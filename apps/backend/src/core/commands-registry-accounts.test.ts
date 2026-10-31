@@ -5,6 +5,7 @@ import type { RegistryDependencies } from "./commands-registry-types.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { agentAccountLoginProgress } from "./agent-accounts.js";
 import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
+import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
 
 import * as cursorBridge from "./cursor-sdk-bridge.js";
 
@@ -59,7 +60,9 @@ describe("account login argument validation", () => {
 
 describe("OpenCode provider login argument validation", () => {
   const registry = createCommandRegistry();
-  const context = {} as CommandContext;
+  const context = {
+    runtime: { localServers: { openCodeProviderLogin: new OpenCodeProviderLoginSlot() } },
+  } as unknown as CommandContext;
 
   test("refuses unexpected fields and non-string sign-in details before any work", async () => {
     await expect(

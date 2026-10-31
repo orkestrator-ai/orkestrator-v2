@@ -237,17 +237,18 @@ export function registerOpenCodeProviderLoginCommands(register: CommandRegistrar
       inputs: asOpenCodeAuthInputs(args.inputs, "inputs"),
     });
   });
-  register("get_opencode_provider_login", async (args) => {
+  register("get_opencode_provider_login", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    return openCodeProviderLoginProgress();
+    return openCodeProviderLoginProgress(context);
   });
-  register("submit_opencode_provider_login_code", async (args) => {
+  register("submit_opencode_provider_login_code", async (args, context) => {
     assertOnlyKeys(args, ["code"], "arguments");
-    return openCodeProviderLogin.submitCode(asNonBlankString(args.code, "code"));
+    return openCodeProviderLogin.submitCode(context, asNonBlankString(args.code, "code"));
   });
-  register("cancel_opencode_provider_login", async (args) => {
+  register("cancel_opencode_provider_login", async (args, context) => {
     assertOnlyKeys(args, ["operationId"], "arguments");
     return openCodeProviderLogin.cancel(
+      context,
       args.operationId === undefined
         ? undefined
         : asNonBlankString(args.operationId, "operationId"),

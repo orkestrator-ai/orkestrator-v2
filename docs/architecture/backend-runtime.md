@@ -6,7 +6,8 @@ Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `environment-operations.ts`, `environment-replacement-fence.ts`,
 `pr-monitor-runtime.ts`, `docker-container-state-cache.ts`,
 `diff-stats-tracking.ts`, `tmux-runtime.ts`, `agent-accounts-runtime.ts`,
-`agent-accounts-last-usage.ts`, `cursor-sdk-login.ts`,
+`agent-accounts-last-usage.ts`, `plan-usage-cache.ts`, `cursor-sdk-login.ts`,
+`github-cli-login.ts`, `opencode-provider-login-slot.ts`,
 `container-usage-sampler.ts`, `container-oom-events.ts`,
 `container-log-service.ts`,
 `docker-cleanup-grants.ts`, `integration-locks.ts`, `feature-build-tasks.ts`,
@@ -25,11 +26,11 @@ environment operations (`backend-runtime.test.ts`).
 | --- | --- | --- |
 | `diffStats` | `DiffStatsTracking` | Diff-stats tracking, Git freshness, worktree watchers. |
 | `terminals` | `TerminalRuntime` | PTYs, session configs, bounded replay buffers and deltas, stable tab keys, orphan reaping, terminal activity timers, and the account homes terminals were launched on (`recordAccountHome`, `isAccountHomeInUse`). `history` (`TerminalHistory`) owns durable terminal history: collectors, configurations, I/O tails, retention and page-read concurrency. |
-| `localServers` | `LocalServerRuntime` | Owned bridge processes and their launch facts (worktree, account, token expiry, loginless), renderer bridge tokens, Cursor credential fingerprints, reuse-health markers, stale-login flags, the per-environment and per-container operation queues, and the shutdown gate. `openCodeAgentTools` (`OpenCodeAgentToolsReconciler`) owns OpenCode MCP reconciliation; `openCodeHostStart` (`OpenCodeHostStartGate`) takes host OpenCode starts one at a time and holds the locked-database retry delays; `piCatalog` (`PiCatalogProbes`) owns the Pi catalogue probe's single flight, empty-result backoff and generation counter; `cursorSdkLogin` (`CursorSdkLoginSlot`) holds the single in-flight Cursor SDK sign-in. |
+| `localServers` | `LocalServerRuntime` | Owned bridge processes and their launch facts (worktree, account, token expiry, loginless), renderer bridge tokens, Cursor credential fingerprints, reuse-health markers, stale-login flags, the per-environment and per-container operation queues, and the shutdown gate. `openCodeAgentTools` (`OpenCodeAgentToolsReconciler`) owns OpenCode MCP reconciliation; `openCodeHostStart` (`OpenCodeHostStartGate`) takes host OpenCode starts one at a time and holds the locked-database retry delays; `piCatalog` (`PiCatalogProbes`) owns the Pi catalogue probe's single flight, empty-result backoff and generation counter; `cursorSdkLogin` (`CursorSdkLoginSlot`) holds the single in-flight Cursor SDK sign-in; `gitHubCliLogin` (`GitHubCliLoginSlot`) the single in-flight GitHub CLI sign-in, which isolates progress and cancellation only, since `gh auth login` writes the host's `gh` configuration; `openCodeProviderLogin` (`OpenCodeProviderLoginSlot`) the OpenCode provider sign-in, the reservation that lets one login change run at a time and the provider list single flight. |
 | `environments` | `EnvironmentOperations` | Setup sessions, the start/setup/baseline dedupe tasks, the per-environment lifecycle queue, and the delete and merge guards. `fence` (`EnvironmentMutationFence`) admits agent work, file writes and worker starts against a runtime replacement or a worktree move. |
 | `prMonitor` | `PrMonitorRuntime` | The `PrMonitorService` and its timers, its `external-pr` admission pool (both created on first use, because every pool registers in the process-wide diagnostics registry, capped at `MAX_DIAGNOSTIC_SOURCES` = 32, and most test runtimes never monitor a PR), the storage/emit binding of the latest caller (not the runtime's own `emit`, so tests that capture events through their context still see them), and the serialised sync queue. Merge cleanup is a construction option (`prMonitor.scheduleMergeCleanup`). |
 | `tmux` | `TmuxRuntime` | claude-tmux sessions and their install locks (`sessions`), interactive pane terminals (`interactiveTerminals`), Claude state polls (`claudeStatePolls`, registered as the `claude-state-signal` diagnostics source), the serialised activity writes, and the orphaned-session sweep's clock and first-seen times. A session's poll loop reaches it through the context it was started with. |
-| `accounts` | `AgentAccountsRuntime` | The last plan-usage readings (`lastUsage`, `AgentAccountLastUsage`), the login keeper's refreshers (construction options) and the coordinator homes whose Keychain login was already removed. |
+| `accounts` | `AgentAccountsRuntime` | The account mutation chain (`withMutation`), the single in-flight sign-in, per-account usage and its generations, the plan-usage cache and active account (`planUsage`, `PlanUsageState`) with the reader over them (`readPlanUsage`), the last plan-usage readings (`lastUsage`, `AgentAccountLastUsage`), what was pushed into each container, the host's MCP refresh digests (`hostMcpRefreshDigests`), the login keeper's refreshers (construction options) and the coordinator homes whose Keychain login was already removed. |
 | `containerStates` | `DockerContainerStateCache` | The short-lived `docker ps` snapshot shared by status reads; container creation invalidates it. |
 | `containerUsage` | `ContainerUsageSampler` | The shared container usage sample. It lists only this backend's owner-labelled containers, so it is per backend. |
 | `containerOom` | `ContainerOomEvents` | The `docker events` OOM follower, started by the backend once it knows its Docker owner namespace. |
@@ -54,8 +55,9 @@ whether lifecycle work may be admitted and drains it on shutdown, while
 - Where a module has no context in reach, pass the narrow cluster down
   (`withShortLivedBridge(localServers, ...)`,
   `createEnvironmentCommandRunner(environment, fence)`) or a narrow option
-  (`NativeAgentService`'s `localBridgeAccountId` and `environmentFence`), not
-  the whole context. An object that outlives one call may keep the cluster it
+  (`NativeAgentService`'s `localBridgeAccountId` and `environmentFence`, a
+  bridge provider's `planUsage`, `gitHubCliEnv`'s config source), not the whole
+  context. An object that outlives one call may keep the cluster it
   was handed at call time (a tmux session keeps the `TerminalRuntime` it
   recorded its account home in).
 - Wiring that would otherwise be a module-level registration is a
@@ -79,6 +81,14 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   A test that swaps an implementation mid-test keeps the variable in the test
   and passes a delegating function (`tests/command-fixtures.ts`,
   `localServerHooks`).
+
+Two module-level test seams stay on purpose, each marked next to its
+declaration. `setAgentSkillsHomeForTesting` (`agent-skills.ts`) redirects the
+home directory, because `os.homedir()` ignores `$HOME` under Bun; the home
+belongs to the process, and a runtime option would put the runtime in every
+skills lookup. `setStorageVolumeOptionsForTest` (`container-storage.ts`) injects
+driver options for one live disk-exhaustion test; no command reaches it. Tests
+that set either must reset it.
 
 ## Shutdown
 
@@ -117,6 +127,12 @@ declaration:
 | `design/export-writer.ts` | `destinationLocks`, `destinationOperations` | Serialise writes to one file on the host; the cap bounds the process. Keyed by destination path, not by backend: a copy per backend would let two backends write the same file at once. |
 | `gateway-support-core.ts` | `activeDynamicCompressions` | CPU-bound compression admission per process: the bound protects the host's CPU, so a counter per backend would multiply it (gateway, not core; still on the `import/no-mutable-exports` allowlist for this binding). |
 | `environment-cleanup.ts` | `loggedKeptBranches` | Only de-duplicates a log line. |
+| `disk-usage.ts` | `running`, `waiting` | Bound disk scans on the host, like `gitDockerScanPool`; a bound per backend would multiply it. |
+| `transcript-artifacts/interactive-modules.ts` | `macroCheck` | A fact about this Bun: whether it honours `macros: false`. |
+| `storage-agent-mail.ts` | `lastIdTime`, `idSequence` | One clock orders mail ids across every repository in the process, a stronger guarantee than one per repository; it shares nothing but ordering. |
+| `opencode-command-changes.ts` | `sharedProbe` | Orders snapshots per repository on the host, so two providers on one worktree must share it. |
+| `opencode-command-changes.ts` | `journals`, `removedJournalDirectories` | Keyed by paths inside a backend's data directory, so two data directories never share an entry. The removed set gains one entry per deleted OpenCode environment for the life of the process. |
+| `agent-test-cursor-credential.ts` | `hostCursorCredential` | Agent-test profiles only: the process entry loads it once from its own data directory, so two agent-test backends in one process would see one key. |
 
 `public-api/reconciler.ts` (`reconcilers`) is a registry of functions filled
 at module load, the same for every backend: code wiring, not state.
@@ -125,8 +141,5 @@ The export-writer locks and `activeDynamicCompressions` were once proposed
 to move per backend; they stay because each bounds or orders host
 resources, not one backend's work.
 
-Further per-backend module state found after the tmux and account moves
-(agent-account logins and usage caches, container login pushes, the
-plan-usage cache's active account, the GitHub CLI and OpenCode provider
-logins and OpenCode command journals) is listed in
-[0390-backend-module-state-beyond-0133.md](../todo/backend-structure/0390-backend-module-state-beyond-0133.md).
+Module state not yet sorted into per-backend or process-wide is listed in
+[1070-backend-module-state-beyond-0390.md](../todo/backend-structure/1070-backend-module-state-beyond-0390.md).

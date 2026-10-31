@@ -24,6 +24,7 @@ import type { KanbanTask } from "./storage-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { TmuxSession } from "./tmux-session-manager.js";
 import type { ContainerUsageSnapshot } from "@orkestrator/protocol/container-resources";
+import type { OpenCodeProviderAuthSnapshot } from "@orkestrator/protocol/opencode-provider-auth";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 /**
@@ -585,6 +586,48 @@ describe("two BackendRuntimes in one process", () => {
     expect(cancel).not.toHaveBeenCalled();
     expect(first.localServers.gitHubCliLogin.cancel()).toEqual({ state: "idle" });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  test("the OpenCode provider sign-in, login changes and list flight are per backend", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const firstLogin = first.localServers.openCodeProviderLogin;
+    const secondLogin = second.localServers.openCodeProviderLogin;
+
+    // A login change on one backend leaves the other free to make its own.
+    const release = firstLogin.reserveMutation();
+    expect(() => firstLogin.reserveMutation()).toThrow("Another OpenCode sign-in");
+    secondLogin.reserveMutation()();
+    release();
+
+    // Each backend asks its own server for the provider list.
+    const reads = { first: 0, second: 0 };
+    const listing = held<OpenCodeProviderAuthSnapshot>();
+    const read = (name: keyof typeof reads) => () => {
+      reads[name] += 1;
+      return listing.promise;
+    };
+    const flights = [
+      firstLogin.listProviders(read("first")),
+      firstLogin.listProviders(read("first")),
+      secondLogin.listProviders(read("second")),
+    ];
+    expect(reads).toEqual({ first: 1, second: 1 });
+    listing.resolve({ providers: [] } as unknown as OpenCodeProviderAuthSnapshot);
+    await Promise.all(flights);
+
+    // A sign-in on one backend is not progress on the other, nor can it cancel it.
+    const controller = new AbortController();
+    firstLogin.begin({
+      controller,
+      progress: { state: "pending", operationId: "operation-1", providerId: "openai" },
+    });
+    expect(firstLogin.progress()).toMatchObject({ state: "pending" });
+    expect(secondLogin.progress()).toEqual({ state: "idle" });
+    expect(secondLogin.cancel()).toEqual({ state: "idle" });
+    expect(controller.signal.aborted).toBe(false);
+    firstLogin.cancel();
+    expect(controller.signal.aborted).toBe(true);
   });
 
   test("each backend's gh runs follow its own selected credential", async () => {

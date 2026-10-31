@@ -58,7 +58,9 @@ which the queue deduplicates. Text is rendered by `renderGoalCarrier`: it always
 opens with `<orkestrator-goal`, so no provider can read a leading `/` or `!` as a
 command, and objective, report and check output are JSON-escaped inside it so they
 cannot form carrier structure. Taking a continuation out of the queue pauses the
-goal.
+goal. Publication and provider handoff both check the current goal identity,
+active status and iteration. Carriers preserve the session mode. A parked
+dispatch pauses the goal with its error.
 
 ## Limits
 
@@ -68,13 +70,17 @@ goal.
   off. That counter includes context re-read on each turn, so a one-word Claude turn
   counts about 68,000. Set a budget in hundreds of thousands.
 - **No progress:** 3 consecutive continuations with no change to the workspace
-  (commit, status and diff, hashed) and no report pause the goal. A workspace that
-  is not a git checkout cannot say, so this stop does not apply there, and the cap
+  (commit, status, tracked diff and untracked contents, hashed) and no report
+  pause the goal. A workspace that is not a git checkout cannot say, so this stop does not apply there, and the cap
   still does.
 - **Check:** 10 minutes. A check that times out or cannot start pauses the goal
   rather than telling the agent it failed. A check runs under `bash -lc` in the
   workspace, through the worker behind `environment.exec`, and runs again after a
-  backend restart, so a check must be safe to repeat.
+  backend restart, so a check must be safe to repeat. Worker identities are
+  durable: recovery adopts a worker still running. Stop, delete and move drain
+  checks and their descendants before changing the environment. Backend shutdown
+  cancels checks and keeps the goal in recoverable `checking` state. Exited
+  worker directories are removed after reading the output tail.
 
 ## The agent's tool
 
@@ -122,7 +128,9 @@ follows the provider's tier, so it is advisory on Grok.
 
 Scripts use `orkestrator session goal`
 ([public-cli.md](public-cli.md)), and a coordinator uses `set_worker_goal` and its
-neighbours ([coordinator.md](coordinator.md)).
+neighbours ([coordinator.md](coordinator.md)). Coordinator tools cannot supply
+shell checks; only a person may configure one through the composer or public API.
+Coordinator goals finish as unverified claims.
 
 ## Native goals stay off
 

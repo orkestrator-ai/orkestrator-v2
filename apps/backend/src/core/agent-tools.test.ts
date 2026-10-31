@@ -108,7 +108,7 @@ describe("report_goal", () => {
   });
 
   async function call(tabId: string | undefined, method: string, params?: Record<string, unknown>) {
-    const { url, token } = server.connection("env-1", "project-1", undefined, tabId);
+    const { url, token } = server.connection("env-1", "project-1", "host", tabId);
     const response = await fetch(url, {
       method: "POST",
       headers: {

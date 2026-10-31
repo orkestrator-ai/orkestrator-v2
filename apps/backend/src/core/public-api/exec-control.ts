@@ -1,3 +1,4 @@
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { PublicExecutionState } from "@orkestrator/protocol/public-api";
 import type { CommandContext } from "../commands-context.js";
@@ -193,6 +194,7 @@ export async function stopEnvironmentExecWorkers(
   context: CommandContext,
   options: { requireStopped?: boolean } = {},
 ): Promise<void> {
+  await stopGoalCheckWorkers(environmentId, context);
   // Partial storage adapters (compatibility fixtures) have no operation store.
   if (typeof context.storage.publicOperations?.listActivePublicOperations !== "function") return;
   const environment = await context.storage.getEnvironment(environmentId);
@@ -235,5 +237,50 @@ export async function stopEnvironmentExecWorkers(
         `[public-api] Could not cancel exec ${record.operationId}: ${boundedMessage(error)}`,
       );
     }
+  }
+}
+
+/** Durable worker identities survive a backend restart and a cleared goal. */
+async function stopGoalCheckWorkers(environmentId: string, context: CommandContext): Promise<void> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (
+    !environment ||
+    (environment.environmentType !== "local" &&
+      (environment.status !== "running" || !environment.containerId))
+  )
+    return;
+  const directory =
+    environment.environmentType === "local"
+      ? path.join(context.storage.getDataDir(), "exec-runs")
+      : CONTAINER_EXEC_ROOT;
+  if (environment.environmentType === "local") {
+    const entries = await fs.readdir(directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    if (!entries.some((name) => /^goal-check-[a-f0-9]{64}$/.test(name))) return;
+  }
+  const operations = (await control(environment, context, {
+    action: "list-goal-checks",
+    directory,
+    environmentId,
+  })) as string[];
+  for (const operationId of operations) {
+    const workerDirectory = execDirectory(environment, operationId, context);
+    const state = (await control(environment, context, {
+      action: "cancel",
+      operationId,
+      directory: workerDirectory,
+    })) as ExecState;
+    // Missing means the check's reader already removed its exited directory.
+    if (state.status !== "exited" && state.status !== "missing") {
+      throw new Error("Goal check workers could not be verified stopped");
+    }
+    if (state.status === "exited")
+      await control(environment, context, {
+        action: "cleanup",
+        operationId,
+        directory: workerDirectory,
+      });
   }
 }

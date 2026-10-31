@@ -1380,12 +1380,13 @@ The coordinator never sees the patch.
 
 A coordinator can give a worker tab a goal, and is woken once when it stops
 (`plans/goals/403`). The tools sit on the same service as `/goal` and
-`session goal`, so its rules apply: one goal per session, a check to prove it, an
-iteration cap, and no change to the permission mode.
+`session goal`, so its rules apply: one goal per session, an iteration cap, and no change to the permission mode.
+Coordinator tools cannot configure shell checks; a person configures checks
+through the composer or public API. A coordinator goal ends as an unverified claim.
 
 | Tool | What it does | Retry | Capability |
 | --- | --- | --- | --- |
-| `set_worker_goal` | Sets the goal from structured fields. `maxIterations` is **required**, bounded by `NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit`, with no default; `check` and `tokenBudget` are optional. Without a check, a done report ends as `claimed`. | Same `requestId` replays the receipt. The goal's ID derives from the request, so a retry after a lost receipt finds the goal instead of starting another. | `jobs` |
+| `set_worker_goal` | Sets the goal from structured fields. `maxIterations` is **required**, bounded by `NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit`, with no default; `tokenBudget` is optional. Shell checks are refused; a done report ends as `claimed`. | Same `requestId` replays the receipt. The goal's ID derives from the request, so a retry after a lost receipt finds the goal instead of starting another. | `jobs` |
 | `get_worker_goal` | Status, reason, what the status means, iterations and limit, the last check's result, and recent ended goals. | Read | `environments` |
 | `pause_worker_goal` | Stops the loop. A turn already running finishes. | States an end: a goal that already stopped answers `alreadyStopped`. | `jobs` |
 | `clear_worker_goal` | Removes the goal in any status. It stays in the goal history. | States an end: no goal answers `cleared: false`. | `jobs` |
@@ -1650,7 +1651,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   on an approval wakes it once after the 20-second debounce. `peer` has two
   ordinary environments exchange ten messages with Wake peers on and no
   coordinator involved. `goal` has a coordinator set a worker a two-turn goal with a
-  passing check, then checks one wake and its read of the result. Every scenario with mail also runs the renderer's
+  claim, then checks one wake and its read of the result. Every scenario with mail also runs the renderer's
   carrier parser over each echoed carrier row and requires one toned tile per
   delivered message and no raw carrier text. It is opt-in
   and never runs in `mise run test` or CI. See "Live coordinator suite" in

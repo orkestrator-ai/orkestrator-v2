@@ -15,8 +15,8 @@ import type {
  * The coordinator launches one worker with a one-word task, then sets a goal on
  * it. The objective takes two turns on purpose: with one, "not woken per
  * iteration" would hold however the wake behaved, because there would be no
- * iteration to wake on. The second turn reports done, and a check that only the
- * second turn can satisfy completes the goal. The coordinator reacts to its wake
+ * iteration to wake on. The second turn reports done, ending as an unverified
+ * claim because coordinator tools cannot configure shell checks. The coordinator reacts to its wake
  * by reading the goal.
  *
  * This module holds the prompts and the verdict; the spec and its orchestration
@@ -87,7 +87,7 @@ export function goalDelegatingPrompt(probe: GoalProbe): string {
 export function goalSetPrompt(probe: GoalProbe, workerEnvironmentId: string): string {
   return [
     HARNESS_PREAMBLE,
-    `Call the Orkestrator set_worker_goal tool exactly once with a fresh requestId, environmentId "${workerEnvironmentId}", tabId "${GOAL_WORKER_TAB}", maxIterations ${GOAL_MAX_ITERATIONS}, check ${JSON.stringify(goalCheckCommand(probe))}, and this exact objective: ${JSON.stringify(goalObjective(probe))}`,
+    `Call the Orkestrator set_worker_goal tool exactly once with a fresh requestId, environmentId "${workerEnvironmentId}", tabId "${GOAL_WORKER_TAB}", maxIterations ${GOAL_MAX_ITERATIONS}, and this exact objective: ${JSON.stringify(goalObjective(probe))}`,
     "Call no other tool, do not wait for the worker, and end this turn with one line.",
     "",
     `When you are woken about that worker, call the Orkestrator get_worker_goal tool once with the same environmentId and tabId, and end that turn with one line giving the status it returned.`,
@@ -198,21 +198,15 @@ export function evaluateGoalScenario(input: GoalScenarioInput): CoordinatorLiveC
       `${set.length} set_worker_goal results; goal ${set[0]?.goalId ? "named" : "missing"}, maxIterations ${set[0]?.maxIterations ?? "none"}, wakeOwed ${set[0]?.wakeOwed ?? false}`,
     ),
     check(
-      "goal-complete",
-      goal?.status === "complete" &&
-        goal.statusReason === "check-passed" &&
+      "goal-claimed",
+      goal?.status === "claimed" &&
+        goal.statusReason === "agent-claimed" &&
         goal.goalId === set[0]?.goalId,
       goal
         ? `status ${goal.status}, reason ${goal.statusReason ?? "none"}${goal.goalId === set[0]?.goalId ? "" : ", a different goal than was set"}`
         : "the worker has no goal",
     ),
-    check(
-      "check-pass-recorded",
-      goal?.lastCheck?.passed === true && goal.lastCheck.exitCode === 0,
-      goal?.lastCheck
-        ? `passed ${goal.lastCheck.passed}, exit ${goal.lastCheck.exitCode}`
-        : "no check result",
-    ),
+    check("no-shell-check", goal?.check === undefined && goal?.lastCheck === undefined),
     // One iteration proves nothing about waking per iteration.
     check(
       "ran-more-than-one-iteration",
@@ -259,7 +253,7 @@ export function evaluateGoalScenario(input: GoalScenarioInput): CoordinatorLiveC
       "wake-names-outcome",
       reported ||
         (notices.length === 1 &&
-          notices[0]!.body?.includes("Its goal is complete (check-passed)") === true &&
+          notices[0]!.body?.includes("Its goal is claimed (agent-claimed)") === true &&
           notices[0]!.body.includes("get_worker_goal")),
       reported ? "the worker's own report was the wake" : `${notices.length} notices after the set`,
     ),
@@ -269,7 +263,7 @@ export function evaluateGoalScenario(input: GoalScenarioInput): CoordinatorLiveC
   checks.push(
     check(
       "coordinator-read-goal",
-      statuses.includes("complete"),
+      statuses.includes("claimed"),
       `${statuses.length} get_worker_goal results: ${statuses.map(String).join(", ") || "none"}`,
     ),
   );

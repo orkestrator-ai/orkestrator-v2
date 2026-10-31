@@ -1,3 +1,4 @@
+import { GOAL_TOKEN_BUDGET_PLATFORMS } from "@orkestrator/protocol/native-agent-goal";
 /**
  * The goal loop against real providers (`mise run test:agent:goals`,
  * `plans/goals/109`, Phase 3). Opt-in only: every case runs real model turns on
@@ -60,7 +61,7 @@ type Projection = {
   goal?: { status: string };
   slashCommands?: { name: string; executionKind?: string }[];
   contextUsage?: { sessionTokens?: number; usedTokens?: number };
-  composer?: { selectedModelId?: string };
+  composer?: { selectedModelId?: string; selectedModeId?: string };
   messages?: { role?: string; content?: unknown }[];
 };
 
@@ -187,7 +188,7 @@ async function openTab(
 
 test.describe(`goal loop: ${platform}`, () => {
   test.skip(!LIVE, "opt-in live goal turns with host credentials");
-  test.describe.configure({ mode: "serial" });
+  test.describe.configure({ mode: "default" });
   test.setTimeout(1_200_000);
 
   test.afterAll(() => writeSummary());
@@ -242,7 +243,7 @@ test.describe(`goal loop: ${platform}`, () => {
         status: goal.status,
         reason: goal.statusReason,
         // Bounded by the record, and only a provider's own error text here.
-        ...(goal.statusReason === "turn-failed" ? { detail: goal.statusDetail } : {}),
+        ...(goal.statusDetail ? { detail: goal.statusDetail } : {}),
         iterations: goal.iterations,
         tokensUsed: goal.tokensUsed,
         ...extra,
@@ -382,6 +383,58 @@ test.describe(`goal loop: ${platform}`, () => {
     });
   });
 
+  test("Plan mode, unchanged workspaces and token limits", async ({ page }) => {
+    test.skip(only !== undefined, `only the ${only} cases`);
+    const { invoke, environment, model, container } = await prepare(page);
+    const scenarios = record.scenarios as Record<string, unknown>;
+    const send = (identity: Awaited<ReturnType<typeof openTab>>, text: string) =>
+      invoke("native_agent_goal_command", { ...identity, text, ...(model ? { model } : {}) });
+    const wait = async (identity: Awaited<ReturnType<typeof openTab>>, label: string) => {
+      let goal: Goal | undefined;
+      const deadline = Date.now() + TURN_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        goal = (await invoke<{ goal?: Goal }>("get_native_agent_goal", identity)).goal;
+        if (goal && !["active", "checking", "verifying"].includes(goal.status)) {
+          scenarios[label] = {
+            status: goal.status,
+            reason: goal.statusReason,
+            detail: goal.statusDetail,
+            iterations: goal.iterations,
+          };
+          writeSummary();
+          return goal;
+        }
+        await page.waitForTimeout(1_000);
+      }
+      throw new Error(`${label} did not end: ${JSON.stringify(goal)}`);
+    };
+    const objective =
+      "Reply with the single word waiting and end this turn. Do not call any tools, report_goal, or change any files. Repeat exactly this for each continuation.";
+    const planning = await openTab(invoke, environment, "goals-plan", container, model);
+    await invoke("update_native_agent_controls", { ...planning, update: { mode: "plan" } });
+    await send(planning, `${objective} --max-iterations 2`);
+    const planned = await wait(planning, "plan-mode");
+    expect(planned.status).toBe("limited");
+    expect(planned.iterations).toBe(2);
+    expect(
+      (await invoke<Projection>("get_native_agent_projection", planning)).composer?.selectedModeId,
+    ).toBe("plan");
+
+    const unchanged = await openTab(invoke, environment, "goals-no-progress", container, model);
+    await send(unchanged, `${objective} --max-iterations 8`);
+    const stalled = await wait(unchanged, "no-progress");
+    expect(stalled.status).toBe("paused");
+    expect(stalled.statusReason).toBe("no-progress");
+
+    if ((GOAL_TOKEN_BUDGET_PLATFORMS as readonly string[]).includes(platform)) {
+      const budgeted = await openTab(invoke, environment, "goals-budget", container, model);
+      await send(budgeted, `${objective} --max-iterations 8 --budget 1`);
+      const limited = await wait(budgeted, "token-budget");
+      expect(limited.status).toBe("limited");
+      expect(limited.statusReason).toBe("token-budget");
+    }
+  });
+
   test("a compaction between turns, and a verifier's verdict", async ({ page }) => {
     test.skip(only === "browser", "run with the full suite, or alone as extras");
     page.setDefaultTimeout(15_000);
@@ -431,7 +484,7 @@ test.describe(`goal loop: ${platform}`, () => {
     const compacting = await openTab(invoke, environment, "goals-compact", container, model);
     await send(
       compacting,
-      `Create goal-compact-1.txt, then call the orkestrator report_goal tool with status "blocked", saying you need to be told to continue. Once you are told to continue, create goal-compact-2.txt, then call report_goal with status "done". --max-iterations 4 --check test -f goal-compact-2.txt`,
+      `Inspect the workspace: if goal-compact-1.txt does not exist, create it and call report_goal with status "blocked". If goal-compact-1.txt already exists, create goal-compact-2.txt and call report_goal with status "done". End the turn immediately after the report. --max-iterations 4 --check test -f goal-compact-2.txt`,
     );
     const waiting = await ended(compacting);
     expect(waiting.status).toBe("blocked");
@@ -453,6 +506,7 @@ test.describe(`goal loop: ${platform}`, () => {
       compacted: compacted?.outcome,
       status: afterCompact.status,
       reason: afterCompact.statusReason,
+      detail: afterCompact.statusDetail,
       iterations: afterCompact.iterations,
     };
     writeSummary();

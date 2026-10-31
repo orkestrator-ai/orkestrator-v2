@@ -179,7 +179,7 @@ test.describe("a goal across a killed backend", () => {
       const queues = await invoke("list_prompt_queues", { environmentId: environment.id }).catch(
         (error: unknown) => String(error),
       );
-      const view = await invoke<Record<string, unknown>>(
+      const view: Record<string, unknown> = await invoke<Record<string, unknown>>(
         "get_native_agent_projection",
         identity,
       ).catch((error: unknown) => ({ error: String(error) }));

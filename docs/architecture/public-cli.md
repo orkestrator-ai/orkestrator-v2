@@ -189,10 +189,10 @@ not advertise at its version before sending it.
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
 | `session interactions list/resolve` | `session.interactions`, `session.interaction.resolve` | pending interactions, `resolve_native_agent_interaction` | provider |
 | `session interactions hold [--resume]` | `session.interaction.hold` | `hold_native_agent_interaction` (the card timer's pause) | provider |
-| `session goal set SESSION --objective\|--objective-file\|--objective-stdin [--check CMD] [--verifier AGENT[:MODEL]] [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.set` | `NativeAgentService.performGoalCommand` from structured fields, never a `/goal` string | provider |
+| `session goal set SESSION --objective\|--objective-file\|--objective-stdin [--check CMD] [--verifier AGENT[:MODEL]] [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.set` | `NativeAgentService.performGoalCommand` from structured fields, never a `/goal` string | provider, filesystem, process |
 | `session goal get SESSION [--check-output] [--wait]` | `session.goal.get` | the session record; starts nothing | read (content) |
 | `session goal pause\|clear SESSION` | `session.goal.pause/clear` | the goal service on the session record; starts no bridge | metadata |
-| `session goal resume SESSION [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.resume` | the goal service, through the live session | provider |
+| `session goal resume SESSION [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.resume` | the goal service, through the live session | provider, filesystem, process |
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |

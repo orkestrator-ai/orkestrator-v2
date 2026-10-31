@@ -390,7 +390,7 @@ export const PUBLIC_ACTIONS = {
   "session.goal.set": {
     version: 1,
     mutation: true,
-    effects: ["provider-session"],
+    effects: ["provider-session", "filesystem", "process"],
     observation: "receipt",
     milestone: "D",
     summary:
@@ -416,7 +416,7 @@ export const PUBLIC_ACTIONS = {
   "session.goal.resume": {
     version: 1,
     mutation: true,
-    effects: ["provider-session"],
+    effects: ["provider-session", "filesystem", "process"],
     observation: "receipt",
     milestone: "D",
     summary: "Resume a stopped goal, optionally with a higher iteration cap or token budget.",

@@ -455,6 +455,8 @@ export interface NativeAgentServiceOptions {
       goalId: string;
       command: string;
       timeoutMs: number;
+      iteration: number;
+      signal: AbortSignal;
     }): Promise<GoalCheckRun>;
     workspaceFingerprint(environmentId: string): Promise<string | undefined>;
     /** Absent: a goal cannot ask for a verifier session on this backend. */

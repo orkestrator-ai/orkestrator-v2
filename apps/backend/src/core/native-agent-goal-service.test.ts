@@ -37,7 +37,13 @@ function harness(
       providerSessionId: "p1",
       dispatchedRequestIds: [] as string[],
     } as unknown as PersistedNativeAgentSession,
-    queue: [] as { id: string; text: string; origin?: unknown; command?: unknown }[],
+    queue: [] as {
+      id: string;
+      text: string;
+      origin?: unknown;
+      command?: unknown;
+      preserveSessionMode?: boolean;
+    }[],
     consumed: new Set<string>(),
     outcome: options.outcome ?? ({ outcome: "completed" } as Outcome),
     activity: options.activity ?? ("idle" as "idle" | "working" | "waiting"),
@@ -62,6 +68,8 @@ function harness(
     outcomeReads: 0,
     now: Date.parse("2026-10-31T12:00:00.000Z"),
     failNextEnqueue: false,
+    dispatchError: undefined as
+      { messageId: string; requestId: string; message: string } | undefined,
     stopped: false,
   };
   const host: NativeAgentGoalHost = {
@@ -86,7 +94,9 @@ function harness(
         state.queue.push(entry);
         return { status: "queued" };
       },
+      getPromptQueue: async () => ({ dispatchError: state.dispatchError }),
       removePromptQueueMessage: async (_queue, _env, id) => {
+        if (!state.queue.some((entry) => entry.id === id)) return;
         state.queue = state.queue.filter((entry) => entry.id !== id);
         state.consumed.add(id);
       },
@@ -144,7 +154,7 @@ function harness(
     return result;
   };
   const goal = () => sessionGoal(state.session) as NativeAgentGoal;
-  return { state, service, dispatchHead, turnEnds, set, goal };
+  return { state, host, service, dispatchHead, turnEnds, set, goal };
 }
 
 describe("setting a goal", () => {
@@ -404,7 +414,8 @@ describe("the loop", () => {
       dispatchedRequestIds: [...(state.session.dispatchedRequestIds ?? []), "user-2"],
     };
     await turnEnds();
-    expect(goal().iterations).toBe(3);
+    expect(goal().iterations).toBe(2);
+    expect(state.queue).toHaveLength(1);
     expect(goal().evaluatedRequestId).toBe("user-2");
     expect(state.queue.map((entry) => entry.id)).toContain(continuation);
   });
@@ -769,3 +780,98 @@ function hostOf(parts: ReturnType<typeof harness>): NativeAgentGoalHost {
 }
 
 void QUEUE;
+
+describe("continuation ordering", () => {
+  test("every carrier preserves the session mode", async () => {
+    const h = harness();
+    await h.set("continue");
+    for (let i = 0; i < 3; i++) {
+      expect(h.dispatchHead().preserveSessionMode).toBe(true);
+      await h.turnEnds();
+    }
+  });
+
+  test("a dispatch after the initial read is not mistaken for removal", async () => {
+    const h = harness();
+    await h.set("continue");
+    const enqueue = h.host.storage.enqueuePromptQueueMessageIfAbsent;
+    h.host.storage.enqueuePromptQueueMessageIfAbsent = async (...args) => {
+      h.dispatchHead();
+      return enqueue(...args);
+    };
+    await h.turnEnds();
+    expect(h.goal().status).toBe("active");
+    expect(h.state.outcomeReads).toBe(0);
+    h.host.storage.enqueuePromptQueueMessageIfAbsent = enqueue;
+    await h.turnEnds();
+    expect(h.state.outcomeReads).toBe(1);
+    expect(h.goal().iterations).toBe(2);
+  });
+
+  test.each(["rejected", "exhausted", "ambiguous"])(
+    "a %s carrier pauses and releases once",
+    async (reason) => {
+      const h = harness();
+      await h.set("continue");
+      const id = h.state.queue[0]!.id;
+      h.state.dispatchError = { messageId: id, requestId: id, message: reason };
+      h.state.session = { ...h.state.session, pendingDispatch: { requestId: id } as never };
+      await h.turnEnds();
+      await h.turnEnds();
+      expect(h.goal()).toMatchObject({
+        status: "paused",
+        statusReason: "continuation-failed",
+        statusDetail: reason,
+      });
+      expect(h.state.rung).toEqual(["paused"]);
+      expect(h.state.released).toBe(1);
+      expect(h.service.holdsTurnEnd(KEY)).toBe(false);
+      expect(h.state.queue).toHaveLength(0);
+    },
+  );
+
+  test("a pending user turn is evaluated only after its completion", async () => {
+    const h = harness();
+    await h.set("continue");
+    const carrier = h.state.queue[0]!.id;
+    h.state.session = { ...h.state.session, dispatchedRequestIds: ["user-turn"] };
+    h.state.outcome = { outcome: "pending" };
+    await h.turnEnds();
+    expect(h.goal().evaluatedRequestId).toBeUndefined();
+    expect(h.state.queue[0]!.id).toBe(carrier);
+    h.state.outcome = { outcome: "completed" };
+    await h.turnEnds();
+    expect(h.goal().evaluatedRequestId).toBe("user-turn");
+    expect(h.goal().iterations).toBe(1);
+    expect(h.state.queue).toHaveLength(1);
+  });
+
+  test("shutdown aborts a deferred check without a late goal mutation", async () => {
+    const h = harness();
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    h.host.runCheck = async ({ signal }) => {
+      began();
+      await new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      return { kind: "finished", exitCode: 0, timedOut: false, durationMs: 1, outputTail: "late" };
+    };
+    await h.set("continue --check true");
+    h.dispatchHead();
+    await h.service.report(
+      { environmentId: "e1" },
+      { goalId: h.goal().goalId, status: "done", message: "done" },
+    );
+    h.service.noteTurnEnded(KEY);
+    await started;
+    h.state.stopped = true;
+    h.service.stop();
+    await h.service.settled();
+    expect(h.goal().status).toBe("checking");
+    expect(h.goal().lastCheck).toBeUndefined();
+    expect(h.state.rung).toHaveLength(0);
+  });
+});

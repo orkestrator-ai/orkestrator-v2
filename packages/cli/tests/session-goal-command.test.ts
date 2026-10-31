@@ -569,7 +569,7 @@ describe("a script against a real backend", () => {
     expect(JSON.stringify(body.receipt)).not.toContain(objective);
     const stored = await harness.storage.getNativeAgentSession(key);
     expect(stored?.goal).toMatchObject({ objective, check: "bun test" });
-    expect((stored?.goal as { tokenBudget?: number }).tokenBudget).toBeUndefined();
+    expect((stored?.goal as { tokenBudget?: number } | undefined)?.tokenBudget).toBeUndefined();
 
     // The same request again: the same goal, the same answer, nothing new.
     const again = await box.run([
@@ -638,4 +638,53 @@ describe("a script against a real backend", () => {
       objective: "One",
     });
   });
+});
+
+describe("watched completion output", () => {
+  for (const replacement of [null, view("active", { goalId: "replacement" })]) {
+    test.each(["json", "human", "id"])(
+      `historical completion keeps its identity (${replacement?.goalId ?? "cleared"}, %s)`,
+      async (format) => {
+        const h = await fixture([read({ goal: replacement, history: [view("complete")] })]);
+        const run = await h.box.run([
+          ...SET,
+          "--wait",
+          ...(format === "json" ? ["--json"] : format === "id" ? ["--output", "id"] : []),
+        ]);
+        expect(run.code).toBe(0);
+        if (format === "json")
+          expect(JSON.parse(run.out).result.goal).toMatchObject({
+            goalId: GOAL_ID,
+            status: "complete",
+          });
+        else if (format === "id") expect(run.out.trim()).toBe(GOAL_ID);
+        else {
+          expect(run.out).toContain(GOAL_ID);
+          expect(run.out).toContain("complete");
+        }
+        expect(run.out).not.toContain("replacement");
+      },
+    );
+  }
+
+  test.each([false, true])(
+    "check output survives wait (initially running: %s)",
+    async (running) => {
+      const complete = read({ goal: view("complete"), checkOutput: "CHECK OUTPUT" });
+      const h = await fixture(running ? [read(), read(), complete] : [complete]);
+      const run = await h.box.run([
+        "session",
+        "goal",
+        "get",
+        "session-id",
+        "--wait",
+        "--check-output",
+        "--json",
+      ]);
+      expect(run.code).toBe(0);
+      expect(JSON.parse(run.out).result.checkOutput).toBe("CHECK OUTPUT");
+      for (const request of h.sent("session.goal.get"))
+        expect((request.body.args.input as Record<string, unknown>).includeCheckOutput).toBe(true);
+    },
+  );
 });

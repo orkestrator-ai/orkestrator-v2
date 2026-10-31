@@ -49,7 +49,8 @@ export type GoalCheckRun =
       durationMs: number;
       outputTail: string;
     }
-  | { kind: "unavailable"; detail: string };
+  | { kind: "unavailable"; detail: string }
+  | { kind: "stopped" };
 
 /** How a verifier session ended. `tokens` is what it spent, when its provider says. */
 export type GoalVerifierRun =
@@ -114,6 +115,9 @@ export interface NativeAgentGoalHost {
       environmentId: string,
       message: unknown,
     ): Promise<{ status: "queued" | "present" | "consumed" }>;
+    getPromptQueue?(queueKey: string): Promise<{
+      dispatchError?: { messageId: string; requestId: string; message: string };
+    } | null>;
     removePromptQueueMessage(queueKey: string, environmentId: string, id: string): Promise<unknown>;
   };
   now(): number;
@@ -136,6 +140,8 @@ export interface NativeAgentGoalHost {
     goalId: string;
     command: string;
     timeoutMs: number;
+    iteration: number;
+    signal: AbortSignal;
   }): Promise<GoalCheckRun>;
   /** Absent: this backend cannot run verifiers, so a goal cannot ask for one. */
   verifier?: GoalVerifierHost;
@@ -190,7 +196,7 @@ export class NativeAgentGoalService {
   private readonly advancing = new Map<string, Promise<void>>();
   private readonly wakeAgain = new Set<string>();
   /** A running check stays in memory; after a restart it runs again. */
-  private readonly checks = new Set<string>();
+  private readonly checks = new Map<string, AbortController>();
   /**
    * Verifier work in flight. Unlike a check it does not hold `advance`, so the
    * sweep keeps watching the session and environment while a session runs.
@@ -221,6 +227,7 @@ export class NativeAgentGoalService {
 
   /** The backend is stopping: let go of verifiers without ending their goals. */
   stop(): void {
+    for (const controller of this.checks.values()) controller.abort();
     for (const { controller } of this.verifiers.values()) {
       controller.abort(GOAL_VERIFIER_BACKEND_STOPPING);
     }
@@ -296,6 +303,20 @@ export class NativeAgentGoalService {
       this.startVerifier(key, session, goal);
       return;
     }
+    const queue = await this.host.storage.getPromptQueue?.(queueKeyOf(session));
+    const requestId =
+      goal.iterations > 0 ? goalContinuationRequestId(goal.goalId, goal.iterations - 1) : undefined;
+    if (
+      requestId &&
+      (queue?.dispatchError?.messageId === requestId ||
+        queue?.dispatchError?.requestId === requestId)
+    ) {
+      await this.apply(key, goal.goalId, {
+        kind: "continuation-failed",
+        detail: queue.dispatchError.message,
+      });
+      return;
+    }
     const where = address(session);
     const activity = this.host.turnActivity(where);
     if (activity === "working" || activity === "waiting") return;
@@ -353,10 +374,22 @@ export class NativeAgentGoalService {
    * side of the enqueue re-sends the same id, which the queue deduplicates.
    */
   private async apply(key: string, goalId: string, event: GoalEvent): Promise<void> {
+    if (this.host.isStopped()) return;
     const change: { action: GoalAction; previous?: NativeAgentGoal } = { action: "none" };
-    const session = await this.host.storage.updateNativeAgentGoal(key, (current) => {
-      if (!current || current.goalId !== goalId) return undefined;
-      const transition = nextGoalState(current, event, this.host.now());
+    const session = await this.host.storage.updateNativeAgentGoal(key, (current, durable) => {
+      if (this.host.isStopped() || !current || current.goalId !== goalId) return undefined;
+      const continuationPending =
+        event.kind === "turn-ended" &&
+        !event.continuation &&
+        current.iterations > 0 &&
+        !durable.dispatchedRequestIds?.includes(
+          goalContinuationRequestId(current.goalId, current.iterations - 1),
+        );
+      const transition = nextGoalState(
+        current,
+        event.kind === "turn-ended" ? { ...event, continuationPending } : event,
+        this.host.now(),
+      );
       if (transition.goal === current) return undefined;
       change.previous = current;
       change.action = transition.action;
@@ -377,6 +410,8 @@ export class NativeAgentGoalService {
     previous: NativeAgentGoal | undefined,
   ): Promise<void> {
     this.host.announce(session);
+    if (previous?.status === "checking" && goal.status !== "checking")
+      this.checks.get(key)?.abort();
     // Whatever moved the goal on, nobody is waiting for its verifier now.
     if (previous?.status === "verifying" && goal.status !== "verifying") {
       this.verifiers.get(key)?.controller.abort();
@@ -403,6 +438,7 @@ export class NativeAgentGoalService {
     session: PersistedNativeAgentSession,
     goal: NativeAgentGoal,
   ): Promise<void> {
+    if (this.host.isStopped()) return;
     // `iterations` already counts this send.
     const iteration = goal.iterations - 1;
     const requestId = goalContinuationRequestId(goal.goalId, iteration);
@@ -418,6 +454,7 @@ export class NativeAgentGoalService {
           text: renderGoalCarrier({ ...goal, iterations: iteration }),
           // A carrier is literal text: never a provider slash command.
           command: { kind: "literal" },
+          preserveSessionMode: true,
           origin: { kind: "goal", goalId: goal.goalId, iteration },
         },
       ));
@@ -427,9 +464,17 @@ export class NativeAgentGoalService {
       status = "present";
     }
     if (status === "consumed") {
+      const current = await this.host.storage.getNativeAgentSession(key);
+      const currentGoal = current ? sessionGoal(current) : undefined;
+      if (
+        currentGoal?.goalId !== goal.goalId ||
+        currentGoal.status !== "active" ||
+        currentGoal.iterations !== goal.iterations
+      )
+        return;
       const dispatched =
-        session.dispatchedRequestIds?.includes(requestId) ||
-        session.pendingDispatch?.requestId === requestId;
+        current?.dispatchedRequestIds?.includes(requestId) ||
+        current?.pendingDispatch?.requestId === requestId;
       // Consumed without a dispatch means a person took it out of the queue.
       if (!dispatched) {
         await this.apply(key, goal.goalId, { kind: "user-pause" });
@@ -469,7 +514,7 @@ export class NativeAgentGoalService {
     session: PersistedNativeAgentSession,
     goal: NativeAgentGoal,
   ): Promise<void> {
-    if (this.checks.has(key)) return;
+    if (this.host.isStopped() || this.checks.has(key)) return;
     if (!goal.check) {
       await this.apply(key, goal.goalId, {
         kind: "check-unavailable",
@@ -477,14 +522,18 @@ export class NativeAgentGoalService {
       });
       return;
     }
-    this.checks.add(key);
+    const controller = new AbortController();
+    this.checks.set(key, controller);
     try {
       const run = await this.host.runCheck({
         environmentId: session.environmentId,
         goalId: goal.goalId,
         command: goal.check,
         timeoutMs: NATIVE_AGENT_GOAL_LIMITS.checkTimeoutDefaultMs,
+        iteration: goal.iterations,
+        signal: controller.signal,
       });
+      if (controller.signal.aborted || this.host.isStopped() || run.kind === "stopped") return;
       if (run.kind === "unavailable") {
         await this.apply(key, goal.goalId, { kind: "check-unavailable", detail: run.detail });
         return;
@@ -507,6 +556,7 @@ export class NativeAgentGoalService {
         },
       });
     } catch (error) {
+      if (controller.signal.aborted || this.host.isStopped()) return;
       await this.apply(key, goal.goalId, {
         kind: "check-unavailable",
         detail: errorMessage(error),
@@ -802,6 +852,7 @@ export class NativeAgentGoalService {
         if (updated) {
           this.running.delete(key);
           this.verifiers.get(key)?.controller.abort();
+          this.checks.get(key)?.abort();
           await this.removeQueuedContinuation(session, goal);
           this.host.announce(updated);
           if (goalIsRunning(goal.status)) await this.host.releaseTurnEnd(updated).catch(() => {});

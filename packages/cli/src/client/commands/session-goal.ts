@@ -139,14 +139,21 @@ async function waitForGoal(
   sessionId: string,
   goalId: string,
   timeoutMs: number,
-  options: { continueOnInteraction: boolean; receipt?: PublicReceipt },
+  options: {
+    continueOnInteraction: boolean;
+    receipt?: PublicReceipt;
+    includeCheckOutput?: boolean;
+  },
 ): Promise<PublicSessionGoal> {
   let latest: NativeAgentGoalView | undefined;
   const receiptOption = options.receipt ? { receipt: options.receipt } : {};
   try {
     return await observe<PublicSessionGoal>(
       async () => {
-        const read = await session.read<PublicSessionGoal>("session.goal.get", { sessionId });
+        const read = await session.read<PublicSessionGoal>("session.goal.get", {
+          sessionId,
+          ...(options.includeCheckOutput ? { includeCheckOutput: true } : {}),
+        });
         const verdict = classifyGoalForWait(read, goalId, {
           continueOnInteraction: options.continueOnInteraction,
         });
@@ -154,7 +161,16 @@ async function waitForGoal(
           latest = verdict.goal;
           return { done: false };
         }
-        if (verdict.kind === "complete") return { done: true, value: read };
+        if (verdict.kind === "complete")
+          return {
+            done: true,
+            value: {
+              ...read,
+              goal: verdict.goal,
+              description: "Complete",
+              ...(read.goal?.goalId !== goalId ? { checkOutput: undefined } : {}),
+            },
+          };
         if (verdict.kind === "interaction") {
           throw new CliError(
             "interaction-required",
@@ -393,7 +409,10 @@ export const sessionGoalCommands: CommandSpec[] = [
         sessionId,
         goalId,
         (options.timeout as number | undefined) ?? DEFAULT_WAIT_MS,
-        { continueOnInteraction: options["continue-on-interaction"] === true },
+        {
+          continueOnInteraction: options["continue-on-interaction"] === true,
+          includeCheckOutput: options["check-output"] === true,
+        },
       );
       return waitOutcome({ ...base, result: read }, read);
     },

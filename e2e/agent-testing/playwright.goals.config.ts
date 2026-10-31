@@ -34,7 +34,7 @@ export default defineConfig({
   globalTeardown: path.join(import.meta.dirname, "goals-live-teardown.ts"),
   use: {
     browserName: "chromium",
-    trace: "retain-on-failure",
+    trace: { mode: "retain-on-failure", snapshots: false, screenshots: false, sources: false },
     screenshot: "only-on-failure",
   },
 });

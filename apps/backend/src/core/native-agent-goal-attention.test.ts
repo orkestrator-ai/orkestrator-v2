@@ -82,11 +82,11 @@ async function endTurn(
       if (withGoal) {
         // The goal's own turn is the session's latest, already acted on, so the
         // loop has nothing to send. Only the edge's reading is under test.
-        await storage.dispatchNativeAgentPromptOnce(key(agent), "goal:g1:0", async () => {});
         await storage.updateNativeAgentGoal(key(agent), () => ({
           ...withGoal,
           evaluatedRequestId: "goal:g1:0",
         }));
+        await storage.dispatchNativeAgentPromptOnce(key(agent), "goal:g1:0", async () => {});
         await service.goals.init();
         await service.goals.settled();
       }
@@ -156,7 +156,6 @@ describe("goal attention", () => {
           { id: "typed-1", requestId: "typed-1", text: "/goal Make it pass --max-iterations 2" },
         ]);
         await service.drainPromptQueueForSession({
-          environmentId: "env-1",
           agent: "claude",
           logicalSessionKey: "env-env-1:tab-1",
         });

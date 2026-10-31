@@ -43,14 +43,13 @@ function passing(): GoalScenarioInput {
     coordinatorEnvironmentId: COORDINATOR,
     workerEnvironmentId: WORKER,
     setResults: [SET_OUTPUT],
-    readResults: [JSON.stringify({ goal: { status: "complete" } })],
+    readResults: [JSON.stringify({ goal: { status: "claimed" } })],
     goal: {
       goalId: "g1",
-      status: "complete",
-      statusReason: "check-passed",
+      status: "claimed",
+      statusReason: "agent-claimed",
       iterations: 2,
       maxIterations: GOAL_MAX_ITERATIONS,
-      lastCheck: { passed: true, exitCode: 0 },
       endedAt: iso(ENDED),
     },
     setEndedAt: SET_ENDED,
@@ -96,7 +95,7 @@ function passing(): GoalScenarioInput {
         toEnvironmentId: COORDINATOR,
         toTabId: "tab",
         placement: "injected",
-        body: "Its goal is complete (check-passed) after 2 of 3 iterations. Read more: `get_worker_goal`.",
+        body: "Its goal is claimed (agent-claimed) after 2 of 3 iterations. Read more: `get_worker_goal`.",
       },
     ],
     escapedInteractions: [],
@@ -125,7 +124,7 @@ describe("the prompts", () => {
     expect(prompt).toContain("set_worker_goal");
     expect(prompt).toContain(`environmentId "${WORKER}"`);
     expect(prompt).toContain(`maxIterations ${GOAL_MAX_ITERATIONS}`);
-    expect(prompt).toContain(JSON.stringify(goalCheckCommand(probe)));
+    expect(prompt).not.toContain("check ");
     expect(prompt).toContain(JSON.stringify(goalObjective(probe)));
     expect(prompt).toContain("get_worker_goal");
   });
@@ -229,16 +228,16 @@ describe("the verdict", () => {
     for (const status of ["claimed", "limited", "paused", "blocked"]) {
       const input = passing();
       input.goal = { ...input.goal!, status, statusReason: "x" };
-      expect(failed(input)).toContain("goal-complete");
+      expect(failed(input)).toContain("goal-claimed");
     }
   });
 
-  test("a goal with no passing check on record fails", () => {
+  test("coordinator claims cannot carry a shell check result", () => {
     const input = passing();
     input.goal = { ...input.goal!, lastCheck: { passed: false, exitCode: 1 } };
-    expect(failed(input)).toEqual(["check-pass-recorded"]);
+    expect(failed(input)).toEqual(["no-shell-check"]);
     const { lastCheck: _lastCheck, ...withoutCheck } = passing().goal!;
-    expect(failed({ ...passing(), goal: withoutCheck })).toEqual(["check-pass-recorded"]);
+    expect(failed({ ...passing(), goal: withoutCheck })).toEqual([]);
   });
 
   test("a single iteration proves nothing about iterations", () => {
@@ -250,7 +249,7 @@ describe("the verdict", () => {
   test("a different goal than the one set fails", () => {
     const input = passing();
     input.goal = { ...input.goal!, goalId: "other" };
-    expect(failed(input)).toEqual(["goal-complete"]);
+    expect(failed(input)).toEqual(["goal-claimed"]);
   });
 
   test("a refused set fails", () => {

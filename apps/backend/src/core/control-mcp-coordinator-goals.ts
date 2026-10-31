@@ -64,7 +64,7 @@ export function registerCoordinatorGoalTools(
     {
       title: "Give a worker tab a goal",
       description:
-        "Give a native agent tab you launched or prompted a durable objective. Orkestrator keeps sending it turns until a check passes, it needs a person, or a limit stops it, and wakes you once when that happens. Prefer a check: without one, a done report ends the goal as claimed, which nothing verified. A goal never changes the tab's permission mode, so an approval still parks a turn. Refused for a tab you did not launch or prompt, for a tab that already has a running goal, for a worker on another node, and for agents that do not support goals yet. Requires maxIterations: choose the smallest number the task can need.",
+        "Give a native agent tab you launched or prompted a durable objective. Orkestrator keeps sending it turns until it reports done, needs a person, or a limit stops it, and wakes you once when that happens. Coordinator goals cannot supply shell checks; a done report ends as claimed and remains unverified. A goal never changes the tab's permission mode, so an approval still parks a turn. Refused for a tab you did not launch or prompt, for a tab that already has a running goal, for a worker on another node, and for agents that do not support goals yet. Requires maxIterations: choose the smallest number the task can need.",
       inputSchema: z
         .object({
           requestId: z
@@ -88,15 +88,6 @@ export function registerCoordinatorGoalTools(
             .max(NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit)
             .describe(
               `Required: the most turns this goal may run, from 1 to ${NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit}. There is no default.`,
-            ),
-          check: z
-            .string()
-            .trim()
-            .min(1)
-            .max(NATIVE_AGENT_GOAL_LIMITS.checkMaxBytes)
-            .optional()
-            .describe(
-              "One-line shell command run in the worker when the agent reports done; exit 0 completes the goal.",
             ),
           tokenBudget: z
             .number()

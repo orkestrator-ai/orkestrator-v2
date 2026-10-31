@@ -1,3 +1,4 @@
+import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { promptQueueMessageFingerprint } from "./storage-record-upgrades.js";
 import * as shared from "./storage-shared.js";
 import {
@@ -415,6 +416,19 @@ export class PromptsRepository {
         session?.pendingDispatch?.requestId === messageId
       ) {
         return { status: "consumed" as const, queue: previous ?? null };
+      }
+
+      if (isRecord(message.origin) && message.origin.kind === "goal") {
+        const goal = session ? sessionGoal(session) : undefined;
+        if (
+          !goal ||
+          goal.status !== "active" ||
+          goal.goalId !== message.origin.goalId ||
+          goal.iterations !== Number(message.origin.iteration) + 1 ||
+          goal.providerSessionId !== session?.providerSessionId
+        ) {
+          return { status: "consumed" as const, queue: previous ?? null };
+        }
       }
 
       // Recovery receipts above remain authoritative even when new publication

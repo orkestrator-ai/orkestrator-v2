@@ -41,7 +41,7 @@ type Script = {
 
 function fixture(platform: AgentPlatform, script: Script = {}) {
   const now = () => new Date().toISOString();
-  const ending = script.ending ?? "complete";
+  const ending = script.ending ?? "claimed";
   const totalIterations = script.iterations ?? 2;
   const environments: Array<{ id: string; name: string }> = [];
   const messages: CoordinatorTranscriptMessage[] = [];
@@ -326,16 +326,16 @@ test("a goal that ends with no wake is reported, not hung on", async () => {
   );
 });
 
-test("a claim, which nothing verified, fails", async () => {
-  const { checks } = await run({ ending: "claimed" });
+test("a coordinator goal cannot pretend a shell check verified it", async () => {
+  const { checks } = await run({ ending: "complete" });
   expect(names(checks)).toEqual(
-    expect.arrayContaining(["goal-complete", "check-pass-recorded", "wake-names-outcome"]),
+    expect.arrayContaining(["goal-claimed", "no-shell-check", "wake-names-outcome"]),
   );
 });
 
 test("a goal stopped at its cap fails", async () => {
   const { checks } = await run({ ending: "limited", iterations: 3 });
-  expect(names(checks)).toEqual(expect.arrayContaining(["goal-complete", "check-pass-recorded"]));
+  expect(names(checks)).toEqual(expect.arrayContaining(["goal-claimed"]));
 });
 
 test("one iteration fails, because it proves nothing about iterations", async () => {
@@ -352,6 +352,6 @@ test("a refused set ends the case at once with the reason", async () => {
   const { checks, sent } = await run({ refused: true });
   expect(sent).toHaveLength(2);
   const failed = names(checks);
-  expect(failed).toEqual(expect.arrayContaining(["finished", "goal-set", "goal-complete"]));
+  expect(failed).toEqual(expect.arrayContaining(["finished", "goal-set", "goal-claimed"]));
   expect(checks.find((item) => item.name === "finished")?.detail).toContain("set no goal");
 });

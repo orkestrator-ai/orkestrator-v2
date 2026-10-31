@@ -127,3 +127,21 @@ describe("agent-test artifact sanitizer", () => {
     expect(retained).toContain("[REDACTED]");
   });
 });
+
+test("a long failed-run trace larger than 16 MiB survives redaction", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-agent-long-trace-"));
+  const source = await mkdtemp(path.join(os.tmpdir(), "ork-agent-long-trace-source-"));
+  temporaryDirectories.push(root, source);
+  // Store without compression so the archive itself exceeds the old bound.
+  const content = "x".repeat(17 * 1024 * 1024) + "\ncookie: orkestrator_gateway_auth=secret\n";
+  await writeFile(path.join(source, "trace.network"), content);
+  const archive = path.join(root, "trace.zip");
+  expect(spawnSync("zip", ["-0", "-q", archive, "trace.network"], { cwd: source }).status).toBe(0);
+  expect((await stat(archive)).size).toBeGreaterThan(16 * 1024 * 1024);
+  await sanitizeAgentTestingArtifacts(root, []);
+  const unpacked = spawnSync("unzip", ["-p", archive, "trace.network"], {
+    maxBuffer: 20 * 1024 * 1024,
+  }).stdout.toString();
+  expect(unpacked).toContain("orkestrator_gateway_auth=[REDACTED]");
+  expect(unpacked).not.toContain("=secret");
+}, 20_000);

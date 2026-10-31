@@ -1,4 +1,7 @@
-import { describe, expect, mock, test } from "bun:test";
+import { PromptRejectedError } from "./agent-provider-contract.js";
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { sessionGoal } from "@orkestrator/protocol/native-agent-goal";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -973,3 +976,71 @@ test.each([false, true])(
     });
   },
 );
+
+test.each(AGENT_PLATFORMS)(
+  "%s goal continuations retain Plan through real queue dispatch",
+  async (agent) => {
+    const stub = providerStub(agent);
+    await withService(stub.provider, async ({ service, storage }) => {
+      const identity = { environmentId: "env-1", agent, logicalSessionKey };
+      const session = await service.ensureSession({ ...identity, sessionMode: "plan" });
+      await storage.updateNativeAgentSessionControls(session.key, session.providerSessionId, {
+        mode: "plan",
+      });
+      await service.runGoalCommand({ ...identity, text: "Keep planning --max-iterations 3" });
+      for (let turn = 1; turn <= 3; turn++) {
+        await service.goals.settled();
+        await service.drainPromptQueueForSession({ agent, logicalSessionKey });
+        await waitForCondition(() => stub.send.mock.calls.length === turn);
+        const options = stub.send.mock.calls[turn - 1]![2];
+        expect(options.mode).toBeUndefined();
+        expect((await storage.getNativeAgentSession(session.key))?.controls?.mode).toBe("plan");
+        await storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
+          requestId: options.requestId!,
+          outcome: "completed",
+          observedAt: new Date().toISOString(),
+        });
+        markIdle(service, agent, session.providerSessionId);
+        service.goals.noteTurnEnded(session.key);
+      }
+      await service.goals.settled();
+      expect(sessionGoal((await storage.getNativeAgentSession(session.key))!)?.status).toBe(
+        "limited",
+      );
+      expect(stub.send).toHaveBeenCalledTimes(3);
+    });
+  },
+);
+
+test("a rejected goal carrier pauses with one failure ring and releases turn-end work", async () => {
+  const stub = providerStub("codex");
+  stub.send.mockImplementation(async () => {
+    throw new PromptRejectedError("carrier refused");
+  });
+  await withService(stub.provider, async ({ service, storage }) => {
+    const identity = { environmentId: "env-1", agent: "codex" as const, logicalSessionKey };
+    const session = await service.ensureSession(identity);
+    const attention = spyOn(storage, "recordEnvironmentSessionCompletion");
+    await service.runGoalCommand({ ...identity, text: "Keep planning" });
+    await service.goals.settled();
+    await service.drainPromptQueueForSession({ agent: "codex", logicalSessionKey });
+    await waitForCondition(async () =>
+      Boolean((await storage.getPromptQueue(`codex\0${logicalSessionKey}`))?.dispatchError),
+    );
+    service.goals.noteTurnEnded(session.key);
+    await service.goals.settled();
+    const stopped = await storage.getEnvironment("env-1");
+    expect(stopped).toMatchObject({ hasUnreadWork: true, unreadReason: "agent_failed" });
+    expect(sessionGoal((await storage.getNativeAgentSession(session.key))!)).toMatchObject({
+      status: "paused",
+      statusReason: "continuation-failed",
+      statusDetail: "carrier refused",
+    });
+    expect(service.goals.holdsTurnEnd(session.key)).toBe(false);
+    expect(attention).toHaveBeenCalledTimes(1);
+    service.goals.noteTurnEnded(session.key);
+    await service.goals.settled();
+    expect(attention).toHaveBeenCalledTimes(1);
+    attention.mockRestore();
+  });
+});

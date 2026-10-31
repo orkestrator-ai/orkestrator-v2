@@ -51,13 +51,9 @@ async function fixture(options: { holdOnGoal?: boolean; check?: GoalCheckRun } =
     undefined,
     // Between iterations the tab really does read idle; this is the sweep's view.
     async () => "idle",
-    {
-      ...(options.holdOnGoal === false
-        ? {}
-        : {
-            workerGoal: (environmentId, tabId) => workerSessionGoal(storage, environmentId, tabId),
-          }),
-    },
+    options.holdOnGoal === false
+      ? {}
+      : { workerGoal: (environmentId, tabId) => workerSessionGoal(storage, environmentId, tabId) },
   );
   const initial = await coordinator.ensure(project.id);
   const conversation = initial.workspace.conversations[0]!;
@@ -191,6 +187,7 @@ async function fixture(options: { holdOnGoal?: boolean; check?: GoalCheckRun } =
     report,
     set,
     key,
+    workerId: worker.id,
     associationId: association.id,
   };
 }
@@ -312,4 +309,28 @@ describe("a coordinator's wake for a worker's goal", () => {
     await runTurn();
     expect(await wakes()).toHaveLength(1);
   });
+});
+
+test("a parked continuation releases its delegation and wakes the coordinator once", async () => {
+  const h = await fixture();
+  await h.set({ maxIterations: 5 });
+  const current = (await h.goal())!;
+  const queueKey = `claude\0env-${h.workerId}:${TAB}`;
+  const reservation = await storage.reservePromptQueueHeadForDispatch(queueKey);
+  expect(reservation).not.toBeNull();
+  await storage.failPromptQueueDispatch(queueKey, reservation!.requestId, "provider refused");
+  h.goals.noteTurnEnded(h.key);
+  await h.goals.settled();
+  await h.coordinator.reconcileWorkerDelegations();
+  await h.coordinator.deliverDelegationWakes();
+  expect(await h.goal()).toMatchObject({
+    goalId: current.goalId,
+    status: "paused",
+    statusReason: "continuation-failed",
+  });
+  expect(await openCount()).toBe(0);
+  expect(await h.wakes()).toHaveLength(1);
+  await h.coordinator.reconcileWorkerDelegations();
+  await h.coordinator.deliverDelegationWakes();
+  expect(await h.wakes()).toHaveLength(1);
 });

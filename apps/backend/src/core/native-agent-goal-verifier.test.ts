@@ -791,3 +791,21 @@ describe("the session itself", () => {
     expect(turn!.options.agentMcp).toBeUndefined();
   });
 });
+
+test("Grok resumes after a compact turn and verifies the next report once", async () => {
+  const w = await world(answers(PASS), { agent: "grok" });
+  await w.set("Resume the work after compaction --verifier grok");
+  await w.turnEnds({ status: "blocked", message: "compact first" });
+  expect(w.goal().status).toBe("blocked");
+  w.state.session = {
+    ...w.state.session,
+    dispatchedRequestIds: [...(w.state.session.dispatchedRequestIds ?? []), "compact-turn"],
+  };
+  await w.service.command(w.state.session, "resume", { busy: false });
+  await w.service.settled();
+  await w.turnEnds(DONE);
+  await w.service.settled();
+  expect(w.goal().status).toBe("complete");
+  expect(w.provider.turns()).toHaveLength(1);
+  expect(w.state.rung.filter((reason) => reason.startsWith("complete:"))).toHaveLength(1);
+});

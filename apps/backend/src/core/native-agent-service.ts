@@ -763,7 +763,11 @@ export class NativeAgentService {
         await storage.recordEnvironmentSessionCompletion(
           session.environmentId,
           new Date(this.now()).toISOString(),
-          goal.status === "blocked" ? "agent_waiting" : "agent_finished",
+          goal.statusReason === "continuation-failed"
+            ? "agent_failed"
+            : goal.status === "blocked"
+              ? "agent_waiting"
+              : "agent_finished",
         );
       },
       releaseTurnEnd: async (session) => options.onGoalReleasedTurnEnd?.(session),

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { boundedUtf8Tail, NATIVE_AGENT_GOAL_LIMITS } from "@orkestrator/protocol/native-agent-goal";
 import type { CommandContext } from "./commands-context.js";
@@ -21,8 +21,24 @@ function errorMessage(error: unknown): string {
 const CHECK_POLL_MS = 1_000;
 const CHECK_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+    if (signal?.aborted) done();
+  });
+}
+
+/** Stable across backend generations; a goal's next iteration gets a new worker. */
+export function goalCheckOperationId(goalId: string, iteration: number): string {
+  return `goal-check-${createHash("sha256")
+    .update(JSON.stringify([goalId, iteration]))
+    .digest("hex")}`;
 }
 
 /**
@@ -34,9 +50,16 @@ function sleep(ms: number): Promise<void> {
 export async function runGoalCheck(
   environment: Environment,
   context: CommandContext,
-  input: { goalId: string; command: string; timeoutMs: number },
+  input: {
+    goalId: string;
+    iteration: number;
+    command: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+  },
 ): Promise<GoalCheckRun> {
-  const operationId = `goal-check-${input.goalId}-${randomUUID()}`;
+  // A restarted backend adopts the existing worker instead of starting a twin.
+  const operationId = goalCheckOperationId(input.goalId, input.iteration);
   const directory = execDirectory(environment, operationId, context);
   const startedAt = Date.now();
   let root: string;
@@ -45,50 +68,89 @@ export async function runGoalCheck(
   } catch (error) {
     return { kind: "unavailable", detail: errorMessage(error) };
   }
-  let state: ExecState;
+  let state: ExecState | undefined;
   try {
-    state = (await control(environment, context, {
-      action: "start",
-      operationId,
-      directory,
-      root,
-      argv: ["bash", "-lc", input.command],
-      cwd: root,
-      env: {},
-      timeoutMs: input.timeoutMs,
-      maxOutputBytes: CHECK_OUTPUT_LIMIT_BYTES,
-    })) as ExecState;
-  } catch (error) {
-    return { kind: "unavailable", detail: errorMessage(error) };
-  }
-  const deadline = startedAt + input.timeoutMs + 60_000;
-  while (state.status === "starting" || state.status === "running") {
-    if (Date.now() > deadline) {
-      return { kind: "unavailable", detail: "The check did not report a result." };
-    }
-    await sleep(CHECK_POLL_MS);
+    if (input.signal?.aborted) return { kind: "stopped" };
     try {
-      state = (await control(environment, context, {
-        action: "status",
-        operationId,
-        directory,
-      })) as ExecState;
+      state = await context.runtime.environments.enqueueLifecycleOperation(
+        environment.id,
+        context.environmentLifecycleTasks,
+        async () => {
+          if (input.signal?.aborted) throw new Error("The check was stopped before launch.");
+          const current = await context.storage.getEnvironment(environment.id);
+          if (!current || current.status !== "running")
+            throw new Error("The check's environment is not running.");
+          environment = current;
+          root = workspaceRoot(current);
+          return (await control(environment, context, {
+            action: "start",
+            operationId,
+            environmentId: environment.id,
+            directory,
+            root,
+            argv: ["bash", "-lc", input.command],
+            cwd: root,
+            env: {},
+            timeoutMs: input.timeoutMs,
+            maxOutputBytes: CHECK_OUTPUT_LIMIT_BYTES,
+          })) as ExecState;
+        },
+      );
     } catch (error) {
       return { kind: "unavailable", detail: errorMessage(error) };
     }
+    const deadline = startedAt + input.timeoutMs + 60_000;
+    while (state.status === "starting" || state.status === "running") {
+      if (input.signal?.aborted) return { kind: "stopped" };
+      if (Date.now() > deadline) {
+        return { kind: "unavailable", detail: "The check did not report a result." };
+      }
+      await sleep(CHECK_POLL_MS, input.signal);
+      if (input.signal?.aborted) return { kind: "stopped" };
+      try {
+        state = (await control(environment, context, {
+          action: "status",
+          operationId,
+          directory,
+        })) as ExecState;
+      } catch (error) {
+        return { kind: "unavailable", detail: errorMessage(error) };
+      }
+    }
+    if (state.status !== "exited") {
+      return { kind: "unavailable", detail: "The check's worker stopped reporting." };
+    }
+    if (state.cancelled)
+      return {
+        kind: "unavailable",
+        detail: "The check was cancelled because its environment is stopping or changing.",
+      };
+    if (state.spawnError) return { kind: "unavailable", detail: state.spawnError };
+    const output = await readTail(environment, context, operationId, directory);
+    return {
+      kind: "finished",
+      exitCode: state.exitCode ?? null,
+      timedOut: state.timedOut === true,
+      durationMs: Date.now() - startedAt,
+      outputTail: output,
+    };
+  } finally {
+    // Cancellation is explicit: shutdown and lifecycle drains never leave a
+    // detached check modifying a workspace. Unknown workers retain evidence.
+    try {
+      if (!state || state.status === "starting" || state.status === "running") {
+        state = (await control(environment, context, {
+          action: "cancel",
+          operationId,
+          directory,
+        })) as ExecState;
+      }
+      if (state.status === "exited")
+        await control(environment, context, { action: "cleanup", operationId, directory });
+    } catch {
+      // Retain the durable directory for recovery and lifecycle drains.
+    }
   }
-  if (state.status !== "exited") {
-    return { kind: "unavailable", detail: "The check's worker stopped reporting." };
-  }
-  if (state.spawnError) return { kind: "unavailable", detail: state.spawnError };
-  const output = await readTail(environment, context, operationId, directory);
-  return {
-    kind: "finished",
-    exitCode: state.exitCode ?? null,
-    timedOut: state.timedOut === true,
-    durationMs: Date.now() - startedAt,
-    outputTail: output,
-  };
 }
 
 async function readTail(
@@ -128,12 +190,12 @@ export async function goalWorkspaceFingerprint(
   environment: Environment,
 ): Promise<string | undefined> {
   const script =
-    "{ git rev-parse HEAD; git status --porcelain=v1 --untracked-files=all; git diff HEAD; } 2>/dev/null | git hash-object --stdin";
+    'set -eo pipefail; git rev-parse --git-dir >/dev/null; { git rev-parse HEAD; git status --porcelain=v1 --untracked-files=all; git diff HEAD; git ls-files --others --exclude-standard -z | while IFS= read -r -d "" file; do printf "%s\\0" "$file"; if [ -L "$file" ]; then readlink "$file" | git hash-object --stdin; else git hash-object --no-filters -- "$file"; fi; done; } 2>/dev/null | git hash-object --stdin';
   const root = workspaceRoot(environment);
   try {
     const { stdout } =
       environment.environmentType === "local"
-        ? await runCommand("bash", ["-c", `git rev-parse --git-dir >/dev/null && ${script}`], {
+        ? await runCommand("bash", ["-c", script], {
             cwd: path.resolve(root),
             timeoutMs: 30_000,
           })
@@ -146,11 +208,7 @@ export async function goalWorkspaceFingerprint(
               environment.containerId!,
               "bash",
               "-lc",
-              withContainerRuntimeCredential(
-                ["bash", "-c", `git rev-parse --git-dir >/dev/null && ${script}`]
-                  .map(quoteShell)
-                  .join(" "),
-              ),
+              withContainerRuntimeCredential(["bash", "-c", script].map(quoteShell).join(" ")),
             ],
             { timeoutMs: 30_000 },
           );

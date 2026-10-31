@@ -35,6 +35,7 @@ export const NATIVE_AGENT_GOAL_REASONS = [
   "user-paused",
   "user-stopped",
   "turn-failed",
+  "continuation-failed",
   "outcome-unknown",
   "runtime-stopped",
   "environment-stopped",
@@ -408,12 +409,15 @@ export type GoalEvent =
       error?: string;
       /** The turn was one of the loop's own continuations. */
       continuation: boolean;
+      /** A carrier already counted in iterations still waits behind this user turn. */
+      continuationPending?: boolean;
       /** `undefined`: the provider or workspace cannot say. */
       tokensUsed?: number;
       workspaceFingerprint?: string;
     }
   | { kind: "check-finished"; result: NativeAgentGoalCheckResult }
   | { kind: "check-unavailable"; detail: string }
+  | { kind: "continuation-failed"; detail: string }
   | { kind: "verifier-finished"; verdict: NativeAgentGoalVerdict }
   | { kind: "verifier-unavailable"; detail: string; tokens?: number }
   /** A verifier session ended with no verdict to act on: count what it spent. */
@@ -559,6 +563,16 @@ function afterTurn(
     if (reported.verifier) return startVerifier(reported, now);
     return { goal: settle(reported, now, "claimed", "agent-claimed"), action: "none" };
   }
+  if (event.continuationPending && !overBudget(seen)) {
+    return {
+      goal: {
+        ...seen,
+        ...(pendingReport ? { lastReport: pendingReport } : {}),
+        noProgressStreak: 0,
+      },
+      action: "none",
+    };
+  }
   const progressed =
     pendingReport !== undefined ||
     !event.continuation ||
@@ -606,6 +620,10 @@ export function nextGoalState(
       const { lastVerdict: _lastVerdict, ...rest } = goal;
       return continueOrLimit({ ...rest, lastCheck: event.result }, now);
     }
+    case "continuation-failed":
+      return goal.status === "active"
+        ? { goal: settle(goal, now, "paused", "continuation-failed", event.detail), action: "none" }
+        : { goal, action: "none" };
     case "check-unavailable":
       if (goal.status !== "checking") return unchanged;
       return {
@@ -874,7 +892,7 @@ function trailingFlags(text: string):
   let verifier: NativeAgentGoalVerifier | undefined;
   for (;;) {
     const match = /(?:^|\s)(--max-iterations|--budget|--verifier)(?:\s+(\S*))?\s*$/.exec(rest);
-    if (!match) return { rest, ...{ maxIterations, tokenBudget, verifier } };
+    if (!match) return { rest, maxIterations, tokenBudget, verifier };
     if (match[1] === "--verifier") {
       const parsed = parseVerifierFlag(match[2] ?? "");
       if ("error" in parsed) return parsed;
@@ -967,6 +985,7 @@ const GOAL_REASON_TEXT: Record<NativeAgentGoalReason, string> = {
   "user-paused": "you paused it",
   "user-stopped": "you stopped the turn",
   "turn-failed": "a turn failed",
+  "continuation-failed": "the next goal turn could not be dispatched",
   "outcome-unknown": "the last turn's outcome could not be confirmed",
   "runtime-stopped": "the agent's runtime stopped mid-turn",
   "environment-stopped": "the environment stopped",

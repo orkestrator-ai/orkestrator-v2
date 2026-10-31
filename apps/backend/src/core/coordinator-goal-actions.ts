@@ -108,6 +108,10 @@ export function registerCoordinatorGoalActions(
   register("set_coordinator_worker_goal", async (args, context) => {
     const caller = await coordinatorCaller(args.scope, context);
     const input = record(args.input, "the goal input");
+    if (input.check !== undefined)
+      throw new Error(
+        "Coordinator goals cannot supply shell checks. A person must configure checks directly.",
+      );
     const requestId = asNonBlankString(input.requestId, "requestId");
     const tab = await ownedWorkerTab(context, caller, input);
     const session = await storedSession(context, tab);
@@ -123,7 +127,7 @@ export function registerCoordinatorGoalActions(
     const command = goalSetCommand({
       objective: input.objective,
       maxIterations: input.maxIterations,
-      ...(typeof input.check === "string" ? { check: input.check } : {}),
+
       ...(typeof input.tokenBudget === "number" ? { tokenBudget: input.tokenBudget } : {}),
     });
     if (command.kind === "error") throw new Error(command.message);
@@ -161,9 +165,10 @@ export function registerCoordinatorGoalActions(
       environmentId: tab.environmentId,
       tabId: tab.tabId,
       goal: goal
-        ? goalForModel(goalPublicView(goal), {
-            ...(goal.lastCheck?.outputTail ? { checkOutput: goal.lastCheck.outputTail } : {}),
-          })
+        ? goalForModel(
+            goalPublicView(goal),
+            goal.lastCheck?.outputTail ? { checkOutput: goal.lastCheck.outputTail } : {},
+          )
         : null,
       history: (session?.goalHistory ?? []).map(goalStatusSummary),
     };

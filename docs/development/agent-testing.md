@@ -1176,7 +1176,7 @@ read-only boundary (`read-only`), that delegation never waits inside a turn
 (`async`), that worker mail flows with nobody's help (`family`), that the
 status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
-(`deliver-now`), that a worker's goal runs to a passing check and wakes the
+(`deliver-now`), that a worker's goal ends as an unverified claim and wakes the
 coordinator once (`goal`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:

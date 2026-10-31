@@ -1,3 +1,4 @@
+import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -327,4 +328,83 @@ describe("backend-authored queue items", () => {
       ]);
     });
   });
+});
+
+function continuationGoal(): NativeAgentGoal {
+  return {
+    goalId: "g",
+    objective: "continue",
+    status: "active",
+    providerSessionId: "provider-1",
+    iterations: 1,
+    maxIterations: 5,
+    noProgressStreak: 0,
+    setAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  };
+}
+const carrier = {
+  id: "goal:g:0",
+  requestId: "goal:g:0",
+  text: "continue",
+  preserveSessionMode: true,
+  origin: { kind: "goal", goalId: "g", iteration: 0 },
+};
+
+describe("goal cancellation fences", () => {
+  for (const action of ["pause", "clear"] as const) {
+    test(`${action} finishes before a delayed continuation insertion`, async () => {
+      await withStorage(async (storage) => {
+        await createSession(storage);
+        await storage.updateNativeAgentGoal(SESSION_KEY, () => continuationGoal());
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const publication = gate.then(() =>
+          storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", carrier),
+        );
+        await storage.updateNativeAgentGoal(SESSION_KEY, (goal) =>
+          action === "clear" ? null : { ...goal!, status: "paused", statusReason: "user-paused" },
+        );
+        // Removing an absent row records no receipt, as in production.
+        await storage.removePromptQueueMessage(KEY, "e1", carrier.id);
+        release();
+        expect((await publication).status).toBe("consumed");
+        expect((await storage.getPromptQueue(KEY))?.messages ?? []).toHaveLength(0);
+        let sends = 0;
+        expect(
+          (
+            await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, carrier.id, async () => {
+              sends++;
+            })
+          ).dispatched,
+        ).toBe(false);
+        expect(sends).toBe(0);
+      });
+    });
+
+    test(`${action} cancels an already reserved continuation before provider handoff`, async () => {
+      await withStorage(async (storage) => {
+        await createSession(storage);
+        await storage.updateNativeAgentGoal(SESSION_KEY, () => continuationGoal());
+        await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", carrier);
+        expect((await storage.reservePromptQueueHeadForDispatch(KEY))?.requestId).toBe(carrier.id);
+        await storage.updateNativeAgentGoal(SESSION_KEY, (goal) =>
+          action === "clear" ? null : { ...goal!, status: "paused", statusReason: "user-paused" },
+        );
+        let sends = 0;
+        expect(
+          (
+            await storage.dispatchNativeAgentPromptOnce(SESSION_KEY, carrier.id, async () => {
+              sends++;
+            })
+          ).dispatched,
+        ).toBe(false);
+        await storage.acknowledgePromptQueueDispatch(KEY, carrier.id);
+        expect(sends).toBe(0);
+        expect((await storage.getPromptQueue(KEY))?.inFlight).toBeUndefined();
+      });
+    });
+  }
 });

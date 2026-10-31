@@ -235,3 +235,9 @@ describe("settings schema", () => {
     }
   });
 });
+
+test("goal set and resume declare their check process and filesystem effects", () => {
+  for (const action of ["session.goal.set", "session.goal.resume"] as const) {
+    expect(PUBLIC_ACTIONS[action].effects).toEqual(["provider-session", "filesystem", "process"]);
+  }
+});

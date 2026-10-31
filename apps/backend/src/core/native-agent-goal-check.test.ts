@@ -1,3 +1,4 @@
+import { nextGoalState, type NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -39,6 +40,38 @@ describe("goalWorkspaceFingerprint", () => {
       await writeFile(path.join(dir, "b.txt"), "new\n");
       const untracked = await goalWorkspaceFingerprint(environment(dir));
       expect(untracked).not.toBe(clean);
+      let progress: NativeAgentGoal = {
+        goalId: "g",
+        objective: "work",
+        providerSessionId: "p",
+        status: "active",
+        iterations: 1,
+        maxIterations: 20,
+        noProgressStreak: 0,
+        workspaceFingerprint: untracked,
+        setAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      };
+      let previous = untracked;
+      for (const contents of ["more work\n", "finished work\n"]) {
+        await writeFile(path.join(dir, "b.txt"), contents);
+        const next = await goalWorkspaceFingerprint(environment(dir));
+        expect(next).toBeString();
+        expect(next).not.toBe(previous);
+        progress = nextGoalState(
+          progress,
+          {
+            kind: "turn-ended",
+            requestId: "goal:g:0",
+            continuation: true,
+            outcome: "completed",
+            workspaceFingerprint: next,
+          },
+          Date.now(),
+        ).goal;
+        expect(progress.noProgressStreak).toBe(0);
+        previous = next;
+      }
       await writeFile(path.join(dir, "a.txt"), "two\n");
       const edited = await goalWorkspaceFingerprint(environment(dir));
       expect(edited).not.toBe(untracked);

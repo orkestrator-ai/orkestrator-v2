@@ -238,7 +238,7 @@ fi
 # domain, parallel lookups, per-query deadline). Each address expires unless
 # a refresh re-resolves it.
 ork_add_domains allowed-domains "$DOMAINS_CSV"
-ork_commit_addresses
+ork_commit_addresses "$(ork_members "$ORK_SET")"
 RESOLVED_DOMAINS="$ORK_RESOLVED_DOMAINS"
 UNRESOLVED_DOMAINS="$ORK_UNRESOLVED_DOMAINS"
 

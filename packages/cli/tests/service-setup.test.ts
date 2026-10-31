@@ -90,6 +90,35 @@ describe("service setup questions", () => {
     ]);
   });
 
+  test("a second backend's tailnet address can ask for a stable port", async () => {
+    const { io, asked } = scripted(["2", "34121", "34122", "70000", "abc", "45000", "n", "y"]);
+    const args = await askServeArguments(io, {
+      installCommand,
+      probe: tailscaleReady,
+      secondBackend: true,
+    });
+    expect(args).toEqual(["--port", "45000"]);
+    expect(asked.filter((prompt) => prompt.includes("Gateway port"))).toHaveLength(5);
+    expect(io.err.join("")).toContain("stay with the main install");
+    expect(io.err.join("")).toContain("service install --yes -- --port 45000");
+  });
+
+  test("a second backend can keep a free port", async () => {
+    const { io } = scripted(["2", "", "n", "y"]);
+    expect(
+      await askServeArguments(io, { installCommand, probe: tailscaleReady, secondBackend: true }),
+    ).toEqual([]);
+  });
+
+  test.each([
+    ["Tailscale Serve", ["1", "n", "n", "y"]],
+    ["SSH", ["3", "y"]],
+  ])("a second backend over %s is not asked for a port", async (_access, answers) => {
+    const { io, asked } = scripted(answers);
+    await askServeArguments(io, { installCommand, probe: tailscaleReady, secondBackend: true });
+    expect(asked.some((prompt) => prompt.includes("Gateway port"))).toBe(false);
+  });
+
   test("asks for the Tailscale CLI when Serve needs one that cannot be found", async () => {
     const { io } = scripted(["1", "/opt/tailscale/bin/tailscale", "n", "n", "y"]);
     const args = await askServeArguments(io, {

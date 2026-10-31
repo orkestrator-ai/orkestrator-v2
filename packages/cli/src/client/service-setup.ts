@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import os from "node:os";
+import {
+  DEFAULT_CONTROL_MCP_PORT,
+  DEFAULT_GATEWAY_PORT,
+} from "../../../../apps/backend/src/fixed-ports.js";
 import { CliError } from "./errors.js";
 import type { ClientIo } from "./io.js";
 import { throwIfInterrupted } from "./wait.js";
@@ -104,6 +108,33 @@ async function confirm(io: ClientIo, prompt: string, fallback: boolean): Promise
   }
 }
 
+/**
+ * A remote client needs an address that survives a restart, and a backend of
+ * another data directory takes a new free port on each start. Null keeps that.
+ */
+async function askGatewayPort(io: ClientIo): Promise<string | null> {
+  io.stderr(
+    `\nThis is not the default data directory, so ports ${DEFAULT_GATEWAY_PORT} and ${DEFAULT_CONTROL_MCP_PORT} stay with the main install. Without a port of its own, this backend takes a free one that changes on each start.\n`,
+  );
+  for (;;) {
+    const answer = await ask(io, "Gateway port for a stable address (empty for a free one): ");
+    if (answer === "") return null;
+    const port = Number(answer);
+    if (
+      /^\d+$/.test(answer) &&
+      port >= 1 &&
+      port <= 65535 &&
+      port !== DEFAULT_GATEWAY_PORT &&
+      port !== DEFAULT_CONTROL_MCP_PORT
+    ) {
+      return answer;
+    }
+    io.stderr(
+      `Enter a port from 1 to 65535, other than ${DEFAULT_GATEWAY_PORT} and ${DEFAULT_CONTROL_MCP_PORT}.\n`,
+    );
+  }
+}
+
 /** Shell-quotes one argument for the equivalent command line. */
 function quote(arg: string): string {
   return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
@@ -145,6 +176,8 @@ export async function askServeArguments(
     signal?: AbortSignal;
     /** Nothing may change: report a missing Tailscale operator, do not grant it. */
     dryRun?: boolean;
+    /** The data directory is not the default one, so the fixed ports are not its own. */
+    secondBackend?: boolean;
   },
 ): Promise<string[]> {
   const source = io;
@@ -174,6 +207,10 @@ export async function askServeArguments(
     io.stderr(
       "\nThis machine has no Tailscale address yet. Connect Tailscale before the service starts, or it will not serve.\n",
     );
+  }
+  if (access === "tailnet" && options.secondBackend) {
+    const port = await askGatewayPort(io);
+    if (port) args.push("--port", port);
   }
   if (access === "serve") {
     args.push("--tailscale-serve");

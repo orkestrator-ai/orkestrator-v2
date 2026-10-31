@@ -68,17 +68,27 @@ await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 const standaloneLogging = installStandaloneBackendLogging(options);
 console.info(`[Backend] Starting Orkestrator ${APP_VERSION}`);
 // A second backend on this host (another data directory) already keeps off the
-// fixed Control MCP port; say so when the main install is running beside it.
+// fixed ports; say so when the main install is running beside it.
 if (!isDefaultDataDir(options.dataDir)) {
   const main = await liveInstanceIn(defaultDataDir(process.platform, process.env));
   if (main) {
+    const gatewayPort = options.port
+      ? `asks for gateway port ${options.port}`
+      : "takes a free gateway port";
     const port = process.env.ORKESTRATOR_CONTROL_MCP_PORT?.trim()
       ? "uses ORKESTRATOR_CONTROL_MCP_PORT for its Control MCP"
       : "leaves the fixed Control MCP port to it";
     console.info(
-      `[Backend] Another backend (pid ${main.pid}) serves the default data directory; this one serves ${options.dataDir} and ${port}.`,
+      `[Backend] Another backend (pid ${main.pid}) serves the default data directory; this one serves ${options.dataDir}, ${gatewayPort} and ${port}.`,
     );
   }
+}
+// Tailscale Serve keeps proxying to the old port after an unclean exit, and the
+// next start refuses to replace a target it cannot recognise as its own.
+if (options.tailscaleServe && options.port === 0) {
+  console.warn(
+    "[Backend] --tailscale-serve on a free gateway port: after an unclean exit the next start refuses the stale Serve target. Pass --port to keep one port.",
+  );
 }
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
   dataDir: options.dataDir,

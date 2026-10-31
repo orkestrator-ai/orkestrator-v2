@@ -4,6 +4,11 @@ import os from "node:os";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { chmod, cp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { defaultDataDir } from "../../../apps/backend/src/data-dir.js";
+import {
+  DEFAULT_CONTROL_MCP_PORT,
+  DEFAULT_GATEWAY_PORT,
+} from "../../../apps/backend/src/fixed-ports.js";
 import * as connection from "../src/client/service-connection.js";
 import { runClient } from "../src/client/main.js";
 import { captureIo, createSandbox, type ClientSandbox } from "./support/client-harness.js";
@@ -20,11 +25,19 @@ afterEach(async () => {
 });
 
 async function fixture(
-  options: { publish?: boolean; tty?: boolean; credentialFailure?: boolean } = {},
+  options: {
+    publish?: boolean;
+    tty?: boolean;
+    credentialFailure?: boolean;
+    defaultDir?: boolean;
+    endpoints?: Array<{ role: string; url: string }>;
+  } = {},
 ) {
   const box = await createSandbox();
   boxes.push(box);
-  const dataDir = path.join(box.root, "data");
+  const dataDir = options.defaultDir
+    ? defaultDataDir(process.platform, box.env, box.root)
+    : path.join(box.root, "data");
   const bin = path.join(dataDir, "backend/releases/9.9.9/node_modules/orkestrator/bin");
   await mkdir(bin, { recursive: true });
   await writeFile(path.join(bin, "orkestrator.js"), "// fixture");
@@ -47,7 +60,7 @@ async function fixture(
           pid: process.pid,
           startedAt: new Date().toISOString(),
           url: ADDRESS,
-          endpoints: [],
+          endpoints: options.endpoints ?? [],
           authFile,
           dataDir,
           appVersion: "9.9.9",
@@ -138,6 +151,67 @@ test.each(["human", "json"])("deadline expiry reports not ready in %s output", a
       authFile: null,
     });
   else expect(result.out).toContain("not reported ready yet");
+});
+
+function installedArgs(dataDir: string): string[] {
+  return JSON.parse(readFileSync(path.join(dataDir, "backend", "service.json"), "utf8")).args;
+}
+
+test("a second backend's Tailscale Serve keeps one port across reinstalls", async () => {
+  const f = await fixture();
+  const first = await f.run(["--", "--tailscale-serve"]);
+  expect(first.code).toBe(0);
+  expect(first.out).toContain("keeps a free port chosen at install");
+  const args = installedArgs(f.dataDir);
+  expect(args.slice(0, 2)).toEqual(["--tailscale-serve", "--port"]);
+  const port = Number(args[2]);
+  expect(port).toBeGreaterThan(0);
+  expect([DEFAULT_GATEWAY_PORT, DEFAULT_CONTROL_MCP_PORT]).not.toContain(port);
+
+  expect((await f.run(["--", "--tailscale-serve"])).code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(args);
+});
+
+test("a second backend's own --port is kept and needs no note", async () => {
+  const f = await fixture();
+  const result = await f.run(["--", "--tailscale-serve", "--port", "45000"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--tailscale-serve", "--port", "45000"]);
+  expect(result.out).not.toContain("not the default data directory");
+});
+
+test("a second backend without Serve is told its port moves, and stays unpinned", async () => {
+  const f = await fixture();
+  const result = await f.run(["--", "--host", "100.64.0.10"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--host", "100.64.0.10"]);
+  expect(result.out).toContain("changes on each start");
+  expect(result.out).toContain("-- --port PORT");
+});
+
+test("the default data directory's Serve keeps the fixed port and no note", async () => {
+  const f = await fixture({ defaultDir: true });
+  const result = await f.run(["--", "--tailscale-serve"]);
+  expect(result.code).toBe(0);
+  expect(installedArgs(f.dataDir)).toEqual(["--tailscale-serve"]);
+  expect(result.out).not.toContain("not the default data directory");
+});
+
+test.each(["human", "json"])("%s output names the local listeners", async (output) => {
+  const local = "http://127.0.0.1:45001/";
+  const f = await fixture({
+    endpoints: [
+      { role: "control", url: "http://127.0.0.1:45002/" },
+      { role: "client", url: local },
+    ],
+  });
+  const result = await f.run(["--output", output, "--timeout", "10s"]);
+  expect(result.code).toBe(0);
+  if (output === "json") expect(JSON.parse(result.out).result.clientUrls).toEqual([local]);
+  else {
+    expect(result.out).toContain(local);
+    expect(result.out).not.toContain("45002");
+  }
 });
 
 /** A launcher that has already given up by the time the install starts waiting. */

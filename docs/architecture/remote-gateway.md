@@ -110,7 +110,7 @@ equivalent environment variable unless noted.
 | Flag | Environment | Purpose |
 | --- | --- | --- |
 | `--host` | | Bind address. Default is the first Tailscale address. |
-| `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121`. |
+| `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121` for the default data directory's backend, and a free port for any other. See [Default gateway port](#default-gateway-port). |
 | `--allow-non-tailscale-bind` | | Permit a non-Tailscale bind (local development). |
 | `--allowed-origins` | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | Comma-separated browser origins. |
 | `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. On Linux, run `sudo tailscale set --operator=$USER` once first; otherwise Tailscale answers `Access denied: serve config denied` and the backend exits. |
@@ -127,6 +127,36 @@ Local-only development bind:
 ```bash
 bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --allow-non-tailscale-bind
 ```
+
+### Default gateway port
+
+Only the backend of the platform default data directory (`isDefaultDataDir`, the
+same rule as the [Control MCP port](control-mcp.md)) defaults to `34121`, because
+remote machines reach it there. With no `--port` or `ORKESTRATOR_GATEWAY_PORT`,
+every other data directory and any `--runtime-flavor agent-test` backend takes a
+free port that changes on each start (`implicitGatewayPort` in
+`apps/backend/src/options.ts`). `mise run dev` asks for a free port too
+(`desktopGatewayPort`). So a second backend cannot move the main install's address
+by starting first. An explicit port always wins, on any data directory.
+
+A second backend that remote clients reach needs a stable address, so give it
+`--port`. The bound URLs are in `backend-instance.json`, and `orkestrator service
+install` prints them. The questions in `service install` offer a port for the
+tailnet address.
+
+Tailscale Serve needs its target port to survive a restart: after an unclean exit
+the Serve configuration still proxies to the old port, and the next start only
+adopts a target on its own port (`TailscaleServeConflictError` otherwise). So
+`service install --data-dir <other> -- --tailscale-serve` without `--port` writes
+a free port chosen at install, and a reinstall keeps it. A hand-started `serve`
+or an older unit with `--tailscale-serve` on a free port logs a warning at
+startup, and needs `--port` to avoid that failure.
+
+If the port is taken, the gateway tries the next 20 ports and then a free one,
+unless `--strict-gateway-port` is set. The walk never lands on `34121`, `34122`,
+`ORKESTRATOR_CONTROL_MCP_PORT` or the loopback client port, even when they are
+free. Those ports belong to another listener, which may not have bound yet. A port
+asked for by name is still tried first.
 
 ## Compression and terminal transport
 

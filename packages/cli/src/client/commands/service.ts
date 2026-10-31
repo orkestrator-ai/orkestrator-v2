@@ -2,10 +2,15 @@ import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import path from "node:path";
 import type { StandaloneStartupFailure } from "@orkestrator/protocol/node/standalone-service";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
-import { defaultDataDir } from "../../../../../apps/backend/src/data-dir.js";
+import { defaultDataDir, isDefaultDataDir } from "../../../../../apps/backend/src/data-dir.js";
+import {
+  DEFAULT_CONTROL_MCP_PORT,
+  DEFAULT_GATEWAY_PORT,
+} from "../../../../../apps/backend/src/fixed-ports.js";
 import { CliError } from "../errors.js";
 import { keyValues } from "../format.js";
 import {
@@ -109,6 +114,29 @@ async function startupFailedError(
   );
 }
 
+/** A free loopback port to keep across restarts; the OS may offer a fixed one on Linux. */
+async function freeServicePort(): Promise<string> {
+  for (;;) {
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = createServer();
+      probe.once("error", reject);
+      probe.listen(0, "127.0.0.1", () => {
+        const address = probe.address();
+        probe.close(() => resolve(typeof address === "object" && address ? address.port : 0));
+      });
+    });
+    if (port !== 0 && port !== DEFAULT_GATEWAY_PORT && port !== DEFAULT_CONTROL_MCP_PORT) {
+      return String(port);
+    }
+  }
+}
+
+/** The `--port` value in serve arguments, if any. */
+function portArgument(args: readonly string[] | undefined): string | undefined {
+  const index = args?.indexOf("--port") ?? -1;
+  return index >= 0 ? args?.[index + 1] : undefined;
+}
+
 function runManager(argv: string[], allowFailure = false): { ok: boolean; output: string } {
   const result = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: 60_000 });
   const ok = result.status === 0;
@@ -136,6 +164,11 @@ export const serviceCommands: CommandSpec[] = [
       "With none, in a terminal, it asks how clients will connect (Tailscale Serve, the",
       "tailnet address or SSH) and prints the equivalent command; --yes skips the questions.",
       "The Bun running this command is the Bun the service uses; reinstall to change it.",
+      "",
+      "Only the default data directory's backend uses the fixed gateway port. With another",
+      "--data-dir and no `--port`, the backend takes a free port that changes on each start,",
+      "so pass `-- --port PORT` for a stable address. --tailscale-serve gets a free port",
+      "chosen once, here, because Tailscale Serve needs its target to outlive a crash.",
       "On Linux, run `loginctl enable-linger $USER` so the service runs without a login.",
       "",
       "Once the service is running, the address it serves and its gateway token are printed.",
@@ -206,17 +239,43 @@ export const serviceCommands: CommandSpec[] = [
       if (readyWaitMs > PUBLIC_API_LIMITS.waitMaxMs) {
         throw new CliError("invalid-input", "--timeout may be at most 24h");
       }
-      const serveArgs = interactive
+      const secondBackend = !isDefaultDataDir(dataDir, process.platform, context.io.env);
+      const requestedArgs = interactive
         ? await askServeArguments(context.io, {
             installCommand: installCommandLine(parsed),
             signal: context.signal,
             dryRun: parsed.options["dry-run"] === true,
+            secondBackend,
           })
         : parsed.rest;
-      if (!interactive) warnIfTailscaleOperatorNeeded(context.io, serveArgs);
+      if (!interactive) warnIfTailscaleOperatorNeeded(context.io, requestedArgs);
       const bun = process.execPath;
       const bunVersion = typeof Bun === "undefined" ? "" : Bun.version;
       const { service, layout, unit } = await unitFor(context, dataDir, bun);
+      // An unclean exit leaves Tailscale Serve proxying to the old port, and the
+      // next start only adopts a target on its own port, so a Serve backend needs
+      // the same port every time. A reinstall keeps the one it has.
+      const pinsPort =
+        secondBackend &&
+        requestedArgs.includes("--tailscale-serve") &&
+        !requestedArgs.includes("--port");
+      const serveArgs =
+        pinsPort && parsed.options["dry-run"] !== true
+          ? [
+              ...requestedArgs,
+              "--port",
+              portArgument(service.readServiceConfig(layout)?.args) ?? (await freeServicePort()),
+            ]
+          : requestedArgs;
+      const portNote = pinsPort
+        ? [
+            "This is not the default data directory, so its gateway keeps a free port chosen at install instead of the fixed one.",
+          ]
+        : secondBackend && !requestedArgs.includes("--port")
+          ? [
+              "This is not the default data directory, so its gateway takes a free port that changes on each start. For a stable address, reinstall with `-- --port PORT`.",
+            ]
+          : [];
       const summary = {
         dataDir,
         version,
@@ -238,6 +297,7 @@ export const serviceCommands: CommandSpec[] = [
               ["unit", `${unit.manager} ${unit.name} → ${unit.file}`],
               ["serve arguments", serveArgs.join(" ") || "(none)"],
             ]),
+            ...portNote,
             "",
             "Dry run: nothing was installed.",
           ],
@@ -322,6 +382,7 @@ export const serviceCommands: CommandSpec[] = [
           started,
           ready: connection !== null,
           browserUrl: connection?.browserUrl ?? null,
+          clientUrls: connection?.clientUrls ?? [],
           authFile: connection?.authFile ?? null,
           ...(connection?.credentialError ? { credentialError: connection.credentialError } : {}),
           ...summary,
@@ -341,6 +402,9 @@ export const serviceCommands: CommandSpec[] = [
                 "",
                 ...keyValues([
                   ["address", connection.browserUrl ?? "(no browser listener; see the log)"],
+                  ...(connection.clientUrls.length > 0
+                    ? [["local listeners", connection.clientUrls.join(", ")] as [string, string]]
+                    : []),
                   ["auth file", connection.authFile],
                   ...(context.io.stdoutIsTty &&
                   context.global.output === "human" &&
@@ -360,6 +424,7 @@ export const serviceCommands: CommandSpec[] = [
                   `The backend has not reported ready yet. Follow ${logFile}; its address and token file are logged there.`,
                 ]
               : []),
+          ...portNote,
           ...(unit.manager === "systemd"
             ? ["Run `loginctl enable-linger $USER` so it keeps running after you log out."]
             : []),

@@ -21,6 +21,7 @@ import {
   persistGatewayToken,
 } from "./gateway-internals.js";
 import type { ListenerKind, GatewayStartInfo } from "./gateway-internals.js";
+import { DEFAULT_CONTROL_MCP_PORT } from "./fixed-ports.js";
 
 /**
  * Where an accepted request goes: `GatewayAuth.handle`. `GatewayAuth` calls
@@ -173,9 +174,12 @@ export class GatewayLifecycle {
     if (preferredPort === 0) return this.listen(bindAddress, preferredPort, "browser");
     if (this.ctx.strictPort) return this.listen(bindAddress, preferredPort, "browser");
 
+    const skippedPorts = this.fallbackSkippedPorts();
     for (let offset = 0; offset <= GATEWAY_PORT_FALLBACK_ATTEMPTS; offset += 1) {
       const candidatePort = preferredPort + offset;
       if (candidatePort > 65535) break;
+      // The port asked for is still tried: only the fallback keeps off these.
+      if (offset > 0 && skippedPorts.has(candidatePort)) continue;
 
       try {
         const listener = await this.listen(bindAddress, candidatePort, "browser");
@@ -195,6 +199,20 @@ export class GatewayLifecycle {
       `[RemoteGateway] Port ${preferredPort} and nearby ports were in use; listening on ${listener.port} instead`,
     );
     return listener;
+  }
+
+  /**
+   * Ports the fallback must leave free, taken or not. The fixed ports belong to
+   * the default data directory's backend, which may not have started yet, and a
+   * Control MCP waiting out a taken port rebinds as soon as it frees. The
+   * loopback client listener binds after this one.
+   */
+  private fallbackSkippedPorts(): Set<number> {
+    const ports = new Set([DEFAULT_GATEWAY_PORT, DEFAULT_CONTROL_MCP_PORT]);
+    const controlMcpPort = Number(this.ctx.env.ORKESTRATOR_CONTROL_MCP_PORT);
+    if (Number.isInteger(controlMcpPort) && controlMcpPort > 0) ports.add(controlMcpPort);
+    if (this.ctx.loopbackClientPort) ports.add(this.ctx.loopbackClientPort);
+    return ports;
   }
 
   async listen(

@@ -118,6 +118,7 @@
     "./node/host-test-scheduler": "./src/node/host-test-scheduler.ts",
     "./node/storage-database": "./src/node/storage-database.ts",
     "./initial-prompt-attachments": "./src/initial-prompt-attachments.ts",
+    "./machine-load": "./src/machine-load.ts",
     "./macos-permissions": "./src/macos-permissions.ts",
     "./mcp-management": "./src/mcp-management.ts",
     "./model-id": "./src/model-id.ts",

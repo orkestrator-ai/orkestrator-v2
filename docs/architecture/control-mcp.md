@@ -243,7 +243,10 @@ original tools remain:
 
 Operator credentials also get, under the names a coordinator already uses:
 
-- `list_nodes` (`node.list`): this machine and the leaf nodes it controls.
+- `list_nodes` (`node.list`): this machine and the leaf nodes it controls. A
+  coordinator's `list_nodes` is a different tool with the same name
+  (`control-mcp-nodes.ts`), and it also reports each machine's OS and load: see
+  [coordinator.md](coordinator.md#choosing-a-machine).
 - `launch_multi_review` (and `start_multi_review`, the same action for an
   operator), `list_multi_reviews`, `get_multi_review`, `open_multi_review`,
   `open_multi_review_fix`, `address_multi_review`, `cancel_multi_review`

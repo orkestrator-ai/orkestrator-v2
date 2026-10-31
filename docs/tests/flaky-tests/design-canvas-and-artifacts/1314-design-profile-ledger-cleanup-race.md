@@ -122,3 +122,10 @@ Logs: `/tmp/docker-fix-backend-owner.log`,
 variance, not target-branch reproduction of the failure. No cleanup code,
 assertion, timeout or skip changed; asynchronous ledger removal remains a
 hypothesis.
+
+The complete `NODE_ENV=test mise run test` subsequently passed on detached main
+in 278.8 s and on the unchanged Docker Settings code in 168.3 s (12.0 s queued).
+The final branch run passed all four groups; logs are retained separately in
+`.orkestrator/review-artifacts/docker-probe-fix-e2ff8181c/docker-fix-final-full-test.log`
+and `docker-fix-main-full-test.log` in that directory. The intermittent ledger
+failure remains open; a passing retry does not establish a cleanup fix.

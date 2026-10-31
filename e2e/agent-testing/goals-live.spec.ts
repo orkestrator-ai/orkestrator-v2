@@ -276,7 +276,11 @@ test.describe(`goal loop: ${platform}`, () => {
         identity,
         `Do no other work: reply with one word, then ${report("done")}. Repeat that each time you are told to continue. --max-iterations 2 --check echo goal-check-output && false`,
       );
-      const goal = await until(identity, ["limited", "complete", "claimed", "paused"], "never passes");
+      const goal = await until(
+        identity,
+        ["limited", "complete", "claimed", "paused"],
+        "never passes",
+      );
       note("cap", goal, { outputSeen: goal.lastCheck?.outputTail.includes("goal-check-output") });
       expect(goal.status).toBe("limited");
       expect(goal.statusReason).toBe("iteration-cap");
@@ -286,7 +290,10 @@ test.describe(`goal loop: ${platform}`, () => {
 
     await test.step("blocked waits for a person", async () => {
       const identity = await tab();
-      await command(identity, `Do no other work: ${report("blocked")}, saying you need a key. --max-iterations 3`);
+      await command(
+        identity,
+        `Do no other work: ${report("blocked")}, saying you need a key. --max-iterations 3`,
+      );
       const goal = await until(identity, ["blocked", "limited", "claimed", "paused"], "blocked");
       note("blocked", goal);
       expect(goal.status).toBe("blocked");
@@ -336,7 +343,11 @@ test.describe(`goal loop: ${platform}`, () => {
           text: "Create the file goal-user-prompt.txt. Do nothing else in this turn.",
         },
       });
-      const goal = await until(identity, ["claimed", "complete", "limited", "paused"], "user prompt");
+      const goal = await until(
+        identity,
+        ["claimed", "complete", "limited", "paused"],
+        "user prompt",
+      );
       note("user-prompt", goal, { userFile: workspace.read("goal-user-prompt.txt") !== undefined });
       expect(goal.status).toBe("claimed");
       expect(workspace.read("goal-user-prompt.txt")).toBeDefined();

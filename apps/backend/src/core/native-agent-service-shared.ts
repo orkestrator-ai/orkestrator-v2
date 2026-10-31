@@ -64,7 +64,7 @@ import {
   resolveReasoningId,
   withResolvedNativeComposerModel,
 } from "@orkestrator/protocol/native-agent";
-import type { GoalCheckRun } from "./native-agent-goal-service.js";
+import type { GoalCheckRun, GoalVerifierHost } from "./native-agent-goal-service.js";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { boundTranscriptResponse } from "@orkestrator/protocol/node/transcript-window";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
@@ -457,6 +457,8 @@ export interface NativeAgentServiceOptions {
       timeoutMs: number;
     }): Promise<GoalCheckRun>;
     workspaceFingerprint(environmentId: string): Promise<string | undefined>;
+    /** Absent: a goal cannot ask for a verifier session on this backend. */
+    verifier?: GoalVerifierHost;
   };
   /** A goal stopped: run the turn-end work it was holding back. */
   onGoalReleasedTurnEnd?: (session: PersistedNativeAgentSession) => Promise<void> | void;

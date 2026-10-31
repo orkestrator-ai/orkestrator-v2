@@ -1,6 +1,18 @@
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
-import { runUserCommand } from "@/lib/backend";
+import { getNativeAgentGoal, runNativeAgentGoalCommand, runUserCommand } from "@/lib/backend";
+import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
+import { GoalDetailLoaderContext } from "@/components/chat/goal-detail-context";
+import { GoalPanel } from "@/components/chat/GoalPanel";
+import { GoalPill } from "@/components/chat/GoalPill";
+import {
+  createGoalTurnNativeMessage,
+  hasBackendTurnClock,
+  isGoalQueueItem,
+  withGoalStatusRows,
+  withGoalTurnsAsPrompts,
+} from "@/lib/chat/goal-messages";
+import { goalApprovalWarning } from "@/lib/chat/goal-presentation";
 import { useHumanPrompts, useUserCommands } from "@/hooks/useUserCommands";
 import { HumanPromptBanner } from "@/components/chat/HumanPromptBanner";
 import { withUserCommandRows } from "@/lib/chat/user-command-rows";
@@ -16,7 +28,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
+import { ChevronDown, Goal, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
   dispatchOutcomeLostOccurrenceId,
@@ -34,6 +46,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
+  GOAL_COMMAND_ID,
   isProviderSlashCommand,
   parseCommandToken,
   resolveSessionActionCommand,
@@ -201,6 +214,7 @@ import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import {
   commandSubmissionIntent,
   draftCommandBusyTitle,
+  goalCommandRefusal,
   type NativeCommandSubmission,
 } from "./native-command-submission";
 import { useNativeCommandComposer } from "./useNativeCommandComposer";
@@ -717,13 +731,15 @@ export function SharedNativeAgentController({
   }, [claudeBackgroundTasksById, platform, projection?.messages, projection?.terminalMessages]);
   const normalizedMessages = useMemo(
     () =>
-      normalizeNativeMessages(decoratedMessages).flatMap((message) =>
+      normalizeNativeMessages(decoratedMessages).flatMap((message) => {
         // One injected prompt can carry several batched messages; each one
         // becomes its own mail tile.
-        message.role === "user" && isPeerMailCarrierContent(message.content)
-          ? createPeerMailNativeMessagesFromCarrier(message)
-          : [message],
-      ),
+        if (message.role === "user" && isPeerMailCarrierContent(message.content)) {
+          return createPeerMailNativeMessagesFromCarrier(message);
+        }
+        // A goal turn is the loop's text, never something the user typed.
+        return [createGoalTurnNativeMessage(message) ?? message];
+      }),
     [decoratedMessages],
   );
   // Tabs persisted before the presentation flag existed still carry this
@@ -946,6 +962,12 @@ export function SharedNativeAgentController({
       ),
     [environmentPrompts, tabId],
   );
+  // Offered only where the loop has passed its live run (D14), and only in an
+  // environment's own tabs: the backend refuses a coordinator or a bug report.
+  const goalsAvailable =
+    hasEnvironmentRecord &&
+    (projection?.capabilities ?? adapter.capabilities).actions?.goal === true;
+  const sessionGoal = goalsAvailable ? projection?.goal : undefined;
   const transcriptMessages = useMemo(() => {
     // Tasks Claude cleaned up on resume get one line in place of their rows.
     const withNotices = withResumeCleanupNotices(
@@ -955,13 +977,21 @@ export function SharedNativeAgentController({
     const base =
       backgroundTaskRows.length === 0 ? withNotices : [...withNotices, ...backgroundTaskRows];
     const withCommands = userCommands.length === 0 ? base : withUserCommandRows(base, userCommands);
-    return ruleSession.applications.length === 0
-      ? withCommands
-      : withPermissionRuleRows(withCommands, ruleSession.applications, ruleSession.rules);
+    const withRules =
+      ruleSession.applications.length === 0
+        ? withCommands
+        : withPermissionRuleRows(withCommands, ruleSession.applications, ruleSession.rules);
+    return sessionGoal
+      ? withGoalStatusRows(withRules, sessionGoal, {
+          canLoadEarlier: projection?.messageWindow?.canLoadEarlier === true,
+        })
+      : withRules;
   }, [
     backgroundTaskRows,
     displayMessages,
     projection?.backgroundTasks,
+    projection?.messageWindow?.canLoadEarlier,
+    sessionGoal,
     ruleSession.applications,
     ruleSession.rules,
     userCommands,
@@ -1030,6 +1060,7 @@ export function SharedNativeAgentController({
   // Load earlier messages keeps the reader on the row they were reading.
   const loadEarlierPlace = useHeldTranscriptPlace();
   useRestoreHeldPlace(loadEarlierPlace, messages, scrollToIndex, loadingEarlier);
+  const turnRows = useMemo(() => withGoalTurnsAsPrompts(normalizedMessages), [normalizedMessages]);
   const latestAssistantMessage = [...normalizedMessages]
     .reverse()
     .find((message) => message.role === "assistant");
@@ -1040,9 +1071,9 @@ export function SharedNativeAgentController({
     platform === "claude" &&
     latestAssistantMessage !== undefined &&
     isClaudeNotLoggedInNotice(latestAssistantMessage) &&
-    normalizedMessages.at(-1)?.role !== "user" &&
+    turnRows.at(-1)?.role !== "user" &&
     normalizedMessages.lastIndexOf(latestAssistantMessage) >
-      normalizedMessages.findLastIndex((message) => message.role === "user")
+      turnRows.findLastIndex((message) => message.role === "user")
       ? latestAssistantMessage.content
       : null;
   const planContent = useMemo(
@@ -1065,7 +1096,7 @@ export function SharedNativeAgentController({
   // notice is the structured signal for it and clears once a model answers, so
   // it pins the card. It never locks the composer. A terminal auth error row
   // after the last prompt already carries the card.
-  const lastUserIndex = normalizedMessages.findLastIndex((message) => message.role === "user");
+  const lastUserIndex = turnRows.findLastIndex((message) => message.role === "user");
   const claudeAuthNotice =
     platform === "claude" &&
     !normalizedMessages
@@ -1365,12 +1396,7 @@ export function SharedNativeAgentController({
     ) : undefined;
   const turnStartedAt =
     projection?.turn.startedAt ??
-    (isTurnActive
-      ? findLatestBackendUserTurnStartedAt(
-          normalizedMessages,
-          (message) => !isClientOnlyNativeMessage(message),
-        )
-      : undefined);
+    (isTurnActive ? findLatestBackendUserTurnStartedAt(turnRows, hasBackendTurnClock) : undefined);
   /*
    * `useElapsedTimer` no longer keeps a renderer-local start, so the completed
    * duration has to come from the transcript too. Deriving it from the backend
@@ -1381,11 +1407,8 @@ export function SharedNativeAgentController({
     () =>
       isTurnActive
         ? null
-        : (findLatestBackendTurnElapsedSeconds(
-            normalizedMessages,
-            (message) => !isClientOnlyNativeMessage(message),
-          ) ?? null),
-    [isTurnActive, normalizedMessages],
+        : (findLatestBackendTurnElapsedSeconds(turnRows, hasBackendTurnClock) ?? null),
+    [isTurnActive, turnRows],
   );
   // The running clock ticks inside the footer (`elapsedStartedAt`): holding
   // the tick here would re-render this whole tab every second of a turn.
@@ -1439,9 +1462,11 @@ export function SharedNativeAgentController({
       (projection?.queue?.items ?? []).flatMap((candidate) => {
         if (!candidate || typeof candidate !== "object") return [];
         const item = candidate as Record<string, unknown>;
-        return typeof item.id === "string" && typeof item.text === "string"
-          ? [{ ...item, id: item.id, text: item.text }]
-          : [];
+        if (typeof item.id !== "string" || typeof item.text !== "string") return [];
+        // A queued goal turn is the loop's: it is not a prompt the user can
+        // recall with the up arrow, edit into the composer or steer.
+        const queued = { ...item, id: item.id, text: item.text };
+        return isGoalQueueItem(queued) ? [] : [queued];
       }),
     [projection?.queue?.items],
   );
@@ -1700,6 +1725,38 @@ export function SharedNativeAgentController({
     };
   }, [sessionKey]);
 
+  const [goalPanelOpen, setGoalPanelOpen] = useState(false);
+  const selectedModelId = composer?.selectedModelId;
+  const runGoalCommand = useCallback(
+    (text: string) =>
+      runNativeAgentGoalCommand({
+        environmentId: data.environmentId,
+        agent: platform,
+        logicalSessionKey: sessionKey,
+        text,
+        ...(selectedModelId ? { model: selectedModelId } : {}),
+      }),
+    [data.environmentId, platform, selectedModelId, sessionKey],
+  );
+  const pendingHandoff = Boolean(handoff.pendingHistory);
+  const runGoalCommandFromPanel = useCallback(
+    async (text: string) => {
+      const refusal = goalCommandRefusal(text, pendingHandoff);
+      if (refusal) throw new Error(refusal);
+      await runGoalCommand(text);
+    },
+    [pendingHandoff, runGoalCommand],
+  );
+  const loadGoalDetail = useCallback(
+    () =>
+      getNativeAgentGoal({
+        environmentId: data.environmentId,
+        agent: platform,
+        logicalSessionKey: sessionKey,
+      }),
+    [data.environmentId, platform, sessionKey],
+  );
+
   const submit = useCallback(
     async (
       text: string,
@@ -1810,6 +1867,37 @@ export function SharedNativeAgentController({
         reportSendError(commandSubmission.message);
         return false;
       }
+      /*
+       * `/goal` acts on the session's goal now, whether or not a turn is running.
+       * It is never a prompt and never queues: a Pause queued behind a running
+       * turn would arrive after the turn it was meant to stop the loop at.
+       */
+      if (commandSubmission.kind === "goal") {
+        reportSendError(null);
+        if (commandSubmission.opensPanel) {
+          clearDraft(sessionKey);
+          discardProvisionalDraft();
+          setGoalPanelOpen(true);
+          return true;
+        }
+        submitInFlightRef.current = true;
+        setIsSubmitting(true);
+        try {
+          const result = await runGoalCommand(
+            serializeForLLM(commandSubmission.arguments, draft.mentions),
+          );
+          clearDraft(sessionKey);
+          discardProvisionalDraft();
+          toast.success(result.message);
+          return true;
+        } catch (error) {
+          reportSendError(error instanceof Error ? error.message : String(error));
+          return false;
+        } finally {
+          submitInFlightRef.current = false;
+          setIsSubmitting(false);
+        }
+      }
       const rawCommand = commandSubmission.kind !== "prompt";
       const commandIntent = commandSubmissionIntent(commandSubmission);
       const commandToken = rawCommand ? parseCommandToken(text, ["/", "$"]) : null;
@@ -1876,7 +1964,8 @@ export function SharedNativeAgentController({
         submitInFlightRef.current = true;
         setIsSubmitting(true);
         try {
-          const outcome = await performAction(sessionAction);
+          // Only `/steer` resolves here: it alone acts on the live turn.
+          const outcome = await performAction({ kind: "steer", text: sessionAction.text });
           if (outcome.outcome === "applied") {
             clearDraft(sessionKey);
             discardProvisionalDraft();
@@ -2210,6 +2299,8 @@ export function SharedNativeAgentController({
       recoverableDispatch,
       actionableDispatch,
       releaseRetiredRequestId,
+      runGoalCommand,
+      setGoalPanelOpen,
       selectedModel?.supportsImageInput,
       send,
       sendLocked,
@@ -2262,6 +2353,9 @@ export function SharedNativeAgentController({
     canQueue,
     agentLabel: label,
   });
+
+  /** `/goal` in the draft runs now, past everything that holds a prompt back. */
+  const draftRunsGoal = commandComposer.draftCommand?.id === GOAL_COMMAND_ID;
 
   /** What the send button would do with the draft as typed. */
   const draftSessionAction = useMemo(
@@ -3338,6 +3432,12 @@ export function SharedNativeAgentController({
       !(typeof queued.requestId === "string" && nativeAsyncQuestionItemId(queued.requestId))
     );
   };
+  // A provider's suggestion is its own text, but one that merely echoed a goal
+  // turn must not be offered back as something to send.
+  const suggestedPrompt =
+    projection?.suggestedPrompt && !isGoalCarrierContent(projection.suggestedPrompt)
+      ? projection.suggestedPrompt
+      : undefined;
   const chatShell = (
     <NativeChatShell
       agentExpansionScope={data.environmentId}
@@ -3463,28 +3563,31 @@ export function SharedNativeAgentController({
         ),
       )}
       pinnedAccessory={pinnedCards.length > 0 ? <>{pinnedCards}</> : null}
+      statusAccessory={
+        sessionGoal ? <GoalPill goal={sessionGoal} onOpen={() => setGoalPanelOpen(true)} /> : null
+      }
       topAccessory={
-        projection?.suggestedPrompt ? (
+        suggestedPrompt ? (
           <div className="flex items-center gap-1">
             <Button
               type="button"
               size="sm"
               variant="outline"
-              title={projection.suggestedPrompt}
+              title={suggestedPrompt}
               onClick={() => {
                 // Appended, never replaced: the draft is the composer's backing
                 // store, so overwriting it destroys a half-written message.
                 updateDraft(sessionKey, {
                   text: draft.text.trim()
-                    ? `${draft.text.replace(/\s+$/, "")}\n\n${projection.suggestedPrompt}`
-                    : projection.suggestedPrompt,
+                    ? `${draft.text.replace(/\s+$/, "")}\n\n${suggestedPrompt}`
+                    : suggestedPrompt,
                 });
                 // Accepting a suggestion consumes it. Providers that cannot be
                 // told simply drop it on the next refresh.
                 dismissSuggestion();
               }}
             >
-              Suggested: {projection.suggestedPrompt}
+              Suggested: {suggestedPrompt}
             </Button>
             <Button
               type="button"
@@ -3512,7 +3615,41 @@ export function SharedNativeAgentController({
           ? () => setResumeDialogOpen(true)
           : undefined
       }
-      resumeDialog={resumeDialog}
+      resumeDialog={
+        <>
+          {resumeDialog}
+          {goalsAvailable ? (
+            <GoalPanel
+              open={goalPanelOpen}
+              onOpenChange={setGoalPanelOpen}
+              goal={sessionGoal}
+              platform={platform}
+              agentLabel={label}
+              approvalWarning={goalApprovalWarning({
+                composer,
+                policy: projection?.policy,
+                agentLabel: label,
+              })}
+              approvalControl={
+                composer?.approvalModes?.length ? (
+                  <ComposerIconPicker
+                    label="Approvals"
+                    testId="goal-approval-mode-picker"
+                    disabled={settingsLocked}
+                    options={composer.approvalModes.map(approvalModeIconOption)}
+                    value={composer.selectedApprovalModeId}
+                    onValueChange={(approvalMode) => {
+                      void updateControlsSafely({ approvalMode });
+                    }}
+                  />
+                ) : null
+              }
+              onCommand={runGoalCommandFromPanel}
+              loadDetail={loadGoalDetail}
+            />
+          ) : null}
+        </>
+      }
       composer={
         <NativeComposeBar
           testId="shared-native-compose-bar"
@@ -3772,6 +3909,18 @@ export function SharedNativeAgentController({
                     }}
                   />
                 ) : null}
+                {goalsAvailable && !sessionGoal ? (
+                  <button
+                    type="button"
+                    data-testid="goal-open-button"
+                    aria-label="Set a goal"
+                    title="Set a goal"
+                    onClick={() => setGoalPanelOpen(true)}
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted-foreground transition-colors hover:bg-elevated-hover hover:text-foreground"
+                  >
+                    <Goal className="h-4 w-4" />
+                  </button>
+                ) : null}
               </>
             ) : null
           }
@@ -3789,7 +3938,9 @@ export function SharedNativeAgentController({
           queue={
             projection?.queue
               ? {
-                  length: queuedMessages.length,
+                  // A blocked goal turn has no row of its own, but its error and
+                  // Retry must still show.
+                  length: queuedMessages.length || (projection.queue.blocked ? 1 : 0),
                   error: projection.queue.blocked
                     ? { message: projection.queue.blocked.error }
                     : null,
@@ -3817,19 +3968,23 @@ export function SharedNativeAgentController({
               : undefined
           }
           showSendButton={
-            authenticationRequired || !sendLocked || canQueue || Boolean(draftSessionAction)
+            authenticationRequired ||
+            !sendLocked ||
+            canQueue ||
+            Boolean(draftSessionAction) ||
+            draftRunsGoal
           }
           sendDisabled={
             queueEditPending ||
-            (sendLocked && !draftSessionAction) ||
-            isDispatching ||
+            (sendLocked && !draftSessionAction && !draftRunsGoal) ||
+            (isDispatching && !draftRunsGoal) ||
             (!draft.text.trim() &&
               draft.attachments.length === 0 &&
               // A draft holding only migrated references has nothing to send.
               sendableTranscriptAnnotations(draft.annotations).length === 0)
           }
           sendTitle={
-            authenticationRequired
+            authenticationRequired && !draftRunsGoal
               ? `Sign in to ${label} before sending`
               : draftSessionAction
                 ? (draftSessionAction.error ?? `Send to the current ${label} turn`)
@@ -3935,14 +4090,16 @@ export function SharedNativeAgentController({
     <BackgroundTaskChildrenContext.Provider value={childBackgroundTasks}>
       <NativeChangeScopeContext.Provider value={nativeChangeScope}>
         <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
-          <div className="@container flex h-full min-h-0 flex-col">
-            <ThreadChangesHeader
-              environmentId={data.environmentId}
-              logicalSessionKey={sessionKey}
-              turnActive={isTurnActive}
-            />
-            <div className="min-h-0 flex-1">{chatShell}</div>
-          </div>
+          <GoalDetailLoaderContext.Provider value={loadGoalDetail}>
+            <div className="@container flex h-full min-h-0 flex-col">
+              <ThreadChangesHeader
+                environmentId={data.environmentId}
+                logicalSessionKey={sessionKey}
+                turnActive={isTurnActive}
+              />
+              <div className="min-h-0 flex-1">{chatShell}</div>
+            </div>
+          </GoalDetailLoaderContext.Provider>
         </RichTranscriptScopeContext.Provider>
       </NativeChangeScopeContext.Provider>
     </BackgroundTaskChildrenContext.Provider>

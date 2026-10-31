@@ -387,6 +387,48 @@ export const PUBLIC_ACTIONS = {
     milestone: "C",
     summary: "Pause or resume one pending interaction's countdown where its deadline is enforced.",
   },
+  "session.goal.set": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Give one agent tab a durable objective: the backend sends turns until a check proves it, the agent needs a person, or a limit stops it.",
+  },
+  "session.goal.get": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary:
+      "Read one session's goal and its recent history, without starting anything; check output on request.",
+  },
+  "session.goal.pause": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Pause a running goal; no further turn starts until it is resumed.",
+  },
+  "session.goal.resume": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Resume a stopped goal, optionally with a higher iteration cap or token budget.",
+  },
+  "session.goal.clear": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Remove a session's goal in any status; it stays readable in the goal history.",
+  },
   "session.transcript": {
     version: 1,
     mutation: false,
@@ -1024,6 +1066,12 @@ export const PUBLIC_EXIT = Object.freeze({
   interactionRequired: 6,
   unknownDispatch: 7,
   conflict: 8,
+  /** `session goal --wait` only: how the goal ended. `complete` exits 0. */
+  goalClaimed: 10,
+  goalBlocked: 11,
+  goalLimited: 12,
+  goalPaused: 13,
+  goalGone: 14,
 });
 
 /** Exit status after SIGINT/SIGTERM stopped an observer: 128 + signal. */
@@ -1093,6 +1141,12 @@ export const PUBLIC_ERROR_EXIT = {
   "dispatch-parked": PUBLIC_EXIT.conflict,
   // The leaf is too old to run public actions for this node, or this node is in leaf mode.
   "node-unsupported": PUBLIC_EXIT.conflict,
+  // 10-14 — `session goal --wait` observed a goal stop without a passing check.
+  "goal-claimed": PUBLIC_EXIT.goalClaimed,
+  "goal-blocked": PUBLIC_EXIT.goalBlocked,
+  "goal-limited": PUBLIC_EXIT.goalLimited,
+  "goal-paused": PUBLIC_EXIT.goalPaused,
+  "goal-gone": PUBLIC_EXIT.goalGone,
 } as const;
 
 export type PublicErrorCode = keyof typeof PUBLIC_ERROR_EXIT;

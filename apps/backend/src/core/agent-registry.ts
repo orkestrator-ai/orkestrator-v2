@@ -8,6 +8,7 @@ import {
   type AgentTabState,
 } from "@orkestrator/protocol/agent-registry";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import type { NativeAgentGoalSummary } from "@orkestrator/protocol/native-agent-goal";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import type { CoordinatorsStorage, StorageService } from "./storage.js";
 
@@ -21,6 +22,12 @@ export interface AgentRegistrySources {
   ) => AgentActivityState | "unknown";
   /** Claude under tmux; undefined when no session exists for the tab. */
   tmux?: (environmentId: string, tabId: string) => AgentActivityState | undefined;
+  /** A native tab's goal, from its session record. */
+  goal?: (
+    environmentId: string,
+    agent: AgentPlatform,
+    logicalSessionKey: string,
+  ) => Promise<NativeAgentGoalSummary | undefined>;
 }
 
 const WORKFLOW_TAB_TYPES = new Set(["claude-build", "multi-review"]);
@@ -86,6 +93,11 @@ export class AgentRegistry {
           const kind = tabKind(tab);
           if (!kind || typeof tab.id !== "string") continue;
           const agent = tabPlatform(tab);
+          const logicalSessionKey = `env-${environment.id}:${tab.id}`;
+          const goal =
+            kind === "native" && agent
+              ? await this.sources.goal?.(environment.id, agent, logicalSessionKey)
+              : undefined;
           entries.push({
             projectId: environment.projectId,
             environmentId: environment.id,
@@ -102,8 +114,9 @@ export class AgentRegistry {
             }),
             tabOrdinal,
             state: running
-              ? this.observe(kind, environment.id, tab.id, agent, `env-${environment.id}:${tab.id}`)
+              ? this.observe(kind, environment.id, tab.id, agent, logicalSessionKey)
               : "stopped",
+            ...(goal ? { goal } : {}),
           });
         }
       }

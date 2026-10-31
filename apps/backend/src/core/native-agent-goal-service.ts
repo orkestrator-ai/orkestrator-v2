@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   boundedUtf8Head,
   goalContinuationRequestId,
@@ -16,9 +16,13 @@ import {
   type GoalEvent,
   type GoalReportStatus,
   type NativeAgentGoal,
+  type NativeAgentGoalVerifier,
+  type NativeAgentGoalVerifierRun,
   type NativeAgentGoalView,
 } from "@orkestrator/protocol/native-agent-goal";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
+import { PROMPT_QUEUE_MESSAGE_CONFLICT } from "./storage-prompts.js";
 import type {
   AgentActivityState,
   PersistedNativeAgentSession,
@@ -47,6 +51,53 @@ export type GoalCheckRun =
     }
   | { kind: "unavailable"; detail: string };
 
+/** How a verifier session ended. `tokens` is what it spent, when its provider says. */
+export type GoalVerifierRun =
+  | { kind: "verdict"; passed: boolean; summary: string; reasons: string[]; tokens?: number }
+  | { kind: "unavailable"; detail: string; tokens?: number }
+  /** Its signal fired: the goal moved on, or the backend is stopping. */
+  | { kind: "stopped"; tokens?: number };
+
+export interface GoalVerifierRequest {
+  environmentId: string;
+  goalId: string;
+  objective: string;
+  check?: string;
+  /** The agent's `done` message, as an unverified claim. */
+  report?: string;
+  verifier: NativeAgentGoalVerifier;
+  signal: AbortSignal;
+  /**
+   * Makes the session's identity durable. Throws a {@link GoalVerifierFenceError}
+   * when the goal is no longer waiting for this run.
+   */
+  saveRun(run: NativeAgentGoalVerifierRun): Promise<void>;
+}
+
+/** The environment-side work of a verifier (`native-agent-goal-verifier.ts`). */
+export interface GoalVerifierHost {
+  run(request: GoalVerifierRequest): Promise<GoalVerifierRun>;
+  /** Stop a session an earlier process left running. Best-effort. */
+  stopRun(input: {
+    environmentId: string;
+    goalId: string;
+    run: NativeAgentGoalVerifierRun;
+  }): Promise<void>;
+  /** Why this agent cannot verify a goal; asked when one is set. */
+  problem(agent: AgentPlatform): Promise<string | undefined>;
+}
+
+/** This process no longer owns the run. The name is what the branch runner reads. */
+export class GoalVerifierFenceError extends Error {
+  constructor(message = "The goal is no longer waiting for this verifier") {
+    super(message);
+    this.name = "GoalVerifierFenceError";
+  }
+}
+
+/** The abort reason of a stopping backend: the next process deals with the session. */
+export const GOAL_VERIFIER_BACKEND_STOPPING = "backend-stopping";
+
 export interface NativeAgentGoalHost {
   storage: {
     getNativeAgentSession(key: string): Promise<PersistedNativeAgentSession | null | undefined>;
@@ -62,7 +113,6 @@ export interface NativeAgentGoalHost {
       queueKey: string,
       environmentId: string,
       message: unknown,
-      fingerprint?: string,
     ): Promise<{ status: "queued" | "present" | "consumed" }>;
     removePromptQueueMessage(queueKey: string, environmentId: string, id: string): Promise<unknown>;
   };
@@ -87,6 +137,8 @@ export interface NativeAgentGoalHost {
     command: string;
     timeoutMs: number;
   }): Promise<GoalCheckRun>;
+  /** Absent: this backend cannot run verifiers, so a goal cannot ask for one. */
+  verifier?: GoalVerifierHost;
   /** The goal changed: a view should read it again. */
   announce(session: PersistedNativeAgentSession): void;
   /** The loop stopped for a reason a person should see. */
@@ -103,6 +155,14 @@ export type GoalCommandResult = { message: string; goal?: NativeAgentGoalView };
 
 export class GoalCommandError extends Error {}
 
+/**
+ * The goal id a durable request owns. Deriving it from the request lets a repeat
+ * after a crash tell whether the first attempt got as far as setting the goal.
+ */
+export function goalIdForRequest(requestKey: string): string {
+  return createHash("sha256").update("goal\0").update(requestKey).digest("hex").slice(0, 32);
+}
+
 function queueKeyOf(session: Pick<PersistedNativeAgentSession, "agent" | "logicalSessionKey">) {
   return `${session.agent}\0${session.logicalSessionKey}`;
 }
@@ -118,7 +178,7 @@ function address(session: PersistedNativeAgentSession): GoalSessionAddress {
 /**
  * Owns the goal loop (`plans/goals.md`): after each turn of a session with a
  * running goal it reads how the turn ended and sends the next one, runs the
- * check, or stops.
+ * check or the verifier, or stops.
  *
  * All durable state is on the session record. The maps here are an index, so a
  * session with no goal costs nothing on a turn edge, and they are rebuilt from
@@ -131,6 +191,14 @@ export class NativeAgentGoalService {
   private readonly wakeAgain = new Set<string>();
   /** A running check stays in memory; after a restart it runs again. */
   private readonly checks = new Set<string>();
+  /**
+   * Verifier work in flight. Unlike a check it does not hold `advance`, so the
+   * sweep keeps watching the session and environment while a session runs.
+   */
+  private readonly verifiers = new Map<
+    string,
+    { controller: AbortController; task: Promise<void> }
+  >();
   private lastSweepAt = 0;
 
   constructor(private readonly host: NativeAgentGoalHost) {}
@@ -143,7 +211,18 @@ export class NativeAgentGoalService {
       if (goal && goalIsRunning(goal.status)) {
         this.running.set(session.key, goal.goalId);
         this.wake(session.key);
+      } else if (goal?.verifierRun) {
+        // A crash between leaving `verifying` and stopping the session.
+        const { environmentId } = session;
+        this.trackVerifier(session.key, () => this.endEarlierRun(session.key, environmentId, goal));
       }
+    }
+  }
+
+  /** The backend is stopping: let go of verifiers without ending their goals. */
+  stop(): void {
+    for (const { controller } of this.verifiers.values()) {
+      controller.abort(GOAL_VERIFIER_BACKEND_STOPPING);
     }
   }
 
@@ -166,7 +245,12 @@ export class NativeAgentGoalService {
   }
 
   async settled(): Promise<void> {
-    while (this.advancing.size > 0) await Promise.allSettled([...this.advancing.values()]);
+    while (this.advancing.size > 0 || this.verifiers.size > 0) {
+      await Promise.allSettled([
+        ...this.advancing.values(),
+        ...[...this.verifiers.values()].map((entry) => entry.task),
+      ]);
+    }
   }
 
   private wake(key: string): void {
@@ -206,6 +290,10 @@ export class NativeAgentGoalService {
     }
     if (goal.status === "checking") {
       await this.runCheck(key, session, goal);
+      return;
+    }
+    if (goal.status === "verifying") {
+      this.startVerifier(key, session, goal);
       return;
     }
     const where = address(session);
@@ -253,7 +341,7 @@ export class NativeAgentGoalService {
       ...(answer.error ? { error: answer.error } : {}),
       continuation,
       ...(tokens !== undefined && goal.tokensAtStart !== undefined
-        ? { tokensUsed: Math.max(0, tokens - goal.tokensAtStart) }
+        ? { tokensUsed: Math.max(0, tokens - goal.tokensAtStart) + (goal.verifierTokens ?? 0) }
         : {}),
       ...(fingerprint !== undefined ? { workspaceFingerprint: fingerprint } : {}),
     });
@@ -279,7 +367,7 @@ export class NativeAgentGoalService {
     if (!session || !goal || goal.goalId !== goalId || !change.previous) return;
     await this.afterChange(key, session, goal, change.previous);
     if (change.action === "send-continuation") await this.sendContinuation(key, session, goal);
-    if (change.action === "run-check") this.wake(key);
+    if (change.action === "run-check" || change.action === "run-verifier") this.wake(key);
   }
 
   private async afterChange(
@@ -289,6 +377,10 @@ export class NativeAgentGoalService {
     previous: NativeAgentGoal | undefined,
   ): Promise<void> {
     this.host.announce(session);
+    // Whatever moved the goal on, nobody is waiting for its verifier now.
+    if (previous?.status === "verifying" && goal.status !== "verifying") {
+      this.verifiers.get(key)?.controller.abort();
+    }
     if (goalIsRunning(goal.status)) {
       this.running.set(key, goal.goalId);
       return;
@@ -315,20 +407,25 @@ export class NativeAgentGoalService {
     const iteration = goal.iterations - 1;
     const requestId = goalContinuationRequestId(goal.goalId, iteration);
     const queueKey = queueKeyOf(session);
-    const { status } = await this.host.storage.enqueuePromptQueueMessageIfAbsent(
-      queueKey,
-      session.environmentId,
-      {
-        id: requestId,
-        requestId,
-        text: renderGoalCarrier({ ...goal, iterations: iteration }),
-        // A carrier is literal text: never a provider slash command.
-        command: { kind: "literal" },
-        origin: { kind: "goal", goalId: goal.goalId, iteration },
-      },
-      // The id is the identity. A resend after a crash may render other text.
-      requestId,
-    );
+    let status: "queued" | "present" | "consumed";
+    try {
+      ({ status } = await this.host.storage.enqueuePromptQueueMessageIfAbsent(
+        queueKey,
+        session.environmentId,
+        {
+          id: requestId,
+          requestId,
+          text: renderGoalCarrier({ ...goal, iterations: iteration }),
+          // A carrier is literal text: never a provider slash command.
+          command: { kind: "literal" },
+          origin: { kind: "goal", goalId: goal.goalId, iteration },
+        },
+      ));
+    } catch (error) {
+      // The id is the identity: a resend whose text differs is still this turn.
+      if (!errorMessage(error).startsWith(PROMPT_QUEUE_MESSAGE_CONFLICT)) throw error;
+      status = "present";
+    }
     if (status === "consumed") {
       const dispatched =
         session.dispatchedRequestIds?.includes(requestId) ||
@@ -419,6 +516,123 @@ export class NativeAgentGoalService {
     }
   }
 
+  private trackVerifier(key: string, work: (signal: AbortSignal) => Promise<void>): void {
+    if (this.verifiers.has(key)) return;
+    const controller = new AbortController();
+    const task = work(controller.signal)
+      .catch((error: unknown) => {
+        // The goal is still `verifying`, so the next sweep runs it again.
+        console.warn("[goals] A verifier failed to finish:", errorMessage(error));
+      })
+      .finally(() => {
+        this.verifiers.delete(key);
+        // A goal that came back to `verifying` while this one stopped starts now.
+        if (this.running.has(key)) this.wake(key);
+      });
+    this.verifiers.set(key, { controller, task });
+    void this.host.trackScan(task);
+  }
+
+  private startVerifier(
+    key: string,
+    session: PersistedNativeAgentSession,
+    goal: NativeAgentGoal,
+  ): void {
+    this.trackVerifier(key, (signal) => this.runVerifier(key, session, goal, signal));
+  }
+
+  /** Stop the session a `verifierRun` names and count what it spent. */
+  private async endEarlierRun(
+    key: string,
+    environmentId: string,
+    goal: NativeAgentGoal,
+  ): Promise<void> {
+    if (!goal.verifierRun) return;
+    await this.host.verifier?.stopRun({
+      environmentId,
+      goalId: goal.goalId,
+      run: goal.verifierRun,
+    });
+    await this.apply(key, goal.goalId, { kind: "verifier-run-ended" });
+  }
+
+  private async runVerifier(
+    key: string,
+    session: PersistedNativeAgentSession,
+    goal: NativeAgentGoal,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const { goalId } = goal;
+    const host = this.host.verifier;
+    if (!host || !goal.verifier) {
+      await this.apply(key, goalId, {
+        kind: "verifier-unavailable",
+        detail: host ? "The goal has no verifier." : "This backend cannot run verifiers.",
+      });
+      return;
+    }
+    await this.endEarlierRun(key, session.environmentId, goal);
+    if (signal.aborted) return;
+    let run: GoalVerifierRun;
+    try {
+      run = await host.run({
+        environmentId: session.environmentId,
+        goalId,
+        objective: goal.objective,
+        ...(goal.check ? { check: goal.check } : {}),
+        ...(goal.lastReport ? { report: goal.lastReport.message } : {}),
+        verifier: goal.verifier,
+        signal,
+        saveRun: (verifierRun) => this.saveVerifierRun(key, goalId, verifierRun),
+      });
+    } catch (error) {
+      run = { kind: "unavailable", detail: errorMessage(error) };
+    }
+    // A stopping backend keeps the durable run: the next process counts it.
+    if (signal.reason === GOAL_VERIFIER_BACKEND_STOPPING) return;
+    const tokens = run.tokens !== undefined ? { tokens: run.tokens } : {};
+    if (signal.aborted || run.kind === "stopped") {
+      await this.apply(key, goalId, { kind: "verifier-run-ended", ...tokens });
+      return;
+    }
+    if (run.kind === "unavailable") {
+      await this.apply(key, goalId, {
+        kind: "verifier-unavailable",
+        detail: run.detail,
+        ...tokens,
+      });
+      return;
+    }
+    await this.apply(key, goalId, {
+      kind: "verifier-finished",
+      verdict: {
+        passed: run.passed,
+        summary: run.summary,
+        ...(run.reasons.length > 0 ? { reasons: run.reasons } : {}),
+        agent: goal.verifier.agent,
+        ...(goal.verifier.model ? { model: goal.verifier.model } : {}),
+        ...tokens,
+        at: new Date(this.host.now()).toISOString(),
+      },
+    });
+  }
+
+  private async saveVerifierRun(
+    key: string,
+    goalId: string,
+    verifierRun: NativeAgentGoalVerifierRun,
+  ): Promise<void> {
+    const updated = await this.host.storage.updateNativeAgentGoal(key, (current) =>
+      current?.goalId === goalId && current.status === "verifying"
+        ? { ...current, verifierRun }
+        : undefined,
+    );
+    const saved = updated ? sessionGoal(updated) : undefined;
+    if (saved?.goalId !== goalId || saved.status !== "verifying") {
+      throw new GoalVerifierFenceError();
+    }
+  }
+
   private async removeQueuedContinuation(
     session: PersistedNativeAgentSession,
     goal: NativeAgentGoal,
@@ -466,7 +680,9 @@ export class NativeAgentGoalService {
       input.status === "done"
         ? goal.check
           ? "Recorded. End your turn now; Orkestrator will run the check."
-          : "Recorded. End your turn now; the goal will end as unverified."
+          : goal.verifier
+            ? "Recorded. End your turn now; a separate verifier will judge the work."
+            : "Recorded. End your turn now; the goal will end as unverified."
         : input.status === "blocked"
           ? "Recorded. End your turn now; the goal will wait for a person."
           : "Recorded. Keep working.";
@@ -545,6 +761,15 @@ export class NativeAgentGoalService {
             "This agent does not report usage, so it can't take a budget.",
           );
         }
+        if (
+          command.tokenBudget !== undefined &&
+          goal.verifier &&
+          !this.host.supportsTokenBudget(goal.verifier.agent)
+        ) {
+          throw new GoalCommandError(
+            "This goal's verifier does not report usage, so it can't take a budget.",
+          );
+        }
         // A goal that moved to a different conversation binds to the current one.
         if (goal.providerSessionId !== session.providerSessionId) {
           await this.host.storage.updateNativeAgentGoal(key, (current) =>
@@ -576,6 +801,7 @@ export class NativeAgentGoalService {
         );
         if (updated) {
           this.running.delete(key);
+          this.verifiers.get(key)?.controller.abort();
           await this.removeQueuedContinuation(session, goal);
           this.host.announce(updated);
           if (goalIsRunning(goal.status)) await this.host.releaseTurnEnd(updated).catch(() => {});
@@ -584,6 +810,15 @@ export class NativeAgentGoalService {
       }
       case "set": {
         const existing = sessionGoal(session);
+        // The same durable request again: it already set this goal, whatever
+        // has happened to the goal since.
+        const repeated =
+          command.goalId === undefined
+            ? undefined
+            : existing?.goalId === command.goalId
+              ? existing
+              : session.goalHistory?.find((past) => past.goalId === command.goalId);
+        if (repeated) return { message: "Goal set.", goal: goalPublicView(repeated) };
         if (existing && goalIsRunning(existing.status)) {
           throw new GoalCommandError(
             "A goal is already running. Run /goal clear first to replace it.",
@@ -594,13 +829,29 @@ export class NativeAgentGoalService {
             "This agent does not report usage, so it can't take a budget.",
           );
         }
+        if (command.verifier) {
+          if (!this.host.verifier) {
+            throw new GoalCommandError("This backend cannot run verifiers.");
+          }
+          const problem = await this.host.verifier.problem(command.verifier.agent);
+          if (problem) throw new GoalCommandError(problem);
+          if (
+            command.tokenBudget !== undefined &&
+            !this.host.supportsTokenBudget(command.verifier.agent)
+          ) {
+            throw new GoalCommandError(
+              "That verifier does not report usage, so the goal can't take a budget.",
+            );
+          }
+        }
         const tokens = await this.host.sessionTokens(address(session)).catch(() => undefined);
         const now = new Date(this.host.now()).toISOString();
         const last = session.dispatchedRequestIds?.at(-1);
         const goal: NativeAgentGoal = {
-          goalId: randomUUID(),
+          goalId: command.goalId ?? randomUUID(),
           objective: command.objective,
           ...(command.check ? { check: command.check } : {}),
+          ...(command.verifier ? { verifier: command.verifier } : {}),
           status: "active",
           providerSessionId: session.providerSessionId,
           iterations: 0,
@@ -615,7 +866,9 @@ export class NativeAgentGoalService {
           updatedAt: now,
         };
         const updated = await this.host.storage.updateNativeAgentGoal(key, (current) =>
-          current && goalIsRunning(current.status) ? undefined : goal,
+          current && (goalIsRunning(current.status) || current.goalId === goal.goalId)
+            ? undefined
+            : goal,
         );
         const saved = updated ? sessionGoal(updated) : undefined;
         if (!updated || saved?.goalId !== goal.goalId) {

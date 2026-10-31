@@ -712,6 +712,30 @@ describe("report_goal authority", () => {
   });
 });
 
+describe("a backend with no verifier", () => {
+  test("refuses a goal that asks for one", async () => {
+    const { set, goal } = harness();
+    await expect(set("x --verifier codex")).rejects.toThrow("cannot run verifiers");
+    expect(goal()).toBeUndefined();
+  });
+
+  test("pauses a goal already waiting for one, so it cannot stay stuck", async () => {
+    const parts = harness();
+    await parts.set("x");
+    parts.state.session = {
+      ...parts.state.session,
+      goal: { ...parts.goal(), status: "verifying", verifier: { agent: "codex" } },
+    } as PersistedNativeAgentSession;
+    parts.service.noteTurnEnded(KEY);
+    await parts.service.settled();
+    expect(parts.goal()).toMatchObject({
+      status: "paused",
+      statusReason: "verifier-unavailable",
+      statusDetail: "This backend cannot run verifiers.",
+    });
+  });
+});
+
 function hostOf(parts: ReturnType<typeof harness>): NativeAgentGoalHost {
   return (parts.service as unknown as { host: NativeAgentGoalHost }).host;
 }

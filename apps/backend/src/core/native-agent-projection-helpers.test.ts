@@ -29,6 +29,27 @@ describe("native agent projection helpers", () => {
     ).toBe(false);
   });
 
+  test("a title never comes from a goal carrier", () => {
+    const carrier = '<orkestrator-goal version="1">\n<orkestrator-goal-payload-json>\n{}';
+    expect(
+      helpers.firstUserMessageOf(
+        [
+          { role: "user", content: carrier },
+          { role: "user", content: "Fix the login bug" },
+        ],
+        undefined,
+      ).firstUserMessage,
+    ).toBe("Fix the login bug");
+    expect(helpers.firstUserMessageOf([{ role: "user", content: carrier }], undefined)).toEqual({
+      reachesStart: true,
+    });
+    // Carrier-like text in the middle is still the user's own message.
+    const quoted = `Why does ${carrier} show up here?`;
+    expect(
+      helpers.firstUserMessageOf([{ role: "user", content: quoted }], undefined).firstUserMessage,
+    ).toBe(quoted);
+  });
+
   test("provider-reported image paths come from images and successful reads only", () => {
     expect(helpers.providerReportedImagePath({ type: "image", fileUrl: "file:///tmp/a.png" })).toBe(
       "/tmp/a.png",

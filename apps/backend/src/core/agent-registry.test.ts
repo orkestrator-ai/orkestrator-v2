@@ -10,6 +10,7 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { describeAgentRegistrySummary } from "@orkestrator/protocol/agent-registry";
+import { goalStatusSummary } from "@orkestrator/protocol/native-agent-goal";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { AgentRegistry } from "./agent-registry.js";
 import { StorageService } from "./storage.js";
@@ -95,6 +96,41 @@ async function fixture() {
 }
 
 describe("AgentRegistry", () => {
+  test("a tab between a goal's iterations reads idle, with the goal saying it will continue", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const summary = goalStatusSummary({
+        goalId: "g1",
+        status: "active",
+        iterations: 4,
+        maxIterations: 20,
+        updatedAt: new Date(0).toISOString(),
+      });
+      const asked: string[] = [];
+      const registry = new AgentRegistry(storage, {
+        native: () => "idle",
+        goal: async (environmentId, _agent, logicalSessionKey) => {
+          asked.push(logicalSessionKey);
+          return environmentId === "running-env" ? summary : undefined;
+        },
+      });
+      const { entries } = await registry.snapshot({ projectId: "p1" });
+      const running = entries.find(
+        (entry) => entry.environmentId === "running-env" && entry.tabId === "native",
+      );
+      expect(running).toMatchObject({
+        state: "idle",
+        goal: { status: "active", running: true, iterations: 4, maxIterations: 20 },
+      });
+      // Only native tabs can hold a goal; a coordinator conversation never does.
+      expect(asked.toSorted()).toEqual(["env-running-env:native", "env-stopped-env:native"]);
+      expect(entries.filter((entry) => entry.goal)).toHaveLength(1);
+    } finally {
+      storage.close();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("lists every agent tab and coordinator with live state and counts", async () => {
     const { storage, dataDir } = await fixture();
     try {

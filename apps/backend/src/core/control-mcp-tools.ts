@@ -83,6 +83,8 @@ import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./co
 import { NODE_FILE_TOOL_CAPABILITIES } from "./control-mcp-node-files.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./control-mcp-coordinator-surfaces.js";
 import { ACCOUNT_TOOL_CAPABILITIES } from "./control-mcp-account-tools.js";
+import { COORDINATOR_GOAL_TOOL_CAPABILITIES } from "./control-mcp-coordinator-goals.js";
+import { goalForModel, type NativeAgentGoalView } from "@orkestrator/protocol/native-agent-goal";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 const MAX_PROMPT_LENGTH = 100_000;
@@ -152,6 +154,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ...NODE_FILE_TOOL_CAPABILITIES,
   ...COORDINATOR_SURFACE_TOOL_CAPABILITIES,
   ...ACCOUNT_TOOL_CAPABILITIES,
+  ...COORDINATOR_GOAL_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 
@@ -1010,7 +1013,17 @@ export async function createControlMcp(
         return toolResult({ ...where, agent: native.agent, connection: "connecting" });
       }
       const { messages: _messages, ...state } = projection;
-      return toolResult({ ...where, agent: native.agent, state });
+      return toolResult({
+        ...where,
+        agent: native.agent,
+        state: {
+          ...state,
+          // A coordinator is a model: what the worker wrote reaches it framed.
+          ...(coordinatorScope && isRecord(state.goal)
+            ? { goal: goalForModel(state.goal as unknown as NativeAgentGoalView) }
+            : {}),
+        },
+      });
     },
   );
 

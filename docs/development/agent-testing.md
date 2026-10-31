@@ -1153,6 +1153,19 @@ the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project state
 stay there, so a scratch configuration directory is not needed to isolate
 session writes.
 
+### Live goal suite
+
+`mise run test:agent:goals [--credential-source <platform>]… [--environment local|container]`
+gives each platform a disposable profile holding that platform's host credential
+alone, runs `e2e/agent-testing/goals-live.spec.ts`, then stops and resets it. It
+drives the goal loop through every scenario and asserts on the durable goal record
+and the workspace: a passing check after several iterations, no check, a check that
+never passes, `blocked`, Stop and resume, a queued user prompt, and clear. It writes
+`output/agent-testing/<profile>/goals/summary-<platform>.json`. Each scenario spends
+real tokens on the smallest model the catalogue names, so nothing else runs it.
+`ORKESTRATOR_AGENT_TEST_GOAL_MODEL_<PLATFORM>` overrides the model. To qualify a
+provider whose capability is off, add it to `GOAL_QUALIFIED_PLATFORMS` locally first.
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's

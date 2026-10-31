@@ -61,9 +61,11 @@ Sources:
 2. A turn ends. The backend reads how it ended from durable state.
 3. If the turn was stopped or failed, the goal pauses, with the reason.
 4. If the agent called `report_goal` with `blocked`, the goal ends as `blocked`.
-5. If it reported `done`, the backend runs the check. A pass ends the goal as
-   `complete`. A failure sends the output back to the agent. With no check, the
-   goal ends as `claimed`, which the UI shows as unverified.
+5. If it reported `done`, the backend runs the check, then the verifier session
+   if the goal has one. When every proof the goal has passes, it ends as
+   `complete`. A failure sends the output or the verdict's reasons back to the
+   agent. With neither, the goal ends as `claimed`, which the UI shows as
+   unverified.
 6. Otherwise, if no limit is reached, the backend queues the next continuation.
 
 ### Status table
@@ -72,11 +74,12 @@ Sources:
 | --- | --- | --- |
 | `active` | Turns continue | No |
 | `checking` | The backend is running the check | No |
-| `paused` | Stopped by the user, a failed turn, a stopped environment, no progress or a replaced session. `statusReason` says which. Resume continues it | Until resumed |
+| `verifying` | A verifier session is judging the work. Restarts re-run it | No |
+| `paused` | Stopped by the user, a failed turn, a stopped environment, no progress, a replaced session, or a check or verifier that could not run. `statusReason` says which. Resume continues it | Until resumed |
 | `blocked` | The agent says it needs a person | Yes, until resumed |
 | `limited` | An iteration cap or token budget was reached. Resume with a higher limit | Until resumed |
 | `claimed` | The agent says it is done and nothing checked it | Yes |
-| `complete` | A check passed | Yes |
+| `complete` | Its proof passed: the check (`check-passed`), or the verifier, after the check if it has both (`verdict-passed`) | Yes |
 
 `/goal clear` removes the goal, in any status.
 
@@ -94,7 +97,7 @@ saying why.
 | D4 | Who can set a goal? | A person, through the composer, and later the CLI and a coordinator. An agent can only report on one. | Model-facing `create_goal` or `ProposeGoal`: an agent could give itself hours of unattended turns. |
 | D5 | What triggers evaluation? | The existing turn-end edge and durable turn outcomes. | Provider stop hooks: not available everywhere. A new poll per session. Reading the transcript to infer an end. |
 | D6 | How is the next turn sent? | Through the persisted prompt queue with a deterministic request id, behind anything the user queued. | A new delivery path. Steering into a running turn: it does not start a turn. |
-| D7 | What makes a goal complete? | A passing check. An agent's `done` with no check ends as `claimed`, shown as unverified. A verifier session may be added later (401). | Trusting the agent's report, as Codex does: the same model marks its own work. A transcript-only evaluator, as Claude does: it cannot run anything, and it needs a small-model path per provider. Requiring a check on every goal: it rules out exploratory goals. |
+| D7 | What makes a goal complete? | A passing check, a passing verdict from an optional read-only verifier session, or both when a goal has both: the check runs first, and both must pass. An agent's `done` with neither ends as `claimed`, shown as unverified. Changed 2026-10-31 from "a passing check, with a verifier possibly later": the maintainer asked for the whole plan now, and a check proves only what it runs, so a goal with no command had no independent proof at all (401). | Trusting the agent's report, as Codex does: the same model marks its own work. A transcript-only evaluator, as Claude does: it cannot run anything, and it needs a small-model path per provider. Requiring a check on every goal: it rules out exploratory goals. |
 | D8 | How does the check run? | The user's command, once per `done` report, through the `environment.exec` worker, in the workspace. Failure output returns to the agent as framed evidence. The agent cannot edit it. | Running it after every turn: slow and costly for long test suites. Letting the agent run it and trusting the transcript. |
 | D9 | What limits a goal? | An iteration cap, always on: default 20, at most 100. An optional token budget. A no-progress stop after 3 idle continuations. | Unbounded by default, as Claude and Codex are unless the user adds a clause or a budget. Wall-clock limits in version 1: iterations and tokens bound cost more directly. |
 | D10 | Stops, failures and restarts | Stop always wins and pauses. A failed turn pauses with no automatic retry in version 1. A stopped environment pauses. A backend restart resumes active goals, because exact-once delivery makes that safe. | Retrying automatically, as Claude does: rate limits and credit errors need their own policy. Pausing on restart, as OpenCode's plugin does: it breaks the rule that background work survives. |
@@ -120,8 +123,9 @@ saying why.
 - One continuation per iteration, across any crash or replay.
 - Sessions with no goal pay nothing on a turn edge.
 - An agent cannot set, widen or complete a goal by itself. It can only report.
-- Agent reports and check output are untrusted text. They reach a model only in
-  an evidence frame, and they are bounded in storage and on the wire.
+- Agent reports, check output and verifier verdicts are untrusted text. They
+  reach a model only in an evidence frame, and they are bounded in storage and on
+  the wire.
 - Every goal has an iteration cap, so there is no unbounded form.
 
 ## Module map
@@ -134,6 +138,7 @@ saying why.
 | Delivery | The prompt queue, `native-agent-prompt-queue-dispatcher.ts` |
 | Agent tool | `apps/backend/src/core/agent-tools.ts` |
 | Check | The worker behind `public-api/actions-exec.ts` |
+| Verifier | `apps/backend/src/core/native-agent-goal-verifier.ts` (new), on `agent-branch-runner.ts` |
 | Command | `packages/protocol/src/agent-slash-commands.ts`, `native-agent-command-dispatch.ts` |
 | UI | `apps/web/src/components/chat/NativeComposeDock.tsx`, new goal components, `MailTile.tsx` as the pattern |
 
@@ -189,7 +194,7 @@ Every goal has an iteration cap. A token budget is optional, and refused where 0
 
 ### P1.8 The goal slash command
 
-A `/goal` entry in `SESSION_ACTION_SLASH_COMMANDS` (`packages/protocol/src/agent-slash-commands.ts`) with `collision: "reserve"` and a new `actions.goal` capability. Forms: `/goal`, `/goal <objective> [--check <command>] [--max-iterations N] [--budget N]`, `/goal pause`, `/goal resume [--max-iterations N]`, `/goal clear`.
+A `/goal` entry in `SESSION_ACTION_SLASH_COMMANDS` (`packages/protocol/src/agent-slash-commands.ts`) with `collision: "reserve"` and a new `actions.goal` capability. Forms: `/goal`, `/goal <objective> [--max-iterations N] [--budget N] [--verifier <agent>[:model]] [--check <command>]`, `/goal pause`, `/goal resume [--max-iterations N]`, `/goal clear`.
 
 ### P1.9 Live qualification on Claude and Codex
 
@@ -268,7 +273,7 @@ Optional work that builds on a qualified loop. Each item is independent.
 
 ### P4.1 Verifier session
 
-At an agent's `done` report, optionally start a fresh read-only session that can read files and run commands, and returns a `verification-verdict@1`. It can use any provider. This is stronger than a transcript-only evaluator, and costs more.
+At an agent's `done` report, optionally start a fresh read-only session that can read files and run commands, and returns a `verification-verdict@1`. It can use any enabled provider. This is stronger than a transcript-only evaluator, and costs more: its tokens count toward the goal's budget.
 
 ### P4.2 Public CLI and API
 

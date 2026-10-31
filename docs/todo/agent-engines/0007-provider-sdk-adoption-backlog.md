@@ -432,8 +432,9 @@ reason.
   app-server with `features.goals=false` (`codexAppServerConfigOverrides`;
   the loopback case in `live-network-lock.test.ts` proves Codex's default
   offers the tools and a bridge thread does not). `thread/goal/*`
-  notifications are ignored and there is no `/goal` command. Revisit only
-  with a goal surface and a design for turns Codex continues on its own.
+  notifications are ignored. Superseded 2026-10-31 by `plans/goals.md`: `/goal`
+  is the backend's own loop on every provider, so Codex's stays off and no turn
+  is ever one Codex continued on its own.
 - **Claude `createSdkMcpServer()` for the Orkestrator control tools.** One
   HTTP MCP server serves every platform (Pi, Cursor, Codex and Grok reach the
   same one), and the backend, not the bridge, enforces per-tab scope. An

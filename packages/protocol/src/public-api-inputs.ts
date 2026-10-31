@@ -27,6 +27,7 @@ import {
   TICKET_SECTION_LIMITS,
   TICKET_SECTIONS_GUIDANCE,
 } from "./ticket-sections.js";
+import { NATIVE_AGENT_GOAL_LIMITS } from "./native-agent-goal.js";
 import { PUBLIC_ACTION_NAMES, PUBLIC_API_LIMITS, type PublicActionName } from "./public-api.js";
 import {
   PUBLIC_CHANGE_SCOPES,
@@ -136,6 +137,17 @@ const operationId: PublicJsonSchema = {
   minLength: 1,
   maxLength: 100,
   description: "Operation ID from a receipt.",
+};
+const goalMaxIterations: PublicJsonSchema = {
+  type: "integer",
+  minimum: 1,
+  maximum: NATIVE_AGENT_GOAL_LIMITS.maxIterationsLimit,
+  description: `Turns the backend may send for this goal (default ${NATIVE_AGENT_GOAL_LIMITS.maxIterationsDefault} when setting; unchanged when resuming).`,
+};
+const goalTokenBudget: PublicJsonSchema = {
+  type: "integer",
+  minimum: 1,
+  description: "Tokens the goal may spend; refused for providers whose usage cannot back a budget.",
 };
 const expectedOperationId: PublicJsonSchema = {
   ...operationId,
@@ -1214,6 +1226,77 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         ["sessionId", "interactionId", "held"],
       ),
       examples: [{ sessionId: EXAMPLE_SESSION_ID, interactionId: "interaction-1", held: true }],
+    },
+    "session.goal.set": {
+      capability: "sessions.control",
+      // A goal can run many unattended turns, so a spoken request confirms it.
+      confirmation: "voice",
+      input: schema(
+        {
+          sessionId,
+          objective: {
+            type: "string",
+            minLength: 1,
+            maxLength: NATIVE_AGENT_GOAL_LIMITS.objectiveMaxChars,
+            description:
+              "What the agent keeps working toward. Sent as data, never parsed for flags.",
+          },
+          check: {
+            type: "string",
+            minLength: 1,
+            maxLength: NATIVE_AGENT_GOAL_LIMITS.checkMaxBytes,
+            description:
+              "One-line shell command run in the workspace when the agent reports done; exit 0 completes the goal. Omitted: a done report ends the goal as claimed (unverified).",
+          },
+          maxIterations: goalMaxIterations,
+          tokenBudget: goalTokenBudget,
+        },
+        ["sessionId", "objective"],
+      ),
+      examples: [
+        {
+          sessionId: EXAMPLE_SESSION_ID,
+          objective: "Make the test suite pass.",
+          check: "bun test",
+          maxIterations: 10,
+        },
+      ],
+    },
+    "session.goal.get": {
+      capability: "sessions.read",
+      confirmation: "never",
+      input: schema(
+        {
+          sessionId,
+          includeCheckOutput: {
+            type: "boolean",
+            description: "true adds the last check's output tail. It is untrusted command output.",
+          },
+        },
+        ["sessionId"],
+      ),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID }],
+    },
+    "session.goal.pause": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema({ sessionId }, ["sessionId"]),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID }],
+    },
+    "session.goal.resume": {
+      capability: "sessions.control",
+      // Resuming can raise the limits, which is the same risk as setting one.
+      confirmation: "voice",
+      input: schema({ sessionId, maxIterations: goalMaxIterations, tokenBudget: goalTokenBudget }, [
+        "sessionId",
+      ]),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID, maxIterations: 40 }],
+    },
+    "session.goal.clear": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema({ sessionId }, ["sessionId"]),
+      examples: [{ sessionId: EXAMPLE_SESSION_ID }],
     },
     "session.transcript": {
       capability: "sessions.read",

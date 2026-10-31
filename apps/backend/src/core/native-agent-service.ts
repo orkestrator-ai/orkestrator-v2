@@ -169,7 +169,11 @@ import {
 } from "./project-home-environment.js";
 import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
-import { GOAL_TOKEN_BUDGET_PLATFORMS } from "@orkestrator/protocol/native-agent-goal";
+import {
+  GOAL_TOKEN_BUDGET_PLATFORMS,
+  parseGoalCarrier,
+  type GoalCommand,
+} from "@orkestrator/protocol/native-agent-goal";
 import {
   GoalCommandError,
   NativeAgentGoalService,
@@ -421,6 +425,27 @@ export class NativeAgentService {
     this.assertAcceptingWork();
     const session = await this.ensureSession(ensure);
     return this.goals.command(session, text, { busy: this.sessionTurnIsBusy(input) });
+  }
+
+  /**
+   * The same, from structured fields, so a caller's text is never re-parsed.
+   * Setting or resuming needs the live session. Anything else acts on the record
+   * alone: pausing or clearing must not start a bridge for a goal that is about
+   * to do nothing.
+   */
+  async performGoalCommand(
+    input: EnsureNativeAgentSessionInput & { command: GoalCommand },
+  ): Promise<GoalCommandResult> {
+    const { command, ...ensure } = input;
+    this.assertAcceptingWork();
+    const session =
+      command.kind === "set" || command.kind === "resume"
+        ? await this.ensureSession(ensure)
+        : await this.storage.getNativeAgentSession(
+            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+          );
+    if (!session) throw new GoalCommandError("This session has no conversation yet.");
+    return this.goals.perform(session, command, { busy: this.sessionTurnIsBusy(input) });
   }
 
   /** A session's goal with its check output, and its recent history. */
@@ -727,6 +752,7 @@ export class NativeAgentService {
           kind: "unavailable",
           detail: "This backend cannot run checks.",
         },
+      ...(options.goalEnvironment?.verifier ? { verifier: options.goalEnvironment.verifier } : {}),
       announce: (session) => {
         this.projections.invalidateProjection(session.key);
         this.launches.announceSessionContent(session);
@@ -3575,7 +3601,9 @@ export class NativeAgentService {
       if (messages.length > 0) return;
       await this.invoke("prepare_environment_first_prompt", {
         environmentId: input.environmentId,
-        prompt: input.prompt,
+        // A goal's first turn is a carrier. Name the environment from what the
+        // person asked for, not from its framing.
+        prompt: parseGoalCarrier(input.prompt)?.objective ?? input.prompt,
       });
     } catch (error) {
       console.warn(
@@ -3713,6 +3741,7 @@ export class NativeAgentService {
 
   async shutdown(): Promise<void> {
     this.stopped = true;
+    this.goals.stop();
     // Before settling projections: a title run in flight is what they wait on.
     await this.options.sessionTitles?.shutdown().catch(() => undefined);
     this.unsubscribeObservationWakeups?.();

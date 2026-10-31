@@ -9,7 +9,9 @@
  * Nothing here reads the clock or the network.
  */
 
+import { goalIsRunning, type NativeAgentGoalView } from "./native-agent-goal.js";
 import type { PublicErrorCode, PublicInteractionRef, PublicReceipt } from "./public-api.js";
+import type { PublicSessionGoal } from "./public-api-resources.js";
 
 export type PublicWaitVerdict =
   | { kind: "terminal"; succeeded: boolean }
@@ -86,6 +88,57 @@ export function terminalReceiptErrorCode(receipt: PublicReceipt): PublicErrorCod
   if (receipt.state === "interrupted") return "run-interrupted";
   if (receipt.state === "unknown") return "run-unknown";
   return receipt.error?.code ?? "operation-failed";
+}
+
+/** The error each stopped goal reports; `complete` is the only success. */
+const GOAL_END_CODES = {
+  claimed: "goal-claimed",
+  blocked: "goal-blocked",
+  limited: "goal-limited",
+  paused: "goal-paused",
+} as const satisfies Record<string, PublicErrorCode>;
+
+export type PublicGoalWaitVerdict =
+  | { kind: "pending"; goal: NativeAgentGoalView }
+  | { kind: "interaction"; goal: NativeAgentGoalView }
+  | { kind: "complete"; goal: NativeAgentGoalView }
+  | {
+      kind: "stopped";
+      code: (typeof GOAL_END_CODES)[keyof typeof GOAL_END_CODES];
+      goal: NativeAgentGoalView;
+    }
+  /** Cleared or replaced before it ended, or never there. It may be in `history`. */
+  | { kind: "gone"; goal?: NativeAgentGoalView };
+
+/**
+ * How `session goal --wait` reads one goal. A goal the session no longer holds
+ * keeps the status it ended with only if it had really ended: one cleared while
+ * paused or running never reached an end, so it reads as gone.
+ */
+export function classifyGoalForWait(
+  read: PublicSessionGoal,
+  goalId: string,
+  options: PublicWaitOptions = {},
+): PublicGoalWaitVerdict {
+  const current = read.goal?.goalId === goalId ? read.goal : null;
+  if (!current) {
+    const past = read.history.findLast((goal) => goal.goalId === goalId);
+    if (past?.status === "complete") return { kind: "complete", goal: past };
+    if (past?.status === "claimed") return { kind: "stopped", code: "goal-claimed", goal: past };
+    return past ? { kind: "gone", goal: past } : { kind: "gone" };
+  }
+  if (goalIsRunning(current.status)) {
+    const needsAnswer = read.activity === "waiting" || (read.pendingInteractionCount ?? 0) > 0;
+    return needsAnswer && !options.continueOnInteraction
+      ? { kind: "interaction", goal: current }
+      : { kind: "pending", goal: current };
+  }
+  if (current.status === "complete") return { kind: "complete", goal: current };
+  return {
+    kind: "stopped",
+    code: GOAL_END_CODES[current.status as keyof typeof GOAL_END_CODES],
+    goal: current,
+  };
 }
 
 /** The CLI's observation backoff: 250 ms doubling to at most 2 s. */

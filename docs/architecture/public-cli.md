@@ -141,6 +141,11 @@ The envelope (`PublicSuccessEnvelope` / `PublicErrorEnvelope`):
 | 6 | Interaction required | `interaction-required` |
 | 7 | Unknown dispatch or outcome | `dispatch-unknown`, `run-unknown`, `node-outcome-unknown` |
 | 8 | Conflict or unsupported | `request-conflict`, `revision-conflict`, `namespace-expired`, `busy`, `not-ready`, `not-empty`, `capability-unavailable`, `backend-incompatible`, `node-unsupported` |
+| 10 | `session goal --wait`: the agent says it is done and nothing verified it | `goal-claimed` |
+| 11 | `session goal --wait`: the agent says it needs a person | `goal-blocked` |
+| 12 | `session goal --wait`: an iteration cap or token budget stopped it | `goal-limited` |
+| 13 | `session goal --wait`: paused, by a person, a failed turn, a stopped environment or no progress | `goal-paused` |
+| 14 | `session goal --wait`: cleared or replaced before it ended, or there is no goal | `goal-gone` |
 | 130 / 143 | Observation stopped by SIGINT / SIGTERM (`observation-interrupted`) | |
 
 An HTTP 200 carrying a rejected or unknown outcome is never a success. Errors
@@ -184,6 +189,10 @@ not advertise at its version before sending it.
 | `session history/resume/fork` | `session.history/resume/fork` | resumable sessions; fork adopts into a new tab | provider |
 | `session interactions list/resolve` | `session.interactions`, `session.interaction.resolve` | pending interactions, `resolve_native_agent_interaction` | provider |
 | `session interactions hold [--resume]` | `session.interaction.hold` | `hold_native_agent_interaction` (the card timer's pause) | provider |
+| `session goal set SESSION --objective\|--objective-file\|--objective-stdin [--check CMD] [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.set` | `NativeAgentService.performGoalCommand` from structured fields, never a `/goal` string | provider |
+| `session goal get SESSION [--check-output] [--wait]` | `session.goal.get` | the session record; starts nothing | read (content) |
+| `session goal pause\|clear SESSION` | `session.goal.pause/clear` | the goal service on the session record; starts no bridge | metadata |
+| `session goal resume SESSION [--max-iterations N] [--budget TOKENS] [--wait]` | `session.goal.resume` | the goal service, through the live session | provider |
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
@@ -589,6 +598,62 @@ read, so a question that was just answered does not report 6.
   (`bridge-outdated`, or no `hold` at all) is refused with `unsupported`
   before anything reaches the provider; one that is gone or expired is
   `interaction-stale`.
+
+### Goals
+
+`session goal` gives one agent tab a durable objective; the backend sends turns
+until a check proves it, the agent needs a person, or a limit stops it. The
+rules are the composer's `/goal` (`plans/goals.md`), and `docs/architecture/goals.md`
+describes the loop. An agent in a session has only `report_goal`, so it can report
+on a goal and never set one. A Control MCP credential granted `sessions.control`
+reaches these actions like any other session control, and the voice profile
+confirms `set` and `resume`.
+
+- **Structured input.** `session.goal.set` takes `objective`, `check`,
+  `maxIterations` and `tokenBudget` as fields, so an objective that mentions
+  `--budget 5` is just an objective. `maxIterations` defaults to 20, is resolved
+  at admission and recorded, and may be at most 100. `check` is one line, as it
+  is in `/goal`. Without a check, a done report ends the goal as `claimed`.
+- **Refused before admission,** with nothing recorded: no capability
+  (`capability-unavailable`, exit 8, as for a provider that has not qualified or
+  a budget on one that reports no usage), bad bounds (`invalid-input`, exit 2), a
+  tab with no conversation (`not-ready`), a parked dispatch (`dispatch-parked`),
+  a running goal, or nothing to pause or resume (`conflict`, exit 8). A goal still
+  at its limit after a resume is an admitted operation that fails `conflict`,
+  with the reason.
+- **One request, one goal.** The goal's ID derives from the operation, so a
+  replay returns the original result whatever has happened to the goal since,
+  and a set the backend died during reports whether it took effect: `succeeded`
+  when the session record or its goal history holds that ID, otherwise
+  `interrupted` with nothing set. The same reasoning covers a coordinator's
+  `set_worker_goal`.
+- **Content-free receipts.** A receipt carries the goal's ID, status and counts.
+  The objective, check and reports are read with `session goal get`, and
+  `session get` adds the same counts as its `goal` field. `--check-output`
+  (`includeCheckOutput`) adds the last check's output tail, which is untrusted
+  command output. Provider session IDs, workspace fingerprints and unread reports
+  are never returned.
+- **`--wait`** (on `set`, `resume` and `get`) follows `session prompt --wait`, but
+  observes the goal rather than one turn, by polling `session.goal.get`:
+
+  | Goal | Exit | Code |
+  | --- | --- | --- |
+  | `complete`: a check or verifier passed | 0 | |
+  | `claimed` | 10 | `goal-claimed` |
+  | `blocked` | 11 | `goal-blocked` |
+  | `limited` | 12 | `goal-limited` |
+  | `paused` | 13 | `goal-paused` |
+  | cleared or replaced before it ended, or no goal | 14 | `goal-gone` |
+  | still running at `--timeout` (default 10 m, at most 24 h) | 5 | `deadline-exceeded` |
+  | a turn waiting on an answer, without `--continue-on-interaction` | 6 | `interaction-required` |
+
+  Only a passing check or verifier exits 0, so a script cannot mistake an
+  unverified claim for a finished job. A goal replaced after it ended still
+  reports how it ended, from the history. The failure envelope's `details` carry
+  the goal's ID, status, reason and counts, never its text. A deadline, a signal
+  or a lost connection stops only the observing: the goal keeps running, and
+  `session goal get --wait` picks it up again. A lost response to a set is found
+  by its request key, as for `session prompt --wait`.
 
 ### Transcripts
 

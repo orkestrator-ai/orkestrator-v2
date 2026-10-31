@@ -1113,7 +1113,7 @@ test.describe("live coordinator", () => {
     }
 
     if (scenarios.includes("goal")) {
-      test(`a worker's goal on ${platform} runs to a passing check, and wakes the coordinator once, not per iteration`, async ({
+      test(`a worker's goal on ${platform} ends as an unverified claim, and wakes the coordinator once, not per iteration`, async ({
         page,
       }) => {
         test.setTimeout(budgets.tests.goal);

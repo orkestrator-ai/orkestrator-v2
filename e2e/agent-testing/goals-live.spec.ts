@@ -42,7 +42,7 @@ const only = process.env.ORKESTRATOR_AGENT_TEST_GOAL_ONLY;
  */
 function slowStep(seconds: number): string {
   return platform === "grok" || platform === "cursor"
-    ? `Write out every whole number from 1 to ${seconds * 3} in words, separated by commas`
+    ? `Write out every whole number from 1 to ${seconds * (platform === "cursor" ? 20 : 3)} in words, separated by commas`
     : `Run the shell command "sleep ${seconds}"`;
 }
 

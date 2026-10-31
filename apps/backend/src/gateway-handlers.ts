@@ -38,7 +38,7 @@ import type {
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
 import { boundedConsoleStats } from "./bounded-console.js";
-import { eventLoopDiagnostics } from "./event-loop-stall-monitor.js";
+import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
 
 /** The invoke, event-stream, metrics and loopback-proxy routes. */
 export class GatewayHandlers {

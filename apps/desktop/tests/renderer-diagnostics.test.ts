@@ -22,6 +22,13 @@ function harness() {
 }
 
 describe("renderer startup diagnostics", () => {
+  test("records a cancelled unload once per navigation", () => {
+    const { emit, log } = harness();
+    emit("will-prevent-unload", {});
+    emit("will-prevent-unload", {});
+    expect(log.mock.calls).toEqual([["[Dialog] renderer beforeunload cancelled an unload"]]);
+  });
+
   test("records preload failures without persisting private error data", () => {
     const { emit, log } = harness();
     const error = Object.assign(new Error("secret file contents /private/path"), {

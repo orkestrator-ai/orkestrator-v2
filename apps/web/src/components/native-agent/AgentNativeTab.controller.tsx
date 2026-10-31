@@ -2358,6 +2358,7 @@ export function SharedNativeAgentController({
     };
   }, [sendFromComposer, sessionKey]);
 
+  const canArchiveResumable = Boolean(adapter.capabilities.actions?.archive);
   /**
    * Provider entries mapped to the shared picker's neutral row shape. Sorting
    * and current-session exclusion belong to the dialog and the backend, not to
@@ -2365,16 +2366,19 @@ export function SharedNativeAgentController({
    */
   const fetchResumableSessions = useCallback(
     async (): Promise<ResumableSession[]> =>
-      (await listResumable()).map((entry) => ({
-        id: entry.sessionId,
-        ...(entry.title ? { title: entry.title } : {}),
-        activityAt: entry.updatedAt ?? entry.createdAt ?? null,
-        ...(entry.status ? { status: entry.status } : {}),
-        ...(entry.detail ? { detail: entry.detail } : {}),
-        ...(entry.parentId ? { parentId: entry.parentId } : {}),
-        ...(entry.branchLabel ? { branchLabel: entry.branchLabel } : {}),
-      })),
-    [listResumable],
+      (await listResumable(canArchiveResumable ? { includeArchived: true } : undefined)).map(
+        (entry) => ({
+          id: entry.sessionId,
+          ...(entry.title ? { title: entry.title } : {}),
+          activityAt: entry.updatedAt ?? entry.createdAt ?? null,
+          ...(entry.status ? { status: entry.status } : {}),
+          ...(entry.detail ? { detail: entry.detail } : {}),
+          ...(entry.parentId ? { parentId: entry.parentId } : {}),
+          ...(entry.branchLabel ? { branchLabel: entry.branchLabel } : {}),
+          ...(entry.archived ? { archived: true } : {}),
+        }),
+      ),
+    [canArchiveResumable, listResumable],
   );
 
   const draftCommandSendTitle = draftCommandBusyTitle(commandComposer.draftCommand, {
@@ -3470,7 +3474,7 @@ export function SharedNativeAgentController({
         agentLabel={label}
         currentSessionId={projection?.sessionId}
         fetchSessions={fetchResumableSessions}
-        {...(adapter.capabilities.actions?.archive ? { onArchive: setResumableArchived } : {})}
+        {...(canArchiveResumable ? { onArchive: setResumableArchived } : {})}
         onResume={(providerSessionId) => {
           setResumeDialogOpen(false);
           const sourceSessionId = projection?.sessionId;

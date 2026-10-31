@@ -118,6 +118,7 @@ import {
   detachAgent,
   ensureAgent,
   listResumableSessions,
+  setResumableAgentArchived,
   parseComposerPatch,
   publicCursorMcpConfig,
   rewindSessionHistory,
@@ -297,7 +298,29 @@ async function routeGlobal(
     return true;
   }
   if (url.pathname === "/session/list" && request.method === "GET") {
-    json(response, 200, { sessions: await listResumableSessions() });
+    json(response, 200, {
+      sessions: await listResumableSessions({
+        includeArchived: url.searchParams.get("includeArchived") === "1",
+      }),
+    });
+    return true;
+  }
+  const archiveRoute = /^\/session\/list\/([^/]+)\/(archive|unarchive)$/.exec(url.pathname);
+  if (archiveRoute && request.method === "POST") {
+    const action = archiveRoute[2]!;
+    const agentId = decodeURIComponent(archiveRoute[1]!).trim();
+    if (!agentId || agentId.length > 256) {
+      json(response, 400, { error: "agentId is invalid" });
+      return true;
+    }
+    const outcome = await setResumableAgentArchived(agentId, action === "archive");
+    if (outcome === "in-use") {
+      json(response, 409, { error: "This conversation is open in a tab" });
+    } else if (outcome === "failed") {
+      json(response, 502, { error: `Cursor could not ${action} this conversation` });
+    } else {
+      json(response, 200, { archived: outcome === "archived" });
+    }
     return true;
   }
   if (url.pathname === "/session/create" && request.method === "POST") {

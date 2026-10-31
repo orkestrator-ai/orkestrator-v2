@@ -45,6 +45,7 @@
     "./bug-report": "./src/bug-report.ts",
     "./bridge-readiness": "./src/bridge-readiness.ts",
     "./claude-background-commands": "./src/claude-background-commands.ts",
+    "./session-title-generation": "./src/session-title-generation.ts",
     "./claude-model-catalog": "./src/claude-model-catalog.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
     "./build-pipeline-defaults": "./src/build-pipeline-defaults.ts",

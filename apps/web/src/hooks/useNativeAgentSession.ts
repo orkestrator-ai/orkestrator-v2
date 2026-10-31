@@ -3222,7 +3222,11 @@ export function useNativeAgentSession<TMessage = unknown>({
       setIsDispatching(false);
     }
   }, [beginProjectionMutation, identity, refresh]);
-  const listResumable = useCallback(() => listNativeAgentResumableSessions(identity), [identity]);
+  const listResumable = useCallback(
+    (options?: { includeArchived?: boolean }) =>
+      listNativeAgentResumableSessions({ ...identity, ...options }),
+    [identity],
+  );
   const setResumableArchived = useCallback(
     async (resumableSessionId: string, archived: boolean) => {
       await setNativeAgentResumableSessionArchived({ ...identity, resumableSessionId, archived });

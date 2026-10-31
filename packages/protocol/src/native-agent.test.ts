@@ -222,7 +222,7 @@ describe("native agent capability table", () => {
       // Cursor through the SDK's `agent.summarize()`.
       expect(nativeAgentCapabilities(platform).actions).toEqual(
         platform === "cursor"
-          ? { steer: true, rewindMessages: true, compact: true }
+          ? { steer: true, rewindMessages: true, compact: true, archive: true }
           : { compact: true },
       );
     }

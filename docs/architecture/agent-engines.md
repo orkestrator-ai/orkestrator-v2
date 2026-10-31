@@ -746,7 +746,7 @@ OpenCode bump.
 | `OpenCodeStreamState`             | Bounded incremental SSE projection state     |
 | `AgentNativeTab`                  | Shared native-agent chat UI                  |
 | `NativeAgentQuestionCard`         | Shared question/answer UI                    |
-| `NativeAgentTurnRecovery`         | Incomplete-turn continuation; OpenCode strategy in `opencode-turn-recovery.ts`, selected by `native-agent-platform-policy.ts` |
+| `NativeAgentTurnRecovery`         | Incomplete-turn continuation; OpenCode strategy in `opencode-turn-recovery.ts`, selected by `native-agent-platform-policy.ts`. Interactive only: an unattended OpenCode overload is continued by `OpenCodeCapacityRetry` (`opencode-capacity-retry.ts`), which keeps the workflow's request and result tool |
 
 The server's SSE event types:
 

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./action-defaults": "./src/action-defaults.ts",
+    "./capacity-retry": "./src/capacity-retry.ts",
     "./agent-accounts": "./src/agent-accounts.ts",
     "./agent-usage-limits": "./src/agent-usage-limits.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",

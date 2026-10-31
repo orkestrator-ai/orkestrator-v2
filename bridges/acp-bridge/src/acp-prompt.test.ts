@@ -19,12 +19,56 @@ import { formatAcpRpcError } from "./acp-errors.js";
 import {
   FLATTENED_RETRIABLE_PROVIDER_SUFFIX,
   RETRIABLE_PROVIDER_ERROR,
+  flattenedRetriableProviderTail,
   requestPromptWithRetriableProviderRetries,
   retriableProviderError,
   structuredPromptInstruction,
   turnTerminalError,
 } from "./acp-prompt.js";
 import { PROMPT_TIMEOUT_MS, type AcpProcess, type SessionState } from "./acp-context.js";
+
+describe("retriableProviderError and limits", () => {
+  test.each([
+    "RetriableError: [resource_exhausted] Error",
+    "RetriableError: [unavailable] PING timed out",
+    "Grok is temporarily overloaded. Please try again in a moment. (HTTP 503)",
+    "Model is temporarily overloaded. Try again in a moment.",
+  ])("retries %s", (message) => {
+    expect(retriableProviderError(new Error(message))).toBe(true);
+  });
+
+  test.each([
+    "RetriableError: [resource_exhausted] You've hit your usage limit",
+    "RetriableError: [resource_exhausted] API rate limit reached",
+    "RetriableError: [resource_exhausted] Quota exceeded",
+    "RetriableError: [unavailable] Please log in again",
+    "subscription:free-usage-exhausted",
+    "Rate limited",
+  ])("never retries %s", (message) => {
+    expect(retriableProviderError(new Error(message))).toBe(false);
+  });
+
+  test("a flattened tail naming a limit stays in the transcript", () => {
+    const part = {
+      type: "text" as const,
+      content: "Answer.\n\nError: RetriableError: [resource_exhausted] usage limit reached",
+      sourcePartId: "part",
+      sourceMessageId: "message",
+    };
+    const state = {
+      messages: [{ id: "message", role: "assistant", content: part.content, parts: [part] }],
+    } as unknown as SessionState;
+    expect(flattenedRetriableProviderTail(state)).toBeNull();
+  });
+
+  test("the overload sentence in assistant text proves nothing", () => {
+    expect(
+      RETRIABLE_PROVIDER_ERROR.test(
+        "Grok is temporarily overloaded. Please try again in a moment.",
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("turnTerminalError", () => {
   test("an expired request fails the turn whatever the agent then answered", () => {

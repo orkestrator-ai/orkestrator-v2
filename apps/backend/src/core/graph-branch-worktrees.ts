@@ -48,7 +48,7 @@ import {
 } from "@orkestrator/protocol/graphs/run";
 import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands-files.js";
 import {
-  createEnvironmentCommandRunner,
+  createGitEnvironmentCommandRunner,
   ensureWorkspaceArtifactIsGitExcluded,
   type EnvironmentCommandRunner,
 } from "./commands-review.js";
@@ -157,7 +157,7 @@ export class GraphBranchWorktrees {
   }
 
   private runner(environment: Environment): EnvironmentCommandRunner {
-    return (this.dependencies.createRunner ?? createEnvironmentCommandRunner)(
+    return (this.dependencies.createRunner ?? createGitEnvironmentCommandRunner)(
       environment,
       this.dependencies.fence,
     );

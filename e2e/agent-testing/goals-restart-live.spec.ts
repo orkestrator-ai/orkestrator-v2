@@ -8,7 +8,7 @@
  *     bunx playwright test --config e2e/agent-testing/playwright.goals.config.ts
  */
 import { expect, test } from "@playwright/test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { openSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -67,8 +67,31 @@ async function crashAndRestart(): Promise<void> {
   const stored = JSON.parse(
     await fs.readFile(path.join(runtime.profileRoot, "profile.json"), "utf8"),
   ) as { credentialSources?: string[]; agentPlatforms?: string[] };
-  const backend = (profileStatus(profile) as { pids?: { backend?: number } }).pids?.backend;
+  const status = profileStatus(profile) as {
+    pids?: { backend?: number };
+    processStartTimes?: { backend?: number };
+  };
+  const backend = status.pids?.backend;
+  const expectedStart = status.processStartTimes?.backend;
   expect(backend, "dev:status names no backend pid to kill").toBeTruthy();
+  expect(typeof expectedStart, "dev:status names no backend process start time").toBe("number");
+  const inspect = (field: string) =>
+    spawnSync("ps", ["-ww", "-o", `${field}=`, "-p", String(backend)], {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C" },
+    });
+  const command = inspect("command");
+  expect(
+    command.status === 0 &&
+      command.stdout.includes(path.join(repositoryRoot, "apps", "backend", "src", "main.ts")) &&
+      command.stdout.includes(runtime.dataDir),
+    "Refusing to signal a backend outside this fixture profile",
+  ).toBe(true);
+  const started = inspect("lstart");
+  expect(
+    started.status === 0 && Math.abs(Date.parse(started.stdout.trim()) - expectedStart!) < 1000,
+    "Refusing to signal a reused backend PID",
+  ).toBe(true);
   process.kill(backend!, "SIGKILL");
   const stop = await runAsync("mise", ["run", "dev:stop", "--profile", profile], 90_000);
   expect(stop.code, `dev:stop failed: ${stop.stderr}`).toBe(0);

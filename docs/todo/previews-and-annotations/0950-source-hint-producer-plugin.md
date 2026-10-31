@@ -110,8 +110,8 @@ container environment created on that profile.
 ## Current state
 
 - Local worktree: the Electron case compiles the documented Babel emitter and
-  captures its rendered Save button with
-  trusted input, saves through the real renderer, and reads back
+  captures its rendered Save button with trusted input, saves through the real
+  renderer, and reads back
   `[verified, not verified]`. The thread shows both rows.
 - Container: the same case on a `containerized` environment, opt-in through
   `ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1`. The page is served from the
@@ -126,13 +126,76 @@ container environment created on that profile.
   `@vitejs/plugin-react` 5. Development transforms emit workspace-relative
   stamps; production builds have none, even with `NODE_ENV=development`.
 
+### Review follow-up validation, 2026-10-31
+
+Tested commits `589a0b2c9` and `f629db0ed` in this worktree on macOS with
+Docker Desktop.
+Commands below ran through `mise run test:logged` except the formatter and
+dependency installs.
+
+- `bun test apps/desktop/tests/source-hint-emitter-doc.test.ts apps/desktop/tests/source-hint-emitter-vite.integration.test.ts --parallel=1`:
+  13 passed. Covers nested lowercase helpers, all-caps names, module-level JSX,
+  absent filenames, both real Vite configurations, and production exclusion.
+- `bun test tests/unit/playwright-spec-loading.test.ts tests/unit/electron-spec-process-ownership.test.ts apps/desktop/tests/browser-preview-source-hints.test.ts --parallel=1`:
+  all three owning files passed.
+- `ORKESTRATOR_AGENT_TEST_PROFILE=hint-review-docker ORKESTRATOR_AGENT_TEST_DOCKER=1 bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts web-annotations-gateway.spec.ts --grep 'Docker fixture checks source hints' --workers=1`:
+  one passed. Existing, missing and escaping-symlink paths returned
+  `[true, false, false]`; the web thread showed all three statuses. The
+  disposable profile was stopped and reset, including its two containers,
+  two volumes and network.
+- `ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1 ORKESTRATOR_AGENT_TEST_RUN_ID=hint-review-electron mise run test:agent:electron`:
+  both source-hint cases passed, including the container opt-in. The selected
+  button is now real Babel output from `annotation-app/GeneratedSave.tsx:2`;
+  the negative ancestor remains deliberately handwritten. The full suite
+  finished with 42 passed, three failed, two skipped and one not run. Failures
+  were native nickname refresh, terminal input and the annotation pixel test's
+  focus assertion. Failure log:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.2imAYu/agent-electron.log.gz`.
+- Rerunning the owning Electron file alone reproduced the renderer-control
+  focus failure before capture (six passed, one failed, eight not run; log
+  `orkestrator-test-run.GCL432/source-hint-electron-owner.log.gz` below the same
+  temporary root). Commit `f629db0ed` explicitly returns native keyboard focus
+  to the host renderer before focusing a control, preserving every assertion.
+  The exact owner command then passed both source-hint cases, but stopped at
+  the existing keyboard-to-preview handoff assertion (nine passed, one failed,
+  five not run; log `orkestrator-test-run.pQLpum/source-hint-electron-owner.log.gz`).
+  The command was
+  `ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1 ORKESTRATOR_AGENT_TEST_RUN_ID=hint-review-electron-owner bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts web-annotations-electron.spec.ts --workers=1`.
+- `ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1 ORKESTRATOR_AGENT_TEST_RUN_ID=hint-review-electron-pixels bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts web-annotations-electron.spec.ts --grep 'capture pixels stay on the target' --workers=1`:
+  one passed after the focus repair. The control-focus failure reproduced in
+  the complete owner, so it is not classified as an aggregate-only flake.
+- After the repair, the exact full Electron command above was rerun again:
+  38 passed, two failed, two skipped and six not run. Both source-hint cases
+  passed again. The remaining failures were the Notes-column geometry test's
+  missing panel and the workspace-realm native focus assertion; later annotation
+  cases were not run after the geometry failure. Failure log:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.kN4NjU/agent-electron.log.gz`.
+  Full-suite artifacts are in `output/agent-testing/hint-review-electron/`;
+  the passing pixel case is in `output/agent-testing/hint-review-electron-pixels/`.
+- `bun check -p apps/desktop/tsconfig.test.json` and
+  `bun check -p e2e/agent-testing/tsconfig.json` passed. Targeted `bunx oxlint`
+  on the four changed TypeScript files and `mise run format:check` passed.
+  Both frozen installs and `bun test tests/unit/version-drift.test.ts --parallel=1`
+  passed after regenerating the lockfiles with the pinned Bun runtime.
+- The preparation's failed broad commands were rerun. With
+  `ORKESTRATOR_E2E_PORT=14590`, `mise run test:browser` cleared the original
+  checkout/port conflict but accumulated unrelated page-load and UI failures
+  while the host load average exceeded 70. It was interrupted after 146 passed,
+  33 failed and nine interrupted tests; 55 skipped and 853 did not run. Failure
+  log: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.XtMApK/browser-review-rerun.log.gz`.
+- `mise run test:agent:browser:isolated` passed the previously failing graph
+  approval case, but failed the capped-file-tree and Cursor draft-attachment
+  cases and reached its 15-minute browser timeout. Its profile
+  `qa-browser-e2a0af6b-a29` was stopped and reset automatically. Failure log:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.l9IZdm/isolated-browser-review-rerun.log.gz`.
+
 ## Needs verification
 
 - These runs were on macOS with Docker Desktop. Linux and Windows hosts were not
   run.
 - The desktop captures use a real Babel transform and React render served as
-  fixture HTML. A live Vite server is covered separately by the integration
-  test; its page has not been captured through Electron.
+  fixture HTML. Vite's development pipeline is covered separately by the
+  integration test; its page has not been captured through Electron.
 - Other Babel build integrations (such as webpack or Next.js) have not been
   qualified; the doc gives only the two Vite configurations in full.
 
@@ -199,3 +262,20 @@ not confirmed" rather than "not found". Neither row is styled as a success.
 Moved the case body into `captureAndReviewSourceHints` and added an opt-in
 container variant, which needs no billed turn. The variable keeps it out of
 `test:agent:electron` runs on hosts with no image.
+
+### Tasks 1 and 3: execute copied configurations and capture emitted output
+
+The review follow-up extracts every JavaScript snippet from the doc instead of
+maintaining a second plugin/config copy. Vite versions run in separate child
+processes with explicit environments, so tests do not mutate the suite's Babel
+environment. The Electron fixture compiles the plugin, renders the button with
+React, and commits that source into its disposable origin before creating
+either environment. This gives both workspace checks the actual emitted path.
+
+### Task 3: return native keyboard focus before renderer control activation
+
+The owning-file rerun exposed that setting a DOM active element alone did not
+return keyboard focus from the native preview. `pressControl` now activates
+the host and focuses its renderer first, matching the existing keyboard test's
+explicit focus ownership setup. It still asserts DOM focus before Enter; no
+assertion, timeout or skip was relaxed.

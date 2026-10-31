@@ -124,3 +124,16 @@ timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-command-filter-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0 in 6.2 seconds logged.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.czctSA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after aggregate completion. The passing owner's bounded runner removed its raw output; only its successful exit and duration were retained.
 - **Assessment:** recurrence confirmed by the complete unchanged owner pass. Shared-host contention remains a hypothesis; no command implementation, assertion, deadline or skip changed, and the aggregate remains non-green.
+
+## Settings layout review — 2026-10-31
+
+- **Original command:** `mise run test`, at implementation commit `d639571b2`; workspace reservation six slots with two isolated Bun workers for web/desktop and four for backend, bridges reservation two slots with one worker per provider. The component browser suite also ran on the shared host. The aggregate waited about 658 seconds for capacity and exited 1 after 1461 seconds.
+- **Failure:** `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning`, `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx:711`, expected one projection read but received two (1948.07 ms). The owning package reported 10883 passed, 10 skipped, two failed across 722 files.
+- **Complete unchanged owner rerun:** the following one-worker command passed (exit 0, 12.7 seconds logged). Multi-file commands ran the two complete owners sequentially with Bun isolation. Passing raw output was removed by the bounded logger.
+
+```sh
+mise run test:logged -- --name transcript-review-failures-isolated -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures
+```
+
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.

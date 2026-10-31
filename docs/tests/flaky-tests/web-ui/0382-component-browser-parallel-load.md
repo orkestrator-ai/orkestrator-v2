@@ -216,6 +216,22 @@ The rerun finished with 142 passed, five skipped and three failed (exit 1, 496.7
 
 Evidence below the host temporary directory: `orkestrator-test-run.1Bd5Xm/failed-turn-browser-suite.log.gz` and `orkestrator-test-run.twT6KM/failed-turn-browser-owners.log.gz`. No implementation, assertion, timeout or skip in these owners changed. Host contention is a hypothesis, not an established cause. Both the complete browser command and the owner rerun remain failed.
 
+## Settings layout review — 2026-10-31
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=18237 ORKESTRATOR_PUBLIC_E2E_PORT=18238 mise run test:logged -- --name browser -- mise run test:browser`, implementation commit `d639571b2`, nine Playwright workers alongside other validation on the shared host.
+- **Aggregate result:** 982 passed, 108 skipped, 14 failed; exit 1 in 1388.6 seconds logged. The component failure short-circuited the public-site command. All new layout measurement cases passed.
+- **Settings failures:** both mobile drawer-opening cases in `e2e/EnvironmentSettingsDrawer.spec.ts` failed to find `Projects and environments` at the five-second visibility deadline, before opening Settings. `Claude background limit persists across reload and clears when reset to default` in `e2e/GlobalSettings.spec.ts` exceeded the 30-second test deadline during its final `page.reload()`.
+- **Complete owning-file confirmation:** the following one-worker run passed (exit 0, 44.7 seconds logged), including all cases in both affected owners and the two layout specs. The drawer and GlobalSettings spec sources were unchanged by this review; the GlobalSettings fixture gained only the Debug/Platforms responses and section selector needed by the new layout coverage. Passing raw output was removed by the bounded logger.
+
+```sh
+ORKESTRATOR_E2E_PORT=18237 mise run test:logged -- --name settings-review-final-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/EnvironmentSettingsDrawer.spec.ts e2e/GlobalSettings.spec.ts e2e/FullscreenSettingsLayout.spec.ts e2e/SettingsPageLayout.spec.ts --workers=1
+```
+
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.DCiIXp/browser.log.gz`.
+- **Assessment:** the drawer and settings reload failures are intermittent in this observation. Host contention is a hypothesis, not an established cause; no assertion, timeout or skip was changed. The full browser command remains failed.
+
+Other aggregate failures were the two native branch suggestion cases, mobile DataSavingGateway, both DesignCanvas cases, two mobile KeyboardShortcuts composer-focus cases, mobile SetupRecovery, mobile ToolGroupFold threshold folding, desktop GlobalStyles message actions and desktop VirtuosoFollow. Those complete owners were not rerun in this review; this observation does not classify them as new flakes or claim they are green. Their original failures remain in the aggregate artifact.
+
 ## Claude sign-in replay review — 2026-10-31
 
 The eight-worker rerun of `mise run test:logged -- --name browser -- mise run test:browser`

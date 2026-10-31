@@ -91,6 +91,16 @@ assertion, timeout or skip changed. Asynchronous ledger removal remains a
 hypothesis. Other outcomes are in
 [1254](../aggregate-validation-runs/1254-merge-readiness-review-validation.md).
 
+## Settings layout branch, 2026-10-31
+
+The first `mise run test` on this renderer-only branch (nothing in `design/`
+changed) failed this test after 70.36 ms with the same symptom: the profile was
+gone and `59426-59429-0123abcd.json` was still in the ledger. The complete
+owner then passed alone twice (0.4 s and 0.9 s logged), and the next full run did
+not repeat the failure. Aggregate evidence:
+`orkestrator-test-run.eT8TET/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+in the host temporary directory.
+
 ## Failed-turn restart validation observation
 
 On 2026-10-31, while validating [0940](../../../todo/cross-cutting/0940-failed-turn-reads-as-completed.md)

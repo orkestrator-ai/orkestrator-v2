@@ -34,6 +34,7 @@ import { Switch } from "@/components/ui/switch";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import type { HostMaintenanceClient } from "@/lib/host-maintenance-client";
 import { HostDependencySettings, type OutdatedEnvironment } from "./HostDependencySettings";
+import { SettingsSectionHeader } from "./SettingsPageLayout";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -263,12 +264,9 @@ export function HostUpdatesPanel({
   return (
     <div className="space-y-10">
       <section className="space-y-6">
-        <div>
-          <h3 className="text-sm font-medium">Orkestrator updates</h3>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Updates Orkestrator on this machine, from here or any device connected to it.
-          </p>
-        </div>
+        <SettingsSectionHeader title="Orkestrator updates">
+          Updates Orkestrator on this machine, from here or any device connected to it.
+        </SettingsSectionHeader>
 
         <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
           <dt className="text-muted-foreground">Running</dt>

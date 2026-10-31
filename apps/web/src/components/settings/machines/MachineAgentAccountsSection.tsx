@@ -321,7 +321,7 @@ function IdentityView({
             {groups.length === 0 ? (
               <p className="text-xs text-zinc-500">No machine could be read.</p>
             ) : (
-              <ul className="divide-y divide-zinc-800/60 rounded-xl border border-zinc-800">
+              <ul className="divide-y divide-zinc-800/60 rounded-lg border border-zinc-800">
                 {groups.map((group) => (
                   <li
                     key={group.key}
@@ -908,7 +908,7 @@ export function MachineAgentAccountsSection({
         />
       ) : null}
       {shown.length > 0 && !(byIdentity && !single) ? (
-        <div className="overflow-x-auto rounded-xl border border-zinc-800">
+        <div className="overflow-x-auto rounded-lg border border-zinc-800">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500">

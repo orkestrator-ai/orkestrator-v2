@@ -14,14 +14,18 @@ does not qualify the replacement chord.
 
 Updated 2026-10-31 against `main` at `931e5541`, on a Linux host (Omarchy,
 Hyprland on Wayland) with a private Xvfb display. Task 4's causes are found and
-fixed on the branch, but the workflow has not yet run the fix. Task 5's packaged
+fixed on the branch; subsequent CI qualification is recorded below. Task 5's packaged
 Linux matrix ran for the sidebar, terminal and Monaco and for the menu bar; the
 other surfaces were not set up (Current state).
 
+Review qualification on 2026-10-31 against `main` at `54d509b2d`: task 4
+now passes on Linux/Xvfb and Windows, with five native-menu and five real
+blocked-shutdown cleanup iterations per platform. The remaining packaged
+Linux surfaces and macOS matrix still need qualification.
+
 The Windows/Linux menu work, its decisions and the menu-navigation fix landed
-in `f0a09962` (#1405). They are listed as done. What is left is native
-qualification: the CI workflow added for it has failed on every run, and the
-packaged-app matrix has not been run on any OS.
+in `f0a09962` (#1405). Tasks 1–4 are done; tasks 5–6 retain their separate
+packaged-app scope.
 
 The matrix's ⌘K row is corrected to the claim rule in `appClaimsShortcut`
 (`packages/protocol/src/keyboard-shortcuts.ts:156-165`), which landed in
@@ -33,7 +37,7 @@ and with an interactive artifact.
 1. **Windows/Linux menu layout**: the conventional File, Edit, View, Window and Help layout, no macOS-only roles, no Super accelerators, and Close Tab with no key. Status: done.
 2. **Super-key behaviour outside macOS**: Super/Windows renderer handlers stay as they are, and Super+Shift+/ stays accepted. Status: done (decided).
 3. **Menu keyboard navigation does not toggle**: choosing View › Keyboard Shortcuts… with Enter opens the dialog; only the chord toggles it. Status: done.
-4. **Native menu workflow passes on CI**: `.github/workflows/native-application-menu.yml` passes on Linux/Xvfb and Windows. Status: open (fixed on the branch; passes locally on Linux/Xvfb 35/35; needs the workflow's run on the pull request, and Windows is reasoned from its logs only).
+4. **Native menu workflow passes on CI**: `.github/workflows/native-application-menu.yml` passes on Linux/Xvfb and Windows. Status: done (2026-10-31: [workflow run 41220321295](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41220321295) passed five menu and five cleanup iterations on each platform, with native input and no retries).
 5. **Packaged Linux native qualification**: the matrix below, plus the Linux menu-bar row, on a packaged Linux build. Status: partly done (2026-10-31: sidebar, terminal, Monaco and the menu bar pass on packaged X11; composer, previews, artifact, design frame, realm and Wayland not run).
 6. **Packaged macOS native qualification**: the matrix below, including the Cyrillic input source, on a packaged macOS build. Status: open (needs a macOS host).
 
@@ -145,7 +149,7 @@ not a display difference.
   - **Mark the job `continue-on-error`.**
     - Pros: unblocks pull requests at once.
     - Cons: the evidence becomes optional and will be ignored.
-- **What counts as a pass?** One green run of both jobs on a pull request or manual dispatch from `main`, with the uploaded menu defaults and About screenshot attached to this file's Current state.
+- **What counts as a pass?** One green run of both jobs on the exact proposed revision, with uploaded menu defaults, About screenshots and assertion summaries linked from Current state. Manual dispatch on the reviewed branch supplies evidence before merge; the pull-request trigger repeats it when a PR is opened.
 
 ### 5. Packaged Linux native qualification
 
@@ -191,6 +195,23 @@ Update 2026-10-31: run on a packaged build of `931e5541`; results and setup are 
 - **What counts as a pass?** The same record as task 5, with the macOS version and input source per row.
 
 ## Current state
+
+### Review qualification, 2026-10-31
+
+[Run 41220321295](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41220321295)
+qualified code revision `8ae7b7b4414d425dc2d142ad011ccc2fb8799d3b` on Linux/Xvfb
+and Windows Server 2025 with Electron 45.0.0. Each platform passed five menu
+and five blocked-shutdown cleanup iterations, with zero skips or retries, plus
+11 deterministic process-table tests. Both menu selections opened, the
+display-only accelerator dispatched nothing, About dismissed and typing
+resumed in every repetition. Windows restored focus without a foreground
+request. Linux/Xvfb supplied native-window focus without focusing the textbox.
+
+The [1510 record](../../tests/flaky-tests/electron-and-desktop/1510-native-menu-keys-before-focus-moves.md#final-evidence)
+links both artifacts and records counts, durations, assertions and the
+intermediate failures: renderer focus restoration on Linux and a Windows
+SQLite handle held briefly after process exit. This closes task 4; the
+packaged surfaces in tasks 5–6 remain separate.
 
 The review follow-up removed the 500 ms press-deduplication window. Desktop
 input now has one main-process owner before page and menu dispatch. Artifact
@@ -640,6 +661,21 @@ isolated X11 session" below; it still holds for macOS.
 - **Cons.** Users with Ctrl+Shift+K in muscle memory get no dialog and no
   hint. If that matters, (b) restores it outside macOS at the cost of taking
   Delete Line from Monaco again.
+
+### Task 4: qualify the reviewed revision before merge
+
+- **Options.** Run the existing workflow manually on the reviewed branch
+  (recommended): gives exact-revision Windows and Linux evidence now, but
+  requires a branch push. Alternatively, wait for a PR or main dispatch:
+  follows the earlier milestone literally, but delays requested live evidence
+  despite identical workflow code.
+- **Choice.** Run the reviewed branch with five repetitions and zero retries,
+  retain the assertion summaries and screenshots, and record the tested SHA.
+- **Why.** The review explicitly requires Windows execution and repeated
+  native-input evidence; all checks can run safely before merge. Missing
+  creation dates leave Windows subtrees unclaimed. Focus checks observe both
+  the native view and renderer; profile deletion retries are bounded and only
+  follow verified process shutdown.
 
 ## Related
 

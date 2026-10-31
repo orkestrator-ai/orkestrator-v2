@@ -25,8 +25,9 @@ iterations passed. The failed run's [Linux artifact](https://github.com/orkestra
 retains the trace and screenshot.
 
 The spec now also observes `document.hasFocus()` and the textbox's DOM focus
-before sending the single native `a`. This checks Chromium's restoration of the active element after
-native-view focus; it does not call the textbox's `focus()` or retry typing.
+before sending the single native `a`. This checks Chromium's restoration of
+the active element after native-view focus; it does not call the textbox's
+`focus()` or retry typing.
 Windows must regain native-view focus without an explicit foreground request;
 Linux/Xvfb still supplies the native-window focus a window manager would give.
 
@@ -42,3 +43,28 @@ page focus restored and the textbox containing `a`. Each Windows cleanup
 iteration reported its helper included in the owned tree and all owned PIDs
 stopped, then failed removing Chromium's SQLite profile file with `EBUSY`.
 Profile deletion now uses bounded filesystem retries after shutdown checks.
+
+### Final evidence
+
+[Run 41220321295](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41220321295)
+passed both jobs on code revision `8ae7b7b4414d425dc2d142ad011ccc2fb8799d3b`.
+Each used one worker, native input, five repetitions and zero retries:
+
+| Platform | Menu | Blocked shutdown cleanup | Total duration | Skips / failures / flaky |
+| --- | --- | --- | --- | --- |
+| Ubuntu / Xvfb | 5/5 | 5/5 | 12.9 s | 0 / 0 / 0 |
+| Windows Server 2025 (10.0.26100) | 5/5 | 5/5 | 55.4 s | 0 / 0 / 0 |
+
+Both jobs also passed the 11 deterministic process-table cases. Each retained
+menu result contains exactly `shortcuts:open`, `shortcuts:open`, `new-window`,
+`new-window`, with About dismissed, focus restored and textbox value `a`.
+Each cleanup result records the helper among the owned PIDs and all owned
+processes stopped. These summaries were downloaded and checked on both
+platforms. Windows also passed profile removal after the bounded retry fix.
+
+The [Linux artifact](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41220321295/artifacts/13049597874)
+and [Windows artifact](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41220321295/artifacts/13049981280)
+retain `results.json`, resolved menu defaults, native About screenshots and the
+per-repetition assertion summaries for seven days. The final local Linux/Xvfb
+command also passed all ten cases (16.9 s). Focus/type checks passed; packaged
+surface qualification remains tracked separately in todo 0325.

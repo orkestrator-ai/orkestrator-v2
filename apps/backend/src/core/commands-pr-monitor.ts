@@ -289,6 +289,8 @@ export async function detectEnvironmentPullRequest(
     /**
      * Rereads a project home's durable record first, so a lookup follows the
      * home's current checkout rather than the target captured when it was queued.
+     * Also supplies the selected GitHub credential for local `gh` runs;
+     * omitting storage uses the host login.
      */
     storage?: StorageService;
     /** Fills `viewerCanMerge` for an open PR; omitted, it stays absent. */

@@ -54,7 +54,7 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   do; a read-only accessor is fine where a method would only wrap one lookup.
 - Where a module has no context in reach, pass the narrow cluster down
   (`withShortLivedBridge(localServers, ...)`,
-  `createEnvironmentCommandRunner(environment, fence)`) or a narrow option
+  `createGitEnvironmentCommandRunner(environment, fence)`) or a narrow option
   (`NativeAgentService`'s `localBridgeAccountId` and `environmentFence`, a
   bridge provider's `planUsage`, `gitHubCliEnv`'s config source), not the whole
   context. An object that outlives one call may keep the cluster it

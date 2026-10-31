@@ -24,3 +24,23 @@ timeout or skip changed.
 Aggregate evidence: `orkestrator-test-run.cmmuTa/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 in the host temporary directory. Preparation evidence is
 `validation-04.stdout.txt` under `.orkestrator/review-artifacts/review-validation-a810480a-55a2-484a-b530-7dd5cb9588b2/`.
+
+
+## Leaf-check readiness review — 2026-10-30
+
+The exact final `mise run test` rerun repeated the same ledger assertion at
+line 348 after 300.67 ms. It ran the backend with four file workers (six slots
+reserved for the workspace group); backend totals were 11,323 passed,
+87 skipped and this one failure. All other test groups and packages passed.
+The complete unchanged owner passed alone with one worker (exit 0, 0.9 s):
+
+```sh
+mise run test:logged -- --name pr-review-browser-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+Evidence:
+`orkestrator-test-run.mtfML9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+under the host temporary directory. No design cleanup implementation,
+assertion, timeout or skip changed. Asynchronous ledger removal remains a
+hypothesis. Other outcomes are in
+[1254](../aggregate-validation-runs/1254-merge-readiness-review-validation.md).

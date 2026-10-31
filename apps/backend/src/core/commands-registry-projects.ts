@@ -957,12 +957,14 @@ export function registerProjectCommands(
   register("save_config", async ({ config }, context) => {
     const { storage } = context;
     const candidate = asRecord(config, "config") as unknown as AppConfig;
-    await storage.saveConfig(
-      {
-        ...candidate,
-        global: stripRendererCredentials(asRecord(candidate.global, "config.global")),
-      },
-      { preserveCredentials: true },
+    await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+      storage.saveConfig(
+        {
+          ...candidate,
+          global: stripRendererCredentials(asRecord(candidate.global, "config.global")),
+        },
+        { preserveCredentials: true },
+      ),
     );
     const savedGlobal = (await storage.loadConfig()).global;
     context.runtime.terminals.history.configureRetention({
@@ -994,9 +996,8 @@ export function registerProjectCommands(
   });
   register("update_global_config", async ({ global, preserveInheritedSettings }, context) => {
     const { storage } = context;
-    const updated = await storage.updateGlobalConfig(
-      stripRendererCredentials(asRecord(global, "global")),
-      {
+    const updated = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+      storage.updateGlobalConfig(stripRendererCredentials(asRecord(global, "global")), {
         preserveCredentials: true,
         ...(preserveInheritedSettings === undefined
           ? {}
@@ -1006,7 +1007,7 @@ export function registerProjectCommands(
                 "preserveInheritedSettings",
               ),
             }),
-      },
+      }),
     );
     context.runtime.terminals.history.configureRetention({
       enabled: updated.global.terminalHistoryEnabled,
@@ -1027,12 +1028,16 @@ export function registerProjectCommands(
       await storage.setGitHubCliReminderDismissed(asRequiredBoolean(args.dismissed, "dismissed")),
     );
   });
-  register("set_github_token", async ({ token }, { storage }) => {
+  register("set_github_token", async ({ token }, { storage, runtime }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
     if (nextToken !== null && !nextToken) {
       throw new Error("GitHub token cannot be empty. Use null to clear it.");
     }
-    return redactAppConfig(await storage.setGitHubToken(nextToken));
+    return redactAppConfig(
+      await runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+        storage.setGitHubToken(nextToken),
+      ),
+    );
   });
   register("set_cursor_api_key", async ({ apiKey }, { storage }) => {
     const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();

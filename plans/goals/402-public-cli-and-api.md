@@ -3,12 +3,12 @@ id: 402
 title: "Public CLI and API"
 phase: 4
 plan: "P4.2"
-status: not-started
+status: done
 depends_on: [108]
 blocked_by: ""
-owner: ""
-branch: ""
-pr: ""
+owner: "Claude Opus 5.5 (investigate-goal-command)"
+branch: "investigate-goal-command-c4666baa82d9-r1"
+pr: "pending"
 updated: 2026-10-31
 ---
 
@@ -65,3 +65,4 @@ Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-31 · plan · Created from the plan. · Not started.
 - 2026-10-31 · Claude (worktree c4666baa82d9) · Added the actions, CLI, docs and tests. · Status and index left for the caller; verifier flag and a packaged run still open.
+- 2026-10-31 · Claude Opus 5.5 (investigate-goal-command) · Delivered with the goals branch; see Notes for what was proven live and what was not. · Awaiting review.

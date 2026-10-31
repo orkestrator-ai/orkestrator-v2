@@ -65,7 +65,8 @@ goal.
 - **Iterations:** always on, default 20, at most 100. The first turn counts.
 - **Tokens:** optional, on platforms in `GOAL_TOKEN_BUDGET_PLATFORMS`. Checked
   between turns from the provider's session counter; a running turn is never cut
-  off.
+  off. That counter includes context re-read on each turn, so a one-word Claude turn
+  counts about 68,000. Set a budget in hundreds of thousands.
 - **No progress:** 3 consecutive continuations with no change to the workspace
   (commit, status and diff, hashed) and no report pause the goal. A workspace that
   is not a git checkout cannot say, so this stop does not apply there, and the cap
@@ -111,9 +112,57 @@ that constraint in the objective.
 /goal Make every test in test/auth pass without editing test files --check bun test test/auth
 ```
 
+## Verifier and other surfaces
+
+`/goal <objective> --verifier <agent>[:model]` adds a fresh read-only session that
+judges a `done` report and returns a verdict, in `native-agent-goal-verifier.ts`. With
+both a check and a verifier, the check runs first and both must pass. Its spend
+counts toward the budget, and it can take several minutes. Read-only enforcement
+follows the provider's tier, so it is advisory on Grok.
+
+Scripts use `orkestrator session goal`
+([public-cli.md](public-cli.md)), and a coordinator uses `set_worker_goal` and its
+neighbours ([coordinator.md](coordinator.md)).
+
 ## Native goals stay off
 
 Codex's `features.goals=false` stays, and `/goal` is reserved over a provider's own
 row. Claude's `ProposeGoal` is in `disallowedTools`. See each bridge's `AGENTS.md`.
 Any pin change can add a native goal or move a turn edge, so upgrades re-run
 `mise run test:agent:goals`.
+
+Cursor is the exception: its model is offered `CreateGoal` and `UpdateGoal`, and
+`@cursor/sdk` 1.2.0 has no way to turn them off. The carrier tells the agent to use
+no other goal tool, which reduces the chance without closing the path.
+
+## Qualification
+
+Live on 2026-10-31 at Claude 2.1.314, Codex 0.166.0, OpenCode 1.19.5, Cursor SDK
+1.2.0, Grok 1.0.70 and Pi 1.4.0, with each provider's default model.
+
+| Provider | Loop scenarios | Background task | Compact then resume | Verifier | Browser, host |
+| --- | --- | --- | --- | --- | --- |
+| Claude | Pass | Pass | Pass | Pass | Pass, and in a container |
+| Codex | Pass | Pass | Pass | Pass, slowly | Pass |
+| OpenCode | Pass | Pass | Goal passes; the compact itself failed | Pass | Pass |
+| Cursor | Pass | Pass | Pass, with no compact to run | Pass | Pass |
+| Grok | Pass, with no shell step | Pass | Pass | Pass | Pass |
+| Pi | Pass | Pass | Goal passes; the compact itself failed | Pass | Pass |
+
+Loop scenarios are a check passing after several iterations, no check, a check that
+never passes, `blocked`, Stop and resume, and a queued user prompt. On Claude,
+`goals-restart-live.spec.ts` also kills the backend during a check and mid-turn. On
+Claude and Codex, the coordinator scenario delegates a goal and gets one wake.
+
+Not proven live:
+
+- A failed turn, except on OpenCode, where a real upstream 403 paused the goal. The
+  others rely on fakes.
+- The no-progress stop and a token budget being reached, by fakes only.
+- A context overflow during a goal. A compact while a goal waits stands in for it.
+- A goal extension on Pi, or a stop hook in a user's Cursor config.
+- A worker on another node: its delegation can wake a coordinator between iterations.
+
+Known problems found on the way, not caused by goals and not fixed here: Grok's shell
+fails to spawn in Orkestrator sessions, and a typed `/compact` delivered through the
+prompt queue leaves a Codex tab `running`.

@@ -138,3 +138,10 @@ environment as permanently busy. The same applies across a restart: the live
 child registry is deliberately not persisted, so a card restored at `active`
 would spin forever with nothing left that could settle it, and `loadPersistedState`
 closes those out on the way in.
+
+## Goals
+
+Orkestrator's goal loop runs in the backend (`plans/goals.md`). Cursor's model is
+offered its own `CreateGoal` and `UpdateGoal`, and `@cursor/sdk` 1.2.0 has no option to
+turn them off, so this path stays open. The carrier tells the agent to use no other
+goal tool. Re-check on each SDK upgrade.

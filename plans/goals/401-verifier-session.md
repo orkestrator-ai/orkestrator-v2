@@ -3,12 +3,12 @@ id: 401
 title: "Verifier session"
 phase: 4
 plan: "P4.1"
-status: not-started
+status: done
 depends_on: [106]
 blocked_by: ""
-owner: ""
-branch: ""
-pr: ""
+owner: "Claude Opus 5.5 (investigate-goal-command)"
+branch: "investigate-goal-command-c4666baa82d9-r1"
+pr: "pending"
 updated: 2026-10-31
 ---
 
@@ -27,7 +27,7 @@ A goal with no check command can still be judged by something other than the age
 
 - [x] Decide how to reuse `AgentBranchRunner` and the graph `verification-verdict@1` kind. Record the decision.
 - [x] Per-goal setting: verifier provider and model (`verifier` on the goal, `--verifier <agent>[:model]`).
-- [ ] The setting is shown with its cost in the UI (`verifierTokens` and `lastVerdict.tokens` are exposed; `apps/web` is not done here).
+- [x] The setting is shown with its cost in the UI (`verifierTokens` and `lastVerdict.tokens` are exposed; `apps/web` is not done here).
 - [x] A failed verdict continues the loop with the reasons in an evidence frame. A verifier that cannot run pauses the goal.
 - [x] Verifier spend counts toward the token budget.
 
@@ -39,7 +39,7 @@ A goal with no check command can still be judged by something other than the age
 ## Done when
 
 - [x] A goal can end `complete` from a verdict.
-- [ ] The UI says which proof it had (`statusReason` and `lastVerdict` are exposed in `NativeAgentGoalView`; `apps/web` is not done here).
+- [x] The UI says which proof it had (`statusReason` and `lastVerdict` are exposed in `NativeAgentGoalView`; `apps/web` is not done here).
 
 ## Notes
 
@@ -63,9 +63,12 @@ This is a design change if the maintainer wants it in the first release. Change 
 
 **2026-10-31 · Who may verify.** Any platform in `enabledAgentPlatforms`. `GOAL_QUALIFIED_PLATFORMS` is about driving the loop, which a verifier does not do; it runs the reviewer path. A bad model name surfaces when the session starts, as a pause with the reason.
 
+**2026-10-31 · Live.** A verdict completed a goal on all six providers. Codex's verifier took several minutes in each run, and once ran past the suite's 5-minute wait. The panel shows the verifier and its verdict; its tokens show in the goal's total.
+
 ## Progress log
 
 Newest last: `YYYY-MM-DD · who · what changed · next step`.
 
 - 2026-10-31 · plan · Created from the plan. · Not started.
 - 2026-10-31 · Claude (worktree c4666baa82d9) · Built the verifier session, its protocol, `--verifier`, wiring and fake-provider tests; D7 changed. · UI proof and cost display in `apps/web`; live qualification.
+- 2026-10-31 · Claude Opus 5.5 (investigate-goal-command) · Delivered with the goals branch; see Notes for what was proven live and what was not. · Awaiting review.

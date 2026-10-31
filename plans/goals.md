@@ -1,8 +1,9 @@
 # Agent goals plan
 
-Status: proposed 2026-10-31. The decisions below are recommendations from the
-2026-10-30 investigation and are not yet confirmed by the maintainer. Nothing
-is built.
+Status: built 2026-10-31 and awaiting review. The maintainer asked for every item to
+be implemented, which confirmed the proposed decisions as they stood. Every provider
+has passed the live loop suite; what each run did and did not prove is in
+[`docs/architecture/goals.md`](../docs/architecture/goals.md#qualification).
 
 Work items and their status: [`plans/goals/000-index.md`](goals/000-index.md).
 Each Pn.m section below is one numbered file there (P1.3 is `103`).

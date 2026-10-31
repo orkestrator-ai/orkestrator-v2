@@ -28,6 +28,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
+| The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
 | Graphs plan work items (`plans/graphs/`): starting one, updating its status | [`plans/graphs/AGENTS.md`](plans/graphs/AGENTS.md) |
 | Goals plan work items (`plans/goals/`): starting one, updating its status | [`plans/goals/AGENTS.md`](plans/goals/AGENTS.md) |
 

@@ -459,6 +459,27 @@ describe("Electron backend process supervisor", () => {
     });
   });
 
+  test("a source-checkout profile drops an inherited production NODE_ENV", () => {
+    // A launcher started from an agent tab of a production backend inherits
+    // NODE_ENV=production, which sends bridge lookup to the packaged layout.
+    for (const flavor of ["development", "agent-test"] as const) {
+      expect(
+        createBackendProcessEnvironment({ NODE_ENV: "production" }, "2.5.0", { flavor }),
+      ).not.toHaveProperty("NODE_ENV");
+      expect(
+        createBackendProcessEnvironment({ NODE_ENV: "test" }, "2.5.0", { flavor }),
+      ).toMatchObject({ NODE_ENV: "test" });
+    }
+    expect(
+      createBackendProcessEnvironment({ NODE_ENV: "production" }, "2.5.0", {
+        flavor: "production",
+      }),
+    ).toMatchObject({ NODE_ENV: "production" });
+    expect(createBackendProcessEnvironment({ NODE_ENV: "production" }, "2.5.0")).toMatchObject({
+      NODE_ENV: "production",
+    });
+  });
+
   test("agent-test child environments suppress ambient credentials by default", () => {
     const isolated = createBackendProcessEnvironment(
       {

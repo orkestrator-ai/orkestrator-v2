@@ -716,6 +716,52 @@ function piServerStatus(entry: LoadedEntry): PiStatus {
   return { status: "effective", statusReason: entry.definition?.unsupportedReason };
 }
 
+interface CodexMergedStatus {
+  status: "effective" | "disabled";
+  statusReason?: string;
+  enabled: boolean;
+}
+
+const NO_TRANSPORT = "No command or URL.";
+
+/**
+ * A winning Codex entry's status once Codex merges the same name's layers
+ * field by field (re-derived at 0.166.0 and held there by `mise run
+ * verify:codex:mcp-live`): an entry with no command or URL takes the
+ * transport of a lower one, and `enabled` comes from the highest layer that
+ * sets it. `undefined` when the entry is invalid or unsupported regardless.
+ */
+function codexMergedStatus(
+  entry: LoadedEntry,
+  lower: readonly LoadedEntry[],
+): CodexMergedStatus | undefined {
+  const definition = entry.definition!;
+  const inherited =
+    definition.invalidReason === NO_TRANSPORT
+      ? lower.find((candidate) => candidate.definition && !candidate.definition.invalidReason)
+      : undefined;
+  if ((definition.invalidReason && !inherited) || definition.unsupportedReason) return undefined;
+  const note = PROVIDER_CODECS.codex.mergeNote;
+  const setter = [entry, ...lower].find((layer) => typeof layer.raw?.enabled === "boolean");
+  if (setter?.raw?.enabled === false) {
+    return {
+      status: "disabled",
+      enabled: false,
+      statusReason:
+        setter === entry
+          ? "Disabled in the saved configuration."
+          : `Disabled by enabled = false in ${setter.source.spec.label}. ${note}`,
+    };
+  }
+  return {
+    status: "effective",
+    enabled: true,
+    statusReason: inherited
+      ? `Takes its command or URL from ${inherited.source.spec.label}. ${note}`
+      : undefined,
+  };
+}
+
 /** A Pi entry's status, following the bridge's load and merge ({@link markPiLoadRules}). */
 function piStatus(entry: LoadedEntry, winner: LoadedEntry | undefined): PiStatus {
   if (entry.skipReason) {
@@ -771,6 +817,7 @@ export function summarizeEntries(
     let status: McpDefinitionSummary["status"];
     let statusReason: string | undefined;
     let shadowedBy: string | undefined;
+    let merged: CodexMergedStatus | undefined;
     if (entry.injected) {
       status = "protected";
       statusReason = "Orkestrator's own connection.";
@@ -789,6 +836,12 @@ export function summarizeEntries(
       statusReason = entry.conflict;
     } else if (entry.source.spec.provider === "pi") {
       ({ status, statusReason, shadowedBy } = piStatus(entry, winner));
+    } else if (
+      entry.source.spec.provider === "codex" &&
+      winner === entry &&
+      (merged = codexMergedStatus(entry, view.shadows.get(entry.entryId) ?? []))
+    ) {
+      ({ status, statusReason } = merged);
     } else if (definition.invalidReason) {
       status = "invalid";
       statusReason = definition.invalidReason;
@@ -816,7 +869,7 @@ export function summarizeEntries(
       sourceId: entry.source.spec.sourceId,
       name: entry.name,
       transport: definition?.transport ?? (entry.injected ? "http" : "unknown"),
-      enabled: entry.disabledReason ? false : (definition?.enabled ?? null),
+      enabled: entry.disabledReason ? false : (merged?.enabled ?? definition?.enabled ?? null),
       status,
       statusReason,
       shadowedBy,

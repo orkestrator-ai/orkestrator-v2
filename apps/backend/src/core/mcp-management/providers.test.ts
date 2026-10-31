@@ -101,6 +101,35 @@ describe("read-only system and managed layers", () => {
     expect(effective.pinned).toBeDefined();
   });
 
+  test("Codex merges a name's layers field by field", async () => {
+    write(
+      "etc/codex/config.toml",
+      [
+        `[mcp_servers.partial]\ncommand = "sys"\n`,
+        `[mcp_servers.inherits_off]\ncommand = "sys"\nenabled = false\n`,
+        `[mcp_servers.back_on]\ncommand = "sys"\nenabled = false\n`,
+      ].join("\n"),
+    );
+    write(
+      "home/.codex/config.toml",
+      [
+        `[mcp_servers.partial]\nargs = ["x"]\n`,
+        `[mcp_servers.inherits_off]\ncommand = "mine"\n`,
+        `[mcp_servers.back_on]\nenabled = true\n`,
+        `[mcp_servers.alone]\nargs = ["x"]\n`,
+      ].join("\n"),
+    );
+    const { definitions, effective } = await catalogFor("codex");
+    const winner = (name: string) => definitions.find((row) => row.entryId === effective[name])!;
+    expect(winner("partial")).toMatchObject({ sourceId: "codex:user", status: "effective" });
+    expect(winner("partial").statusReason).toContain("System configuration");
+    expect(winner("inherits_off")).toMatchObject({ status: "disabled", enabled: false });
+    expect(winner("inherits_off").statusReason).toContain("System configuration");
+    expect(winner("back_on")).toMatchObject({ status: "effective", enabled: true });
+    // With nothing to inherit from, a missing command is still invalid.
+    expect(winner("alone").status).toBe("invalid");
+  });
+
   test("absent system files add no rows", async () => {
     const specs = await providerSources("codex", hostContext());
     expect(specs.map((spec) => spec.sourceId)).toEqual(["codex:user", "codex:injected"]);
@@ -117,6 +146,27 @@ describe("read-only system and managed layers", () => {
       definitions.find((row) => row.sourceId === "grok:managed-user" && row.name === "org")!
         .entryId,
     );
+  });
+
+  test("Grok requirements.toml servers win over config.toml", async () => {
+    write("home/.grok/requirements.toml", `[mcp_servers.pinned]\ncommand = "user-req"\n`);
+    write("etc/grok/requirements.toml", `[mcp_servers.pinned]\ncommand = "system-req"\n`);
+    write("home/.grok/config.toml", `[mcp_servers.pinned]\ncommand = "mine"\n`);
+    const { specs, effective, definitions } = await catalogFor("grok");
+    const requirements = specs.filter((spec) => spec.sourceId.startsWith("grok:requirements-"));
+    expect(requirements.map((spec) => spec.sourceId)).toEqual([
+      "grok:requirements-user",
+      "grok:requirements-system",
+    ]);
+    for (const spec of requirements) {
+      expect(spec).toMatchObject({ scope: "managed", writable: false });
+      expect(spec.precedence).toBeGreaterThan(20);
+    }
+    const row = (sourceId: string) =>
+      definitions.find((item) => item.sourceId === sourceId && item.name === "pinned")!;
+    expect(effective.pinned).toBe(row("grok:requirements-system").entryId);
+    expect(row("grok:requirements-user").status).toBe("shadowed");
+    expect(row("grok:user").status).toBe("shadowed");
   });
 
   test("Grok's compat switch in requirements.toml wins over config.toml", async () => {

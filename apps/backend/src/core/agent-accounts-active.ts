@@ -68,6 +68,14 @@ export async function resolveActiveAgentAccount(
 export const CODEX_BRIDGE_STATE_DIR_ENV = "CODEX_BRIDGE_STATE_DIR";
 
 /**
+ * Read by the Claude bridge (`bridges/claude-bridge/src/services/claude-home.ts`):
+ * the added account's directory, equal to `CLAUDE_CONFIG_DIR`. It tells the
+ * bridge that the `.claude.json` its CLI reads is a copy of the host file the
+ * bridge reads itself, so a server only that copy names is stale.
+ */
+export const CLAUDE_ACCOUNT_HOME_ENV = "ORKESTRATOR_CLAUDE_ACCOUNT_HOME";
+
+/**
  * Point a Claude or Codex bridge's environment at the active account.
  *
  * The host login changes nothing, so a user who never adds an account
@@ -89,6 +97,7 @@ export async function applyActiveAgentAccountEnvironment(
   env: NodeJS.ProcessEnv,
 ): Promise<string> {
   if (platform === "codex") delete env[CODEX_BRIDGE_STATE_DIR_ENV];
+  else delete env[CLAUDE_ACCOUNT_HOME_ENV];
   const active = await resolveActiveAgentAccount(context, platform);
   if (!active.home) return active.accountId;
   const sources = hostAgentAccountSources();
@@ -96,11 +105,40 @@ export async function applyActiveAgentAccountEnvironment(
   stripInheritedAgentCredentials(env);
   if (platform === "claude") {
     env.CLAUDE_CONFIG_DIR = active.home;
+    // Only when the copy's source is the file the bridge reads (HOME's).
+    // With the backend's own `CLAUDE_CONFIG_DIR` set the two differ, and the
+    // copy's extra servers are then the user's, not stale.
+    const bridgeReads = path.join(env.HOME?.trim() || os.homedir(), ".claude.json");
+    if (path.resolve(sources.claudeJson) === path.resolve(bridgeReads)) {
+      env[CLAUDE_ACCOUNT_HOME_ENV] = active.home;
+    }
   } else {
     env.CODEX_HOME = active.home;
     env[CODEX_BRIDGE_STATE_DIR_ENV] = path.join(sources.codexHome, "orkestrator-bridge");
   }
   return active.accountId;
+}
+
+/**
+ * Directories of the added Claude accounts that exist. The MCP editor notes
+ * on Claude's sources that these hold copies, and refreshes the copies after
+ * a save (`mcp-management/claude-account-copies.ts`).
+ */
+export async function addedClaudeAccountHomes(context: CommandContext): Promise<string[]> {
+  const store = await context.storage.agentAccounts.loadAgentAccounts();
+  const root = context.storage.agentAccounts.agentAccountsDirectory();
+  const homes = store.accounts
+    .filter((account) => account.platform === "claude")
+    .map((account) => agentAccountHome(root, "claude", account.id));
+  const present = await Promise.all(
+    homes.map((home) =>
+      fs.stat(home).then(
+        (stat) => stat.isDirectory(),
+        () => false,
+      ),
+    ),
+  );
+  return homes.filter((_, index) => present[index]);
 }
 
 /**

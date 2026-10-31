@@ -451,6 +451,23 @@ describe("catalog states", () => {
     ).toBeTruthy();
   });
 
+  test("a Claude source added accounts copy says so above its servers", async () => {
+    // Backend text (`claude-account-copies.ts`), sent only while an added
+    // Claude account exists.
+    const accountNote =
+      "Added Claude accounts use their own copy of these servers. Orkestrator replaces each copy with this file's servers when you save here and before it starts Claude on an account, so servers added inside an account's own configuration are overwritten, and Orkestrator sessions do not use them.";
+    install({
+      ...baseHandlers,
+      get_mcp_management_snapshot: () =>
+        snapshot({ sources: [{ ...snapshot().sources[0]!, note: accountNote }] }),
+    });
+    render(<ProviderMcpSettings />);
+    const source = await screen.findByRole("region", { name: "Backend user" });
+    const header = within(source).getByText(accountNote);
+    expect(header.closest("header")).toBeTruthy();
+    expect(within(source).getByRole("listitem", { name: "docs, In use" })).toBeTruthy();
+  });
+
   test("a deep link naming a server highlights its row", async () => {
     install({
       ...baseHandlers,

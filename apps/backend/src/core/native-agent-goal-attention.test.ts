@@ -4,7 +4,7 @@
  * not. The bridge platforms run through the real HTTP provider against a stubbed
  * bridge, so each one's activity answer is parsed as in production.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { sessionGoal, type NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 import {
@@ -110,6 +110,52 @@ const PLATFORMS = [
 ] as const;
 
 describe("goal attention", () => {
+  test("a background OpenCode goal meters the transcript when its lightweight snapshot omits usage", async () => {
+    const messages = mock(async () => [{ tokens: 1_010 }]);
+    const stub = createProviderStub("opencode", {
+      sessionStateSnapshot: async () => ({ status: "idle" }),
+      messages,
+    });
+    const provider = {
+      ...stub.provider,
+      usageMessageLimit: 42,
+      usageFromMessages: (rows: readonly unknown[]) => ({
+        usedTokens: 10,
+        sessionTokens: (rows[0] as { tokens: number }).tokens,
+      }),
+    };
+    await withService(
+      { prefix: "orkestrator-goal-background-usage-", provider: async () => provider },
+      async ({ storage, service }) => {
+        const session = await service.ensureSession({
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "env-env-1:budget",
+        });
+        await storage.updateNativeAgentGoal(session.key, () =>
+          goal({
+            providerSessionId: session.providerSessionId,
+            tokensAtStart: 1_000,
+            tokenBudget: 1,
+          }),
+        );
+        await storage.dispatchNativeAgentPromptOnce(session.key, "goal:g1:0", async () => {});
+        await storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
+          requestId: "goal:g1:0",
+          outcome: "completed",
+          observedAt: new Date().toISOString(),
+        });
+        await service.goals.init();
+        await service.goals.settled();
+        const stopped = sessionGoal((await storage.getNativeAgentSession(session.key))!);
+        expect(stopped?.statusReason).toBe("token-budget");
+        expect(stopped?.tokensUsed).toBe(10);
+        expect(messages).toHaveBeenCalledWith(session.providerSessionId, { limit: 42 });
+        expect(stub.send).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   for (const agent of ["claude", "codex", "opencode", "cursor", "grok", "pi"] as const) {
     test(`${agent}: Stop pauses a goal while its carrier waits and the provider still reports idle`, async () => {
       const stub = createProviderStub(agent);

@@ -68,7 +68,8 @@ identity; resuming the goal creates a new one after a retired delivery.
 - **Iterations:** always on, default 20, at most 100. The first turn counts.
 - **Tokens:** optional, on platforms in `GOAL_TOKEN_BUDGET_PLATFORMS`. Checked
   between turns from the provider's session counter; a running turn is never cut
-  off. That counter includes context re-read on each turn, so a one-word Claude turn
+  off. If OpenCode's lightweight snapshot omits usage, a bounded authoritative
+  transcript read meters the background tab. That counter includes context re-read on each turn, so a one-word Claude turn
   counts about 68,000. Set a budget in hundreds of thousands.
 - **No progress:** 3 consecutive continuations with no change to the workspace
   (commit, status, tracked diff and untracked contents, hashed) and no report

@@ -740,10 +740,17 @@ export class NativeAgentService {
           input.logicalSessionKey,
         );
         const session = await storage.getNativeAgentSession(key);
-        if (!provider?.sessionStateSnapshot || !session) return undefined;
-        const snapshot = await provider.sessionStateSnapshot(session.providerSessionId);
-        return (snapshot as { contextUsage?: { sessionTokens?: number } }).contextUsage
-          ?.sessionTokens;
+        if (!provider || !session) return undefined;
+        const snapshot = await provider.sessionStateSnapshot?.(session.providerSessionId);
+        const tokens = snapshot?.contextUsage?.sessionTokens;
+        if (tokens !== undefined || !provider.usageFromMessages) return tokens;
+        // OpenCode's lightweight snapshot only has streamed usage. An inactive
+        // tab can miss that evidence; meter its bounded authoritative transcript
+        // before deciding whether another goal turn fits the budget.
+        const messages = await provider.messages(session.providerSessionId, {
+          limit: provider.usageMessageLimit ?? provider.messageReadLimit ?? 1_000,
+        });
+        return provider.usageFromMessages(messages)?.sessionTokens;
       },
       workspaceFingerprint: async (environmentId) =>
         options.goalEnvironment?.workspaceFingerprint(environmentId),

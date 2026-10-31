@@ -224,6 +224,14 @@ const input = {
 };
 
 describe("BrowserPreviewManager", () => {
+  test("lets a page's beforeunload neither open a dialog nor cancel a navigation", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const preventDefault = mock(() => undefined);
+    harness.views[0]!.webContents.emit("will-prevent-unload", { preventDefault });
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+  });
+
   test("creates a sandboxed view in the dedicated session and attaches it to the window", async () => {
     const harness = createHarness();
 
@@ -237,6 +245,7 @@ describe("BrowserPreviewManager", () => {
         nodeIntegration: false,
         sandbox: true,
         devTools: true,
+        disableDialogs: true,
         session: { id: "preview-session" },
       },
     });

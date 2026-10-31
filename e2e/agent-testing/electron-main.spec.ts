@@ -341,8 +341,9 @@ print("public.tiff")
           app.relaunch = relaunch;
           app.quit = quit;
         };
-        dialog.showMessageBox = ((options: Electron.MessageBoxOptions) => {
-          state.prompts.push(options);
+        // On macOS the dialog arrives with a parent window; it is the last argument.
+        dialog.showMessageBox = ((...args: unknown[]) => {
+          state.prompts.push(args.at(-1) as Electron.MessageBoxOptions);
           return new Promise<Electron.MessageBoxReturnValue>((resolve) => {
             state.answer = (response) => resolve({ response, checkboxChecked: false });
           });

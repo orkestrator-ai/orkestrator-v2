@@ -1,4 +1,5 @@
 import { appShortcut } from "@orkestrator/protocol/keyboard-shortcuts";
+import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
 import {
   app,
   BrowserWindow,
@@ -68,6 +69,7 @@ import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
 import { pinnedArtifactsForPlatforms } from "@orkestrator/toolchain/manifest";
 import {
   chooseAgentPlatforms,
+  createDialogHostWindow,
   createMacOsPermissionSplashWindow,
   createToolchainBootstrapWindow,
   reportToolchainProgress,
@@ -139,6 +141,7 @@ import {
 } from "./remote-relaunch.js";
 import { relaunchApplication } from "./relaunch.js";
 import { showRestartPrompt } from "./restart-prompt.js";
+import { createNativeDialogs, installUncaughtExceptionDialog } from "./native-dialogs.js";
 import {
   applyWindowTitle,
   focusWindowById,
@@ -333,11 +336,56 @@ const quitReopen = registerQuitReopenRelaunch({
   allowRelaunch: runtimeFlavor !== "agent-test",
   relaunch: relaunchingApp.relaunch,
 });
+/** The window a dialog attaches to: the focused one, else any that is open. */
+function currentDialogWindow(): BrowserWindow | null {
+  return (
+    focusedContext()?.window ??
+    BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ??
+    null
+  );
+}
+// Held so a click can still restore the window after the dialog's caller moved on.
+const dialogNotifications = new Set<Notification>();
+function requestDialogAttention(window: BrowserWindow, message: string): void {
+  // Nobody is at an agent-test profile, and the desktop it shares is the user's.
+  if (window.isFocused() || runtimeFlavor === "agent-test") return;
+  if (process.platform === "darwin") app.dock?.bounce("informational");
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({ title: productName, body: message });
+  dialogNotifications.add(notification);
+  notification.once("close", () => dialogNotifications.delete(notification));
+  notification.once("click", () => {
+    dialogNotifications.delete(notification);
+    if (window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  });
+  notification.show();
+}
+const nativeDialogs = createNativeDialogs<BrowserWindow>({
+  dialog,
+  platform: process.platform,
+  currentWindow: currentDialogWindow,
+  createHostWindow: async () => {
+    await app.whenReady();
+    return createDialogHostWindow({ BrowserWindowCtor: BrowserWindow, dirname: __dirname });
+  },
+  requestAttention: requestDialogAttention,
+});
+nativeDialogs.install();
+installUncaughtExceptionDialog(process, nativeDialogs);
+startEventLoopStallMonitor({
+  formatStall: ({ lagMs, endedAt, intervalMs, folded }) =>
+    `[Desktop] Main thread stalled for ${lagMs} ms, ending ${endedAt}: a ${intervalMs} ms timer ` +
+    `fired late, so windows, IPC and the backend's stdout reader waited` +
+    `${nativeDialogs.describeStall(lagMs)}${folded}`,
+});
 const showNonBlockingError = (title: string, detail: string): void => {
   void showRestartPrompt({
     title,
     detail,
-    showMessageBox: (options) => dialog.showMessageBox(options),
+    showMessageBox: (options) => nativeDialogs.showMessageBox("backend-error", options),
     restart: () => {
       quitReopen.scheduleRelaunch();
       app.quit();
@@ -711,8 +759,7 @@ async function startAutoUpdate(): Promise<void> {
       productName,
       currentVersion: app.getVersion(),
       getWindow: () => focusedContext()?.window ?? null,
-      showMessageBox: (window, options) =>
-        window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options),
+      showMessageBox: (window, options) => nativeDialogs.showMessageBox("updater", options, window),
       onCheckResult: (report) => hostUpdates?.reportCheck(report),
       ...(process.platform === "linux"
         ? { prepareForInstall: () => prepareAppImageInstall(app, backendProcess) }
@@ -745,9 +792,9 @@ function startHostUpdates(engine: AutoUpdateController): void {
         restartAt,
         signal,
         productName,
-        window: focusedContext()?.window ?? BrowserWindow.getAllWindows()[0] ?? null,
+        window: currentDialogWindow(),
         showMessageBox: (window, options) =>
-          dialog.showMessageBox(window as BrowserWindow, options),
+          nativeDialogs.showMessageBox("remote-restart", options, window as BrowserWindow),
         notify: (title, body) => {
           if (Notification.isSupported()) new Notification({ title, body }).show();
         },
@@ -1347,7 +1394,7 @@ async function startApplication(): Promise<void> {
     // handled). Toolchain hosts do not request one, so this is left as is.
     fetchImpl: (input, init) => net.fetch(input, init),
     onProgress: (progress) => toolchainProgress.report(progress),
-    showMessageBox: (options) => dialog.showMessageBox(options),
+    showMessageBox: (options) => nativeDialogs.showMessageBox("toolchain-setup", options),
     quit: () => app.quit(),
     logError: (error) => console.error("[Toolchains] Failed to prepare pinned tools:", error),
     artifacts,
@@ -1573,12 +1620,17 @@ if (isPrimaryInstance) {
           runtimeFlavor !== "agent-test" &&
           recoverRemoteBackendFailure(app.getPath("userData"), relaunchingApp),
         error,
-        report: (failure) => {
+        report: async (failure) => {
           console.error("[Desktop] Startup failed:", failure);
-          dialog.showErrorBox(
-            `${productName} failed to start`,
-            failure instanceof Error ? failure.message : String(failure),
-          );
+          // Nobody answers in an agent-test profile; its launcher reads the log.
+          if (runtimeFlavor === "agent-test") return;
+          await nativeDialogs.showMessageBox("startup-failure", {
+            type: "error",
+            title: `${productName} failed to start`,
+            message: `${productName} failed to start`,
+            detail: failure instanceof Error ? failure.message : String(failure),
+            buttons: ["OK"],
+          });
         },
         quit: () => app.quit(),
       });

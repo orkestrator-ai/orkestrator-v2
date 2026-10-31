@@ -29,7 +29,7 @@ import {
   stopStandaloneBackendLogging,
 } from "./standalone-logging.js";
 import { installBoundedConsole } from "./bounded-console.js";
-import { startEventLoopStallMonitor } from "./event-loop-stall-monitor.js";
+import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
 
 assertSupportedPlatform();
 // First, before anything logs: Bun's console writes to a stalled stdout reader

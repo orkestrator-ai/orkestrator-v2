@@ -1,6 +1,6 @@
 # Gateway keepalive test races the host scheduler
 
-- **ID:** 1325
+- **ID:** 1492
 - **Status:** resolved
 - **Date observed:** 2026-10-31
 - **Test:** `a link that drops without an answer > a same-origin stream that stops its keepalives counts as lost, and is replaced`

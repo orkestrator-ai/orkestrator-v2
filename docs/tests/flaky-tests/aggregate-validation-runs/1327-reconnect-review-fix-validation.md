@@ -10,7 +10,7 @@
 
 All changed-area checks passed:
 
-- `mise run test:logged -- --name reconnect-web -- bun test --cwd apps/web ./src/lib/native/web-gateway-reconnect.test.ts ./src/lib/native/web-gateway-silent-recovery.test.ts ./src/lib/native/terminal-websocket-client.test.ts --parallel=1 --only-failures`: 76 passed after correcting the harness cleanup and the existing keepalive clock race ([1325](../previews-annotations-and-gateway/1325-gateway-keepalive-wall-clock-race.md)).
+- `mise run test:logged -- --name reconnect-web -- bun test --cwd apps/web ./src/lib/native/web-gateway-reconnect.test.ts ./src/lib/native/web-gateway-silent-recovery.test.ts ./src/lib/native/terminal-websocket-client.test.ts --parallel=1 --only-failures`: 76 passed after correcting the harness cleanup and the existing keepalive clock race ([1492](../previews-annotations-and-gateway/1492-gateway-keepalive-wall-clock-race.md)).
 - `mise run test:logged -- --name reconnect-desktop -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-event-stream.test.ts ./tests/connection-manager-federation.test.ts ./tests/connection-manager.test.ts --parallel=1 --only-failures`: passed.
 - Separate complete owners `web-gateway.test.ts` and `web-gateway-contract.test.ts`: passed (4.6 s and 2.5 s logged).
 - `playwright-spec-loading.test.ts`, `client-outage-support.test.ts`, and the flake-register guard: passed.

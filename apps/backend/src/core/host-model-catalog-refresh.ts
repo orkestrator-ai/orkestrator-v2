@@ -20,8 +20,9 @@ import {
 import {
   allocateLocalPort,
   fetchAcpNormalizedModelsAt,
-  getBridgePath,
+  type BridgeName,
   HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
+  prepareBridgePath,
   waitForLocalServerStartup,
 } from "./commands-servers.js";
 import {
@@ -149,11 +150,8 @@ export async function withShortLivedBridge<T>(
   }
 }
 
-export function bridgeEntrypoint(
-  context: CommandContext,
-  name: Parameters<typeof getBridgePath>[1],
-) {
-  const cwd = getBridgePath(context, name);
+export async function bridgeEntrypoint(context: CommandContext, name: BridgeName) {
+  const cwd = await prepareBridgePath(context, name);
   const entrypoint = `${cwd}/dist/index.js`;
   if (!existsSync(cwd)) throw new Error(`${name} directory not found: ${cwd}`);
   if (!existsSync(entrypoint)) throw new Error(`${name} entrypoint not found: ${entrypoint}`);
@@ -170,7 +168,7 @@ async function refreshClaude(
   context: CommandContext,
   dependencies: HostRefreshDependencies,
 ): Promise<HostCatalog> {
-  const { cwd, entrypoint } = bridgeEntrypoint(context, "claude-bridge");
+  const { cwd, entrypoint } = await bridgeEntrypoint(context, "claude-bridge");
   const workingDirectory = await probeWorkingDirectory(context);
   const token = randomBytes(32).toString("base64url");
   const env: NodeJS.ProcessEnv = {
@@ -204,7 +202,7 @@ async function refreshClaude(
 }
 
 async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
-  const { cwd, entrypoint } = bridgeEntrypoint(context, "codex-bridge");
+  const { cwd, entrypoint } = await bridgeEntrypoint(context, "codex-bridge");
   const workingDirectory = await probeWorkingDirectory(context);
   const token = randomBytes(32).toString("base64url");
   const config = await context.storage.loadConfig();
@@ -258,7 +256,7 @@ async function refreshAcp(
 ): Promise<HostCatalog> {
   const useCursorSdk = agent === "cursor";
   const bridgeName = useCursorSdk ? "cursor-bridge" : "acp-bridge";
-  const { cwd, entrypoint } = bridgeEntrypoint(context, bridgeName);
+  const { cwd, entrypoint } = await bridgeEntrypoint(context, bridgeName);
   const workingDirectory = await probeWorkingDirectory(context);
   const token = randomBytes(32).toString("base64url");
   const cursorCredentials =

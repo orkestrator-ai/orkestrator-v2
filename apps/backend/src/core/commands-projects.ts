@@ -4,11 +4,12 @@ import { gitHubGitCredentials } from "./github-git-credentials.js";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createProject } from "./storage.js";
 import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { CommandFailedError, runCommand } from "./shell.js";
-import { conciseError } from "./commands-error-text.js";
+import { conciseError, isGitSshAuthenticationFailure } from "./commands-error-text.js";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import type { ClaudeModelCatalogSnapshot, Project } from "./models.js";
 import type { StorageService } from "./storage.js";
@@ -330,12 +331,24 @@ function projectGitUrlLockKey(gitUrl: string): string {
   return `git-url:${gitUrl}`;
 }
 
-function cloneCommandFailureDetail(error: unknown): string {
+function cloneCommandFailureDetail(error: unknown, gitUrl: string): string {
   if (error instanceof CommandFailedError && error.executableMissing) {
     return "Git is not installed or available on PATH";
   }
   if (error instanceof CommandFailedError && error.timedOut) {
     return "the clone timed out";
+  }
+  if (error instanceof Error && isGitSshAuthenticationFailure(error.message)) {
+    // Bound the host too: a project copy reports only the first 300 characters.
+    const hostname = os.hostname();
+    const hostLabel = hostname.length > 48 ? `${hostname.slice(0, 47)}…` : hostname;
+    const https = parseGitHubRepositoryRemote(gitUrl).ok
+      ? " Or run `gh auth setup-git` and add the project with its https:// URL."
+      : "";
+    return (
+      `SSH authentication failed on ${hostLabel}. Orkestrator can't enter a key passphrase, ` +
+      `so an authorized key must be loaded in an SSH agent it can reach.${https}`
+    );
   }
   return conciseError(error);
 }
@@ -519,13 +532,13 @@ export async function addExistingProject(
                 cwd: temporaryPath,
                 timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
                 redactValues: [gitUrl],
-                ...(await gitHubGitCredentials(gitUrl)),
+                ...(await gitHubGitCredentials(storage, gitUrl)),
               },
               run,
             );
           } catch (error) {
             throw new Error(
-              `Could not clone the Git repository: ${cloneCommandFailureDetail(error)}`,
+              `Could not clone the Git repository: ${cloneCommandFailureDetail(error, gitUrl)}`,
             );
           }
 
@@ -773,7 +786,7 @@ export async function createProjectFromScratch(
         }
       }
 
-      const ghEnv = await gitHubCliEnv();
+      const ghEnv = await gitHubCliEnv(storage);
       try {
         // A timeout or transport error may arrive after GitHub accepted the API
         // request. Mark the outcome ambiguous before invoking gh so rollback
@@ -809,7 +822,7 @@ export async function createProjectFromScratch(
       const gitUrl = await readOriginUrl(projectPath, run);
       if (!gitUrl) throw new Error("Could not verify the origin remote");
 
-      const gitCredentials = await gitHubGitCredentials(gitUrl);
+      const gitCredentials = await gitHubGitCredentials(storage, gitUrl);
       await runRemoteGit(
         "push",
         ["--set-upstream", "origin", "main"],

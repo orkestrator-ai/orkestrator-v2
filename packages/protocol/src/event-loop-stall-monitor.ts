@@ -3,7 +3,9 @@
  *
  * Everything the backend serves — the renderer gateway, bridge streams, agent
  * MCP (`/mcp`), mail — shares one event loop, so a stall shows up as timeouts
- * everywhere at once and leaves no trace of its own. This samples timer
+ * everywhere at once and leaves no trace of its own. The desktop main process
+ * runs it too: there, a late timer means Chromium's main thread was held. This
+ * samples timer
  * lateness: a chained timer due every `intervalMs` that fires late by at least
  * `thresholdMs` is a stall, logged with its length so an incident can be
  * dated from the log afterwards. A setTimeout chain, not
@@ -49,6 +51,14 @@ export interface EventLoopStallMonitorOptions {
   logIntervalMs?: number;
   alwaysLogMs?: number;
   log?: (message: string) => void;
+  /** The log line for one stall; `folded` is "" or a suffix naming suppressed stalls. */
+  formatStall?: (stall: {
+    lagMs: number;
+    /** Wall-clock end of the stall, as an ISO string. */
+    endedAt: string;
+    intervalMs: number;
+    folded: string;
+  }) => string;
   /** Monotonic milliseconds. */
   now?: () => number;
   wallClock?: () => number;
@@ -76,6 +86,11 @@ export function startEventLoopStallMonitor(
   const logIntervalMs = options.logIntervalMs ?? EVENT_LOOP_STALL_LOG_INTERVAL_MS;
   const alwaysLogMs = options.alwaysLogMs ?? EVENT_LOOP_STALL_ALWAYS_LOG_MS;
   const log = options.log ?? ((message: string) => console.warn(message));
+  const formatStall =
+    options.formatStall ??
+    (({ lagMs, endedAt, intervalMs, folded }) =>
+      `[Backend] Event loop stalled for ${lagMs} ms, ending ${endedAt}: ` +
+      `a ${intervalMs} ms timer fired late, so every request in that window waited${folded}`);
   const now = options.now ?? (() => performance.now());
   const wallClock = options.wallClock ?? Date.now;
   const setTimer =
@@ -120,10 +135,7 @@ export function startEventLoopStallMonitor(
         : "";
     suppressed = 0;
     suppressedMaxMs = 0;
-    log(
-      `[Backend] Event loop stalled for ${lagMs} ms, ending ${new Date(at).toISOString()}: ` +
-        `a ${intervalMs} ms timer fired late, so every request in that window waited${folded}`,
-    );
+    log(formatStall({ lagMs, endedAt: new Date(at).toISOString(), intervalMs, folded }));
   };
 
   const schedule = () => {

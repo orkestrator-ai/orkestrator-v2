@@ -80,17 +80,16 @@ does not hold (never 404), or 503 `{closed:false,pending:true,error}` when it
 cannot prove the work stopped — in which case the session stays registered.
 The backend (`commands-registry-teardown.ts`, `bridge-session-close.ts`) keeps
 its durable teardown intent until a 2xx arrives. A 404/405 from the route
-means the bridge predates it: the backend may then use a legacy
-`DELETE /session/:id` only for platforms whose DELETE has never deleted history
-(`LEGACY_DELETE_RETAINS_HISTORY`: Codex, Pi, Grok, Cursor). Claude's DELETE
-calls the SDK's `deleteSession`, so an old Claude bridge leaves the close
-pending with a "restart the environment" error instead.
+means the bridge predates it, which only an unpublished source build can do.
+The close stays pending with a "restart the environment" error on every
+platform and never falls back to `DELETE /session/:id`: Claude's calls the SDK's
+`deleteSession`.
 
 Only a 2xx whose body affirms `closed: true` confirms a close; an empty or
 malformed 2xx leaves the intent pending. Pending intents are retried at
 startup and by the backend's coalesced 60-second sweep, with a per-intent
 backoff (30 s, doubling, capped at 15 minutes) so a bridge that keeps refusing
-is not polled every minute. The old-Claude-bridge failure carries a stable
+is not polled every minute. The old-bridge failure carries a stable
 `bridge-upgrade-required` marker (`@orkestrator/protocol/tab-teardown`), and
 the renderer shows one non-destructive toast per environment asking the user
 to restart it; the conversation is not deleted and the close is retried.
@@ -747,7 +746,7 @@ OpenCode bump.
 | `OpenCodeStreamState`             | Bounded incremental SSE projection state     |
 | `AgentNativeTab`                  | Shared native-agent chat UI                  |
 | `NativeAgentQuestionCard`         | Shared question/answer UI                    |
-| `NativeAgentTurnRecovery`         | Incomplete-turn continuation; OpenCode strategy in `opencode-turn-recovery.ts`, selected by `native-agent-platform-policy.ts` |
+| `NativeAgentTurnRecovery`         | Incomplete-turn continuation; OpenCode strategy in `opencode-turn-recovery.ts`, selected by `native-agent-platform-policy.ts`. Interactive only: an unattended OpenCode overload is continued by `OpenCodeCapacityRetry` (`opencode-capacity-retry.ts`), which keeps the workflow's request and result tool |
 
 The server's SSE event types:
 

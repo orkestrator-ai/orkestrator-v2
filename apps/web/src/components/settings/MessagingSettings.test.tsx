@@ -53,6 +53,25 @@ afterAll(() => {
 });
 
 describe("MessagingSettings", () => {
+  test("every messaging switch is named and toggles from its visible label", async () => {
+    renderMessagingLayout();
+    await screen.findByRole("switch", { name: "Enable messaging" });
+    for (const name of [
+      "Enable messaging",
+      "Pause delivery",
+      "Allow cross-project messages",
+      "Wake peers",
+    ]) {
+      const control = screen.getByRole("switch", { name });
+      const label = screen.getByText(name, { selector: "label" });
+      expect(label.getAttribute("for")).toBe(control.id);
+      expect(screen.getByLabelText(name) === control).toBe(true);
+      const before = control.getAttribute("aria-checked");
+      fireEvent.click(label);
+      expect(control.getAttribute("aria-checked")).toBe(before === "true" ? "false" : "true");
+    }
+  });
+
   test("offers coordinator status updates, defaulting to decisions and problems", async () => {
     renderMessagingLayout();
     const select = (await screen.findByLabelText(

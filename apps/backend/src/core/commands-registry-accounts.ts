@@ -27,7 +27,7 @@ import {
 } from "./agent-accounts.js";
 import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
-import { readProjectUsageLimits } from "./agent-usage-limits.js";
+import { cachedPlanUsage, readProjectUsageLimits } from "./agent-usage-limits.js";
 import { openAgentSignInTerminal, readHostAgentSignIns } from "./agent-sign-ins.js";
 import { openCodeProviderLogin, openCodeProviderLoginProgress } from "./opencode-provider-login.js";
 
@@ -142,7 +142,10 @@ export function registerAgentAccountCommands(
   register("get_project_usage_limits", async (args, context) => {
     assertOnlyKeys(args, ["projectId"], "arguments");
     return readProjectUsageLimits(
-      { storage: context.storage },
+      {
+        storage: context.storage,
+        planUsage: cachedPlanUsage(context.runtime.accounts.planUsage.cache),
+      },
       asNonBlankString(args.projectId, "projectId"),
     );
   });
@@ -171,17 +174,18 @@ export function registerAgentAccountCommands(
           : asRequiredBoolean(args.reauthenticate, "reauthenticate"),
     });
   });
-  register("get_agent_account_login", async (args) => {
+  register("get_agent_account_login", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    return agentAccountLoginProgress();
+    return agentAccountLoginProgress(context);
   });
-  register("submit_agent_account_login_code", async (args) => {
+  register("submit_agent_account_login_code", async (args, context) => {
     assertOnlyKeys(args, ["code"], "arguments");
-    return submitAgentAccountLoginCode(asNonBlankString(args.code, "code"));
+    return submitAgentAccountLoginCode(context, asNonBlankString(args.code, "code"));
   });
-  register("cancel_agent_account_login", async (args) => {
+  register("cancel_agent_account_login", async (args, context) => {
     assertOnlyKeys(args, ["operationId"], "arguments");
     return cancelAgentAccountLogin(
+      context,
       args.operationId === undefined
         ? undefined
         : asNonBlankString(args.operationId, "operationId"),
@@ -233,17 +237,18 @@ export function registerOpenCodeProviderLoginCommands(register: CommandRegistrar
       inputs: asOpenCodeAuthInputs(args.inputs, "inputs"),
     });
   });
-  register("get_opencode_provider_login", async (args) => {
+  register("get_opencode_provider_login", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
-    return openCodeProviderLoginProgress();
+    return openCodeProviderLoginProgress(context);
   });
-  register("submit_opencode_provider_login_code", async (args) => {
+  register("submit_opencode_provider_login_code", async (args, context) => {
     assertOnlyKeys(args, ["code"], "arguments");
-    return openCodeProviderLogin.submitCode(asNonBlankString(args.code, "code"));
+    return openCodeProviderLogin.submitCode(context, asNonBlankString(args.code, "code"));
   });
-  register("cancel_opencode_provider_login", async (args) => {
+  register("cancel_opencode_provider_login", async (args, context) => {
     assertOnlyKeys(args, ["operationId"], "arguments");
     return openCodeProviderLogin.cancel(
+      context,
       args.operationId === undefined
         ? undefined
         : asNonBlankString(args.operationId, "operationId"),

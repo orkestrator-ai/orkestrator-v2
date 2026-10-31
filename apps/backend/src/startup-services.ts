@@ -1,5 +1,5 @@
 import type { OrkestratorGateway } from "./gateway.js";
-import type { ManagedWebClient } from "./managed-web-client.js";
+import type { ManagedWebClient, ManagedWebClientOwnershipStore } from "./managed-web-client.js";
 import { startStandaloneTailscaleServe, type TailscaleServeManager } from "./tailscale-serve.js";
 
 type Gateway = Pick<OrkestratorGateway, "start" | "stop">;
@@ -16,6 +16,7 @@ export interface GatewayStartupDependencies {
   > | null;
   tailscaleServe: boolean;
   tailscaleServePort: number;
+  standaloneServeOwnership?: ManagedWebClientOwnershipStore;
   createTailscaleServe: () => Serve;
   logger: Pick<Console, "info" | "error">;
 }
@@ -59,6 +60,7 @@ export async function startGatewayServices(deps: GatewayStartupDependencies) {
         tailscaleServe,
         gatewayInfo.browserUrl,
         deps.tailscaleServePort,
+        deps.standaloneServeOwnership,
       );
       deps.logger.info(`[TailscaleServe] Available at ${tailscaleUrl}`);
       info = { ...gatewayInfo, browserUrl: tailscaleUrl };

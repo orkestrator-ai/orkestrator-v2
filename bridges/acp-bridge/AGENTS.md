@@ -84,6 +84,27 @@ the record would be dropped).
   (`POLICY_ENV`), so a TUI "always allow" in the user's main checkout cannot
   skip the permission request the bridge answers from the policy.
 
+## Grok extensions
+
+Where standard ACP has no surface, Grok's own are used, each confirmed against
+the real binary (see the Grok section of `docs/development/upgrade-agents.md`).
+
+- **MCP elicitation is `_x.ai/mcp/elicit`.** `parkGrokElicitation` parks it as
+  `mcp-form` or `mcp-url` and answers with `outcome`, never MCP's `action`, which
+  Grok reads as malformed and cancels. A form the shared card cannot collect
+  (`isSupportedMcpForm`, the rule Claude uses too) and a link that is not
+  http(s) are declined on the spot with a notice. An answer that breaks the
+  schema gets 400 and the card stays up. `interaction_resolved` for a request
+  still parked withdraws it: the server gave up, and nothing is waiting.
+- **A fork is `_x.ai/session/fork` plus `session/load`** (`acp-fork.ts`). Grok's
+  index keeps whole turns and clamps silently, so `forkPromptIndex` never counts
+  rows: it aligns the transcript's prompts with `_x.ai/rewind/points` from the
+  newest backwards and refuses anything that does not line up, and any point
+  before a compaction, whose fork would still hold what came after it. A message
+  mid-turn therefore forks with the rest of its turn. A compaction Grok ran by
+  itself leaves no row, so it cannot be refused. The fork takes the source's
+  policy but not its per-tab MCP credential, and a read-only session is refused.
+
 ## Parked request deadlines
 
 - **A pause only moves the deadline.** `POST .../approvals/:id/hold` and
@@ -108,6 +129,19 @@ the record would be dropped).
   `GROK_ASK_USER_QUESTION_TIMEOUT_SECS` at the hold ceiling, so the bridge's
   deadline decides; a duration or off switch the user set is left alone and
   published as the request's provider limit.
+
+## Transient provider errors
+
+`requestPromptWithRetriableProviderRetries` continues a turn a transient
+provider error ended (`[resource_exhausted]`, `[unavailable]`, Grok's own
+overload sentence on a JSON-RPC error), on the shared capacity backoff
+(`@orkestrator/protocol/capacity-retry`: five attempts, waits of about 2 to 54 s
+with jitter). `ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS` overrides only the base
+wait. The wait shows as a `retry` card settled in place, and anything that ends
+the turn calls `state.wakeRetryWait`, so Stop never sits out a wait. An error
+naming a usage or rate limit, quota or a login is never retried, whatever its
+code (`namesLimitOrLogin`). See
+[1010](../../docs/todo/agent-engines/1010-model-capacity-backoff-retry.md).
 
 ## Policy refusals
 

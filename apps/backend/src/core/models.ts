@@ -662,6 +662,9 @@ export interface PersistedNativeAgentPendingSteer {
   createdAt: string;
 }
 
+/** What a backend-owned native job does when its agent finishes (Resolve's PR refresh). */
+export type NativeAgentJobCompletionAction = "refresh-pr-after-agent-completion";
+
 /**
  * Durable mapping between a logical UI tab and the provider session that owns
  * its transcript. The backend creates this mapping atomically, so any number of
@@ -721,6 +724,12 @@ export interface PersistedNativeAgentSession {
    * makes. Lets observers settle a turn as failed without reading transcripts.
    */
   turnOutcomes?: PersistedNativeAgentTurnOutcome[];
+  /** Last applied activity for a request; settled roots may still own background work. */
+  activityTurn?: {
+    providerSessionId: string;
+    requestId?: string;
+    state: "active" | "settled";
+  };
   /**
    * Bounded request ids whose turn was still active when a stop was requested.
    * A provider reports a stopped turn as idle, so this is the only durable
@@ -824,7 +833,18 @@ export type PersistedAgentInteractionWorkflowSummary = AgentInteractionWorkflowS
  * body is opaque — each agent carries different attachment and mode fields, and
  * the backend has no reason to understand any of them.
  */
+export interface NativeAgentJobReceipt {
+  requestId: string;
+  /** Coalesced presses follow the original admission, including its eventual settlement. */
+  dispatchRequestId?: string;
+  fingerprint: string;
+  status: "accepted" | "unknown";
+  queued?: true;
+}
+
 export interface PersistedPromptQueue {
+  /** Bounded job request bindings, published before dispatch and kept after queue settlement. */
+  jobReceipts?: NativeAgentJobReceipt[];
   /** Only older backends write this lease; retain exclusion until settlement or expiry. */
   outstandingClaim?: {
     token: string;
@@ -882,6 +902,35 @@ export interface PersistedPromptQueue {
   removedOrigins?: Array<{ requestId: string; removedAt: string }>;
   updatedAt: string;
   revision: number;
+}
+
+/** Whether a job's accepted prompt still occupies this conversation or its queue. */
+export function nativeAgentJobReceiptIsActive(
+  receipt: NativeAgentJobReceipt,
+  session: PersistedNativeAgentSession | null,
+  queue: PersistedPromptQueue | null | undefined,
+): boolean {
+  const requestId = receipt.dispatchRequestId ?? receipt.requestId;
+  if (
+    [...(queue?.messages ?? []), queue?.outstandingClaim?.message, queue?.inFlight?.message].some(
+      (message) =>
+        message &&
+        typeof message === "object" &&
+        ((message as Record<string, unknown>).requestId === requestId ||
+          (message as Record<string, unknown>).id === requestId),
+    )
+  )
+    return true;
+  if (
+    session?.pendingDispatch?.requestId === requestId ||
+    session?.pendingSteer?.requestId === requestId
+  )
+    return true;
+  if (session?.turnOutcomes?.some((outcome) => outcome.requestId === requestId)) return false;
+  if (session?.dispatchedRequestIds?.includes(requestId))
+    return session.dispatchedRequestIds.at(-1) === requestId;
+  // A removed waiting item is consumed. An unconfirmed direct admission stays fenced.
+  return !receipt.queued;
 }
 
 /**

@@ -410,14 +410,14 @@ that default or normalize values current writers may still omit (environment
 setup phase, agent settings, mail defaults) stay where they are. Only shapes
 no current writer can produce belong in an upgrade migration.
 
-One upgrade cannot run once: a backend up to v2.28.0-beta shares this schema
-version and can still write a prompt-queue claim (`outstandingClaim`). So
-`restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
+One upgrade cannot run once: a backend up to v2.29.0-beta can write a
+prompt-queue claim (`outstandingClaim`), and one that opened the database before
+version 5 keeps writing until it stops, because the version is checked only at
+open. So `restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
 load of the prompt queues (`loadPromptQueues`): live leases retain exclusion
 and survive queue writes until settlement or expiry. Expired or malformed
 leases restore their message to the head, and the next save persists that.
-Malformed message ids receive a stable recovery id. A new migration would have made
-every older release refuse the database.
+Malformed message ids receive a stable recovery id.
 
 Version 4 (`change-tracking/ledger-schema.ts`) adds the change-tracking
 ledger: the first engine with its own indexed tables (worktrees, evidence,

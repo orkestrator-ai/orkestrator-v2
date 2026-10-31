@@ -36,6 +36,8 @@ import {
   metricValue,
   type UsageMetric,
 } from "./usage-format";
+import { SETTINGS_CARD_CLASS, SettingsPageLayout } from "../SettingsPageLayout";
+import { cn } from "@/lib/utils";
 
 /**
  * The Usage pane of global settings.
@@ -174,19 +176,18 @@ export function UsageSettings() {
   );
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-foreground">Usage</h2>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {view === "limits"
-              ? "What each signed-in account has left in its current plan windows."
-              : report?.recordingSince
-                ? `Everything agents processed on this machine, recorded since ${formatDayLabel(report.recordingSince, { year: true })}.`
-                : "Everything agents processed on this machine, recorded as turns finish."}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <SettingsPageLayout
+      width="wide"
+      title="Usage"
+      description={
+        view === "limits"
+          ? "What each signed-in account has left in its current plan windows."
+          : report?.recordingSince
+            ? `Everything agents processed on this machine, recorded since ${formatDayLabel(report.recordingSince, { year: true })}.`
+            : "Everything agents processed on this machine, recorded as turns finish."
+      }
+      actions={
+        <>
           <SegmentedSelector
             ariaLabel="Usage view"
             value={view}
@@ -214,9 +215,9 @@ export function UsageSettings() {
               )}
             </Button>
           )}
-        </div>
-      </header>
-
+        </>
+      }
+    >
       {view === "limits" ? (
         <div className="space-y-4">
           {enabledPlatforms.map((entry) => (
@@ -283,10 +284,7 @@ export function UsageSettings() {
             </div>
           ) : report && totals ? (
             <>
-              <section
-                aria-label="Daily usage"
-                className="rounded-xl border border-border/60 bg-card/30 p-4"
-              >
+              <section aria-label="Daily usage" className={cn(SETTINGS_CARD_CLASS, "p-4")}>
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                   <p
                     data-testid="usage-total"
@@ -325,6 +323,6 @@ export function UsageSettings() {
           ) : null}
         </>
       )}
-    </div>
+    </SettingsPageLayout>
   );
 }

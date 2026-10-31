@@ -1,7 +1,7 @@
 import { expect, test, setSystemTime } from "bun:test";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
-import { CACHE_TTL_MS, sharedPlanUsageCache } from "./plan-usage-cache.js";
-import { readProjectUsageLimits } from "./agent-usage-limits.js";
+import { CACHE_TTL_MS, createPlanUsageCache } from "./plan-usage-cache.js";
+import { cachedPlanUsage, readProjectUsageLimits } from "./agent-usage-limits.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 
 const NOW = Date.parse("2026-10-30T12:00:00Z");
@@ -140,9 +140,9 @@ test("reports each platform's cached reading with the windows that are used up",
   ]);
 });
 
-test("shared cache expiry serves lastOk as stale without changing fetchedAt", async () => {
+test("cache expiry serves lastOk as stale without changing fetchedAt", async () => {
   setSystemTime(NOW);
-  sharedPlanUsageCache.clear();
+  const cache = createPlanUsageCache();
   try {
     const snapshot: PlanUsageSnapshot = {
       platform: "claude",
@@ -150,23 +150,23 @@ test("shared cache expiry serves lastOk as stale without changing fetchedAt", as
       fetchedAt: new Date(NOW).toISOString(),
       windows: [{ window: "quota", usedPercent: 40 }],
     };
-    sharedPlanUsageCache.store("claude", snapshot, CACHE_TTL_MS);
+    cache.store("claude", snapshot, CACHE_TTL_MS);
     const sources = {
       storage: {
         getEnvironmentsByProject: async () => [],
         listNativeAgentSessions: async () => [],
       },
+      planUsage: cachedPlanUsage(cache),
     };
     expect((await readProjectUsageLimits(sources, "p")).activeAccounts[0]?.stale).toBe(false);
     setSystemTime(NOW + CACHE_TTL_MS + 1);
-    expect(sharedPlanUsageCache.peek("claude")).toBeUndefined();
+    expect(cache.peek("claude")).toBeUndefined();
     expect((await readProjectUsageLimits(sources, "p")).activeAccounts[0]).toMatchObject({
       stale: true,
       fetchedAt: snapshot.fetchedAt,
     });
-    expect(sharedPlanUsageCache.lastOk("claude")).toBe(snapshot);
+    expect(cache.lastOk("claude")).toBe(snapshot);
   } finally {
     setSystemTime();
-    sharedPlanUsageCache.clear();
   }
 });

@@ -53,14 +53,11 @@ export async function getContainerGitHubCredentialStatus(
   };
 }
 
-let loadGlobalConfig: (() => Promise<AppConfig["global"]>) | undefined;
-
-/** Set once at startup so host `gh` runs can follow the selected credential. */
-export function setGitHubCliConfigSource(
-  load: (() => Promise<AppConfig["global"]>) | undefined,
-): void {
-  loadGlobalConfig = load;
-}
+/**
+ * Where a host `gh` run reads the credential selected in Settings: the storage
+ * of the backend it runs for. Absent, it uses the host's `gh auth login`.
+ */
+export type GitHubCliConfigSource = { loadConfig(): Promise<Pick<AppConfig, "global">> };
 
 /** Ignore inherited tokens so host mode means the stored `gh auth login`. */
 function hostGitHubCliEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -71,8 +68,11 @@ function hostGitHubCliEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Process
 }
 
 /** Environment for a host `gh` run using exactly the credential selected in Settings. */
-export async function gitHubCliEnv(base?: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
-  const global = await loadGlobalConfig?.();
+export async function gitHubCliEnv(
+  source: GitHubCliConfigSource | undefined,
+  base?: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+  const global = (await source?.loadConfig())?.global;
   const env = hostGitHubCliEnv(base);
   if (!global || gitHubCredentialSource(global) !== "pat") return env;
   const token = global.githubToken?.trim();

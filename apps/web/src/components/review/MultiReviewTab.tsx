@@ -40,6 +40,7 @@ import * as backend from "@/lib/backend";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
 import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { formatElapsedWithHours } from "@/lib/format-elapsed";
 import { formatTokenCount } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
@@ -408,6 +409,25 @@ function InspectorTranscriptTabs({
         {report}
       </TabsContent>
     </Tabs>
+  );
+}
+
+/**
+ * The graph and inspector's shared scroll area. A stable gutter keeps the
+ * graph's width, and so its zoom, from changing when the inspector grows enough
+ * to need a scrollbar. The reader's place survives another tab taking over.
+ */
+function OverviewScroll({ children }: { children: ReactNode }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useScrollOffsetAcrossHide(scrollRef);
+  return (
+    <div
+      ref={scrollRef}
+      data-testid="multi-review-overview-scroll"
+      className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+    >
+      {children}
+    </div>
   );
 }
 
@@ -1831,12 +1851,7 @@ function MultiReviewOverviewTab({
         {busy && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
       </header>
 
-      {/* A stable gutter keeps the graph's width, and so its zoom, from
-          changing when the inspector grows enough to need a scrollbar. */}
-      <div
-        data-testid="multi-review-overview-scroll"
-        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
-      >
+      <OverviewScroll>
         <div className="@container flex min-h-full flex-col">
           {notices.length > 0 ? (
             <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
@@ -1883,7 +1898,7 @@ function MultiReviewOverviewTab({
             </FlowInspectorPanel>
           </div>
         </div>
-      </div>
+      </OverviewScroll>
 
       <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 bg-background/90 px-4 py-3 sm:px-5">
         {workflow.phase === "failed" && workflow.engine !== "graph" && (

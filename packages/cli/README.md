@@ -57,6 +57,10 @@ bunx orkestrator \
   --allow-non-tailscale-bind
 ```
 
+Only the default data directory's backend defaults to port 34121. With another
+`--data-dir` and no `--port`, the backend takes a free port that changes on each
+start, so pass `--port` if remote clients need a stable address.
+
 Or install Bun when needed and start the service in one command:
 
 ```bash
@@ -93,6 +97,14 @@ installs exactly the tools you name instead. On success `toolchains/bin/current`
 points at the installed set and the service uses it by default for that data
 directory — restart a running service to pick up a new one. Pass `--data-dir`
 when the service does, and see `orkestrator toolchain install --help`.
+
+## Cursor and Pi
+
+The Cursor and Pi bridges ship without their SDKs, which are too large or too
+platform-specific to bundle. The first time one starts, the backend installs
+the SDK it pins into `<data-dir>/bridge-runtimes/` with
+`bun install --frozen-lockfile`, so that first start needs access to the npm
+registry. Later starts, and restarts, reuse it.
 
 ## Client commands
 

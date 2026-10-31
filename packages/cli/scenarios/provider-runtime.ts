@@ -6,10 +6,11 @@ import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-plat
 /**
  * What a live Pi, Cursor or Grok scenario needs beyond the packaged CLI.
  *
- * The published package bundles only the Claude and Codex bridges (OpenCode
- * runs its own server), so the scenario backend gets its own resource root:
- * the packaged Claude and Codex bridges plus the selected provider's bridge
- * as this worktree built it, laid out the way the desktop app ships it
+ * The published package installs the Cursor and Pi bridges' SDKs from the
+ * registry on first use (`scripts/bridges.ts`), which a scenario should not
+ * depend on, so the scenario backend gets its own resource root: the packaged
+ * Claude and Codex bridges plus the selected provider's bridge as this
+ * worktree built it, SDKs vendored, laid out the way the desktop app ships it
  * (`<bridge>/dist` and `package.json`). The published package is unchanged,
  * and the CLI, backend and claude/codex bridges under test are still the
  * packaged ones. A fresh data directory enables only the legacy platforms,
@@ -23,7 +24,7 @@ import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-plat
 /** Providers whose agent binary the toolchain pins (`toolchain install --tool`). */
 const PINNED_TOOLS: ReadonlySet<string> = new Set(Object.keys(PINNED_TOOLCHAIN_VERSIONS));
 
-/** Providers whose bridge the package does not ship, with that bridge. */
+/** Providers whose bridge a scenario takes from this worktree, with that bridge. */
 export const REPOSITORY_BRIDGES: Readonly<Record<string, string>> = Object.freeze({
   pi: "pi-bridge",
   cursor: "cursor-bridge",

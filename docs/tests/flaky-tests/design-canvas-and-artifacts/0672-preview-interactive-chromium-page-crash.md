@@ -45,3 +45,26 @@
   tail.
 - **Next step:** read that output at the next CI recurrence.
 
+## Polling-window diagnostics — 2026-10-31 (review follow-up)
+
+- A crash after `setContent` previously reached the polling deadline and failed
+  a bare request assertion after the Chromium log had been deleted. The poll
+  now stops on a crash, and both a crash and incomplete control requests throw
+  inside the diagnostic handler's scope, before cleanup.
+- Verified on Linux with temporary fault injection in the control case: added
+  a never-requested control path to keep polling active, then scheduled
+  `page.goto("chrome://crash")` 100 ms after `setContent` returned. The expected
+  failure printed the crash event, free/total memory, load and actual Chromium
+  log lines (0.8 s; artifact `/tmp/orkestrator-test-run.E3vXOJ`). With only the
+  never-requested path, the expected timeout named that path, reported
+  `no crash event` and printed the log tail (10.4 s; artifact
+  `/tmp/orkestrator-test-run.LXYBKZ`). Both injections were removed afterwards.
+- Both checks used `mise run test:logged -- --name <injection-name> -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./src/core/transcript-artifacts/preview-interactive.test.ts
+  --test-name-pattern 'the sink detects requests from a deliberately unrestricted page'
+  --parallel=1 --only-failures`, with names `preview-polling-crash-injection`
+  and `preview-polling-timeout-injection`, respectively. The complete owning
+  file passed without fault injection. The CI crash's underlying cause remains
+  unconfirmed.
+

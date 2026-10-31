@@ -382,8 +382,12 @@ describe("interactive preview in Chromium", () => {
           );
           // A positive observation: done as soon as every class has arrived.
           const deadline = Date.now() + 10_000;
-          while (!CONTROL_PATHS.every(reached) && Date.now() < deadline)
+          while (!crash && !CONTROL_PATHS.every(reached) && Date.now() < deadline)
             await new Promise((resolve) => setTimeout(resolve, 50));
+          if (crash) throw new Error("The unrestricted control page crashed");
+          const missing = CONTROL_PATHS.filter((path) => !reached(path));
+          if (missing.length > 0)
+            throw new Error(`The unrestricted control page missed requests: ${missing.join(", ")}`);
         } catch (error) {
           const log = existsSync(logFile) ? readFileSync(logFile, "utf8").split("\n") : [];
           throw new Error(

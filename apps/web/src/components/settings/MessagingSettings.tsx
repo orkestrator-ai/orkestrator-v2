@@ -106,36 +106,48 @@ export function MessagingSettings() {
       <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
         <SettingsRow
           label="Enable messaging"
+          htmlFor="messaging-enabled"
           description="Expose inbox and send tools to interactive agent tabs."
         >
           <Switch
+            id="messaging-enabled"
+            aria-label="Enable messaging"
             checked={settings.enabled}
             onCheckedChange={(enabled) => setSettings({ ...settings, enabled })}
           />
         </SettingsRow>
         <SettingsRow
           label="Pause delivery"
+          htmlFor="messaging-paused"
           description="Keep accepting durable messages but stop automatic delivery."
         >
           <Switch
+            id="messaging-paused"
+            aria-label="Pause delivery"
             checked={settings.paused}
             onCheckedChange={(paused) => setSettings({ ...settings, paused })}
           />
         </SettingsRow>
         <SettingsRow
           label="Allow cross-project messages"
+          htmlFor="messaging-allowCrossProject"
           description="Let agents discover and store messages outside their current project. They are never automatically delivered."
         >
           <Switch
+            id="messaging-allowCrossProject"
+            aria-label="Allow cross-project messages"
             checked={settings.allowCrossProject}
             onCheckedChange={(allowCrossProject) => setSettings({ ...settings, allowCrossProject })}
           />
         </SettingsRow>
         <SettingsRow
           label="Wake peers"
+          htmlFor="messaging-wakePeers"
           description="Mail between agents in environments you created starts the recipient's next turn when it is idle. Coordinators and the workers they create always wake each other."
         >
           <Switch
+            id="messaging-wakePeers"
+            aria-label="Wake peers"
             checked={settings.wakePeers}
             onCheckedChange={(wakePeers) => setSettings({ ...settings, wakePeers })}
           />

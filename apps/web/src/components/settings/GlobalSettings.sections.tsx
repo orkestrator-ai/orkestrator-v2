@@ -1002,67 +1002,69 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       title="Agent platforms"
       description="Enabled systems appear in the toolbar, review picker, and build workflow. Newly enabled binaries are downloaded on the next app launch."
     >
-      <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
-        {AGENT_PLATFORMS.map((platform, index) => {
-          const checked = enabledAgentPlatforms.includes(platform);
-          return (
-            <div
-              key={platform}
-              className={cn(
-                "flex items-center justify-between gap-6 px-4 py-3.5",
-                index > 0 && "border-t border-zinc-800/80",
-              )}
-            >
-              <Label
-                htmlFor={`platform-${platform}`}
-                className="flex min-w-0 items-center gap-3 text-sm font-medium"
+      <div className="space-y-3">
+        <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
+          {AGENT_PLATFORMS.map((platform, index) => {
+            const checked = enabledAgentPlatforms.includes(platform);
+            return (
+              <div
+                key={platform}
+                className={cn(
+                  "flex items-center justify-between gap-6 px-4 py-3.5",
+                  index > 0 && "border-t border-zinc-800/80",
+                )}
               >
-                {/*
+                <Label
+                  htmlFor={`platform-${platform}`}
+                  className="flex min-w-0 items-center gap-3 text-sm font-medium"
+                >
+                  {/*
                   The tile carries the enabled state; the mark inside it always
                   paints its own platform accent, so a text colour here would
                   never reach anything.
                 */}
-                <span
-                  className={cn(
-                    "grid size-8 shrink-0 place-items-center rounded-lg border",
-                    checked ? "border-cyan-400/30 bg-cyan-500/10" : "border-zinc-800 bg-zinc-900",
-                  )}
-                >
-                  <AgentPlatformIcon platform={platform} accent className="size-4" />
-                </span>
-                <span>{AGENT_PLATFORM_LABELS[platform]}</span>
-              </Label>
-              <Switch
-                id={`platform-${platform}`}
-                checked={checked}
-                onCheckedChange={(next) => {
-                  const selected = next
-                    ? AGENT_PLATFORMS.filter(
-                        (candidate) =>
-                          candidate === platform || enabledAgentPlatforms.includes(candidate),
-                      )
-                    : enabledAgentPlatforms.filter((candidate) => candidate !== platform);
-                  if (selected.length === 0) {
-                    toast.error("Keep at least one agent platform enabled");
-                    return;
-                  }
-                  setEnabledAgentPlatforms(selected);
-                  // A default agent for a platform the user just disabled would
-                  // name a launch surface that no longer exists. Resolved rather
-                  // than read, so an app tier that had been inheriting the
-                  // shipped default is retargeted too.
-                  if (!selected.includes(resolveDefaultAgent({ global: agentSettings }))) {
-                    setAgentSettings({ ...agentSettings, defaultAgent: selected[0]! });
-                  }
-                }}
-              />
-            </div>
-          );
-        })}
+                  <span
+                    className={cn(
+                      "grid size-8 shrink-0 place-items-center rounded-lg border",
+                      checked ? "border-cyan-400/30 bg-cyan-500/10" : "border-zinc-800 bg-zinc-900",
+                    )}
+                  >
+                    <AgentPlatformIcon platform={platform} accent className="size-4" />
+                  </span>
+                  <span>{AGENT_PLATFORM_LABELS[platform]}</span>
+                </Label>
+                <Switch
+                  id={`platform-${platform}`}
+                  checked={checked}
+                  onCheckedChange={(next) => {
+                    const selected = next
+                      ? AGENT_PLATFORMS.filter(
+                          (candidate) =>
+                            candidate === platform || enabledAgentPlatforms.includes(candidate),
+                        )
+                      : enabledAgentPlatforms.filter((candidate) => candidate !== platform);
+                    if (selected.length === 0) {
+                      toast.error("Keep at least one agent platform enabled");
+                      return;
+                    }
+                    setEnabledAgentPlatforms(selected);
+                    // A default agent for a platform the user just disabled would
+                    // name a launch surface that no longer exists. Resolved rather
+                    // than read, so an app tier that had been inheriting the
+                    // shipped default is retargeted too.
+                    if (!selected.includes(resolveDefaultAgent({ global: agentSettings }))) {
+                      setAgentSettings({ ...agentSettings, defaultAgent: selected[0]! });
+                    }
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-xs text-muted-foreground/70">
+          Disabling a platform hides new launch choices; existing sessions and files are kept.
+        </p>
       </div>
-      <p className="text-xs text-muted-foreground/70">
-        Disabling a platform hides new launch choices; existing sessions and files are kept.
-      </p>
       <div>
         <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -2096,143 +2098,145 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <p className="mt-2 text-xs text-amber-500">{versionReminder.description}</p>
         ) : null}
       </div>
-      <SettingsSectionHeader title="Save Logs for Debugging">
-        Write application logs to disk for troubleshooting
-      </SettingsSectionHeader>
-      <button
-        type="button"
-        onClick={() => setDebugLogging(!debugLogging)}
-        className={cn(
-          "max-w-xs w-full p-3 rounded-lg border-2 text-left transition-colors",
-          debugLogging
-            ? "border-primary bg-primary/5"
-            : "border-transparent bg-zinc-900 hover:border-zinc-600",
-        )}
-      >
-        <div className="flex items-center justify-between">
-          <span className="font-medium text-sm">{debugLogging ? "Enabled" : "Disabled"}</span>
-          <div
-            className={cn(
-              "w-9 h-5 rounded-full transition-colors relative",
-              debugLogging ? "bg-primary" : "bg-muted-foreground/30",
-            )}
-          >
+      <div className="space-y-3">
+        <SettingsSectionHeader title="Save Logs for Debugging">
+          Write application logs to disk for troubleshooting
+        </SettingsSectionHeader>
+        <button
+          type="button"
+          onClick={() => setDebugLogging(!debugLogging)}
+          className={cn(
+            "max-w-xs w-full p-3 rounded-lg border-2 text-left transition-colors",
+            debugLogging
+              ? "border-primary bg-primary/5"
+              : "border-transparent bg-zinc-900 hover:border-zinc-600",
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-sm">{debugLogging ? "Enabled" : "Disabled"}</span>
             <div
               className={cn(
-                "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
-                debugLogging ? "translate-x-4" : "translate-x-0.5",
+                "w-9 h-5 rounded-full transition-colors relative",
+                debugLogging ? "bg-primary" : "bg-muted-foreground/30",
               )}
+            >
+              <div
+                className={cn(
+                  "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
+                  debugLogging ? "translate-x-4" : "translate-x-0.5",
+                )}
+              />
+            </div>
+          </div>
+        </button>
+        <div className="max-w-xs space-y-2">
+          <Label htmlFor="debug-log-retention" className="text-sm">
+            Keep logs for
+          </Label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="debug-log-retention"
+              aria-label="Log retention days"
+              type="number"
+              min={MIN_DEBUG_LOG_RETENTION_DAYS}
+              max={MAX_DEBUG_LOG_RETENTION_DAYS}
+              step={1}
+              value={debugLogRetentionDays}
+              onChange={(event) => setDebugLogRetentionDays(Number(event.target.value))}
+              className="w-24"
             />
+            <span className="text-sm text-muted-foreground">days</span>
           </div>
-        </div>
-      </button>
-      <div className="max-w-xs space-y-2">
-        <Label htmlFor="debug-log-retention" className="text-sm">
-          Keep logs for
-        </Label>
-        <div className="flex items-center gap-2">
-          <Input
-            id="debug-log-retention"
-            aria-label="Log retention days"
-            type="number"
-            min={MIN_DEBUG_LOG_RETENTION_DAYS}
-            max={MAX_DEBUG_LOG_RETENTION_DAYS}
-            step={1}
-            value={debugLogRetentionDays}
-            onChange={(event) => setDebugLogRetentionDays(Number(event.target.value))}
-            className="w-24"
-          />
-          <span className="text-sm text-muted-foreground">days</span>
-        </div>
-        {!isValidDebugLogRetentionDays(debugLogRetentionDays) && (
-          <p className="text-xs text-destructive">
-            Enter a whole number from {MIN_DEBUG_LOG_RETENTION_DAYS} to{" "}
-            {MAX_DEBUG_LOG_RETENTION_DAYS}.
-          </p>
-        )}
-        <p className="text-xs text-muted-foreground">
-          Expired production logs are removed at startup and periodically while the app runs. Logs
-          also roll over to a new file once one grows large, and the oldest are dropped if the
-          directory as a whole gets too big.
-        </p>
-      </div>
-
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-foreground">Stored logs</p>
-            <p className="text-xs text-muted-foreground mt-1" aria-live="polite">
-              {isLoadingLogStorage
-                ? "Calculating storage used…"
-                : logStorageStats
-                  ? `${formatLogBytes(logStorageStats.totalBytes)} across ${logStorageStats.fileCount} ${logStorageStats.fileCount === 1 ? "file" : "files"}`
-                  : "Storage usage unavailable"}
+          {!isValidDebugLogRetentionDays(debugLogRetentionDays) && (
+            <p className="text-xs text-destructive">
+              Enter a whole number from {MIN_DEBUG_LOG_RETENTION_DAYS} to{" "}
+              {MAX_DEBUG_LOG_RETENTION_DAYS}.
             </p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => void refreshLogStorage()}
-            disabled={isLoadingLogStorage || isCleaningLogs}
-            aria-label="Refresh log storage"
-          >
-            <RefreshCw className={cn("h-4 w-4", isLoadingLogStorage && "animate-spin")} />
-          </Button>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Expired production logs are removed at startup and periodically while the app runs. Logs
+            also roll over to a new file once one grows large, and the oldest are dropped if the
+            directory as a whole gets too big.
+          </p>
         </div>
-        {logDirectory && (
-          <button
-            type="button"
-            disabled={!canRevealFiles}
-            onClick={() => {
-              if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
-            }}
-            className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
-            title={logDirectory}
-          >
-            <FolderOpen className="h-3 w-3 shrink-0" />
-            <span className="truncate">{logDirectory}</span>
-          </button>
-        )}
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
+
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">Stored logs</p>
+              <p className="text-xs text-muted-foreground mt-1" aria-live="polite">
+                {isLoadingLogStorage
+                  ? "Calculating storage used…"
+                  : logStorageStats
+                    ? `${formatLogBytes(logStorageStats.totalBytes)} across ${logStorageStats.fileCount} ${logStorageStats.fileCount === 1 ? "file" : "files"}`
+                    : "Storage usage unavailable"}
+              </p>
+            </div>
             <Button
               type="button"
-              variant="outline"
-              size="sm"
-              disabled={isCleaningLogs || isLoadingLogStorage || !logStorageStats?.fileCount}
+              variant="ghost"
+              size="icon"
+              onClick={() => void refreshLogStorage()}
+              disabled={isLoadingLogStorage || isCleaningLogs}
+              aria-label="Refresh log storage"
             >
-              {isCleaningLogs ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4 mr-2" />
-              )}
-              Clean up logs
+              <RefreshCw className={cn("h-4 w-4", isLoadingLogStorage && "animate-spin")} />
             </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent
-            className={Z_FULLSCREEN_DIALOG}
-            overlayClassName={Z_FULLSCREEN_DIALOG}
-          >
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete all stored logs?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This permanently deletes every file in the application log directory. If logging is
-                active, a new daily log may be created immediately afterward.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={() => void handleCleanupLogs()}>
-                Delete logs
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+          </div>
+          {logDirectory && (
+            <button
+              type="button"
+              disabled={!canRevealFiles}
+              onClick={() => {
+                if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {});
+              }}
+              className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full disabled:text-muted-foreground disabled:no-underline"
+              title={logDirectory}
+            >
+              <FolderOpen className="h-3 w-3 shrink-0" />
+              <span className="truncate">{logDirectory}</span>
+            </button>
+          )}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isCleaningLogs || isLoadingLogStorage || !logStorageStats?.fileCount}
+              >
+                {isCleaningLogs ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4 mr-2" />
+                )}
+                Clean up logs
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent
+              className={Z_FULLSCREEN_DIALOG}
+              overlayClassName={Z_FULLSCREEN_DIALOG}
+            >
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete all stored logs?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently deletes every file in the application log directory. If logging
+                  is active, a new daily log may be created immediately afterward.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => void handleCleanupLogs()}>
+                  Delete logs
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+        <p className="text-xs text-muted-foreground/60">
+          Enabling logging or changing retention requires an app restart to take effect.
+        </p>
       </div>
-      <p className="text-xs text-muted-foreground/60">
-        Enabling logging or changing retention requires an app restart to take effect.
-      </p>
     </SettingsPageLayout>
   );
 

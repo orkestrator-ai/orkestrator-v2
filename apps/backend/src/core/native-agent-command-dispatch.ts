@@ -18,6 +18,7 @@ import {
   type NativeAgentBridgeCommandInvocation,
 } from "@orkestrator/protocol/agent-command-catalogue";
 import {
+  GOAL_COMMAND_ID,
   parseCommandToken,
   resolveCommandInvocation,
 } from "@orkestrator/protocol/agent-slash-commands";
@@ -43,6 +44,8 @@ export type CommandDispatchPlan =
       commandName?: string;
     }
   | { kind: "session-action"; action: "compact"; commandName: string }
+  /** Acts on the goal record: nothing is journaled and no turn is disturbed. */
+  | { kind: "goal"; commandName: string; arguments: string }
   | {
       kind: "rejected";
       message: string;
@@ -158,6 +161,9 @@ export function planCommandDispatch(input: CommandDispatchInput): CommandDispatc
   if (command.executionKind === "session-action") {
     if (command.id === "orkestrator:compact") {
       return { kind: "session-action", action: "compact", commandName: command.name };
+    }
+    if (command.id === GOAL_COMMAND_ID) {
+      return { kind: "goal", commandName: command.name, arguments: token.arguments };
     }
     // `/steer` reaching the prompt path means no turn was running when the
     // composer looked. Providers answer it locally with usage text rather

@@ -173,6 +173,7 @@ import {
   valueFingerprint,
 } from "./native-agent-projection-encoding.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
+import { goalPublicView, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { type CompatibilityPathId, compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
@@ -340,6 +341,12 @@ export interface NativeAgentTranscriptProjectionHost {
    * on the rest. Absent in tests that do not wire it.
    */
   permissionRules?: PermissionRuleEnforcer;
+}
+
+/** The goal a view shows. The session record is the only place it lives. */
+function goalProjectionField(session: PersistedNativeAgentSession) {
+  const goal = sessionGoal(session);
+  return goal ? { goal: goalPublicView(goal) } : {};
 }
 
 /**
@@ -3185,6 +3192,7 @@ export class NativeAgentTranscriptProjection {
           ? { queue: stateSnapshot.providerQueue }
           : {}),
       ...(contextUsage ? { contextUsage } : {}),
+      ...goalProjectionField(resolved.session),
       ...(asyncQuestionResponses.size > 0
         ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
         : {}),
@@ -5058,6 +5066,7 @@ export class NativeAgentTranscriptProjection {
           : snapshot.providerQueue
             ? { queue: snapshot.providerQueue }
             : {}),
+        ...goalProjectionField(resolved.session),
         ...(asyncQuestionResponses.size > 0
           ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
           : {}),

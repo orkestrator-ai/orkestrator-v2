@@ -1,5 +1,6 @@
 import type { CanUseTool, HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
@@ -193,7 +194,7 @@ export async function resolveQueryPlan(
   // Orkestrator's own bounded artifact store and never touch the workspace.
   // An explicit toolPolicy deny still wins.
   const agentMailTools = mcpServerNames.has(AGENT_MCP_SERVER_NAME)
-    ? [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map(
+    ? [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map(
         (name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`,
       )
     : [];

@@ -117,6 +117,10 @@ export interface NativeAgentLaunchActivityReconcilerHost {
   /** The service's public prompt dispatch. */
   dispatchPrompt(input: DispatchNativeAgentPromptInput): Promise<PersistedNativeAgentSession>;
   /** Prompt dispatch with a preparation step run against the resolved session. */
+  /** A running goal holds this session's turn-end: it is not finished yet. */
+  goalHoldsTurnEnd?(sessionKey: string): boolean;
+  /** Each sweep gives running goals a chance to notice what no edge reported. */
+  sweepGoals?(): void;
   dispatchPromptWithPreparation(
     input: DispatchNativeAgentPromptInput,
     prepare: PrepareDispatch,
@@ -306,6 +310,24 @@ export class NativeAgentLaunchActivityReconciler {
       : observed.state;
   }
 
+  /**
+   * A session's view changed with no activity change, such as its goal: tell
+   * views to read it again, in the same stamp sequence as other changes.
+   */
+  announceSessionContent(session: PersistedNativeAgentSession): void {
+    const observed = this.observedSessionActivity.get(session.key);
+    this.options.onObservationInvalidation?.({
+      observation: this.observations.nextStamp(),
+      environmentId: session.environmentId,
+      sessionKey: session.key,
+      providerSessionId: session.providerSessionId,
+      state: observed?.state ?? "idle",
+      owner: session.owner?.kind === "coordinator" ? "coordinator" : "environment",
+      agent: session.agent as BuildPipelineAgent,
+      logicalSessionKey: session.logicalSessionKey,
+    });
+  }
+
   /** Whether the session's last turn was cut off by its runtime stopping. */
   sessionStoppedMidTurn(
     environmentId: string,
@@ -489,6 +511,7 @@ export class NativeAgentLaunchActivityReconciler {
       return this.activityScanFollowUp;
     }
     this.activityScanNumber += 1;
+    this.host.sweepGoals?.();
     const scan = this.host
       .trackScan(
         recurringWorkMetrics.observe("native-activity-sweep", () =>
@@ -1177,11 +1200,15 @@ export class NativeAgentLaunchActivityReconciler {
             : "agent_finished";
       if (stillApplicable && !stillApplicable())
         return { completed: false, attentionRecorded: false };
-      await this.storage.recordEnvironmentSessionCompletion(
-        session.environmentId,
-        new Date(this.host.now()).toISOString(),
-        reason,
-      );
+      // A turn the goal loop will follow up is not the agent finishing. The
+      // loop rings once when it stops. A failure and an approval still ring.
+      if (reason !== "agent_finished" || !this.host.goalHoldsTurnEnd?.(session.key)) {
+        await this.storage.recordEnvironmentSessionCompletion(
+          session.environmentId,
+          new Date(this.host.now()).toISOString(),
+          reason,
+        );
+      }
     }
     if (stillApplicable && !stillApplicable())
       return { completed: false, attentionRecorded: false };

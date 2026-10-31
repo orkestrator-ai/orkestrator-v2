@@ -1,3 +1,4 @@
+import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
 import { randomUUID } from "node:crypto";
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -313,6 +314,7 @@ export class OrkestratorBackend {
     Partial<
       Pick<
         AgentToolsServer,
+        | "setGoalToolHost"
         | "revokeTab"
         | "workflowResultConnection"
         | "servicePort"
@@ -371,6 +373,7 @@ export class OrkestratorBackend {
       Partial<
         Pick<
           AgentToolsServer,
+          | "setGoalToolHost"
           | "revokeTab"
           | "workflowResultConnection"
           | "servicePort"
@@ -873,6 +876,9 @@ export class OrkestratorBackend {
               });
           }
           if (isAgentTurnEndTransition(event)) {
+            // Read before the loop reacts: a turn it will follow up is not the
+            // worker reporting back, and it settles when the loop stops.
+            const goalHolds = this.nativeAgents.goals.holdsTurnEnd(event.sessionKey);
             // Capture the turn's end state and publish turn-net/thread-net.
             let changesFinalized: Promise<unknown> = Promise.resolve();
             if (event.owner !== "coordinator" && event.logicalSessionKey) {
@@ -910,7 +916,10 @@ export class OrkestratorBackend {
              * coordinator could previously reach thirty seconds.
              */
             void Promise.all([changesFinalized, annotationsObserved])
-              .then(() => this.nativeAgents.drainPromptQueueForSession(event))
+              .then(() => {
+                this.nativeAgents.goals.noteTurnEnded(event.sessionKey);
+                return this.nativeAgents.drainPromptQueueForSession(event);
+              })
               .catch((error: unknown) => {
                 console.warn(
                   "[backend] Failed to drain the prompt queue after a turn ended:",
@@ -937,7 +946,7 @@ export class OrkestratorBackend {
                 ? event.logicalSessionKey.slice(`env-${event.environmentId}:`.length)
                 : undefined;
             void (
-              workerTabId
+              workerTabId && !goalHolds
                 ? this.coordinators.settleWorkerDelegations({
                     environmentId: event.environmentId,
                     tabId: workerTabId,
@@ -959,6 +968,30 @@ export class OrkestratorBackend {
                 );
               });
           }
+        },
+        goalEnvironment: {
+          runCheck: async (input) => {
+            const environment = await storage.getEnvironment(input.environmentId);
+            if (!environment) return { kind: "unavailable", detail: "The environment is gone." };
+            return runGoalCheck(environment, context, input);
+          },
+          workspaceFingerprint: async (environmentId) => {
+            const environment = await storage.getEnvironment(environmentId);
+            return environment ? goalWorkspaceFingerprint(environment) : undefined;
+          },
+        },
+        onGoalReleasedTurnEnd: async (session) => {
+          if (
+            session.owner?.kind !== "coordinator" &&
+            session.logicalSessionKey.startsWith(`env-${session.environmentId}:`)
+          ) {
+            await this.coordinators.settleWorkerDelegations({
+              environmentId: session.environmentId,
+              tabId: session.logicalSessionKey.slice(`env-${session.environmentId}:`.length),
+              state: "completed",
+            });
+          }
+          await this.agentMail.drainInjects();
         },
         onAsyncQuestionAttention: (event) => {
           options.emit("native-agent-async-question", {
@@ -993,6 +1026,7 @@ export class OrkestratorBackend {
       },
     );
     context.nativeAgents = this.nativeAgents;
+    this.agentTools.setGoalToolHost?.(this.nativeAgents.goals);
     context.agentRegistry = new AgentRegistry(storage, {
       native: (environmentId, agent, logicalSessionKey) =>
         this.nativeAgents.sessionTurnActivitySnapshot(environmentId, agent, logicalSessionKey),

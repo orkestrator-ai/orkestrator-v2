@@ -369,6 +369,24 @@ export function registerNativeAgentCommands(
     });
   });
 
+  register("native_agent_goal_command", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.runGoalCommand({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      text: typeof args.text === "string" ? args.text : "",
+      ...(typeof args.model === "string" && args.model ? { model: args.model } : {}),
+    });
+  });
+  register("get_native_agent_goal", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.readGoalDetail({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    });
+  });
   register("stop_native_agent_session", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");

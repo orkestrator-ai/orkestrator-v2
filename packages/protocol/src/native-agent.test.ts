@@ -146,6 +146,7 @@ describe("native agent capability table", () => {
     expect(nativeAgentCapabilities("claude").composer.localSettings).toBe(true);
     expect(nativeAgentCapabilities("claude").composer.promptSuggestions).toBe(true);
     expect(nativeAgentCapabilities("claude").actions).toEqual({
+      goal: true,
       compact: true,
       rewindFiles: true,
       steer: true,

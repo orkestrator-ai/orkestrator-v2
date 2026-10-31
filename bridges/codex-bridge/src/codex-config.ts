@@ -1,4 +1,5 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
   coordinatorCapabilityPolicy,
@@ -706,7 +707,11 @@ export function codexAppServerConfigOverrides(
           // policy: they are how it reports back. Artifact tools likewise only
           // write to Orkestrator's own store. Its other Orkestrator tools keep
           // Codex's defaults.
-          for (const name of [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES]) {
+          for (const name of [
+            ...AGENT_MAIL_TOOL_NAMES,
+            ...ARTIFACT_TOOL_NAMES,
+            ...AGENT_GOAL_TOOL_NAMES,
+          ]) {
             overrides[`mcp_servers.orkestrator.tools.${name}.approval_mode`] =
               JSON.stringify("approve");
           }

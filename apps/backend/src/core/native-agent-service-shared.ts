@@ -64,6 +64,7 @@ import {
   resolveReasoningId,
   withResolvedNativeComposerModel,
 } from "@orkestrator/protocol/native-agent";
+import type { GoalCheckRun } from "./native-agent-goal-service.js";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { boundTranscriptResponse } from "@orkestrator/protocol/node/transcript-window";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
@@ -447,6 +448,18 @@ export interface NativeAgentServiceOptions {
   interactionMonitorMaxRetries?: number;
   onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /** The environment-side work of the goal loop; the composition root has the context it needs. */
+  goalEnvironment?: {
+    runCheck(input: {
+      environmentId: string;
+      goalId: string;
+      command: string;
+      timeoutMs: number;
+    }): Promise<GoalCheckRun>;
+    workspaceFingerprint(environmentId: string): Promise<string | undefined>;
+  };
+  /** A goal stopped: run the turn-end work it was holding back. */
+  onGoalReleasedTurnEnd?: (session: PersistedNativeAgentSession) => Promise<void> | void;
   /**
    * An idle (or released) session's view changed without an activity
    * transition: its provider's content revision moved. Stamped from the same

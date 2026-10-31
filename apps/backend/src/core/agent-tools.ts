@@ -1,3 +1,8 @@
+import {
+  GOAL_REPORT_STATUSES,
+  NATIVE_AGENT_GOAL_LIMITS,
+  type GoalReportStatus,
+} from "@orkestrator/protocol/native-agent-goal";
 import { createDesignMcp, resolveDesignDestination, type DesignService } from "./design/index.js";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -559,6 +564,53 @@ async function registerGraphActivationTools(
   }
 }
 
+/** What the agent tool server needs from the goal loop. */
+export interface GoalToolHost {
+  report(
+    scope: { environmentId: string; tabId?: string },
+    input: { goalId: string; status: GoalReportStatus; message: string },
+  ): Promise<{ ok: boolean; message: string }>;
+}
+
+/**
+ * `report_goal` is listed for every tab rather than only ones with a goal: a
+ * provider may cache a session's tool list when it starts, and a goal can be set
+ * later. The goal id, which only the goal's own turn carries, picks the goal, so
+ * an environment-wide credential (OpenCode) cannot reach another tab's goal by
+ * accident. A tab-scoped credential must also match the goal's tab.
+ */
+function registerGoalTools(server: McpServer, goals: GoalToolHost, scope: AgentToolScope): void {
+  server.registerTool(
+    "report_goal",
+    {
+      title: "Report on your goal",
+      description:
+        "Use only when a goal turn asked you to. Say that the goal's objective is met (done), that you cannot continue without a person (blocked), or give a short progress note (progress). This cannot set or change a goal.",
+      inputSchema: z.object({
+        goalId: z.string().trim().min(1).max(200),
+        status: z.enum(GOAL_REPORT_STATUSES),
+        message: z.string().trim().min(1).max(NATIVE_AGENT_GOAL_LIMITS.reportMessageMaxBytes),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ goalId, status, message }) => {
+      const answer = await goals.report(
+        {
+          environmentId: scope.environmentId,
+          ...(scope.tabId ? { tabId: scope.tabId } : {}),
+        },
+        { goalId, status, message },
+      );
+      return toolResult(answer);
+    },
+  );
+}
+
 async function createAgentToolServer(
   storage: StorageService,
   scope: AgentToolScope,
@@ -571,7 +623,12 @@ async function createAgentToolServer(
   {
     instructions = true,
     graphTools = null,
-  }: { instructions?: boolean; graphTools?: GraphActivationToolHost | null } = {},
+    goalTools = null,
+  }: {
+    instructions?: boolean;
+    graphTools?: GraphActivationToolHost | null;
+    goalTools?: GoalToolHost | null;
+  } = {},
 ): Promise<McpServer> {
   if (scope.workflowResultBroker) {
     const server = new McpServer(
@@ -762,6 +819,8 @@ async function createAgentToolServer(
 
   if (artifactTools) registerTranscriptArtifactTools(server, artifactTools, scope);
 
+  if (goalTools) registerGoalTools(server, goalTools, scope);
+
   return server;
 }
 
@@ -818,6 +877,7 @@ export class AgentToolsServer {
   private designRequests = 0;
   private readonly mailRateWindows = new Map<string, number[]>();
   private webAnnotationToolHost: WebAnnotationToolHost | null = null;
+  private goalToolHost: GoalToolHost | null = null;
   private readonly webAnnotationToolLimiter = new WebAnnotationToolLimiter();
   private provisionalFindingSink: ProvisionalFindingSink | null = null;
   private transcriptArtifactToolHost: TranscriptArtifactToolHost | null = null;
@@ -1045,6 +1105,11 @@ export class AgentToolsServer {
    */
   setWebAnnotationToolHost(host: WebAnnotationToolHost | null): void {
     this.webAnnotationToolHost = host;
+  }
+
+  /** Where `report_goal` calls go. The tool is listed only while this is set. */
+  setGoalToolHost(host: GoalToolHost | null): void {
+    this.goalToolHost = host;
   }
 
   /** Where Multi Review reviewers' `report_finding` calls go. */
@@ -1357,6 +1422,7 @@ export class AgentToolsServer {
                 {
                   instructions: agentMcpAnnounces(body),
                   graphTools: this.graphActivationToolHost,
+                  goalTools: this.goalToolHost,
                 },
               ),
         { legacy: "stateless" },

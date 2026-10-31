@@ -8,7 +8,7 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * with `--fixture-environments local,container` (C29): the user starts it,
  * switches to another environment while it runs, comes back to backend-owned
  * progress, and after it completes sees the previous container as a recovery
- * copy — also after a reload. The Docker dialog's reviewed cleanup lists
+ * copy — also after a reload. The Docker settings tab's reviewed cleanup lists
  * nothing it would remove from a live environment.
  */
 

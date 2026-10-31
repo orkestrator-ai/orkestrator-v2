@@ -7,13 +7,13 @@ refused-login-…: The agent completed its work." while the tab showed the error
 
 ## Task analysis
 
-Analysed 2026-10-29 against `main` at `79f3bc97`; re-checked and implemented 2026-10-30 against `main` at `cd7bbe3e`.
+Analysed 2026-10-29 against `main` at `79f3bc97`; re-checked and implemented 2026-10-30 against `main` at `cd7bbe3e`; task 3 re-checked and implemented 2026-10-31 against `main` at `931e5541`.
 
 ### Tasks
 
 1. **Give a failed turn its own unread reason**: record and show a failure, not "completed its work". Status: done (2026-10-30). `agent_failed` is recorded on a failed turn's end and the toast reads "Agent stopped with an error".
 2. **Check every platform reports a failed turn the same way**: Status: done (2026-10-30) against stubs; a live failed turn per provider was not run (see Needs verification).
-3. **A failed turn the backend did not watch end**: a turn that fails while the backend is restarting, or whose bridge dies under it, still rings `agent_finished`. Status: open.
+3. **A failed turn the backend did not watch end**: a turn that fails while the backend is restarting, or whose bridge dies under it, still rings `agent_finished`. Status: done (2026-10-31) against fake bridges and a restart harness; a live restart and crash were not run (see Needs verification).
 
 ### 1. Give a failed turn its own unread reason
 
@@ -64,7 +64,7 @@ Analysed 2026-10-29 against `main` at `79f3bc97`; re-checked and implemented 202
 
 **Context.** After a backend restart, a session's first observation has no prior state. The environment aggregate's `working → idle` fallback then rings the bell (`storage-projects.ts`, `completionTransition` in `setEnvironmentAgentActivity`), and that path picks `agent_waiting` or `agent_finished` from the aggregate alone. Separately, when no bridge answers for a group (`observeProvider` returns nothing, or the bridge is known absent), the reconciler records each session `idle` with no observation (`native-agent-launch-activity-reconciler.ts`, the `!provider` branch), so a bridge that crashed mid-turn reads as a finished turn.
 
-**Investigation.** Not started beyond the reading above. The aggregate path would need the per-session `turnFailed` answers from the same sweep; the crash path has no provider answer at all, only the fact that a session observed `working` lost its bridge.
+**Investigation.** Done 2026-10-31; the outcome is under [Assumptions and decisions](#task-3-what-was-found). The reading above held, and there were three more ends: a bridge replaced before the next sweep, a session the bridge proves gone across a restart, and non-native sources that ring the same aggregate bell (split out to [1060](1060-non-native-activity-bell-reads-as-finished.md)).
 
 **Decisions.**
 
@@ -112,10 +112,56 @@ Made 2026-10-30 while implementing tasks 1 and 2 against `main` at `cd7bbe3e`. N
 - **Chose:** to record the restart and crash ends as task 3 here rather than widen this change.
 - **Why:** neither has a per-session edge to read the outcome on, so each needs a change to a different path (the aggregate fallback, the bridge-absent branch), and the crash case needs a decision about deliberate stops.
 
+### Task 3: what was found
+
+Made 2026-10-31 against `main` at `931e5541`. Every path that could ring `agent_finished` for a turn nobody watched end, and what it does now:
+
+| End of the turn | Before | Now |
+| --- | --- | --- |
+| Bridge dies, next read fails, then no bridge is found | `agent_finished` from the session edge | `agent_failed` |
+| Backend restart, bridge survives, turn failed meanwhile | `agent_finished` from the aggregate | `agent_failed` from the session's first answer |
+| Backend restart, bridge gone (the usual local case: bridges exit with their backend) | `agent_finished` from the aggregate | `agent_failed` when the latest dispatched turn has no recorded end |
+| Bridge replaced before the next sweep, restored session reads idle | `agent_finished` from the session edge | `agent_failed` from the bridge's own report (below) |
+| Backend restart, bridge proves the session gone | `agent_finished` from the aggregate | `agent_failed` |
+| Runtime stopped across a restart | Nothing: storage clears activity when it records a stop | Nothing (pinned by a test) |
+| Multi Review, graph runs, terminal agents | `agent_finished` from the aggregate | Unchanged; see [1060](1060-non-native-activity-bell-reads-as-finished.md) |
+
+What each provider reports after its own restart:
+
+- **Claude:** the turn-in-flight mark restores the session as `error`, so `turnFailed`.
+- **Codex:** a turn its dead predecessor left unfinished settles `failed`, so `turnFailed`.
+- **Cursor, Grok, Pi:** the session restores idle with no error, and the journal holds the request as `ambiguous`, so `GET /session/:id/dispatch` answers `lost`.
+- **OpenCode:** the provider has no restart journal. A failure on the request's answer is read as in task 1. A server replaced before the next sweep, with nothing on the answer, still reads as finished: nothing durable says otherwise, and the window closes when a failed read leads to the no-bridge path instead.
+
+### Task 3: what the restart fallback says
+
+- **Chose:** a variant of the recommended option. It uses the same evidence but rings from the session rather than through a new `setEnvironmentAgentActivity` option. Where the durable `native-agent` source says `working` and has done since before this process, a session's first idle answer asks `readTurnFailed`. A "yes" records `agent_failed` through `recordEnvironmentSessionCompletion`, which also turns the aggregate fallback off for that sweep. A "no" stays quiet and the fallback rings `agent_finished` as before.
+- **Why:** passing answers to the storage call only helps when the aggregate goes idle in that same sweep. A sibling tab still working would keep it `working`, and by the time it went idle the failed session's answer would be gone. The session ring has no such gap, and the `attentionRecorded` path it needs already existed.
+- **Bound on the evidence:** `unwatchedWorkingEnvironments` holds an environment only from its first sweep in this process until each of its sessions has answered, so a tab opened later inherits nothing. A durably idle environment rings nothing, however stale the bridge's `turnFailed`. Each session's first answer there costs at most two no-touch reads (the turn outcome and the dispatch status), once per restart. An unreadable outcome backs the group off and withholds the environment, as on a watched edge, so the turn is not announced as finished in the meantime.
+
+### Task 3: what a bridge lost mid-turn says
+
+- **Chose:** the recommended option, `agent_failed`, for a session seen `working` whose bridge is gone. A turn already released to background work has no edge and rings nothing, as before.
+- **Across a restart** there is no per-session state, so the session must also have a latest dispatched request with no recorded outcome and no recorded stop. An environment whose session has neither falls back to `agent_finished`.
+- **A session the bridge proves gone** counts the same way, because its turn cannot have finished.
+
+### Task 3: telling a deliberate stop from a crash
+
+- **Chose:** two checks, because the analysis's worry was real: `settleStoppedSessions` runs after a stop takes effect, so a sweep can find the bridge gone first. `runtimeStopRequested` is called before `stopLocalServerUnlocked` terminates a bridge (environment stop, move, delete, single-bridge stop) and before a container stop or rebuild. For `RUNTIME_STOP_REQUEST_WINDOW_MS` (two minutes) a missing bridge keeps `agent_finished`. A stop the user asked for is read from `interruptedRequestIds`, so stopping a turn and then losing the bridge is not a failure.
+- **Why not a stop fence that withholds the group:** it would need clearing on every failure path, and keeping the bell an old stop already rang is no regression.
+
+### Task 3: the `lost` read
+
+- **Chose:** on a turn-end edge with no `turnFailed` and no terminal error, ask `dispatchStatus` for the latest request and treat `lost` as a turn cut short. A failed read, or any other answer, changes nothing and does not back the group off. Skipped for OpenCode, which never answers `lost` and would pay a transcript read.
+- **Why not compare bridge connection identities:** a container bridge can come back on the same port, and the identity is in memory, so it says nothing after a backend restart. `lost` is durable and the bridge's own statement.
+- **Known looseness:** Claude answers `lost` for any id restored from an earlier process, including a finished one. It only matters where a Claude bridge restarted and the durable source says `working` while another platform's tab held the turn. Such a bell says "failed" for a session whose turn finished, and the tab shows the truth.
+
 ## Needs verification
 
+- A real backend restart and a real bridge crash mid-turn, in a disposable profile, to confirm the bell reads "Agent stopped with an error". The tests drive the real sweep and HTTP provider against fake bridges, a port that stops answering, and a second service over the same storage. They do not start a real bridge or provider.
 - A live failed turn per provider (for example a refused login), to confirm the real bridge sends `turnFailed` and the toast reads "Agent stopped with an error". The tests prove the contract against stubbed bridges and each bridge's own failure path, not each real provider. This needs billed or credentialed provider turns, which this work did not run.
 
 ## Related
 
 - [0235-codex-refused-login-turn-invisible.md](../agent-engines/0235-codex-refused-login-turn-invisible.md)
+- [1060-non-native-activity-bell-reads-as-finished.md](1060-non-native-activity-bell-reads-as-finished.md)

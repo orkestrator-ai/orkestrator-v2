@@ -572,7 +572,12 @@ function ColumnLabel({
   );
 }
 
-/** The canvas width, or null until it has been measured (and in DOM tests). */
+/**
+ * The canvas width, or null until it has been measured (and in DOM tests). A
+ * hidden tab measures 0 and keeps the last width: forgetting it would swap the
+ * stacked column for the shorter wide graph, and the page around it would lose
+ * its scroll position to that when the tab is shown again.
+ */
 function useMeasuredWidth(): [(element: HTMLDivElement | null) => void, number | null] {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [width, setWidth] = useState<number | null>(null);
@@ -580,7 +585,7 @@ function useMeasuredWidth(): [(element: HTMLDivElement | null) => void, number |
     if (!element) return;
     const measure = () => {
       const next = element.clientWidth;
-      setWidth(next > 0 ? next : null);
+      if (next > 0) setWidth(next);
     };
     measure();
     if (typeof ResizeObserver === "undefined") {
@@ -594,14 +599,19 @@ function useMeasuredWidth(): [(element: HTMLDivElement | null) => void, number |
   return [setElement, width];
 }
 
-/** The stacked column's natural height, or null until it has been measured. */
+/**
+ * The stacked column's natural height, or null until it has been measured. A
+ * hidden tab keeps the last height, as `useMeasuredWidth` does.
+ */
 function useMeasuredHeight(): [(element: HTMLDivElement | null) => void, number | null] {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [height, setHeight] = useState<number | null>(null);
   useLayoutEffect(() => {
     if (!element) return;
     // `offsetHeight` ignores transforms, so zooming never feeds back into it.
-    const measure = () => setHeight(element.offsetHeight > 0 ? element.offsetHeight : null);
+    const measure = () => {
+      if (element.offsetHeight > 0) setHeight(element.offsetHeight);
+    };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);

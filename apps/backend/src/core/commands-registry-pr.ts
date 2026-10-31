@@ -1,5 +1,8 @@
 import { projectHomePrTarget } from "./commands-pr-monitor.js";
-import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
+import {
+  isProjectHomeEnvironment,
+  reconcileProjectHomeEnvironment,
+} from "./project-home-environment.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   isReviewPackageReference,
@@ -226,7 +229,7 @@ export function registerPullRequestCommands(
   register(
     "merge_environment_pr",
     async (
-      { environmentId, method, deleteBranch, cleanupAfterMerge, expectedHeadSha },
+      { environmentId, method, deleteBranch, cleanupAfterMerge, expectedHeadSha, expectedPrUrl },
       context,
     ): Promise<MergeEnvironmentPrResult> => {
       const id = asString(environmentId, "environmentId");
@@ -242,6 +245,14 @@ export function registerPullRequestCommands(
       const requestedCleanup = asBoolean(cleanupAfterMerge, false);
       const cleanupRequested =
         requestedCleanup || Boolean(environment.cleanupAfterMergeRequestedAt);
+      if (
+        expectedPrUrl !== undefined &&
+        (environment.prUrl !== asString(expectedPrUrl, "expectedPrUrl") ||
+          cleanupRequested !== requestedCleanup ||
+          (isProjectHomeEnvironment(environment) && asBoolean(deleteBranch, true)))
+      ) {
+        throw new Error("The pull request or merge effects changed; confirm the merge again");
+      }
       if (requestedCleanup) {
         await context.storage.updateEnvironment(id, {
           cleanupAfterMergeRequestedAt: new Date().toISOString(),

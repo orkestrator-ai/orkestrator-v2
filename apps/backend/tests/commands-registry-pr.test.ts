@@ -59,7 +59,7 @@ if [ "$5" = "statusCheckRollup" ]; then
   printf '%s\\n' '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":""}]}'
   exit 0
 fi
-printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","mergeable":"MERGEABLE","updatedAt":"2026-01-01T00:00:00Z"},{"url":"https://github.com/acme/repo/pull/2","state":"OPEN","mergeable":"CONFLICTING","updatedAt":"2026-01-02T00:00:00Z"}]'
+printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","mergeable":"MERGEABLE","isCrossRepository":false,"updatedAt":"2026-01-01T00:00:00Z"},{"url":"https://github.com/acme/repo/pull/2","state":"OPEN","mergeable":"CONFLICTING","isCrossRepository":false,"updatedAt":"2026-01-02T00:00:00Z"}]'
 `,
       async (logPath) => {
         await expect(
@@ -76,7 +76,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","
 
         const ghLog = await fs.readFile(logPath, "utf8");
         expect(ghLog.trim()).toBe(
-          "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
+          "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
         );
       },
     );
@@ -95,7 +95,7 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '%s\\n' 'GraphQL: Resource not accessible by personal access token (statusCheckRollup)' >&2
   exit 1
 fi
-printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-01-02T00:00:00Z"}]'
+printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","mergeable":"MERGEABLE","isCrossRepository":false,"updatedAt":"2026-01-02T00:00:00Z"}]'
 `,
       async (logPath) => {
         await expect(
@@ -111,7 +111,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/5","state":"OPEN","me
         });
 
         expect((await fs.readFile(logPath, "utf8")).trim()).toBe(
-          "pr list --head feature/check-permission --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
+          "pr list --head feature/check-permission --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
         );
       },
     );
@@ -154,7 +154,7 @@ printf '[]\\n'
       await withFakeGh(
         `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/17","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-08-25T17:43:11Z"}]'
+printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/17","state":"OPEN","mergeable":"MERGEABLE","isCrossRepository":false,"updatedAt":"2026-08-25T17:43:11Z"}]'
 `,
         async (logPath) => {
           await expect(
@@ -191,7 +191,7 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/17","state":"OPEN","m
 
       await withFakeGh(
         `#!/bin/sh
-printf '%s\n' '[{"url":"https://github.com/acme/repo/pull/3","state":"OPEN"${comma},"updatedAt":"2026-01-03T00:00:00Z"}]'
+printf '%s\n' '[{"url":"https://github.com/acme/repo/pull/3","state":"OPEN"${comma},"isCrossRepository":false,"updatedAt":"2026-01-03T00:00:00Z"}]'
 `,
         async () => {
           await expect(
@@ -295,7 +295,7 @@ if [ "$1" = "exec" ]; then
   case "$*" in
     *"git -C /workspace branch --show-current"*) printf '%s\\n' 'feature/container-pr'; exit 0 ;;
   esac
-  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/9","state":"MERGED","mergeable":"MERGEABLE","updatedAt":"2026-01-03T00:00:00Z"}]'
+  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/9","state":"MERGED","mergeable":"MERGEABLE","isCrossRepository":false,"updatedAt":"2026-01-03T00:00:00Z"}]'
   exit 0
 fi
 exit 0
@@ -315,7 +315,7 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain(
-          "gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
+          "gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
         );
         expect(execLog).not.toContain("statusCheckRollup");
         expect(execLog).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
@@ -345,7 +345,7 @@ if [ "$1" = "exec" ]; then
     *"git -C /workspace branch --show-current"*) printf '%s\\n' 'feature/container-check-permission'; exit 0 ;;
     *"statusCheckRollup"*) printf '%s\\n' 'GraphQL: Resource not accessible by personal access token (statusCheckRollup)' >&2; exit 1 ;;
   esac
-  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/12","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-01-03T00:00:00Z"}]'
+  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/12","state":"OPEN","mergeable":"MERGEABLE","isCrossRepository":false,"updatedAt":"2026-01-03T00:00:00Z"}]'
   exit 0
 fi
 exit 0
@@ -368,7 +368,7 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain(
-          "gh pr list --head 'feature/container-check-permission' --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
+          "gh pr list --head 'feature/container-check-permission' --state all --limit 30 --json url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
         );
         expect(execLog).not.toContain("statusCheckRollup");
       },
@@ -1147,7 +1147,7 @@ command=""
 for arg in "$@"; do command="$arg"; done
 command="$(printf '%s\\n' "$command" | tail -n 1)"
 if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
-  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  printf '%s\\n' 'https://github.com/acme/repo/pull/43'
   exit 0
 fi
 if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
@@ -1173,9 +1173,40 @@ exit 0
         expect(await fs.readFile(logs.exec, "utf8")).toContain(
           `'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash' '--match-head-commit' '${sha}'`,
         );
+        expect(await fs.readFile(logs.exec, "utf8")).not.toContain(
+          "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/43'",
+        );
       },
     );
   });
+
+  test.each(["url", "cleanup"])(
+    "refuses merge when confirmed %s changes before dispatch",
+    async (changed) => {
+      const url = "https://github.com/acme/repo/pull/42";
+      const environment = createEnvironment({
+        prUrl: url,
+        prState: "open",
+        ...(changed === "cleanup"
+          ? { cleanupAfterMergeRequestedAt: new Date().toISOString() }
+          : {}),
+      });
+      const { context, updates } = createContext(environment);
+      const commands = createCommandRegistry();
+      await expect(
+        commands.get("merge_environment_pr")?.(
+          {
+            environmentId: environment.id,
+            expectedPrUrl: changed === "url" ? "https://github.com/acme/repo/pull/43" : url,
+            cleanupAfterMerge: false,
+            deleteBranch: true,
+          },
+          context,
+        ),
+      ).rejects.toThrow("confirm the merge again");
+      expect(updates).toEqual([]);
+    },
+  );
 
   shimTest(
     "persists merge cleanup intent before dispatch and completes local cleanup in the backend",

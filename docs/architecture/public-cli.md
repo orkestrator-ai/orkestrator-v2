@@ -202,7 +202,7 @@ not advertise at its version before sending it.
 | `pr merge ENV --yes [--method M] [--keep-branch] [--cleanup] [--expected-head-sha S]` | `pr.merge` | the Merge and Merge and Cleanup buttons: `merge_environment_pr`, settled from GitHub | external, filesystem, process |
 | `pr close ENV --yes` / `pr reopen ENV` / `pr ready ENV` / `pr draft ENV` | `pr.close` / `pr.reopen` / `pr.ready` / `pr.draft` | the viewer's state command | external |
 | `pr comment ENV` / `pr comment-edit ENV --comment-id N` (`--body` or `--body-file`) | `pr.comment` / `pr.comment.edit` | the viewer's conversation comment | external |
-| `pr review ENV --event E --yes` / `pr review-comment ENV --path P --line N --side S` | `pr.review` / `pr.review.comment` | the viewer's review and inline comment | external |
+| `pr review ENV --event E --yes [--comments-file PATH]` / `pr review-comment ENV --path P --line N --side S` | `pr.review` / `pr.review.comment` | the viewer's review and inline comment; `--comments-file` reads a JSON array of `{path,line,side,body,startLine?}` | external |
 | `pr thread-reply ENV --thread-id T` / `pr thread-resolve ENV --thread-id T [--unresolve]` / `pr file-viewed ENV --path P [--unviewed]` | `pr.thread.reply` / `pr.thread.resolve` / `pr.file.viewed` | the viewer's thread and file controls | external |
 | `pr reviewers ENV [--add L] [--remove L]` / `pr label ENV --name N [--remove]` | `pr.reviewers` / `pr.label` | the viewer's reviewers and labels | external |
 | `node list` | `node.list` | the command node's registry and links (never routes or credentials) | read |
@@ -230,6 +230,8 @@ not advertise at its version before sending it.
 | `service install/uninstall/status` | local | launchd or systemd user service running versioned releases through the launcher | filesystem, process |
 | `toolchain install [--tool T] [--dry-run]` | local | pinned toolchain installer into `<data-dir>/toolchains` (see [`packages/cli/README.md`](../../packages/cli/README.md) and [upgrade-agents.md](../development/upgrade-agents.md)) | filesystem |
 | `completion bash\|zsh\|fish` | local | completion script generated from this build's command table (nouns, verbs, flags; never IDs, never a backend) | none |
+
+Merge confirmations bind the resolved PR URL and effective cleanup and branch deletion effects. A changed attachment or newly requested cleanup needs fresh confirmation. Project homes keep their branch. An earlier cleanup request still applies to a later plain merge and conflicts with `--keep-branch`. Merge-and-cleanup receipts remain `running` until deletion finishes; a deletion error produces `partial` with the cleanup error. Human `pr timeline` output includes each entry, and `pr files --path` includes diff hunks and matching review threads. Both report truncation.
 
 The shared discovery, tab resolution, catalogue and launch-validation helpers
 live in [`control-shared-actions.ts`](../../apps/backend/src/core/control-shared-actions.ts)

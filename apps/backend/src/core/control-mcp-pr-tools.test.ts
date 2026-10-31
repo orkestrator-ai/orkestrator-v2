@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { realpath } from "node:fs/promises";
+import { runCommand } from "./shell.js";
 import { CONTROL_MCP_PROFILE_CAPABILITIES } from "@orkestrator/protocol/control-mcp";
 import { controlMcpHarness, rpc, type RpcResult } from "./control-mcp-test-support.js";
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
@@ -257,7 +259,13 @@ describe("merge_pr", () => {
       receipt: { action: "pr.merge", state: "succeeded" },
     });
     expect(merges).toEqual([
-      { environmentId: "env-1", method: "rebase", deleteBranch: true, cleanupAfterMerge: false },
+      {
+        environmentId: "env-1",
+        method: "rebase",
+        deleteBranch: true,
+        cleanupAfterMerge: false,
+        expectedPrUrl: PR_URL,
+      },
     ]);
 
     const replay = await mcp.call(mcp.defaultToken, "merge_pr", {
@@ -323,6 +331,98 @@ describe("confirming a merge", () => {
     expect(replay.ok).toBe(true);
     expect(merges).toHaveLength(1);
   });
+
+  test("a project home's changed checkout needs fresh approval for its new PR", async () => {
+    const mcp = await harness();
+    const merges = stubGitHub(mcp);
+    const environment = (await mcp.harness.storage.getEnvironment("env-1"))!;
+    const { projectPath } = await mcp.harness.createRepository("home-confirm");
+    await mcp.harness.storage.updateProject(environment.projectId, { localPath: projectPath });
+    await runCommand("git", ["checkout", "-b", "feature/a"], { cwd: projectPath });
+    await mcp.harness.storage.removeEnvironment("env-1");
+    await mcp.harness.storage.addEnvironment({
+      ...environment,
+      projectHome: true,
+      branch: "feature/a",
+      worktreePath: await realpath(projectPath),
+    });
+    const args = { environmentId: "env-1", requestId: "home-switch" };
+    const first = envelope(await mcp.call(mcp.defaultToken, "pr_merge", args));
+    expect(first.error.details.description).not.toContain("deletes its branch");
+    await runCommand("git", ["checkout", "-b", "feature/b"], { cwd: projectPath });
+    mcp.harness.commands.set("detect_pr_local", async () => ({
+      url: "https://github.com/acme/site/pull/8",
+      state: "open",
+    }));
+    const changed = envelope(
+      await mcp.call(mcp.defaultToken, "pr_merge", {
+        ...args,
+        confirmToken: first.error.details.confirmToken,
+      }),
+    );
+    expect(changed.error.code).toBe("confirmation-required");
+    expect(changed.error.details.refused).toBe("mismatch");
+    expect(merges).toEqual([]);
+    const approved = envelope(
+      await mcp.call(mcp.defaultToken, "pr_merge", {
+        ...args,
+        confirmToken: changed.error.details.confirmToken,
+      }),
+    );
+    expect(approved.ok).toBe(true);
+    expect(merges).toEqual([
+      expect.objectContaining({
+        expectedPrUrl: "https://github.com/acme/site/pull/8",
+        deleteBranch: false,
+      }),
+    ]);
+  });
+
+  test("cleanup requested after confirmation requires fresh approval", async () => {
+    const mcp = await harness();
+    const merges = stubGitHub(mcp);
+    const args = { environmentId: "env-1", requestId: "changed-cleanup" };
+    const first = envelope(await mcp.call(mcp.defaultToken, "pr_merge", args));
+    await mcp.harness.storage.updateEnvironment("env-1", {
+      cleanupAfterMergeRequestedAt: new Date().toISOString(),
+    });
+    const changed = envelope(
+      await mcp.call(mcp.defaultToken, "pr_merge", {
+        ...args,
+        confirmToken: first.error.details.confirmToken,
+      }),
+    );
+    expect(changed.error.code).toBe("confirmation-required");
+    expect(changed.error.details.description).toContain("then deletes environment");
+    expect(merges).toEqual([]);
+  });
+
+  test.each(["pr.comment.edit", "pr.review.comment", "pr.thread.reply"])(
+    "voice previews the body and PR for %s",
+    async (action) => {
+      const mcp = await harness();
+      stubGitHub(mcp);
+      const { token } = await mcp.credential("voice");
+      const response = envelope(
+        await mcp.call(token, "run_action", {
+          action,
+          input: {
+            environmentId: "env-1",
+            body: "Please add a regression test",
+            commentId: 1,
+            threadId: "thread-1",
+            path: "a.ts",
+            line: 1,
+            side: "RIGHT",
+          },
+          requestId: action,
+        }),
+      );
+      expect(response.error.code).toBe("confirmation-required");
+      expect(response.error.details.description).toContain("Please add a regression test");
+      expect(response.error.details.description).toContain("pull request #7");
+    },
+  );
 
   test("a token for one merge does not run a different one", async () => {
     const mcp = await harness();

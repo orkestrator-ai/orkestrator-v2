@@ -34,7 +34,9 @@ function receipt(action: PublicReceipt["action"]): PublicReceipt {
 
 const URL_7 = "https://github.com/acme/site/pull/7";
 
-async function fixture(): Promise<{ box: ClientSandbox; gateway: FakeGateway }> {
+async function fixture(
+  results: Record<string, unknown> = {},
+): Promise<{ box: ClientSandbox; gateway: FakeGateway }> {
   const box = await createSandbox();
   const own = capabilities();
   const gateway = await startFakeGateway((request: RecordedRequest) => {
@@ -47,15 +49,16 @@ async function fixture(): Promise<{ box: ClientSandbox; gateway: FakeGateway }> 
       return envelope(
         publicSuccessEnvelope(
           action,
-          action === "pr.list"
-            ? { pullRequests: [{ number: 7, state: "open", title: "Fix", htmlUrl: URL_7 }] }
-            : {
-                environmentId: "env-1",
-                url: URL_7,
-                number: 7,
-                attachment: "stored",
-                pullRequest: null,
-              },
+          results[action] ??
+            (action === "pr.list"
+              ? { pullRequests: [{ number: 7, state: "open", title: "Fix", htmlUrl: URL_7 }] }
+              : {
+                  environmentId: "env-1",
+                  url: URL_7,
+                  number: 7,
+                  attachment: "stored",
+                  pullRequest: null,
+                }),
           mutation ? receipt(action) : undefined,
         ),
       );
@@ -144,7 +147,11 @@ describe("orkestrator pr", () => {
 
   test("comment takes inline text or a file, and requires one", async () => {
     const { box, gateway } = await fixture();
-    expect((await box.run(["pr", "comment", "env-1"])).code).toBe(2);
+    const missing = await box.run(["pr", "comment", "env-1"]);
+    expect(missing.code).toBe(2);
+    expect(missing.out + missing.err).toContain("--body-file");
+    expect(missing.out + missing.err).toContain("--body");
+    expect(missing.out + missing.err).not.toContain("--body-stdin");
     expect((await box.run(["pr", "comment", "env-1", "--body", "Hello"])).code).toBe(0);
     const file = path.join(box.root, "comment.md");
     await writeFile(file, "From a file");
@@ -197,6 +204,115 @@ describe("orkestrator pr", () => {
     expect(inputsOf(gateway, "pr.label")).toEqual([
       { environmentId: "env-1", name: "bug", present: false },
     ]);
+  });
+
+  test("human timeline renders entries in order and indicates truncation", async () => {
+    const createdAt = "2026-01-02T12:00:00Z";
+    const author = { login: "octocat" };
+    const { box } = await fixture({
+      "pr.timeline": {
+        items: [
+          { kind: "commit", sha: "abc123", message: "Fix login", author, createdAt },
+          { kind: "comment", comment: { body: "Please add tests", author, createdAt } },
+          { kind: "review", state: "APPROVED", body: "Looks good", author, createdAt },
+          { kind: "event", event: "labeled", detail: "bug", actor: author, createdAt },
+        ],
+        truncated: true,
+      },
+    });
+    const response = await box.run(["pr", "timeline", "env-1"]);
+    expect(response.code).toBe(0);
+    for (const value of [
+      "commit",
+      "abc123 Fix login",
+      "Please add tests",
+      "APPROVED: Looks good",
+      "labeled: bug",
+      "octocat",
+      createdAt,
+      "Timeline truncated",
+    ])
+      expect(response.out).toContain(value);
+    expect(response.out.indexOf("Fix login")).toBeLessThan(
+      response.out.indexOf("Please add tests"),
+    );
+  });
+
+  test.each([true, false])(
+    "human file diff and threads, patch available=%s",
+    async (patchAvailable) => {
+      const { box, gateway } = await fixture({
+        "pr.files": {
+          number: 7,
+          headSha: "abc123",
+          truncated: true,
+          file: {
+            path: "src/login.ts",
+            status: "modified",
+            additions: 1,
+            deletions: 1,
+            patchAvailable,
+            hunks: [
+              {
+                header: "@@ -1 +1 @@",
+                lines: [
+                  { type: "remove", text: "oldLogin()" },
+                  { type: "add", text: "newLogin()" },
+                ],
+              },
+            ],
+          },
+          threads: [
+            {
+              id: "thread-1",
+              path: "src/login.ts",
+              line: 1,
+              isResolved: false,
+              comments: [
+                {
+                  author: { login: "reviewer" },
+                  createdAt: "2026-01-02",
+                  body: "Test this redirect",
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const response = await box.run(["pr", "files", "env-1", "--path", "src/login.ts"]);
+      expect(response.code).toBe(0);
+      for (const value of [
+        "src/login.ts",
+        "modified",
+        "reviewer",
+        "Test this redirect",
+        "unresolved",
+        "File list truncated",
+      ])
+        expect(response.out).toContain(value);
+      if (patchAvailable)
+        for (const line of ["@@ -1 +1 @@", "-oldLogin()", "+newLogin()"])
+          expect(response.out).toContain(line);
+      else expect(response.out).toContain("Patch unavailable");
+      expect(inputsOf(gateway, "pr.files")).toEqual([
+        { environmentId: "env-1", path: "src/login.ts" },
+      ]);
+    },
+  );
+
+  test("review sends inline comments from a JSON file and rejects malformed JSON", async () => {
+    const { box, gateway } = await fixture();
+    const file = path.join(box.root, "review.json");
+    const comments = [{ path: "a.ts", line: 4, side: "RIGHT", startLine: 2, body: "Add coverage" }];
+    await writeFile(file, JSON.stringify(comments));
+    const args = ["pr", "review", "env-1", "--yes", "--event", "COMMENT", "--comments-file", file];
+    expect((await box.run(args)).code).toBe(0);
+    expect(inputsOf(gateway, "pr.review")).toEqual([
+      { environmentId: "env-1", event: "COMMENT", comments },
+    ]);
+    await writeFile(file, "broken");
+    expect((await box.run(args)).code).toBe(2);
+    expect(inputsOf(gateway, "pr.review")).toHaveLength(1);
   });
 
   test("reads take no request key", async () => {

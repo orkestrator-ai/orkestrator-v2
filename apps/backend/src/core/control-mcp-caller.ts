@@ -149,7 +149,7 @@ async function environmentName(caller: ControlMcpCaller, environmentId: unknown)
 interface PullRequestView {
   url?: string;
   number?: number;
-  environment?: { cleanupAfterMergeRequested?: boolean };
+  environment?: { cleanupAfterMergeRequested?: boolean; projectHome?: boolean };
   pullRequest?: {
     title: string;
     baseRef: string;
@@ -181,9 +181,9 @@ function pullRequestName(view: PullRequestView | null, fallback: string): string
 async function mergeDescription(
   caller: ControlMcpCaller,
   input: Record<string, unknown>,
+  view: PullRequestView | null,
 ): Promise<string> {
   const environment = await environmentName(caller, input.environmentId);
-  const view = await readPullRequest(caller, input.environmentId);
   const detail = view?.pullRequest;
   const warnings = [
     detail?.isDraft ? "it is a draft and is marked ready first" : null,
@@ -199,7 +199,7 @@ async function mergeDescription(
     `This merges ${pullRequestName(view, environment)} with ${method}`,
     cleanup
       ? `, then deletes ${environment} and its worktree`
-      : input.deleteBranch === false
+      : input.deleteBranch === false || view?.environment?.projectHome === true
         ? ""
         : " and deletes its branch",
     ". It cannot be undone.",
@@ -235,6 +235,7 @@ async function confirmationFor(
   caller: ControlMcpCaller,
   action: PublicActionName,
   input: Record<string, unknown>,
+  mergeView: PullRequestView | null,
 ): Promise<string | null> {
   const rule = controlMcpConfirmationRule(action, caller.profile);
   if (rule === "none") return null;
@@ -265,7 +266,7 @@ async function confirmationFor(
     case "pr.resolve":
       return `This starts an agent that merges ${typeof input.targetBranch === "string" ? short(input.targetBranch, 100) : "the target branch"} into ${await environmentName(caller, input.environmentId)}, resolves conflicts and pushes.`;
     case "pr.merge":
-      return mergeDescription(caller, input);
+      return mergeDescription(caller, input, mergeView);
     case "pr.close":
       return `This closes ${pullRequestName(await readPullRequest(caller, input.environmentId), await environmentName(caller, input.environmentId))} without merging.`;
     case "pr.reopen":
@@ -280,7 +281,17 @@ async function confirmationFor(
       return `This ${verdict} ${pullRequestName(await readPullRequest(caller, input.environmentId), await environmentName(caller, input.environmentId))} as the configured GitHub user.`;
     }
     case "pr.comment":
-      return `This posts a comment on the pull request of ${await environmentName(caller, input.environmentId)} as the configured GitHub user: ${short(String(input.body ?? ""), 160)}`;
+    case "pr.comment.edit":
+    case "pr.review.comment":
+    case "pr.thread.reply": {
+      const verb =
+        action === "pr.comment.edit"
+          ? "edits a comment"
+          : action === "pr.thread.reply"
+            ? "replies to a thread"
+            : "posts a comment";
+      return `This ${verb} on ${pullRequestName(await readPullRequest(caller, input.environmentId), await environmentName(caller, input.environmentId))} as the configured GitHub user: ${short(String(input.body ?? ""), 160)}`;
+    }
     case "project.create":
       return `This creates a private GitHub repository at ${short(String(input.path ?? "a new path"), 200)} and pushes to it.`;
     case "project.remove":
@@ -335,10 +346,27 @@ export async function runPublicAction(
   if (!mutation && requestId !== undefined) {
     return adapterError(action, "invalid-input", "Read actions do not take a requestId");
   }
-  const base = await confirmationFor(caller, action, input);
+  const mergeView =
+    action === "pr.merge" ? await readPullRequest(caller, input.environmentId) : null;
+  // Bind both approval and execution to the same resolved target and effects.
+  const executionInput =
+    action === "pr.merge"
+      ? {
+          ...input,
+          expectedPrUrl: mergeView?.url ?? "",
+          cleanup:
+            input.cleanup === true || mergeView?.environment?.cleanupAfterMergeRequested === true,
+          deleteBranch:
+            mergeView?.environment?.projectHome === true ? false : (input.deleteBranch ?? true),
+        }
+      : input;
+  const base = await confirmationFor(caller, action, input, mergeView);
   const description = base ? withNodeName(base, await nodeSuffix(caller)) : null;
   if (description) {
-    const bound = confirmedInput(caller, input);
+    const bound = confirmedInput(
+      caller,
+      action === "pr.merge" ? { input, resolved: executionInput } : input,
+    );
     const check = caller.confirmTokens.check(
       confirmToken,
       caller.credential.id,
@@ -362,7 +390,7 @@ export async function runPublicAction(
       });
     }
   }
-  return dispatchAs(caller, action, input, mutation ? requestId : undefined);
+  return dispatchAs(caller, action, executionInput, mutation ? requestId : undefined);
 }
 
 export interface RunStatusOutcome {

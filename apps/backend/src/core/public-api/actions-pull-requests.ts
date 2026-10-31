@@ -235,6 +235,7 @@ const prGet: ReadActionHandler<{ environmentId: string }> = {
   async run(input, context) {
     const environment = await currentEnvironment(context, input.environmentId);
     const stored = {
+      projectHome: isProjectHomeEnvironment(environment),
       branch: environment.branch,
       prUrl: environment.prUrl ?? null,
       prState: environment.prState ?? null,
@@ -341,7 +342,9 @@ const prFiles = environmentRead<{ environmentId: string; path?: string }>(
       if (!file) {
         throw new PublicActionError(
           "not-found",
-          `This pull request does not change ${input.path.slice(0, 200)}`,
+          truncated
+            ? `Could not find ${input.path.slice(0, 200)} in the truncated file list`
+            : `This pull request does not change ${input.path.slice(0, 200)}`,
         );
       }
       return {
@@ -390,6 +393,7 @@ interface MergeInput {
   deleteBranch?: boolean;
   cleanup?: boolean;
   expectedHeadSha?: string;
+  expectedPrUrl?: string;
 }
 
 function optionalSha(input: Record<string, unknown>, key: string): string | undefined {
@@ -467,7 +471,32 @@ function mergeOutcome(
       },
     };
   }
-  return { state: "succeeded", result };
+  if (value.cleanupOutcome === "pending") {
+    return { state: "running", stage: "cleanup-pending", result };
+  }
+  return { state: "succeeded", stage: "completed", result };
+}
+
+function settledMergeOutcome(
+  input: MergeInput,
+  url: string,
+  method: GitHubPullRequestMergeMethod,
+  cleanup: boolean,
+  environment: Environment | null,
+): ExecuteOutcome {
+  return mergeOutcome(input, url, method, {
+    outcome: "merged",
+    cleanupOutcome: !cleanup
+      ? "not-requested"
+      : !environment
+        ? "completed"
+        : environment.cleanupAfterMergeError
+          ? "failed"
+          : "pending",
+    ...(cleanup && environment?.cleanupAfterMergeError
+      ? { cleanupError: boundedMessage(sanitizeGitHubError(environment.cleanupAfterMergeError)) }
+      : {}),
+  });
 }
 
 const prMerge: MutationActionHandler<MergeInput> = {
@@ -480,6 +509,7 @@ const prMerge: MutationActionHandler<MergeInput> = {
     const deleteBranch = optionalBoolean(input, "deleteBranch");
     const cleanup = optionalBoolean(input, "cleanup");
     const expectedHeadSha = optionalSha(input, "expectedHeadSha");
+    const expectedPrUrl = optionalString(input, "expectedPrUrl", 2048);
     if (cleanup && deleteBranch === false) {
       throw invalid("cleanup deletes the merged branch with the environment; omit deleteBranch");
     }
@@ -489,6 +519,7 @@ const prMerge: MutationActionHandler<MergeInput> = {
       ...(deleteBranch !== undefined ? { deleteBranch } : {}),
       ...(cleanup !== undefined ? { cleanup } : {}),
       ...(expectedHeadSha ? { expectedHeadSha: expectedHeadSha.toLowerCase() } : {}),
+      ...(expectedPrUrl !== undefined ? { expectedPrUrl } : {}),
     };
     return { value, scope: `environment:${environmentId}`, intent: value };
   },
@@ -498,13 +529,29 @@ const prMerge: MutationActionHandler<MergeInput> = {
     if (context.command.runtime.environments.isMerging(environment.id)) {
       throw new PublicActionError("conflict", "This environment is already being merged");
     }
-    if (input.cleanup && isProjectHomeEnvironment(environment)) {
+    const cleanup = input.cleanup === true || Boolean(environment.cleanupAfterMergeRequestedAt);
+    const deleteBranch = !isProjectHomeEnvironment(environment) && (input.deleteBranch ?? true);
+    if (cleanup && input.deleteBranch === false) {
+      throw invalid("cleanup deletes the merged branch with the environment; omit deleteBranch");
+    }
+    if (cleanup && isProjectHomeEnvironment(environment)) {
       throw new PublicActionError(
         "unsupported",
         "A project's home checkout cannot be cleaned up after a merge",
       );
     }
     const pullRequest = await requirePullRequest(environment, context);
+    if (
+      input.expectedPrUrl !== undefined &&
+      (input.expectedPrUrl !== pullRequest.url ||
+        input.cleanup !== cleanup ||
+        input.deleteBranch !== deleteBranch)
+    ) {
+      throw new PublicActionError(
+        "target-mismatch",
+        "The pull request or merge effects changed; confirm the merge again",
+      );
+    }
     if (pullRequest.state === "merged") {
       throw new PublicActionError(
         "conflict",
@@ -513,8 +560,6 @@ const prMerge: MutationActionHandler<MergeInput> = {
       );
     }
     const method = input.method ?? "squash";
-    const deleteBranch = input.deleteBranch ?? true;
-    const cleanup = input.cleanup === true;
     // Refuse a moved branch before the merge can flip a draft to ready.
     // Unreadable is not a refusal: GitHub enforces the SHA itself.
     if (input.expectedHeadSha) {
@@ -543,6 +588,13 @@ const prMerge: MutationActionHandler<MergeInput> = {
           cleanup ? "pending" : "not-requested",
         );
         await operation.update({ stage: "merging", result: running });
+        const latest = await currentEnvironment(context, environment.id);
+        if (latest.branch !== environment.branch || (latest.prUrl && latest.prUrl !== url)) {
+          throw new PublicActionError(
+            "target-mismatch",
+            "The pull request changed before merge dispatch; confirm again",
+          );
+        }
         // The merge command acts on the stored pull request.
         if (pullRequest.attachment === "detected") {
           await context.command.storage.updateEnvironment(environment.id, {
@@ -555,6 +607,7 @@ const prMerge: MutationActionHandler<MergeInput> = {
           method,
           deleteBranch,
           cleanupAfterMerge: cleanup,
+          expectedPrUrl: url,
           ...(input.expectedHeadSha ? { expectedHeadSha: input.expectedHeadSha } : {}),
         });
         return runWithContinuation(operation, task, {
@@ -567,17 +620,13 @@ const prMerge: MutationActionHandler<MergeInput> = {
             const state = await livePullRequestState(url, context);
             const message = boundedMessage(sanitizeGitHubError(error));
             if (state === "merged") {
-              return {
-                state: "succeeded",
-                result: mergeResult(
-                  environment.id,
-                  url,
-                  method,
-                  true,
-                  "merged",
-                  cleanup ? "pending" : "not-requested",
-                ),
-              };
+              return settledMergeOutcome(
+                input,
+                url,
+                method,
+                cleanup,
+                await context.command.storage.getEnvironment(environment.id),
+              );
             }
             if (state === null) {
               return {
@@ -626,27 +675,24 @@ const reconcileMerge: ReconcileFunction = async (record: PublicOperationRecord, 
     ? await context.command.storage.getEnvironment(environmentId)
     : null;
   const previous = record.generation !== context.generation;
-  let state: GitHubPullRequestDetail["state"] | null = null;
+  let state: GitHubPullRequestDetail["state"] | null =
+    record.result?.merged === true ? "merged" : null;
   if (
     environment?.prUrl === url &&
     (environment.prState === "merged" || environment.prState === "closed")
   ) {
     state = environment.prState;
-  } else if (previous || !environment) {
+  } else if (!state && (previous || !environment)) {
     state = await livePullRequestState(url, context);
   }
   if (state === "merged") {
-    const cleanup = record.resolved?.cleanup === true;
-    return {
-      state: "succeeded",
-      stage: "completed",
-      result: {
-        ...record.result,
-        merged: true,
-        outcome: "merged",
-        cleanup: !cleanup ? "not-requested" : environment ? "pending" : "completed",
-      },
-    };
+    return settledMergeOutcome(
+      { environmentId: environmentId! },
+      url,
+      (record.resolved?.method ?? "squash") as GitHubPullRequestMergeMethod,
+      record.resolved?.cleanup === true,
+      environment,
+    );
   }
   if (state === "closed") {
     return {

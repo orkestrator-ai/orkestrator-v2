@@ -121,7 +121,7 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "--json",
     target.projectHome
       ? "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,headRefName,baseRefName,isCrossRepository"
-      : "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName",
+      : "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
   ];
   return {
     args,
@@ -162,12 +162,26 @@ export function parsePrMonitorDetectionResponse(
   request: PrMonitorDetectionRequest,
   stdout: string,
 ): PrDetectionResult | null {
-  if (request.homeBase) {
-    const parsed = JSON.parse(stdout);
-    const matches = (entry: Record<string, unknown>) =>
-      entry.headRefName === request.branch &&
-      entry.baseRefName === request.homeBase &&
-      entry.isCrossRepository === false;
+  if (request.homeBase || !request.knownPrUrl) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      throw new Error(
+        request.knownPrUrl
+          ? "Failed to parse gh pr view output"
+          : "Failed to parse gh pr list output",
+      );
+    }
+    if (!request.knownPrUrl && !Array.isArray(parsed))
+      throw new Error("Failed to parse gh pr list output");
+    const matches = (entry: unknown) =>
+      typeof entry === "object" &&
+      entry !== null &&
+      (entry as Record<string, unknown>).isCrossRepository === false &&
+      (!request.homeBase ||
+        ((entry as Record<string, unknown>).headRefName === request.branch &&
+          (entry as Record<string, unknown>).baseRefName === request.homeBase));
     if (request.knownPrUrl) {
       if (!matches(parsed)) return null;
     } else {

@@ -193,6 +193,22 @@ describe("other reads", () => {
     expect(!unchanged.ok && unchanged.error.code).toBe("not-found");
   });
 
+  test("a missing path in a truncated file list is inconclusive", async () => {
+    const { harness } = await setup();
+    await withPullRequest(harness);
+    stubCommands(harness, {
+      get_github_pull_request_files: () => ({
+        headSha: HEAD,
+        files: [],
+        threads: [],
+        truncated: true,
+      }),
+    });
+    const response = await harness.call("pr.files", { environmentId: "env-1", path: "missing.ts" });
+    expect(!response.ok && response.error.message).toContain("truncated file list");
+    expect(!response.ok && response.error.message).not.toContain("does not change");
+  });
+
   test("pr.timeline and pr.options read the environment's pull request and repository", async () => {
     const { harness } = await setup();
     await withPullRequest(harness);
@@ -252,7 +268,13 @@ describe("pr.merge", () => {
       cleanup: "not-requested",
     });
     expect(stubs.of("merge_environment_pr")).toEqual([
-      { environmentId: "env-1", method: "squash", deleteBranch: true, cleanupAfterMerge: false },
+      {
+        environmentId: "env-1",
+        method: "squash",
+        deleteBranch: true,
+        cleanupAfterMerge: false,
+        expectedPrUrl: PR_URL,
+      },
     ]);
 
     const replay = await harness.call("pr.merge", input, { requestId: "merge-1" });
@@ -289,8 +311,20 @@ describe("pr.merge", () => {
       { requestId: "clean" },
     );
     expect(stubs.of("merge_environment_pr")).toEqual([
-      { environmentId: "env-1", method: "rebase", deleteBranch: false, cleanupAfterMerge: false },
-      { environmentId: "env-1", method: "squash", deleteBranch: true, cleanupAfterMerge: true },
+      {
+        environmentId: "env-1",
+        method: "rebase",
+        deleteBranch: false,
+        cleanupAfterMerge: false,
+        expectedPrUrl: PR_URL,
+      },
+      {
+        environmentId: "env-1",
+        method: "squash",
+        deleteBranch: true,
+        cleanupAfterMerge: true,
+        expectedPrUrl: PR_URL,
+      },
     ]);
     expect(cleaned.ok && cleaned.result.cleanup).toBe("completed");
   });
@@ -476,6 +510,143 @@ describe("pr.merge", () => {
     const settled = await harness.call<Record<string, unknown>>("run.get", { operationId });
     expect(settled.receipt?.state).toBe("succeeded");
     expect(settled.ok && settled.result).toMatchObject({ merged: true, outcome: "merged" });
+  });
+
+  test.each(["success", "failure", "restart", "immediate"])(
+    "queued merge observes cleanup until %s",
+    async (mode) => {
+      const { harness } = await setup();
+      await withPullRequest(harness, { cleanupAfterMergeRequestedAt: new Date().toISOString() });
+      stubCommands(harness, {
+        merge_environment_pr: () => ({
+          outcome: mode === "immediate" ? "merged" : "pending",
+          cleanupOutcome: "pending",
+        }),
+        get_github_pull_request: () => detail({ state: "merged" }),
+      });
+      const pending = await harness.call(
+        "pr.merge",
+        { environmentId: "env-1" },
+        { requestId: "queued-cleanup" },
+      );
+      const operationId = pending.receipt!.operationId;
+      const stored = await harness.storage.publicOperations.getPublicOperation(operationId);
+      expect(stored.status === "found" && stored.record.resolved?.cleanup).toBe(true);
+      if (mode === "restart")
+        await harness.storage.publicOperations.updatePublicOperation(operationId, (record) => ({
+          ...record,
+          generation: "previous",
+        }));
+      await harness.storage.updateEnvironment("env-1", { prState: "merged" });
+      const cleaning = await harness.call<Record<string, unknown>>("run.get", { operationId });
+      expect(cleaning.receipt?.state).toBe("running");
+      expect(cleaning.ok && cleaning.result).toMatchObject({ merged: true, cleanup: "pending" });
+      if (mode === "failure")
+        await harness.storage.updateEnvironment("env-1", {
+          cleanupAfterMergeError: "Worktree busy",
+        });
+      else await harness.storage.removeEnvironment("env-1");
+      const done = await harness.call<Record<string, unknown>>("run.get", { operationId });
+      expect(done.receipt?.state).toBe(mode === "failure" ? "partial" : "succeeded");
+      if (mode !== "failure") expect(done.receipt?.stage).toBe("completed");
+      if (mode === "failure") expect(done.receipt?.error?.message).toContain("Worktree busy");
+      else expect(done.ok && done.result.cleanup).toBe("completed");
+    },
+  );
+
+  test("earlier cleanup conflicts with keeping the branch", async () => {
+    const { harness } = await setup();
+    await withPullRequest(harness, { cleanupAfterMergeRequestedAt: new Date().toISOString() });
+    const stubs = stubCommands(harness, { merge_environment_pr: () => merged });
+    const response = await harness.call(
+      "pr.merge",
+      { environmentId: "env-1", deleteBranch: false },
+      { requestId: "keep-cleanup" },
+    );
+    expect(!response.ok && response.error.code).toBe("invalid-input");
+    expect(stubs.calls).toEqual([]);
+  });
+
+  test.each([false, true])(
+    "lost merge response observes earlier cleanup, error=%s",
+    async (failed) => {
+      const { harness } = await setup();
+      await withPullRequest(harness, {
+        cleanupAfterMergeRequestedAt: new Date().toISOString(),
+        ...(failed ? { cleanupAfterMergeError: "Busy worktree" } : {}),
+      });
+      stubCommands(harness, {
+        merge_environment_pr: () => {
+          throw new Error("response lost");
+        },
+        get_github_pull_request: () => detail({ state: "merged" }),
+      });
+      const response = await harness.call(
+        "pr.merge",
+        { environmentId: "env-1" },
+        { requestId: "lost-cleanup" },
+      );
+      expect(response.receipt?.state).toBe(failed ? "partial" : "running");
+      if (!failed) {
+        expect(response.ok && response.result).toMatchObject({ merged: true, cleanup: "pending" });
+        await harness.storage.removeEnvironment("env-1");
+        const done = await harness.call<Record<string, unknown>>("run.get", {
+          operationId: response.receipt!.operationId,
+        });
+        expect(done.receipt?.state).toBe("succeeded");
+        expect(done.ok && done.result.cleanup).toBe("completed");
+      }
+    },
+  );
+
+  test("a merge outlasting the grace period is recorded by its continuation", async () => {
+    const { harness } = await setup();
+    await withPullRequest(harness);
+    let complete!: (value: MergeEnvironmentPrResult) => void;
+    stubCommands(harness, {
+      merge_environment_pr: () =>
+        new Promise<MergeEnvironmentPrResult>((resolve) => {
+          complete = resolve;
+        }),
+    });
+    const response = await harness.call(
+      "pr.merge",
+      { environmentId: "env-1" },
+      { requestId: "long-merge" },
+    );
+    expect(response.receipt?.state).toBe("running");
+    complete(merged);
+    let done = await harness.call("run.get", { operationId: response.receipt!.operationId });
+    for (let i = 0; i < 100 && done.receipt?.state === "running"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      done = await harness.call("run.get", { operationId: response.receipt!.operationId });
+    }
+    expect(done.receipt?.state).toBe("succeeded");
+    expect(done.ok && done.result).toMatchObject({ merged: true, url: PR_URL });
+  });
+
+  test("merge refuses a target or cleanup effect changed after approval", async () => {
+    const { harness } = await setup();
+    await withPullRequest(harness);
+    const stubs = stubCommands(harness, { merge_environment_pr: () => merged });
+    const input = {
+      environmentId: "env-1",
+      expectedPrUrl: "https://github.com/acme/site/pull/8",
+      cleanup: false,
+      deleteBranch: true,
+    };
+    const wrong = await harness.call("pr.merge", input, { requestId: "wrong-target" });
+    expect(!wrong.ok && wrong.error.code).toBe("target-mismatch");
+    await harness.storage.updateEnvironment("env-1", {
+      cleanupAfterMergeRequestedAt: new Date().toISOString(),
+    });
+    const changed = await harness.call(
+      "pr.merge",
+      { ...input, expectedPrUrl: PR_URL },
+      { requestId: "wrong-effect" },
+    );
+    expect(!changed.ok && changed.error.code).toBe("target-mismatch");
+    expect(stubs.calls).toEqual([]);
   });
 
   test("a pending merge whose pull request was closed fails", async () => {

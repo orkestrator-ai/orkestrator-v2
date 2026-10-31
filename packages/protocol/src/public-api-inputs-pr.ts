@@ -204,6 +204,11 @@ export const PR_ACTION_INPUTS: Readonly<Record<PrActionName, PublicActionInputCo
             description:
               "Merge and Cleanup: delete this environment and its worktree once the merge is confirmed. Cannot be combined with deleteBranch false.",
           },
+          expectedPrUrl: {
+            type: "string",
+            description:
+              "Refuse if the attached PR or the explicit cleanup/branch effects changed since confirmation.",
+          },
           expectedHeadSha: {
             ...commitSha,
             description:

@@ -1,9 +1,15 @@
+import type {
+  GitHubPullRequestFile,
+  GitHubPullRequestReviewThread,
+  GitHubPullRequestTimelineItem,
+} from "@orkestrator/protocol/github-pull-requests";
 import type { PublicActionName } from "@orkestrator/protocol/public-api";
 import {
   PUBLIC_PR_BODY_MAX_CHARS,
   PUBLIC_PR_LIST_FILTERS,
   PUBLIC_PR_MERGE_METHODS,
   PUBLIC_PR_REVIEW_EVENTS,
+  PUBLIC_PR_REVIEW_COMMENTS_MAX,
   PUBLIC_PR_SIDES,
 } from "@orkestrator/protocol/public-api-inputs-pr";
 import { CliError } from "../errors.js";
@@ -84,7 +90,7 @@ async function bodyText(
     inline: parsed.options.body,
     label: "Body",
     maxBytes: PUBLIC_PR_BODY_MAX_CHARS * 4,
-    names: { file: "--body-file", stdin: "--body-stdin", inline: "--body" },
+    names: { file: "--body-file", stdin: "", inline: "--body" },
     required,
   });
   if (body !== undefined && body.length > PUBLIC_PR_BODY_MAX_CHARS) {
@@ -212,6 +218,107 @@ function pullRequestLines(result: Input): string[] {
   ]);
 }
 
+function timelineLines(result: Input): string[] {
+  const items = result.items as GitHubPullRequestTimelineItem[];
+  const lines = items.flatMap((item) => {
+    if (item.kind === "comment") {
+      return [
+        `comment · ${item.comment.author?.login ?? "unknown"} · ${item.comment.createdAt}`,
+        item.comment.body,
+      ];
+    }
+    if (item.kind === "event") {
+      return [
+        `event · ${item.actor?.login ?? "unknown"} · ${item.createdAt}`,
+        `${item.event}${item.detail ? `: ${item.detail}` : ""}`,
+      ];
+    }
+    return [
+      `${item.kind} · ${item.author?.login ?? (item.kind === "commit" ? item.authorName : undefined) ?? "unknown"} · ${item.createdAt}`,
+      item.kind === "commit"
+        ? `${item.sha} ${item.message}`
+        : `${item.state}${item.body ? `: ${item.body}` : ""}`,
+    ];
+  });
+  if (!items.length) lines.push("No timeline entries.");
+  if (result.truncated) lines.push("Timeline truncated; more entries are available on GitHub.");
+  return lines;
+}
+
+function fileLines(result: Input): string[] {
+  const lines = keyValues([
+    ["number", result.number],
+    ["head", result.headSha],
+  ]);
+  if (Array.isArray(result.files)) {
+    lines.push(
+      ...table(
+        ["FILE", "STATUS", "+", "-"],
+        (result.files as GitHubPullRequestFile[]).map((file) => [
+          file.path,
+          file.status,
+          String(file.additions),
+          String(file.deletions),
+        ]),
+      ),
+    );
+  } else {
+    const file = result.file as GitHubPullRequestFile;
+    lines.push(`${file.path} (${file.status}, +${file.additions} -${file.deletions})`);
+    if (!file.patchAvailable) lines.push("Patch unavailable; view this file on GitHub.");
+    else
+      for (const hunk of file.hunks) {
+        lines.push(
+          hunk.header,
+          ...hunk.lines.map(
+            (line) =>
+              `${line.type === "add" ? "+" : line.type === "remove" ? "-" : line.type === "no-newline" ? "\\" : " "}${line.text}`,
+          ),
+        );
+      }
+  }
+  for (const thread of (result.threads ?? []) as GitHubPullRequestReviewThread[]) {
+    lines.push(
+      `Thread ${thread.id} · ${thread.path}:${thread.line ?? "outdated"} · ${thread.isResolved ? "resolved" : "unresolved"}${thread.isOutdated ? " · outdated" : ""}`,
+    );
+    for (const comment of thread.comments)
+      lines.push(`${comment.author?.login ?? "unknown"} · ${comment.createdAt}: ${comment.body}`);
+    if (thread.commentsTruncated) lines.push("Thread comments truncated; see GitHub for more.");
+  }
+  if (result.truncated) lines.push("File list truncated; more files are available on GitHub.");
+  return lines;
+}
+
+async function reviewComments(
+  context: CommandContext,
+  parsed: Parsed,
+): Promise<unknown[] | undefined> {
+  const file = parsed.options["comments-file"];
+  if (file === undefined) return undefined;
+  const text = await readTextSource(context.io, {
+    file,
+    label: "Review comments",
+    maxBytes: PUBLIC_PR_BODY_MAX_CHARS * 4,
+    names: { file: "--comments-file", stdin: "" },
+    required: true,
+  });
+  let comments: unknown;
+  try {
+    comments = JSON.parse(text!);
+  } catch {
+    throw new CliError(
+      "invalid-input",
+      "--comments-file must contain a JSON array of inline comments",
+    );
+  }
+  if (!Array.isArray(comments) || comments.length > PUBLIC_PR_REVIEW_COMMENTS_MAX)
+    throw new CliError(
+      "invalid-input",
+      `--comments-file must contain at most ${PUBLIC_PR_REVIEW_COMMENTS_MAX} inline comments in a JSON array`,
+    );
+  return comments;
+}
+
 export const pullRequestCommands: readonly CommandSpec[] = [
   read(
     "get",
@@ -271,7 +378,7 @@ export const pullRequestCommands: readonly CommandSpec[] = [
     "Read a pull request's commits, comments, reviews and events.",
     [],
     () => ({}),
-    (result) => [`${(result.items as unknown[]).length} timeline items`],
+    timelineLines,
   ),
   read(
     "files",
@@ -289,28 +396,7 @@ export const pullRequestCommands: readonly CommandSpec[] = [
       const path = stringOption(parsed.options, "path");
       return path !== undefined ? { path } : {};
     },
-    (result) =>
-      Array.isArray(result.files)
-        ? table(
-            ["FILE", "STATUS", "+", "-"],
-            (
-              result.files as Array<{
-                path: string;
-                status: string;
-                additions: number;
-                deletions: number;
-              }>
-            ).map((file) => [
-              file.path,
-              file.status,
-              String(file.additions),
-              String(file.deletions),
-            ]),
-          )
-        : keyValues([
-            ["number", result.number],
-            ["head", result.headSha],
-          ]),
+    fileLines,
   ),
   read(
     "options",
@@ -419,19 +505,28 @@ export const pullRequestCommands: readonly CommandSpec[] = [
       },
       ...BODY_OPTIONS,
       { name: "commit-id", kind: "string", valueName: "SHA", description: "The commit reviewed." },
+      {
+        name: "comments-file",
+        kind: "string",
+        valueName: "PATH",
+        description:
+          "JSON array of inline comments (path, line, side, body and optional startLine).",
+      },
       YES_OPTION,
     ],
     async (context, parsed) => {
       requireYes(parsed, "This submits a review as your GitHub user");
       const body = await bodyText(context, parsed, false);
       const commitId = stringOption(parsed.options, "commit-id");
+      const comments = await reviewComments(context, parsed);
       return {
+        ...(comments !== undefined ? { comments } : {}),
         event: oneOf(parsed.options.event, PUBLIC_PR_REVIEW_EVENTS, "--event"),
         ...(body !== undefined ? { body } : {}),
         ...(commitId !== undefined ? { commitId } : {}),
       };
     },
-    { inputFields: { "body-file": "body", yes: null } },
+    { inputFields: { "body-file": "body", "comments-file": "comments", yes: null } },
   ),
   change(
     "review-comment",

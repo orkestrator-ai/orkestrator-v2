@@ -1202,9 +1202,11 @@ export async function mergePullRequestInContainer(
   method: "squash" | "merge" | "rebase",
   deleteBranch: boolean,
   expectedHeadSha?: string,
+  attachedPrUrl?: string,
 ): Promise<MergePrResult> {
   const runGh = createContainerGhRunner(containerId);
-  const prUrl = (await runGh(["pr", "view", "--json", "url", "--jq", ".url"], 30_000)).trim();
+  const prUrl =
+    attachedPrUrl ?? (await runGh(["pr", "view", "--json", "url", "--jq", ".url"], 30_000)).trim();
   parseGitHubPullRequestUrl(prUrl);
 
   await markPullRequestReadyIfDraft(prUrl, runGh);
@@ -1339,6 +1341,7 @@ async function runStoredEnvironmentMergeOnce<T>(
             method,
             deleteBranch,
             expectedHeadSha,
+            environment.prUrl ?? undefined,
           );
     // A merge moved the base branch on the remote (or may have, when the
     // outcome is unknown): the next diff must not wait out a fetch cooldown to

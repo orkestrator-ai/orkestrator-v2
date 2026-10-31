@@ -119,3 +119,32 @@ solely from the workspace and root groups described above. Compressed group
 evidence is in the temporary `orkestrator-test-run.CX0Bro` artifact directory;
 the outer logged command retained `orkestrator-test-run.kk9C3O`. The updated
 registry owner and final repository formatting check also passed.
+
+
+## Native-dialog review follow-up (2026-10-31)
+
+On branch `todo-0880-desktop-modal-dialogs-4539ddba3d6a` at `6b123867c`,
+`mise run test` exited 1 with exactly one failing test:
+`artifact host lifecycle > a hung artifact frame after readiness is reported unresponsive and closing terminates it`
+in `apps/desktop/tests/artifact-host-manager.test.ts:945`. The expected
+`[{ hostId: "host-1", type: "unresponsive" }]` was still `[]` after the
+80 ms wait; the test took 118.56 ms. Desktop used two Bun workers and
+reported 1,439 passes, 16 skips and one failure across 101 files. All other
+workspace packages, the root/support group, bridges and Codex protocol
+lockfile check passed. The run took 1,642.4 s including about 1,223.8 s
+waiting for host admission.
+
+The unchanged owner then passed alone in 1.7 s:
+
+```sh
+mise run test:logged -- --name artifact-host-manager -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/artifact-host-manager.test.ts --parallel=1 --only-failures
+```
+
+The aggregate evidence is retained in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.PyN34e/`
+(`summary.json` and
+`workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`).
+The logged runner removed the passing isolated output. This repeats the
+missing watchdog event recorded above; delayed timer scheduling remains a
+hypothesis, not an established cause. No artifact-host source, assertion,
+timeout or skip changed in this review fix. Status remains open.

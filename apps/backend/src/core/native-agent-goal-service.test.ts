@@ -661,6 +661,34 @@ describe("restarts", () => {
 });
 
 describe("report_goal authority", () => {
+  test("two tabs on an environment credential cannot reach each other's goals", async () => {
+    const first = harness();
+    await first.set("first tab");
+    const other = harness();
+    other.state.session = {
+      ...other.state.session,
+      key: "other-key",
+      logicalSessionKey: "env-e1:t2",
+    } as PersistedNativeAgentSession;
+    await other.service.command(other.state.session, "second tab", { busy: false });
+    await other.service.settled();
+    const secondGoal = sessionGoal(other.state.session)!;
+    // A goal id belongs to the service holding it. An environment credential
+    // reports by id, so the first tab's id cannot touch the second tab's goal.
+    const wrong = await other.service.report(
+      { environmentId: "e1" },
+      { goalId: first.goal().goalId, status: "done", message: "m" },
+    );
+    expect(wrong.ok).toBe(false);
+    expect(sessionGoal(other.state.session)?.pendingReport).toBeUndefined();
+    const right = await other.service.report(
+      { environmentId: "e1" },
+      { goalId: secondGoal.goalId, status: "progress", message: "m" },
+    );
+    expect(right.ok).toBe(true);
+    expect(first.goal().pendingReport).toBeUndefined();
+  });
+
   test("a tab cannot report on another tab's goal", async () => {
     const { set, service, goal } = harness();
     await set("x");

@@ -282,6 +282,14 @@ describe("GoalPanel form", () => {
     expect((button("Set goal") as HTMLButtonElement).disabled).toBe(true);
   });
 
+  test("Grok's advisory rules are stated, and only for Grok", () => {
+    renderPanel({ platform: "grok", agentLabel: "Grok" });
+    expect(screen.getByTestId("goal-advisory-note").textContent).toContain("best-effort");
+    cleanup();
+    renderPanel();
+    expect(screen.queryByTestId("goal-advisory-note")).toBeNull();
+  });
+
   test("no budget field where the agent's usage cannot back one", () => {
     renderPanel({ platform: "unknown" as AgentPlatform, agentLabel: "Unknown" });
     expect(screen.queryByLabelText("Token budget (optional)")).toBeNull();

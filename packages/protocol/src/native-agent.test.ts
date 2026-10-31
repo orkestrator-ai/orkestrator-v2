@@ -219,7 +219,9 @@ describe("native agent capability table", () => {
       expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
       // Grok compacts through its own `/compact`, run by the ACP bridge.
       expect(nativeAgentCapabilities(platform).actions).toEqual(
-        platform === "cursor" ? { steer: true, rewindMessages: true } : { compact: true },
+        platform === "cursor"
+          ? { goal: true, steer: true, rewindMessages: true }
+          : { compact: true, goal: true },
       );
     }
   });

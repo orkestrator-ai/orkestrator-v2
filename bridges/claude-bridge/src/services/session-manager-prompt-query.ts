@@ -75,6 +75,14 @@ import { requestsUltracode } from "./ultracode.js";
 // The query a turn runs: its policy, MCP servers, plugins, tools and
 // permission mode, resolved once per turn, and the SDK options a launch uses.
 
+/**
+ * `ProposeGoal` starts Claude Code's own goal loop. Orkestrator's runs in the
+ * backend, and two must never stack on one session (`plans/goals.md`, D2).
+ */
+export function withNativeGoalClosed(disallowed: readonly string[] | undefined): string[] {
+  return [...(disallowed ?? []), "ProposeGoal"];
+}
+
 export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
 1. Thoroughly explore the codebase and its existing patterns.
 2. Consider viable approaches and their trade-offs.
@@ -223,12 +231,9 @@ export async function resolveQueryPlan(
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
   // Any other policy keeps its override and also loses the tools for each
   // capability it denies (a network denial takes WebFetch and WebSearch).
-  // `ProposeGoal` starts Claude Code's own goal loop. Orkestrator's runs in the
-  // backend, and two must never stack on one session (`plans/goals.md`, D2).
-  const disallowedTools = [
-    ...((coordinatorReadOnly ? claudeDeniedTools(policy) : claudeDisallowedTools(policy)) ?? []),
-    "ProposeGoal",
-  ];
+  const disallowedTools = withNativeGoalClosed(
+    coordinatorReadOnly ? claudeDeniedTools(policy) : claudeDisallowedTools(policy),
+  );
 
   const fastMode = options?.fastMode === true;
   const ultracode = requestsUltracode(options?.parameterValues);

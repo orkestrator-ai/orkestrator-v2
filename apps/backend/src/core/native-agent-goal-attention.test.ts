@@ -17,7 +17,7 @@ import {
 } from "./agent-provider-test-support.js";
 import type { BridgeConnection, NativeAgentRuntimeProvider } from "./native-agent-provider.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
-import { withService } from "./native-agent-service-projection-test-support.js";
+import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
 const key = (agent: BuildPipelineAgent) => nativeAgentSessionStorageKey("env-1", agent, "tab-1");
 
@@ -141,23 +141,99 @@ describe("goal attention", () => {
     });
   }
 
-  test("the goal field reaches a session's stored record for readers", async () => {
-    const { provider, finish } = bridge(claudeConnection, {});
+  test("a typed /goal in the queue sets the goal, journals nothing and empties the queue", async () => {
+    const stub = createProviderStub("claude");
     await withService(
-      { prefix: "orkestrator-goal-read-", provider: async () => provider },
-      async ({ storage }) => {
-        await storage.adoptNativeAgentSession({
-          key: key("claude"),
+      { prefix: "orkestrator-goal-queue-", provider: async () => stub.provider },
+      async ({ storage, service }) => {
+        await service.ensureSession({
           environmentId: "env-1",
           agent: "claude",
-          logicalSessionKey: "tab-1",
-          providerSessionId: "provider-1",
+          logicalSessionKey: "env-env-1:tab-1",
         });
-        await storage.updateNativeAgentGoal(key("claude"), () => goal());
-        const session = await storage.getNativeAgentSession(key("claude"));
-        expect(sessionGoal(session!)?.goalId).toBe("g1");
+        const queueKey = "claude\u0000env-env-1:tab-1";
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "typed-1", requestId: "typed-1", text: "/goal Make it pass --max-iterations 2" },
+        ]);
+        await service.drainPromptQueueForSession({
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "env-env-1:tab-1",
+        });
+        const stored = await storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:tab-1"),
+        );
+        expect(sessionGoal(stored!)?.objective).toBe("Make it pass");
+        expect(stored?.dispatchedRequestIds ?? []).not.toContain("typed-1");
+        expect(
+          (await storage.getPromptQueue(queueKey))?.messages.map((m) => (m as { id: string }).id),
+        ).not.toContain("typed-1");
+        await service.goals.perform(stored!, { kind: "clear" }, { busy: false });
       },
     );
-    finish();
+  });
+
+  test("a projection shows the goal, without its check output", async () => {
+    const stub = createProviderStub("claude");
+    await withService(
+      { prefix: "orkestrator-goal-projection-", provider: async () => stub.provider },
+      async ({ storage, service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-1",
+        };
+        await service.ensureSession(identity);
+        const sessionKey = nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:tab-1");
+        expect((await service.getProjection(identity))?.goal).toBeUndefined();
+        await storage.updateNativeAgentGoal(sessionKey, () =>
+          goal({
+            status: "paused",
+            statusReason: "user-paused",
+            lastCheck: {
+              passed: false,
+              exitCode: 1,
+              durationMs: 1,
+              outputTail: "private output",
+              at: new Date(0).toISOString(),
+            },
+          }),
+        );
+        const view = await service.getProjection(identity);
+        expect(view?.goal?.status).toBe("paused");
+        expect(JSON.stringify(view?.goal)).not.toContain("private output");
+        const detail = await service.readGoalDetail(identity);
+        expect(detail.goal?.lastCheck?.outputTail).toBe("private output");
+      },
+    );
+  });
+
+  test("a resumed conversation keeps the goal on the same key, bound to the old id", async () => {
+    const stub = createProviderStub("claude");
+    await withService(
+      { prefix: "orkestrator-goal-replaced-", provider: async () => stub.provider },
+      async ({ storage }) => {
+        const sessionKey = key("claude");
+        const common = {
+          key: sessionKey,
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "tab-1",
+        };
+        await storage.adoptNativeAgentSession({ ...common, providerSessionId: "provider-1" });
+        await storage.updateNativeAgentGoal(sessionKey, () => goal());
+        // Another key, as a fork gets, starts with no goal.
+        const otherKey = nativeAgentSessionStorageKey("env-1", "claude", "tab-2");
+        await storage.adoptNativeAgentSession({
+          ...common,
+          key: otherKey,
+          logicalSessionKey: "tab-2",
+          providerSessionId: "provider-2",
+        });
+        expect(sessionGoal((await storage.getNativeAgentSession(otherKey))!)).toBeUndefined();
+        const stored = await storage.getNativeAgentSession(sessionKey);
+        expect(sessionGoal(stored!)?.providerSessionId).toBe("provider-1");
+      },
+    );
   });
 });

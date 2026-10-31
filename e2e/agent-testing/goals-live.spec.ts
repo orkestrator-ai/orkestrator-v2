@@ -32,6 +32,8 @@ const platform = process.env.ORKESTRATOR_AGENT_TEST_GOAL_PLATFORM ?? "claude";
 const environmentKind = process.env.ORKESTRATOR_AGENT_TEST_GOAL_ENVIRONMENT ?? "local";
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_GOALS === "1";
 const TURN_TIMEOUT_MS = 300_000;
+/** `browser` runs the probe and browser cases; `extras` compaction and the verifier. */
+const only = process.env.ORKESTRATOR_AGENT_TEST_GOAL_ONLY;
 /**
  * Something slow for the agent to do. Grok's shell fails to spawn in Orkestrator
  * sessions, with or without a goal (`plans/goals/303`), so it writes instead.
@@ -191,7 +193,7 @@ test.describe(`goal loop: ${platform}`, () => {
   test.afterAll(() => writeSummary());
 
   test("every scenario", async ({ page }) => {
-    test.skip(process.env.ORKESTRATOR_AGENT_TEST_GOAL_ONLY === "browser", "browser case only");
+    test.skip(only !== undefined, `only the ${only} cases`);
     page.setDefaultTimeout(15_000);
     const { invoke, environment, workspace, model, container } = await prepare(page);
     const scenarios = record.scenarios as Record<string, unknown>;
@@ -380,7 +382,74 @@ test.describe(`goal loop: ${platform}`, () => {
     });
   });
 
+  test("a compaction between turns, and a verifier's verdict", async ({ page }) => {
+    test.skip(only === "browser", "run with the full suite, or alone as extras");
+    page.setDefaultTimeout(15_000);
+    const { invoke, environment, workspace, model, container } = await prepare(page);
+    const send = (identity: Awaited<ReturnType<typeof openTab>>, text: string) =>
+      invoke("native_agent_goal_command", {
+        ...identity,
+        text,
+        ...(model ? { model } : {}),
+      });
+    const ended = async (identity: Awaited<ReturnType<typeof openTab>>) => {
+      const deadline = Date.now() + TURN_TIMEOUT_MS;
+      let goal: Goal | undefined;
+      while (Date.now() < deadline) {
+        goal = (await invoke<{ goal?: Goal }>("get_native_agent_goal", identity)).goal;
+        if (goal && !["active", "checking", "verifying"].includes(goal.status)) return goal;
+        await page.waitForTimeout(2_000);
+      }
+      throw new Error(`never ended; last ${JSON.stringify({ status: goal?.status })}`);
+    };
+    const scenarios = record.scenarios as Record<string, unknown>;
+
+    // A compaction queued behind the first turn runs first, and the loop goes on.
+    const compacting = await openTab(invoke, environment, "goals-compact", container, model);
+    await send(
+      compacting,
+      `Create goal-compact-1.txt and end your turn without calling report_goal. When you are told to continue, create goal-compact-2.txt, then call the orkestrator report_goal tool with status "done". --max-iterations 4 --check test -f goal-compact-2.txt`,
+    );
+    await invoke("enqueue_prompt_queue_message", {
+      queueKey: `${platform}\0${compacting.logicalSessionKey}`,
+      environmentId: environment.id,
+      message: {
+        id: `compact-${Date.now()}`,
+        requestId: `compact-${Date.now()}`,
+        text: "/compact",
+        command: { kind: "typed" },
+      },
+    });
+    const afterCompact = await ended(compacting);
+    scenarios.compact = {
+      status: afterCompact.status,
+      reason: afterCompact.statusReason,
+      iterations: afterCompact.iterations,
+    };
+    writeSummary();
+    expect(afterCompact.status).toBe("complete");
+    expect(workspace.read("goal-compact-2.txt")).toBeDefined();
+
+    // No check: an independent read-only session decides.
+    const verifying = await openTab(invoke, environment, "goals-verifier", container, model);
+    await send(
+      verifying,
+      `Create goal-verified.txt holding the single word verified, then call the orkestrator report_goal tool with status "done". The objective is met when that file exists and holds that word. --max-iterations 3 --verifier ${platform}`,
+    );
+    const verified = await ended(verifying);
+    scenarios.verifier = {
+      status: verified.status,
+      reason: verified.statusReason,
+      detail: verified.statusDetail,
+      iterations: verified.iterations,
+    };
+    writeSummary();
+    expect(verified.status).toBe("complete");
+    expect(verified.statusReason).toBe("verdict-passed");
+  });
+
   test("what the provider offers, and a live background task", async ({ page }) => {
+    test.skip(only === "extras", "only the extras");
     page.setDefaultTimeout(15_000);
     const { invoke, environment, workspace, model, container } = await prepare(page);
     const identity = await openTab(invoke, environment, "goals-probe", container, model);
@@ -460,6 +529,7 @@ test.describe(`goal loop: ${platform}`, () => {
   test("the browser: set, watch from elsewhere, reload, pause and clear", async ({
     page,
   }, testInfo) => {
+    test.skip(only === "extras", "only the extras");
     page.setDefaultTimeout(30_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     const { invoke, environment, workspace, model, container, projectName, projectId } =

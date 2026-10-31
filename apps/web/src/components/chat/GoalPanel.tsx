@@ -106,6 +106,15 @@ function GoalPanelBody({
       {approvalControl}
     </div>
   ) : null;
+  // Grok's approvals and read-only rules are advisory, so an unattended goal
+  // relies on the agent honouring them (`plans/goals/303`).
+  const advisory =
+    platform === "grok" ? (
+      <p data-testid="goal-advisory-note" className="text-xs text-muted-foreground">
+        {agentLabel} applies its permission rules on a best-effort basis, so an unattended goal may
+        change things you would normally be asked about.
+      </p>
+    ) : null;
   const failure = error ? (
     <p
       role="alert"
@@ -127,6 +136,7 @@ function GoalPanelBody({
       </DialogHeader>
       <div className="flex max-h-[70vh] min-w-0 flex-col gap-3 overflow-y-auto pr-1">
         {warning}
+        {advisory}
         {showForm ? (
           <GoalForm
             platform={platform}

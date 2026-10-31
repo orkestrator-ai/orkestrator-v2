@@ -380,8 +380,8 @@ test.describe(`goal loop: ${platform}`, () => {
     // Which goal tools reach a session, as the model sees them. A closure this
     // qualification relies on shows up here as an empty list.
     const ask = async (name: string, prompt: string) => {
-      const before = (await invoke<Projection>("get_native_agent_projection", identity)).messages
-        ?.length;
+      const before = (await invoke<Projection | null>("get_native_agent_projection", identity))
+        ?.messages?.length;
       await invoke("dispatch_native_agent_intent", {
         ...identity,
         requestId: `probe-${name}-${Date.now()}`,

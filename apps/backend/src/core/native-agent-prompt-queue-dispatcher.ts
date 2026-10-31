@@ -677,7 +677,15 @@ export class NativeAgentPromptQueueDispatcher {
       return;
     }
     if (status === "blocked") return;
-    if (status !== "idle") {
+    // A goal's turn may run past a terminal error. The loop only sends one after
+    // a failed turn if a person resumed the goal, which is the same decision as
+    // sending a message, and it cannot burn a queue: another failure pauses it.
+    const goalTurn =
+      status === "error" &&
+      typeof head === "object" &&
+      head !== null &&
+      (head as { origin?: { kind?: unknown } }).origin?.kind === "goal";
+    if (status !== "idle" && !goalTurn) {
       await this.deferQueue(queueKey, `provider session is ${status}`, queue.inFlight?.requestId, {
         /*
          * A terminal turn error is sticky until the next turn runs, and the

@@ -2797,6 +2797,30 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test("a goal's turn runs past a terminal error, which only a person's resume can lead to", async () => {
+      const stub = createProviderStub("codex", {
+        status: async () => "error" as ProviderStatus,
+      });
+      await withService(
+        { prefix: "orkestrator-native-drain-goal-turn-", provider: async () => stub.provider },
+        async ({ storage, service }) => {
+          const queueKey = "codex\u0000env-env-1:tab-1";
+          await storage.savePromptQueue(queueKey, "env-1", [
+            {
+              id: "goal:g1:1",
+              requestId: "goal:g1:1",
+              text: "Keep going",
+              command: { kind: "literal" },
+              origin: { kind: "goal", goalId: "g1", iteration: 1 },
+            },
+          ]);
+          await queueInternals(service).drainPromptQueues();
+          expect(stub.send).toHaveBeenCalledTimes(1);
+          expect((await storage.getPromptQueue(queueKey))?.dispatchError).toBeUndefined();
+        },
+      );
+    });
+
     test("parks a terminal session error reported without a detail", async () => {
       // The bridge reports `error` with no explanation, so `status()` returns it
       // instead of throwing. The queued prompt must still park, not stall.

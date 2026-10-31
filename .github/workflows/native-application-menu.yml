@@ -9,10 +9,12 @@ on:
       - packages/protocol/src/keyboard-shortcuts.ts
       - e2e/agent-testing/application-menu-electron.spec.ts
       - e2e/agent-testing/design-electron-cleanup.ts
+      - e2e/agent-testing/electron-cleanup.spec.ts
       - e2e/agent-testing/native-menu-input.ts
       - e2e/agent-testing/playwright.electron.config.ts
       - e2e/fixtures/application-menu-electron.ts
       - e2e/process-cleanup.ts
+      - tests/unit/electron-process-table.test.ts
       - bun.lock
   workflow_dispatch:
 
@@ -20,7 +22,7 @@ jobs:
   menu:
     name: Native menu (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     strategy:
@@ -36,6 +38,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Install Electron runtime
         run: bun apps/desktop/node_modules/electron/install.js
+      - name: Check Windows process ownership tables
+        run: mise run test:logged -- --name process-tables -- bun test ./tests/unit/electron-process-table.test.ts --parallel=1
       - name: Install isolated Linux desktop tools
         if: runner.os == 'Linux'
         run: |
@@ -46,9 +50,9 @@ jobs:
           ORKESTRATOR_NATIVE_MENU_INPUT: "1"
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
-            xvfb-run -a mise run test:logged -- --name native-menu-linux -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts
+            xvfb-run -a mise run test:logged -- --name native-menu-linux -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts electron-cleanup.spec.ts --repeat-each=5 --retries=0
           else
-            mise run test:logged -- --name native-menu-windows -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts
+            mise run test:logged -- --name native-menu-windows -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts application-menu-electron.spec.ts electron-cleanup.spec.ts --repeat-each=5 --retries=0
           fi
       - name: Upload native menu and About evidence
         if: ${{ !cancelled() }}

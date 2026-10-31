@@ -233,10 +233,22 @@ test("built application menu resolves native roles and dispatches callbacks", as
       .toBe(false);
     // Xvfb has no window manager to return native focus after the panel, so
     // the test does; the page must then take keys without being refocused.
-    nativeMenuFocus(main!);
+    if (process.platform === "linux") nativeMenuFocus(main!);
     await expect.poll(pageFocused).toBe(true);
     nativeMenuKeys(main!, ["a"], "a");
     await expect(page.getByRole("textbox")).toHaveValue("a");
+    await test.info().attach("native-input-results", {
+      body: JSON.stringify({
+        platform: process.platform,
+        electron: electronVersion,
+        repeat: test.info().repeatEachIndex,
+        events: await events(),
+        aboutDismissed: true,
+        pageFocused: await pageFocused(),
+        resumedTyping: await page.getByRole("textbox").inputValue(),
+      }),
+      contentType: "application/json",
+    });
   }, [
     async () => void (await closeElectronWithin(app)),
     () => rm(directory, { recursive: true, force: true }),

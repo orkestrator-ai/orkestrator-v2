@@ -1,9 +1,17 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import type { ElectronApplication } from "playwright";
 import { processAlive, signalProcess, waitForStopped, withCleanup } from "../process-cleanup";
 
 /** Snapshot exact owned descendants before quitting, while parent links still exist. */
-export function electronProcessTree(app: Pick<ElectronApplication, "process">): number[] {
+export function electronProcessTree(
+  app: Pick<ElectronApplication, "process">,
+  platform: NodeJS.Platform = process.platform,
+  enumerate: (
+    command: string,
+    args: string[],
+    options: { encoding: "utf8"; timeout?: number },
+  ) => Pick<SpawnSyncReturns<string>, "status" | "stdout"> = spawnSync,
+): number[] {
   let root: number | undefined;
   try {
     root = app.process().pid;
@@ -13,7 +21,7 @@ export function electronProcessTree(app: Pick<ElectronApplication, "process">): 
     return [];
   }
   if (!root) return [];
-  const rows = processTable();
+  const rows = processTable(platform, enumerate);
   const started = new Map(rows.map(([pid, , start]) => [pid, start]));
   const pids = [root];
   for (let index = 0; index < pids.length; index++) {
@@ -22,6 +30,9 @@ export function electronProcessTree(app: Pick<ElectronApplication, "process">): 
       // Windows keeps a dead parent's id on its children, and reuses ids: a
       // process older than its parent belonged to an earlier owner of the id.
       const parentStart = started.get(parent);
+      // Without both creation dates Windows cannot prove this parent link
+      // belongs to the current owner of the PID. Never signal that subtree.
+      if (platform === "win32" && (start === undefined || parentStart === undefined)) continue;
       if (start !== undefined && parentStart !== undefined && start < parentStart) continue;
       pids.push(pid);
     }
@@ -31,9 +42,12 @@ export function electronProcessTree(app: Pick<ElectronApplication, "process">): 
 }
 
 /** `[pid, ppid, start]` rows; the start time is only read on Windows. */
-function processTable(): [number, number, number?][] {
-  if (process.platform !== "win32") {
-    const processes = spawnSync("ps", ["-axo", "pid=,ppid="], {
+function processTable(
+  platform: NodeJS.Platform,
+  enumerate: NonNullable<Parameters<typeof electronProcessTree>[2]>,
+): [number, number, number?][] {
+  if (platform !== "win32") {
+    const processes = enumerate("ps", ["-axo", "pid=,ppid="], {
       encoding: "utf8",
     });
     if (processes.status !== 0) throw new Error("Could not enumerate Electron descendants");
@@ -43,14 +57,15 @@ function processTable(): [number, number, number?][] {
     });
   }
   // Git Bash's ps has no -o; read the parent links from WMI instead.
-  const processes = spawnSync(
+  const processes = enumerate(
     "powershell.exe",
     [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
       // The System Idle Process has no creation date.
-      "$ProgressPreference = 'SilentlyContinue'; Get-CimInstance Win32_Process | ForEach-Object { " +
+      "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; " +
+        "Get-CimInstance Win32_Process | ForEach-Object { " +
         "$start = if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 }; " +
         '"$($_.ProcessId) $($_.ParentProcessId) $start" }',
     ],
@@ -62,7 +77,7 @@ function processTable(): [number, number, number?][] {
     .filter(Boolean)
     .map((line) => {
       const [pid, parent, start] = line.trim().split(/\s+/).map(Number);
-      return [pid!, parent!, start];
+      return [pid!, parent!, start && Number.isFinite(start) ? start : undefined];
     });
 }
 

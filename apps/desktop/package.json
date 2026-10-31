@@ -23,6 +23,7 @@
     "@orkestrator/web": "workspace:*"
   },
   "devDependencies": {
+    "@babel/core": "^8.0.10",
     "@types/node": "^24.19.2",
     "@types/ws": "8.18.2",
     "builder-util-runtime": "9.7.0",

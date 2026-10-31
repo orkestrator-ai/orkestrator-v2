@@ -13,7 +13,9 @@
  * sensitive-field masking in evidence and pixels; adversarial page strings
  * inert in the compiled brief and forged provenance rejected; pins after
  * hot reload / reorder / duplicate / removal; hash and query route identity
- * with token stripping; no synthetic secret in profile storage or logs.
+ * with token stripping; no synthetic secret in profile storage or logs;
+ * development source hints in a local worktree and, with
+ * ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER=1, a container environment.
  *
  * Native window (rendered by the real renderer, not fixed bounds): the Notes
  * column shrinks the view to its host at app zoom 0.8, 1 and 1.25 (150% turns
@@ -1403,7 +1405,10 @@ async function setHostWindowSize(width: number, height: number): Promise<void> {
  * preview the other tests drive is destroyed first, so exactly one native view
  * shows the fixture; `restoreDirectPreview` puts it back.
  */
-async function showRendererPreview(extraTabs: Array<Record<string, unknown>> = []) {
+async function showRendererPreview(
+  extraTabs: Array<Record<string, unknown>> = [],
+  containerId: string | null = null,
+) {
   const environment = await invoke<{ projectId: string }>("get_environment", {
     environmentId: s().environmentId,
   });
@@ -1416,7 +1421,7 @@ async function showRendererPreview(extraTabs: Array<Record<string, unknown>> = [
     expectedRevision: current?.revision ?? 0,
     layout: {
       version: PANE_LAYOUT_VERSION,
-      containerId: null,
+      containerId,
       activePaneId: "annotation-ui-pane",
       root: {
         kind: "leaf",
@@ -1454,8 +1459,12 @@ async function pressControl(locator: ReturnType<Page["locator"]>, key = "Enter")
   await s().window.keyboard.press(key);
 }
 
-test("development source hints survive native spool and renderer capability gating into verified stored evidence", async () => {
-  await showRendererPreview();
+/**
+ * A trusted capture of the fixture's emitted hints in the current environment,
+ * saved through the real renderer, then read back from storage and the thread.
+ */
+async function captureAndReviewSourceHints(containerId: string | null = null): Promise<void> {
+  await showRendererPreview([], containerId);
   try {
     const capabilities = await invoke<{ operations: { sourceHints?: boolean } }>(C.capabilities, {
       environmentId: s().environmentId,
@@ -1511,6 +1520,11 @@ test("development source hints survive native spool and renderer capability gati
       { ...candidates[0]!, verified: true },
       candidates[1]!,
     ]);
+    // The reviewer sees what the agent is given, and what the backend's check found.
+    await expect(s().window.locator(`${NOTES_PANEL} [data-source-candidates] li`)).toHaveText([
+      "annotation-app/page.ts:120 · SettingsSave · path found in workspace at capture",
+      "annotation-app/MissingSettings.tsx:4 · Settings · path not confirmed",
+    ]);
     await expect.poll(() => preview("readPendingCapture", descriptor.captureId)).toBeNull();
     // Disk-backed evidence remains available after the renderer loses its cache.
     await s().window.reload();
@@ -1520,6 +1534,40 @@ test("development source hints survive native spool and renderer capability gati
     );
   } finally {
     await restoreDirectPreview();
+  }
+}
+
+test("development source hints survive native spool and renderer capability gating into verified stored evidence", async () => {
+  await captureAndReviewSourceHints();
+});
+
+test("a desktop capture in a container environment has its source hints checked inside the container", async () => {
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_ELECTRON_CONTAINER !== "1",
+    "Needs Docker and this worktree's image (mise run docker:build:dev)",
+  );
+  test.info().setTimeout(6 * 60_000);
+  const localEnvironmentId = s().environmentId;
+  const { projectId } = await invoke<{ projectId: string }>("get_environment", {
+    environmentId: localEnvironmentId,
+  });
+  const environment = await invoke<{ id: string }>("create_environment", {
+    projectId,
+    name: "annotation-fixture-container",
+    networkAccessMode: "restricted",
+    environmentType: "containerized",
+  });
+  try {
+    await invoke("start_environment", { environmentId: environment.id });
+    const { containerId } = await invoke<{ containerId?: string | null }>("get_environment", {
+      environmentId: environment.id,
+    });
+    expect(containerId).toBeTruthy();
+    s().environmentId = environment.id;
+    await captureAndReviewSourceHints(containerId!);
+  } finally {
+    s().environmentId = localEnvironmentId;
+    await invoke("delete_environment", { environmentId: environment.id });
   }
 });
 

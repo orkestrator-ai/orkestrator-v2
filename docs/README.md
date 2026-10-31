@@ -89,6 +89,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [command-nodes-plan.md](development/command-nodes-plan.md) | Build plan for command nodes: contracts, milestones, requirement matrix with evidence and status, and the final verification procedure. |
 | [testing-guide.md](development/testing-guide.md) | How to choose and run tests. Commands live here. |
 | [agent-testing.md](development/agent-testing.md) | Isolated profiles and real-stack QA. |
+| [source-hint-emitter.md](development/source-hint-emitter.md) | The Babel plugin a project copies to emit web annotation source hints in development builds, and how to add it to Vite. The plugin text is run by a test. |
 | [cli-testing.md](development/cli-testing.md) | Driving a `dev:test` profile with the `orkestrator` CLI: setup from a worktree, scripting output, recipes, UI rehydration checks. Contract stays in `public-cli.md`. |
 | [upgrade-agents.md](development/upgrade-agents.md) | SDK/CLI bump runbook. Pins are test-enforced. "Other dependencies" covers non-agent packages, runtimes and image tools. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Credential and catalogue inventory. |

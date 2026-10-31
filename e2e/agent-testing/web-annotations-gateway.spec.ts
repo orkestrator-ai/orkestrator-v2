@@ -24,6 +24,7 @@ import {
   WEB_ANNOTATION_LIMITS,
   type WebAnnotationCaptureInput,
   type WebAnnotationDestination,
+  type WebAnnotationGetResult,
   type WebAnnotationRequest,
 } from "@orkestrator/protocol/web-annotations";
 import {
@@ -946,6 +947,116 @@ test("Docker fixture writes annotation evidence inside the container, checks pat
     testInfo.annotations.push({
       type: "container-evidence-cleanup",
       description: `removed ${Math.round((Date.now() - removedAfter) / 1_000)} s after settlement`,
+    });
+  } finally {
+    inContainer(setup.containerId, ["rm", "-f", link]);
+    await setup.cleanup();
+    await setup.page.context().close();
+  }
+});
+
+test("Docker fixture checks source hints inside the container and the thread shows what it found", async ({
+  browser,
+}, testInfo) => {
+  test.skip(!DOCKER, "Docker fixture profile required");
+  testInfo.setTimeout(3 * 60_000);
+  const status = profileStatus();
+  expect(status.status).toBe("ready");
+  const setup = await setUpContainer(browser, status, "codex", { holdQueue: false });
+  const link = "annotation-app/hint-outside-link.ts";
+  try {
+    const capabilities = await setup.invoke<{ operations: { sourceHints?: boolean } }>(
+      C.capabilities,
+      { environmentId: setup.environmentId },
+    );
+    expect(capabilities.operations.sourceHints).toBe(true);
+    expect(inContainer(setup.containerId, ["ln", "-sf", "/etc/hostname", link]).status).toBe(0);
+    // A browser client has no trusted capture, so the hints are added here. The
+    // desktop producer is covered by the Electron suite; this is the check in /workspace.
+    const capture = await captureFrom(
+      setup.page,
+      setup.fixture,
+      ROUTE_VARIANTS.pricing,
+      `[data-testid="${TEST_IDS.teamCta}"]`,
+    );
+    const hint = (path: string) => ({ producer: "docker-fixture", path, verified: false });
+    const receipt = await setup.invoke<{ annotationId: string }>(C.create, {
+      environmentId: setup.environmentId,
+      operationId: `op-${Math.random().toString(36).slice(2)}`,
+      capture: {
+        ...capture,
+        evidence: {
+          ...capture.evidence!,
+          sourceHints: [
+            { ...hint("annotation-app/content.ts"), line: 3 },
+            hint("annotation-app/missing.ts"),
+            hint(link),
+          ],
+        },
+      },
+      body: "Source hints in a container",
+    });
+    const saved = await setup.invoke<WebAnnotationGetResult>(C.get, {
+      environmentId: setup.environmentId,
+      annotationId: receipt.annotationId,
+    });
+    const verified = saved.capture?.evidence?.sourceHints?.map((entry) => entry.verified);
+    expect(verified).toEqual([true, false, false]);
+    testInfo.annotations.push({
+      type: "container-source-hints",
+      description: JSON.stringify(verified),
+    });
+
+    const browserTabId = "annotation-source-hints-tab";
+    const layout = await setup.invoke<{ revision?: number } | null>("get_pane_layout", {
+      environmentId: setup.environmentId,
+    });
+    await setup.invoke("save_pane_layout", {
+      environmentId: setup.environmentId,
+      expectedRevision: layout?.revision ?? 0,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: setup.containerId,
+        activePaneId: "pane-source-hints",
+        root: {
+          kind: "leaf",
+          id: "pane-source-hints",
+          tabs: [
+            {
+              id: browserTabId,
+              type: "browser",
+              browserData: {
+                url: `${setup.fixture.url}${ROUTE_VARIANTS.pricing}`,
+                annotationPanel: {
+                  open: true,
+                  filter: { scope: "all", state: "all" },
+                  selectedAnnotationId: receipt.annotationId,
+                },
+              },
+            },
+          ],
+          activeTabId: browserTabId,
+        },
+      },
+    });
+    await setup.page.setViewportSize({ width: 1440, height: 960 });
+    await setup.page.goto(status.browserUrl!);
+    await openEnvironment(setup.page, CONTAINER_ENVIRONMENT);
+    const panel = setup.page.locator(`[data-annotation-panel="${browserTabId}"]`);
+    await expect(panel.locator("[data-source-candidates] li")).toHaveText(
+      [
+        "annotation-app/content.ts:3 · path found in workspace at capture",
+        "annotation-app/missing.ts · path not confirmed",
+        `${link} · path not confirmed`,
+      ],
+      { timeout: 60_000 },
+    );
+
+    await setup.invoke(C.delete, {
+      environmentId: setup.environmentId,
+      operationId: `op-${Math.random().toString(36).slice(2)}`,
+      annotationId: receipt.annotationId,
+      expectedMetadataRevision: saved.annotation.metadataRevision,
     });
   } finally {
     inContainer(setup.containerId, ["rm", "-f", link]);

@@ -14,8 +14,11 @@
  * continuation's message id carries the request's own marker, so everything that
  * finds a request's answer by that marker (settlement, the terminal error, the
  * structured result) reads the newest attempt. While a retry is due the request
- * reads `turnSettled: false`, which every workflow owner waits on. A workflow's
- * own status poll drives it, so nothing runs once nobody is waiting on the turn.
+ * reads `turnSettled: false`, which every workflow owner waits on. Accepted or
+ * ambiguously delivered continuations retain their exact message ID until their
+ * own terminal answer appears. A stale refusal cannot spend another attempt.
+ * A workflow's own status poll drives retries, so nothing is dispatched once
+ * nobody is waiting on the turn.
  *
  * Only in memory: a backend restart during a wait loses the retry, and the turn
  * then fails with its refusal, as it did before.
@@ -28,10 +31,10 @@ import {
   namesLimitOrLogin,
   type CapacityRetryPolicy,
 } from "@orkestrator/protocol/capacity-retry";
-import { nextOpenCodeMessageIdForRequest } from "@orkestrator/protocol/opencode-message-id";
 import {
   MAX_TRACKED_INTERACTION_SESSIONS,
   asRecord,
+  isTransientHttpStatus,
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
 import type {
@@ -48,6 +51,8 @@ const OVERLOAD_BODY =
 /**
  * A retry nobody has looked at for this long is abandoned, so an outcome read
  * cannot be held open by a workflow that stopped polling without aborting.
+ * Also bounds reconciliation of a continuation absent from the transcript,
+ * measured from dispatch even when the workflow keeps polling.
  */
 export const OPENCODE_CAPACITY_RETRY_ABANDON_MS = 5 * 60_000;
 
@@ -80,6 +85,8 @@ export function isUnattendedOpenCodeOrigin(origin: AgentInteractionOrigin): bool
 
 /** What the turn's prompt asked for, resent on every attempt. Never the prompt itself. */
 export interface OpenCodeContinuationRequest {
+  /** Restore instance-scoped tools after a command reload. */
+  prepare(): Promise<void>;
   /** Wraps the continuation the way the original prompt was wrapped. */
   shapeText(text: string): string;
   fields: {
@@ -96,6 +103,8 @@ interface CapacityRetryPlan {
   request: OpenCodeContinuationRequest;
   /** The attempt the turn is on, the original one being 1. */
   attempt: number;
+  /** The dispatched continuation; old snapshots cannot answer it. */
+  pending?: { messageId: string; sentAt: number };
   /** When the next attempt is due, once this one has been seen to fail. */
   retryAt?: number;
   /** When a workflow last found the refusal and left it waiting. */
@@ -109,6 +118,13 @@ export interface OpenCodeCapacityRetryDependencies {
   now: () => number;
   random?: () => number;
   policy?: Partial<CapacityRetryPolicy>;
+  accepted: (sessionId: string, requestId: string) => void;
+  nextMessageId: (
+    sessionId: string,
+    history: readonly unknown[],
+    requestId: string,
+    now: number,
+  ) => string;
   /** The turn-start bookkeeping a dispatch does: the clock, change evidence. */
   beginAttempt: (sessionId: string, requestId: string, messageId: string) => Promise<number>;
   rejectAttempt: (sessionId: string, startedAt: number, ambiguous: boolean) => void;
@@ -138,13 +154,21 @@ export class OpenCodeCapacityRetry {
   }
 
   /** A retry is still going to answer this refusal, so it is not the turn's outcome yet. */
-  willRetry(sessionId: string, requestId: string, error: unknown): boolean {
+  willRetry(sessionId: string, requestId: string, error: unknown, parentId?: string): boolean {
     const plan = this.plans.get(sessionId);
-    if (plan?.requestId !== requestId || !isOpenCodeCapacityError(error)) return false;
-    if (plan.attempt >= this.policy.maxAttempts) return false;
+    if (plan?.requestId !== requestId) return false;
     const now = this.deps.now();
-    plan.observedAt ??= now;
-    if (now - plan.observedAt <= OPENCODE_CAPACITY_RETRY_ABANDON_MS) return true;
+    if (plan.pending && parentId !== plan.pending.messageId) {
+      return now - plan.pending.sentAt <= OPENCODE_CAPACITY_RETRY_ABANDON_MS;
+    }
+    if (!isOpenCodeCapacityError(error) || plan.attempt >= this.policy.maxAttempts) return false;
+    if (
+      plan.observedAt === undefined ||
+      now - plan.observedAt <= OPENCODE_CAPACITY_RETRY_ABANDON_MS
+    ) {
+      plan.observedAt = now;
+      return true;
+    }
     this.plans.delete(sessionId);
     return false;
   }
@@ -160,23 +184,37 @@ export class OpenCodeCapacityRetry {
     error: unknown,
     history: readonly unknown[],
   ): Promise<boolean> {
-    if (!this.willRetry(sessionId, requestId, error)) {
+    const latest = asRecord(
+      asRecord(
+        history.findLast((message) => asRecord(asRecord(message)?.info)?.role === "assistant"),
+      )?.info,
+    );
+    const parentId = typeof latest?.parentID === "string" ? latest.parentID : undefined;
+    if (!this.willRetry(sessionId, requestId, error, parentId)) {
       this.plans.delete(sessionId);
       return false;
     }
     const plan = this.plans.get(sessionId)!;
+    if (plan.pending && parentId !== plan.pending.messageId) return true;
+    plan.pending = undefined;
     const now = this.deps.now();
     const nextAttempt = plan.attempt + 1;
     plan.retryAt ??= now + capacityRetryDelayMs(this.policy, nextAttempt, this.deps.random);
     if (now < plan.retryAt) return true;
 
-    const messageID = nextOpenCodeMessageIdForRequest(history, requestId, now);
+    await plan.request.prepare();
+    if (this.plans.get(sessionId) !== plan) return false;
+    const messageID = this.deps.nextMessageId(sessionId, history, requestId, now);
     const startedAt = await this.deps.beginAttempt(sessionId, requestId, messageID);
     // Stop or a close may have arrived during that await.
     if (this.plans.get(sessionId) !== plan) {
       this.deps.rejectAttempt(sessionId, startedAt, false);
       return false;
     }
+    plan.attempt = nextAttempt;
+    plan.pending = { messageId: messageID, sentAt: now };
+    plan.retryAt = undefined;
+    plan.observedAt = undefined;
     let response;
     try {
       response = await this.deps.client.session.promptAsync(
@@ -192,20 +230,21 @@ export class OpenCodeCapacityRetry {
         this.deps.requestOptions(),
       );
     } catch {
-      // It may have reached OpenCode. Never send it twice: the next read of the
-      // transcript shows the continuation's answer, or the refusal it follows.
+      // A missing acknowledgement is unknown until this exact continuation
+      // answers, cancellation arrives, or the bounded materialization wait ends.
       this.deps.rejectAttempt(sessionId, startedAt, true);
-      this.plans.delete(sessionId);
       return true;
     }
     if ("error" in response && response.error) {
-      this.deps.rejectAttempt(sessionId, startedAt, false);
+      const status = response.response?.status;
+      const ambiguous =
+        status === undefined || status === 404 || status === 409 || isTransientHttpStatus(status);
+      this.deps.rejectAttempt(sessionId, startedAt, ambiguous);
+      if (ambiguous) return true;
       this.plans.delete(sessionId);
       return false;
     }
-    plan.attempt = nextAttempt;
-    plan.retryAt = undefined;
-    plan.observedAt = undefined;
+    this.deps.accepted(sessionId, requestId);
     return true;
   }
 }

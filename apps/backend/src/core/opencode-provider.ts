@@ -272,6 +272,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       requestOptions: () => this.requestOptions(),
       now: () => this.now(),
       policy: dependencies.openCodeCapacityRetryPolicy,
+      accepted: (sessionId, requestId) =>
+        this.messageIds.markAccepted(openCodeMessageIdScope(connection, sessionId), requestId),
+      nextMessageId: (sessionId, history, requestId, now) =>
+        this.messageIds.next(
+          openCodeMessageIdScope(connection, sessionId),
+          history,
+          requestId,
+          now,
+        ),
       beginAttempt: async (sessionId, requestId, messageId) => {
         const startedAt = this.now();
         this.streamState.beginTurn(sessionId, startedAt, requestId);
@@ -726,6 +735,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           response = outcome.response;
         } else {
           continuation = {
+            prepare: () => this.workflowResults.prepare(sessionId, options),
             shapeText: (text) =>
               options.schema ? openCodeStructuredPrompt(text, options.schema) : text,
             fields: {
@@ -832,16 +842,19 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     readOpenCodeTurnTerminalError(this.client, sessionId, requestId, this.requestOptions(), {
       failure: this.streamState.dispatchFailure(sessionId, requestId),
       now: this.now(),
-      retrying: (error) => this.capacityRetry.willRetry(sessionId, requestId, error),
+      retrying: (error, parentId) =>
+        this.capacityRetry.willRetry(sessionId, requestId, error, parentId),
     });
 
   async settleTurn(sessionId: string, requestId: string): Promise<boolean> {
-    return this.workflowResults.settleCompleted(
-      sessionId,
-      requestId,
-      () => this.status(sessionId),
-      () => this.reviewPermissions.restoreIfNeeded(sessionId),
-      (error, history) => this.capacityRetry.hold(sessionId, requestId, error, history),
+    return this.commandReload.withinPromptDispatch(() =>
+      this.workflowResults.settleCompleted(
+        sessionId,
+        requestId,
+        () => this.status(sessionId),
+        () => this.reviewPermissions.restoreIfNeeded(sessionId),
+        (error, history) => this.capacityRetry.hold(sessionId, requestId, error, history),
+      ),
     );
   }
 

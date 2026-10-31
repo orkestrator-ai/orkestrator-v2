@@ -236,8 +236,8 @@ export class OpenCodeWorkflowResultBroker {
     requestId: string,
     status: () => Promise<ProviderStatus>,
     restoreReviewer: () => Promise<unknown>,
-    /** Keeps a failed request open: a retry owns it, and its grant must stay. */
-    holdFailure?: (error: unknown, history: readonly unknown[]) => Promise<boolean>,
+    /** A retry or pending continuation still owns this request and its grant. */
+    holdCompletion?: (error: unknown, history: readonly unknown[]) => Promise<boolean>,
   ): Promise<boolean> {
     try {
       return await this.runExclusive(sessionId, async () => {
@@ -270,7 +270,7 @@ export class OpenCodeWorkflowResultBroker {
           (!info?.error && (!finish || finish === "tool-calls"))
         )
           return false;
-        if (info?.error && (await holdFailure?.(info.error, history))) return false;
+        if (await holdCompletion?.(info?.error, history)) return false;
         await this.settle(sessionId, requestId, restoreReviewer);
         return true;
       });

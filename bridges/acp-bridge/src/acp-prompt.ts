@@ -297,6 +297,22 @@ export async function requestPromptWithRetriableProviderRetries(
     recordTurnUsage(state, result);
     const flattened = requestError ? null : flattenedRetriableProviderTail(state);
     if (!requestError && !flattened) {
+      const last = state.messages.at(-1);
+      const part = last?.parts.at(-1);
+      const suffix =
+        part?.type === "text"
+          ? FLATTENED_RETRIABLE_PROVIDER_SUFFIX.exec(part.content)?.[0]
+          : undefined;
+      if (
+        last?.role === "assistant" &&
+        suffix &&
+        namesLimitOrLogin(suffix) &&
+        FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(last.content)
+      ) {
+        throw new Error(suffix.trim());
+      }
+    }
+    if (!requestError && !flattened) {
       if (
         promptStopReason(result) !== "cancelled" ||
         !endedOnPolicyRefusal(state, result, deniedBefore) ||

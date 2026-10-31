@@ -568,6 +568,22 @@ export function normalizeBridgePart(
     };
   }
 
+  if (value.type === "retry") {
+    const content = boundedString(value.content, MAX_TOOL_TITLE_BYTES);
+    if (content === undefined) return null;
+    const interrupted = value.toolState !== "success" && value.toolState !== "failure";
+    return {
+      type: "retry",
+      content: interrupted
+        ? "Provider temporarily unavailable, automatic retry interrupted by restart"
+        : content,
+      toolState: interrupted ? "failure" : (value.toolState as "success" | "failure"),
+      sourcePartId,
+      sourceMessageId,
+      ...(createdAt ? { createdAt } : {}),
+    };
+  }
+
   if (value.type === "file") {
     const content = boundedString(value.content, MAX_TOOL_PATH_BYTES);
     if (!content) return null;

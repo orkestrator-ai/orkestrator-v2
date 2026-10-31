@@ -376,9 +376,12 @@ ork_add_domains() {
 }
 
 ork_commit_addresses() {
+    # Refresh must persist the exact snapshot used for revocation. An entry
+    # that expires afterward still needs to be revoked by the next refresh.
+    local entries="$1"
     chmod 0644 "$ORK_ADDRESSES.next"
     mv -f "$ORK_ADDRESSES.next" "$ORK_ADDRESSES"
-    ork_members "$ORK_SET" > "$ORK_ENTRIES.next" || return 1
+    printf '%s\n' "$entries" > "$ORK_ENTRIES.next" || return 1
     chmod 0644 "$ORK_ENTRIES.next"
     mv -f "$ORK_ENTRIES.next" "$ORK_ENTRIES"
 }
@@ -486,5 +489,5 @@ ork_rebuild_allowlist() {
     ipset destroy "$ORK_NEXT_SET" 2>/dev/null || true
     new=$(ork_members "$ORK_SET")
     ork_revoke "$old" "$new"
-    ork_commit_addresses || return 1
+    ork_commit_addresses "$new" || return 1
 }

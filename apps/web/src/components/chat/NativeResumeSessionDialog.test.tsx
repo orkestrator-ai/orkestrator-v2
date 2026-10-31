@@ -111,6 +111,96 @@ describe("NativeResumeSessionDialog", () => {
     expect(screen.queryByRole("button", { name: "Remove from list" }) === null).toBe(true);
   });
 
+  describe("archived rows", () => {
+    const rows: ResumableSession[] = [
+      { id: "live", title: "Live one", activityAt: "2026-01-01T00:00:00Z" },
+      { id: "kept", title: "Kept one", archived: true, activityAt: "2026-06-01T00:00:00Z" },
+    ];
+
+    test("stay hidden until asked for, and then sit below every live row", async () => {
+      renderDialog(rows, { onArchive: mock(async () => undefined) });
+      await waitFor(() => expect(screen.getByText("Live one")).toBeTruthy());
+      expect(screen.queryByText("Kept one")).toBeNull();
+
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Show archived (1)"));
+      });
+      expect(screen.getByText("Kept one")).toBeTruthy();
+      const text = document.body.textContent ?? "";
+      expect(text.indexOf("Live one")).toBeLessThan(text.indexOf("Kept one"));
+      expect(text).toContain("Archived");
+    });
+
+    test("the only rows being archived still leaves the toggle to reach them", async () => {
+      renderDialog([rows[1]!], {
+        onArchive: mock(async () => undefined),
+        emptyMessage: "Nothing here",
+      });
+      await waitFor(() => expect(screen.getByText("Nothing here")).toBeTruthy());
+      expect(screen.getByLabelText("Show archived (1)")).toBeTruthy();
+    });
+
+    test("a platform that cannot archive never shows them or the toggle", async () => {
+      renderDialog(rows);
+      await waitFor(() => expect(screen.getByText("Live one")).toBeTruthy());
+      expect(screen.queryByText("Kept one")).toBeNull();
+      expect(screen.queryByLabelText("Show archived (1)")).toBeNull();
+    });
+
+    test("choosing one restores it before resuming", async () => {
+      const order: string[] = [];
+      const onResumeOrder = mock((id: string) => {
+        order.push(`resume:${id}`);
+      });
+      const onArchive = mock(async (id: string, archived: boolean) => {
+        order.push(`${archived ? "archive" : "unarchive"}:${id}`);
+      });
+      renderDialog(rows, { onArchive, onResume: onResumeOrder });
+      await waitFor(() => expect(screen.getByText("Live one")).toBeTruthy());
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Show archived (1)"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByText("Kept one"));
+      });
+      expect(order).toEqual(["unarchive:kept", "resume:kept"]);
+    });
+
+    test("a refused restore does not resume and keeps the row archived", async () => {
+      const onResume = mock(() => {});
+      const onArchive = mock(async () => {
+        throw new Error("Cursor could not unarchive this conversation");
+      });
+      renderDialog(rows, { onArchive, onResume });
+      await waitFor(() => expect(screen.getByText("Live one")).toBeTruthy());
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Show archived (1)"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByText("Kept one"));
+      });
+      expect(onResume).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Show archived (1)")).toBeTruthy();
+    });
+
+    test("the restore button puts a row back without resuming it", async () => {
+      const onResume = mock(() => {});
+      const onArchive = mock(async (_id: string, _archived: boolean) => undefined);
+      renderDialog(rows, { onArchive, onResume });
+      await waitFor(() => expect(screen.getByText("Live one")).toBeTruthy());
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Show archived (1)"));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Restore to list" }));
+      });
+      expect(onArchive.mock.calls.at(-1)).toEqual(["kept", false]);
+      expect(onResume).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText("Show archived (1)")).toBeNull();
+      expect(screen.getByText("Kept one")).toBeTruthy();
+    });
+  });
+
   test("removes an archived row and puts it back on Undo", async () => {
     const onArchive = mock(async (_id: string, _archived: boolean) => undefined);
     renderDialog(
@@ -129,6 +219,8 @@ describe("NativeResumeSessionDialog", () => {
     expect(onArchive.mock.calls[0]).toEqual(["a", true]);
     await waitFor(() => expect(screen.queryByText("Alpha") === null).toBe(true));
     expect(screen.getByText("Beta")).toBeTruthy();
+    // The row stays one toggle away.
+    expect(screen.getByLabelText("Show archived (1)")).toBeTruthy();
 
     const options = mockToast.mock.calls.at(-1)?.[1] as {
       action: { label: string; onClick: () => void };

@@ -90,6 +90,30 @@ describe("Codex archive", () => {
     ]);
   });
 
+  test("archived conversations are listed last and flagged, only when asked for", async () => {
+    writeRollout("sessions", "thread-live");
+    writeRollout("sessions", "thread-listed-archived");
+    writeRollout("archived_sessions", "thread-moved");
+    const h = await harness({
+      "thread/list": (params) =>
+        params.archived === true
+          ? { data: [threadPayload("thread-listed-archived")], nextCursor: null }
+          : { data: [], nextCursor: null },
+    });
+    const { sessions } = await h.runtime.listSessions({ includeArchived: true });
+    expect(sessions[0]).toMatchObject({ id: "thread-live" });
+    expect(sessions[0]!.archived).toBeUndefined();
+    expect(
+      sessions
+        .slice(1)
+        .map((session) => [session.id, session.archived])
+        .sort(),
+    ).toEqual([
+      ["thread-listed-archived", true],
+      ["thread-moved", true],
+    ]);
+  });
+
   test("the resume list leaves archived conversations out", async () => {
     writeRollout("sessions", "thread-live");
     writeRollout("sessions", "thread-listed-archived");

@@ -2052,7 +2052,7 @@ export class NativeAgentService {
   }
 
   listProjectionResumableSessions(
-    input: NativeAgentProjectionInput,
+    input: NativeAgentProjectionInput & { includeArchived?: boolean },
   ): Promise<NativeAgentResumeEntry[]> {
     return this.sessionOperations.listProjectionResumableSessions(input);
   }

@@ -263,6 +263,36 @@ describe("NativeAgentSessionOperations", () => {
       const entries = await operations.listProjectionResumableSessions(identity);
       expect(entries.map((entry) => entry.sessionId)).toEqual(["new", "old", "undated"]);
     });
+
+    test("asks for archived rows only where they exist, and lists them last", async () => {
+      const asked: unknown[] = [];
+      const listResumableSessions = async (options?: unknown) => {
+        asked.push(options);
+        return [
+          { sessionId: "kept", archived: true, updatedAt: "2026-06-01T00:00:00Z" },
+          { sessionId: "live", updatedAt: "2026-01-01T00:00:00Z" },
+        ];
+      };
+      const { operations } = harness({ provider: { listResumableSessions } });
+      const entries = await operations.listProjectionResumableSessions({
+        ...identity,
+        includeArchived: true,
+      });
+      expect(asked).toEqual([{ includeArchived: true }]);
+      expect(entries.map((entry) => entry.sessionId)).toEqual(["live", "kept"]);
+
+      await operations.listProjectionResumableSessions(identity);
+      expect(asked.at(-1)).toBeUndefined();
+
+      // Claude has no archive, so the option never reaches its bridge.
+      const claude = harness({ provider: { listResumableSessions } });
+      await claude.operations.listProjectionResumableSessions({
+        ...identity,
+        agent: "claude",
+        includeArchived: true,
+      });
+      expect(asked.at(-1)).toBeUndefined();
+    });
   });
 
   test("a fork carries the composer's selection into the child's controls", async () => {

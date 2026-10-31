@@ -1044,8 +1044,9 @@ export interface NativeAgentCapabilities {
     branches?: boolean;
     /**
      * A conversation can be taken out of the resume list and put back
-     * (Codex `thread/archive` / `thread/unarchive`). Archive keeps the
-     * provider's history; it is never a delete.
+     * (Codex `thread/archive` / `thread/unarchive`, Cursor `Agent.archive` /
+     * `Agent.unarchive`). Archive keeps the provider's history; it is never a
+     * delete.
      */
     archive?: boolean;
   };
@@ -1125,7 +1126,10 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       // Grok compacts through its own `/compact`, which the ACP bridge runs as
       // a selected command; a session whose live inventory lacks it answers
       // the action 422 `command-unavailable`.
-      actions: agent === "cursor" ? { steer: true, rewindMessages: true } : { compact: true },
+      actions:
+        agent === "cursor"
+          ? { steer: true, rewindMessages: true, archive: true }
+          : { compact: true },
       // Cursor's SDK exposes no approval hook at all, so a Cursor tab never
       // raises anything. Grok's ACP wire does: it answers
       // `session/request_permission` for tool calls. Reporting the empty set
@@ -2054,6 +2058,12 @@ export interface NativeAgentResumeEntry {
   detail?: string;
   parentId?: string;
   branchLabel?: string;
+  /**
+   * Out of the resume list, whether archived here or in the provider's own UI.
+   * Listed only on request, and the provider refuses to continue one until it
+   * is restored.
+   */
+  archived?: boolean;
 }
 
 export interface NativeAgentForkOutcome {

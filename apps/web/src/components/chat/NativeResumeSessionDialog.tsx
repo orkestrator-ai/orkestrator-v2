@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, Clock, Loader2, MessageSquare } from "lucide-react";
+import { Archive, ArchiveRestore, Clock, Loader2, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -8,7 +8,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { formatRelativeTime } from "@/lib/format-relative-time";
 
@@ -29,6 +31,8 @@ export interface ResumableSession {
   status?: "idle" | "running" | "error";
   /** Optional trailing detail, e.g. "12 messages". */
   detail?: string;
+  /** Out of the list until "Show archived"; has to be restored to continue. */
+  archived?: boolean;
 }
 
 interface NativeResumeSessionDialogProps {
@@ -53,7 +57,8 @@ interface NativeResumeSessionDialogProps {
   /**
    * Takes a row out of the list (`archived: true`) or puts it back. The
    * provider keeps the conversation either way; this is never a delete. Absent
-   * where the platform cannot archive, and the rows then offer no remove.
+   * where the platform cannot archive, and the rows then offer no remove and no
+   * "Show archived".
    */
   onArchive?: (sessionId: string, archived: boolean) => Promise<void>;
 }
@@ -79,6 +84,7 @@ export function NativeResumeSessionDialog({
 }: NativeResumeSessionDialogProps) {
   const [fetchedSessions, setFetchedSessions] = useState<ResumableSession[]>([]);
   const [archiving, setArchiving] = useState<ReadonlySet<string>>(() => new Set());
+  const [showArchived, setShowArchived] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestGenerationRef = useRef(0);
@@ -99,6 +105,7 @@ export function NativeResumeSessionDialog({
     if (open) {
       setIsLoading(true);
       setError(null);
+      setShowArchived(false);
     }
   }
 
@@ -139,52 +146,80 @@ export function NativeResumeSessionDialog({
    * both have to stay correct when the session the user is in changes while the
    * picker is open, and neither is a reason to hit the bridge again.
    */
-  const sessions = useMemo(
-    () =>
-      fetchedSessions
-        .filter((session) => session.id !== currentSessionId)
-        .sort((a, b) => activityTimestamp(b) - activityTimestamp(a)),
-    [fetchedSessions, currentSessionId],
-  );
+  const { sessions, archivedCount } = useMemo(() => {
+    const rows = fetchedSessions.filter((session) => session.id !== currentSessionId);
+    const archivedCount = onArchive ? rows.filter((session) => session.archived).length : 0;
+    return {
+      archivedCount,
+      sessions: rows
+        .filter((session) => !session.archived || (onArchive && showArchived))
+        .sort(
+          // Archived rows stay below every live one.
+          (a, b) =>
+            Number(Boolean(a.archived)) - Number(Boolean(b.archived)) ||
+            activityTimestamp(b) - activityTimestamp(a),
+        ),
+    };
+  }, [fetchedSessions, currentSessionId, onArchive, showArchived]);
+
+  const setRowArchived = (id: string, archived: boolean) =>
+    setFetchedSessions((current) =>
+      current.map((entry) => (entry.id === id ? { ...entry, archived } : entry)),
+    );
+
+  /** Marks the row busy while `work` runs, and reports a refusal as `failure`. */
+  const whileArchiving = async (
+    id: string,
+    failure: string,
+    work: () => Promise<void>,
+  ): Promise<boolean> => {
+    setArchiving((current) => new Set(current).add(id));
+    try {
+      await work();
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : failure);
+      return false;
+    } finally {
+      setArchiving((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
 
   /**
-   * Removes the row once the provider confirms, and offers to put it back. A
+   * Takes the row out once the provider confirms, and offers to put it back. A
    * refusal (the conversation is open in another tab, say) leaves it listed.
    */
-  const archive = async (session: ResumableSession) => {
+  const archive = (session: ResumableSession) => {
     if (!onArchive) return;
-    setArchiving((current) => new Set(current).add(session.id));
-    try {
+    void whileArchiving(session.id, "Could not remove the session", async () => {
       await onArchive(session.id, true);
-      setFetchedSessions((current) => current.filter((entry) => entry.id !== session.id));
+      setRowArchived(session.id, true);
       toast("Removed from the list", {
         description: "The conversation itself is kept.",
         action: {
           label: "Undo",
           onClick: () => {
-            void onArchive(session.id, false)
-              .then(() =>
-                setFetchedSessions((current) =>
-                  current.some((entry) => entry.id === session.id)
-                    ? current
-                    : [...current, session],
-                ),
-              )
-              .catch((err) =>
-                toast.error(err instanceof Error ? err.message : "Could not restore the session"),
-              );
+            void restore(session);
           },
         },
       });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not remove the session");
-    } finally {
-      setArchiving((current) => {
-        const next = new Set(current);
-        next.delete(session.id);
-        return next;
-      });
-    }
+    });
+  };
+
+  const restore = (session: ResumableSession): Promise<boolean> =>
+    whileArchiving(session.id, "Could not restore the session", async () => {
+      await onArchive?.(session.id, false);
+      setRowArchived(session.id, false);
+    });
+
+  /** The provider refuses to continue an archived conversation, so restore it first. */
+  const choose = async (session: ResumableSession) => {
+    if (session.archived && !(await restore(session))) return;
+    onResume(session.id);
   };
 
   return (
@@ -198,6 +233,18 @@ export function NativeResumeSessionDialog({
         </DialogHeader>
 
         <div className="mt-2">
+          {!isLoading && !error && archivedCount > 0 && (
+            <div className="mb-2 flex items-center justify-end gap-2">
+              <Label htmlFor="resume-show-archived" className="text-xs text-muted-foreground">
+                Show archived ({archivedCount})
+              </Label>
+              <Switch
+                id="resume-show-archived"
+                checked={showArchived}
+                onCheckedChange={setShowArchived}
+              />
+            </div>
+          )}
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -218,7 +265,8 @@ export function NativeResumeSessionDialog({
                     )}
                   >
                     <button
-                      onClick={() => onResume(session.id)}
+                      disabled={archiving.has(session.id)}
+                      onClick={() => void choose(session)}
                       className={cn(
                         "min-w-0 flex-1 rounded-md px-3 py-2 text-left",
                         "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
@@ -251,6 +299,7 @@ export function NativeResumeSessionDialog({
                             {session.status === "error" && (
                               <span className="ml-2 text-destructive">• Error</span>
                             )}
+                            {session.archived && <span className="ml-2">• Archived</span>}
                           </div>
                         </div>
                       </div>
@@ -258,10 +307,16 @@ export function NativeResumeSessionDialog({
                     {onArchive && (
                       <button
                         type="button"
-                        aria-label="Remove from list"
-                        title="Remove from list (the conversation is kept)"
+                        aria-label={session.archived ? "Restore to list" : "Remove from list"}
+                        title={
+                          session.archived
+                            ? "Restore to list"
+                            : "Remove from list (the conversation is kept)"
+                        }
                         disabled={archiving.has(session.id)}
-                        onClick={() => void archive(session)}
+                        onClick={() =>
+                          session.archived ? void restore(session) : archive(session)
+                        }
                         className={cn(
                           "m-1 shrink-0 rounded-md p-1.5 text-muted-foreground",
                           "opacity-0 group-hover:opacity-100 focus:opacity-100",
@@ -271,6 +326,8 @@ export function NativeResumeSessionDialog({
                       >
                         {archiving.has(session.id) ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : session.archived ? (
+                          <ArchiveRestore className="h-4 w-4" />
                         ) : (
                           <Archive className="h-4 w-4" />
                         )}

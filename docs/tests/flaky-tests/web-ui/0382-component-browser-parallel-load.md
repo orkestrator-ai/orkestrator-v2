@@ -216,6 +216,63 @@ The rerun finished with 142 passed, five skipped and three failed (exit 1, 496.7
 
 Evidence below the host temporary directory: `orkestrator-test-run.1Bd5Xm/failed-turn-browser-suite.log.gz` and `orkestrator-test-run.twT6KM/failed-turn-browser-owners.log.gz`. No implementation, assertion, timeout or skip in these owners changed. Host contention is a hypothesis, not an established cause. Both the complete browser command and the owner rerun remain failed.
 
+## Hidden flow graph review — 2026-10-31
+
+The requested hidden-selection centering and scroll-race fixes passed their
+focused unit tests, scoped lint, web/e2e typechecks, repository formatting, and
+the complete MultiReviewFlow/GraphRunFlow browser owners in both Chromium and
+WebKit (two workers). The fixes are in commit `13100a29e`.
+
+The required exact recorded browser rerun was:
+
+```sh
+mise run test:logged -- --name browser -- mise run test:browser
+```
+
+It reported 989 passed, 106 skipped and 11 failed (exit 1, 1166.0 s,
+nine workers). Failures were both native branch-selection cases; mobile
+DataSavingGateway; desktop DesignCanvas, DiffBase reload, GitHubCliSetup,
+GlobalSettings, GlobalStyles message actions, TranscriptPaging reviewer paging
+before prose, and both VirtuosoFollow cases. The MultiReviewFlow and
+GraphRunFlow cases passed.
+The chained public-site suite was not reached.
+
+All nine complete unchanged owning specs were then run sequentially:
+
+```sh
+mise run test:logged -- --name recorded-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts e2e/DataSavingGateway.spec.ts e2e/DesignCanvas.spec.ts e2e/DiffBase.spec.ts e2e/GitHubCliSetup.spec.ts e2e/GlobalSettings.spec.ts e2e/GlobalStyles.spec.ts e2e/TranscriptPaging.spec.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+The sequential run reported 57 passed, nine skipped and four failed
+(exit 1, 414.8 s). The complete DataSavingGateway, DesignCanvas, DiffBase,
+GitHubCliSetup, GlobalSettings, GlobalStyles and TranscriptPaging owners were
+green unchanged. Both native branch cases still received `rel` instead of
+`release/2.0`; both desktop VirtuosoFollow cases still received `false`
+instead of `auto`. Those two owners were not green, and these results alone
+do not classify their failures as intermittent.
+
+Owner evidence: `orkestrator-test-run.0Fo1AI/recorded-browser-owners.log.gz`.
+No implementation, assertion, timeout or skip in these owners changed.
+
+Aggregate evidence: `orkestrator-test-run.lvKDJR/browser.log.gz` below the host
+temporary directory. The exact default-suite rerun also retained the existing
+backend timing failures in [0491](../backend-services-and-tooling/0491-standalone-ready-sigkill-escalation-aggregate.md)
+and [1314](../design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md);
+both complete unchanged backend owners passed with one worker.
+
+The complete VirtuosoFollow owner was also run by itself and retained both
+desktop failures (exit 1, two skipped, 32.6 s):
+
+```sh
+mise run test:logged -- --name recorded-virtuoso-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+Evidence: `orkestrator-test-run.oWOYrZ/recorded-virtuoso-owner.log.gz` below
+the host temporary directory. This is a failed owning-file rerun, not a new
+flake confirmation; the prior follow history remains in
+[0153](../native-agents-and-transcripts/0153-virtuoso-follow-parallel-scroll-release.md).
+No cause was established. The broad browser command remains non-green.
+
 ## Settings layout review — 2026-10-31
 
 - **Original command:** `ORKESTRATOR_E2E_PORT=18237 ORKESTRATOR_PUBLIC_E2E_PORT=18238 mise run test:logged -- --name browser -- mise run test:browser`, implementation commit `d639571b2`, nine Playwright workers alongside other validation on the shared host.

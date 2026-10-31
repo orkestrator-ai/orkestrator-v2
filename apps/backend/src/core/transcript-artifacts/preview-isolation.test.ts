@@ -178,6 +178,33 @@ describe("process worker hardening", () => {
     }
   });
 
+  test("the configured scratch root holds the worker's private TMPDIR", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ork-scratch-root-"));
+    const exits: Array<{ verified: boolean; scratchDir?: string | null }> = [];
+    try {
+      const target = create({ scratchRoot: root, onWorkerExit: (report) => exits.push(report) });
+      const result = await target.run(
+        { kind: "mermaid", source: "env-report", theme: "light" },
+        scope(),
+        new AbortController().signal,
+      );
+      expect(result.ok).toBe(true);
+      const report = JSON.parse(
+        result.diagnostics.find((entry) => entry.code === "env-report")!.message,
+      ) as { env: Record<string, string> };
+      expect(realpathSync(path.dirname(report.env.TMPDIR!))).toBe(realpathSync(root));
+
+      const deadline = Date.now() + 10_000;
+      while (target.stats().running > 0 && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(exits).toHaveLength(1);
+      expect(exits[0]!.verified).toBe(true);
+      expect(existsSync(exits[0]!.scratchDir!)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("an unreachable Docker daemon is not evidence that a container is gone", async () => {
     expect(await containerGone("/nonexistent/docker-cli", "ork-artifact-preview-x")).toBe(false);
   });

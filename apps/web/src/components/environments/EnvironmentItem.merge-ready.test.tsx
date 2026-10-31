@@ -132,7 +132,7 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
       />,
     );
     expect(nameElement().classList).not.toContain("text-shimmer");
-    expect(screen.queryByTestId("merge-ready-indicator")).toBeNull();
+    expect(screen.queryByTestId("merge-ready-indicator") === null).toBe(true);
     expect(row().hasAttribute("aria-describedby")).toBe(false);
 
     view.rerender(

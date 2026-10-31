@@ -216,12 +216,48 @@ describe.skipIf(NO_GNU_TAR !== undefined)(titleWithSkip("verified copy helper", 
     expect(script).toContain("--numeric-owner");
   });
 
+  /** Byte offset of each member's header, read from GNU tar's block numbers. */
+  function memberOffsets(archive: Buffer): number[] {
+    const listing = execFileSync("tar", ["-tR", "-f", "-"], {
+      input: archive,
+      env: { ...SHELL_ENV, LC_ALL: "C" },
+    }).toString();
+    return [...listing.matchAll(/^block (\d+): (?!\*\*)/gm)].map((match) => Number(match[1]) * 512);
+  }
+
+  // Where the cut falls depends on member order, which depends on the file
+  // system; a cut right after a complete member passed GNU tar's own checks and
+  // reported a partial copy as complete on CI. Both positions are checked.
   test("a truncated archive fails extraction instead of reporting a partial copy", () => {
     const { root } = workspace();
     const archive = archiveOf(root);
-    const truncated = archive.subarray(0, Math.floor(archive.length / 3));
-    const result = copyStream(truncated, join(root, "truncated"), 1);
-    expect(result.ok).toBe(false);
+    const offsets = memberOffsets(archive);
+    expect(offsets.length).toBeGreaterThan(2);
+    const midMember = offsets[2]! + 100;
+    const afterMember = offsets[2]!;
+    for (const [name, end] of [
+      ["mid-member", midMember],
+      ["after-member", afterMember],
+      ["after-member-partial-block", afterMember + 341],
+    ] as const) {
+      const result = copyStream(archive.subarray(0, end), join(root, `truncated-${name}`), 1);
+      expect({ name, ok: result.ok }).toEqual({ name, ok: false });
+    }
+  });
+
+  test("a stream without its end-of-archive block is refused even when tar accepts it", () => {
+    const { root } = workspace();
+    const archive = archiveOf(root);
+    const last = memberOffsets(archive).at(-1)!;
+    // Everything up to the last member's header: tar extracts it with exit 0.
+    const accepted = spawnSync("tar", ["-t", "-f", "-"], {
+      input: archive.subarray(0, last),
+      env: SHELL_ENV,
+    });
+    expect(accepted.status).toBe(0);
+    expect(copyStream(archive.subarray(0, last), join(root, "cut"), 1).ok).toBe(false);
+    // The whole stream, its zero blocks included, still copies.
+    expect(copyStream(archive, join(root, "whole"), 1).ok).toBe(true);
   });
 
   test("a volume copy archives the extended attributes extraction keeps", () => {

@@ -1,7 +1,7 @@
 # Cursor authenticated readiness times out in the aggregate
 
 - **ID:** 0182
-- **Status:** open
+- **Status:** resolved
 
 Observed: 2026-10-06 on macOS with Bun 1.4.2.
 
@@ -333,3 +333,36 @@ The exact aggregate rerun's bridge group also passed (46.2 seconds). Its
 remaining failures were the existing duplicate flake case IDs and the missing
 pinned Codex binary. The readiness timeout remains intermittent with no
 confirmed root cause; no assertion, deadline, skip or Cursor code changed.
+
+## Cause shown and fixed — 2026-10-31 (todo 0030)
+
+The owner reached Cursor's API. With `CURSOR_API_KEY` set ("status-test-key"
+and the retry helper's "retry-test-key"), `POST /session/create` hydrated the
+composer through `listModels()`, a real `Cursor.models.list` call bounded at
+30 s and shared by the next test's creation, and `GET /session/:id/status`
+called `authStatus()`, whose account lookup (`Cursor.me`) has no bound at all.
+On this host the catalogue call took about 0.9 s and was refused with
+"Invalid User API Key"; a slower network holds both routes, and the
+`afterEach` that waits for the server to close times out with them.
+
+- **Reproduced:** in a private network namespace where every non-loopback
+  connection hangs (see [1530](1530-cursor-initial-run-reaches-cursor-backend.md)
+  for the command), the unchanged file never finished within 200 s, and with
+  only the catalogue stubbed it failed with this case's exact signature:
+  `authentication > reports an authenticated credential as ready` first, then
+  further cases, each "a beforeEach/afterEach hook timed out" at about
+  10,004 ms.
+- **Fix:** the file's `beforeEach` stubs the model catalogue
+  (`useCursorModelsForTests`) and the credential runtime
+  (`useCursorCredentialRuntimeForTests`, an empty store as on a CI runner, no
+  `me` lookup). Under the same dead network it then passed 79 of 79 in 1.6 s;
+  normally 79 of 79 in 2.3 s. The CI `main` recurrence of 2026-10-30
+  (run 41041292977, `liveness routes > runtime health reports the attached
+  agent's MCP configuration without attaching`, hook timeout at 10,000.59 ms)
+  fits the same cause.
+- Three `prompt dispatch`/`structured output` cases still failed inside the
+  namespace only (a 200 ms race on the prompt 502). They never appeared in a
+  recorded recurrence and were not investigated.
+- The unbounded account lookup is a product gap: todo
+  [1173](../../../todo/agent-engines/1173-cursor-status-account-lookup-unbounded.md).
+

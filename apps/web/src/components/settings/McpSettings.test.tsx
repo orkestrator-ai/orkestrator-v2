@@ -255,11 +255,11 @@ describe("McpSettings", () => {
       settingsResponse = { ...healthySettings, running: false, error: "Port is occupied" };
       const view = render(<McpSettings />);
       await screen.findByText("Port is occupied");
-      expect(screen.queryByRole("button", { name: "Copy setup" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Copy setup" }) === null).toBe(true);
       settingsResponse = healthySettings;
       await act(async () => callbacks.get(event)!());
       await screen.findByText("Listening locally");
-      expect(screen.queryByText("Port is occupied")).toBeNull();
+      expect(screen.queryByText("Port is occupied") === null).toBe(true);
       expect(screen.getAllByRole("button", { name: "Copy setup" })).toHaveLength(3);
       view.unmount();
       expect(signals.every((signal) => signal.aborted)).toBe(true);

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { Environment } from "@/types";
 import { useEnvironmentStore } from "./environmentStore";
+import { useNativeComposeStore } from "./nativeComposeStore";
+import { createSessionKey } from "@/lib/utils";
 
 function environment(id: string, overrides: Partial<Environment> = {}): Environment {
   return {
@@ -32,6 +34,36 @@ beforeEach(() => {
 });
 
 describe("environmentStore", () => {
+  test("deleting an environment releases retained image prompts for every tab", () => {
+    useNativeComposeStore.setState({ sentPrompts: new Map() });
+    for (const [envId, tabId] of [
+      ["deleted", "a"],
+      ["deleted", "b"],
+      ["other", "c"],
+    ]) {
+      const key = createSessionKey(envId!, tabId!);
+      useNativeComposeStore.getState().recordSentPrompt(key, {
+        prompt: "Image prompt",
+        providerSessionId: tabId,
+        draft: { text: "Image prompt", mentions: [], annotations: [] },
+        attachments: [
+          {
+            id: "image",
+            type: "image",
+            path: "/image.png",
+            name: "image.png",
+            previewUrl: "data:image/png;base64,cG5n",
+          },
+        ],
+        priorMessageIds: new Set(),
+      });
+    }
+    useEnvironmentStore.getState().removeEnvironment("deleted");
+    expect([...useNativeComposeStore.getState().sentPrompts.keys()]).toEqual([
+      createSessionKey("other", "c"),
+    ]);
+    useNativeComposeStore.setState({ sentPrompts: new Map() });
+  });
   test("sorts snapshots while preserving authoritative setup fields", () => {
     useEnvironmentStore
       .getState()

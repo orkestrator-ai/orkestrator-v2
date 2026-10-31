@@ -106,3 +106,27 @@ mise run test:logged -- --name desktop-review-failures-isolated -- bun test --cw
 
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.
+
+## Project checkout review recurrence — 2026-10-31
+
+`mise run test:logged -- --name review-default-rerun -- mise run test`
+repeated the startup deadline at 15,004.37 ms. Desktop reported 1,382
+passed, 16 skipped and one failed across 97 files (33.92 s). The aggregate
+reserved workspace/root/bridge/protocol worker budgets of 6/1/2/1, with
+concurrent component-browser validation. The complete aggregate failed in
+448.2 s, also retaining a missing checkout-local Codex binary and case
+0791. Evidence: `orkestrator-test-run.sdHQzL/` and enclosing
+`orkestrator-test-run.2RPkIW/` in the host temporary directory.
+
+The complete unchanged owner passed with the required Node preload
+(exit 0, 1.6 s):
+
+```sh
+mise run test:logged -- --name desktop-bridge-builds -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+An initial exploratory owner command omitted the preload and timed out at
+15,007.54 ms (22 passed, one failed; `orkestrator-test-run.OjVhGT`).
+That command did not reproduce the aggregate's preload configuration. No
+implementation, deadline, assertion or skip changed. Startup contention
+remains a hypothesis; the passing owner does not make the aggregate pass.

@@ -285,3 +285,22 @@ The failing isolated log is `orkestrator-test-run.jy1RfG/recorded-codex-catalogu
 below the host temporary directory; the passing summary is in
 `orkestrator-test-run.ngehxI`. This confirms intermittent behavior, without
 establishing its cause. No bridge source, assertion or timeout changed.
+
+## Project checkout review validation, 2026-10-31
+
+`mise run test:logged -- --name review-default-rerun -- mise run test`
+repeated the first-answer settling timeout at line 212 (2,046.68 ms). The
+aggregate reserved two bridge worker slots; the Codex package ran with one
+Bun worker and reported 2,265 passed, 53 skipped and one failed across 101
+files (47.21 s). The bridge group completed in 116.0 s.
+
+The complete unchanged owner passed (exit 0, 1.3 s):
+
+```sh
+mise run test:logged -- --name cold-command-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.sdHQzL/bridges.log.gz` in the host temporary
+directory; the enclosing run is `orkestrator-test-run.2RPkIW`. The checkout
+fixes change no bridge source, assertion, deadline or skip. This is another
+intermittent observation, not proof of a root cause or a passing aggregate.

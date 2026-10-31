@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
-import { setGitHubCliConfigSource } from "./github-credentials.js";
 import { gitHubGitCredentials } from "./github-git-credentials.js";
 import type { GitHubCloneRepositoryList } from "@orkestrator/protocol/github-clone";
 import type { Project } from "./models.js";
@@ -16,6 +15,18 @@ let storage: StorageService;
 let saved: NodeJS.ProcessEnv;
 const keys = ["GIT_EXEC_PATH", "GH_TOKEN", "GITHUB_TOKEN", "FAKE_GIT_REMOTE", "FAKE_GH_LOG"];
 const pat = "selected_pat";
+
+/** Selects a PAT in Settings as this backend's storage reports it. */
+function selectPat(githubToken: string | undefined): void {
+  const load = StorageService.prototype.loadConfig.bind(storage);
+  storage.loadConfig = async () => {
+    const config = await load();
+    return {
+      ...config,
+      global: { ...config.global, useHostGitHubCredentials: false, githubToken },
+    };
+  };
+}
 
 beforeEach(async () => {
   saved = { ...process.env };
@@ -77,16 +88,11 @@ esac
   process.env.GH_TOKEN = "inherited_host_token";
   process.env.GITHUB_TOKEN = "another_host_token";
   setManagedGitHubCli(gh);
-  setGitHubCliConfigSource(async () => ({
-    ...(await storage.loadConfig()).global,
-    useHostGitHubCredentials: false,
-    githubToken: pat,
-  }));
+  selectPat(pat);
 });
 
 afterEach(async () => {
   setManagedGitHubCli(undefined);
-  setGitHubCliConfigSource(undefined);
   for (const key of keys) {
     if (saved[key] === undefined) delete process.env[key];
     else process.env[key] = saved[key];
@@ -132,11 +138,7 @@ test("PAT creation pushes to its private repository and PAT discovery clones it,
 test.each([undefined, "", "   "])(
   "missing PAT %j prevents registry creation, discovery and private cloning before gh/transfer",
   async (githubToken) => {
-    setGitHubCliConfigSource(async () => ({
-      ...(await storage.loadConfig()).global,
-      useHostGitHubCredentials: false,
-      githubToken,
-    }));
+    selectPat(githubToken);
     await expect(
       invoke("create_project_from_scratch", { localPath: path.join(root, "scratch") }),
     ).rejects.toThrow("personal access token is missing");
@@ -156,7 +158,10 @@ test.each([undefined, "", "   "])(
 );
 
 test("the real credential helper overrides host helpers, rejects other hosts/protocols and never persists tokens", async () => {
-  const credentials = await gitHubGitCredentials("ssh://git@github.com/pat-owner/private.git");
+  const credentials = await gitHubGitCredentials(
+    storage,
+    "ssh://git@github.com/pat-owner/private.git",
+  );
   const args = ["-c", "credential.helper=!echo password=host_token", ...credentials.gitOptions];
   const fill = (url: string) =>
     runCommand("git", [...args, "credential", "fill"], {
@@ -179,5 +184,7 @@ test("the real credential helper overrides host helpers, rejects other hosts/pro
     env: credentials.env,
     stdin: `protocol=https\nhost=github.com\nusername=x-access-token\npassword=${pat}\n\n`,
   });
-  expect(await gitHubGitCredentials("https://example.com/repo.git")).toEqual({ gitOptions: [] });
+  expect(await gitHubGitCredentials(storage, "https://example.com/repo.git")).toEqual({
+    gitOptions: [],
+  });
 });

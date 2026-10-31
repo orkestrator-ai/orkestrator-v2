@@ -17,7 +17,7 @@ import { dockerExec } from "./commands-container-exec.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { gitHubCli } from "./github-cli-binary.js";
-import { gitHubCliEnv } from "./github-credentials.js";
+import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 import { sanitizeGitHubError } from "./github.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import type { Environment } from "./models.js";
@@ -73,6 +73,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 /** The production shell over the host and Docker. */
 export function createGraphEnvironmentShell(
   fence: Pick<EnvironmentMutationFence, "beginMutation">,
+  gitHubConfig: GitHubCliConfigSource,
 ): GraphEnvironmentShell {
   const held = async <T>(environment: Environment, run: () => Promise<T>): Promise<T> => {
     const release = fence.beginMutation(environment.id);
@@ -138,7 +139,7 @@ export function createGraphEnvironmentShell(
               await runCommand(gitHubCli(), args, {
                 cwd: worktree(environment),
                 timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-                env: await gitHubCliEnv(),
+                env: await gitHubCliEnv(gitHubConfig),
                 signal: options.signal,
                 redactValues: options.redact,
               })
@@ -148,7 +149,7 @@ export function createGraphEnvironmentShell(
     readFile: (environment, relativePath) =>
       readEnvironmentWorkspaceFile(
         environment,
-        createEnvironmentCommandRunner(environment, fence),
+        createEnvironmentCommandRunner(environment, fence, gitHubConfig),
         relativePath,
       ),
   };

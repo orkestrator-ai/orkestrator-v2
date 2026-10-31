@@ -1,9 +1,11 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { PublicExecutionState, PublicInteractionRef } from "@orkestrator/protocol/public-api";
 import {
   decodePublicSessionId,
   nativeTabLogicalSessionKey,
 } from "@orkestrator/protocol/public-api-resources";
+import { openCoordinatorConversation } from "../coordinator-runtime.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import type { PublicOperationRecord } from "./operation-ledger.js";
 import { nativePromptQueueKey } from "./prompt-delivery.js";
@@ -40,9 +42,14 @@ async function runTarget(
   const requestId = record.resources.dispatchRequestId;
   const decoded = decodePublicSessionId(record.resources.sessionId);
   if (!requestId || !decoded) return null;
-  const layout = await context.command.storage.getPaneLayout(decoded.environmentId);
+  const storage = context.command.storage;
+  const coordinator = await openCoordinatorConversation(storage, decoded.environmentId);
+  const layout = coordinator ? null : await storage.getPaneLayout(decoded.environmentId);
   const tab = nativeTabsOfLayout(layout).find((candidate) => candidate.tabId === decoded.tabId);
-  const agent = tab?.agent ?? (record.resolved?.agent as AgentPlatform | undefined);
+  const agent =
+    coordinator?.conversation.agent ??
+    tab?.agent ??
+    (record.resolved?.agent as AgentPlatform | undefined);
   if (!agent) return null;
   return {
     environmentId: decoded.environmentId,
@@ -124,6 +131,31 @@ async function evaluateQueuedRun(
   const session = await storage.getNativeAgentSession(
     nativeAgentSessionStorageKey(target.environmentId, target.agent, target.logicalSessionKey),
   );
+  if (session?.dispatchedRequestIds?.includes(id)) {
+    const accepted = { ...record, dispatch: { state: "accepted" as const }, stage: "executing" };
+    const observed = await evaluateRun(accepted, context);
+    return { ...observed, dispatch: { state: "accepted" }, stage: observed?.stage ?? "executing" };
+  }
+  if (
+    coordinatorIdFromRuntimeId(target.environmentId) &&
+    !(await openCoordinatorConversation(storage, target.environmentId))
+  ) {
+    // A closed owner can never drain again. Retire its queue, including any
+    // held claim, rather than leaving work pending or eligible for retry.
+    await storage.deletePromptQueuesByEnvironment(target.environmentId);
+    return {
+      state: "interrupted",
+      stage: "completed",
+      dispatch: { state: session?.pendingDispatch?.requestId === id ? "unknown" : "not-sent" },
+      execution: {
+        state: "interrupted",
+        evidence: "none",
+        reason: "The Coordinator conversation was closed",
+        observedAt,
+      },
+      error: { code: "run-interrupted", message: "The Coordinator conversation was closed" },
+    };
+  }
   if (session?.pendingDispatch?.requestId === id) {
     return {
       state: "unknown",
@@ -136,11 +168,6 @@ async function evaluateQueuedRun(
         observedAt,
       },
     };
-  }
-  if (session?.dispatchedRequestIds?.includes(id)) {
-    const accepted = { ...record, dispatch: { state: "accepted" as const }, stage: "executing" };
-    const observed = await evaluateRun(accepted, context);
-    return { ...observed, dispatch: { state: "accepted" }, stage: observed?.stage ?? "executing" };
   }
   if (held) {
     return record.stage === "queued" ? null : { stage: "queued", dispatch: { state: "pending" } };
@@ -294,12 +321,18 @@ async function evaluateRun(
     });
   }
   const storage = context.command.storage;
-  const environment = await storage.getEnvironment(target.environmentId);
-  if (!environment) {
+  // A Coordinator has no environment row; its conversation is what can go away.
+  const coordinator = coordinatorIdFromRuntimeId(target.environmentId) !== null;
+  const owner = coordinator
+    ? await openCoordinatorConversation(storage, target.environmentId)
+    : await storage.getEnvironment(target.environmentId);
+  if (!owner) {
     return settle({
       state: "interrupted",
       evidence: "none",
-      reason: "The environment was deleted",
+      reason: coordinator
+        ? "The Coordinator conversation was closed"
+        : "The environment was deleted",
     });
   }
   const session = await storage.getNativeAgentSession(

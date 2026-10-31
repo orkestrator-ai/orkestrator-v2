@@ -1,3 +1,4 @@
+import { MACHINE_LOAD_COMMAND } from "@orkestrator/protocol/machine-load";
 import { APP_VERSION } from "./constants.js";
 import { assertOnlyKeys } from "./commands-validation.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -6,7 +7,11 @@ import {
   type EnvironmentProcessUsageSnapshot,
   type ProcessUsageEnvironment,
 } from "./environment-process-usage.js";
-import { createSystemUsageReader, type SystemUsageSnapshot } from "./system-usage.js";
+import {
+  createSystemUsageReader,
+  hostRamReader,
+  type SystemUsageSnapshot,
+} from "./system-usage.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
@@ -19,13 +24,20 @@ export function registerSystemCommands(
     environments: ProcessUsageEnvironment[],
   ) => Promise<EnvironmentProcessUsageSnapshot>,
 ): void {
-  const readUsage = readSystemUsage ?? createSystemUsageReader();
+  const readUsage = readSystemUsage ?? createSystemUsageReader({ ramReader: hostRamReader });
   const readProcesses = readEnvironmentProcessUsage ?? defaultReadEnvironmentProcessUsage;
   register("get_app_version", (args) => {
     assertOnlyKeys(args, [], "arguments");
     return APP_VERSION;
   });
   register("get_system_usage", (_args, context) => readUsage(context.storage.getDataDir()));
+  // Answered from the sampler's history, with no I/O, so it costs a coordinator
+  // one round trip per machine. Read by `list_nodes`, here and over the node link.
+  register(MACHINE_LOAD_COMMAND, (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    if (!context.machineLoad) throw new Error("Machine load sampling is not running here.");
+    return context.machineLoad.report();
+  });
   // Every client's open process panel asks for the same thing: the child
   // processes of every running environment. A read already in flight is
   // joined rather than repeated; nothing completed is cached, so a later

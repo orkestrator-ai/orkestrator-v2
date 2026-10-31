@@ -568,7 +568,22 @@ exit 0
     });
     const { context } = createContext([local, container]);
     const withdrawn: Array<{ id: string; status: string }> = [];
+    let enterStop!: () => void;
+    let releaseStop!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enterStop = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const requested = mock(async (environmentId: string, agent?: string) => {
+      expect(environmentId).toBe(container.id);
+      expect(agent).toBeUndefined();
+      enterStop();
+      await gate;
+    });
     context.nativeAgents = {
+      runtimeStopRequested: requested,
       environmentRuntimeStopped: async (environmentId: string) => {
         const environment = environmentId === local.id ? local : container;
         withdrawn.push({ id: environmentId, status: environment.status });
@@ -583,8 +598,19 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 ${ownedContainerInspect()}
 exit 0
 `,
-      async () => {
-        await commands.get("stop_environment")?.({ environmentId: container.id }, context);
+      async ({ all }) => {
+        const stopping = commands.get("stop_environment")!(
+          { environmentId: container.id },
+          context,
+        );
+        await entered;
+        try {
+          expect(await fs.readFile(all, "utf8").catch(() => "")).not.toContain("stop container-1");
+        } finally {
+          releaseStop();
+          await stopping;
+        }
+        expect(requested).toHaveBeenCalledTimes(1);
       },
     );
 
@@ -927,10 +953,25 @@ exit 0
     const commands = createCommandRegistry();
     const child = createFakeChild(95001);
     context.runtime.localServers.adoptProcess(`codex:${environment.id}`, child);
-    localServerHooks.terminateProcessTree = async () => true;
+    let stopRecorded = false;
+    const requested = mock(async (environmentId: string, agent?: string) => {
+      expect(environmentId).toBe(environment.id);
+      expect(agent).toBe("codex");
+      await Promise.resolve();
+      stopRecorded = true;
+    });
+    context.nativeAgents = {
+      runtimeStopRequested: requested,
+      environmentRuntimeStopped: async () => {},
+    } as unknown as typeof context.nativeAgents;
+    localServerHooks.terminateProcessTree = async () => {
+      expect(stopRecorded).toBe(true);
+      return true;
+    };
 
     await commands.get("stop_environment")?.({ environmentId: environment.id }, context);
 
+    expect(requested).toHaveBeenCalledTimes(1);
     // The bridge is gone and its ownership entry released, so a later start
     // does not think a server is already running.
     expect(context.runtime.localServers.process(`codex:${environment.id}`)).toBeUndefined();

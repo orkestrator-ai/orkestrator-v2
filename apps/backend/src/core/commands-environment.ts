@@ -140,7 +140,7 @@ import {
   syncContainerGitHubCredential,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
-import { resolveGitHubToken } from "./github-credentials.js";
+import { resolveGitHubToken, type GitHubCliConfigSource } from "./github-credentials.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
 import {
   configuredImageRef,
@@ -1738,6 +1738,7 @@ export async function stopEnvironmentOnce(
   if (environment.containerId) {
     const containerId = environment.containerId;
     await assertDockerContainerOwned(containerId, context);
+    await context.nativeAgents?.runtimeStopRequested(environment.id);
     const outcome = await runContainerOperation(
       context,
       environment.id,
@@ -2272,7 +2273,10 @@ export async function removeLocalWorktree(
   });
 }
 
-export async function deleteMergedEnvironmentRemoteBranch(environment: Environment): Promise<void> {
+export async function deleteMergedEnvironmentRemoteBranch(
+  environment: Environment,
+  gitHubConfig: GitHubCliConfigSource,
+): Promise<void> {
   if (isProjectHomeEnvironment(environment)) return;
   if (environment.prState !== "merged" || !environment.prUrl) return;
 
@@ -2280,7 +2284,7 @@ export async function deleteMergedEnvironmentRemoteBranch(environment: Environme
     if (!environment.worktreePath) return;
     await deletePullRequestHeadBranchViaGitHubApi(
       environment.prUrl,
-      createLocalGhRunner(environment.worktreePath),
+      createLocalGhRunner(environment.worktreePath, gitHubConfig),
     );
     return;
   }

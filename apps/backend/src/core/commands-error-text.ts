@@ -45,10 +45,15 @@ export const ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES = {
   containerRemovalFailed:
     "Docker did not remove the old container, so it was kept. Retry the reset once Docker is healthy.",
   gitSshAuthentication:
-    "Git SSH authentication failed. Check that your SSH agent has a key authorized for this repository (a passphrase-protected key must be loaded with ssh-add), or configure its socket in Settings > General, then restart Orkestrator and retry.",
+    "Git SSH authentication failed. Orkestrator can't enter a key passphrase, so a key authorized for this repository must be loaded in an SSH agent (ssh-add). If Orkestrator can't reach that agent, set its socket in Settings > General, then restart Orkestrator and retry.",
   gitRemoteTimedOut:
     "Timed out fetching from the git remote. Check your network connection and that your SSH agent has your key loaded (a passphrase-protected key must be added with ssh-add), then retry.",
 } as const;
+
+/** OpenSSH's refusal once no key it could use was accepted, as Git relays it. */
+export function isGitSshAuthenticationFailure(message: string): boolean {
+  return /permission denied \((?:[^(),\s]+,\s*)*publickey(?:\s*,[^(),]+)*\)/i.test(message);
+}
 
 /**
  * Classifies a subprocess/storage failure into a message that is safe to
@@ -86,7 +91,7 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
   if (message === "Setup script failed") {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript;
   }
-  if (/permission denied \(publickey\)/i.test(message)) {
+  if (isGitSshAuthenticationFailure(message)) {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication;
   }
   // Matched against what the Docker CLI actually emits, not a paraphrase.

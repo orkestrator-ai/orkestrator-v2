@@ -428,6 +428,7 @@ for (const first of ["local", "containers"] as const) {
     const read = async () => login(NOW + (renewed ? 3600_000 : 60_000));
     const keeper = new ContainerClaudeLoginKeeper(
       {
+        runtime: trackedRuntime(),
         runtimeFlavor: "production",
         storage: {
           loadConfig: async () => ({ global: { useHostClaudeCredentials: false } }),

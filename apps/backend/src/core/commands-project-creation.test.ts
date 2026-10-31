@@ -564,6 +564,42 @@ describe("create_project_from_scratch", () => {
     },
   );
 
+  test.each([
+    ["git@github.com:acme/private.git", true],
+    ["git@example.invalid:acme/private.git", false],
+  ])(
+    "add_project explains a refused SSH key instead of relaying Git's output (%s)",
+    async (gitUrl, offersHttps) => {
+      const runCommand = mock(async () => {
+        throw new CommandFailedError(
+          "Command failed: git clone\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+          { exitCode: 128 },
+        );
+      });
+
+      await withProjectCreation(
+        runCommand,
+        async (_invoke, storage, root, _args, invokeCommand) => {
+          const error = await invokeCommand("add_project", {
+            gitUrl,
+            localPath: path.join(root, "clone-refused"),
+          }).catch((thrown: Error) => thrown);
+
+          const { message } = error as Error;
+          expect(message).toContain(
+            `Could not clone the Git repository: SSH authentication failed on ${os.hostname()}.`,
+          );
+          expect(message).toContain("can't enter a key passphrase");
+          expect(message).not.toContain("Command failed");
+          expect(message.includes("gh auth setup-git")).toBe(offersHttps);
+          // A project copy relays only this much of the clone's error.
+          expect(message.length).toBeLessThanOrEqual(300);
+          expect(await storage.loadProjects()).toEqual([]);
+        },
+      );
+    },
+  );
+
   test("add_project redacts a credential-bearing Git URL from clone failures", async () => {
     const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
       shellRunCommand(command, args, options),

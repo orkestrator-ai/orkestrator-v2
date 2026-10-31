@@ -174,8 +174,13 @@ async function moveEnvironmentOnce(
   await assertFreshAgentIdle(environmentId, context);
   const project = await storage.getProject(environment.projectId);
   const projectPath = project?.localPath?.trim();
-  if (!projectPath || !(await pathExists(projectPath))) {
-    throw new Error("The project checkout is unavailable; the worktree cannot be moved");
+  if (!projectPath) {
+    throw new Error("This project has no local checkout configured, so the worktree can't move");
+  }
+  if (!(await pathExists(projectPath))) {
+    throw new Error(
+      `The project's local checkout does not exist, so the worktree can't move: ${projectPath}`,
+    );
   }
   const from = path.resolve(environment.worktreePath!);
   const fromStats = await fs.stat(from).catch(() => null);

@@ -211,7 +211,7 @@ test("starting a home with a missing checkout refuses to create a worktree", asy
   const home = await ensure();
   await rm(checkout, { recursive: true, force: true });
   await expect(startEnvironmentOnce(home.id, context, () => undefined)).rejects.toThrow(
-    "checkout is unavailable",
+    "local checkout does not exist",
   );
   expect(await storage.getEnvironment(home.id)).toMatchObject({ status: "error" });
   await expect(readFile(path.join(context.worktreeDir!, "README.md"))).rejects.toThrow();

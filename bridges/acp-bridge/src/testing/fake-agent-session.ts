@@ -143,6 +143,37 @@ export function handleSessionMessage(message: JsonObject): boolean {
     });
     return true;
   }
+  // Grok's extensions a fork goes through. Recorded so a test can see the params.
+  if (message.method === "_x.ai/rewind/points" && typeof message.id === "number") {
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { rewind_points: JSON.parse(process.env.FAKE_ACP_REWIND_POINTS ?? "[]") },
+    });
+    return true;
+  }
+  if (message.method === "_x.ai/session/fork" && typeof message.id === "number") {
+    if (process.env.FAKE_ACP_FORK_REQUEST_FILE) {
+      appendFileSync(process.env.FAKE_ACP_FORK_REQUEST_FILE, `${JSON.stringify(message.params)}\n`);
+    }
+    if (process.env.FAKE_ACP_FAIL_FORK === "1") {
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32603, message: "Internal error", data: "/Users/someone/private" },
+      });
+      return true;
+    }
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      result:
+        process.env.FAKE_ACP_MALFORMED_FORK === "1"
+          ? {}
+          : { newSessionId: "forked-session", chatMessagesCopied: 2 },
+    });
+    return true;
+  }
   if (message.method === "authenticate" && typeof message.id === "number") {
     if (process.env.FAKE_ACP_AUTH_REQUEST_FILE) {
       appendFileSync(process.env.FAKE_ACP_AUTH_REQUEST_FILE, `${JSON.stringify(message)}\n`);

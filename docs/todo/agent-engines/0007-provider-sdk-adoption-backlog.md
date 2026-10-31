@@ -20,10 +20,10 @@ pins undercut one of them is it raised below (task 1).
 4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: open (depends on 0001's live runs for re-arm; provenance not started).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
 6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
-7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still `1.0.40`).
+7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
 8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: open (recommendation corrected: Codex and OpenCode cannot take instructions at the current pins, so it needs a capability bit).
 9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred (decision recorded: until a user asks for a specific agent).
-10. **Grok MCP elicitation**: UI only once Grok advertises a contract. Status: blocked (needs one live Grok run to see whether 1.0.67 sends elicitation).
+10. **Grok MCP elicitation**: `mcp-form` and `mcp-url` cards over `_x.ai/mcp/elicit`. Status: done (2026-10-31; proved signed in on 1.0.67 through the bridge).
 11. **Grok `costUsdTicks` qualification**: two billed Grok turns to establish the tick unit. Status: open (needs Grok credentials and billed turns).
 12. **OpenCode `find.*` and Session V2 features**: unused 1.x file search; V2 waits on 0008. Status: done for `find.*` (moved to "Decided out"); Session V2 stays with 0008.
 13. **Living-doc drift**: fix `agent-engines.md` (Grok Build, Claude compatibility surface) and `upgrade-agents.md`. Status: done (`docs(agent-engines): fix Claude compatibility surface and Grok ACP drift`).
@@ -158,6 +158,8 @@ pins undercut one of them is it raised below (task 1).
 
 **Investigation.** Still blocked at `@cursor/sdk` `1.0.40`: `askQuestion` is only a member of the `ToolName` string union (`bridges/cursor-bridge/node_modules/@cursor/sdk/dist/cjs/options.d.ts:378`, and `agent/options.d.ts`), with no typed call or answer API.
 
+Rechecked 2026-10-30 against `1.2.0`, adopted 2026-10-31: still blocked. `ToolName` is byte-identical (`dist/esm/options.d.ts:472`) and the `ToolCall` union (`dist/esm/vendor/cursor-sdk-shared/tool-call-types.d.ts:579-597`) has no question variant or answer path. 1.2.0 also adds no approval hook; it does add `agent.summarize()` (`dist/esm/agent.d.ts:34`) and an `SDKSummaryMessage` stream message, which would let Cursor offer `compact`.
+
 **Decisions.** None: blocked upstream; recheck on the next Cursor bump.
 
 ### 8. Pi compaction controls
@@ -203,6 +205,10 @@ pins undercut one of them is it raised below (task 1).
 **Context.** Grok's ACP client does not advertise elicitation.
 
 **Investigation.** The ACP bridge has no elicitation handling (no hits under `bridges/acp-bridge/src`). The `2.0.1` ACP SDK does carry elicitation types (`dist/nes/acp.d.ts`, `dist/v1/acp.js`), so the client-side contract now exists; whether Grok `1.0.67` sends it is unchecked. Rechecked 2026-10-30: the bridge's `initialize` advertises only `fs`, `terminal` and `session` client capabilities (`bridges/acp-bridge/src/acp-context.ts:1156-1160`), not elicitation, and an elicitation request would be refused with `-32601` by the catch-all branch (`acp-context.ts:1414-1419`).
+
+Rechecked 2026-10-30 against the 1.0.67 and 1.0.70 binaries, signed out (`strings`, bundled docs): Grok does not use ACP `elicitation/create` on the client side. It forwards MCP elicitations as its own extension request `_x.ai/mcp/elicit` (form and url modes; Accept, Decline or Cancel) with a `_x.ai/mcp/elicit_complete` follow-up, in both versions. 
+
+Probed live 2026-10-31 on 1.0.67: `agent stdio` does forward both modes, the answer is tagged by `outcome` (`accept` with `content`, `decline`, `cancel`), and an MCP-shaped `action` reads as malformed and cancels. Built on that; see `bridges/acp-bridge/AGENTS.md` ("Grok extensions").
 
 **Decisions.**
 
@@ -291,6 +297,15 @@ Chose the recommended option. A Codex feature flag is not a stability promise,
 and "Decided out" says not to reopen without a new reason. Revisit when goals
 leave the flag.
 
+Rechecked 2026-10-30: the revisit condition is already met at the pin.
+`codex features list` (throwaway `CODEX_HOME`) reports `goals  stable  true`
+for both `0.164.0` and `0.166.0`, so goals are on by default without
+`features.goals`, and the bridge drops `thread/goal/updated` and
+`thread/goal/cleared` as bookkeeping (`event-reducer.ts:162-163`) without
+tracking them anywhere. A goal the model or a user sets in a Codex tab is
+therefore invisible in Orkestrator. Goals are being handled centrally for every
+provider (2026-10-31), so no Codex-only work follows from this.
+
 ### Task 2: delete the guard and its type
 
 Chose the recommended option, and also deleted the `SdkCompactBoundaryMessage`
@@ -324,7 +339,7 @@ to ask for a specific one. Nothing in the current pins changes those reasons.
 
 ### Task 7: still blocked
 
-`@cursor/sdk` is still `1.0.40`, so the upstream gap is unchanged.
+`@cursor/sdk` is now `1.2.0`, and the upstream gap is unchanged.
 
 ### Task 8: recommendation corrected, left open
 
@@ -342,10 +357,16 @@ recommended. Task 8's Context and Decisions now state this capability-gated
 recommendation directly, replacing the stale claim that Codex can honour the
 shared argument. Task 8 remains open.
 
-### Tasks 10 and 11: need live Grok runs
+### Task 10: built after a live probe
 
-Both need a signed-in Grok CLI and billed turns, which this worker may not use.
-The exact steps are under "Qualification".
+A signed-in probe on 2026-10-31 answered the open question (Grok forwards
+elicitation over `agent stdio`), so the cards were built and proved through the
+bridge in the same change.
+
+### Task 11: needs live Grok runs
+
+It needs a signed-in Grok CLI and billed turns. The exact steps are under
+"Qualification".
 
 ### Task 12: drop `find.*`
 
@@ -483,9 +504,6 @@ Unadopted today. Each line says what blocks it or what decision it needs.
     agent is that record plus a platform id in
     `packages/protocol/src/agent-platforms.ts`, with packaging covered by
     `tests/unit/bridge-packaging.test.ts`.
-  - Grok MCP elicitation. Grok's ACP client does not advertise it. Add UI only
-    once Grok exposes a supported reverse-request contract; inventing one would
-    not activate anything.
   - Grok cost. `costUsdTicks` is ignored on purpose because the tick has no
     documented scale (`bridges/acp-bridge/src/usage.ts`), and cost is taken only
     from an explicit USD `usage_update.cost`. Accept it once the qualification
@@ -512,17 +530,6 @@ in a throwaway Orkestrator profile (never the real data directory, never ports
   5. Pass only if the two tick-to-USD ratios agree within the dashboard's
      rounding. Then record the conversion, both samples and the date in the
      `usage.ts` comment, and change `parseUsdCost` to accept ticks.
-- Grok MCP elicitation (task 10), folded into the same session:
-  1. Add an MCP server to the environment that calls `elicitation/create` from
-     a tool (a small stdio server is enough).
-  2. Ask Grok to call that tool.
-  3. In the raw frame log from step 3 above, look for any agent-to-client
-     request whose method the bridge does not handle (through the bridge, it
-     would be answered `-32601 Unsupported ACP client method: <name>`). Also
-     check whether Grok's `initialize` answer mentions elicitation.
-  4. If Grok sends a request, record its method and shape here and unblock the
-     task. If it does not, record "1.0.67 does not forward elicitation" and keep
-     it blocked.
 
 ## Constraints and rationale
 
@@ -557,8 +564,8 @@ in a throwaway Orkestrator profile (never the real data directory, never ports
   `McpServerProvenance`, `readMcpResource`, the tool `_meta.ui` members,
   `verbatimPrompts`, `additionalDirectories` and `createSdkMcpServer` are all
   still present (checked 2026-10-30 in `bridges/claude-bridge/node_modules`).
-  The Grok `1.0.67` elicitation and `costUsdTicks` behaviour has not been
-  checked live; the steps are under "Qualification".
+  The Grok `1.0.67` `costUsdTicks` behaviour has not been checked live; the
+  steps are under "Qualification".
 
 ## Related
 

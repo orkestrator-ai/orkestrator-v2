@@ -37,7 +37,7 @@ export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
   codex: "0.164.0",
   opencode: "1.19.4",
   pi: "1.4.0",
-  cursor: "1.0.40",
+  cursor: "1.2.0",
   grok: "1.0.67",
 };
 

@@ -65,6 +65,24 @@ export function undeclaredPromptCapabilities(providerId: string): { image?: true
     : {};
 }
 
+/**
+ * How a provider forks a session, when it can. ACP's own `session/fork` is still
+ * unstable and Grok does not advertise it; Grok has an extension instead, and
+ * lists a session's prompts on another (`_x.ai/rewind/points`), which is what
+ * names a fork point. Keyed by provider id for the same reason as above.
+ */
+const SESSION_FORK_METHODS: Readonly<Record<string, { fork: string; promptPoints: string }>> = {
+  grok: { fork: "_x.ai/session/fork", promptPoints: "_x.ai/rewind/points" },
+};
+
+export function sessionForkMethods(
+  providerId: string,
+): { fork: string; promptPoints: string } | undefined {
+  return Object.hasOwn(SESSION_FORK_METHODS, providerId)
+    ? SESSION_FORK_METHODS[providerId]
+    : undefined;
+}
+
 export function loadAcpProviderConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): AcpProviderConfig {

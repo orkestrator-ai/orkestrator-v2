@@ -10,7 +10,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.309`, Anthropic SDK `1.2.0`, CLI `2.1.309` (npm `latest`, verified 2026-10-23) |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.164.0` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used only by the backend (native chat and build pipelines) | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.19.4` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.40` (npm `latest`, verified 2026-10-23) |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.2.0` (npm `latest`, verified 2026-10-31) |
 | Grok | The ACP bridge spawns the CLI and speaks ACP over its stdio; `@agentclientprotocol/sdk` supplies the protocol types | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.67` (stable channel; verified 2026-10-23), ACP SDK `2.0.1` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types (upstream removed `@earendil-works/pi-server` in 1.2.0) | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `1.4.0` |
 
@@ -65,7 +65,7 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
-Cursor 1.0.40 also has a Bun-export diagnostic seam patch registered in root
+Cursor 1.2.0 also has a Bun-export diagnostic seam patch registered in root
 `patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
 aligned. The appended export references the SDK's minified stall-detector and
 execution-controller bindings: simply renaming the patch on upgrade is not
@@ -75,8 +75,9 @@ are found by their field lists: the stall detector opens with
 `timer;advisoryTimer;heartbeatOnlyTimer` and is assigned inside the lazy
 initializer that names `@anysphere/agent-client:stall-detector` (which the
 export must call first); the controller is the class opening with
-`serverStream;clientStream;controlledExecManager`. In 1.0.40 those are `W_0`,
-`x01` and `Z_0` (1.0.37: `eR0`, `Er0`, `aR0`; 1.0.36: `aE0`, `Xn0`, `dE0`).
+`serverStream;clientStream;controlledExecManager`. In 1.2.0 those are `Vm0`,
+`N71` and `Qm0` (1.0.40: `W_0`, `x01`, `Z_0`; 1.0.37: `eR0`, `Er0`, `aR0`;
+1.0.36: `aE0`, `Xn0`, `dE0`).
 All three live in `dist/bundled/index.js`, and the controller loop is still
 `for await (let U of N) await this.clientStream.write(U)`. Run the Cursor
 SDK diagnostics tests and version-drift test, then build/vendor the bridge and
@@ -1350,7 +1351,11 @@ trusting a green result.
    Confirm `bun.lock` resolves the intended version and note which
    `@cursor/sdk-<platform>` optional packages it brought in. There is no CLI
    pin, no `scripts/download-*.sh`, no manifest entry, and no Dockerfile `ARG`
-   to mirror — this step is the whole pin.
+   to mirror. The diagnostic seam patch does have to move with it: `bun install`
+   only warns that the old patch no longer applies, so regenerate it with
+   `bun patch` against the new bundle, using the
+   [bindings described above](#what-is-enforced-and-what-is-not). The
+   version-drift and `sdk-diagnostics` tests fail until it is done.
 2. Review the five compatibility files above against the new type definitions.
    Pay particular attention to `InteractionUpdate` variants and tool cases added
    upstream: both degrade silently by design.
@@ -1522,6 +1527,34 @@ anything that needs a session is still as last verified against 1.0.52.
   That 1.0.67 still describes an inline `image` block sent with no path in the
   text needs a signed-in check. If Grok ever stops reading the block, set
   Grok's `attachments.images` to `false` in `nativeAgentCapabilities`.
+- **Files.** 1.0.67 and 1.0.70 answer `promptCapabilities.embeddedContext:
+  true`, so Grok's capability row offers file attachments
+  (`attachments.files`). The bridge sends a text file as an ACP `resource`
+  block with its contents inline, refuses binary content, and refuses any file
+  when the agent stops advertising `embeddedContext`. Proved signed in on 1.0.67
+  (2026-10-31), including a block whose `uri` named a file that does not exist,
+  so Grok answers from the block itself. If a release stops reading it, set
+  Grok's `attachments.files` back to `false`.
+- **MCP elicitation.** Grok tells its MCP servers it supports `elicitation` and
+  forwards each request as the extension request `_x.ai/mcp/elicit`
+  (`toolCallId`, `serverName`, `message`, `mode`, then `requestedSchema` or
+  `url` and `elicitationId`), including over `agent stdio`. The answer is tagged
+  by `outcome`: `{outcome:"accept",content}`, `{outcome:"decline"}` or
+  `{outcome:"cancel"}`. Grok reads anything else as malformed and cancels without
+  saying so, so an `action` key from MCP's own shape silently fails. It sends
+  `_x.ai/session_notification` with `interaction_resolved` when a request ends.
+  Proved signed in on 1.0.67 through the bridge (2026-10-31); `strings` show the
+  same types in 1.0.70.
+- **Session fork.** `_x.ai/session/fork` takes `sourceSessionId`, `sourceCwd`
+  (required) and `newCwd`, and optionally `targetPromptIndex`; it answers
+  `newSessionId`, and the fork loads with `session/load`, in the same or a fresh
+  process. Grok does not advertise ACP's own unstable `session/fork`. The index
+  keeps whole turns up to and including that prompt, and an index past the end
+  silently copies everything. `_x.ai/rewind/points` lists `prompt_index` and
+  `prompt_preview`, and `/compact` takes no index of its own. A fork at a point
+  before a compaction still holds what followed it, as summary, because
+  compaction squashes the history it copies. Proved signed in on 1.0.67
+  (2026-10-31); both methods are in 1.0.70's `strings`.
 - **Main-checkout approvals.** 1.0.67 lets a git worktree use its main
   checkout's saved "always allow" answers by default
   (`[features] worktree_inherits_main_approvals`), which would let a tool run

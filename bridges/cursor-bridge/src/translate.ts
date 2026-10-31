@@ -208,7 +208,7 @@ function applyUpdate(state: SessionState, update: unknown, context: UpdateContex
       applySummaryStarted(state, context);
       break;
     case "summary-completed":
-      applySummaryCompleted(state, readText(update.summary), context);
+      applySummaryCompleted(state, readText(update.summary), context, update.failed === true);
       break;
     case "user-message-appended":
       applyAppendedUserMessage(
@@ -498,6 +498,8 @@ export function settleDetachedSubagentPart(part: BridgeToolPart, state?: Session
  */
 export const ABANDONED_TOOL_NOTE = "Tool call ended without a result";
 export const ABANDONED_COMPACTION_NOTE = "Compaction ended without a summary";
+/** `summary-completed` with `failed`: the SDK left the conversation as it was. */
+export const FAILED_COMPACTION_NOTE = "Compaction failed; the conversation is unchanged";
 
 export function settleAbandonedToolParts(state: SessionState): void {
   const abandoned = new Set<string>();
@@ -692,10 +694,17 @@ function applySummaryStarted(state: SessionState, context: UpdateContext): void 
   appendCompactionPart(state, "", "pending", context);
 }
 
-function applySummaryCompleted(state: SessionState, summary: string, context: UpdateContext): void {
+function applySummaryCompleted(
+  state: SessionState,
+  rawSummary: string,
+  context: UpdateContext,
+  failed: boolean,
+): void {
+  const summary = rawSummary || (failed ? FAILED_COMPACTION_NOTE : "");
+  const toolState = failed ? "failure" : "success";
   const open = openCompactionPart(state);
   if (!open) {
-    appendCompactionPart(state, summary, "success", context);
+    appendCompactionPart(state, summary, toolState, context);
     return;
   }
   const { row, part } = open;
@@ -703,7 +712,7 @@ function applySummaryCompleted(state: SessionState, summary: string, context: Up
     part.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
     chargeTranscript(state, jsonStringContentBytes(part.content));
   }
-  part.toolState = "success";
+  part.toolState = toolState;
   rowChanged(state, row);
 }
 
@@ -731,7 +740,7 @@ function openCompactionPart(
 function appendCompactionPart(
   state: SessionState,
   summary: string,
-  toolState: "pending" | "success",
+  toolState: BridgeCompactionPart["toolState"],
   context: UpdateContext,
 ): void {
   const message = currentAssistantMessage(state);

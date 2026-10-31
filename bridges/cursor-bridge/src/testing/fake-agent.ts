@@ -33,17 +33,55 @@ export interface FakeRunScript {
   holdDispose?: Promise<void>;
   /** Rejects `asyncDispose`, standing in for a teardown that throws. */
   failDispose?: Error;
+  /** Rejects `summarize` itself: no run started. */
+  failSummarize?: Error;
+  /** Messages `run.stream()` yields, such as a `summary` status. */
+  streamMessages?: unknown[];
 }
 
 export interface FakeAgent extends SDKAgent {
   readonly sends: Array<{ message: unknown; options: unknown }>;
   readonly cancels: number;
+  readonly summarizes: number;
 }
 
 export function fakeAgent(script: FakeRunScript = {}): FakeAgent {
   const sends: Array<{ message: unknown; options: unknown }> = [];
   let cancels = 0;
   let cancelled = false;
+  let summarizes = 0;
+
+  const startedRun = () => {
+    const settle = async () => {
+      if (script.hold) await script.hold;
+      return {
+        id: "fake-run",
+        status: cancelled ? ("cancelled" as const) : (script.status ?? ("finished" as const)),
+        ...(script.result !== undefined ? { result: script.result } : {}),
+        ...(script.errorMessage ? { error: { message: script.errorMessage } } : {}),
+        ...(script.durationMs !== undefined ? { durationMs: script.durationMs } : {}),
+      };
+    };
+
+    return {
+      id: "fake-run",
+      agentId: "fake-agent",
+      status: "running" as const,
+      supports: () => true,
+      unsupportedReason: () => undefined,
+      async *stream() {
+        if (script.hold) await script.hold;
+        for (const message of script.streamMessages ?? []) yield message;
+      },
+      conversation: async () => [],
+      wait: settle,
+      cancel: async () => {
+        cancels += 1;
+        cancelled = true;
+      },
+      onDidChangeStatus: () => () => undefined,
+    };
+  };
 
   const agent = {
     agentId: "fake-agent",
@@ -63,35 +101,12 @@ export function fakeAgent(script: FakeRunScript = {}): FakeAgent {
       // be back-pressuring a live run.
       for (const update of script.updates ?? []) options.onDelta?.({ update });
 
-      const settle = async () => {
-        if (script.hold) await script.hold;
-        return {
-          id: "fake-run",
-          status: cancelled ? ("cancelled" as const) : (script.status ?? ("finished" as const)),
-          ...(script.result !== undefined ? { result: script.result } : {}),
-          ...(script.errorMessage ? { error: { message: script.errorMessage } } : {}),
-          ...(script.durationMs !== undefined ? { durationMs: script.durationMs } : {}),
-        };
-      };
-
-      return {
-        id: "fake-run",
-        agentId: "fake-agent",
-        status: "running" as const,
-        supports: () => true,
-        unsupportedReason: () => undefined,
-        // eslint-disable-next-line require-yield
-        async *stream() {
-          if (script.hold) await script.hold;
-        },
-        conversation: async () => [],
-        wait: settle,
-        cancel: async () => {
-          cancels += 1;
-          cancelled = true;
-        },
-        onDidChangeStatus: () => () => undefined,
-      };
+      return startedRun();
+    },
+    async summarize() {
+      summarizes += 1;
+      if (script.failSummarize) throw script.failSummarize;
+      return startedRun();
     },
     close: () => undefined,
     reload: async () => undefined,
@@ -107,6 +122,9 @@ export function fakeAgent(script: FakeRunScript = {}): FakeAgent {
     },
     get cancels() {
       return cancels;
+    },
+    get summarizes() {
+      return summarizes;
     },
   };
   return agent as unknown as FakeAgent;

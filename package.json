@@ -164,8 +164,8 @@
     "artifactName": "orkestrator-v2-${os}-${arch}.${ext}"
   },
   "patchedDependencies": {
-    "@cursor/sdk@1.0.40": "patches/@cursor%2Fsdk@1.0.40.patch",
     "@opencode-ai/sdk@1.19.4": "patches/@opencode-ai%2Fsdk@1.19.4.patch",
-    "react-virtuoso@4.18.19": "patches/react-virtuoso@4.18.19.patch"
+    "react-virtuoso@4.18.19": "patches/react-virtuoso@4.18.19.patch",
+    "@cursor/sdk@1.2.0": "patches/@cursor%2Fsdk@1.2.0.patch"
   }
 }

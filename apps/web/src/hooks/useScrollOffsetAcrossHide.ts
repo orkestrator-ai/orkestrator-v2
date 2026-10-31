@@ -22,6 +22,7 @@ export function useScrollOffsetAcrossHide(scrollRef: RefObject<HTMLElement | nul
     let offset = element.scrollTop;
     hidden.current = element.clientHeight === 0;
     const onScroll = () => {
+      if (element.clientHeight === 0) hidden.current = true;
       if (!hidden.current) offset = element.scrollTop;
     };
     const observer = new ResizeObserver(() => {
@@ -40,5 +41,5 @@ export function useScrollOffsetAcrossHide(scrollRef: RefObject<HTMLElement | nul
     };
   }, [scrollRef]);
 
-  return useCallback(() => hidden.current, []);
+  return useCallback(() => hidden.current || scrollRef.current?.clientHeight === 0, [scrollRef]);
 }

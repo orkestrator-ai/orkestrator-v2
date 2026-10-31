@@ -576,15 +576,19 @@ function ColumnLabel({
  * The canvas width, or null until it has been measured (and in DOM tests). A
  * hidden tab measures 0 and keeps the last width: forgetting it would swap the
  * stacked column for the shorter wide graph, and the page around it would lose
- * its scroll position to that when the tab is shown again.
+ * its scroll position to that when the tab is shown again. The last result
+ * tracks whether it is measurable now, so visibility can defer centering
+ * independently of the width retained for layout.
  */
-function useMeasuredWidth(): [(element: HTMLDivElement | null) => void, number | null] {
+function useMeasuredWidth(): [(element: HTMLDivElement | null) => void, number | null, boolean] {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [width, setWidth] = useState<number | null>(null);
+  const [measurable, setMeasurable] = useState(false);
   useLayoutEffect(() => {
     if (!element) return;
     const measure = () => {
       const next = element.clientWidth;
+      setMeasurable(next > 0);
       if (next > 0) setWidth(next);
     };
     measure();
@@ -596,7 +600,7 @@ function useMeasuredWidth(): [(element: HTMLDivElement | null) => void, number |
     observer.observe(element);
     return () => observer.disconnect();
   }, [element]);
-  return [setElement, width];
+  return [setElement, width, measurable];
 }
 
 /**
@@ -785,7 +789,8 @@ export function FlowGraph({
   const present = (graph: ReactNode) =>
     fullscreen ? createPortal(graph, fullscreenContainer ?? document.body) : graph;
   const [measureRef, measuredWidth] = useMeasuredWidth();
-  const [measureViewportRef, viewportWidth] = useMeasuredWidth();
+  const [measureViewportRef, viewportWidth, viewportMeasurable] = useMeasuredWidth();
+  const viewportElementRef = useRef<HTMLDivElement | null>(null);
   // In fullscreen the viewport takes the overlay's height rather than its own.
   const [measureViewportHeight, viewportHeight] = useMeasuredHeight();
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -810,6 +815,7 @@ export function FlowGraph({
   const { attachViewport } = flowViewport;
   const viewportRef = useCallback(
     (element: HTMLDivElement | null) => {
+      viewportElementRef.current = element;
       measureViewportRef(element);
       measureViewportHeight(element);
       attachViewport(element);
@@ -874,7 +880,14 @@ export function FlowGraph({
     centerRef.current = () => {
       const previous = centredRef.current;
       const last = previous?.key === viewKey ? previous : null;
-      if (stacked || viewportWidth === null) return;
+      // The DOM check also covers selection updates before the hide observer runs.
+      if (
+        stacked ||
+        viewportWidth === null ||
+        !viewportMeasurable ||
+        !viewportElementRef.current?.clientWidth
+      )
+        return;
       centredRef.current = { key: viewKey, stage: selectedStage, width: viewportWidth };
       if (last && last.stage === selectedStage && last.width === viewportWidth) return;
       if (!last && useFlowGraphViewStore.getState().views.get(viewKey)?.width === viewportWidth)
@@ -885,7 +898,7 @@ export function FlowGraph({
   });
   useEffect(() => {
     centerRef.current();
-  }, [selectedStage, viewportWidth, stacked, viewKey]);
+  }, [selectedStage, viewportWidth, viewportMeasurable, stacked, viewKey]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, node: FlowNodeModel) => {
     if (event.key === "Enter") {

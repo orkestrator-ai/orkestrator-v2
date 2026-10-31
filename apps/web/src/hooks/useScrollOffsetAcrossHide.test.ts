@@ -60,6 +60,26 @@ describe("useScrollOffsetAcrossHide", () => {
     expect(element.scrollTop).toBe(700);
   });
 
+  test("ignores scroll after hiding before the observer reports the hide", () => {
+    const isHidden = render();
+    scrollTo(700);
+    clientHeight = 0;
+    expect(isHidden.current()).toBe(true);
+    let hiddenDuringScroll = false;
+    element.addEventListener("scroll", () => {
+      hiddenDuringScroll = isHidden.current();
+    });
+    scrollTo(0);
+    expect(hiddenDuringScroll).toBe(true);
+    act(() => notifyResize());
+    clientHeight = 400;
+    scrollTo(0);
+    expect(isHidden.current()).toBe(true);
+    act(() => notifyResize());
+    expect(isHidden.current()).toBe(false);
+    expect(element.scrollTop).toBe(700);
+  });
+
   test("a resize of a visible scroller leaves the reader's offset alone", () => {
     const isHidden = render();
     scrollTo(700);

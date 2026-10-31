@@ -49,7 +49,10 @@ import {
 } from "@/components/chat/ComposerIconPicker";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import type { MentionableInputRef } from "@/components/chat/MentionableInput";
-import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
+import {
+  NativeAttachmentMenu,
+  type WorkspaceAttachment,
+} from "@/components/chat/NativeAttachmentMenu";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { SelectionPricingBadge } from "@/components/chat/SelectionPricingBadge";
@@ -168,6 +171,7 @@ import {
   nativeComposePersistenceStore,
   useNativeComposeStore,
   type NativeComposeDraft,
+  type NativeSentPrompt,
 } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -227,6 +231,8 @@ const EMPTY_PROJECTION_MESSAGES: NativeMessage[] = [];
 const EMPTY_DISMISSED_NOTICE_IDS: string[] = [];
 /** How long a send made before the first session-state read may wait for it. */
 const HELD_SUBMIT_TIMEOUT_MS = 15_000;
+/** How long a prompt waits for the composer to unlock after a Claude sign-in. */
+const RESEND_AFTER_SIGN_IN_TIMEOUT_MS = 30_000;
 /**
  * How often a visible Codex tab locked for sign-in asks again. Codex's lock
  * clears only on an account read, and app-server does not notice a login
@@ -571,6 +577,8 @@ export function SharedNativeAgentController({
   }, [activeNoticeIds, noticeSessionIdentity, projection, reconcileNoticeDismissals]);
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
   const clearDraft = useNativeComposeStore((state) => state.clearDraft);
+  const recordSentPrompt = useNativeComposeStore((state) => state.recordSentPrompt);
+  const sentPrompt = useNativeComposeStore((state) => state.sentPrompts.get(sessionKey));
   const consumeBrowserAnnotations = useNativeComposeStore(
     (state) => state.consumeBrowserAnnotations,
   );
@@ -1706,7 +1714,13 @@ export function SharedNativeAgentController({
       requestId?: string,
       preparedPrompt = false,
       modeOverride?: "build" | "plan",
-      submitOptions?: { literal?: boolean; noQueue?: boolean; preflight?: boolean },
+      submitOptions?: {
+        literal?: boolean;
+        noQueue?: boolean;
+        preflight?: boolean;
+        /** Sent instead of the draft's, for a prompt sent again after sign-in. */
+        attachments?: WorkspaceAttachment[];
+      },
     ) => {
       if (queueEditPendingRef.current || submitInFlightRef.current || beforeSendPendingRef.current)
         return false;
@@ -1763,14 +1777,15 @@ export function SharedNativeAgentController({
           setIsSubmitting(false);
         }
       }
+      const sourceAttachments = submitOptions?.attachments ?? draft.attachments;
       const providerSupportedAttachments = retainSupportedAttachments(
-        draft.attachments,
+        sourceAttachments,
         adapter.capabilities.attachments,
       );
       const providerSupportedIds = new Set(
         providerSupportedAttachments.map((attachment) => attachment.id),
       );
-      const unsupportedAttachments = draft.attachments.filter(
+      const unsupportedAttachments = sourceAttachments.filter(
         (attachment) =>
           !providerSupportedIds.has(attachment.id) ||
           (attachment.type === "image" && selectedModel?.supportsImageInput === false),
@@ -2082,6 +2097,18 @@ export function SharedNativeAgentController({
       let keepTranscriptConfirmation = false;
       // The provider will never run this id: a resend has to mint a new one.
       let requestIdRetired = false;
+      // A command's identity is not in its text, so only a prompt is kept for
+      // the send-again-after-sign-in path.
+      recordSentPrompt(
+        sessionKey,
+        rawCommand
+          ? undefined
+          : {
+              prompt,
+              attachments: submittedAttachments,
+              priorMessageIds: visibleAuthoritativeMessageIds,
+            },
+      );
       try {
         if (canQueue) {
           await enqueue(prompt, options);
@@ -2207,6 +2234,7 @@ export function SharedNativeAgentController({
       projection?.capabilities,
       projection?.sessionId,
       projection?.slashCommands,
+      recordSentPrompt,
       recoverableDispatch,
       actionableDispatch,
       releaseRetiredRequestId,
@@ -2626,6 +2654,92 @@ export function SharedNativeAgentController({
     tabId,
   ]);
 
+  /*
+   * Claude answers a prompt it has no login for with its not-logged-in notice
+   * and does nothing else, so once the user signs in from the card that prompt
+   * is sent again instead of asking them to resend it. Only a prompt this
+   * renderer sent (the transcript keeps an attached image as inline data, not
+   * its path), only while the notice is still the latest exchange, and never
+   * over a draft the user has started since.
+   */
+  const notLoggedInPrompt = useMemo(() => {
+    if (claudeNotLoggedInNotice === null || !sentPrompt) return null;
+    const userMessages = normalizedMessages.filter((message) => message.role === "user");
+    const refused = userMessages.at(-1);
+    const previous = userMessages.at(-2);
+    if (!refused || sentPrompt.priorMessageIds.has(refused.id)) return null;
+    if (previous && !sentPrompt.priorMessageIds.has(previous.id)) return null;
+    return sentPrompt;
+  }, [claudeNotLoggedInNotice, normalizedMessages, sentPrompt]);
+  const composerEmpty =
+    !draft.text.trim() && draft.attachments.length === 0 && draft.annotations.length === 0;
+  const [resendAfterSignIn, setResendAfterSignIn] = useState<{
+    sent: NativeSentPrompt;
+    /** The notice it answers: one resend per refusal, across card remounts. */
+    noticeId: string;
+    requestedAt: number;
+  } | null>(null);
+  const noticeId = claudeNotLoggedInNotice === null ? undefined : latestAssistantMessage?.id;
+  const resendingAfterSignIn =
+    resendAfterSignIn !== null && resendAfterSignIn.noticeId === noticeId && composerEmpty;
+  const requestResendAfterSignIn = useCallback(() => {
+    if (!notLoggedInPrompt || !noticeId || !composerEmpty) return;
+    if (resendAfterSignIn?.noticeId === noticeId) return;
+    setResendAfterSignIn({ sent: notLoggedInPrompt, noticeId, requestedAt: Date.now() });
+    // A bridge that found no login keeps the composer locked until it reads
+    // again; a read now replaces it with one on the new login.
+    if (authenticationRequired) void refresh().catch(() => undefined);
+  }, [
+    authenticationRequired,
+    composerEmpty,
+    noticeId,
+    notLoggedInPrompt,
+    refresh,
+    resendAfterSignIn?.noticeId,
+  ]);
+  useEffect(() => {
+    if (!resendAfterSignIn || resendAfterSignIn.sent !== sentPrompt) return;
+    if (!composerEmpty || sendLocked || isDispatching) {
+      // Give up rather than send long after the user stopped expecting it; the
+      // card then asks them to resend.
+      const timer = setTimeout(
+        () => {
+          recordSentPrompt(sessionKey, undefined);
+          setResendAfterSignIn(null);
+        },
+        Math.max(0, resendAfterSignIn.requestedAt + RESEND_AFTER_SIGN_IN_TIMEOUT_MS - Date.now()),
+      );
+      return () => clearTimeout(timer);
+    }
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      // Dropped before sending, so a send refused before dispatch cannot
+      // repeat. A dispatched one records itself again.
+      recordSentPrompt(sessionKey, undefined);
+      void submit(resendAfterSignIn.sent.prompt, undefined, true, undefined, {
+        attachments: resendAfterSignIn.sent.attachments,
+      }).then(
+        (accepted) => {
+          if (!accepted) setResendAfterSignIn(null);
+        },
+        () => setResendAfterSignIn(null),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    composerEmpty,
+    isDispatching,
+    recordSentPrompt,
+    resendAfterSignIn,
+    sendLocked,
+    sentPrompt,
+    sessionKey,
+    submit,
+  ]);
+
   const submissionError = sendError ?? draft.submissionError;
   const errorMessage =
     submissionError ??
@@ -2920,6 +3034,8 @@ export function SharedNativeAgentController({
             : (authRequiredSince ?? claudeAuthNoticeSeen?.at ?? undefined)
         }
         containerId={data.containerId}
+        {...(notLoggedInPrompt && composerEmpty ? { onSignedIn: requestResendAfterSignIn } : {})}
+        resendingAfterSignIn={resendingAfterSignIn}
       />
     ) : null,
     authenticationRequired && platform !== "claude" ? (

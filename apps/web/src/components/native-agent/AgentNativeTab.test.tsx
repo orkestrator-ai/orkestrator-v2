@@ -1440,6 +1440,88 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
   });
 
+  describe("after Claude refuses a prompt with its not-logged-in notice", () => {
+    const notice = "Not logged in · Please run /login";
+
+    async function sendRefusedPrompt(tabId: string) {
+      accountLoginProgress = { state: "idle" };
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+      await screen.findByTestId("shared-native-compose-bar");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, { text: "Fix the garbled text" });
+      });
+      fireEvent.click(await screen.findByTitle("Send"));
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      // Claude runs nothing: it answers with the notice.
+      const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+      act(() => {
+        useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+          ...current,
+          revision: current.revision + 1,
+          messages: [
+            {
+              id: "user-1",
+              role: "user",
+              content: "Fix the garbled text",
+              createdAt: "2026-10-31T00:23:00.000Z",
+              parts: [{ type: "text", content: "Fix the garbled text" }],
+            },
+            {
+              id: "assistant-1",
+              role: "assistant",
+              content: notice,
+              createdAt: "2026-10-31T00:23:01.000Z",
+              parts: [{ type: "text", content: notice }],
+            },
+          ],
+        });
+      });
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+      await screen.findByLabelText("Sign-in code");
+      return sessionKey;
+    }
+
+    test("sends the prompt again once the user signs in", async () => {
+      await sendRefusedPrompt("tab-resend-after-sign-in");
+      expect(screen.getByText(/Your message is sent again once you sign in\./)).toBeTruthy();
+
+      accountLoginProgress = {
+        state: "succeeded",
+        platform: "claude",
+        mode: "reauthenticate",
+        completedAt: "2026-10-31T00:24:00.000Z",
+      };
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2), {
+        timeout: 4_000,
+      });
+      const [first, resent] = dispatchNativeAgentIntentMock.mock.calls.map(([input]) => input);
+      expect(resent).toMatchObject({ agent: "claude", prompt: first!.prompt });
+      // A new request: the refused one already ran.
+      expect(resent!.requestId).not.toBe(first!.requestId);
+      expect(screen.getByText("Signed in. Sending your message again…")).toBeTruthy();
+    });
+
+    test("leaves the resend to the user once they have started another message", async () => {
+      const sessionKey = await sendRefusedPrompt("tab-no-resend-over-draft");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, { text: "Something else" });
+      });
+      accountLoginProgress = {
+        state: "succeeded",
+        platform: "claude",
+        mode: "reauthenticate",
+        completedAt: "2026-10-31T00:24:00.000Z",
+      };
+      expect(
+        await screen.findByText("Signed in. Resend your message to continue.", undefined, {
+          timeout: 4_000,
+        }),
+      ).toBeTruthy();
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   test("does not mistake another provider's reply for Claude's notice", async () => {
     const notice = "Not logged in · Please run /login";
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({

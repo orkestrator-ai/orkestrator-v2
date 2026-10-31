@@ -252,6 +252,13 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
           filename: attachment.name,
         })),
       };
+      // The tab's controller sends this again if Claude answers it with its
+      // not-logged-in notice and the user then signs in.
+      composeStore.recordSentPrompt(sessionKey, {
+        prompt,
+        attachments: draft?.attachments ?? [],
+        priorMessageIds: new Set(),
+      });
       setStartingFirstPrompt(true);
       composeStore.updateDraft(sessionKey, {
         requestId,

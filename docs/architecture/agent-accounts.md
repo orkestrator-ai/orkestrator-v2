@@ -209,7 +209,14 @@ The UI is `ClaudeAuthRecoveryCard`. It shows under a Claude authentication
 error in the transcript, and pinned above the composer while Claude's `Not
 logged in · Please run /login` reply is the latest exchange or Claude reports
 `authentication-required` readiness (below). It reuses the settings pane's
-link-and-code panel and resumes a sign-in already running. Its compact form,
+link-and-code panel and resumes a sign-in already running. When the card
+answers `Not logged in`, a successful sign-in sends the refused prompt again.
+Claude ran nothing for that prompt, so sending it again cannot repeat work.
+The renderer keeps the last prompt it sent for each session, exactly as sent
+(`NativeSentPrompt`), because Claude's transcript stores an attached image as
+inline data rather than its path. The resend happens only when that prompt is
+the user row the notice answers and the composer is empty. It waits up to 30
+s for the composer to unlock, and otherwise the card asks the user to resend. Its compact form,
 `ClaudeAccountSignInAction`, is the **Sign in to Claude** action on the Agent
 Info account card and on the Claude settings sign-in card. Claude's bridge
 hint names those cards rather than a terminal; its route kind stays

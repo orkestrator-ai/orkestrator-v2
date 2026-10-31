@@ -84,10 +84,27 @@ const EMPTY_DRAFT: NativeComposeDraft = {
   mode: "build",
 };
 
+/**
+ * The last prompt this renderer dispatched for a session, exactly as sent.
+ *
+ * Kept so a prompt Claude refused for a missing login can be sent again once
+ * the user signs in. The transcript cannot rebuild it: Claude records an
+ * attached image as inline data, not the path it was sent from. Memory only,
+ * one per session, and never persisted: after a restart the user resends.
+ */
+export interface NativeSentPrompt {
+  prompt: string;
+  attachments: WorkspaceAttachment[];
+  /** Transcript rows visible when it was sent; its own row is the next user row. */
+  priorMessageIds: ReadonlySet<string>;
+}
+
 interface NativeComposeState {
   drafts: Map<string, NativeComposeDraft>;
+  sentPrompts: Map<string, NativeSentPrompt>;
   updateDraft: (sessionKey: string, update: Partial<NativeComposeDraft>) => void;
   clearDraft: (sessionKey: string) => void;
+  recordSentPrompt: (sessionKey: string, sent: NativeSentPrompt | undefined) => void;
   consumeBrowserAnnotations: (environmentId: string, annotationIds: readonly string[]) => void;
 }
 
@@ -318,6 +335,7 @@ export function nativeComposeDraft(
 
 export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
   drafts: new Map(),
+  sentPrompts: new Map(),
   updateDraft: (sessionKey, update) =>
     set((state) => {
       const drafts = new Map(state.drafts);
@@ -359,6 +377,14 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
       const drafts = new Map(state.drafts);
       drafts.delete(sessionKey);
       return { drafts };
+    }),
+  recordSentPrompt: (sessionKey, sent) =>
+    set((state) => {
+      if (!sent && !state.sentPrompts.has(sessionKey)) return state;
+      const sentPrompts = new Map(state.sentPrompts);
+      if (sent) sentPrompts.set(sessionKey, sent);
+      else sentPrompts.delete(sessionKey);
+      return { sentPrompts };
     }),
   consumeBrowserAnnotations: (environmentId, annotationIds) =>
     set((state) => {

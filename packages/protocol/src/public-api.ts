@@ -263,7 +263,8 @@ export const PUBLIC_ACTIONS = {
     effects: [],
     observation: "immediate",
     milestone: "A",
-    summary: "List native-agent sessions of one environment without reading transcripts.",
+    summary:
+      "List native-agent sessions of one environment or Coordinator conversation without reading transcripts.",
   },
   "session.get": {
     version: 1,

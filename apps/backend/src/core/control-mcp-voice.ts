@@ -1,6 +1,7 @@
 import { allPublicPages } from "./control-mcp-pages.js";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import {
   PUBLIC_ALL_NODES,
   isPublicErrorCode,
@@ -29,6 +30,7 @@ import {
   type ControlMcpCaller,
 } from "./control-mcp-caller.js";
 import { sayForEnvelope } from "./control-mcp-gateway.js";
+import { operatorAllNodes, operatorNode } from "./control-mcp-operator-tools.js";
 import {
   resolveTarget,
   sessionAliases,
@@ -460,7 +462,59 @@ async function targetCandidates(
       }
     }
   }
+  if (
+    (!kind || kind === "session") &&
+    allowed(caller, "session.list") &&
+    // Naming another machine reads node.list first; don't fail a credential without it.
+    (!caller.nodeId || allowed(caller, "node.list"))
+  ) {
+    candidates.push(...(await coordinatorCandidates(caller, scope)));
+  }
   return candidates;
+}
+
+/**
+ * Coordinator conversations, which no environment lists. The main one answers
+ * to "coordinator" and "<project> coordinator"; only the registry names them.
+ */
+async function coordinatorCandidates(
+  caller: ControlMcpCaller,
+  scope: { projectId?: string; environmentId?: string },
+): Promise<TargetCandidate[]> {
+  const nodes =
+    caller.nodeId === PUBLIC_ALL_NODES
+      ? (await operatorAllNodes(caller)).reachable
+      : [await operatorNode(caller, caller.nodeId)];
+  const perNode = await Promise.all(
+    nodes.map(async (node): Promise<TargetCandidate[]> => {
+      const [registry, projects] = await Promise.all([
+        node.invoke<AgentRegistrySnapshot>("get_agent_registry", scope),
+        allPages<PublicProjectSummary>(node.caller, "project.list"),
+      ]);
+      return registry.entries.flatMap((entry) => {
+        if (entry.ownerKind !== "coordinator" || !entry.sessionId) return [];
+        const project = projects?.find((candidate) => candidate.id === entry.projectId)?.name;
+        const names =
+          entry.coordinatorRole === "side"
+            ? [entry.displayName]
+            : ["coordinator", entry.displayName];
+        return [
+          {
+            kind: "session" as const,
+            id: entry.sessionId,
+            name: entry.displayName,
+            aliases: [...names, ...(project ? names.map((name) => `${project} ${name}`) : [])],
+            environmentId: entry.environmentId,
+            projectId: entry.projectId,
+            ...(typeof node.tag.nodeId === "string"
+              ? { nodeId: node.tag.nodeId, nodeName: String(node.tag.node ?? node.tag.nodeId) }
+              : {}),
+          },
+        ];
+      });
+    }),
+  );
+  return perNode.flat();
 }
 
 function candidateNode(item: object): { nodeId?: string; nodeName?: string } {

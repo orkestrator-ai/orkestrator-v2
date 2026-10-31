@@ -1,4 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorConversationSessionKey,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import {
+  decodePublicSessionId,
+  encodePublicSessionId,
+} from "@orkestrator/protocol/public-api-resources";
 import { controlMcpHarness } from "./control-mcp-test-support.js";
 import { cleanupSessionHarnesses, setActivity } from "./public-api/test-provider.js";
 
@@ -172,6 +182,166 @@ describe("operator tools over public actions", () => {
       receipt: { action: "session.prompt", requestId: "prompt-idle" },
     });
     expect(harness.stub.sends.at(-1)?.prompt).toBe("Second.");
+  });
+
+  describe("Coordinator conversations", () => {
+    async function withCoordinator() {
+      const harness = await open();
+      const storage = harness.harness.storage;
+      await storage.updateProject(harness.projectId, { localPath: harness.harness.root });
+      const main = {
+        id: "main",
+        tabId: "coordinator-main",
+        logicalSessionKey: coordinatorConversationSessionKey("coordinator-1", {
+          id: "main",
+          tabId: "coordinator-main",
+        }),
+        agent: "claude" as const,
+        title: "Coordinator",
+        createdAt: new Date(0).toISOString(),
+        mailboxIncarnationId: "incarnation-main",
+        role: "main" as const,
+      };
+      await storage.coordinators.mutateCoordinatorWorkspace(harness.projectId, () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-1",
+        projectId: harness.projectId,
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [main],
+        selectedConversationId: "main",
+        repositoryContextRevision: 0,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      }));
+      const environmentId = coordinatorRuntimeId("coordinator-1", "main");
+      const providerSessionId = "provider-coordinator";
+      await harness.harness.commands.get("adopt_native_agent_session")!(
+        {
+          environmentId,
+          agent: "claude",
+          logicalSessionKey: main.logicalSessionKey,
+          providerSessionId,
+          origin: "interactive-native",
+        },
+        harness.harness.context,
+      );
+      setActivity(harness.service, "claude", main.tabId, providerSessionId, "idle", environmentId);
+      return { harness, environmentId, tabId: main.tabId };
+    }
+
+    test("what list_agents names, every session and tab tool can then reach", async () => {
+      const { harness, environmentId, tabId } = await withCoordinator();
+      const agents = await harness.call(harness.defaultToken, "list_agents");
+      const entry = (
+        agents.structuredContent as {
+          entries: Array<{
+            ownerKind: string;
+            environmentId: string;
+            tabId: string;
+            sessionId?: string;
+          }>;
+        }
+      ).entries.find((candidate) => candidate.ownerKind === "coordinator")!;
+      expect(entry).toMatchObject({ environmentId, tabId });
+      const sessionId = entry.sessionId!;
+      expect(decodePublicSessionId(sessionId)).toEqual({ environmentId, tabId });
+
+      const tabs = await harness.call(harness.defaultToken, "list_tabs", { environmentId });
+      expect(tabs.isError).not.toBe(true);
+      expect(tabs.structuredContent).toMatchObject({
+        total: 1,
+        tabs: [{ id: tabId, type: "agent-native", title: "Coordinator", agent: "claude" }],
+      });
+
+      const state = await harness.call(harness.defaultToken, "get_tab_state", {
+        environmentId,
+        tabId,
+      });
+      expect(state.isError).not.toBe(true);
+      expect(state.structuredContent).toMatchObject({ environmentId, tabId, agent: "claude" });
+
+      const transcript = await harness.call(harness.defaultToken, "get_tab_transcript", {
+        environmentId,
+        tabId,
+      });
+      expect(transcript.isError).not.toBe(true);
+
+      expect(
+        (await harness.call(harness.defaultToken, "session_list", { environmentId })).isError,
+      ).not.toBe(true);
+      expect(
+        (await harness.call(harness.defaultToken, "session_get", { sessionId })).isError,
+      ).not.toBe(true);
+
+      const sent = await harness.call(harness.defaultToken, "send_prompt_to_tab", {
+        requestId: "prompt-coordinator",
+        environmentId,
+        tabId,
+        prompt: "What is the state of the release?",
+      });
+      expect(sent.structuredContent).toMatchObject({
+        environmentId,
+        tabId,
+        outcome: "accepted",
+        receipt: { action: "session.prompt", requestId: "prompt-coordinator" },
+      });
+      expect(harness.stub.sends.at(-1)?.prompt).toContain("What is the state of the release?");
+    });
+
+    test("resolve_target finds a project's Coordinator by name", async () => {
+      const { harness, environmentId, tabId } = await withCoordinator();
+      const target = async (query: string) =>
+        (
+          (await harness.call(harness.defaultToken, "resolve_target", { query, kind: "session" }))
+            .structuredContent as { result?: { target?: { id: string; environmentId: string } } }
+        ).result?.target;
+      for (const query of ["coordinator", "the session coordinator"]) {
+        expect(await target(query)).toMatchObject({
+          id: encodePublicSessionId(environmentId, tabId),
+          environmentId,
+        });
+      }
+    });
+
+    test("a read-only credential can read a Coordinator but cannot prompt it", async () => {
+      const { harness, environmentId, tabId } = await withCoordinator();
+      const readOnly = await harness.credential("read-only");
+      const listed = await harness.call(readOnly.token, "list_tabs", { environmentId });
+      expect(listed.isError).not.toBe(true);
+      const names = (await harness.list(readOnly.token)).tools.map((tool) => tool.name);
+      expect(names).not.toContain("send_prompt_to_tab");
+      const refused = await harness.call(readOnly.token, "run_action", {
+        action: "session.prompt",
+        requestId: "read-only-prompt",
+        input: { sessionId: encodePublicSessionId(environmentId, tabId), prompt: "Hello" },
+      });
+      expect(refused.isError).toBe(true);
+      expect(harness.stub.sends).toHaveLength(0);
+    });
+
+    test("mail from a credential stays inbox-only: prompting is the one way in", async () => {
+      const { harness, environmentId, tabId } = await withCoordinator();
+      await harness.harness.storage.synchronizeAgentMailboxes();
+      const sent = await harness.call(harness.defaultToken, "send_message", {
+        requestId: "mail-coordinator",
+        toEnvironmentId: environmentId,
+        toTabId: tabId,
+        subject: "Status",
+        body: "Hello",
+      });
+      expect(sent.structuredContent).toMatchObject({ message: { placement: "stored" } });
+      expect(harness.stub.sends).toHaveLength(0);
+    });
+  });
+
+  test("list_tabs refuses an unknown environment instead of reading as no tabs", async () => {
+    const harness = await open();
+    const missing = await harness.call(harness.defaultToken, "list_tabs", {
+      environmentId: "no-such-environment",
+    });
+    expect(missing.isError).toBe(true);
+    expect(JSON.stringify(missing.content)).toContain("Environment not found: no-such-environment");
   });
 
   test("ticket tools keep their shapes over ticket.* with durable request keys", async () => {

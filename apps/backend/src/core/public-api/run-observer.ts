@@ -1,9 +1,11 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { PublicExecutionState, PublicInteractionRef } from "@orkestrator/protocol/public-api";
 import {
   decodePublicSessionId,
   nativeTabLogicalSessionKey,
 } from "@orkestrator/protocol/public-api-resources";
+import { openCoordinatorConversation } from "../coordinator-runtime.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import type { PublicOperationRecord } from "./operation-ledger.js";
 import { nativePromptQueueKey } from "./prompt-delivery.js";
@@ -40,9 +42,14 @@ async function runTarget(
   const requestId = record.resources.dispatchRequestId;
   const decoded = decodePublicSessionId(record.resources.sessionId);
   if (!requestId || !decoded) return null;
-  const layout = await context.command.storage.getPaneLayout(decoded.environmentId);
+  const storage = context.command.storage;
+  const coordinator = await openCoordinatorConversation(storage, decoded.environmentId);
+  const layout = coordinator ? null : await storage.getPaneLayout(decoded.environmentId);
   const tab = nativeTabsOfLayout(layout).find((candidate) => candidate.tabId === decoded.tabId);
-  const agent = tab?.agent ?? (record.resolved?.agent as AgentPlatform | undefined);
+  const agent =
+    coordinator?.conversation.agent ??
+    tab?.agent ??
+    (record.resolved?.agent as AgentPlatform | undefined);
   if (!agent) return null;
   return {
     environmentId: decoded.environmentId,
@@ -294,12 +301,18 @@ async function evaluateRun(
     });
   }
   const storage = context.command.storage;
-  const environment = await storage.getEnvironment(target.environmentId);
-  if (!environment) {
+  // A Coordinator has no environment row; its conversation is what can go away.
+  const coordinator = coordinatorIdFromRuntimeId(target.environmentId) !== null;
+  const owner = coordinator
+    ? await openCoordinatorConversation(storage, target.environmentId)
+    : await storage.getEnvironment(target.environmentId);
+  if (!owner) {
     return settle({
       state: "interrupted",
       evidence: "none",
-      reason: "The environment was deleted",
+      reason: coordinator
+        ? "The Coordinator conversation was closed"
+        : "The environment was deleted",
     });
   }
   const session = await storage.getNativeAgentSession(

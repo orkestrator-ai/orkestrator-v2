@@ -1147,8 +1147,8 @@ shape for older renderers and adds scoped fields (`cpuCoresUsed`, `sampledAt`,
 ### Unknown figures and out-of-memory kills
 
 Usage figures Docker did not report are `null` end to end (memory, CPUs,
-disk, image count, creation time) and the Docker dialog shows them as
-unknown; it refreshes every five seconds while open and marks a sample older
+disk, image count, creation time) and Settings → Docker shows them as
+unknown; it refreshes every five seconds while shown and marks a sample older
 than fifteen seconds stale. `/dev/shm` is 1 GiB, or half the memory limit
 when that is smaller, because shared memory is charged to the limit.
 `container-oom-events.ts` follows Docker's `oom` events for this owner — a

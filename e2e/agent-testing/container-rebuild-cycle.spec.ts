@@ -103,7 +103,11 @@ test("Docker fixture rebuild keeps running while another environment is open and
   await page.keyboard.press("Escape");
 
   // Reviewed cleanup never offers the live environment's resources.
-  await page.getByRole("button", { name: "Docker configuration" }).click();
+  await page.getByRole("button", { name: "Global settings" }).click();
+  await page
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { name: "Docker", exact: true })
+    .click();
   await page.getByRole("button", { name: /Review cleanup/ }).click();
   await expect(
     page.getByText(/Review Docker cleanup|Nothing to clean up|can be removed/i).first(),

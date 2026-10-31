@@ -28,6 +28,7 @@ test("scope banners name the owner of each section in a leaf window", () => {
   for (const section of [
     "platforms",
     "network",
+    "docker",
     "container",
     "disk-usage",
     "skills",

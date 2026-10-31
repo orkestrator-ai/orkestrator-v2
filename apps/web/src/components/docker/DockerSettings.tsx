@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
   Loader2,
-  Container,
   RefreshCw,
   Trash2,
   AlertCircle,
@@ -24,10 +23,8 @@ import {
 } from "lucide-react";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
-import {
-  FullscreenSettingsLayout,
-  type SettingsMenuItem,
-} from "@/components/settings/FullscreenSettingsLayout";
+import { isWindowMachine, useAccountMachine } from "@/components/settings/account-machine";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import type { DockerSystemStats, ContainerInfo } from "@/lib/backend";
 import { useProjectStore, useEnvironmentStore } from "@/stores";
 import { Label } from "@/components/ui/label";
@@ -43,12 +40,7 @@ import { formatBytes, formatRelativeTime } from "./docker-stats-format";
 import { DockerImageStatusPanel } from "./DockerImageStatusPanel";
 import { DockerCleanupReview } from "./DockerCleanupReview";
 
-interface DockerStatsDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-/** Refresh interval while the dialog is open. */
+/** Refresh interval while the section is shown. */
 const STATS_REFRESH_MS = 5_000;
 /** A sample older than this is shown as stale. */
 const STATS_STALE_MS = 15_000;
@@ -63,7 +55,34 @@ function isUnclaimedContainer(container: ContainerInfo): boolean {
   );
 }
 
-export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps) {
+/**
+ * Settings → Docker. Docker commands reach only this window's backend, so
+ * another machine picked in the header gets a notice instead of figures that
+ * belong to a different host.
+ */
+export function DockerSettings() {
+  const { machine } = useAccountMachine();
+  const dockerAvailable = useDockerAvailability();
+  if (!isWindowMachine(machine)) {
+    return (
+      <p className="max-w-3xl text-sm text-muted-foreground">
+        Docker containers can be managed only for the machine this window works on. Pick it in the
+        header to see its Docker resources.
+      </p>
+    );
+  }
+  if (!dockerAvailable) {
+    return (
+      <div className="flex max-w-3xl items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        <span>Docker is not running. Start Docker to see its resources and containers.</span>
+      </div>
+    );
+  }
+  return <DockerSettingsPanel />;
+}
+
+function DockerSettingsPanel() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<DockerSystemStats | null>(null);
@@ -105,7 +124,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
         if (background) setError(null);
       })
       .catch((err: unknown) => {
-        console.error("[DockerStatsDialog] Failed to load data:", err);
+        console.error("[DockerSettings] Failed to load data:", err);
         setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
@@ -124,29 +143,14 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     fetchData(false);
   };
 
-  // Opening shows the spinner until the first load answers; closing resets.
-  const [wasOpen, setWasOpen] = useState(open);
-  if (wasOpen !== open) {
-    setWasOpen(open);
-    if (open) {
-      setIsLoading(true);
-      setError(null);
-    } else {
-      setStats(null);
-      setContainers([]);
-      setError(null);
-    }
-  }
-
-  // Load data when dialog opens, then refresh while it stays open. The
-  // backend shares one sample between callers, so this costs no extra
-  // Docker calls within its interval. Opening already showed the spinner.
+  // Load when the section is shown, then refresh while it stays on screen.
+  // The backend shares one sample between callers, so this costs no extra
+  // Docker calls within its interval. The first load clears the spinner.
   useEffect(() => {
-    if (!open) return;
     fetchData(false);
     const timer = setInterval(() => fetchData(true), STATS_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [open, fetchData]);
+  }, [fetchData]);
 
   const handleStopContainer = async (containerId: string) => {
     setStoppingContainerId(containerId);
@@ -157,7 +161,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       const containersData = await backend.getOrkestratorContainers();
       setContainers(containersData);
     } catch (err) {
-      console.error("[DockerStatsDialog] Stop container failed:", err);
+      console.error("[DockerSettings] Stop container failed:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setStoppingContainerId(null);
@@ -173,7 +177,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       const containersData = await backend.getOrkestratorContainers();
       setContainers(containersData);
     } catch (err) {
-      console.error("[DockerStatsDialog] Delete container failed:", err);
+      console.error("[DockerSettings] Delete container failed:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeletingContainerId(null);
@@ -210,16 +214,12 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       setSelectedProjectId("");
       setReattachName("");
     } catch (err) {
-      console.error("[DockerStatsDialog] Reattach failed:", err);
+      console.error("[DockerSettings] Reattach failed:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsReattaching(false);
     }
   };
-
-  const dockerMenuItems: SettingsMenuItem[] = [
-    { id: "containers", label: "Containers", icon: <Container className="h-4 w-4" /> },
-  ];
 
   const renderDockerSection = () => {
     if (error) {
@@ -474,14 +474,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
   return (
     <>
-      <FullscreenSettingsLayout
-        open={open}
-        onOpenChange={onOpenChange}
-        title="Docker"
-        menuItems={dockerMenuItems}
-      >
-        {() => renderDockerSection()}
-      </FullscreenSettingsLayout>
+      {renderDockerSection()}
 
       <DockerCleanupReview
         open={showCleanupReview}

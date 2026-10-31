@@ -3,7 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import type { ContainerInfo, DockerSystemStats } from "@/lib/backend";
-import { DockerStatsDialog } from "./DockerStatsDialog";
+import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { AccountMachineProvider } from "@/components/settings/account-machine";
+import { DockerSettings } from "./DockerSettings";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -52,10 +54,10 @@ function install(stats: DockerSystemStats, containers: ContainerInfo[]) {
   return calls;
 }
 
-describe("Docker stats dialog", () => {
+describe("Docker settings section", () => {
   test("an unassigned pre-label container can be reattached", async () => {
     install(unknownStats, [container({ isAssigned: false, cleanupExclusion: "legacy-unadopted" })]);
-    render(<DockerStatsDialog open onOpenChange={() => undefined} />);
+    render(<DockerSettings />);
     expect(await screen.findByTitle("Reattach to project")).toBeTruthy();
     expect(screen.getByText("Legacy")).toBeTruthy();
     expect(screen.queryByText("Protected") === null).toBe(true);
@@ -67,7 +69,7 @@ describe("Docker stats dialog", () => {
 
   test("what Docker did not report reads as unknown, never as zero", async () => {
     install(unknownStats, [container({})]);
-    render(<DockerStatsDialog open onOpenChange={() => undefined} />);
+    render(<DockerSettings />);
     await screen.findByText(/Not measured: Docker did not answer/);
     expect(screen.getAllByText(/unknown/).length).toBeGreaterThanOrEqual(4);
     expect(screen.queryAllByText("0 B")).toHaveLength(0);
@@ -88,7 +90,7 @@ describe("Docker stats dialog", () => {
       },
       [container({})],
     );
-    render(<DockerStatsDialog open onOpenChange={() => undefined} />);
+    render(<DockerSettings />);
     await screen.findByText(/CPU: 2.50 cores/);
     expect(screen.getByText("2 out-of-memory kills")).toBeTruthy();
     expect(screen.getByText(/created time unknown/)).toBeTruthy();
@@ -98,7 +100,7 @@ describe("Docker stats dialog", () => {
 
   test("refresh reloads both the figures and the containers", async () => {
     const calls = install(unknownStats, []);
-    render(<DockerStatsDialog open onOpenChange={() => undefined} />);
+    render(<DockerSettings />);
     await screen.findByText(/Not measured/);
     const before = calls.filter((command) => command === "get_docker_system_stats").length;
     fireEvent.click(screen.getAllByRole("button", { name: "Refresh" })[0]!);
@@ -107,5 +109,29 @@ describe("Docker stats dialog", () => {
         before + 1,
       ),
     );
+  });
+
+  test("asks for Docker when it is not running, without calling it", async () => {
+    const calls = install(unknownStats, []);
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <DockerSettings />
+      </DockerAvailabilityProvider>,
+    );
+    expect(screen.getByText(/Docker is not running/)).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toHaveLength(0);
+  });
+
+  test("another machine picked in the header never shows this window's Docker", async () => {
+    const calls = install(unknownStats, [container({})]);
+    render(
+      <AccountMachineProvider value={{ machine: "bk_elsewhere", name: "Build box" }}>
+        <DockerSettings />
+      </AccountMachineProvider>,
+    );
+    expect(screen.getByText(/only for the machine this window works on/)).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toHaveLength(0);
   });
 });

@@ -1768,6 +1768,11 @@ describe("session lifecycle", () => {
       .flatMap((message) => message.parts);
     expect(parts).toEqual([{ type: "status", severity: "error", content: refusal }]);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "error", phase: "failed" });
+    // The backend's turn-end bell reads the failure from the no-touch route.
+    expect(h.runtime.getActivitySnapshot(sessionId)).toMatchObject({
+      activity: "idle",
+      turnFailed: true,
+    });
   });
 
   test("does not treat a plaintext final message as structured success", async () => {

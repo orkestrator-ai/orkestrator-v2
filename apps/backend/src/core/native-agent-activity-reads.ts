@@ -19,7 +19,10 @@ export const ACTIVITY_GROUP_READ_CONCURRENCY = 4;
 
 export interface ActivityGroupRead {
   state: ProviderActivityState;
-  /** Present when the provider answered with a full observation. */
+  /**
+   * Present when the provider answered with a full observation, or a
+   * lifecycle-only provider reported a failed turn.
+   */
   observation?: ProviderActivityObservation;
 }
 
@@ -46,6 +49,9 @@ async function readOne(
   }
   if (provider.activity) return { state: await provider.activity(sessionId) };
   const { status } = await readProviderStatus(provider, sessionId);
+  // Lifecycle-only providers report a failed turn as `error`; it reads idle.
+  if (status === "error")
+    return { state: "idle", observation: { state: "idle", turnFailed: true } };
   return {
     state:
       status === "missing"

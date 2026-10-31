@@ -9,6 +9,7 @@ import {
 } from "./commands-pr-monitor.js";
 import type { PrMonitorTarget } from "./pr-monitor.js";
 import { classifyPrDetectionFailure } from "./pr-monitor-policy.js";
+import { PrViewerPermissionCache } from "./pr-viewer-permission.js";
 
 /**
  * The `gh` boundary of backend PR monitoring, driven through a fake `gh` on
@@ -22,10 +23,12 @@ let root: string;
 let worktree: string;
 let ghLog: string;
 let ghMode: string;
+let ghPermissions: string;
 const originalPath = process.env.PATH;
 const env = process.env as Record<string, string | undefined>;
 const originalLog = env.FAKE_GH_LOG;
 const originalMode = env.FAKE_GH_MODE;
+const originalPermissions = env.FAKE_GH_PERMISSIONS;
 
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pr-boundary-"));
@@ -33,6 +36,7 @@ beforeAll(async () => {
   const bin = path.join(root, "bin");
   ghLog = path.join(root, "gh.log");
   ghMode = path.join(root, "mode");
+  ghPermissions = path.join(root, "permissions");
   await fs.mkdir(worktree, { recursive: true });
   await fs.mkdir(bin, { recursive: true });
   await fs.writeFile(
@@ -43,6 +47,10 @@ mode=$(cat "$FAKE_GH_MODE")
 case "$*" in
   *statusCheckRollup*)
     echo "HTTP 403: Resource not accessible by integration" >&2
+    exit 1 ;;
+  *.permissions*)
+    if [ -s "$FAKE_GH_PERMISSIONS" ]; then cat "$FAKE_GH_PERMISSIONS"; exit 0; fi
+    echo "HTTP 502: Bad Gateway" >&2
     exit 1 ;;
 esac
 if [ "$mode" = "rate-limited" ]; then
@@ -56,6 +64,7 @@ printf '%s\\n' "{\\"url\\":\\"${PR_URL}\\",\\"state\\":\\"$mode\\",\\"mergeable\
   process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ""}`;
   env.FAKE_GH_LOG = ghLog;
   env.FAKE_GH_MODE = ghMode;
+  env.FAKE_GH_PERMISSIONS = ghPermissions;
 });
 
 afterAll(async () => {
@@ -64,6 +73,8 @@ afterAll(async () => {
   else env.FAKE_GH_LOG = originalLog;
   if (originalMode === undefined) delete env.FAKE_GH_MODE;
   else env.FAKE_GH_MODE = originalMode;
+  if (originalPermissions === undefined) delete env.FAKE_GH_PERMISSIONS;
+  else env.FAKE_GH_PERMISSIONS = originalPermissions;
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -105,6 +116,55 @@ test("a merged PR is detected without paying for a check rollup", async () => {
   await fs.writeFile(ghMode, "MERGED");
   const detection = await detectEnvironmentPullRequest(knownPr(), { includeCheckSummary: true });
   expect(detection).toMatchObject({ state: "merged", checkSummaryStatus: "skipped" });
+  expect(await ghCalls()).toHaveLength(1);
+});
+
+test("an open PR's merge permission is asked once through the same gh, then cached", async () => {
+  await fs.writeFile(ghMode, "OPEN");
+  await fs.writeFile(ghPermissions, '{"admin":false,"maintain":false,"push":false,"pull":true}\n');
+  const viewerPermissions = new PrViewerPermissionCache();
+  try {
+    const first = await detectEnvironmentPullRequest(knownPr(), {
+      includeCheckSummary: false,
+      viewerPermissions,
+    });
+    expect(first).toMatchObject({ state: "open", viewerCanMerge: false });
+    const calls = await ghCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toBe("api --hostname github.com repos/acme/repo --jq .permissions");
+
+    const second = await detectEnvironmentPullRequest(knownPr(), {
+      includeCheckSummary: false,
+      viewerPermissions,
+    });
+    expect(second).toMatchObject({ viewerCanMerge: false });
+    expect(await ghCalls()).toHaveLength(1);
+  } finally {
+    await fs.rm(ghPermissions, { force: true });
+  }
+});
+
+test("a failed permission lookup leaves the PR state intact and the permission unknown", async () => {
+  await fs.writeFile(ghMode, "OPEN");
+  const detection = await detectEnvironmentPullRequest(knownPr(), {
+    includeCheckSummary: false,
+    viewerPermissions: new PrViewerPermissionCache(),
+  });
+  expect(detection).toMatchObject({
+    state: "open",
+    hasMergeConflicts: false,
+    viewerCanMerge: null,
+  });
+  await ghCalls();
+});
+
+test("a terminal PR never asks for merge permission", async () => {
+  await fs.writeFile(ghMode, "MERGED");
+  const detection = await detectEnvironmentPullRequest(knownPr(), {
+    includeCheckSummary: false,
+    viewerPermissions: new PrViewerPermissionCache(),
+  });
+  expect(detection).not.toHaveProperty("viewerCanMerge");
   expect(await ghCalls()).toHaveLength(1);
 });
 

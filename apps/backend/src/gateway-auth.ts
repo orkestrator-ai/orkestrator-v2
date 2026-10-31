@@ -573,6 +573,7 @@ export class GatewayAuth {
     if (identity.nodeMode) {
       capabilities[BACKEND_CAPABILITIES.nodeAttachment] = 1;
       capabilities[BACKEND_CAPABILITIES.publicActionRelay] = 1;
+      capabilities[BACKEND_CAPABILITIES.nodeMailSteer] = 1;
     }
     const hello: BackendHello = {
       schemaVersion: BACKEND_HELLO_SCHEMA_VERSION,

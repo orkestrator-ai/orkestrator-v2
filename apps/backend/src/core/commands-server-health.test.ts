@@ -1,8 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
+import { createServer, type OutgoingHttpHeaders } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import {
+  checkHttpHealth,
   confirmRunningServerHealth,
+  isHealthyHttpResponse,
   OPENCODE_INSTANCE_WARM_TIMEOUT_MS,
+  waitForUnhealthy,
   warmOpenCodeInstance,
 } from "./commands-server-health.js";
 import {
@@ -85,5 +90,81 @@ describe("warmOpenCodeInstance", () => {
       false,
     );
     expect(checkHealth).toHaveBeenCalledWith(4321, expect.any(String), {}, 5);
+  });
+});
+
+describe("isHealthyHttpResponse", () => {
+  test("accepts any non-HTML 2xx, including plain text and no content type", () => {
+    expect(isHealthyHttpResponse(200, "application/json")).toBe(true);
+    expect(isHealthyHttpResponse(204, undefined)).toBe(true);
+    expect(isHealthyHttpResponse(200, "text/plain; charset=utf-8")).toBe(true);
+  });
+
+  test("refuses HTML pages and non-2xx statuses", () => {
+    expect(isHealthyHttpResponse(200, "text/html")).toBe(false);
+    expect(isHealthyHttpResponse(200, " Text/HTML; charset=utf-8")).toBe(false);
+    expect(isHealthyHttpResponse(401, "application/json")).toBe(false);
+    expect(isHealthyHttpResponse(503, undefined)).toBe(false);
+    expect(isHealthyHttpResponse(undefined, undefined)).toBe(false);
+  });
+});
+
+describe("checkHttpHealth", () => {
+  async function withServer(
+    status: number,
+    headers: OutgoingHttpHeaders,
+    body: string,
+    run: (port: number) => Promise<void>,
+  ): Promise<void> {
+    const server = createServer((_request, response) => {
+      response.writeHead(status, headers);
+      response.end(body);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      await run((server.address() as AddressInfo).port);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+
+  test("treats a 1.x JSON health answer as healthy", async () => {
+    await withServer(
+      200,
+      { "content-type": "application/json" },
+      '{"healthy":true,"version":"1.19.4"}',
+      async (port) => expect(await checkHttpHealth(port)).toBe(true),
+    );
+  });
+
+  test("treats OpenCode 2.x's web app fallback on /global/health as unhealthy", async () => {
+    // What `opencode serve` 2.2.2 returns for GET /global/health, before auth.
+    await withServer(
+      200,
+      { "content-type": "text/html" },
+      "<!doctype html><html></html>",
+      async (port) => expect(await checkHttpHealth(port)).toBe(false),
+    );
+  });
+
+  test("waitForUnhealthy returns after the first HTML response while the port stays open", async () => {
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests += 1;
+      expect(request.url).toBe("/global/health");
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><html></html>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      // One attempt proves immediate success without a wall-clock assertion.
+      await expect(
+        waitForUnhealthy((server.address() as AddressInfo).port, 1),
+      ).resolves.toBeUndefined();
+      expect(requests).toBe(1);
+      expect(server.listening).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

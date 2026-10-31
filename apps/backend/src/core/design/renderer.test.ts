@@ -587,6 +587,64 @@ describe("DesignRenderer lifecycle deadlines", () => {
 });
 
 describe("DesignRenderer shutdown", () => {
+  for (const stoppedBy of ["deadline", "shutdown"] as const) {
+    test(`a launch completed after ${stoppedBy} releases its recorded artifacts`, async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "ork-late-"));
+      const profiles = new DesignProfileLedger(path.join(root, "ledger"));
+      const profile = path.join(root, "playwright_chromiumdev_profile-Abc123");
+      mkdirSync(profile);
+      const launching = deferred<DesignBrowserHandle>();
+      const started = deferred<string>();
+      const closing = deferred();
+      const late = fakeBrowser({
+        browserClose: async () => {
+          await closing.promise;
+          rmSync(profile, { recursive: true, force: true });
+        },
+      });
+      const instance = new DesignRenderer({
+        profiles,
+        executablePath: () => "/chromium",
+        budgets: { launchMs: stoppedBy === "deadline" ? 100 : 10_000, cleanupMs: 2_000 },
+        launchBrowser: (options) => {
+          started.resolve(options.artifactsDir!);
+          return launching.promise;
+        },
+      });
+      renderers.push(instance);
+      try {
+        const pending = failure(instance.run(job()));
+        const artifacts = await started.promise;
+        expect(existsSync(artifacts)).toBe(true);
+        if (stoppedBy === "shutdown") await instance.close();
+        expect((await pending).code).toBe("renderer-unavailable");
+        launching.resolve({ ...late.handle, pid: process.pid, profileDir: profile });
+        await waitFor(() => late.close.mock.calls.length === 1);
+        await waitFor(() => readdirSync(profiles.dir).some((name) => name.endsWith(".json")));
+        const recordName = readdirSync(profiles.dir).find((name) => name.endsWith(".json"))!;
+        expect(JSON.parse(readFileSync(path.join(profiles.dir, recordName), "utf8"))).toMatchObject(
+          {
+            profile,
+            artifacts,
+          },
+        );
+        expect(existsSync(artifacts)).toBe(true);
+        closing.resolve();
+        await waitFor(() => readdirSync(profiles.dir).length === 0);
+        expect(existsSync(artifacts)).toBe(false);
+        expect(existsSync(profile)).toBe(false);
+        expect(late.newContext).not.toHaveBeenCalled();
+        expect(late.close).toHaveBeenCalledTimes(1);
+        expect(late.kill).not.toHaveBeenCalled();
+      } finally {
+        launching.resolve(late.handle);
+        closing.resolve();
+        await instance.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("close() with active and queued work resolves within bounds and leaves no timers", async () => {
     const realSetTimeout = globalThis.setTimeout;
     const realClearTimeout = globalThis.clearTimeout;
@@ -868,8 +926,11 @@ describe("DesignRenderer with real Chromium", () => {
     "a killed backend's browser profile is removed by the next startup sweep (0248)",
     async () => {
       // The child's TMPDIR is ours, so its profile lands where this test owns it.
-      const root = mkdtempSync(path.join(tmpdir(), "ork-design-killed-backend-"));
-      const temp = path.join(root, "tmp");
+      // Names are short: Chromium puts its SingletonSocket in that TMPDIR, the
+      // test process's own TMPDIR is already private (0248), and a longer path
+      // passed Linux's 108-byte socket limit, so Chromium aborted at launch.
+      const root = mkdtempSync(path.join(tmpdir(), "ork-dk-"));
+      const temp = path.join(root, "t");
       const ledgerDir = path.join(root, "design-browser-profiles");
       mkdirSync(temp);
       const child = spawn(
@@ -886,14 +947,21 @@ describe("DesignRenderer with real Chromium", () => {
           });
           child.once("exit", () => reject(new Error("the renderer fixture exited early")));
         });
-        const [recordName] = readdirSync(ledgerDir);
+        const [recordName] = readdirSync(ledgerDir).filter((name) => name.endsWith(".json"));
         const record = JSON.parse(readFileSync(path.join(ledgerDir, recordName!), "utf8")) as {
           profile: string;
+          artifacts?: string;
           browser: { pid: number };
         };
         browserPid = record.browser.pid;
         expect(path.dirname(record.profile)).toBe(temp);
         expect(existsSync(record.profile)).toBe(true);
+        // Playwright honoured artifactsDir: nothing unrecorded in the temp dir (0830).
+        expect(path.dirname(record.artifacts!)).toBe(ledgerDir);
+        expect(existsSync(record.artifacts!)).toBe(true);
+        expect(
+          readdirSync(temp).filter((name) => name.startsWith("playwright-artifacts-")),
+        ).toEqual([]);
 
         child.kill("SIGKILL");
         await exited;

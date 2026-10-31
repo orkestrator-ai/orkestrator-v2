@@ -117,7 +117,7 @@ The unrelated owner follow-ups are:
 | Owner | Preparation symptom | Complete isolated result | Case |
 | --- | --- | --- | --- |
 | `apps/backend/src/core/design/browser-profiles.test.ts` | Profile removed before its JSON ledger entry (265.62 ms) | Passed, 1.8 s | [1314](../design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md) |
-| `apps/backend/src/core/storage-backups.test.ts` | Descendant still alive after bounded exit wait (2484.04 ms) | Passed, 3.0 s | [1316](../backend-services-and-tooling/1316-storage-backup-descendant-exit-race.md) |
+| `apps/backend/src/core/storage-backups.test.ts` | Descendant still alive after bounded exit wait (2484.04 ms) | Passed, 3.0 s | [1317](../backend-services-and-tooling/1317-storage-backup-descendant-exit-race.md) |
 | `tests/unit/disk-report.test.ts` | Five-second timeout, null report status (5166.47 ms) | Passed, 5.2 s | [0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md) |
 | `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts` | First-answer settling timeout (2209.90 ms) | First isolated run: 29 passed, stale/ready assertion failed; second unchanged run: 30 passed, 1.2 s | [0791](../agent-bridges/0791-codex-command-catalogue-stale-race.md) |
 | `e2e/ToolGroupFold.spec.ts` | Mobile fold gap 57 px instead of at most 2 px | 38 passed, 100.3 s | [1012](../web-ui/1012-live-tool-fold-threshold-gap.md) |

@@ -1431,6 +1431,11 @@ describe("ACP bridge", () => {
       (response) => response.json(),
     )) as { status: string };
     expect(status.status).toBe("error");
+    // The backend's turn-end bell reads the failure from the no-touch route.
+    const activity = await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then(
+      (response) => response.json(),
+    );
+    expect(activity).toEqual({ activity: "idle", turnFailed: true });
   });
 
   test("dispatches an image-only prompt and indexes every attachment part", async () => {

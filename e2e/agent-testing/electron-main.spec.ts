@@ -500,7 +500,7 @@ print("public.tiff")
           if (!focusedWindow || !item?.click) {
             throw new Error("Keyboard Shortcuts… menu item is unavailable");
           }
-          if (item.accelerator !== "CmdOrCtrl+Shift+K") {
+          if (item.accelerator !== "CmdOrCtrl+Shift+/") {
             throw new Error(`Keyboard Shortcuts… shows ${String(item.accelerator)}`);
           }
           // Built MenuItem.click takes the event first; Electron forwards it
@@ -533,7 +533,15 @@ print("public.tiff")
       await expect(shortcutsDialog).toHaveCount(0);
       await clickKeyboardShortcuts(false);
       await expect(shortcutsDialog).toBeVisible();
-      await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Shift+K`);
+      await window.keyboard.press(
+        `${process.platform === "darwin" ? "Meta" : "Control"}+Shift+Slash`,
+      );
+      await expect(shortcutsDialog).toHaveCount(0);
+      // Either modifier is accepted on every platform: on macOS, Control+Shift+/
+      // as well as ⌘⇧/.
+      await window.keyboard.press("Control+Shift+Slash");
+      await expect(shortcutsDialog).toBeVisible();
+      await window.keyboard.press("Control+Shift+Slash");
       await expect(shortcutsDialog).toHaveCount(0);
 
       // Electron's native input path must claim one press before either the
@@ -544,28 +552,29 @@ print("public.tiff")
         globalThis.addEventListener(
           "keydown",
           (event) => {
-            if (event instanceof KeyboardEvent && event.key.toLowerCase() === "k" && event.shiftKey)
+            if (event instanceof KeyboardEvent && event.code === "Slash" && event.shiftKey)
               state.count++;
           },
           true,
         );
       });
-      const nativeShortcut = () =>
-        app.evaluate(({ BrowserWindow }) => {
+      const nativeShortcut = (modifier: "meta" | "control") =>
+        app.evaluate(({ BrowserWindow }, modifier) => {
           const host = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]!;
           host.focus();
           host.webContents.focus();
-          const modifiers: ("meta" | "control" | "shift")[] = [
-            process.platform === "darwin" ? "meta" : "control",
-            "shift",
-          ];
-          host.webContents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers });
-          host.webContents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers });
-        });
-      await nativeShortcut();
-      await expect(shortcutsDialog).toBeVisible();
-      await nativeShortcut();
-      await expect(shortcutsDialog).toHaveCount(0);
+          const modifiers: ("meta" | "control" | "shift")[] = [modifier, "shift"];
+          host.webContents.sendInputEvent({ type: "keyDown", keyCode: "/", modifiers });
+          host.webContents.sendInputEvent({ type: "keyUp", keyCode: "/", modifiers });
+        }, modifier);
+      for (const modifier of process.platform === "darwin"
+        ? (["meta", "control"] as const)
+        : (["control"] as const)) {
+        await nativeShortcut(modifier);
+        await expect(shortcutsDialog).toBeVisible();
+        await nativeShortcut(modifier);
+        await expect(shortcutsDialog).toHaveCount(0);
+      }
       expect(
         await window.evaluate(
           () =>

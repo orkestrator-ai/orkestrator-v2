@@ -292,6 +292,9 @@ export function createDelegationWatch(
       const observation: DelegationObservation = {
         at: Date.now(),
         coordinatorPhase: projection?.turn.phase ?? "idle",
+        ...(projection?.contextUsage?.turns
+          ? { coordinatorTurnIds: projection.contextUsage.turns.map((turn) => turn.turnId) }
+          : {}),
         queueLength: queue?.messages?.length ?? 0,
         workerPhases: phases,
         delegations,

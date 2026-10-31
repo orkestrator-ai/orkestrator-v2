@@ -84,6 +84,7 @@ import {
 } from "./cold-restart-evidence";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import { outlivingProcessEnv } from "../../tests/private-tmpdir";
 
 type Status = {
   status: string;
@@ -280,6 +281,7 @@ async function restartProfile(
   const launcher = spawn("bun", args, {
     cwd: repositoryRoot,
     detached: true,
+    env: outlivingProcessEnv(),
     stdio: ["ignore", output, output],
   });
   launcher.unref();

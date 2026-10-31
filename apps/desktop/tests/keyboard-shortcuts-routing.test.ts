@@ -40,10 +40,11 @@ function harness(platform: NodeJS.Platform = "linux") {
   return { shell, realm, otherWindow, owners, controller, routing, register };
 }
 
+// ⌘⇧/ as macOS reports it. Ctrl+Shift+/ may report the shifted "?".
 const chord = {
   type: "keyDown",
-  key: "K",
-  code: "KeyK",
+  key: "/",
+  code: "Slash",
   meta: true,
   control: false,
   shift: true,
@@ -121,10 +122,10 @@ describe("native shortcut routing", () => {
     },
   );
 
-  test("Windows/Linux Ctrl+Shift+K toggles once, while AltGr (Ctrl+Alt) reaches the page", () => {
+  test("Windows/Linux Ctrl+Shift+/ toggles once, while AltGr (Ctrl+Alt) reaches the page", () => {
     const { register, shell, controller } = harness();
     const source = register(shell.id);
-    const ctrl = { ...chord, meta: false, control: true };
+    const ctrl = { ...chord, key: "?", meta: false, control: true };
     const event = { preventDefault: mock(() => {}) };
     source.emit("before-input-event", event, ctrl);
     // Electron also delivers rawKeyDown for a Ctrl chord; it is not a second press.
@@ -161,7 +162,7 @@ describe("native shortcut routing", () => {
     ["Ctrl+K", { meta: false, control: true }],
   ])("%s in a native artifact view opens the window's search, once per press", (_, mods) => {
     const { register, shell, realm } = harness();
-    const search = { ...chord, ...mods, key: "k", shift: false };
+    const search = { ...chord, ...mods, key: "k", code: "KeyK", shift: false };
     const source = register(43);
     const event = { preventDefault: mock(() => {}) };
     source.emit("before-input-event", event, search);
@@ -211,15 +212,11 @@ describe("native shortcut routing", () => {
     const { register, shell } = harness("darwin");
     const source = register(43);
     const event = { preventDefault: mock(() => {}) };
-    source.emit("before-input-event", event, {
-      ...chord,
-      shift: false,
-      meta: false,
-      control: true,
-    });
+    const search = { ...chord, key: "k", code: "KeyK", shift: false };
+    source.emit("before-input-event", event, { ...search, meta: false, control: true });
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(shell.send).not.toHaveBeenCalled();
-    source.emit("before-input-event", event, { ...chord, shift: false });
+    source.emit("before-input-event", event, search);
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
     expect(shell.send).toHaveBeenCalledWith("orkestrator:event", "app-shortcut", "search-projects");
   });
@@ -233,7 +230,13 @@ describe("native shortcut routing", () => {
       const source = register(id);
       const event = { preventDefault: mock(() => {}) };
       for (const mods of [{ meta: true }, { meta: false, control: true }])
-        source.emit("before-input-event", event, { ...chord, ...mods, key: "k", shift: false });
+        source.emit("before-input-event", event, {
+          ...chord,
+          ...mods,
+          key: "k",
+          code: "KeyK",
+          shift: false,
+        });
       expect(event.preventDefault).not.toHaveBeenCalled();
       for (const contents of [shell, realm, otherWindow]) {
         expect(contents.send).not.toHaveBeenCalled();
@@ -242,10 +245,15 @@ describe("native shortcut routing", () => {
     },
   );
 
-  test.each([1, 2, 43])("Ctrl+Shift+K in app/realm/artifact %s toggles like ⌘⇧K", (id) => {
+  test.each([1, 2, 43])("Ctrl+Shift+/ in app/realm/artifact %s toggles like ⌘⇧/", (id) => {
     const { register, shell, realm, controller } = harness();
     const event = { preventDefault: mock(() => {}) };
-    register(id).emit("before-input-event", event, { ...chord, meta: false, control: true });
+    register(id).emit("before-input-event", event, {
+      ...chord,
+      key: "?",
+      meta: false,
+      control: true,
+    });
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
     expect((id === 1 ? shell : realm).send).toHaveBeenLastCalledWith(
       "orkestrator:event",

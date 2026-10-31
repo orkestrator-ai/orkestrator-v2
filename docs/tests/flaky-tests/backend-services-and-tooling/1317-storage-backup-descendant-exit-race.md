@@ -1,6 +1,6 @@
 # Storage backup descendants remain visible after abrupt backend death
 
-- **ID:** 1316
+- **ID:** 1317
 - **Status:** open
 - **Date observed:** 2026-10-30
 - **Test:** `database snapshots > abrupt backend death terminates the supervisor and its blocked copy before restart cleanup`

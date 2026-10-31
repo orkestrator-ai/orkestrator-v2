@@ -48,6 +48,7 @@ import {
   FIXTURE_VIEWPORT,
   startFixtureServer,
 } from "./web-annotations-support";
+import { outlivingProcessEnv } from "../../tests/private-tmpdir";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
@@ -140,7 +141,12 @@ async function restartProfile(mode: "graceful" | "crash"): Promise<Status> {
         ? ["--agent-platforms", stored.agentPlatforms.join(",")]
         : []),
     ],
-    { cwd: repositoryRoot, detached: true, stdio: ["ignore", output, output] },
+    {
+      cwd: repositoryRoot,
+      detached: true,
+      env: outlivingProcessEnv(),
+      stdio: ["ignore", output, output],
+    },
   );
   launcher.unref();
   let status: Status | undefined;

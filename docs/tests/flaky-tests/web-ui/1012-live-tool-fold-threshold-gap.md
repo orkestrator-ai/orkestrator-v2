@@ -85,3 +85,20 @@ mise run test:logged -- --name recorded-tool-fold -- bunx playwright test --conf
 Passing output was removed; the summary remains in
 `orkestrator-test-run.YX20cU` below the host temporary directory. No folding
 implementation, assertion, timeout or skip changed; the cause is unconfirmed.
+
+## Leaf-check readiness review — 2026-10-30
+
+Preparation repeated the desktop no-preference fold-gap failure at line 147 in
+the nine-worker component browser aggregate (971 passed, 106 skipped, seven
+failed). The complete unchanged ToolGroupFold owner passed with one worker in
+98.0 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=1457 mise run test:logged -- --name pr-review-ToolGroupFold-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --workers=1 --output output/playwright/pr-review-ToolGroupFold-owner
+```
+
+The exact full browser rerun passed every group-fold case (976 passed, 106
+skipped, only the two native branch-picker cases failed), with evidence in
+`orkestrator-test-run.VyCqpD/browser.log.gz` under the host temporary directory.
+The host still ran other validation during the owner run; the cause remains
+unconfirmed. No group implementation, assertion, timeout or skip changed.

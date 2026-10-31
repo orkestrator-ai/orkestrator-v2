@@ -12,6 +12,7 @@ import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTra
 import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
 import { AnnotationDestinationLayoutFixture } from "./AnnotationDestinationLayoutFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
+import { RememberRulePanelFixture } from "./RememberRulePanelFixture";
 import {
   AgentLaunchDialog,
   type AgentLaunchSelection,
@@ -1996,6 +1997,7 @@ function fixtureForPath() {
     return <NativeMessageSpacingFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
+  if (window.location.pathname === "/remember-rule-panel") return <RememberRulePanelFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
   if (window.location.pathname === "/markdown-editor-diagram")

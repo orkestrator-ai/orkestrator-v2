@@ -3,10 +3,14 @@ import { InteractionUpdateSchema } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
 import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { publicContextUsage } from "./public.js";
+import { beginAssistantTurn } from "./transcript.js";
+import compactionOrder from "../test-fixtures/compaction-order-1.2.0.json";
 import type { BridgeToolPart, SessionState } from "./state.js";
 import {
   ABANDONED_COMPACTION_NOTE,
   ABANDONED_TOOL_NOTE,
+  FAILED_COMPACTION_NOTE,
+  FALLBACK_COMPACTION_NOTE,
   applyInteractionUpdate,
   applyStreamUsage,
   settleAbandonedToolParts,
@@ -860,6 +864,145 @@ describe("session-wide state", () => {
       toolState: "success",
       content: "late",
     });
+  });
+
+  test("a failed compaction settles its boundary as a failure", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    // Parsed by the SDK's own schema, so a release that drops the field fails here.
+    applyInteractionUpdate(
+      state,
+      InteractionUpdateSchema.parse({ type: "summary-completed", failed: true }),
+    );
+
+    const parts = state.messages.at(-1)!.parts.filter((part) => part.type === "compaction");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ toolState: "failure", content: FAILED_COMPACTION_NOTE });
+  });
+
+  test("a fallback compaction says the transcript was trimmed", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    applyInteractionUpdate(state, { type: "summary-completed", fallback: true });
+
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
+      toolState: "success",
+      content: FALLBACK_COMPACTION_NOTE,
+    });
+  });
+
+  test("replays the signed-in SDK 1.2.0 compaction ordering as one boundary", () => {
+    const state = running();
+    for (const update of compactionOrder.updates) {
+      applyInteractionUpdate(
+        state,
+        InteractionUpdateSchema.parse(
+          update.type === "summary" ? { ...update, summary: "Synthetic summary" } : update,
+        ),
+      );
+    }
+    expect(state.messages.flatMap((row) => row.parts)).toEqual([
+      expect.objectContaining({
+        type: "compaction",
+        toolState: "success",
+        content: "Synthetic summary",
+      }),
+    ]);
+  });
+
+  test("a completion after the summary settles that boundary instead of adding one", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    applyInteractionUpdate(state, { type: "summary", summary: "trimmed copy" });
+    applyInteractionUpdate(state, { type: "summary-completed", fallback: true });
+
+    const parts = state.messages.at(-1)!.parts.filter((part) => part.type === "compaction");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      toolState: "success",
+      content: `${FALLBACK_COMPACTION_NOTE}.\n\ntrimmed copy`,
+    });
+  });
+
+  test.each([
+    [{}, "success", "kept the plan"],
+    [{ fallback: true }, "success", `${FALLBACK_COMPACTION_NOTE}.\n\nkept the plan`],
+    [{ failed: true }, "failure", `${FAILED_COMPACTION_NOTE}.\n\nkept the plan`],
+  ] as const)(
+    "keeps one boundary when completion %j precedes the summary",
+    (outcome, toolState, content) => {
+      const state = running();
+      applyInteractionUpdate(state, InteractionUpdateSchema.parse({ type: "summary-started" }));
+      applyInteractionUpdate(
+        state,
+        InteractionUpdateSchema.parse({ type: "summary-completed", ...outcome }),
+      );
+      const boundary = state.messages[0]!.parts[0]!;
+      // A late summary must revise its owner even after another model step opens.
+      applyInteractionUpdate(state, { type: "step-started", modelCallId: "next" });
+      applyInteractionUpdate(state, { type: "text-delta", text: "Continuing." });
+      const revision = state.revision;
+      applyInteractionUpdate(
+        state,
+        InteractionUpdateSchema.parse({ type: "summary", summary: "kept the plan" }),
+      );
+
+      const parts = state.messages.flatMap((row) =>
+        row.parts.filter((part) => part.type === "compaction"),
+      );
+      expect(parts).toHaveLength(1);
+      expect(parts[0]).toBe(boundary);
+      expect(parts[0]).toMatchObject({ toolState, content });
+      expect(state.revision).toBeGreaterThan(revision);
+    },
+  );
+
+  test("a late failed completion preserves the summary with an explicit failure note", () => {
+    const state = running();
+    for (const update of [
+      { type: "summary-started" },
+      { type: "summary", summary: "kept the plan" },
+      { type: "summary-completed", failed: true },
+      { type: "summary-completed", failed: true },
+    ])
+      applyInteractionUpdate(state, InteractionUpdateSchema.parse(update));
+
+    expect(state.messages.flatMap((row) => row.parts)).toEqual([
+      expect.objectContaining({
+        type: "compaction",
+        toolState: "failure",
+        content: `${FAILED_COMPACTION_NOTE}.\n\nkept the plan`,
+      }),
+    ]);
+  });
+
+  test("pairs successive compactions separately and leaves summary-only events distinct", () => {
+    const state = running();
+    for (const summary of ["first", "second"]) {
+      applyInteractionUpdate(state, { type: "summary-started" });
+      applyInteractionUpdate(state, { type: "summary-completed", fallback: true });
+      applyInteractionUpdate(state, { type: "summary", summary });
+    }
+    applyInteractionUpdate(state, { type: "summary", summary: "standalone" });
+    expect(state.messages.flatMap((row) => row.parts.map((part) => part.content))).toEqual([
+      `${FALLBACK_COMPACTION_NOTE}.\n\nfirst`,
+      `${FALLBACK_COMPACTION_NOTE}.\n\nsecond`,
+      "standalone",
+    ]);
+  });
+
+  test("does not attach a new turn's summary to an earlier completion", () => {
+    const state = running();
+    beginAssistantTurn(state);
+    applyInteractionUpdate(state, { type: "summary-started" });
+    applyInteractionUpdate(state, { type: "summary-completed", failed: true });
+    beginAssistantTurn(state);
+    applyInteractionUpdate(state, { type: "summary", summary: "new turn" });
+    expect(state.messages.flatMap((row) => row.parts.map((part) => part.content))).toEqual([
+      FAILED_COMPACTION_NOTE,
+      "new turn",
+    ]);
   });
 
   test("an appended user message becomes a user row", () => {

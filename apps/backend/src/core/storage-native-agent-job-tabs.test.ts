@@ -3,6 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  mergePersistedPaneLayouts,
+  type PaneLayoutMergeInput,
+} from "@orkestrator/protocol/pane-layout-merge";
 import { StorageService } from "./storage.js";
 
 describe("StorageService control job tabs", () => {
@@ -50,6 +54,59 @@ describe("StorageService control job tabs", () => {
           },
         ],
       });
+      const base = structuredClone(bound) as unknown as PaneLayoutMergeInput;
+      if (base.root.kind !== "leaf") throw new Error("expected one pane");
+      const tab = { ...base.root.tabs[0]!, displayTitle: "Renamed resolution" };
+      const desired: PaneLayoutMergeInput = {
+        ...base,
+        activePaneId: "right",
+        root: {
+          kind: "split",
+          id: "split",
+          direction: "horizontal",
+          sizes: [50, 50],
+          children: [
+            { kind: "leaf", id: base.root.id, tabs: [], activeTabId: null },
+            { kind: "leaf", id: "right", tabs: [tab], activeTabId: tab.id },
+          ],
+        },
+      };
+      const merged = mergePersistedPaneLayouts(base, desired, base);
+      expect(merged.root).toMatchObject({
+        children: [
+          { tabs: [] },
+          {
+            tabs: [
+              {
+                displayTitle: "Renamed resolution",
+                jobCompletionAction: "refresh-pr-after-agent-completion",
+              },
+            ],
+          },
+        ],
+      });
+      // Older renderers omit the backend field when they save their tab shape.
+      delete (tab as Record<string, unknown>).jobCompletionAction;
+      const moved = await storage.applyPaneLayoutIntent("env-1", base, desired);
+      expect(moved.root).toMatchObject({
+        children: [
+          { tabs: [] },
+          {
+            tabs: [
+              {
+                id: tab.id,
+                displayTitle: "Renamed resolution",
+                jobCompletionAction: "refresh-pr-after-agent-completion",
+              },
+            ],
+          },
+        ],
+      });
+      const saved = await storage.savePaneLayout("env-1", desired, moved.revision);
+      expect(saved.root).toEqual(moved.root);
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.getPaneLayout("env-1"))?.root).toEqual(saved.root);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

@@ -16,7 +16,11 @@ import {
   resolveFastMode,
 } from "./build-pipeline-service-helpers.js";
 import { assertValidPromptAttachments } from "./prompt-attachments.js";
-import { isNativeAgentJobTabReuse, resendToOpenJobTab } from "./native-agent-job-tab-reuse.js";
+import {
+  isNativeAgentJobTabReuse,
+  resendToOpenJobTab,
+  jobPromptFingerprint,
+} from "./native-agent-job-tab-reuse.js";
 
 function jobIdFor(environmentId: string, requestId: string): string {
   return createHash("sha256")
@@ -35,6 +39,21 @@ async function launchNativeAgentJob(
     validateModelCatalog: boolean;
     allowCompletionAction: boolean;
   },
+): Promise<Record<string, unknown>> {
+  if (args.tabReuse && options.allowCompletionAction) {
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    return context.storage.withNativeAgentJobLaunch(environmentId, () =>
+      launchNativeAgentJobInternal(args, context, dependencies, options),
+    );
+  }
+  return launchNativeAgentJobInternal(args, context, dependencies, options);
+}
+
+async function launchNativeAgentJobInternal(
+  args: Record<string, unknown>,
+  context: CommandContext,
+  dependencies: RegistryDependencies,
+  options: { validateModelCatalog: boolean; allowCompletionAction: boolean },
 ): Promise<Record<string, unknown>> {
   if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
   const environmentId = asNonBlankString(args.environmentId, "environmentId");
@@ -181,10 +200,15 @@ async function launchNativeAgentJob(
   );
 
   let armedAt: string | null = null;
+  let previousArmedAt: string | undefined;
   const rollBackCompletionAction = async (): Promise<void> => {
     if (!armedAt) return;
     try {
-      await context.storage.disarmPrRecheckAfterAgentCompletion(environmentId, armedAt);
+      await context.storage.disarmPrRecheckAfterAgentCompletion(
+        environmentId,
+        armedAt,
+        previousArmedAt,
+      );
     } catch (error) {
       console.warn(
         `[native-agent-job] Failed to roll back PR refresh for ${environmentId}:`,
@@ -196,6 +220,7 @@ async function launchNativeAgentJob(
   if (completionAction === "refresh-pr-after-agent-completion") {
     const armed = await context.storage.armPrRecheckAfterAgentCompletion(environmentId);
     armedAt = armed.armedAt;
+    previousArmedAt = armed.previousArmedAt;
   }
 
   const completionActionResult = completionAction
@@ -261,6 +286,26 @@ async function launchNativeAgentJob(
       providerSessionId: session.providerSessionId,
       title,
     });
+    const jobQueueKey = `${agent}\0${logicalSessionKey}`;
+    if (tabReuse) {
+      await context.storage.reserveNativeAgentJobRequest(jobQueueKey, environmentId, {
+        requestId,
+        fingerprint: jobPromptFingerprint(
+          prompt,
+          conversationMode,
+          tabReuse === "same-agent"
+            ? {
+                ...(explicitModel ? { model: explicitModel } : {}),
+                ...(explicitReasoningEffort ? { reasoningEffort: explicitReasoningEffort } : {}),
+                ...(typeof args.fastMode === "boolean" && typeof fastMode === "boolean"
+                  ? { fastMode }
+                  : {}),
+              }
+            : {},
+        ),
+        status: "unknown",
+      });
+    }
     const outcome = await context.nativeAgents.dispatchIntent({
       environmentId,
       agent,
@@ -278,6 +323,8 @@ async function launchNativeAgentJob(
       ...(attachments?.length ? { attachments } : {}),
       ...(initialPromptPresentation ? { initialPromptPresentation } : {}),
     });
+    if (tabReuse)
+      await context.storage.settleNativeAgentJobRequest(jobQueueKey, requestId, outcome.outcome);
     if (outcome.outcome === "rejected") await rollBackCompletionAction();
     return {
       jobId,

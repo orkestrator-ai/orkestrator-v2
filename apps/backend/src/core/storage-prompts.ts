@@ -1,3 +1,4 @@
+import { nativeAgentJobReceiptIsActive } from "./models.js";
 import { promptQueueMessageFingerprint } from "./storage-record-upgrades.js";
 import * as shared from "./storage-shared.js";
 import {
@@ -429,6 +430,134 @@ export class PromptsRepository {
         previous,
       );
       return { status: "queued" as const, queue };
+    });
+  }
+
+  /** One job launch at a time, including target selection and provider admission. */
+  withNativeAgentJobLaunch<T>(environmentId: string, operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(
+      this.context.file(
+        `native-agent-job-${createHash("sha256").update(environmentId).digest("hex")}`,
+      ),
+      "native agent job launch",
+      operation,
+      { acquireTimeoutMs: 180_000 },
+    );
+  }
+
+  /** Bind before dispatch, or atomically coalesce and publish a waiting prompt. */
+  async reserveNativeAgentJobRequest(
+    queueKey: string,
+    environmentId: string,
+    receipt: import("./models.js").NativeAgentJobReceipt,
+    message?: Record<string, unknown>,
+    coalesce = false,
+  ): Promise<import("./models.js").NativeAgentJobReceipt> {
+    assertPromptQueueKeyOwner(queueKey, environmentId);
+    if (message) this.repos.promptQueues.validatePromptQueueMessage(message);
+    return this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      await this.repos.nativeAgentSessions.assertEnvironmentAcceptsBackgroundState(
+        environmentId,
+        "Job",
+      );
+      const queues = await this.repos.promptQueues.loadPromptQueues();
+      const previous = queues[queueKey];
+      const existing = previous?.jobReceipts?.find(
+        (entry) => entry.requestId === receipt.requestId,
+      );
+      if (existing) {
+        if (existing.fingerprint !== receipt.fingerprint)
+          throw new Error("Job request ID conflict");
+        return existing;
+      }
+      const held = [
+        ...(previous?.messages ?? []),
+        previous?.outstandingClaim?.message,
+        previous?.inFlight?.message,
+      ];
+      const session = await this.promptQueueNativeSession(queueKey, environmentId);
+      const matchingHeld =
+        message && held.find((entry) => isRecord(entry) && entry.text === message.text);
+      const duplicate = coalesce
+        ? (previous?.jobReceipts?.find(
+            (entry) =>
+              entry.fingerprint === receipt.fingerprint &&
+              nativeAgentJobReceiptIsActive(entry, session, previous),
+          ) ??
+          (isRecord(matchingHeld)
+            ? {
+                requestId: String(matchingHeld.requestId ?? matchingHeld.id),
+                status: "accepted" as const,
+                queued: true as const,
+              }
+            : undefined))
+        : undefined;
+      const savedReceipt = duplicate
+        ? {
+            ...receipt,
+            dispatchRequestId:
+              "dispatchRequestId" in duplicate
+                ? (duplicate.dispatchRequestId ?? duplicate.requestId)
+                : duplicate.requestId,
+            status: session?.dispatchedRequestIds?.includes(
+              "dispatchRequestId" in duplicate
+                ? (duplicate.dispatchRequestId ?? duplicate.requestId)
+                : duplicate.requestId,
+            )
+              ? ("accepted" as const)
+              : duplicate.status,
+            queued: duplicate.queued,
+          }
+        : receipt;
+      const receipts = previous?.jobReceipts ?? [];
+      // Refuse rather than evict a binding and make an old retry publishable again.
+      const retained = receipts;
+      if (retained.length >= 256) throw new Error("Native job receipt capacity reached");
+      await this.repos.promptQueues.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        message && !duplicate
+          ? [...(previous?.messages ?? []), message]
+          : (previous?.messages ?? []),
+        {
+          ...(previous ?? {
+            queueKey,
+            environmentId,
+            messages: [],
+            revision: 0,
+            updatedAt: nowIso(),
+          }),
+          jobReceipts: [...retained, savedReceipt],
+        },
+      );
+      return savedReceipt;
+    });
+  }
+
+  async settleNativeAgentJobRequest(
+    queueKey: string,
+    requestId: string,
+    status: "accepted" | "unknown" | "rejected",
+  ): Promise<void> {
+    await this.repos.promptQueues.enqueuePromptQueueMutation(async () => {
+      const queues = await this.repos.promptQueues.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous?.jobReceipts) return;
+      const jobReceipts = previous.jobReceipts.flatMap((entry) =>
+        (entry.dispatchRequestId ?? entry.requestId) !== requestId
+          ? [entry]
+          : status === "rejected"
+            ? []
+            : [{ ...entry, status }],
+      );
+      await this.repos.promptQueues.savePromptQueueMutation(
+        queues,
+        queueKey,
+        previous.environmentId,
+        previous.messages,
+        { ...previous, jobReceipts },
+      );
     });
   }
 

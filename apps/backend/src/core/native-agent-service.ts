@@ -1631,11 +1631,29 @@ export class NativeAgentService {
       if (hasPendingTabTeardown(environment, input.logicalSessionKey)) return "unavailable";
       const resolved = await this.resolveProjectionSession(input);
       if (!resolved) return "unavailable";
-      const { session, provider } = resolved;
+      const { provider } = resolved;
+      let { session } = resolved;
+      if (session.pendingDispatch)
+        await this.settleAmbiguousDispatch(
+          input,
+          session.key,
+          session.pendingDispatch.requestId,
+          provider,
+        );
+      if (session.pendingSteer)
+        await this.settleAmbiguousSteer(
+          input,
+          session.key,
+          session.pendingSteer.requestId,
+          provider,
+        );
+      if (session.pendingDispatch || session.pendingSteer)
+        session = (await this.storage.getNativeAgentSession(session.key)) ?? session;
       if (session.pendingDispatch || session.pendingSteer) return "unavailable";
       const queue = await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`);
       if (queue?.dispatchError) return "unavailable";
       const { status } = await readProviderStatus(provider, session.providerSessionId);
+      await this.recordObservedTurnOutcome(session, status, undefined, provider);
       if (status === "running" || status === "blocked") return "busy";
       if (status !== "idle") return "unavailable";
       // Sending past a backlog would overtake prompts the user queued first.
@@ -3110,7 +3128,11 @@ export class NativeAgentService {
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
       if (input.modelSource === "default" || !input.model) {
-        input = { ...input, model: session.controls?.modelId ?? input.model };
+        input = {
+          ...input,
+          model: session.controls?.modelId ?? input.model,
+          reasoningEffort: input.reasoningEffort ?? session.controls?.reasoningId,
+        };
       }
       const provider = await this.provider(input);
       provider.registerSession?.(session.providerSessionId, {

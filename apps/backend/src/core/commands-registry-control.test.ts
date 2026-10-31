@@ -14,6 +14,15 @@ import {
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { NativeAgentService } from "./native-agent-service.js";
+import {
+  AmbiguousPromptDispatchError,
+  type AgentSessionProvider,
+  type ProviderStatus,
+} from "./native-agent-provider.js";
+import { queueInternals } from "./native-agent-service-test-collaborators.js";
+import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
+import { resendToOpenJobTab } from "./native-agent-job-tab-reuse.js";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 
 describe("launch_control_job command", () => {
@@ -513,6 +522,8 @@ describe("launch_control_job command", () => {
     async function withResolveEnvironment(
       run: (harness: {
         storage: StorageService;
+        context: CommandContext;
+        dataDir: string;
         launch: (args?: Record<string, unknown>) => Promise<Record<string, unknown>>;
         promptReadiness: ReturnType<typeof mock>;
         dispatchIntent: ReturnType<typeof mock>;
@@ -586,6 +597,8 @@ describe("launch_control_job command", () => {
       try {
         await run({
           storage,
+          context,
+          dataDir,
           promptReadiness,
           dispatchIntent,
           ensureSession,
@@ -735,7 +748,7 @@ describe("launch_control_job command", () => {
     });
 
     test("resends with a full tab bar, and only a new tab hits the limit", async () => {
-      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab }) => {
         await openJobTab(resolveTabId);
         for (let index = 1; index < MAX_TABS_PER_ENVIRONMENT; index += 1) {
           await storage.ensureNativeAgentJobTab({
@@ -748,11 +761,348 @@ describe("launch_control_job command", () => {
         await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, reused: true });
         expect(await tabIds(storage)).toHaveLength(MAX_TABS_PER_ENVIRONMENT);
 
-        fakes.promptReadiness.mockImplementation(async () => "unavailable");
-        await expect(launch({ requestId: "resolve-request-3" })).rejects.toThrow("maximum");
-        expect(await armedAt(storage)).toBeUndefined();
+        const previousArm = await armedAt(storage);
+        await expect(
+          launch({ requestId: "resolve-request-3", tabReuse: "same-agent", agent: "claude" }),
+        ).rejects.toThrow("maximum");
+        expect(await armedAt(storage)).toBe(previousArm);
+        const requestRefresh = mock(async () => undefined);
+        const complete = createCommandRegistry().get("pr_monitor_agent_turn_completed")!;
+        await complete({ environmentId: "env-1" }, {
+          storage,
+          runtime: { prMonitor: { requestRefresh } },
+        } as unknown as CommandContext);
+        expect(requestRefresh).toHaveBeenCalledTimes(1);
       });
     });
+
+    test("binds an unknown retry and later press to the original tab across restart and recency changes", async () => {
+      await withResolveEnvironment(
+        async ({ storage, context, dataDir, launch, openJobTab, ...fakes }) => {
+          await openJobTab(resolveTabId);
+          fakes.dispatchIntent.mockImplementationOnce(async () => ({ outcome: "unknown" }));
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          await openJobTab("agent-job-newest", "codex", "2026-09-01T12:00:00.000Z");
+          const restarted = new StorageService(dataDir);
+          await restarted.init();
+          context.storage = restarted;
+          fakes.promptReadiness.mockImplementation(async () => "unavailable");
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          await expect(launch({ requestId: "new-press" })).resolves.toMatchObject({
+            tabId: resolveTabId,
+            status: "unknown",
+          });
+          expect(fakes.dispatchIntent).toHaveBeenCalledTimes(1);
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+          expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(0);
+        },
+      );
+    });
+
+    test.each(["pendingDispatch", "pendingSteer"] as const)(
+      "keeps later presses on a tab with %s",
+      async (field) => {
+        await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+          await openJobTab(resolveTabId);
+          await openJobTab("agent-job-newest", "codex", "2026-09-01T12:00:00.000Z");
+          const original = storage.getNativeAgentSession.bind(storage);
+          storage.getNativeAgentSession = async (key) => {
+            const session = await original(key);
+            return session?.logicalSessionKey === resolveKey
+              ? {
+                  ...session,
+                  [field]: {
+                    requestId: "pending-original",
+                    prompt: "Resolve the merge conflicts.",
+                    text: "Resolve the merge conflicts.",
+                  },
+                }
+              : session;
+          };
+          fakes.promptReadiness.mockImplementation(async () => "unavailable");
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          expect(fakes.dispatchIntent).not.toHaveBeenCalled();
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+        });
+      },
+    );
+
+    test("concurrent plain presses with no existing Resolve tab create one conversation", async () => {
+      await withResolveEnvironment(async ({ storage, launch, ...fakes }) => {
+        const results = await Promise.all([
+          launch({ requestId: "first" }),
+          launch({ requestId: "second" }),
+        ]);
+        expect(results[0]?.tabId).toBe(results[1]?.tabId);
+        expect(await tabIds(storage)).toHaveLength(1);
+        expect(fakes.ensureSession).toHaveBeenCalledTimes(1);
+        expect(fakes.dispatchIntent).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    test.each(["idle", "busy"])(
+      "coalesces concurrent identical plain presses while %s",
+      async (readiness) => {
+        await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+          await openJobTab(resolveTabId);
+          fakes.promptReadiness.mockImplementation(async () => readiness);
+          const results = await Promise.all(
+            Array.from({ length: 4 }, (_, index) => launch({ requestId: `concurrent-${index}` })),
+          );
+          expect(results.every((result) => result.tabId === resolveTabId)).toBe(true);
+          expect(fakes.dispatchIntent).toHaveBeenCalledTimes(readiness === "idle" ? 1 : 0);
+          expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(
+            readiness === "idle" ? 0 : 1,
+          );
+          fakes.promptReadiness.mockImplementation(async () => "busy");
+          await launch({ requestId: "repeat-after-admission" });
+          expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(
+            readiness === "idle" ? 0 : 1,
+          );
+        });
+      },
+    );
+
+    test.each(["claimed", "in-flight"])("coalesces a matching %s queue item", async (state) => {
+      await withResolveEnvironment(async ({ storage, dataDir, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        // A composer-created item has no job receipt of its own.
+        await storage.enqueuePromptQueueMessage(queueKey, "env-1", {
+          id: "original",
+          requestId: "original",
+          text: "Resolve the merge conflicts.",
+          mode: "build",
+        });
+        if (state === "claimed") seedLegacyPromptQueueClaim(dataDir, queueKey, "original");
+        else await storage.reservePromptQueueHeadForDispatch(queueKey);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        await launch();
+        const queue = await storage.getPromptQueue(queueKey);
+        expect(queue?.messages).toHaveLength(0);
+        expect(
+          state === "claimed" ? queue?.outstandingClaim?.message.id : queue?.inFlight?.requestId,
+        ).toBe("original");
+        expect(fakes.dispatchIntent).not.toHaveBeenCalled();
+      });
+    });
+
+    test("falls back after a queue publication failure and tolerates a missed wake-up", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        const reserve = spyOn(storage, "reserveNativeAgentJobRequest");
+        reserve.mockRejectedValueOnce(new Error("write failed"));
+        const fallback = await launch();
+        expect(fallback.reused).toBeUndefined();
+        expect(fakes.ensureSession).toHaveBeenCalledTimes(1);
+        fakes.notifyPromptQueueChanged.mockImplementation(() => {
+          throw new Error("wake failed");
+        });
+        await expect(
+          launch({ requestId: "missed-wake", prompt: "Resolve updated conflicts." }),
+        ).resolves.toMatchObject({ queued: true });
+        expect(
+          (await storage.listPromptQueues("env-1")).flatMap((queue) => queue.messages),
+        ).toHaveLength(1);
+        reserve.mockRestore();
+      });
+    });
+
+    test("a committed queue publication cannot fall back after its acknowledgement is lost", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        const original = storage.reserveNativeAgentJobRequest.bind(storage);
+        const reserve = spyOn(storage, "reserveNativeAgentJobRequest").mockImplementationOnce(
+          async (...args) => {
+            await original(...args);
+            throw new Error("lost storage acknowledgement");
+          },
+        );
+        try {
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, queued: true });
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+          expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+        } finally {
+          reserve.mockRestore();
+        }
+      });
+    });
+
+    test("keeps configured requests distinct and writes Claude's plan flag", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId, "claude");
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        for (const requestId of ["plan-one", "plan-two"])
+          await launch({
+            requestId,
+            agent: "claude",
+            tabReuse: "same-agent",
+            conversationMode: "plan",
+          });
+        expect((await storage.getPromptQueue(`claude\0${resolveKey}`))?.messages).toEqual([
+          expect.objectContaining({ planModeEnabled: true, mode: "plan" }),
+          expect.objectContaining({ planModeEnabled: true, mode: "plan" }),
+        ]);
+      });
+    });
+
+    test("does not reuse a provider without a speed control for an explicit speed choice", async () => {
+      await withResolveEnvironment(async ({ context, storage }) => {
+        await storage.ensureNativeAgentJobTab({
+          environmentId: "env-1",
+          tabId: "pi-resolve",
+          agent: "pi",
+          completionAction: "refresh-pr-after-agent-completion",
+        });
+        await expect(
+          resendToOpenJobTab(context, {
+            environmentId: "env-1",
+            requestId: "speed",
+            completionAction: "refresh-pr-after-agent-completion",
+            tabReuse: "same-agent",
+            agent: "pi",
+            enabledAgents: ["pi"],
+            prompt: "Resolve",
+            mode: "build",
+            selection: { fastMode: true },
+          }),
+        ).resolves.toBeNull();
+      });
+    });
+
+    test("reconciles a real ambiguous dispatch on its bound tab without another send", async () => {
+      await withResolveEnvironment(async ({ storage, context, launch, openJobTab }) => {
+        await openJobTab(resolveTabId);
+        let journal: "unknown" | "dispatched" = "unknown";
+        let running = false;
+        const send = mock(async () => {
+          running = true;
+          throw new AmbiguousPromptDispatchError("lost response");
+        });
+        const createSession = mock(async () => "unexpected-new-session");
+        const provider = {
+          agent: "codex",
+          createSession,
+          registerSession: () => undefined,
+          send,
+          status: async () => (running ? "running" : "idle"),
+          dispatchStatus: async () => journal,
+          messages: async () => [],
+          structured: async () => null,
+          abort: async () => undefined,
+        } as unknown as AgentSessionProvider;
+        const service = new NativeAgentService(
+          storage,
+          async () => {
+            throw new Error("unexpected invoke");
+          },
+          { provider: async () => provider },
+        );
+        context.nativeAgents = service;
+        try {
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          await openJobTab("agent-job-newest", "codex", "2026-09-01T12:00:00.000Z");
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          await expect(launch({ requestId: "later-press" })).resolves.toMatchObject({
+            tabId: resolveTabId,
+            status: "unknown",
+          });
+          journal = "dispatched";
+          await expect(launch()).resolves.toMatchObject({
+            tabId: resolveTabId,
+            status: "accepted",
+          });
+          expect(send).toHaveBeenCalledTimes(1);
+          expect(createSession).not.toHaveBeenCalled();
+          expect(
+            (
+              await storage.getNativeAgentSession(
+                nativeAgentSessionStorageKey("env-1", "codex", resolveKey),
+              )
+            )?.pendingDispatch,
+          ).toBeUndefined();
+        } finally {
+          await service.shutdown();
+        }
+      });
+    });
+
+    test.each(["any-agent", "same-agent"])(
+      "drains a %s resend through the real dispatcher with its controls and PR refresh",
+      async (tabReuse) => {
+        await withResolveEnvironment(async ({ storage, context, launch, openJobTab }) => {
+          await openJobTab(resolveTabId);
+          await storage.updateNativeAgentSessionControls(
+            nativeAgentSessionStorageKey("env-1", "codex", resolveKey),
+            `provider-${resolveTabId}`,
+            { modelId: "original-model", reasoningId: "medium" },
+          );
+          let status: ProviderStatus = "running";
+          const send = mock(
+            async (_id: string, _prompt: string, _options: Record<string, unknown>) => {
+              status = "running";
+            },
+          );
+          const provider = {
+            agent: "codex",
+            registerSession: () => undefined,
+            send,
+            status: async () => status,
+            activity: async () => (status === "running" ? "working" : "idle"),
+            messages: async () => [],
+            structured: async () => null,
+            abort: async () => undefined,
+          } as unknown as AgentSessionProvider;
+          const requestRefresh = mock(async () => undefined);
+          context.runtime = { prMonitor: { requestRefresh } } as unknown as BackendRuntime;
+          const service = new NativeAgentService(
+            storage,
+            async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+              if (command !== "pr_monitor_agent_turn_completed")
+                throw new Error(`unexpected invoke: ${command}`);
+              return (await createCommandRegistry().get(command)!(args ?? {}, context)) as T;
+            },
+            { provider: async () => provider },
+          );
+          context.nativeAgents = service;
+          // Drive the real drainer explicitly so there is no timer race in the test.
+          const wake = spyOn(service, "notifyPromptQueueChanged").mockImplementation(
+            () => undefined,
+          );
+          try {
+            await Promise.all(
+              Array.from({ length: tabReuse === "any-agent" ? 4 : 1 }, (_, index) =>
+                launch({
+                  requestId: `drain-${index}`,
+                  tabReuse,
+                  modelId: "picked-model",
+                  reasoningId: "high",
+                  conversationMode: "plan",
+                }),
+              ),
+            );
+            expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+            status = "idle";
+            await queueInternals(service).drainPromptQueues();
+            expect(send).toHaveBeenCalledTimes(1);
+            expect(send.mock.calls[0]?.[2]).toMatchObject({
+              model: tabReuse === "same-agent" ? "picked-model" : "original-model",
+              effort: tabReuse === "same-agent" ? "high" : "medium",
+              mode: "plan",
+            });
+            expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(0);
+            expect(requestRefresh).not.toHaveBeenCalled();
+            status = "idle";
+            await service.reconcileAgentActivity();
+            expect(requestRefresh).toHaveBeenCalledTimes(1);
+          } finally {
+            wake.mockRestore();
+            await service.shutdown();
+          }
+        });
+      },
+    );
 
     test("reuses the most recently used of several Resolve tabs", async () => {
       await withResolveEnvironment(async ({ launch, openJobTab }) => {

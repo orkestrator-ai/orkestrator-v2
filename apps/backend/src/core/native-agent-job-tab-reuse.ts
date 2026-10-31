@@ -2,9 +2,9 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import type { CommandContext } from "./commands-context.js";
-import type { NativeAgentJobCompletionAction } from "./models.js";
+import { nativeAgentJobReceiptIsActive, type NativeAgentJobCompletionAction } from "./models.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
-import { queueString } from "./native-agent-queue-message.js";
+import { createHash } from "node:crypto";
 import { nativePromptQueueKey } from "./public-api/prompt-delivery.js";
 import { nativeTabsOfLayout, type NativeTabInfo } from "./public-api/summaries.js";
 
@@ -55,6 +55,7 @@ async function mostRecentJobTab(
       (input.tabReuse === "any-agent" || tab.agent === input.agent),
   );
   let latest: { tab: NativeTabInfo; updatedAt: string } | null = null;
+  let pending: NativeTabInfo | null = null;
   for (const tab of tabs) {
     const session = await context.storage.getNativeAgentSession(
       nativeAgentSessionStorageKey(
@@ -63,10 +64,31 @@ async function mostRecentJobTab(
         nativeTabLogicalSessionKey(input.environmentId, tab.tabId),
       ),
     );
+    if (session?.pendingDispatch || session?.pendingSteer) pending ??= tab;
+    const queue = await context.storage.getPromptQueue(
+      nativePromptQueueKey(tab.agent, nativeTabLogicalSessionKey(input.environmentId, tab.tabId)),
+    );
+    if (
+      queue?.jobReceipts?.some(
+        (receipt) =>
+          receipt.status === "unknown" &&
+          !session?.dispatchedRequestIds?.includes(receipt.dispatchRequestId ?? receipt.requestId),
+      )
+    )
+      pending ??= tab;
+    if (
+      input.tabReuse === "any-agent" &&
+      queue?.jobReceipts?.some(
+        (receipt) =>
+          receipt.fingerprint === jobPromptFingerprint(input.prompt, input.mode) &&
+          nativeAgentJobReceiptIsActive(receipt, session, queue),
+      )
+    )
+      pending ??= tab;
     const updatedAt = session?.updatedAt ?? "";
     if (!latest || updatedAt >= latest.updatedAt) latest = { tab, updatedAt };
   }
-  return latest?.tab ?? null;
+  return pending ?? latest?.tab ?? null;
 }
 
 /** Whether the provider lets an existing conversation change what the dialog chose. */
@@ -77,6 +99,16 @@ function selectionApplies(agent: AgentPlatform, selection: ResendInput["selectio
     (selection.reasoningEffort === undefined || composer.reasoning) &&
     (selection.fastMode === undefined || composer.speed)
   );
+}
+
+export function jobPromptFingerprint(
+  prompt: string,
+  mode: "plan" | "build",
+  selection: ResendInput["selection"] = {},
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify([prompt, mode, selection]))
+    .digest("hex");
 }
 
 /**
@@ -94,6 +126,49 @@ export async function resendToOpenJobTab(
 ): Promise<ResentJob | null> {
   const nativeAgents = context.nativeAgents;
   if (!nativeAgents) return null;
+  // A durable receipt outranks recency, availability and even a closed tab.
+  // Once a request may have crossed the provider boundary it cannot be retargeted.
+  for (const queue of await context.storage.listPromptQueues(input.environmentId)) {
+    const receipt = queue.jobReceipts?.find((entry) => entry.requestId === input.requestId);
+    if (!receipt) continue;
+    const separator = queue.queueKey.indexOf("\0");
+    const agent = queue.queueKey.slice(0, separator) as AgentPlatform;
+    const logicalSessionKey = queue.queueKey.slice(separator + 1);
+    const fingerprint = jobPromptFingerprint(
+      input.prompt,
+      input.mode,
+      input.tabReuse === "same-agent" ? input.selection : {},
+    );
+    if (receipt.fingerprint !== fingerprint) throw new Error("Job request ID conflict");
+    if (receipt.status === "unknown")
+      await nativeAgents.promptReadiness({
+        environmentId: input.environmentId,
+        agent,
+        logicalSessionKey,
+      });
+    const session = await context.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(input.environmentId, agent, logicalSessionKey),
+    );
+    const status = session?.dispatchedRequestIds?.includes(
+      receipt.dispatchRequestId ?? receipt.requestId,
+    )
+      ? "accepted"
+      : receipt.status;
+    if (status !== receipt.status)
+      await context.storage.settleNativeAgentJobRequest(
+        queue.queueKey,
+        receipt.dispatchRequestId ?? receipt.requestId,
+        status,
+      );
+    return {
+      tabId: logicalSessionKey.slice(`env-${input.environmentId}:`.length),
+      agent,
+      logicalSessionKey,
+      reused: true,
+      status,
+      ...(receipt.queued ? { queued: true } : {}),
+    };
+  }
   const tab = await mostRecentJobTab(context, input);
   if (!tab) return null;
   const selection = input.tabReuse === "same-agent" ? input.selection : {};
@@ -102,10 +177,112 @@ export async function resendToOpenJobTab(
   const logicalSessionKey = nativeTabLogicalSessionKey(input.environmentId, tab.tabId);
   const session = { environmentId: input.environmentId, agent: tab.agent, logicalSessionKey };
   const readiness = await nativeAgents.promptReadiness(session);
-  if (readiness === "unavailable") return null;
+  const persisted = await context.storage.getNativeAgentSession(
+    nativeAgentSessionStorageKey(input.environmentId, tab.agent, logicalSessionKey),
+  );
+  const queueKey = nativePromptQueueKey(tab.agent, logicalSessionKey);
+  const queue = await context.storage.getPromptQueue(queueKey);
+  const ambiguous =
+    persisted?.pendingDispatch ||
+    persisted?.pendingSteer ||
+    queue?.jobReceipts?.some(
+      (receipt) =>
+        receipt.status === "unknown" &&
+        !persisted?.dispatchedRequestIds?.includes(receipt.dispatchRequestId ?? receipt.requestId),
+    );
+  const activeReceipt =
+    input.tabReuse === "any-agent" &&
+    queue?.jobReceipts?.find(
+      (receipt) =>
+        receipt.fingerprint === jobPromptFingerprint(input.prompt, input.mode) &&
+        nativeAgentJobReceiptIsActive(receipt, persisted, queue),
+    );
+  if (readiness === "unavailable" && !ambiguous && !activeReceipt) return null;
   const resent = { tabId: tab.tabId, agent: tab.agent, logicalSessionKey, reused: true as const };
 
+  const fingerprint = jobPromptFingerprint(input.prompt, input.mode, selection);
+  const queuedMessage = {
+    id: input.requestId,
+    requestId: input.requestId,
+    text: input.prompt,
+    mode: input.mode,
+    ...(tab.agent === "claude" ? { planModeEnabled: input.mode === "plan" } : {}),
+    ...(selection.model ? { model: selection.model } : {}),
+    ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
+    ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
+  };
+  if (ambiguous) {
+    const matching =
+      input.tabReuse === "any-agent" &&
+      queue?.jobReceipts?.find((receipt) => receipt.fingerprint === fingerprint);
+    const pendingMatches =
+      input.tabReuse === "any-agent" &&
+      (persisted?.pendingDispatch?.prompt === input.prompt ||
+        persisted?.pendingSteer?.text === input.prompt);
+    const dispatchRequestId = matching
+      ? (matching.dispatchRequestId ?? matching.requestId)
+      : pendingMatches
+        ? (persisted?.pendingDispatch?.requestId ?? persisted?.pendingSteer?.requestId)
+        : undefined;
+    // Identical presses follow the original ambiguous admission. Distinct
+    // choices wait durably on that same tab until its admission is settled.
+    const queued = !dispatchRequestId || (matching && matching.queued);
+    await context.storage.reserveNativeAgentJobRequest(
+      queueKey,
+      input.environmentId,
+      {
+        requestId: input.requestId,
+        fingerprint,
+        status: dispatchRequestId ? "unknown" : "accepted",
+        ...(dispatchRequestId ? { dispatchRequestId } : {}),
+        ...(queued ? { queued: true } : {}),
+      },
+      dispatchRequestId ? undefined : queuedMessage,
+    );
+    if (queued) {
+      try {
+        nativeAgents.notifyPromptQueueChanged?.(queueKey);
+      } catch {
+        /* Periodic sweep recovers missed wake-ups. */
+      }
+    }
+    return {
+      ...resent,
+      status: dispatchRequestId ? "unknown" : "accepted",
+      ...(queued ? { queued: true } : {}),
+    };
+  }
+
+  if (readiness === "unavailable" && activeReceipt) {
+    const receipt = await context.storage.reserveNativeAgentJobRequest(
+      queueKey,
+      input.environmentId,
+      {
+        requestId: input.requestId,
+        fingerprint,
+        status: activeReceipt.status,
+      },
+      undefined,
+      true,
+    );
+    return { ...resent, status: receipt.status, ...(receipt.queued ? { queued: true } : {}) };
+  }
+
   if (readiness === "idle") {
+    const receipt = await context.storage.reserveNativeAgentJobRequest(
+      queueKey,
+      input.environmentId,
+      {
+        requestId: input.requestId,
+        fingerprint,
+        status: "unknown",
+      },
+      undefined,
+      input.tabReuse === "any-agent",
+    );
+    if (receipt.dispatchRequestId && receipt.dispatchRequestId !== input.requestId) {
+      return { ...resent, status: receipt.status, ...(receipt.queued ? { queued: true } : {}) };
+    }
     const outcome = await nativeAgents.dispatchIntent({
       ...session,
       origin: "interactive-native",
@@ -116,40 +293,41 @@ export async function resendToOpenJobTab(
       ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
       ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
     });
+    await context.storage.settleNativeAgentJobRequest(queueKey, input.requestId, outcome.outcome);
     if (outcome.outcome === "rejected") return null;
     return outcome.outcome === "unknown"
       ? { ...resent, status: "unknown", ...(outcome.error ? { error: outcome.error } : {}) }
       : { ...resent, status: "accepted" };
   }
 
-  const queueKey = nativePromptQueueKey(tab.agent, logicalSessionKey);
+  let queuedReceipt;
   try {
-    // Pressing the button twice during a long turn should not run the same
-    // prompt twice after it. The waiting copy already does what the press asked.
-    // A dialog's choice is a different request, so it still queues.
-    const queue = await context.storage.getPromptQueue(queueKey);
-    if (
-      input.tabReuse === "any-agent" &&
-      queue?.messages.some((message) => queueString(message, "text") === input.prompt)
-    ) {
-      return { ...resent, status: "accepted", queued: true };
-    }
-    await context.storage.enqueuePromptQueueMessageIfAbsent(queueKey, input.environmentId, {
-      id: input.requestId,
-      requestId: input.requestId,
-      text: input.prompt,
-      mode: input.mode,
-      // Claude's queue entries carry the composer's plan flag instead.
-      ...(tab.agent === "claude" ? { planModeEnabled: input.mode === "plan" } : {}),
-      ...(selection.model ? { model: selection.model } : {}),
-      ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
-      ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
-    });
+    queuedReceipt = await context.storage.reserveNativeAgentJobRequest(
+      queueKey,
+      input.environmentId,
+      {
+        requestId: input.requestId,
+        fingerprint,
+        status: "accepted",
+        queued: true,
+      },
+      queuedMessage,
+      input.tabReuse === "any-agent",
+    );
   } catch (error) {
+    if (error instanceof Error && error.message === "Native job receipt capacity reached")
+      throw error;
     console.warn(
       `[native-agent-job] Could not queue a resend for ${input.environmentId}:`,
       error instanceof Error ? error.name : "unknown error",
     );
+    // A write may have committed before a notification or connection failed.
+    // Fall back only after a durable read proves there is no published request.
+    const receipt = (await context.storage.getPromptQueue(queueKey))?.jobReceipts?.find(
+      (entry) => entry.requestId === input.requestId,
+    );
+    if (receipt)
+      return { ...resent, status: receipt.status, ...(receipt.queued ? { queued: true } : {}) };
     return null;
   }
   try {
@@ -157,5 +335,9 @@ export async function resendToOpenJobTab(
   } catch {
     // The drainer's periodic sweep is the safety net for a missed wake-up.
   }
-  return { ...resent, status: "accepted", queued: true };
+  return {
+    ...resent,
+    status: queuedReceipt.status,
+    ...(queuedReceipt.queued ? { queued: true } : {}),
+  };
 }

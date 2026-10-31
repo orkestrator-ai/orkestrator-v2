@@ -150,6 +150,24 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
+/** Renderer renames and moves cannot remove a backend-owned job marker. */
+function preserveJobCompletionActions(root: unknown, previousRoot: unknown): unknown {
+  const actions = new Map(
+    paneLayoutLeaves(previousRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .filter((tab) => tab.jobCompletionAction === "refresh-pr-after-agent-completion")
+      .map((tab) => [tab.id, tab.jobCompletionAction]),
+  );
+  const next = structuredClone(root);
+  for (const leaf of paneLayoutLeaves(next)) {
+    for (const tab of leaf.tabs) {
+      if (tab.type === "agent-native" && actions.has(tab.id))
+        tab.jobCompletionAction = actions.get(tab.id);
+    }
+  }
+  return next;
+}
+
 export class SessionsRepository {
   constructor(
     private readonly context: StorageContext,
@@ -340,10 +358,14 @@ export class SessionsRepository {
         environmentId,
         containerId: layout.containerId,
         activePaneId: layout.activePaneId,
-        root: layout.root,
+        root:
+          previous?.containerId === layout.containerId
+            ? preserveJobCompletionActions(layout.root, previous.root)
+            : layout.root,
         updatedAt: nowIso(),
         revision: currentRevision + 1,
       };
+      assertPaneLayoutRootWithinBounds(saved.root);
       layouts[environmentId] = saved;
       // Selection changes make this a high-churn record. Keep one current
       // recovery snapshot without rotating five near-identical historical
@@ -408,6 +430,14 @@ export class SessionsRepository {
       ) {
         next = suppressLateSetupTabAdditions(next, previous, base);
       }
+      if (sameGeneration)
+        next = {
+          ...next,
+          root: preserveJobCompletionActions(
+            next.root,
+            previous.root,
+          ) as PaneLayoutMergeInput["root"],
+        };
       assertPaneLayoutRootWithinBounds(next.root);
       const saved: PersistedPaneLayout = {
         ...next,

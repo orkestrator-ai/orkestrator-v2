@@ -1,5 +1,6 @@
 import type { CanUseTool, HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
@@ -29,6 +30,7 @@ import { debugLog } from "./logger.js";
 import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import {
   AGENT_MCP_SERVER_NAME,
+  claudeAccountOnlyMcpServerNames,
   claudeGrantedMcpServerNames,
   claudeUserMcpQueryOptions,
   getMcpRuntimeConfig,
@@ -44,7 +46,7 @@ import {
   isCoordinatorReadOnlyPolicy,
   readOnlyRefusalRole,
 } from "./read-only-policy.js";
-import { runtimeEnvironmentForSessionQuery } from "./runtime-env.js";
+import { runtimeEnvironmentForSessionQuery, withUnattendedOverloadRetry } from "./runtime-env.js";
 import {
   claudeExecutableOptions,
   sdkSessionIdFromBridgeId,
@@ -73,6 +75,14 @@ import { requestsUltracode } from "./ultracode.js";
 
 // The query a turn runs: its policy, MCP servers, plugins, tools and
 // permission mode, resolved once per turn, and the SDK options a launch uses.
+
+/**
+ * `ProposeGoal` starts Claude Code's own goal loop. Orkestrator's runs in the
+ * backend, and two must never stack on one session (`plans/goals.md`, D2).
+ */
+export function withNativeGoalClosed(disallowed: readonly string[] | undefined): string[] {
+  return [...(disallowed ?? []), "ProposeGoal"];
+}
 
 export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
 1. Thoroughly explore the codebase and its existing patterns.
@@ -151,6 +161,14 @@ export async function resolveQueryPlan(
     resolveClaudeTurnPlugins(cwd, policy, settingSources),
   ]);
   turn.mcpServerNames = mcpServerNames;
+  // On an added account the CLI loads its own copy of the servers; what that
+  // copy names and the configuration does not is stale from launch.
+  const accountOnlyMcpServers = await claudeAccountOnlyMcpServerNames(
+    cwd,
+    settingSources,
+    mcpServerNames,
+    claudeUserMcpQueryOptions(policy).strictMcpConfig === true,
+  );
 
   const mcpServerCount = Object.keys(mcpServers).length;
   const pluginCount = plugins.length;
@@ -193,7 +211,7 @@ export async function resolveQueryPlan(
   // Orkestrator's own bounded artifact store and never touch the workspace.
   // An explicit toolPolicy deny still wins.
   const agentMailTools = mcpServerNames.has(AGENT_MCP_SERVER_NAME)
-    ? [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map(
+    ? [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map(
         (name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`,
       )
     : [];
@@ -222,9 +240,9 @@ export async function resolveQueryPlan(
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
   // Any other policy keeps its override and also loses the tools for each
   // capability it denies (a network denial takes WebFetch and WebSearch).
-  const disallowedTools = coordinatorReadOnly
-    ? claudeDeniedTools(policy)
-    : claudeDisallowedTools(policy);
+  const disallowedTools = withNativeGoalClosed(
+    coordinatorReadOnly ? claudeDeniedTools(policy) : claudeDisallowedTools(policy),
+  );
 
   const fastMode = options?.fastMode === true;
   const ultracode = requestsUltracode(options?.parameterValues);
@@ -257,7 +275,10 @@ export async function resolveQueryPlan(
   );
 
   // A graph agent's policy denies `github.write`: its CLI gets no GitHub credential.
-  const queryEnvironment = await runtimeEnvironmentForSessionQuery(policy);
+  const queryEnvironment = withUnattendedOverloadRetry(
+    session.executionPolicy,
+    await runtimeEnvironmentForSessionQuery(policy),
+  );
   const liveSettings = claudeLiveSettings({
     model: options?.model,
     permissionMode,
@@ -274,6 +295,7 @@ export async function resolveQueryPlan(
     effortLevel,
     mcpServers,
     mcpServerNames,
+    accountOnlyMcpServers,
     mcpConfigRevision,
     plugins,
     mcpServerCount,

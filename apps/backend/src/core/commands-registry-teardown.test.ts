@@ -445,7 +445,8 @@ describe("tab close retains conversation history", () => {
           const commands = createCommandRegistry({
             tabTeardown: {
               peekBridge: async () => ({ port: 4000, authToken: "test" }),
-              fetch: (async () => new Response(null, { status: 404 })) as unknown as typeof fetch,
+              fetch: (async () =>
+                Response.json({ closed: true, missing: true })) as unknown as typeof fetch,
             },
           });
           const context = {
@@ -703,24 +704,24 @@ describe("tab close retains conversation history", () => {
     });
   }
 
-  test("uses the proven non-destructive legacy DELETE for an older Codex bridge", async () => {
+  test("an older Codex bridge gets the restart notice and no DELETE, as Claude does", async () => {
     await withTeardown(
-      (call) =>
-        call.method === "POST"
-          ? new Response("404 Not Found", { status: 404 })
-          : Response.json({ status: "deleted" }),
+      () => new Response("404 Not Found", { status: 404 }),
       async ({ invoke, storage, calls }) => {
         const key = await mapTab(storage, "codex", "tab-codex", "codex-old");
-        await invoke("teardown_tab", {
+        const failure = await invoke("teardown_tab", {
           environmentId: "e1",
           tabId: "tab-codex",
           kind: "codex-native",
-        });
+        }).catch((error: unknown) => error);
+        expect(tabTeardownFailureKind(failure)).toBe("bridge-upgrade-required");
         expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([
           ["POST", "/session/codex-old/close"],
-          ["DELETE", "/session/codex-old"],
         ]);
-        expect(await storage.getNativeAgentSession(key)).toBeNull();
+        expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toHaveProperty(
+          "tab-codex",
+        );
       },
     );
   });

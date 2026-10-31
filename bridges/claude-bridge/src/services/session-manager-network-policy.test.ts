@@ -1,3 +1,4 @@
+import { withNativeGoalClosed } from "./session-manager-prompt-query.js";
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
@@ -24,6 +25,13 @@ const NETWORK_DENIED: NativeAgentExecutionPolicy = {
   capabilityPolicy: { deny: ["network"] },
   networkAccess: "restricted",
 };
+
+describe("native goals", () => {
+  test("Claude's own goal tool is closed whatever the policy denies", () => {
+    expect(withNativeGoalClosed(undefined)).toEqual(["ProposeGoal"]);
+    expect(withNativeGoalClosed(["WebFetch"])).toEqual(["WebFetch", "ProposeGoal"]);
+  });
+});
 
 describe("a policy that denies the network", () => {
   test("adds WebFetch, WebSearch and RemoteTrigger to the override's own deny list", () => {

@@ -428,6 +428,37 @@ describe("useNativeAgentSession progressive view", () => {
     },
   );
 
+  test("a goal on session state reaches the projection, survives a transcript read and clears", async () => {
+    const goal = {
+      goalId: "goal-1",
+      objective: "Make the build green",
+      status: "active" as const,
+      iterations: 1,
+      maxIterations: 20,
+      noProgressStreak: 0,
+      setAt: "2026-10-31T10:00:00.000Z",
+      updatedAt: "2026-10-31T10:00:00.000Z",
+    };
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1", { goal })];
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.projection?.goal).toEqual(goal));
+    await waitFor(() => expect(result.current.projection?.messages).toHaveLength(1));
+
+    transcriptUpdates = [() => transcriptSnapshot("transcript-2", [message("m1"), message("m2")])];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.messages).toHaveLength(2);
+    expect(result.current.projection?.goal).toEqual(goal);
+
+    stateUpdates = [() => stateSnapshot("state-2")];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.goal).toBeUndefined();
+  });
+
   test("installs transcript text without waiting for held discovery", async () => {
     let releaseDiscovery!: () => void;
     const heldDiscovery = new Promise<NativeAgentDiscoveryUpdate>((resolve) => {

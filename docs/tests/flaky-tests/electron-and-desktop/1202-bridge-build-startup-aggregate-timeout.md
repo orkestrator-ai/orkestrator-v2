@@ -94,6 +94,32 @@ below the host temporary directory. Passing output was removed by the runner.
 No owner implementation, assertion, timeout or skip changed; the cause remains
 unconfirmed.
 
+
+## Goal review repair — 2026-10-31
+
+The full `mise run test` rerun repeated the successful-start timeout at
+15,010.34 ms. The complete unchanged owner passed alone in 0.9 s:
+
+```sh
+mise run test:logged -- --name goal-bridge-owner -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.Zau4wx/review-tests.log.gz` in the host temporary
+directory. No assertion, timeout or skip changed; the cause remains unconfirmed.
+
+## Settings layout review — 2026-10-31
+
+- **Original command:** `mise run test`, at implementation commit `d639571b2`; workspace reservation six slots with two isolated Bun workers for web/desktop and four for backend, bridges reservation two slots with one worker per provider. The component browser suite also ran on the shared host. The aggregate waited about 658 seconds for capacity and exited 1 after 1461 seconds.
+- **Failure:** `dev:test bridge builds > a successful start records bridges before launching the runtime and accepts backend readiness`, `apps/desktop/scripts/dev/bridge-builds.test.ts`, exceeded its 15-second deadline (15006.02 ms). The owning package reported 1393 passed, 16 skipped, two failed across 98 files.
+- **Complete unchanged owner rerun:** the following one-worker command passed (exit 0, 1.7 seconds logged). Multi-file commands ran the two complete owners sequentially with Bun isolation. Passing raw output was removed by the bounded logger.
+
+```sh
+mise run test:logged -- --name desktop-review-failures-isolated -- bun test --cwd apps/desktop ./tests/preview-partition-retention.test.ts ./scripts/dev/bridge-builds.test.ts --parallel=1 --only-failures
+```
+
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.
+
 ## Project checkout review recurrence — 2026-10-31
 
 `mise run test:logged -- --name review-default-rerun -- mise run test`
@@ -117,3 +143,20 @@ An initial exploratory owner command omitted the preload and timed out at
 That command did not reproduce the aggregate's preload configuration. No
 implementation, deadline, assertion or skip changed. Startup contention
 remains a hypothesis; the passing owner does not make the aggregate pass.
+
+## Goal main-merge validation — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+  The default aggregate reserved workspace/root/bridge/protocol worker budgets
+  of 6/1/2/1; web and desktop used two isolated file workers and backend used
+  four. No browser suite ran alongside it in this worktree. The logger reported
+  679.9 s total, including about 342 s waiting for the shared-host scheduler.
+- **Failure:** the successful-start test exceeded its 15-second deadline
+  (15010.15 ms). Desktop reported 1,485 passed, 16 skipped and one failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-bridge-startup-owner -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed, exit 0, in 0.9 s.
+- **Evidence:** `orkestrator-test-run.Am7yHz/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `orkestrator-test-run.lhybBa/merge-tests.log.gz` below the host temporary
+  directory. The aggregate remained non-green. The complete unchanged owner
+  passed separately; no owning implementation, assertion, deadline or skip
+  changed. The cause remains unconfirmed.

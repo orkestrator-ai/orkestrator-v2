@@ -103,10 +103,16 @@ async function launch(pkg: WorkerJobPackage, emit: Emit): Promise<LaunchedBrowse
       // Loopback only: the worker connects to its own server.
       host: "127.0.0.1",
     });
-  } catch {
+  } catch (error) {
+    // Chromium aborts before its sandbox starts when its SingletonSocket, made
+    // inside the worker's TMPDIR, passes the 108-byte Unix socket limit. Say
+    // so: reported as a sandbox failure, it read as a runner policy problem.
+    const socketPathTooLong = /Socket path too long/.test(String((error as Error)?.message));
     throw new JobFailure(
       "renderer_unavailable",
-      "Chromium could not start with its sandbox enabled in the preview worker",
+      socketPathTooLong
+        ? "Chromium could not start in the preview worker: its temporary directory path is too long for Chromium's socket"
+        : "Chromium could not start with its sandbox enabled in the preview worker",
       "browser-launch",
     );
   }

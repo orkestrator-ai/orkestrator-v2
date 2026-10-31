@@ -4,15 +4,17 @@ Checked against `main` at `bf49a751` (2026-10-25).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Tasks 2 to 5 worked on
+2026-10-31 against `main` at `931e5541` (see "Round of 2026-10-31" under
+Current state).
 
 ### Tasks
 
 1. **Apply the required-check ruleset**: once `main` has three green `CI` runs in a row, the maintainer applies the prepared ruleset (item 1). Status: open (the precondition is now met; maintainer action).
-2. **Open CI flakes 0182 and 0672**: the Cursor HTTP readiness timeout and the Chromium page crash in the interactive preview case. Status: open.
-3. **Owner flake cases from the triage**: create the cases the 2026-10-25 triage suggested but did not number. Status: open.
-4. **Failures that are not flakes**: give `workspace-realm-electron.spec.ts:409`, the annotation Notes focus check, the `AgentLaunchDialog` branch suggestion and the 0723 exit-before-stderr race their own bug or todo. Status: open.
-5. **Live hung-`close()` Electron check**: run a real Electron spec whose `close()` hangs and confirm `closeElectronWithin` cleans up. Status: open.
+2. **Open CI flakes 0182 and 0672**: the Cursor HTTP readiness timeout and the Chromium page crash in the interactive preview case. Status: done for 0182 (cause shown and fixed, resolved); 0672 open with crash diagnostics in place, waiting for a CI recurrence (2026-10-31).
+3. **Owner flake cases from the triage**: create the cases the 2026-10-25 triage suggested but did not number. Status: done (2026-10-31): 1530 to 1535; `media-stream.browser.test.ts` already had 1108.
+4. **Failures that are not flakes**: give `workspace-realm-electron.spec.ts:409`, the annotation Notes focus check, the `AgentLaunchDialog` branch suggestion and the 0723 exit-before-stderr race their own bug or todo. Status: done (2026-10-31): todos 1170, 1171 and 1172.
+5. **Live hung-`close()` Electron check**: run a real Electron spec whose `close()` hangs and confirm `closeElectronWithin` cleans up. Status: done (2026-10-31): `"killed"` after 20,066 ms, nothing left running.
 6. **Watch the workspace group margin and the runner shutdowns** (Needs verification). Status: open (margin currently comfortable).
 7. **Deferred measurement work**: ACP transcript matrix, longest-first bridge scheduling, splitting backend `test:workspace`, and any resumed speed work. Status: deferred (until measured).
 
@@ -187,6 +189,22 @@ runs, two open CI flakes (0182, 0672), owner cases the triage suggested, and
 one live check (an Electron spec with a hung `close()`).
 
 ## Current state
+
+- **Round of 2026-10-31.** `main` was red again: every completed `CI` run
+  from 2026-10-28 10:13 to 2026-10-31 02:16 failed "Unit and integration
+  tests" (27 run logs read). The causes were deterministic, not flakes:
+
+  | Failure | Since | Cause | Fix on this branch |
+  | --- | --- | --- | --- |
+  | About 30 real-Chromium preview cases (`html-print`, `pdf-thumbnail`, Mermaid, interactive, modules, runaway, escape, staged assets): "Chromium could not start with its sandbox enabled" | #1425, 2026-10-29 | The private test TMPDIR nested the preview worker's scratch one level deeper; Chromium's `SingletonSocket` path reached 113 bytes, past Linux's 108, and Chromium aborted. Reproduced locally. | A process-mode `scratchRoot` runner option; the tests use the parent TMPDIR (`fixtures/preview-scratch-root.ts`). The worker now names a socket-path failure. |
+  | `Playwright private TMPDIR wiring` (12 cases) | #1425 | CI's test job installs no Playwright browsers. | The spec launches the first Chromium present, as the design renderer does. |
+  | `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` | 2026-10-27 | 57 unsafe assertions in 25 files merged while `main` was red. | `scripts/rewrite-bounded-dom-assertions.ts`. |
+  | `verified copy helper > a truncated archive fails extraction…` | 2026-10-28, intermittent then constant | GNU tar exits 0 for a stream cut right after a complete member, so the copy helper accepted a truncated copy; the test's cut position depended on member order. A product bug. | `docker/orkestrator-migrate.sh` requires tar's end-of-archive block; the test cuts at three fixed positions. |
+  | `ACP bridge > latches a fatal error when active children exceed the bounded registry` | #1461 | Stale expectation: the activity route now reports `turnFailed`. | Expectation updated. |
+  | `flaky test register > case numbers are unique…` | several runs | Concurrent branches took 1304 and 1316; already renumbered on `main`. | The guard now names the colliding files. |
+
+  Lint and typecheck passed throughout. The design-renderer sweep case (0248)
+  failed until #1463 and passes since.
 
 - **CI.** `.github/workflows/ci.yml` runs on pushes to `main` and on pull
   requests, with three jobs: "bun fmt and oxlint", "Typecheck", and "Unit and
@@ -458,7 +476,11 @@ one live check (an Electron spec with a hung `close()`).
      recurrence since the 2026-09-21 fixture correction, and 10 of 10 runs
      passed. The rest of 0006 (a 2026-09-08 aggregate timeout cluster) stays
      open.
-   - **Still to do:** 0182 (Cursor HTTP hooks) and 0672 (Chromium page crash)
+   - Done (2026-10-31): 0182 resolved (the HTTP contract tests reached
+     Cursor's API; stubbed) and 0672 given crash diagnostics; owner cases
+     1530 to 1535 created; todos 1170 to 1174 filed. The text below is the
+     2026-10-25 triage note they came from.
+   - **Was still to do:** 0182 (Cursor HTTP hooks) and 0672 (Chromium page crash)
      on CI. Owner cases
      the triage suggested but did not create (no numbers were free):
      `media-stream.browser.test.ts` (timed out in 0694, 0801 and 0825),
@@ -493,7 +515,8 @@ one live check (an Electron spec with a hung `close()`).
    `*-electron.spec.ts` uses them. `tests/unit/electron-spec-process-ownership.test.ts`
    (5 tests) fails with each part removed. A throwaway Playwright run with a
    2 s timeout leaked the old pattern's process group and left nothing with
-   the new one. Not run: a real Electron spec with a hung `close()`.
+   the new one. Done (2026-10-31): a real Electron spec with a hung
+   `close()` (task 5 of the task analysis).
 10. **Done (2026-10-22): the Codex bridge listened on import in a test**
     ([flake 0660](../../tests/flaky-tests/agent-bridges/0660-codex-item-to-parts-inherited-port.md)).
 
@@ -702,6 +725,45 @@ Decisions made on 2026-10-25 for this round, with the options weighed.
   its inputs were rechecked. It is not applied: applying it is the
   maintainer's call, after three green `main` runs.
 
+Decisions made on 2026-10-31 for tasks 2 to 5 and the register.
+
+- **D14. Fix red `main` in this round.** Not in the brief, but every CI run
+  failed and the failures masked 0672. All six causes were deterministic and
+  each fix is its own commit. The copy-helper fix changes a script in the
+  environment image (`docker/image-manifest.ts`), so it ships with the next
+  image.
+- **D15. Preview socket path: test-side, not a shorter production name.**
+  Options: shorten `ork-artifact-preview-<pid>-` (production change, recovery
+  must accept both names); shorten the private test TMPDIR prefix (changes
+  every sweep); point the preview tests' scratch at the parent TMPDIR through
+  the supervisor's existing `scratchRoot` seam. Chose the last: production
+  depth is unchanged and already fits (about 84 bytes under `/tmp`).
+- **D16. 0182.** Followed the recommended evidence-led path: a dead-network
+  namespace reproduced the exact signature, and stubbing the catalogue and
+  credential runtime removed it, so no readiness budget was added. The
+  unbounded production lookup is todo 1173.
+- **D17. Task 3: create the cases now.** The recommended option was to wait
+  for recurrences; the brief asked for them, so they exist with the triage's
+  second-hand evidence and say so. `initial-run.test.ts` (1530) got a fresh
+  reproduction: the real SDK reaches `api2.cursor.sh`.
+- **D18. Task 4 folders.** As recommended, one todo per group: 1170 and 1171
+  in cross-cutting (spec health across features), 1172 in agent-engines (a
+  product bug, not fixed here). Two more found this round: 1173 and 1174.
+- **D19. Task 5 method.** As recommended: a temporary `before-quit` block in
+  `apps/desktop/electron/main.ts` and a temporary outcome log in
+  `electron-main.spec.ts`, both reverted. The spec failed earlier, on its own
+  window checks, behind this host's startup dialogs, so the hang was met by
+  the spec's `finally` (`closeElectronWithin(launchedApp)`): `"killed"` after
+  20,066 ms; Electron, its backend and the Vite group were gone afterwards,
+  and the temporary root was removed. A run where the temporary log line
+  threw also left nothing: the worker fixture stopped the Vite group.
+- **D20. Duplicate numbers.** No duplicate outside the 29 frozen numbers is
+  on `main` (1304 and 1316 were already renumbered). The frozen ones stay
+  (decided 2026-10-25, and renumbering 74 files needs more numbers than this
+  round reserved). The existing guard already failed on a duplicate; it now
+  names the files first, and a fixture proves disjoint reserved ranges above
+  the highest number pass.
+
 ## Related
 
 - [Flake registry](../../tests/flaky-tests/0000-index.md); this round:
@@ -715,7 +777,13 @@ Decisions made on 2026-10-25 for this round, with the options weighed.
   [0879](../../tests/flaky-tests/design-canvas-and-artifacts/0879-mermaid-limits-render-deadline-on-ci.md);
   still open from earlier rounds:
   [0006](../../tests/flaky-tests/aggregate-validation-runs/0006-2026-09-08-coordinator-action-validation.md),
-  [0182](../../tests/flaky-tests/agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md).
+  [0182](../../tests/flaky-tests/agent-bridges/0182-cursor-auth-readiness-aggregate-timeout.md)
+  (resolved 2026-10-31); created 2026-10-31: 1530 to 1535.
+- Todos from this file's triage: [1170](1170-electron-native-focus-checks-fail-alone.md),
+  [1171](1171-agent-launch-native-branch-suggestion.md),
+  [1172](../agent-engines/1172-opencode-start-error-before-stderr.md),
+  [1173](../agent-engines/1173-cursor-status-account-lookup-unbounded.md),
+  [1174](../coordinator-and-multi-review/1174-cursor-coordinator-skill-tests-read-checkout.md).
 - [0145-claude-linux-sandbox-apparmor-nested-userns.md](../agent-engines/0145-claude-linux-sandbox-apparmor-nested-userns.md):
   the product side of the CI sandbox failure.
 - [Testing guide, "Agent CLIs on `PATH`"](../../development/testing-guide.md#agent-clis-on-path):

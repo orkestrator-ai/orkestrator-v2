@@ -38,3 +38,11 @@ The background reconcile count remained one instead of zero at line 195
 `mise run test:logged -- --name merge-agent-tools-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`
 (exit 0, 3.4 s). This repeats the fixed-wait race above; no agent-tool
 implementation, assertion, timeout or skip changed.
+
+## PR auto-merge branch — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name backend-workspace -- bun run --cwd apps/backend test:workspace` (two workers), on branch `auto-merge-toggle-811626194e15-r1`.
+- **Failure:** `expect(agentTools().configurationCount()).toBe(0)` at `commands-agent-tools.test.ts:195` received a non-zero count (193.16 ms). Backend package: 11,794 tests across 805 files, two failures (this case, plus `session-title-runners.test.ts`, which needs the pinned `binaries/codex` this worktree does not have).
+- **Complete unchanged owner:** `mise run test:logged -- --name agent-tools-alone -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1` passed (2.6 s).
+- **Evidence:** `orkestrator-test-run.aPuQa7` below the host temporary directory.
+- **Assessment:** confirms recurrence. The branch does not touch agent-tool configuration; nothing changed in the test.

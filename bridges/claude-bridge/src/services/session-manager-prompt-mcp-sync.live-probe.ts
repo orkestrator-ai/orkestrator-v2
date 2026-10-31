@@ -15,11 +15,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ClaudeQueryControl } from "../types/index.js";
-import type { SdkMcpServersConfig } from "./mcp-config.js";
+import { setClaudeAccountHomeForTesting, setClaudeHomeForTesting } from "./claude-home.js";
+import {
+  claudeAccountOnlyMcpServerNames,
+  getMcpRuntimeConfig,
+  type SdkMcpServersConfig,
+} from "./mcp-config.js";
 import { claudeExecutableOptions } from "./session-manager-core.js";
 import {
   createClaudeRuntimeMcp,
   type McpSyncRuntime,
+  type McpSyncTarget,
   syncClaudeRuntimeMcp,
 } from "./session-manager-prompt-mcp-sync.js";
 
@@ -55,6 +61,13 @@ function isAlive(pid: number): boolean {
   }
 }
 
+/** What an account scenario's bridge resolves from the host file, as `resolveQueryPlan` does. */
+interface BridgeView {
+  writeHost: (servers: Record<string, unknown>) => void;
+  /** The next turn's sync target, read from the host file by the bridge's own resolver. */
+  next: (key: string) => Promise<McpSyncTarget>;
+}
+
 interface Scenario {
   /** `mcpServers` in the CLI's own `.claude.json`. */
   file: Record<string, unknown>;
@@ -62,9 +75,17 @@ interface Scenario {
   inline: SdkMcpServersConfig;
   /** Every name the configuration declares at launch. */
   declared: string[];
+  /**
+   * An added Claude account: `mcpServers` of the host `HOME/.claude.json`,
+   * which the bridge reads, while the CLI reads `file` from its
+   * `CLAUDE_CONFIG_DIR`. The launch set (`inline`, `declared`, the
+   * account-only names) is then resolved by the bridge's own code instead.
+   */
+  host?: Record<string, unknown>;
   act: (
     runtime: McpSyncRuntime,
     writeFile: (servers: Record<string, unknown>) => void,
+    bridge: BridgeView,
   ) => Promise<void>;
 }
 
@@ -91,6 +112,26 @@ async function run(
       JSON.stringify({ hasCompletedOnboarding: true, mcpServers: servers }),
     );
   writeFile(scenario.file);
+  const writeHost = (servers: Record<string, unknown>) =>
+    writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: servers }));
+  const settingSources = ["user", "project"];
+  const bridge: BridgeView = {
+    writeHost,
+    next: async (key) => {
+      const { servers, names } = await getMcpRuntimeConfig(cwd, {}, undefined, "user");
+      return { servers, key, names, required: [] };
+    },
+  };
+  let accountOnly: string[] = [];
+  if (scenario.host) {
+    writeHost(scenario.host);
+    setClaudeHomeForTesting(home);
+    setClaudeAccountHomeForTesting(configDir);
+    const launch = await bridge.next("launch");
+    scenario.inline = launch.servers;
+    scenario.declared = Array.from(launch.names);
+    accountOnly = await claudeAccountOnlyMcpServerNames(cwd, settingSources, launch.names);
+  }
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
@@ -126,7 +167,7 @@ async function run(
         });
         return child;
       },
-      settingSources: ["user", "project"],
+      settingSources: settingSources as ("user" | "project")[],
       mcpServers: scenario.inline,
       env: {
         PATH: process.env.PATH,
@@ -149,9 +190,9 @@ async function run(
     const runtime: McpSyncRuntime = {
       control: control as unknown as ClaudeQueryControl,
       mcpServers: "launch",
-      mcp: createClaudeRuntimeMcp(scenario.inline, scenario.declared),
+      mcp: createClaudeRuntimeMcp(scenario.inline, scenario.declared, accountOnly),
     };
-    await scenario.act(runtime, writeFile);
+    await scenario.act(runtime, writeFile, bridge);
     // Let a server the CLI stopped finish exiting.
     await sleep(1_000);
     const servers = (await control.mcpServerStatus())
@@ -186,6 +227,8 @@ async function run(
     open.delete(control);
     control.close();
     await exited;
+    setClaudeHomeForTesting(null);
+    setClaudeAccountHomeForTesting(undefined);
     await rm(root, { recursive: true, force: true });
   }
 }
@@ -246,6 +289,26 @@ export async function runMcpSyncProbe(): Promise<Record<string, McpSyncObservati
           names: new Set(["alpha"]),
           required: [],
         });
+      },
+    })),
+    // An added Claude account (0039 item 12). The bridge reads the host
+    // file and the CLI reads the account's copy, which still names `extra`
+    // (removed from the host since the copy was made, or added inside the
+    // account home). The host's SSE entry, which the bridge never passes
+    // inline, shows whether the CLI reads the host file too. Then two host
+    // edits, each picked up on the next turn as the bridge does: an addition,
+    // and the removal of a server the account's copy still names.
+    account: await run((fixture) => ({
+      host: { keep: fixture("keep"), hostsse: { type: "sse", url: "http://127.0.0.1:9/sse" } },
+      file: { keep: fixture("keep"), extra: fixture("extra") },
+      inline: {},
+      declared: [],
+      act: async (runtime, _writeFile, bridge) => {
+        const sse = { type: "sse", url: "http://127.0.0.1:9/sse" };
+        bridge.writeHost({ keep: fixture("keep"), added: fixture("added"), hostsse: sse });
+        await syncClaudeRuntimeMcp(runtime, await bridge.next("added"));
+        bridge.writeHost({ added: fixture("added"), hostsse: sse });
+        await syncClaudeRuntimeMcp(runtime, await bridge.next("removed"));
       },
     })),
     // An SSE entry the bridge never passes inline; the CLI loads it itself.

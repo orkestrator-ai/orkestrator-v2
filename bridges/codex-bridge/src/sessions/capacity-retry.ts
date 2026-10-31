@@ -3,83 +3,62 @@
  *
  * Codex ends such a turn with `turn/completed` `status: "failed"` and
  * `codexErrorInfo: "serverOverloaded"` (`CodexErr::ServerOverloaded`, shown as
- * "Selected model is at capacity. Please try a different model."). app-server
- * does not retry it itself: its own retry loop covers stream disconnects and
- * 5xx responses (`willRetry` on the standalone `error` notification), never
- * this. Unattended work (Multi Review steps, build stages) fails on the first
+ * "Selected model is at capacity. Please try a different model.") or
+ * `"policyCapacityUnavailable"`. app-server retries either itself only when the
+ * server sends `Retry-After` (`willRetry` on the standalone `error`
+ * notification); otherwise the turn fails. Unattended work (Multi Review steps, build stages) fails on the first
  * status read that says `error`, so the bridge continues the turn itself, with
  * exponential backoff, while it keeps reporting the session `running`.
  *
- * Pure: no timers, no I/O. `app-server-runtime-capacity-retry.ts` drives it.
+ * Pure: no timers, no I/O. `app-server-runtime-capacity-retry.ts` drives it. The
+ * backoff itself is shared with the other providers
+ * (`@orkestrator/protocol/capacity-retry`).
  */
+import { formatRetryDelay } from "@orkestrator/protocol/capacity-retry";
+
 import type { EngineError } from "../engine/types.js";
 
-export interface CapacityRetryPolicy {
-  /** Attempts in total, the original one included. 1 turns retrying off. */
-  maxAttempts: number;
-  /** Nominal wait before the first retry. */
-  baseDelayMs: number;
-  /** Growth of the nominal wait per retry. */
-  multiplier: number;
-  /** Ceiling on any one wait, applied before jitter. */
-  maxDelayMs: number;
-}
-
-/**
- * Five attempts, waits of about 2, 6, 18 and 54 s: about 80 s in all, never
- * more than 60 s at once. A capacity incident usually needs longer than a
- * doubling series from 2 s gives it (about 30 s for four retries), and a
- * workflow abandons a step only after 45 minutes without activity, so the
- * longer window costs nothing a user waits on in practice.
- */
-export const DEFAULT_CAPACITY_RETRY_POLICY: CapacityRetryPolicy = {
-  maxAttempts: 5,
-  baseDelayMs: 2_000,
-  multiplier: 3,
-  maxDelayMs: 60_000,
-};
+export {
+  DEFAULT_CAPACITY_RETRY_POLICY,
+  capacityRetryDelayMs,
+  formatRetryDelay,
+  type CapacityRetryPolicy,
+} from "@orkestrator/protocol/capacity-retry";
 
 /** `CodexErr::ServerOverloaded`'s text, verbatim, as app-server reports it. */
 export const CODEX_SERVER_OVERLOADED_MESSAGE =
   "Selected model is at capacity. Please try a different model.";
 
+/** `CodexErrorDetails::PolicyCapacityUnavailable`'s text, verbatim (0.166). */
+export const CODEX_POLICY_CAPACITY_UNAVAILABLE_MESSAGE =
+  "Policy-restricted capacity is unavailable. Please try again later.";
+
+/**
+ * The two capacity refusals. `policyCapacityUnavailable` is a 503
+ * `policy_capacity_unavailable`: the same condition for capacity reserved under
+ * a policy, which Codex itself gives "the same retry advice as ordinary
+ * overloads" and retries only when the server sends `Retry-After`.
+ */
+const CAPACITY_CODES = new Set(["serverOverloaded", "policyCapacityUnavailable"]);
+const CAPACITY_MESSAGES = new Set([
+  CODEX_SERVER_OVERLOADED_MESSAGE,
+  CODEX_POLICY_CAPACITY_UNAVAILABLE_MESSAGE,
+]);
+
 /**
  * True only for a model capacity refusal.
  *
- * The structured `serverOverloaded` code decides. The exact message is
- * accepted only when app-server sent no code at all, so a build that drops the
- * code still retries, and no other text ever does. Usage limits, rate limits,
- * quota, login refusals and bad requests all carry their own codes and are
- * never retried; a 401/403 is refused even under the overload code.
+ * The structured code decides. The exact message is accepted only when
+ * app-server sent no code at all, so a build that drops the code still
+ * retries, and no other text ever does. Usage limits, rate limits, quota, login
+ * refusals and bad requests all carry their own codes and are never retried; a
+ * 401/403 is refused even under a capacity code.
  */
 export function isModelCapacityError(error: EngineError | undefined): boolean {
   if (!error) return false;
   if (error.httpStatusCode === 401 || error.httpStatusCode === 403) return false;
-  if (error.code !== undefined) return error.code === "serverOverloaded";
-  return error.message.trim() === CODEX_SERVER_OVERLOADED_MESSAGE;
-}
-
-/**
- * The wait before attempt `nextAttempt` (2 for the first retry).
- *
- * "Equal jitter": half the nominal wait is fixed, the other half random, so
- * retries from many sessions refused at the same moment spread out, and none
- * retries sooner than half its nominal wait.
- */
-export function capacityRetryDelayMs(
-  policy: CapacityRetryPolicy,
-  nextAttempt: number,
-  random: () => number = Math.random,
-): number {
-  const retryIndex = Math.max(0, nextAttempt - 2);
-  const nominal = Math.min(policy.maxDelayMs, policy.baseDelayMs * policy.multiplier ** retryIndex);
-  const unit = Math.min(1, Math.max(0, random()));
-  return Math.round(nominal / 2 + (nominal / 2) * unit);
-}
-
-/** Whole seconds for the transcript; a sub-second wait still reads "1 s". */
-export function formatRetryDelay(delayMs: number): string {
-  return `${Math.max(1, Math.round(delayMs / 1_000))} s`;
+  if (error.code !== undefined) return CAPACITY_CODES.has(error.code);
+  return CAPACITY_MESSAGES.has(error.message.trim());
 }
 
 /** The pending card's text while the bridge waits. */

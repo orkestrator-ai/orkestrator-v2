@@ -312,7 +312,7 @@ describe("AppShell", () => {
     );
     // No environment refresh follows: the monitor event must immediately veto
     // the still-clean environment snapshot on its own.
-    expect(title.querySelector("[data-merge-ready]")).toBeNull();
+    expect(title.querySelector("[data-merge-ready]") === null).toBe(true);
     act(() =>
       usePrMonitorStore.setState((state) => ({
         states: new Map(
@@ -325,8 +325,8 @@ describe("AppShell", () => {
     expect(
       screen
         .getByRole("button", { name: "pgstack1 - feature-auth", hidden: true })
-        .querySelector("[data-merge-ready]"),
-    ).toBeNull();
+        .querySelector("[data-merge-ready]") === null,
+    ).toBe(true);
   });
 
   test.each([
@@ -383,7 +383,7 @@ describe("AppShell", () => {
     expect((await screen.findByRole("tooltip")).textContent).toContain(label);
     selectedEnvironmentPr = { ...selectedEnvironmentPr, lifecycleOperation: "deleting" };
     view.rerender(<AppShell>Workspace</AppShell>);
-    expect(title.querySelector(".text-shimmer")).toBeNull();
+    expect(title.querySelector(".text-shimmer") === null).toBe(true);
     const describedText = (title.getAttribute("aria-describedby") ?? "")
       .split(/\s+/)
       .map((id) => document.getElementById(id)?.textContent ?? "")
@@ -423,7 +423,7 @@ describe("AppShell", () => {
       expect(node.environments[0]?.prMergeability).toBe("clean");
       const title = screen.getByRole("button", { name: "app - feature", hidden: true });
       expect(document.title).toBe("app - feature");
-      expect(title.querySelector("[data-merge-ready]")).toBeNull();
+      expect(title.querySelector("[data-merge-ready]") === null).toBe(true);
       // A freshly hydrated clean summary is also what a failed leaf monitor
       // or a restarted leaf can return. Neither proves a successful PR check.
       act(() =>
@@ -434,8 +434,8 @@ describe("AppShell", () => {
       expect(
         screen
           .getByRole("button", { name: "app - feature", hidden: true })
-          .querySelector("[data-merge-ready]"),
-      ).toBeNull();
+          .querySelector("[data-merge-ready]") === null,
+      ).toBe(true);
     } finally {
       cleanup();
       uninstallDesktopFake();
@@ -489,7 +489,7 @@ describe("AppShell", () => {
     mountSearch = true;
     uiStore.setState({ sidebarOpen: false });
     const { rerender } = render(<AppShell>Workspace</AppShell>);
-    expect(screen.queryByText("Sidebar")).toBeNull();
+    expect(screen.queryByText("Sidebar") === null).toBe(true);
     fireEvent.keyDown(document.body, { key: "k", code: "KeyK", metaKey: true });
     await waitFor(() => expect(screen.getByTestId("project-search-dialog")).toBeTruthy());
     expect(uiStore.getState().sidebarOpen).toBe(true);
@@ -501,11 +501,11 @@ describe("AppShell", () => {
     act(() => {
       requestAppShortcut("search-projects");
     });
-    await waitFor(() => expect(screen.queryByTestId("project-search-dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("project-search-dialog") === null).toBe(true));
     // A later mount must not replay the consumed request.
     cleanup();
     render(<AppShell>Workspace</AppShell>);
-    expect(screen.queryByTestId("project-search-dialog")).toBeNull();
+    expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
   });
 
   test("a closed mobile drawer drops search without opening or replaying it", () => {
@@ -513,11 +513,11 @@ describe("AppShell", () => {
     const { rerender } = render(<AppShell>Workspace</AppShell>);
     isMobile = true;
     rerender(<AppShell>Workspace</AppShell>);
-    expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
     act(() => {
       requestAppShortcut("search-projects");
     });
-    expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
     const delivered = mock(() => {});
     const dispose = onAppShortcut("search-projects", delivered);
     expect(delivered).not.toHaveBeenCalled();
@@ -536,7 +536,7 @@ describe("AppShell", () => {
         requestAppShortcut("search-projects");
       });
       expect(uiStore.getState().sidebarOpen).toBe(false);
-      expect(screen.queryByText("Sidebar")).toBeNull();
+      expect(screen.queryByText("Sidebar") === null).toBe(true);
     } finally {
       cleanup();
       happyDOM.setURL(href);

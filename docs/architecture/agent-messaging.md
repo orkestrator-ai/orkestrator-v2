@@ -494,6 +494,9 @@ wins.
 | Grok (ACP) | A permission request for a mail tool is answered with its allow option when it names the Orkestrator server: `orkestrator__<tool>` (Grok 1.0.46's own `server__tool` form) or `_meta["x.ai/tool"]` `{ namespace: "orkestrator", name }`. Never a bare `send_message`, which any server could offer. Grok 1.0.52 asks for its `use_tool` wrapper even under `--always-approve`, so for `use_tool` the name is the wrapped `rawInput.tool_name`, or the one the bridge recorded for the same call (`orkestratorToolPermissionOption`, `acp-session.ts`). The annotation result tools (`WEB_ANNOTATION_TOOL_NAMES`) are allowed the same way |
 | Cursor | Never asks |
 
+`report_goal` shares the mail tools' footing: it never prompts, and it writes only
+to Orkestrator's own record ([goals.md](goals.md)).
+
 ## How each provider gets the tools
 
 The store does not talk to vendors. Bridges (or OpenCode’s server) must

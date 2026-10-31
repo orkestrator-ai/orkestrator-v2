@@ -1,3 +1,4 @@
+import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { describe, expect, test } from "bun:test";
@@ -65,11 +66,13 @@ describe("OpenCode provider", () => {
           permission: [
             { permission: "*", pattern: "*", action: "deny" },
             // A worker's mail tools are allowed whatever the default.
-            ...[...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map((name) => ({
-              permission: `orkestrator_${name}`,
-              pattern: "*",
-              action: "allow",
-            })),
+            ...[...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map(
+              (name) => ({
+                permission: `orkestrator_${name}`,
+                pattern: "*",
+                action: "allow",
+              }),
+            ),
             { permission: "read", pattern: "*", action: "allow" },
             { permission: "shell", pattern: "*", action: "deny" },
           ],

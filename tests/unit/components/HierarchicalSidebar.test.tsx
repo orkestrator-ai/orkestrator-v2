@@ -573,7 +573,7 @@ describe("HierarchicalSidebar", () => {
     render(<HierarchicalSidebar />);
     const row = screen.getByRole("button", { name: /^Project One/ });
     expect(within(row).getByTestId("project-icon").getAttribute("src")).toBe(icon);
-    expect(within(row).queryByTestId("machine-home-icon")).toBeNull();
+    expect(within(row).queryByTestId("machine-home-icon") === null).toBe(true);
   });
 
   test("shows a project and environment search bar under the host switcher", () => {

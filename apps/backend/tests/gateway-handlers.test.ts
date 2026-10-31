@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 import { installBoundedConsole } from "../src/bounded-console.js";
-import { startEventLoopStallMonitor } from "../src/event-loop-stall-monitor.js";
+import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
 
 describe("remote gateway", () => {
   test("authenticated metrics expose null diagnostics when the singletons are absent", async () => {

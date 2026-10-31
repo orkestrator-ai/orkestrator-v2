@@ -697,6 +697,49 @@ stays pinned to the tail and snaps back. Measurements land as annotations in
 `results.json`. Override models and trail lengths with the variables named in
 the spec's header.
 
+### Live client outage
+
+`e2e/agent-testing/client-outage.spec.ts` qualifies reconnect and freshness under
+real outages, with no credentials and no provider turns. Each client sits behind
+its own proxy inside the test (`client-outage-support.ts`), which can reset its
+connections, silence them with no error, or stop reading its terminal transport.
+The machine's network is untouched. It covers a dropped link on the shared
+`EventSource` and on the terminal WebSocket, a silent link, terminal recovery
+under real TCP backpressure, quiet safety reads, and a backend restart with direct
+(bearer) clients and with a real session, which lapses by design.
+
+It signals the profile's backend and starts its own replacement on the same data,
+port and token, so use a profile of its own. Electron's Local then reports the
+backend as stopped until you restart the profile, and it may show a dialog.
+Each case starts a replacement if no backend is listening, so the spec can run
+again on the same profile.
+
+```bash
+mise run dev:test --profile qa-outage --fixture --no-agent-credentials --agent-platforms codex
+# In a second terminal (about 13 minutes):
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 \
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-outage ORKESTRATOR_AGENT_TEST_LIVE_OUTAGE=1 \
+  mise run test:logged -- --name client-outage -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts client-outage.spec.ts --workers=1
+mise run dev:stop --profile qa-outage
+mise run dev:reset --profile qa-outage
+```
+
+Each case records content-free timings as an annotation in `results.json`. The
+Electron half (a remote backend really restarted, then a silent link) is
+`connection-outage-electron.spec.ts`, in `mise run test:agent:electron`. The Codex
+breaker against a real binary is gated separately, and needs only the pinned
+`codex`, which a profile's `data/toolchains/codex` holds if the host does not:
+
+```bash
+CODEX_PROTOCOL_BINARY=<pinned codex> RUN_LIVE_CODEX_APP_SERVER=1 \
+  mise run test:logged -- --name codex-breaker -- \
+  bun test bridges/codex-bridge/src/app-server/live-circuit-breaker.test.ts --parallel=1
+```
+
+The [recorded run](../todo/transcripts-and-observation/0051-client-reconnect-and-freshness.md#live-qualification-record-2026-10-31)
+is in 0051.
+
 ### Live cold restart
 
 `e2e/agent-testing/cold-restart-live.spec.ts` stops and starts the whole
@@ -839,6 +882,27 @@ check but drops the ones that need the model to answer: Claude's bridge
 records the MCP files a query was built from when the query starts, so the
 apply half still runs when the provider refuses requests (a rate limit, say).
 A full-mode pass is still needed for the tool-call checks.
+
+### MCP editor and live panel without credentials
+
+`e2e/agent-testing/mcp-ui-matrix.spec.ts` drives the MCP editor's conflict
+recovery and secret replacement at 1440 and 390 px, then a Claude session
+with one healthy and one failing fixture server: reconnect from the live
+panel and a hard reload. No model is called: without a login the Claude CLI
+still connects and reports its MCP servers before the turn fails. It needs
+`ORKESTRATOR_AGENT_TEST_MCP_UI=1`, and its live case skips unless the
+profile lists no Claude credential source:
+
+```bash
+mise run dev:test --profile mcp-ui --fixture --no-agent-credentials --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=mcp-ui ORKESTRATOR_AGENT_TEST_MCP_UI=1 \
+  mise run test:logged -- --name mcp-ui -- mise run test:agent:browser -- \
+  e2e/agent-testing/mcp-ui-matrix.spec.ts
+```
+
+Screenshots go to `output/agent-testing/<run-id>/mcp-ui-matrix/`. Secret
+values are compared in memory and never printed or captured.
 
 ### Live slash commands in an inactive environment
 
@@ -1153,6 +1217,22 @@ the profile's own `CLAUDE_CONFIG_DIR`; sessions, settings and project state
 stay there, so a scratch configuration directory is not needed to isolate
 session writes.
 
+### Live goal suite
+
+`mise run test:agent:goals [--credential-source <platform>]… [--browser-only]`
+gives each platform a disposable profile holding that platform's host credential
+alone, runs `e2e/agent-testing/goals-live.spec.ts`, then stops and resets it. It
+drives the goal loop through every scenario and asserts on the durable goal record
+and the workspace: a passing check after several iterations, no check, a check that
+never passes, `blocked`, Stop and resume, a queued user prompt, and clear. It writes
+`output/agent-testing/<profile>/goals/summary-<platform>.json`. Each scenario spends
+real tokens on the smallest model the catalogue names, so nothing else runs it.
+A container run needs a hand-started profile (`--fixture-environments local,container`)
+and `ORKESTRATOR_AGENT_TEST_GOAL_ENVIRONMENT=container`, and
+`goals-restart-live.spec.ts`, which kills the backend, also needs one; its header has
+the commands. `ORKESTRATOR_AGENT_TEST_GOAL_MODEL_<PLATFORM>` overrides the model. To qualify a
+provider whose capability is off, add it to `GOAL_QUALIFIED_PLATFORMS` locally first.
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's
@@ -1160,7 +1240,8 @@ read-only boundary (`read-only`), that delegation never waits inside a turn
 (`async`), that worker mail flows with nobody's help (`family`), that the
 status wakes of work the coordinator started reach it (`status`), that a
 `deliverNow` correction is steered into a busy worker's running turn
-(`deliver-now`), and that peer mail between two ordinary environments wakes
+(`deliver-now`), that a worker's goal ends as an unverified claim and wakes the
+coordinator once (`goal`), and that peer mail between two ordinary environments wakes
 each side with **Wake peers** on (`peer`). Every scenario with mail also checks how each mail
 carrier is shown as a tile. It runs as one command and owns its profiles:
 
@@ -1410,8 +1491,35 @@ the `steer-unsupported` hold note before its gate opens, and it is injected
 `coordinator-live-deliver-now.ts`; `coordinator-live-deliver-now-orchestration.test.ts`
 runs the orchestration over a scripted command transport.
 
+The `goal` case (`plans/goals/403`) proves a coordinator can give a worker a goal
+and react to its end. It runs only where the platform's `actions.goal` capability
+is on, so other platforms record a skip, gives the coordinator two prompts and
+waits at most six step budgets:
+
+```bash
+mise run test:agent:coordinator --credential-source claude --scenario goal
+```
+
+The coordinator launches one worker whose task is a one-word reply, and that
+launch's own wake passes first. A second prompt has it call `set_worker_goal` once
+on that tab with `maxIterations: 3`, the check `test -f goal-<token>-two` and an
+objective that takes two turns: the first creates `goal-<token>-one` and ends
+without `report_goal`, and the second creates the file the check needs and reports
+`done`. Two turns on purpose: with one there would be no iteration to wake on. The
+prompt also tells it to call `get_worker_goal` once when woken. The harness then
+reads the goal on each poll until it stops and the wake settles, and watches 30 more
+seconds for a second wake. It passes when the set result names the goal with
+`wakeOwed: true`; the goal ends `complete` with reason `check-passed`, a passing
+`lastCheck` and two or three iterations; the goal's delegation closes and wakes the
+coordinator only after the goal's `endedAt`; exactly one coordinator turn follows
+the set turn; the notice names the outcome and `get_worker_goal`, unless a report
+the worker mailed was the wake; and `get_worker_goal` returned `complete`. The
+prompts and verdict are in `coordinator-live-goal.ts`;
+`coordinator-live-goal-orchestration.test.ts` runs the orchestration over a scripted
+command transport.
+
 Mail tiles are judged on every scenario with mail (`async`, `family`, `status`,
-`deliver-now` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
+`deliver-now`, `goal` and each side of `peer`) by `e2e/agent-testing/coordinator-mail-tiles.ts`.
 Each provider echoes the injected carrier as a user row in its own way, and the
 transcript shows that row as tiles only when the renderer's
 `isPeerMailCarrierContent` accepts its `content`. The check runs the

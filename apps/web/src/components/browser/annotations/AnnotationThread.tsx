@@ -26,6 +26,8 @@ import {
   captureProducerLabel,
   pageLabel,
   sameService,
+  sourceHintLocation,
+  sourceHintStatus,
   targetPrecision,
   viewportLabel,
 } from "./format";
@@ -81,6 +83,32 @@ function CaptureEvidence({ capture }: { capture: WebAnnotationCapture }) {
         </div>
       )}
     </details>
+  );
+}
+
+/**
+ * The source locations the agent is given, with what the backend's path check
+ * found. The page declares them, so they stay candidates even when verified.
+ */
+function SourceCandidates({ capture }: { capture: WebAnnotationCapture }) {
+  const hints = capture.evidence?.sourceHints;
+  if (!hints?.length) return null;
+  const producers = [...new Set(hints.map((hint) => hint.producer))].join(", ");
+  return (
+    <div className="space-y-0.5 text-[11px]" data-source-candidates>
+      <p className="text-muted-foreground">
+        Source candidates from the page ({producers}). The agent is told to check the code.
+      </p>
+      <ul className="space-y-0.5">
+        {hints.map((hint, index) => (
+          <li key={`${hint.path}-${index}`} className="break-words" data-verified={hint.verified}>
+            <span className="font-mono text-[10px]">{sourceHintLocation(hint)}</span>
+            {hint.component ? ` · ${hint.component}` : ""}
+            <span className="text-muted-foreground"> · {sourceHintStatus(hint)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -476,6 +504,7 @@ export function AnnotationThread({
               {captureProducerLabel(captureRecord)}
             </p>
             <SavedImageControls annotation={annotation} capture={captureRecord} />
+            <SourceCandidates capture={captureRecord} />
             <CaptureEvidence capture={captureRecord} />
           </>
         ) : (

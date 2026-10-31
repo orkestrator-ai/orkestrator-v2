@@ -286,6 +286,38 @@ below the host temporary directory; the passing summary is in
 `orkestrator-test-run.ngehxI`. This confirms intermittent behavior, without
 establishing its cause. No bridge source, assertion or timeout changed.
 
+
+## PR auto-merge review repair, 2026-10-31
+
+Preparation's `mise run test` repeated the two-pre-plugin-answer stale/ready
+mismatch at 102.04 ms (Codex: 2,265 passed, 52 skipped, one failed). The
+recorded aggregate ran bridge tests in parallel; evidence is
+`.orkestrator/review-artifacts/review-validation-038a8906-ba10-4822-a245-7c81a58b7a2c/validation-04.stdout.txt`.
+The unchanged complete owner passed alone (30 tests, 1.0 s, exit 0):
+
+```sh
+mise run test:logged -- --name catalogue-isolated -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures
+```
+
+No bridge implementation, assertion, or timeout changed. This confirms the
+existing intermittence; the cause remains unproven.
+
+## Resolve button tab reuse validation, 2026-10-31
+
+`mise run test` failed the two-pre-plugin-answer stale/ready assertion
+(`codex-command-catalogue.test.ts:273`, expected `stale`, received `ready`) at
+97.17 ms. Codex reported 2,313 passed and one failed; the suite took 715.6 s, about
+four times an earlier run on the same machine (182 s), so the host was under load.
+The change under test edits no bridge file. Log:
+`orkestrator-test-run.xfpUnw/bridges.log.gz` below the host temporary directory.
+The owning file then passed five of five runs alone (30 passed each):
+
+```sh
+bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts
+```
+
+No bridge source, assertion or timeout changed.
+
 ## Project checkout review validation, 2026-10-31
 
 `mise run test:logged -- --name review-default-rerun -- mise run test`

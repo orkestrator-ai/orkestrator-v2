@@ -69,6 +69,11 @@ export interface DispatchInput {
   requestId?: string;
   /** Transcript user message claimed before SDK dispatch. */
   userMessageId?: string;
+  /**
+   * An `agent.summarize()` run rather than a prompt. Its result is the summary,
+   * which belongs on the compaction boundary, not in the transcript as prose.
+   */
+  compaction?: true;
 }
 
 export interface DispatchHandle {
@@ -169,6 +174,54 @@ export async function dispatchPrompt(
     }
   }
 
+  return followStartedRun(state, run, promptSequence, input, diagnostics, () => {
+    commandChanges.close();
+    // A turn that lost ownership (a close, a newer turn) settled no outcome.
+    endTurnEvidence(state, evidence, { phase: "unknown", terminal: false });
+  });
+}
+
+/**
+ * Start the SDK's summarize run on a turn the caller has already claimed.
+ *
+ * It takes no options, so no `onDelta` reaches the transcript: the boundary
+ * opens here and `followRun` settles it from the run's `summary` message and
+ * terminal result. It rejects before the run starts when the agent has no saved
+ * conversation or another run is active, so a rejection here is not ambiguous
+ * the way a failed `send` is: nothing was journaled and nothing can be running.
+ */
+export async function dispatchCompaction(
+  state: SessionState,
+  agent: SDKAgent,
+): Promise<DispatchHandle> {
+  const promptSequence = state.promptSequence;
+  const diagnostics = createRunDiagnostics(state);
+  const start = () => agent.summarize();
+  const run = await (diagnostics ? diagnostics.follow(start) : start()).catch((error) => {
+    diagnostics?.close("send-failed");
+    throw error;
+  });
+  diagnostics?.sent(run.id);
+  applyInteractionUpdate(state, { type: "summary-started" });
+  return followStartedRun(
+    state,
+    run,
+    promptSequence,
+    { prompt: "", images: [], compaction: true },
+    diagnostics,
+    () => undefined,
+  );
+}
+
+/** Publish a started run's controls and follow it to its terminal state. */
+async function followStartedRun(
+  state: SessionState,
+  run: Awaited<ReturnType<SDKAgent["send"]>>,
+  promptSequence: number,
+  input: DispatchInput,
+  diagnostics: CursorRunDiagnostics | undefined,
+  onSettled: () => void,
+): Promise<DispatchHandle> {
   state.activeRun = run;
   const unsubscribeStatus = run.onDidChangeStatus((status) => {
     if (!turnStillOwned(state, promptSequence)) return;
@@ -215,9 +268,7 @@ export async function dispatchPrompt(
       diagnostics,
     ).finally(() => {
       diagnostics?.close();
-      commandChanges.close();
-      // A turn that lost ownership (a close, a newer turn) settled no outcome.
-      endTurnEvidence(state, evidence, { phase: "unknown", terminal: false });
+      onSettled();
       unsubscribeStatus();
       if (state.activeRun === run) state.activeRun = undefined;
     }),
@@ -301,6 +352,7 @@ export async function followRun(
         // rather than what the composer asked for — the two differ whenever
         // Cursor substitutes a model.
         recordStreamSystemMessage(state, event);
+        if (input.compaction && summaryMessageFailed(event)) streamed.summaryFailed = true;
         const message = streamMessageUsage(event);
         if (!message) continue;
         streamed.total = sumTurnUsage(streamed.total, message);
@@ -402,6 +454,15 @@ function finishTurn(
   input: DispatchInput,
   streamed: StreamedUsage,
 ): void {
+  // Before the sweep below, which reads a boundary still open as abandoned: a
+  // cancelled or failed summarize run leaves it to that sweep.
+  if (input.compaction && result.status === "finished") {
+    applyInteractionUpdate(state, {
+      type: "summary-completed",
+      summary: result.result ?? "",
+      failed: streamed.summaryFailed === true,
+    });
+  }
   settleBackgroundChildren(state);
   settleAbandonedToolParts(state);
   state.cancelTurn = undefined;
@@ -432,7 +493,7 @@ function finishTurn(
   // transcript is the honest record of what ran.
   state.status = "idle";
   state.error = undefined;
-  backfillTerminalAssistantText(state, result.result);
+  if (!input.compaction) backfillTerminalAssistantText(state, result.result);
   recordUsage(state, result, streamed, input);
   recordStructuredOutput(state, result.result, input);
   journal(state, input.requestId, "completed");
@@ -478,6 +539,13 @@ function failTurn(
 interface StreamedUsage {
   total?: TurnUsage;
   last?: TurnUsage;
+  /** The run ended normally but its `summary` message reported `error`. */
+  summaryFailed?: boolean;
+}
+
+/** Status of the summarization, not the run: the run can still finish. */
+function summaryMessageFailed(event: unknown): boolean {
+  return isObject(event) && event.type === "summary" && event.status === "error";
 }
 
 function recordUsage(

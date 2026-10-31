@@ -21,6 +21,15 @@ Status: Historical — 2026-08-16 inventory plus a 2026-09-11 current-state note
 > no longer has a separate renderer-side client or store. §3.1 and §3.6
 > statements that say otherwise are the 2026-08-16 snapshot.
 
+> **Current (2026-10-31).** Grok takes file attachments as well as images: it
+> advertises ACP `embeddedContext`, and the ACP bridge sends a text file as a
+> `resource` block (binary refused). Cursor is still images only, so the
+> "image-only" statements below now apply to Cursor alone. Grok also forks
+> (`_x.ai/session/fork`) and raises MCP elicitations (`mcp-form`, `mcp-url`,
+> over `_x.ai/mcp/elicit`), and Cursor compacts (`agent.summarize()`, SDK 1.2.0).
+> The capability table is `nativeAgentCapabilities()` in
+> `packages/protocol/src/native-agent.ts`.
+
 > Historical note (2026-08-26): Cursor's ACP/CLI interface described below has
 > been removed. Cursor now runs only through `bridges/cursor-bridge/` and
 > `@cursor/sdk`; Grok remains on `bridges/acp-bridge/`. The retained comparison

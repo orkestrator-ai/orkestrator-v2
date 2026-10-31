@@ -208,7 +208,7 @@ describe("AGENTS.md approval dialog", () => {
     });
     expect(entry.value).toBe("Pasted across three lines");
     expect(diffLines("add")).toContain("+ - Pasted across three lines");
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("alert") === null).toBe(true);
   });
 
   test("entries and diff scroll between a fixed header and footer", async () => {

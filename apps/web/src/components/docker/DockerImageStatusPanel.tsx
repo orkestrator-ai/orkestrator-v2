@@ -8,6 +8,7 @@ import type {
 } from "@orkestrator/protocol/image-manifest";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
+import { useAccountMachine } from "@/components/settings/account-machine";
 
 const STATE_LABEL: Record<ImageCompatibilityState, string> = {
   compatible: "Compatible",
@@ -45,6 +46,7 @@ function shortId(id: string | null): string | null {
  * Reads its own snapshot so the Docker dialog stays a thin shell.
  */
 export function DockerImageStatusPanel() {
+  const { machine } = useAccountMachine();
   const [image, setImage] = useState<ImageStatus | null>(null);
   const [topology, setTopology] = useState<DockerTopology | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,9 +63,9 @@ export function DockerImageStatusPanel() {
   const fetchStatus = useCallback(
     (refresh: boolean) =>
       Promise.all([
-        backend.getDockerImageStatus(),
-        backend.getDockerTopology(refresh),
-        backend.getHostMaintenance().catch(() => null),
+        backend.getDockerImageStatus(machine),
+        backend.getDockerTopology(refresh, machine),
+        backend.getHostMaintenance(false, machine).catch(() => null),
       ])
         .then(([imageStatus, daemon, maintenance]) => {
           setImage(imageStatus);
@@ -72,7 +74,7 @@ export function DockerImageStatusPanel() {
         })
         .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
         .finally(() => setLoading(false)),
-    [adoptDownload],
+    [adoptDownload, machine],
   );
 
   const load = (refresh: boolean) => {
@@ -96,7 +98,7 @@ export function DockerImageStatusPanel() {
       if (polling) return;
       polling = true;
       void backend
-        .getHostMaintenance()
+        .getHostMaintenance(false, machine)
         .then((maintenance) => {
           if (!active) return;
           const task = maintenance.tasks["image-update"] ?? null;
@@ -118,16 +120,16 @@ export function DockerImageStatusPanel() {
       active = false;
       clearInterval(timer);
     };
-  }, [adoptDownload, fetchStatus]);
+  }, [adoptDownload, fetchStatus, machine]);
 
   const startDownload = () => {
     setStarting(true);
     setError(null);
     void backend
-      .startHostImageUpdate()
+      .startHostImageUpdate(machine)
       .then(adoptDownload)
       .catch(async (err: unknown) => {
-        const maintenance = await backend.getHostMaintenance().catch(() => null);
+        const maintenance = await backend.getHostMaintenance(false, machine).catch(() => null);
         const task = maintenance?.tasks["image-update"];
         if (task?.state === "running") adoptDownload(task);
         else setError(err instanceof Error ? err.message : String(err));

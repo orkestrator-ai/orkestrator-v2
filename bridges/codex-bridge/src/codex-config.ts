@@ -1,4 +1,5 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
   coordinatorCapabilityPolicy,
@@ -520,10 +521,10 @@ export function codexAppServerConfigOverrides(
     // hosted search. See `codexToolHistoryGaps`.
     "features.incremental_tools": "false",
     // Goals are stable and on by default (0.164.0 and 0.166.0 alike), which
-    // offers the model `create_goal`, `get_goal` and `update_goal`. Orkestrator
-    // has no goal surface and ignores `thread/goal/*`, so a goal the model set
-    // would be invisible, and a goal Codex continues on its own would run
-    // turns the bridge never dispatched (`live-network-lock.test.ts`).
+    // offers the model `create_goal`, `get_goal` and `update_goal`. Orkestrator's
+    // goal loop runs in the backend on every provider (`plans/goals.md`, D1 and
+    // D2) and ignores `thread/goal/*`: a goal Codex continued on its own would
+    // run turns the bridge never dispatched (`live-network-lock.test.ts`).
     "features.goals": "false",
   };
   const rawUrl = env[ORKESTRATOR_AGENT_MCP_URL_ENV]?.trim();
@@ -706,7 +707,11 @@ export function codexAppServerConfigOverrides(
           // policy: they are how it reports back. Artifact tools likewise only
           // write to Orkestrator's own store. Its other Orkestrator tools keep
           // Codex's defaults.
-          for (const name of [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES]) {
+          for (const name of [
+            ...AGENT_MAIL_TOOL_NAMES,
+            ...ARTIFACT_TOOL_NAMES,
+            ...AGENT_GOAL_TOOL_NAMES,
+          ]) {
             overrides[`mcp_servers.orkestrator.tools.${name}.approval_mode`] =
               JSON.stringify("approve");
           }

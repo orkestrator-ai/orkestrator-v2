@@ -785,6 +785,9 @@ export class BrowserPreviewManager {
         sandbox: true,
         devTools: true,
         safeDialogs: true,
+        // Agents drive previews with nobody there to answer. `alert` returns at
+        // once and `confirm` is false; Electron's `prompt` always throws.
+        disableDialogs: true,
         navigateOnDragDrop: false,
       },
     });
@@ -927,6 +930,12 @@ export class BrowserPreviewManager {
         },
       });
       this.options.menu.buildFromTemplate(template).popup({ window });
+    });
+    // A page's beforeunload never opens a dialog in Electron: unhandled, it
+    // silently cancels the navigation, which an agent would only see as a hang.
+    contents.on("will-prevent-unload", (event) => {
+      console.info("[Dialog] browser-preview ignored a page's beforeunload");
+      event.preventDefault();
     });
     contents.on("will-navigate", (event) => {
       this.clipboardUserActivations.delete(contents);

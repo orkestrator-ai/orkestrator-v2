@@ -725,6 +725,8 @@ export class ProjectsRepository {
         }
       }
 
+      const previousPrUrl = environment.prUrl;
+      const previousBranch = environment.branch;
       if (isNonBlankString(updates.name)) environment.name = updates.name;
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
       if (
@@ -971,6 +973,38 @@ export class ProjectsRepository {
       if ("setupOverride" in updates && typeof updates.setupOverride === "boolean") {
         environment.setupOverride = updates.setupOverride;
       }
+      if ("autoMerge" in updates) {
+        // Off is an explicit `false`, like lifecycleError's `null`: renderers
+        // merge snapshots field-by-field, so a dropped key would leave it on.
+        environment.autoMerge =
+          updates.autoMerge === true && !!environment.prUrl && environment.prState === "open";
+        environment.autoMergePrUrl = environment.autoMerge ? environment.prUrl : null;
+        environment.autoMergeEnabledAt = environment.autoMerge ? new Date().toISOString() : null;
+        environment.autoMergeError = null;
+      }
+      if ("autoMergeError" in updates) {
+        environment.autoMergeError =
+          typeof updates.autoMergeError === "string" ? updates.autoMergeError.slice(0, 2000) : null;
+      }
+      if (
+        environment.autoMerge &&
+        (environment.prUrl !== previousPrUrl ||
+          environment.branch !== previousBranch ||
+          environment.prState !== "open" ||
+          (environment.autoMergePrUrl != null && environment.autoMergePrUrl !== environment.prUrl))
+      ) {
+        environment.autoMerge = false;
+        environment.autoMergePrUrl = null;
+        environment.autoMergeEnabledAt = null;
+        environment.autoMergeError = null;
+      }
+      if (
+        !environment.autoMerge ||
+        environment.hasMergeConflicts === false ||
+        environment.prUrl !== previousPrUrl
+      ) {
+        environment.autoMergeResolveRequestId = undefined;
+      }
       if ("tabTeardownIntents" in updates) {
         const intents = updates.tabTeardownIntents;
         if (intents === undefined || intents === null) {
@@ -1181,7 +1215,13 @@ export class ProjectsRepository {
    */
   async armPrRecheckAfterAgentCompletion(
     environmentId: string,
-  ): Promise<{ environment: Environment; armedAt: string | null }> {
+    claim?: {
+      onlyIfUnarmed?: boolean;
+      autoMergePrUrl?: string;
+      autoMergeEnabledAt?: string;
+      requestId?: string;
+    },
+  ): Promise<{ environment: Environment; armedAt: string | null; previousArmedAt?: string }> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
       const environment = environments.find((candidate) => candidate.id === environmentId);
@@ -1193,6 +1233,29 @@ export class ProjectsRepository {
       )
         return { environment, armedAt: null };
 
+      if (claim?.onlyIfUnarmed && environment.prRecheckAfterAgentCompletionArmedAt)
+        return { environment, armedAt: null };
+      if (
+        claim?.autoMergePrUrl &&
+        (environment.autoMerge !== true ||
+          environment.autoMergePrUrl !== claim.autoMergePrUrl ||
+          (claim.autoMergeEnabledAt !== undefined &&
+            environment.autoMergeEnabledAt !== claim.autoMergeEnabledAt) ||
+          environment.prUrl !== claim.autoMergePrUrl ||
+          environment.hasMergeConflicts !== true ||
+          environment.deletionRequestedAt ||
+          environment.lifecycleOperation ||
+          environment.status !== "running" ||
+          !(
+            environment.setupPhase === "ready" ||
+            environment.setupScriptsComplete ||
+            environment.setupOverride
+          ))
+      )
+        return { environment, armedAt: null };
+      if (claim?.autoMergePrUrl && !environment.autoMergeResolveRequestId)
+        environment.autoMergeResolveRequestId = claim.requestId;
+      const previousArmedAt = environment.prRecheckAfterAgentCompletionArmedAt;
       const now = Date.now();
       const previous = environment.prRecheckAfterAgentCompletionArmedAt
         ? Date.parse(environment.prRecheckAfterAgentCompletionArmedAt)
@@ -1205,6 +1268,7 @@ export class ProjectsRepository {
       return {
         environment,
         armedAt: environment.prRecheckAfterAgentCompletionArmedAt,
+        previousArmedAt,
       };
     });
   }
@@ -1213,6 +1277,7 @@ export class ProjectsRepository {
   async disarmPrRecheckAfterAgentCompletion(
     environmentId: string,
     armedAt: string,
+    previousArmedAt?: string,
   ): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -1220,7 +1285,7 @@ export class ProjectsRepository {
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
       if (environment.prRecheckAfterAgentCompletionArmedAt !== armedAt) return environment;
 
-      environment.prRecheckAfterAgentCompletionArmedAt = undefined;
+      environment.prRecheckAfterAgentCompletionArmedAt = previousArmedAt;
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
@@ -1313,7 +1378,7 @@ export class ProjectsRepository {
     }
     if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
       throw new Error(
-        "source must be frontend, claude-terminal, claude-tmux, native-agent, multi-review, or graph-run",
+        "source must be frontend, claude-terminal, claude-tmux, native-agent, multi-review, graph-run, or build-pipeline",
       );
     }
     if (
@@ -1578,6 +1643,7 @@ export class ProjectsRepository {
       EnvironmentUnreadReason,
       "agent_finished" | "agent_failed" | "agent_waiting"
     > = "agent_finished",
+    completionKey?: string,
   ): Promise<Environment> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
@@ -1589,6 +1655,14 @@ export class ProjectsRepository {
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
+      // Keep request dedupe and the badge in the same durable write.
+      if (completionKey) {
+        if (environment.agentAttentionKeys?.includes(completionKey)) return environment;
+        environment.agentAttentionKeys = [
+          ...(environment.agentAttentionKeys ?? []),
+          completionKey,
+        ].slice(-1_000);
+      }
       const previousTime = Date.parse(environment.lastActivityAt ?? "");
       const acceptedTime =
         Number.isFinite(previousTime) && previousTime >= occurredTime

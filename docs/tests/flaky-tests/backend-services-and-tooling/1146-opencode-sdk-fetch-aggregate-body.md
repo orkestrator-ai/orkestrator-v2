@@ -48,3 +48,21 @@ mise run test:logged -- --name opencode-fetch-owner -- bun test --cwd apps/backe
 The response again appears to come from another handler, but the cause
 remains unconfirmed. No OpenCode implementation, fixture, assertion, deadline
 or skip changed.
+
+## Todo 0051 validation — 2026-10-31
+
+`mise run test` on the 0051 branch failed this test again, with the `{}` body
+(4.30 ms). The backend reported 11,674 passed and two failed. The other failure
+was the Codex title runner's `Pinned Codex CLI not found`, because the worktree
+has no `binaries/codex`; it passes with `CODEX_PROTOCOL_BINARY` set, and is no
+flake. The 0051 change touches neither `http-bridge-transport.ts` nor the OpenCode
+provider. Aggregate evidence: `orkestrator-test-run.Ra7vlM` under the host
+temporary directory.
+
+The complete unchanged owner passed alone three times out of three (five tests):
+
+```sh
+bun test --cwd apps/backend ./src/core/opencode-sdk-fetch.test.ts --parallel=1 --only-failures
+```
+
+The cause remains unconfirmed. No assertion, skip or implementation changed.

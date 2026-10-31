@@ -393,6 +393,9 @@ observation time). Texts live in `apps/web/src/lib/view-freshness.ts`.
   automatic reads and reconciles once when it clears, and
   `ConnectionStatusBanner` shows one app-wide notice after 4 s, so a blip that
   recovers on the first retry stays silent. Browser `offline` is not an owner.
+  A link that drops with no answer counts as down once its stream has been
+  silent for 60 s, and a stream refused with `401` does not count at all (see
+  [remote-gateway.md](remote-gateway.md#event-stream-reconnects)).
 - **Per view**, only failures specific to that view: `stale`, `degraded` and
   `unsupported` mark the View PR action (its tooltip adds the last successful
   check time) and the legacy diff badge (the change projection carries its

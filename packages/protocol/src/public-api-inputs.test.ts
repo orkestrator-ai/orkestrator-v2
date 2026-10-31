@@ -226,6 +226,9 @@ describe("public action input contract", () => {
       "environment.delete": "always",
       "environment.exec": "voice",
       "session.interaction.resolve": "voice:approval",
+      // A goal can run many unattended turns, and resuming can raise its limits.
+      "session.goal.set": "voice",
+      "session.goal.resume": "voice",
       // Each pushes to the remote (a build's last step opens its PR).
       "build.launch": "voice",
       // A graph's system nodes may push and open a PR.

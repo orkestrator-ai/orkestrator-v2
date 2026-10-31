@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs
 import path from "node:path";
 
 const GATEWAY_COOKIE = "orkestrator_gateway_auth";
-export const MAX_SANITIZABLE_FILE_BYTES = 16 * 1024 * 1024;
+export const MAX_SANITIZABLE_FILE_BYTES = 64 * 1024 * 1024;
 export const MAX_ARTIFACT_TREE_BYTES = 256 * 1024 * 1024;
 export const MAX_ARTIFACT_FILES = 5_000;
 

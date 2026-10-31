@@ -270,8 +270,10 @@ describe("ProjectSearchBar", () => {
       );
       // Only the ready environment shimmers.
       expect(
-        screen.getByTestId("project-search-item-env-container").querySelector("[data-merge-ready]"),
-      ).toBeNull();
+        screen
+          .getByTestId("project-search-item-env-container")
+          .querySelector("[data-merge-ready]") === null,
+      ).toBe(true);
 
       act(() =>
         useEnvironmentStore.setState({
@@ -279,8 +281,9 @@ describe("ProjectSearchBar", () => {
         }),
       );
       expect(
-        screen.getByTestId("project-search-item-env-local").querySelector("[data-merge-ready]"),
-      ).toBeNull();
+        screen.getByTestId("project-search-item-env-local").querySelector("[data-merge-ready]") ===
+          null,
+      ).toBe(true);
     } finally {
       // Unmount first so restoring the shared stores does not re-render the bar.
       cleanup();
@@ -347,7 +350,7 @@ describe("ProjectSearchBar", () => {
         expect(row.querySelector('[data-name-signal="needs-answer"]')).toBeTruthy();
       }
       act(() => useEnvironmentStore.getState().setDeleting(environment.id, true));
-      expect(row.querySelector(".text-shimmer")).toBeNull();
+      expect(row.querySelector(".text-shimmer") === null).toBe(true);
       expect(row.hasAttribute("aria-describedby")).toBe(false);
     } finally {
       cleanup();

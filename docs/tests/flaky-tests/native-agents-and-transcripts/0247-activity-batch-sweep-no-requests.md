@@ -261,3 +261,13 @@ unconfirmed.
 - **Isolated rerun:** `mise run test:logged -- --name activity-batch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/native-agent-service-activity-batch.test.ts --parallel`
   passed the unchanged owning file (0.4 s).
 - **Disposition:** recorded evidence only; no test changed.
+
+## Provider parity main merge recurrence — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name merge-default-tests -- mise run test` on `agent-provider-parity-b3e549e90812-r1`, merging main at `751b971623` (2026-10-31).
+- **Worker configuration:** workspace/root/bridges/protocol reservations 6/1/2/1; backend 4x parallel, root 1x parallel; Bun 1.4.4. The run waited about 182 seconds for the host scheduler.
+- **Aggregate result:** exit 1; backend 11,883 passed, 103 skipped and four failed across 11,990 tests in 812 files (266.84 s); root/support 3,320 passed, one failed and one error across 3,321 tests in 162 files (350.27 s). Web, desktop, public web, CLI, protocol, toolchain, bridges and protocol-lockfile checks passed. The aggregate took 710.6 s including the queue.
+- **Failure:** `activity sweep over the batch route > 1 sessions cost 1 request(s) and touch nothing` expected `[1]` and received `[]` (241.39 ms), alongside reconciliation errors.
+- **Unchanged owner rerun:** `mise run test:logged -- --name merge-activity-batch-owner -- bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed, exit 0 (1.2 s).
+- **Evidence:** `orkestrator-test-run.LzSOdM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and enclosing `orkestrator-test-run.WvH9mv/merge-default-tests.log.gz` under the host temporary directory.
+- **Assessment:** unchanged owner passed in isolation; no implementation, assertion, deadline or skip changed. Timing or host contention remains a hypothesis. The aggregate remains non-green.

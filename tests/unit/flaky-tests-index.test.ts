@@ -204,6 +204,16 @@ function checkCaseNumbers(register: string) {
     [...byNumber].filter(([, files]) => files.length > 1).map(([id, files]) => [id, files.sort()]),
   );
 
+  // Two branches that each took "the next number" both pass alone; the
+  // collision appears only once both merge (1304 and 1316 in October 2026).
+  // Name it plainly so the branch that merges second renumbers its own case.
+  const collisions = Object.entries(duplicates)
+    .filter(([id, files]) => JSON.stringify(files) !== JSON.stringify(FROZEN_DUPLICATES[id]))
+    .map(([id, files]) => `${id}: ${files.join(", ")}`);
+  expect(
+    collisions,
+    `Flake case numbers used by more than one file. Renumber the newer case to a free number, or one from a range reserved for your branch, and update its ID line, index row and references:\n${collisions.join("\n")}`,
+  ).toEqual([]);
   expect(duplicates).toEqual(FROZEN_DUPLICATES);
 }
 
@@ -278,6 +288,19 @@ describe("flake number guard negative fixtures", () => {
     checkCaseNumbers(register);
     writeCase(register, `${group}/9999-second.md`);
     expect(() => checkCaseNumbers(register)).toThrow();
+  });
+
+  test("accepts numbers from ranges reserved for concurrent branches", () => {
+    const register = fixture();
+    // Gaps are fine: workers running at once take disjoint reserved ranges
+    // far above the highest number in use, in any group.
+    writeCase(register, "agent-bridges/1320-highest-in-use.md");
+    writeCase(register, "aggregate-validation-runs/1530-first-worker.md");
+    writeCase(register, "web-ui/1531-first-worker.md");
+    writeCase(register, "agent-bridges/1540-second-worker.md");
+    checkCaseNumbers(register);
+    writeCase(register, "web-ui/1540-second-worker-again.md");
+    expect(() => checkCaseNumbers(register)).toThrow(/1540: /);
   });
 
   test("rejects removal of a frozen duplicate", () => {

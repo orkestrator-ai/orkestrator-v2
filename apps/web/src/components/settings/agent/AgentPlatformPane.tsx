@@ -48,6 +48,7 @@ import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/nat
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 import { McpServersSettingsLink } from "../mcp-servers/McpServersSettingsLink";
 import { INHERIT, OptionCards } from "./InheritedValue";
+import { SettingsSectionHeader } from "../SettingsPageLayout";
 
 export interface AgentPlatformPaneProps {
   platform: AgentPlatform;
@@ -206,22 +207,16 @@ export function AgentPlatformPane({
   const selectedSupportsSpeed = reasoningModel?.supportsSpeed === true;
 
   return (
-    <div className="max-w-2xl space-y-8">
+    <div className="space-y-8">
       {platform === "cursor" ? (
-        <div className="space-y-1">
-          <h3 className="text-sm font-medium text-foreground">Mode</h3>
-          <p className="text-xs text-muted-foreground">
-            Cursor always runs in Native mode through its TypeScript SDK.
-          </p>
-        </div>
+        <SettingsSectionHeader title="Mode">
+          Cursor always runs in Native mode through its TypeScript SDK.
+        </SettingsSectionHeader>
       ) : (
         <div className="space-y-3">
-          <div>
-            <h3 className="text-sm font-medium text-foreground">Mode</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              How {label} runs in environments. Native opens a chat interface instead of a terminal.
-            </p>
-          </div>
+          <SettingsSectionHeader title="Mode">
+            How {label} runs in environments. Native opens a chat interface instead of a terminal.
+          </SettingsSectionHeader>
           <OptionCards
             ariaLabel={`${label} mode`}
             value={stored?.mode ?? INHERIT}
@@ -249,12 +244,9 @@ export function AgentPlatformPane({
 
       {platform === "claude" && (
         <div className="space-y-3">
-          <div>
-            <h3 className="text-sm font-medium text-foreground">Native backend</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              The implementation behind Native mode. Only applies when the resolved mode is Native.
-            </p>
-          </div>
+          <SettingsSectionHeader title="Native backend">
+            The implementation behind Native mode. Only applies when the resolved mode is Native.
+          </SettingsSectionHeader>
           <OptionCards
             ariaLabel="Claude native backend"
             value={stored?.claudeNativeBackend ?? INHERIT}
@@ -404,13 +396,10 @@ export function AgentPlatformPane({
 
       {platform === "claude" && (
         <div className="space-y-5">
-          <div>
-            <h3 className="text-sm font-medium text-foreground">Agent SDK session defaults</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Applied when a new Claude Native session starts with the Agent SDK. Existing sessions
-              keep the values they started with.
-            </p>
-          </div>
+          <SettingsSectionHeader title="Agent SDK session defaults">
+            Applied when a new Claude Native session starts with the Agent SDK. Existing sessions
+            keep the values they started with.
+          </SettingsSectionHeader>
 
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground" htmlFor="claude-thinking-mode">

@@ -117,6 +117,7 @@ describe("coordinator skills", () => {
         // Still no settings layer: its hooks, permissions, env, MCP servers
         // and CLAUDE.md stay out.
         expect(options.settingSources).toEqual([]);
+        expect(options.disallowedTools).toContain("ProposeGoal");
         const mirrors = join(home, ".claude", "orkestrator", "coordinator-skills");
         const paths = (options.plugins ?? []).map((plugin) => plugin.path);
         expect(paths).toHaveLength(2);

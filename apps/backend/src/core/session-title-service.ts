@@ -3,10 +3,11 @@
  *
  * Every native platform gets its title from here, keyed by whichever agent
  * login this machine already has: the session's own platform first when it is
- * Codex or Claude, then the other one. With neither signed in (or both
- * failing) the caller keeps the first-message fallback
- * (`firstMessageSessionTitle`). The renderer never generates a title, and no
- * bridge does any more.
+ * Codex or Claude, then the other one. The user's `sessionTitleGeneration`
+ * setting can keep a first message from reaching a second vendor, or turn
+ * generation off. With no strategy left (or all of them failing) the caller
+ * keeps the first-message fallback (`firstMessageSessionTitle`). The renderer
+ * never generates a title, and no bridge does any more.
  *
  * Each strategy is a one-shot CLI run with nothing of the user's configuration
  * loaded (`session-title-runners.ts`). A strategy that fails is rested for a
@@ -14,6 +15,11 @@
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
+import {
+  DEFAULT_SESSION_TITLE_GENERATION_POLICY,
+  resolveSessionTitleGenerationPolicy,
+  type SessionTitleGenerationPolicy,
+} from "@orkestrator/protocol/session-title-generation";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import type { CommandContext } from "./commands-context.js";
 import { resolveClaudeBinary, resolveCodexBinary } from "./commands-agent-support.js";
@@ -46,6 +52,8 @@ export interface SessionTitleServiceDependencies {
   signedIn(strategy: SessionTitleStrategy): Promise<boolean>;
   /** The executable and environment one strategy runs with. A throw skips it. */
   launch(strategy: SessionTitleStrategy): Promise<{ executable: string; env: NodeJS.ProcessEnv }>;
+  /** Which logins may be used, read per generation. Absent is the default; a throw is "off". */
+  policy?(): Promise<SessionTitleGenerationPolicy>;
   run?: typeof runCommand;
   generators?: Partial<
     Record<SessionTitleStrategy, (input: SessionTitleRunInput) => Promise<string>>
@@ -64,8 +72,15 @@ const DEFAULT_FAILURE_COOLDOWN_MS = 10 * 60_000;
 const DEFAULT_MAX_CONCURRENT = 2;
 const DEFAULT_MAX_QUEUED = 32;
 
-/** Generator order for a session of this platform. */
-export function sessionTitleStrategyOrder(agent: AgentPlatform): SessionTitleStrategy[] {
+/** Generator order for a session of this platform, as far as the policy allows. */
+export function sessionTitleStrategyOrder(
+  agent: AgentPlatform,
+  policy: SessionTitleGenerationPolicy = DEFAULT_SESSION_TITLE_GENERATION_POLICY,
+): SessionTitleStrategy[] {
+  if (policy === "off") return [];
+  if (policy === "own-platform") {
+    return agent === "claude" || agent === "codex" ? [agent] : [];
+  }
   return agent === "claude" ? ["claude", "codex"] : ["codex", "claude"];
 }
 
@@ -117,7 +132,11 @@ export class SessionTitleService implements SessionTitleGenerator {
     agent: AgentPlatform;
     source: string;
   }): Promise<GeneratedSessionTitle | null> {
-    for (const strategy of sessionTitleStrategyOrder(input.agent)) {
+    // Unreadable means unknown consent, so nothing leaves this machine.
+    const policy: SessionTitleGenerationPolicy = this.deps.policy
+      ? await this.deps.policy().catch(() => "off" as const)
+      : DEFAULT_SESSION_TITLE_GENERATION_POLICY;
+    for (const strategy of sessionTitleStrategyOrder(input.agent, policy)) {
       if (this.shutdownController.signal.aborted) return null;
       if ((this.restingUntil.get(strategy) ?? 0) > this.now()) continue;
       if (!(await this.deps.signedIn(strategy).catch(() => false))) continue;
@@ -190,6 +209,10 @@ export function sessionTitleGenerationEnabled(env: NodeJS.ProcessEnv): boolean {
  */
 export function createSessionTitleService(context: CommandContext): SessionTitleService {
   return new SessionTitleService({
+    policy: async () =>
+      resolveSessionTitleGenerationPolicy(
+        (await context.storage.loadConfig()).global.sessionTitleGeneration,
+      ),
     signedIn: async (strategy) => {
       const [{ readAgentSignInStatus }, { listAgentAccounts }] = await Promise.all([
         import("./agent-sign-in-status.js"),

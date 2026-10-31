@@ -179,6 +179,6 @@ for (const grouping of ["machine", "repository"] as const) {
     expect(image.getAttribute("src")).toBe(icon);
     const row = image.closest("button")!;
     expect(row.textContent).toContain("local-app");
-    expect(within(row).queryByTestId("machine-home-icon")).toBeNull();
+    expect(within(row).queryByTestId("machine-home-icon") === null).toBe(true);
   });
 }

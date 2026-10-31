@@ -13,7 +13,13 @@ export type AgentActivityState = "idle" | "working" | "waiting";
 
 /** Who observed an activity state. Renderers may only ever report `frontend`. */
 export type AgentActivitySource =
-  "frontend" | "claude-terminal" | "claude-tmux" | "native-agent" | "multi-review" | "graph-run";
+  | "frontend"
+  | "claude-terminal"
+  | "claude-tmux"
+  | "native-agent"
+  | "multi-review"
+  | "graph-run"
+  | "build-pipeline";
 
 export interface AgentActivitySourceSnapshot {
   state: AgentActivityState;
@@ -46,6 +52,8 @@ export const AGENT_ACTIVITY_SOURCES: readonly AgentActivitySource[] = [
   "multi-review",
   /** Graph runs (item 208): working while a run works, waiting while one waits on a person. */
   "graph-run",
+  /** Build pipelines: working while a pipeline's agents are in flight. */
+  "build-pipeline",
 ];
 
 /**

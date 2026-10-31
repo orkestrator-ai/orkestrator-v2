@@ -48,7 +48,10 @@ async function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "t
 export function denyPendingRequests(state: SessionState): void {
   for (const approval of Array.from(state.approvals.values())) approval.respond();
   for (const interaction of Array.from(state.interactions.values())) {
-    interaction.respond({ outcome: "cancelled" });
+    interaction.respond({
+      outcome:
+        interaction.kind === "mcp-form" || interaction.kind === "mcp-url" ? "cancel" : "cancelled",
+    });
   }
 }
 
@@ -109,6 +112,7 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
       ? state.promptSequence + 1
       : state.promptSequence;
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
+    state.wakeRetryWait?.();
   }
 
   const children = new Set<AcpProcess>();

@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import { machineInvoke, type AccountMachine } from "./agent-accounts";
 import type {
   ContainerLifecycleSnapshot,
   RebuildPreview,
@@ -95,8 +96,10 @@ export async function getScopedResourceSnapshots(
   return response;
 }
 
-export async function getProjects(): Promise<Project[]> {
-  return invoke<Project[]>("get_projects");
+export async function getProjects(machine?: AccountMachine): Promise<Project[]> {
+  return machine === undefined
+    ? invoke<Project[]>("get_projects")
+    : machineInvoke<Project[]>(machine, "get_projects");
 }
 
 export async function addProject(

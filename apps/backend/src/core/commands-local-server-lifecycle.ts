@@ -160,7 +160,10 @@ export async function stopLocalServerUnlocked(
     localServers.openCodeAgentTools.cancel(`local:${environmentId}`);
   }
   const child = localServers.process(key);
-  if (child) await localServers.terminate(key, child, "stop requested");
+  if (child) {
+    await context.nativeAgents?.runtimeStopRequested(environmentId, kind);
+    await localServers.terminate(key, child, "stop requested");
+  }
   const { port, pid } = localServerFields(kind);
   const fields = { [port]: null, [pid]: null };
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);

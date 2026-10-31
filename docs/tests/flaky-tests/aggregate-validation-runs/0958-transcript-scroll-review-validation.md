@@ -60,3 +60,18 @@ Evidence under the host temporary directory:
 
 The broad commands remain non-green. Backend owner intermittence is confirmed;
 shared-host contention is a hypothesis. The final focused scroll checks pass.
+
+
+## Goal review validation — 2026-10-31
+
+The full component-browser rerun completed with 988 passed, 106 skipped and the
+two native branch-picker failures in `e2e/AgentLaunchDialog.spec.ts:18` (mobile
+and desktop Chromium). The unchanged owner retained both failures alone, with
+two manual-entry cases passing: the field stayed `rel` rather than selecting
+`release/2.0`. It is not newly classified as flaky.
+
+The initial default port belonged to another checkout. Both the full rerun and
+owner rerun used `ORKESTRATOR_E2E_PORT=54123`; no other checkout's server was
+stopped. Evidence: `orkestrator-test-run.uvQKxe/review-browser.log.gz` and
+`orkestrator-test-run.6h3q1i/goal-branch-picker.log.gz` in the host temporary
+directory. No native-picker code, assertion, timeout or skip changed.

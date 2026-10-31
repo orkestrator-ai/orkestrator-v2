@@ -1,7 +1,9 @@
 # Client reconnect and freshness
 
 Checked against `main` at `20f6de91` (2026-10-25). All five code items are
-done; what is left is live qualification.
+done. Live qualification ran on 2026-10-31 against `main` at `931e5541`, found
+four bugs and fixed them (see the [record](#live-qualification-record-2026-10-31)).
+What is left is a dropped link between two real machines.
 
 ## Task analysis
 
@@ -9,13 +11,15 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Outage workload**: a backend restart and a dropped tailnet link with several tabs and terminals open, on the shared `EventSource`, direct fetch and terminal WebSocket paths, showing spread reconnects and terminals returning with the main stream. Status: open.
-2. **Real-browser freshness checks**: the banner after 4 s of a real outage and clearing on reconnect, reads paused meanwhile, no indicator flicker on quiet `unchanged` reads, plus an Electron remote connection. Status: open.
-3. **Terminal recovery under backpressure**: exact recovery after the new socket ladder, on HTTP/SSE and on the WebSocket. Status: open.
-4. **Codex breaker with a real binary**: cooldown and half-open probe against a `codex` that keeps failing to start. Status: open.
-5. **Revisit the reasoned defaults**: the 4 s banner delay and the 5 min and 30 min breaker cooldowns, from task 1's data. Status: blocked (on task 1).
+1. **Outage workload**: a backend restart and a dropped tailnet link with several tabs and terminals open, on the shared `EventSource`, direct fetch and terminal WebSocket paths, showing spread reconnects and terminals returning with the main stream. Status: done on one machine, with the link simulated in the test; a real two-machine tailnet drop is not run (needs live evidence).
+2. **Real-browser freshness checks**: the banner after 4 s of a real outage and clearing on reconnect, reads paused meanwhile, no indicator flicker on quiet `unchanged` reads, plus an Electron remote connection. Status: done.
+3. **Terminal recovery under backpressure**: exact recovery after the new socket ladder, on HTTP/SSE and on the WebSocket. Status: done.
+4. **Codex breaker with a real binary**: cooldown and half-open probe against a `codex` that keeps failing to start. Status: done; no bug found.
+5. **Revisit the reasoned defaults**: the 4 s banner delay and the 5 min and 30 min breaker cooldowns, from task 1's data. Status: done for the banner delay (kept); the breaker cooldowns stay reasoned defaults, because no run can measure how long a user takes to fix an install.
 
 The five code items are done and still match HEAD; nothing in this area has changed since #1257 (`e9b30126`), apart from an unrelated import in the Codex supervisor (#1295).
+
+The analyses below are from 2026-10-27 and are kept for their reasoning. Their outcome is in the [live qualification record](#live-qualification-record-2026-10-31) and the decisions at the end.
 
 ### 1. Outage workload
 
@@ -156,10 +160,15 @@ exercised against a real outage yet.
   (`apps/backend/src/core/opencode-observation-stream.ts`). The gateway has
   one ladder per reconnect owner: `mainStreamBackoff` for the main stream,
   `browserTerminalBackoff` for the shared same-origin terminal `EventSource`,
-  and `stream.backoff` for each direct terminal fetch stream. Cookie-mode
-  `EventSource`s use it only once CLOSED; the browser retries a CONNECTING one
-  itself. The main stream reopening retries any waiting terminal fallback at
-  once (`retryWaitingTerminalFallbacks`). A tab becoming visible or the
+  and `stream.backoff` for each direct terminal fetch stream. A cookie-mode
+  `EventSource` is closed on its first error, whatever state that leaves it
+  in, and rebuilt on the ladder from the current cursor. The main stream
+  reopening retries any waiting terminal fallback at
+  once (`retryWaitingTerminalFallbacks`). A main stream silent for 60 s, or an
+  attempt unanswered after 20 s, counts as lost, and takes the terminal streams
+  and terminal WebSocket with it (`dropSilentStreams`; the Electron client
+  watches the same limits). A `401` is not an outage: the state goes back to
+  `connecting`, so reads run and show it. A tab becoming visible or the
   browser's `online` event retries the waiting main stream and terminal
   fallbacks at once (`retryWaitingStreams`); the gateway's disposer removes
   both listeners. `web-gateway-reconnect.test.ts` covers both stream kinds on
@@ -168,7 +177,8 @@ exercised against a real outage yet.
   (`apps/web/src/lib/native/terminal-websocket-client.ts`): the socket has one
   `ReconnectBackoff` (`socketBackoff`: first retry 500 ms, cap 10 s, equal
   jitter, healthy after 30 s of `ready`). A deliberate foreground rebuild
-  ends its health interval without counting a failure; going idle resets it.
+  ends its health interval without counting a failure; going idle resets it. A
+  drop announces a desync once, not once per failed attempt of the outage.
   Denied subscriptions use `reconnectDelayMs` per channel (500 ms to 10 s),
   reset when the server accepts the subscription. The gateway hands it the
   same jitter source and clock as its event streams (`eventReconnectRandom`,
@@ -257,40 +267,157 @@ All done on 2026-10-25:
 
 ### Qualification
 
-Not run: each needs a live stack this run did not have (see "Not verified"
-below for why).
+Done on 2026-10-31; see the record below. Still open:
 
-- An outage workload (backend restart and a dropped tailnet link) with
-  several tabs and terminals open, showing that reconnects spread out instead
-  of retrying in lock-step, and that terminals come back with the main stream.
-  Run it for both terminal paths: a same-origin browser (shared `EventSource`)
-  and a direct client (per-terminal fetch), and once with the terminal
-  WebSocket enabled (`orkestrator-terminal-transport` = `websocket`), whose
-  socket ladder is new. Today only deterministic ladder tests exist
-  (`reconnect-backoff.test.ts`, `web-gateway-reconnect.test.ts`,
-  `terminal-websocket-client.test.ts`, `opencode-provider-reconnect.test.ts`).
-- Real-browser checks that the connection banner appears after 4 s of a real
-  outage and clears after reconnect, that automatic reads pause meanwhile
-  (`getReadCoordinator().getDiagnostics().disconnected`), and that the PR,
-  diff-badge and Files indicators do not flicker on a quiet `unchanged`
-  safety read. Include an Electron remote connection, whose signal is the
-  connection list rather than the gateway stream.
-- Exact terminal recovery under backpressure, re-run after item 1, on both the
-  HTTP/SSE fallback and the WebSocket path.
+- A dropped link between two real machines. The link here is a proxy inside the
+  test, which resets connections or goes silent. A real tailnet may behave
+  differently, for example in how soon an OS gives up on a socket or fails a
+  connect. Batch it with the two-machine runs of 0052 and 0048 (0031).
+- A real PR on the View PR action. The credential-free profile records a PR URL
+  and the action renders, but no PR state ever arrives from GitHub, so only the
+  absence of flicker is shown, not a stale marker appearing and clearing.
+- Hidden tabs. Headless Chromium keeps a page `visible`, so timer throttling in a
+  background tab is not measured.
+
+## Live qualification record (2026-10-31)
+
+Against `main` at `931e5541` plus this change, on a disposable
+`dev:test --profile todo-0051-outage --fixture --no-agent-credentials --agent-platforms codex`
+profile, with load averages above 40 from other workers. How to rerun it is in
+[`agent-testing.md`](../../development/agent-testing.md#live-client-outage).
+Numbers are from the final run on the fixed code, except where a range covers
+earlier runs. That run's only failure was the pass rule itself (decision 10), and
+the case then passed three times out of three on the corrected rule.
+
+**The harness.** `e2e/agent-testing/client-outage.spec.ts` puts each client behind
+its own proxy (`client-outage-support.ts`), so nothing on the machine changes and
+every attempt has an owner. `reset` drops connections, `blackhole` silences them
+with no error, and a terminal stall stops reading from the gateway, which gives
+real TCP backpressure. A backend restart signals the profile's own backend, after
+checking its identity, and starts a replacement on the same data, port and token.
+
+### Bugs found and fixed
+
+1. **Same-origin streams retried in lock-step, for the whole outage.** The
+   documented ladder only applied once an `EventSource` was CLOSED, and a network
+   failure leaves it CONNECTING, so Chromium owned the retry. Measured across 3
+   tabs: every 3 s with no backoff, first attempts at 3006, 3007 and 3009 ms (span
+   3 ms), both streams of every tab. After the fix the rungs span up to 8428 ms,
+   and attempts back off (1.6 s, 5.6 s, 12.3 s, 24.5 s, 33.2 s).
+   Evidence: "tabs dropped together retry on their own jitter" and "the shared
+   terminal socket returns on the ladder" in `web-gateway-reconnect.test.ts`.
+2. **A silently dropped link was never noticed.** With no error and no answer, no
+   banner appeared within 90 s, reads were not paused and no attempt was made; an
+   open socket waits on TCP for many minutes. This is what a vanished tailnet peer
+   looks like, so it was the main case the banner exists for. Now noticed at
+   63.6 s on HTTP/SSE and on the WebSocket, and 63.5 s on an Electron remote.
+   Evidence: the "a link that drops without an answer" cases in
+   `web-gateway-reconnect.test.ts`, "a stream that stops its keepalives" in
+   `backend-event-stream.test.ts`, and "sends keepalive events" in
+   `gateway-events.test.ts`.
+3. **The terminal WebSocket announced a desync on every failed attempt.** Each
+   retry of an outage cost each terminal a snapshot read and a session read that
+   could not succeed: 5 of each per terminal in a 45 s outage. Now once per drop,
+   and 0 reads arrive once reads are paused. Evidence: "announces a desync once per
+   drop" in `terminal-websocket-client.test.ts`, which fails with the guard removed.
+4. **A refused credential looked like an outage.** With reads paused nothing could
+   report the `401`, so a tab whose session lapsed showed "Reconnecting" for 52 s
+   before reaching the login page. By the code (not run), a durable token that
+   changed would have shown it for as long as the tab stayed open. Now 5.9 to 7.9 s
+   after the backend listens. Evidence:
+   the "a stream the gateway refuses for its credential" cases in
+   `web-gateway-reconnect.test.ts`.
+
+### Task 1: outage workload
+
+Attempt times per owner, from the link. Pass rule: see decision 10.
+
+| Case | Owners | Span of each main stream rung (ms) | Terminal behind main (ms) | Result |
+| --- | --- | --- | --- | --- |
+| Dropped link, shared `EventSource` (before the fix) | 3 tabs | 3, 2996 (a resend), 2996, 2995, 2997 | 0, -6, -4 | Lock-step: fails |
+| Dropped link, shared `EventSource` | 3 tabs | 853, 210, 2858, 4189, 8428 | 4, -2318, -98 | Pass |
+| Dropped link, terminal WebSocket | 3 tabs | 220, 814, 647, 4518, 7589 | 5, -8484, 3 | Pass |
+| Backend restart, direct fetch | 4 clients | 891, 549, 2163, 4410, 9677 | -3859, 2, 3, 3 | Pass |
+| Backend restart, direct and WebSocket | 4 clients | 611, 1466, 4178, 5284, 5127 | -7263, 3, -9299, 1 | Pass |
+
+A negative figure means the terminal's own ladder found the backend first. The
+dropped-link runs had 3 tabs rendering 4 terminals (3 sessions, one of them open in
+two tabs). Outages lasted 45 s, long enough to reach the 16 s cap. Direct clients
+got a desync notice when their terminal transport returned, and output written
+during the outage reached both tabs rendering that terminal.
+
+A backend restart with a real session (`backend restart, real UI`) showed the
+banner at 4006 ms, reached the login page 5870 to 7870 ms after the backend
+listened, and a fresh `dev:login` link recovered the UI.
+
+### Task 2: freshness in a real browser
+
+| Check | Result |
+| --- | --- |
+| Banner on a dropped link | 4005 to 4009 ms in every tab, on both transports; absent at 3 s |
+| Reads paused | `disconnected` within 10 to 100 ms; 0 coordinator reads and 0 commands once paused, on both transports |
+| Banner clears on reconnect | The moment the main stream answers (within 2 ms of it; 78 ms to 9.2 s after restore, depending on the rung) |
+| Quiet `unchanged` reads | 9 safety passes in 45 s over `get_environment_diff_stats`, `get_pr_monitor_state` and `get_worktree_snapshot_revisions`, with the Files panel open, a diff badge and View PR showing: 0 indicator changes, 0 banner changes |
+| Indicators across a whole outage | 0 changes in every tab (decision 5: the banner speaks for an outage) |
+| Electron remote, real restart | `reconnecting` at 20 ms, banner at 4338 ms, reconnected 1874 ms after the backend listened; cleared, reads resumed |
+| Electron remote, silent link | Banner at 63.5 s, recovered 953 ms after the link returned |
+
+The Electron case is `connection-outage-electron.spec.ts`, in the Electron suite.
+
+### Task 3: terminal recovery under backpressure
+
+The transport was stalled at the link while the terminal printed 4,000,000 numbered
+lines and an end marker, then released.
+
+| Transport | Desync notices | Numbered lines rendered | Last number | Gaps | Last 200 lines against the snapshot |
+| --- | --- | --- | --- | --- | --- |
+| HTTP/SSE | 39 | 1029 | 4000000 | 0 | Equal |
+| WebSocket | 1 | 1029 | 4000000 | 0 | Equal |
+
+The notices show the bounded queue did overflow. The rendered screen ends exactly
+where the authoritative snapshot does, with an unbroken sequence.
+
+### Task 4: Codex breaker with a real binary
+
+`bridges/codex-bridge/src/app-server/live-circuit-breaker.test.ts`, against the
+pinned 0.166.0 through a wrapper that fails until the test "fixes the install",
+with the production spawn, exit, `initialize`, termination and pidfile paths and a
+throwaway `CODEX_HOME`. All 4 cases pass in 39.6 s; no bug found.
+
+- **Exits at once:** 3 spawns open the breaker. Demand during the cooldown spawns
+  nothing, and neither does waiting past it with no demand. Two concurrent demands
+  share one probe with no retries. The failed probe doubles the cooldown. With the
+  install fixed, the next probe reaches real `codex`, and the breaker closes. A later
+  failure gets a whole ladder and the first cooldown again.
+- **Hangs in `initialize`:** killed at the 30 s handshake timeout, opening the
+  breaker with no process left running; the probe then recovers.
+- **Missing or non-executable binary:** trips the breaker with no unhandled error,
+  and recovers.
+- **`stop()`:** wakes a real 60 s backoff in under 5 s and leaves no process behind.
+
+One thing it does not cover: a binary that completes the handshake and then dies
+resets the failure window each time, so it never trips the breaker. That is by
+design (decision 1), and it spawns only on demand.
+
+### Task 5: the reasoned defaults
+
+The rule from the file: if the first reconnect usually lands under 4 s, keep the
+delay. Over two runs of 5 quick restarts with 4 direct clients, the backend was down
+464 to 1026 ms and all 40 first reconnects landed between 1021 and 1981 ms. The 4 s
+delay stays: such a restart shows no banner, with about 2 s to spare. These backends
+had no running agents or environments to restore, so a heavy backend will take
+longer, and may show the banner. That is the banner doing its job.
+
+The breaker cooldowns are unchanged. Task 4 shows they work as designed, but what
+would tune them is how long a user takes to fix an install, which no run can
+measure.
 
 ## Not verified
 
-- The qualification runs above. An agent-test (`dev:test`) browser session
-  lapses whenever the backend restarts and is sent to the login page by
-  design, so a backend restart cannot show the banner in that harness; the
-  outage check needs a durable-token browser or a direct (bearer) client
-  against a backend that is stopped and restarted, and the dropped tailnet
-  link needs a second machine.
-- The Codex breaker's cooldown and probe are proved only with a fake
-  app-server child (`process-supervisor.test.ts`), not with a real `codex`
-  binary that keeps failing to start.
-- The 4 s banner delay and the 5 min / 30 min breaker cooldowns are reasoned
-  defaults, not measured ones. Revisit them with the outage workload.
+- A dropped link between two real machines (see Qualification).
+- Timer throttling in a real background tab.
+- Any event-stream reader other than the browser gateway and Electron's client.
+  Neither fix was applied elsewhere.
 
 ## Assumptions and decisions
 
@@ -371,6 +498,79 @@ below for why).
    capability (correct unless that server was upgraded in place, which the
    next server switch or remount corrects).
 
+10. **What counts as "spread out".**
+    - Options: (a) the file's rule as written: the attempts span half the jitter
+      window, and no two owners share a retry tick; (b) some rung spans half its
+      window, and at most 20% of owner pairs land within 20 ms across all rungs;
+      (c) only the last rung must span half its window; (d) a visual check of logs.
+    - Choice: (b), in `retriesAreSpread`.
+    - Why: with several owners, independent jitter makes "no two ever coincide"
+      fail by chance often, on a healthy client (the real runs had coincidences).
+      (c) was tried first and failed a healthy run: three tabs spanned 3.6 s of the
+      last rung's 8 s window, after 4.75 s on the rung before. Lock-step owners stay
+      within milliseconds on every rung, so (b) still fails them.
+    - Pros: measurable, stable, and it failed the real bug. Cons: laxer than the
+      file's words, since one wide rung is enough.
+11. **Same-origin streams: who owns the retry?**
+    - Options: (a) close on any error and use the ladder; (b) leave the browser's
+      retry and have the gateway send a jittered `retry:` per client; (c) keep it
+      and document that the ladder only applies once CLOSED.
+    - Choice: (a).
+    - Why: `retry:` sets one fixed interval, so it can spread tabs but cannot back
+      off. (c) leaves every tab retrying both streams every 3 s for the whole outage.
+    - Pros: one policy on every transport; a shared socket retried as one owner.
+      Cons: it no longer uses the browser's `Last-Event-ID` (the URL's cursor does
+      the same job, and the gateway still accepts both).
+12. **How to notice a silent link.**
+    - Options: (a) watch the existing keepalives, adding a named keepalive event an
+      `EventSource` can see, by request; (b) poll a lightweight route from each
+      client; (c) move same-origin clients to fetch streams; (d) leave it, and
+      document that the banner covers only links that answer.
+    - Choice: (a), with a 60 s silence limit and a 20 s connect timeout.
+    - Why: it adds about 20 bytes per 25 s per stream, and no request. (b) costs
+      traffic that 0052 is trying to remove, and (c) gives up the shared socket
+      that WKWebView's connection limit needs. (d) leaves the main case unhandled.
+    - Pros: works on every client, and an older gateway is simply not watched.
+      Cons: a silent link shows the banner after about 64 s, not 4 s; lowering the
+      limit needs a shorter keepalive, and a tab frozen for over 60 s reconnects
+      needlessly (harmless, since it resumes from its cursor).
+13. **Where the watchdog lives.**
+    - Options: (a) only on the main stream, which then drops the terminal
+      transports; (b) on every stream.
+    - Choice: (a).
+    - Why: they share the link, and terminal streams carry no keepalive event today.
+    - Pros: one timer per client. Cons: a terminal stream that stalls alone, with
+      the main stream healthy, is still not noticed. No run produced that.
+14. **A `401` on the stream.**
+    - Options: (a) back to `connecting`, so reads run and show the failure, retries
+      continuing; (b) a new `unauthorized` state; (c) leave it as `disconnected`.
+    - Choice: (a). A same-origin stream cannot read its status, so an HTTP failure
+      asks `gateway-settings`, once until the stream next opens.
+    - Why: it matches decision 4, which already says an auth failure must stay
+      visible as read errors. (b) adds a state nothing would use yet.
+    - Pros: small, and honest about the cause. Cons: one extra request after an HTTP
+      failure; a non-agent-test tab shows read errors rather than a login prompt.
+15. **How to restart only the backend in a `dev:test` profile.**
+    - Options: (a) signal the profile's backend after checking its identity, and
+      start a replacement from the spec through `BackendProcess`; (b) restart the
+      whole profile with `dev:stop` and `dev:test`; (c) add a restart command to the
+      product.
+    - Choice: (a).
+    - Why: (b) takes minutes and restarts Vite, so it cannot measure a restart that
+      takes under a second. (c) adds product surface for a test.
+    - Pros: a real restart with real timings. Cons: Electron's Local shows as
+      unavailable until the profile is restarted, and it reports an error dialog in
+      its window; the replacement ends with the Playwright worker.
+16. **Bearer clients for the restart cases** (the file's recommendation, followed).
+    The real `createBrowserGatewayApi` runs in a real page with the durable token,
+    as a page argument with traces and screenshots off. Pros: the real ladder through
+    real browser networking, and no weakening of the session lapse. Cons: these
+    clients have no UI, so the real UI is covered separately, up to the lapse.
+17. **Order relative to 0052 and 0048.** The file recommended one two-machine
+    session. The instruction for this run was to simulate the link inside the test.
+    Pros: repeatable, and it found all four bugs. Cons: the real two-machine drop
+    remains open.
+
 ## Constraints and rationale
 
 - Keep the replay cursor, subscribe-before-replay, the connected frame's
@@ -405,7 +605,10 @@ below for why).
   - What does not skip it:
     - narrowing the shared filter;
     - the terminal WebSocket asking for fallback again.
+  - After a silent drop, the main stream reopening also retries any terminal
+    attempt still unanswered, since only its own TCP timeout would end it.
   - Removing the last fallback terminal resets the shared ladder.
+- `401` is not an outage, and a silent link is one: see decisions 12 and 14.
 - Browser `offline` is deliberately not treated as disconnected: a local
   desktop backend stays reachable without internet. `online` only triggers a
   reconcile, and the gateway retries any stream waiting out its backoff.

@@ -22,6 +22,7 @@
  *     against persisted turns rather than retrying blind.
  */
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import {
   ARTIFACT_TOOL_NAMES,
   ORKESTRATOR_ARTIFACT_MCP_PATH,
@@ -143,7 +144,7 @@ import {
  * only write to Orkestrator's bounded artifact store and never the workspace.
  */
 const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
-  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES].map((name) => [
+  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map((name) => [
     name,
     { approval_mode: "approve" },
   ]),

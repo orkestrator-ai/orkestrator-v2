@@ -1,4 +1,5 @@
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import {
   encodePublicSessionId,
   nativeTabLogicalSessionKey,
@@ -7,7 +8,12 @@ import {
   type PublicSessionActivity,
   type PublicSessionSummary,
 } from "@orkestrator/protocol/public-api-resources";
-import type { Environment, PersistedNativeAgentSession, Project } from "../models.js";
+import type {
+  Environment,
+  NativeAgentJobCompletionAction,
+  PersistedNativeAgentSession,
+  Project,
+} from "../models.js";
 import { environmentSettingsRevision, projectRevision } from "./revisions.js";
 
 /**
@@ -97,6 +103,7 @@ export interface NativeTabInfo {
   agent: AgentPlatform;
   title: string | null;
   hasProviderSession: boolean;
+  jobCompletionAction?: NativeAgentJobCompletionAction;
 }
 
 /** Native-agent tabs of a backend-owned pane layout. */
@@ -116,6 +123,9 @@ export function nativeTabsOfLayout(layout: unknown): NativeTabInfo[] {
           agent: native.platform,
           title: typeof tab.displayTitle === "string" ? tab.displayTitle.slice(0, 200) : null,
           hasProviderSession: typeof native.sessionId === "string" && native.sessionId.length > 0,
+          ...(tab.jobCompletionAction === "refresh-pr-after-agent-completion"
+            ? { jobCompletionAction: tab.jobCompletionAction }
+            : {}),
         });
       }
       return;
@@ -142,6 +152,7 @@ export function publicSessionSummary(
       : null;
   const createdAt = session?.pendingDispatch?.createdAt;
   const parkedAgeMs = createdAt ? Date.now() - Date.parse(createdAt) : Number.POSITIVE_INFINITY;
+  const goal = session ? sessionGoal(session) : undefined;
   return {
     id: encodePublicSessionId(environmentId, tab.tabId),
     environmentId,
@@ -159,6 +170,7 @@ export function publicSessionSummary(
         }
       : null,
     pendingInteractionCount,
+    ...(goal ? { goal: goalStatusSummary(goal) } : {}),
     createdAt: session?.createdAt ?? null,
     updatedAt: session?.updatedAt ?? null,
   };

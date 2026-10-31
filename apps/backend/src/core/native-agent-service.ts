@@ -169,6 +169,16 @@ import {
 } from "./project-home-environment.js";
 import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
+import {
+  GOAL_TOKEN_BUDGET_PLATFORMS,
+  parseGoalCarrier,
+  type GoalCommand,
+} from "@orkestrator/protocol/native-agent-goal";
+import {
+  GoalCommandError,
+  NativeAgentGoalService,
+  type GoalCommandResult,
+} from "./native-agent-goal-service.js";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import {
   commandDispatchNeedsCatalogue,
@@ -330,6 +340,8 @@ export class NativeAgentService {
   private readonly launches: NativeAgentLaunchActivityReconciler;
   /** Prompt-queue drains, session work fences and parked-dispatch settles. */
   private readonly promptQueues: NativeAgentPromptQueueDispatcher;
+  /** The goal loop. Public so the turn-end edge and agent tools can reach it. */
+  readonly goals: NativeAgentGoalService;
   /** Stop, resume, fork, session actions, sign-in, controls and interaction answers. */
   private readonly sessionOperations: NativeAgentSessionOperations;
   sessionActivitySnapshot(
@@ -391,6 +403,56 @@ export class NativeAgentService {
    */
   reconcileAgentActivity(options: { startedAfter?: number } = {}): Promise<void> {
     return this.launches.reconcileAgentActivity(options);
+  }
+
+  private sessionTurnIsBusy(input: NativeAgentProjectionInput): boolean {
+    const activity = this.launches.sessionTurnActivitySnapshot(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    return activity === "working" || activity === "waiting";
+  }
+
+  /**
+   * Run `/goal` for a tab outside the prompt path: it never queues behind a
+   * turn or journals a request, because pausing a goal must work mid-turn.
+   */
+  async runGoalCommand(
+    input: EnsureNativeAgentSessionInput & { text: string },
+  ): Promise<GoalCommandResult> {
+    const { text, ...ensure } = input;
+    this.assertAcceptingWork();
+    const session = await this.ensureSession(ensure);
+    return this.goals.command(session, text, { busy: this.sessionTurnIsBusy(input) });
+  }
+
+  /**
+   * The same, from structured fields, so a caller's text is never re-parsed.
+   * Setting or resuming needs the live session. Anything else acts on the record
+   * alone: pausing or clearing must not start a bridge for a goal that is about
+   * to do nothing.
+   */
+  async performGoalCommand(
+    input: EnsureNativeAgentSessionInput & { command: GoalCommand },
+  ): Promise<GoalCommandResult> {
+    const { command, ...ensure } = input;
+    this.assertAcceptingWork();
+    const session =
+      command.kind === "set" || command.kind === "resume"
+        ? await this.ensureSession(ensure)
+        : await this.storage.getNativeAgentSession(
+            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+          );
+    if (!session) throw new GoalCommandError("This session has no conversation yet.");
+    return this.goals.perform(session, command, { busy: this.sessionTurnIsBusy(input) });
+  }
+
+  /** A session's goal with its check output, and its recent history. */
+  readGoalDetail(input: NativeAgentProjectionInput) {
+    return this.goals.detail(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
   }
 
   /** Fresh no-touch admission read, including background work and persisted sessions after reload. */
@@ -477,6 +539,15 @@ export class NativeAgentService {
     this.withdrawEnvironmentInteractions(environmentId);
     const sessions = await this.storage.listNativeAgentSessions();
     await this.launches.settleStoppedSessions(environmentId, sessions);
+  }
+
+  /**
+   * The backend is about to stop this environment's bridges on purpose, so a
+   * sweep that finds one gone must not report its turn as failed
+   * (`NativeAgentLaunchActivityReconciler.runtimeStopRequested`).
+   */
+  runtimeStopRequested(environmentId: string, agent?: BuildPipelineAgent): Promise<void> {
+    return this.launches.runtimeStopRequested(environmentId, agent);
   }
 
   /** Whether the session's last turn was cut off by its runtime stopping. */
@@ -641,6 +712,85 @@ export class NativeAgentService {
       dispatchPrompt: (input) => this.dispatchPrompt(input),
       dispatchPromptWithPreparation: (input, prepare) =>
         this.dispatchPromptInternal(input, prepare),
+      goalHoldsTurnEnd: (sessionKey) => this.goals.holdsTurnEnd(sessionKey),
+      sweepGoals: () => this.goals.sweep(),
+    });
+    this.goals = new NativeAgentGoalService({
+      storage,
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      trackScan: (task) => this.trackScan(task),
+      requestOutcome: (input) => this.sessionRequestOutcome(input),
+      turnActivity: (input) =>
+        this.launches.sessionTurnActivitySnapshot(
+          input.environmentId,
+          input.agent,
+          input.logicalSessionKey,
+        ),
+      stoppedMidTurn: (input) =>
+        this.launches.sessionStoppedMidTurn(
+          input.environmentId,
+          input.agent,
+          input.logicalSessionKey,
+        ),
+      environmentRunning: async (environmentId) => {
+        try {
+          await this.assertEnvironmentLive(environmentId);
+          return (await storage.getEnvironment(environmentId))?.status === "running";
+        } catch {
+          return false;
+        }
+      },
+      notifyQueue: (queueKey) => this.notifyPromptQueueChanged(queueKey),
+      sessionTokens: async (input) => {
+        const provider = await this.observeProvider(input);
+        const key = nativeAgentSessionStorageKey(
+          input.environmentId,
+          input.agent,
+          input.logicalSessionKey,
+        );
+        const session = await storage.getNativeAgentSession(key);
+        if (!provider || !session) return undefined;
+        const snapshot = await provider.sessionStateSnapshot?.(session.providerSessionId);
+        const tokens = snapshot?.contextUsage?.sessionTokens;
+        if (tokens !== undefined || !provider.usageFromMessages) return tokens;
+        // OpenCode's lightweight snapshot only has streamed usage. An inactive
+        // tab can miss that evidence; meter its bounded authoritative transcript
+        // before deciding whether another goal turn fits the budget.
+        const messages = await provider.messages(session.providerSessionId, {
+          limit: provider.usageMessageLimit ?? provider.messageReadLimit ?? 1_000,
+        });
+        return provider.usageFromMessages(messages)?.sessionTokens;
+      },
+      workspaceFingerprint: async (environmentId) =>
+        options.goalEnvironment?.workspaceFingerprint(environmentId),
+      runCheck: async (input) =>
+        options.goalEnvironment?.runCheck(input) ?? {
+          kind: "unavailable",
+          detail: "This backend cannot run checks.",
+        },
+      ...(options.goalEnvironment?.verifier ? { verifier: options.goalEnvironment.verifier } : {}),
+      announce: (session) => {
+        this.projections.invalidateProjection(session.key);
+        this.launches.announceSessionContent(session);
+      },
+      ringAttention: async (session, goal) => {
+        // A failed turn already rang on its own edge.
+        if (goal.statusReason === "turn-failed") return;
+        await storage.recordEnvironmentSessionCompletion(
+          session.environmentId,
+          new Date(this.now()).toISOString(),
+          goal.statusReason === "continuation-failed"
+            ? "agent_failed"
+            : goal.status === "blocked"
+              ? "agent_waiting"
+              : "agent_finished",
+        );
+      },
+      releaseTurnEnd: async (session) => options.onGoalReleasedTurnEnd?.(session),
+      supportsGoals: (agent) => nativeCapabilities(agent).actions?.goal === true,
+      supportsTokenBudget: (agent) =>
+        (GOAL_TOKEN_BUDGET_PLATFORMS as readonly string[]).includes(agent),
     });
     this.interactions = new NativeAgentInteractionTracker({
       storage,
@@ -1106,6 +1256,12 @@ export class NativeAgentService {
 
   private async initialize(): Promise<void> {
     await this.repairPersistedStartupTabs().catch(() => undefined);
+    await this.goals.init().catch((error: unknown) => {
+      console.warn(
+        "[goals] Failed to recover goals:",
+        error instanceof Error ? error.message : error,
+      );
+    });
     await Promise.allSettled([
       this.trackScan(this.launches.launchScan()),
       this.trackScan(this.promptQueues.queueScan()),
@@ -1615,6 +1771,59 @@ export class NativeAgentService {
   async dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {
     return this.dispatchIntentInternal(input, false);
   }
+
+  /**
+   * Whether an existing tab's session can take another prompt, for a caller
+   * choosing between that tab and a new one. `busy` means the prompt has to wait
+   * in the durable queue. `unavailable` means it would not run there: no session,
+   * a tab being closed, a parked dispatch or queue, or a failed provider session
+   * (the queue parks a prompt behind a terminal error rather than sending it).
+   * Never creates a session; a read that fails answers `unavailable`.
+   */
+  async promptReadiness(
+    input: NativeAgentProjectionInput,
+  ): Promise<"idle" | "busy" | "unavailable"> {
+    try {
+      const environment = await this.storage.getEnvironment(input.environmentId);
+      if (hasPendingTabTeardown(environment, input.logicalSessionKey)) return "unavailable";
+      const resolved = await this.resolveProjectionSession(input);
+      if (!resolved) return "unavailable";
+      const { provider } = resolved;
+      let { session } = resolved;
+      if (session.pendingDispatch)
+        await this.settleAmbiguousDispatch(
+          input,
+          session.key,
+          session.pendingDispatch.requestId,
+          provider,
+        );
+      if (session.pendingSteer)
+        await this.settleAmbiguousSteer(
+          input,
+          session.key,
+          session.pendingSteer.requestId,
+          provider,
+        );
+      if (session.pendingDispatch || session.pendingSteer)
+        session = (await this.storage.getNativeAgentSession(session.key)) ?? session;
+      if (session.pendingDispatch || session.pendingSteer) return "unavailable";
+      const queue = await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`);
+      if (queue?.dispatchError) return "unavailable";
+      const { status } = await readProviderStatus(provider, session.providerSessionId);
+      await this.recordObservedTurnOutcome(session, status, undefined, provider);
+      if (status === "running" || status === "blocked") return "busy";
+      if (status !== "idle") return "unavailable";
+      // Sending past a backlog would overtake prompts the user queued first.
+      return queue &&
+        (queue.outstandingClaim !== undefined ||
+          queue.inFlight !== undefined ||
+          queue.messages.length > 0)
+        ? "busy"
+        : "idle";
+    } catch {
+      return "unavailable";
+    }
+  }
   private async dispatchIntentInternal(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
@@ -2028,10 +2237,19 @@ export class NativeAgentService {
     );
   }
 
-  stopProjectionSession(
+  async stopProjectionSession(
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
-    return this.sessionOperations.stopProjectionSession(input);
+    // Do not wait on a dispatch's storage lease before sending the abort that
+    // releases it. Both tasks are observed immediately, and Stop only settles
+    // after the durable goal fence and provider interrupt have both finished.
+    const [, projection] = await Promise.all([
+      this.goals.userStop(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      ),
+      this.sessionOperations.stopProjectionSession(input),
+    ]);
+    return projection;
   }
 
   stopProjectionBackgroundTask(
@@ -2053,7 +2271,7 @@ export class NativeAgentService {
   }
 
   listProjectionResumableSessions(
-    input: NativeAgentProjectionInput,
+    input: NativeAgentProjectionInput & { includeArchived?: boolean },
   ): Promise<NativeAgentResumeEntry[]> {
     return this.sessionOperations.listProjectionResumableSessions(input);
   }
@@ -3076,7 +3294,11 @@ export class NativeAgentService {
       // Freeze the effective inherited choice before preparing and journaling
       // dispatch. Retries replay this concrete model, never a stale default.
       if (input.modelSource === "default" || !input.model) {
-        input = { ...input, model: session.controls?.modelId ?? input.model };
+        input = {
+          ...input,
+          model: session.controls?.modelId ?? input.model,
+          reasoningEffort: input.reasoningEffort ?? session.controls?.reasoningId,
+        };
       }
       const provider = await this.provider(input);
       provider.registerSession?.(session.providerSessionId, {
@@ -3092,6 +3314,17 @@ export class NativeAgentService {
        */
       const commandPlan = await this.planDispatchCommand(input, session, provider);
       if (commandPlan.kind === "rejected") throw new PromptRejectedError(commandPlan.message);
+      if (commandPlan.kind === "goal") {
+        try {
+          await this.goals.command(session, commandPlan.arguments, {
+            busy: this.sessionTurnIsBusy(input),
+          });
+        } catch (error) {
+          if (error instanceof GoalCommandError) throw new PromptRejectedError(error.message);
+          throw error;
+        }
+        return session;
+      }
       /*
        * Commands the user ran with `!` since the agent's last turn start this
        * prompt, after any coordinator block (which display strips first). Only
@@ -3261,10 +3494,17 @@ export class NativeAgentService {
                   images: input.images,
                   attachments: input.attachments,
                   schema: input.schema,
-                  mode: input.mode,
+                  // Resolve inheritance under the session lease: Claude's
+                  // permission payload treats an omitted mode as Build.
+                  mode: input.mode ?? durable.controls?.mode,
                   fastMode: input.fastMode,
                   subAgent: input.subAgent,
-                  executionAgent: preparation.executionAgent ?? input.executionAgent,
+                  executionAgent:
+                    preparation.executionAgent ??
+                    input.executionAgent ??
+                    (input.mode === undefined
+                      ? (durable.controls?.executionProfileId ?? undefined)
+                      : undefined),
                   includeLocalSettings: input.includeLocalSettings,
                   promptSuggestions: input.promptSuggestions,
                   model: preparation.model ?? input.model,
@@ -3455,7 +3695,9 @@ export class NativeAgentService {
       if (messages.length > 0) return;
       await this.invoke("prepare_environment_first_prompt", {
         environmentId: input.environmentId,
-        prompt: input.prompt,
+        // A goal's first turn is a carrier. Name the environment from what the
+        // person asked for, not from its framing.
+        prompt: parseGoalCarrier(input.prompt)?.objective ?? input.prompt,
       });
     } catch (error) {
       console.warn(
@@ -3593,6 +3835,7 @@ export class NativeAgentService {
 
   async shutdown(): Promise<void> {
     this.stopped = true;
+    this.goals.stop();
     // Before settling projections: a title run in flight is what they wait on.
     await this.options.sessionTitles?.shutdown().catch(() => undefined);
     this.unsubscribeObservationWakeups?.();

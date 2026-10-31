@@ -938,7 +938,7 @@ describe("KanbanTaskDialog", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(screen.queryByLabelText("Ticket text")).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText("Ticket text") === null).toBe(true));
     expect(updateTaskContentMock).not.toHaveBeenCalled();
   });
 

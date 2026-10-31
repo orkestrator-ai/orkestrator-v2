@@ -198,6 +198,51 @@ describe("annotation threads and list", () => {
     expect(await screen.findByText("After-capture for review")).toBeTruthy();
   });
 
+  test("lists source candidates with what the path check found, without calling them proof", async () => {
+    const annotation = backend.seed({ id: "annotation-hints", title: "Hints" });
+    const capture = backend.captures.get(annotation.currentCaptureId)!;
+    backend.captures.set(capture.id, {
+      ...capture,
+      evidence: {
+        ...capture.evidence!,
+        sourceHints: [
+          {
+            producer: "vite-plugin-example",
+            path: "apps/web/src/SaveButton.tsx",
+            line: 12,
+            component: "SaveButton",
+            verified: true,
+          },
+          {
+            producer: "vite-plugin-example",
+            path: "apps/web/src/<img src=x onerror=alert(1)>.tsx",
+            verified: false,
+          },
+        ],
+      },
+    });
+    openThread(annotation.id);
+    render(<AnnotationHarness />);
+    await screen.findByText(/^Source candidates from the page \(vite-plugin-example\)/);
+    const rows = [...document.querySelectorAll("[data-source-candidates] li")];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "apps/web/src/SaveButton.tsx:12 · SaveButton · path found in workspace at capture",
+      "apps/web/src/<img src=x onerror=alert(1)>.tsx · path not confirmed",
+    ]);
+    expect(rows.map((row) => row.getAttribute("data-verified"))).toEqual(["true", "false"]);
+    // Page strings stay text, and the list is visible without opening the evidence.
+    expect(document.querySelector("[data-source-candidates] img")).toBeNull();
+    expect(document.querySelector("details [data-source-candidates]")).toBeNull();
+  });
+
+  test("a capture without source hints shows no candidate list", async () => {
+    const annotation = backend.seed({ id: "annotation-no-hints", title: "No hints" });
+    openThread(annotation.id);
+    render(<AnnotationHarness />);
+    await screen.findByText("Page evidence (untrusted)");
+    expect(document.querySelector("[data-source-candidates]")).toBeNull();
+  });
+
   test("shows missing images distinctly from stale captures", async () => {
     const annotation = backend.seed({ id: "annotation-a", title: "Header spacing" });
     const record = backend.captures.get(annotation.currentCaptureId)!;

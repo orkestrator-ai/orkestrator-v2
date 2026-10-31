@@ -6,6 +6,10 @@ import type { GatewayProxy } from "./gateway-proxy.js";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { parseGatewayCursor } from "./gateway-event-replay.js";
 import {
+  GATEWAY_KEEPALIVE_EVENT,
+  GATEWAY_KEEPALIVE_EVENTS_PARAM,
+} from "@orkestrator/protocol/gateway-event-stream";
+import {
   AUTH_COOKIE,
   API_PREFIX,
   MAX_INVOKE_BODY_BYTES,
@@ -38,7 +42,9 @@ import type {
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
 import { boundedConsoleStats } from "./bounded-console.js";
-import { eventLoopDiagnostics } from "./event-loop-stall-monitor.js";
+import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
+
+const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
 
 /** The invoke, event-stream, metrics and loopback-proxy routes. */
 export class GatewayHandlers {
@@ -215,6 +221,7 @@ export class GatewayHandlers {
       throw error;
     }
     const state: GatewayEventClient = {
+      keepaliveEvents: url.searchParams.has(GATEWAY_KEEPALIVE_EVENTS_PARAM),
       prefixes: parseEventSubscriptionFilter(url.searchParams.get("events")),
       includedPrefixes: parseEventSubscriptionFilter(url.searchParams.get("includeEvents")),
       excludedPrefixes: parseEventSubscriptionFilter(url.searchParams.get("excludeEvents")),
@@ -247,6 +254,8 @@ export class GatewayHandlers {
     this.ctx.clients.set(client, state);
     try {
       client.write(": connected\n\n");
+      // At once, so the client knows to expect them for as long as the stream lives.
+      if (state.keepaliveEvents) client.write(KEEPALIVE_EVENT_FRAME);
       if (isTerminalOnly) {
         // Terminal streams use their own revisioned snapshot protocol. They are
         // deliberately absent from the authoritative gateway replay sequence.
@@ -284,7 +293,7 @@ export class GatewayHandlers {
         this.events.flushOmittedCursor(client, clientState);
         if (!this.ctx.clients.has(client)) continue;
         this.ctx.metrics.recordKeepalive();
-        client.write(": keepalive\n\n");
+        client.write(clientState.keepaliveEvents ? KEEPALIVE_EVENT_FRAME : ": keepalive\n\n");
       }
     }, this.ctx.keepaliveMs);
     this.ctx.keepalive.unref?.();

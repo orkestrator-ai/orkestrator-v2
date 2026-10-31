@@ -144,3 +144,32 @@ mise run test:logged -- --name recorded-virtuoso-follow -- bunx playwright test 
 Aggregate evidence is `orkestrator-test-run.CtuZX3/repaired-browser-suite.log.gz`
 below the host temporary directory. Passing owner output was removed. No
 owner implementation, assertion, timeout or skip changed; no cause was established.
+
+
+## Hidden flow graph review — 2026-10-31
+
+Both desktop cases received `false` instead of `auto` at the re-engagement
+assertions (lines 43 and 86) in the required full browser rerun. Both also
+failed in the sequential nine-owner run (57 passed, nine skipped, four failed;
+414.8 s). The complete unchanged VirtuosoFollow owner then failed by itself
+(exit 1, two failed, two mobile skips; 32.6 s):
+
+```sh
+mise run test:logged -- --name recorded-virtuoso-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --workers=1
+```
+
+Evidence: `orkestrator-test-run.oWOYrZ/recorded-virtuoso-owner.log.gz` below
+the host temporary directory. No follow implementation, assertion, timeout
+or skip changed. This run does not establish intermittence or a cause.
+Full outcomes and the seven browser owners that passed sequentially are in
+[0382](../web-ui/0382-component-browser-parallel-load.md).
+
+
+## History-loading main merge — 2026-10-31
+
+History-loading main merge on 2026-10-31 repeated desktop small-wheel false/auto; the complete unchanged follow owner passed in the one-worker five-owner rerun (1600).
+
+Exact commands, eight-worker aggregate counts, sequential one-worker results,
+failure details and retained evidence are in
+[1600](../aggregate-validation-runs/1600-history-loading-main-merge-validation.md).
+No owning implementation, assertion, timeout or skip changed between runs.

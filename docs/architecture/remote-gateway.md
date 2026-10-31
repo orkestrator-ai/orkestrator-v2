@@ -14,7 +14,8 @@ running Orkestrator.
 
 - `mise run dev` starts Electron, which supervises one backend. Electron uses
   an ephemeral loopback control listener. Authenticated browsers use a
-  separate Tailscale listener on port `34121` (or a local-only fallback).
+  separate browser listener on an OS-assigned free port; the bound URL is
+  logged (with a local-only fallback when Tailscale is unavailable).
   Losing Tailscale or a browser-port conflict does not take down the desktop
   control channel.
 - `mise run start:web` builds and starts the backend without Electron. The
@@ -110,7 +111,7 @@ equivalent environment variable unless noted.
 | Flag | Environment | Purpose |
 | --- | --- | --- |
 | `--host` | | Bind address. Default is the first Tailscale address. |
-| `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121`. |
+| `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121` for the default data directory's backend, and a free port for any other. See [Default gateway port](#default-gateway-port). |
 | `--allow-non-tailscale-bind` | | Permit a non-Tailscale bind (local development). |
 | `--allowed-origins` | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | Comma-separated browser origins. |
 | `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. On Linux, run `sudo tailscale set --operator=$USER` once first; otherwise Tailscale answers `Access denied: serve config denied` and the backend exits. |
@@ -127,6 +128,48 @@ Local-only development bind:
 ```bash
 bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --allow-non-tailscale-bind
 ```
+
+### Default gateway port
+
+Only the backend of the platform default data directory (`isDefaultDataDir`, the
+same rule as the [Control MCP port](control-mcp.md)) defaults to `34121`, because
+remote machines reach it there. With no `--port` or `ORKESTRATOR_GATEWAY_PORT`,
+every other data directory and any `--runtime-flavor agent-test` backend takes a
+free port that changes on each start (`implicitGatewayPort` in
+`apps/backend/src/options.ts`). `mise run dev` asks for a free port too
+(`desktopGatewayPort`). So a second backend cannot move the main install's address
+by starting first. An explicit port always wins, on any data directory.
+
+A second backend that remote clients reach needs a stable address, so give it
+`--port`. The bound URLs are in `backend-instance.json`, and `orkestrator service
+install` prints them. The questions in `service install` offer a port for the
+tailnet address.
+
+`service install --data-dir <other> -- --tailscale-serve` without `--port`
+writes a free port chosen at install and `--strict-gateway-port`. Reinstalling
+keeps a valid nonreserved pin; saved zero, fixed or invalid ports are replaced.
+If the pin becomes occupied, startup fails without publishing another target.
+
+Standalone Serve also records ownership atomically in
+`<data-dir>/standalone-serve.json` before publishing its root proxy. Older units
+and hand-started backends can therefore recover their owned root when a free
+port or fallback changes across restarts. On the first update, ownership is
+recovered from the last successful `backend-instance.json` (the loopback primary
+URL and HTTPS browser URL). Only the matching tailnet-only root is replaced;
+other paths survive, and foreign roots and Funnel configurations remain
+conflicts. Keep these files when repairing a service. An old service with no
+usable ownership evidence needs host-side inspection of its Serve configuration
+before removing its stale root; reinstalling with a port alone cannot prove
+ownership of an unknown target.
+
+If a non-strict port is taken, the gateway tries the next 20 ports and then a
+free one. The walk skips `34121`, `34122`, `ORKESTRATOR_CONTROL_MCP_PORT` and the
+loopback client port. Every OS-assigned browser port is also checked against
+these reservations and released and retried if reserved. A port asked for by
+name is still tried first.
+
+See the [pending release migration note](../development/releasing.md#pending-release-note-gateway-port-migration)
+for existing services that remote clients reach directly over the tailnet.
 
 ## Compression and terminal transport
 

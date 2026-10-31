@@ -8198,7 +8198,8 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
   });
 
-  test("waits on the connecting logo until a new tab's first session exists", async () => {
+  test("shows a new tab's opening prompt while its first session is created", async () => {
+    renderVirtualizedMessages = true;
     // What the backend really answers while `ensure` is still spawning the
     // agent: the logical key has no provider session to resolve yet.
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
@@ -8216,7 +8217,21 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    const { container } = render(
+    let settleDispatch: (() => void) | undefined;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      (input) =>
+        new Promise((resolve) => {
+          settleDispatch = () => resolve({ outcome: "accepted", requestId: input.requestId });
+        }),
+    );
+    const assertPromptVisible = () => {
+      const prompt = screen.getByText("Review the current changes");
+      // jsdom does not apply Tailwind styles. Check the ancestor that actually
+      // hides the transcript rather than only checking that its text exists.
+      expect(prompt.closest(".opacity-0")).toBeNull();
+      expect(screen.getAllByText("Review the current changes")).toHaveLength(1);
+    };
+    const { container, rerender } = render(
       <AgentNativeTab
         tabId="tab-new-cursor"
         data={freshTab("cursor")}
@@ -8237,14 +8252,15 @@ describe("AgentNativeTab", () => {
       revision: 1,
     });
 
-    // Cursor is still being spawned. There is no conversation to refresh, and
-    // the opening prompt cannot be injected until creation finishes, so the tab
-    // waits on the pulsing logo. A ready composer would invite a message the
-    // session cannot accept, and reconnect copy would name a session that has
-    // never existed.
-    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
-    expect(container.querySelector("svg.agent-connecting-logo")).toBeTruthy();
-    expect(screen.queryByText("Ready to build!") === null).toBe(true);
+    // Cursor is still being spawned and the opening prompt cannot be injected
+    // until creation finishes. The prompt is on screen anyway, with the wait
+    // shown beneath it: hiding it behind the connecting logo made the prompt
+    // look as if it arrived seconds late. Reconnect copy would name a session
+    // that has never existed.
+    assertPromptVisible();
+    expect(screen.getByText("Starting Cursor Agent…")).toBeTruthy();
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+    expect(container.querySelector("svg.agent-connecting-logo") === null).toBe(true);
     expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
@@ -8256,6 +8272,238 @@ describe("AgentNativeTab", () => {
     });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+    // The submitted prompt's own bubble takes over; the prompt is never doubled.
+    assertPromptVisible();
+
+    // Acceptance clears the tab's initialPrompt before the turn necessarily
+    // reports running. The retired latch must keep its replacement visible too.
+    await act(async () => settleDispatch!());
+    rerender(<AgentNativeTab tabId="tab-new-cursor" data={freshTab("cursor")} isActive />);
+    assertPromptVisible();
+
+    const sessionKey = createSessionKey("env-1", "tab-new-cursor");
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    const response: NativeMessage = {
+      id: "opening-assistant",
+      role: "assistant",
+      content: "Inspecting the changes",
+      parts: [{ type: "text", content: "Inspecting the changes" }],
+      createdAt: "2026-10-31T00:00:01.000Z",
+    };
+    act(() =>
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        turn: { phase: "running" },
+        messages: [response],
+      }),
+    );
+    await screen.findByText("Inspecting the changes");
+    assertPromptVisible();
+    const list = screen.getByTestId("native-agent-transcript-test-list");
+    const rows = [...list.children].map((row) => row.textContent ?? "");
+    expect(rows.findIndex((row) => row.includes("Review the current changes"))).toBeLessThan(
+      rows.findIndex((row) => row.includes("Inspecting the changes")),
+    );
+    // The delayed authoritative user echo replaces the optimistic opening row.
+    act(() =>
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 2,
+        turn: { phase: "running" },
+        messages: [
+          {
+            id: "opening-user",
+            role: "user",
+            content: "Review the current changes",
+            parts: [{ type: "text", content: "Review the current changes" }],
+            createdAt: "2026-10-31T00:00:00.000Z",
+          },
+          response,
+        ],
+      }),
+    );
+    assertPromptVisible();
+  });
+
+  test("waits on the connecting logo while a prompt-less tab's first session is created", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    ensureNativeAgentSessionMock.mockImplementation(() => new Promise(() => {}));
+
+    const { container } = render(
+      <AgentNativeTab tabId="tab-new-cursor-no-prompt" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+
+    // Nothing to show yet, and a ready composer would invite a message the
+    // session cannot accept.
+    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
+    expect(container.querySelector("svg.agent-connecting-logo")).toBeTruthy();
+    expect(screen.queryByText(/^Starting /) === null).toBe(true);
+  });
+
+  test("shows a backend-owned startup prompt before the backend dispatches it", async () => {
+    renderVirtualizedMessages = true;
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "ready",
+          pendingAgentLaunch: true,
+          initialPrompt: "Add a dark mode toggle",
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "cursor",
+            style: "native",
+            status: "starting",
+          },
+        } as never,
+      ],
+    });
+    // The backend has not created the provider session yet.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    let settleEnsure: (() => void) | undefined;
+    ensureNativeAgentSessionMock.mockImplementation(
+      (input) =>
+        new Promise((resolve) => {
+          settleEnsure = () =>
+            resolve({
+              providerSessionId: "cursor-session",
+              logicalSessionKey: input.logicalSessionKey,
+              environmentId: input.environmentId,
+              agent: input.agent,
+            });
+        }),
+    );
+
+    render(<AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />);
+
+    expect(await screen.findByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.getByText("Starting Cursor Agent…")).toBeTruthy();
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+    // The backend owns this dispatch; the preview never sends anything.
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    // Dispatch returned: the launch flags clear before the echo is read. The
+    // prompt stays on screen through that gap rather than flickering out.
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-1", {
+        pendingAgentLaunch: false,
+        startupAgentSession: undefined,
+      });
+    });
+    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
+
+    // The provider can stream its answer before echoing the user prompt.
+    const response: NativeMessage = {
+      id: "backend-assistant",
+      role: "assistant",
+      content: "Adding the toggle",
+      parts: [{ type: "text", content: "Adding the toggle" }],
+      createdAt: "2026-10-31T00:00:01.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      turn: { phase: "running" as const },
+      messages: [response],
+    }));
+    await act(async () => settleEnsure!());
+    await screen.findByText("Adding the toggle");
+    const prompt = screen.getByText("Add a dark mode toggle");
+    expect(prompt.closest(".opacity-0")).toBeNull();
+    const list = screen.getByTestId("native-agent-transcript-test-list");
+    const rows = [...list.children].map((row) => row.textContent ?? "");
+    expect(rows.findIndex((row) => row.includes("Add a dark mode toggle"))).toBeLessThan(
+      rows.findIndex((row) => row.includes("Adding the toggle")),
+    );
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    const sessionKey = createSessionKey("env-1", "startup-agent");
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() =>
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Add a dark mode toggle",
+            parts: [{ type: "text", content: "Add a dark mode toggle" }],
+            createdAt: "2026-10-31T00:00:00.000Z",
+          },
+          response,
+        ],
+      }),
+    );
+    // The echo replaces the preview exactly once.
+    expect(screen.getAllByText("Add a dark mode toggle")).toHaveLength(1);
+    expect(screen.queryByText(/^Starting /)).toBeNull();
+  });
+
+  test.each(["rejected", "transport", "exception"] as const)(
+    "clears startup feedback and restores the draft after an opening %s failure",
+    async (failure) => {
+      renderVirtualizedMessages = true;
+      dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+        if (failure === "exception") throw new Error("Opening dispatch failed");
+        if (failure === "transport")
+          return {
+            outcome: "unknown",
+            requestId: input.requestId,
+            origin: "transport",
+            error: "Opening connection dropped",
+          };
+        return { outcome: "rejected", error: "Opening dispatch rejected" };
+      });
+      const tabId = `startup-failure-${failure}`;
+      const { container } = render(
+        <AgentNativeTab
+          tabId={tabId}
+          data={freshTab("cursor")}
+          initialPrompt="Recover this opening prompt"
+          isActive
+        />,
+      );
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(screen.getByRole("textbox").textContent).toBe("Recover this opening prompt"),
+      );
+      expect(screen.queryByText(/^Starting /)).toBeNull();
+      expect(container.querySelector(".agent-thinking-shimmer")).toBeNull();
+      expect(
+        within(screen.getByTestId("native-agent-transcript-test-list")).queryByText(
+          "Recover this opening prompt",
+        ),
+      ).toBeNull();
+      expect(
+        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", tabId))?.text,
+      ).toBe("Recover this opening prompt");
+    },
+  );
+
+  test("shows a backend-owned startup prompt while setup is still running", async () => {
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "running",
+          pendingAgentLaunch: true,
+          initialPrompt: "Add a dark mode toggle",
+        } as never,
+      ],
+    });
+
+    render(<AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />);
+
+    expect(await screen.findByText("Waiting for setup scripts to complete...")).toBeTruthy();
+    expect(screen.getByTestId("setup-pending-prompt").textContent).toBe("Add a dark mode toggle");
   });
 
   test("shows the connecting logo on a created tab that connected once but is still empty", async () => {

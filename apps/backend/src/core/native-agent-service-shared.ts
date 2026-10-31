@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import type { PlanUsageState } from "./plan-usage-cache.js";
 import type {
   BuildPipelineAgent,
   PipelineSessionPhase,
@@ -461,6 +462,8 @@ export interface NativeAgentServiceOptions {
   changeTracking?: () => NativeAgentChangeTrackingHooks | null | undefined;
   /** Account a live local Claude or Codex bridge (`<agent>:<environmentId>`) was launched on. */
   localBridgeAccountId?: (key: string) => string | undefined;
+  /** This backend's plan usage (`runtime.accounts.planUsage`); sessions report into it. */
+  planUsage?: PlanUsageState;
   /**
    * The backend's replacement and move fence (`runtime.environments.fence`),
    * which admits each prompt. A service built without one gets a private fence

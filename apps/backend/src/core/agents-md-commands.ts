@@ -151,6 +151,7 @@ export function registerAgentsMdCommands(
     return readAgentsMdSectionFromBase({
       root,
       baseBranch: await agentsMdBaseBranch(context, projectId),
+      gitHubConfig: context.storage,
     });
   });
 
@@ -170,6 +171,7 @@ export function registerAgentsMdCommands(
       key,
       changes,
       reason,
+      gitHubConfig: context.storage,
       ...(typeof args.nodeName === "string" ? { nodeName: args.nodeName.slice(0, 64) } : {}),
     });
   });

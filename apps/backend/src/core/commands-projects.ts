@@ -532,7 +532,7 @@ export async function addExistingProject(
                 cwd: temporaryPath,
                 timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
                 redactValues: [gitUrl],
-                ...(await gitHubGitCredentials(gitUrl)),
+                ...(await gitHubGitCredentials(storage, gitUrl)),
               },
               run,
             );
@@ -786,7 +786,7 @@ export async function createProjectFromScratch(
         }
       }
 
-      const ghEnv = await gitHubCliEnv();
+      const ghEnv = await gitHubCliEnv(storage);
       try {
         // A timeout or transport error may arrive after GitHub accepted the API
         // request. Mark the outcome ambiguous before invoking gh so rollback
@@ -822,7 +822,7 @@ export async function createProjectFromScratch(
       const gitUrl = await readOriginUrl(projectPath, run);
       if (!gitUrl) throw new Error("Could not verify the origin remote");
 
-      const gitCredentials = await gitHubGitCredentials(gitUrl);
+      const gitCredentials = await gitHubGitCredentials(storage, gitUrl);
       await runRemoteGit(
         "push",
         ["--set-upstream", "origin", "main"],

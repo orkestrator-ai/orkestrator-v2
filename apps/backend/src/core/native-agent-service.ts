@@ -553,6 +553,7 @@ export class NativeAgentService {
           onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
+          planUsage: options.planUsage,
         }),
       forgetGroup: (cacheKey) => this.launches.forgetActivityGroup(cacheKey),
     });
@@ -3715,6 +3716,7 @@ export class NativeAgentService {
         provider = createNativeAgentProvider(connection, {
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
+          planUsage: this.options.planUsage,
         });
         this.providerRegistry.cache(cacheKey, provider, identity);
       }
@@ -3756,7 +3758,9 @@ export class NativeAgentService {
           const cached = this.providerRegistry.cachedForConnection(key, identity);
           if (cached) provider = cached;
           else {
-            provider = createNativeAgentProvider(connection, {});
+            provider = createNativeAgentProvider(connection, {
+              planUsage: this.options.planUsage,
+            });
             this.providerRegistry.cache(key, provider, identity);
           }
         }

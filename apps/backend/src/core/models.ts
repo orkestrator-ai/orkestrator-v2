@@ -1127,6 +1127,8 @@ export interface AppConfig {
      * running, in hours. Absent means the Claude CLI's own 2-hour ceiling.
      */
     claudeBackgroundCommandLimitHours?: number;
+    /** Which agent logins may write session titles. Absent is `any-signed-in`. */
+    sessionTitleGeneration?: import("@orkestrator/protocol/session-title-generation").SessionTitleGenerationPolicy;
     terminalAppearance: {
       fontFamily: string;
       fontSize: number;

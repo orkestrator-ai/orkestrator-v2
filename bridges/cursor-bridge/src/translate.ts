@@ -806,7 +806,7 @@ function newestCompactionPart(
 function appendCompactionPart(
   state: SessionState,
   summary: string,
-  toolState: "pending" | "success" | "failure",
+  toolState: BridgeCompactionPart["toolState"],
   context: UpdateContext,
 ): BridgeCompactionPart {
   const message = currentAssistantMessage(state);

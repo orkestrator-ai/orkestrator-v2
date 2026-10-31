@@ -1270,22 +1270,29 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     >
                       <Button
                         variant={isGrid ? "ghost" : "outline"}
-                        size="sm"
+                        size="icon-sm"
                         className={cn(
-                          "gap-2",
                           autoMerge.enabled &&
                             "border-green-600 bg-green-600/15 text-white hover:bg-green-600/25 hover:text-white",
                         )}
                         onClick={() => void autoMerge.toggle()}
+                        aria-label="Auto-merge"
                         aria-pressed={autoMerge.enabled}
                         disabled={autoMerge.saving}
                       >
                         {autoMerge.saving ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
-                          <GitMerge className="h-4 w-4" />
+                          <span
+                            aria-hidden="true"
+                            className="relative inline-flex size-5 items-end justify-start"
+                          >
+                            <GitMerge className="h-4 w-4" />
+                            <span className="absolute top-0 right-0 text-[9px] leading-none font-semibold">
+                              A
+                            </span>
+                          </span>
                         )}
-                        <span className={cn(isGrid && "truncate text-xs")}>Auto-merge</span>
                       </Button>
                     </ToolbarTooltipTrigger>
                   )}

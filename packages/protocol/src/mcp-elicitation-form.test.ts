@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isSupportedClaudeForm, isValidClaudeFormContent } from "./claude-elicitation-schema.js";
+import { isSupportedMcpForm, isValidMcpFormContent } from "./mcp-elicitation-form";
 
 test("accepted form schemas enforce required fields, scalar types, enum and bounds", () => {
   const schema = {
@@ -12,9 +12,9 @@ test("accepted form schemas enforce required fields, scalar types, enum and boun
     },
     required: ["team", "count"],
   };
-  expect(isSupportedClaudeForm(schema)).toBe(true);
+  expect(isSupportedMcpForm(schema)).toBe(true);
   expect(
-    isValidClaudeFormContent(schema, { team: "core", count: 2, enabled: false, label: "界" }),
+    isValidMcpFormContent(schema, { team: "core", count: 2, enabled: false, label: "界" }),
   ).toBe(true);
   for (const content of [
     { team: "core" },
@@ -26,7 +26,7 @@ test("accepted form schemas enforce required fields, scalar types, enum and boun
     { team: "core", count: 2, enabled: "false" },
     { team: "core", count: 2, extra: true },
   ]) {
-    expect(isValidClaudeFormContent(schema, content)).toBe(false);
+    expect(isValidMcpFormContent(schema, content)).toBe(false);
   }
 });
 
@@ -38,6 +38,6 @@ test("unsupported arrays, objects, unions and unknown constraints are refused", 
     { type: "string", pattern: "a+" },
     { type: "number", enum: [1, 2] },
   ]) {
-    expect(isSupportedClaudeForm({ type: "object", properties: { value: field } })).toBe(false);
+    expect(isSupportedMcpForm({ type: "object", properties: { value: field } })).toBe(false);
   }
 });

@@ -653,6 +653,8 @@ export async function listNativeAgentResumableSessions(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
+  /** Also lists conversations taken out of the list, flagged `archived`. */
+  includeArchived?: boolean;
 }): Promise<NativeAgentResumeEntry[]> {
   return invoke("list_native_agent_resumable_sessions", input);
 }

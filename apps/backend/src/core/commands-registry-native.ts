@@ -405,6 +405,7 @@ export function registerNativeAgentCommands(
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      ...(args.includeArchived === true ? { includeArchived: true } : {}),
     });
   });
 

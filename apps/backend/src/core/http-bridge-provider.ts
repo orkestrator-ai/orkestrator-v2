@@ -1087,8 +1087,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
-  listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    return readBridgeResumableSessions(this.agent, this.connection, this.fetchImpl);
+  listResumableSessions(options?: {
+    includeArchived?: boolean;
+  }): Promise<NativeAgentResumeEntry[]> {
+    return readBridgeResumableSessions(this.agent, this.connection, this.fetchImpl, options);
   }
 
   slashCommands(sessionId?: string) {
@@ -1260,7 +1262,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
-    if (this.agent === "cursor" || this.agent === "grok") {
+    if (this.agent === "cursor") {
       throw new PromptRejectedError(`${this.agent} does not support session forks`);
     }
     const response = await bridgeFetch(

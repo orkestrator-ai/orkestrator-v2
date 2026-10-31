@@ -102,3 +102,30 @@ No projection implementation, assertion, or timeout changed.
 After `mise run download:codex` installed the pinned 0.166.0 binary in the
 ignored checkout-local `binaries/` directory, the exact isolated command above
 passed both complete owners (10 tests, 5.1 s, exit 0).
+
+## Capacity retry review (1010) recurrence — 2026-10-31
+
+- **Original command:** `mise run test` on
+  `todo-1010-capacity-retry-follow-ups-6057edc0cb1d` at `e81b746e9`, Bun 1.4.4
+  on the shared macOS host. Workspace/root/bridges/protocol reserved 6/1/2/1
+  worker slots; backend used two Bun workers. Admission waited about 411 s
+  behind other worktrees' exclusive leases.
+- **Failure:** the line-140 running-card assertion failed after 838.54 ms.
+  The snapshot still contained a fallback `lint_check` card with empty actions,
+  and another child's name/identity had not finished hydrating. The wait checks
+  for three child IDs and the rejected spawn before checking the full snapshot;
+  it does not require names or actions to have finished hydrating. This matches
+  the earlier partial-hydration symptom; scheduling is a hypothesis, not an
+  established root cause.
+- **Suite counts:** backend 11,719 passed, 103 skipped, 1 failed across 11,823
+  tests in 804 files. Twelve of thirteen workspace tasks passed. Root, bridge
+  and Codex protocol groups all passed; the aggregate remained failed.
+- **Complete unchanged owner:** `mise run test:logged -- --name
+  codex-subagent-cards -- bun test --cwd apps/backend
+  ./tests/codex-subagent-cards.test.ts --parallel=1` passed (one test, 2.9 s
+  logged).
+- **Evidence:**
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.QtSGjZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** confirmed intermittent recurrence. This review changes the
+  OpenCode retry and ACP persistence/prompt paths; it does not change the Codex
+  subagent fixture, implementation, assertion, timeout or skip.

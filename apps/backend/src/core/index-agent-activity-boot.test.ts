@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { BuildPipelineActivity } from "./build-pipeline-activity.js";
 import { OrkestratorBackend } from "./index.js";
 import type { ClientEnvironment, Environment } from "./models.js";
 import { readStoredValue, seedStore, storageDatabase } from "./storage-test-support.js";
@@ -55,6 +56,40 @@ async function withBackend<T>(
 }
 
 describe("OrkestratorBackend agent activity boot reset", () => {
+  test("starts pipeline activity recovery at boot and stops the observer at shutdown", async () => {
+    const stuckAt = new Date(10_000).toISOString();
+    await withBackend(
+      [
+        {
+          ...baseEnvironment,
+          id: "e1",
+          agentActivityState: "working",
+          agentActivitySources: { "build-pipeline": { state: "working", updatedAt: stuckAt } },
+        },
+      ],
+      async (backend, dataDir) => {
+        const observer = (backend as unknown as { buildPipelineActivity: BuildPipelineActivity })
+          .buildPipelineActivity;
+        const started = spyOn(observer, "start");
+        const stopped = spyOn(observer, "stop");
+        try {
+          await backend.init();
+          await observer.settled();
+          expect(started).toHaveBeenCalledTimes(1);
+          expect(readStoredValue<Environment[]>(dataDir, "environments.json")![0]).toMatchObject({
+            agentActivityState: "idle",
+            agentActivitySources: { "build-pipeline": { state: "idle" } },
+          });
+          await backend.shutdown();
+          expect(stopped).toHaveBeenCalledTimes(1);
+        } finally {
+          started.mockRestore();
+          stopped.mockRestore();
+        }
+      },
+    );
+  });
+
   test("drops renderer activity left behind by a process that is gone", async () => {
     const stuckAt = new Date(10_000).toISOString();
     await withBackend(

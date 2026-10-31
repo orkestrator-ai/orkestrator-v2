@@ -182,6 +182,7 @@ test.describe(`goal loop: ${platform}`, () => {
   test.afterAll(() => writeSummary());
 
   test("every scenario", async ({ page }) => {
+    test.skip(process.env.ORKESTRATOR_AGENT_TEST_GOAL_ONLY === "browser", "browser case only");
     page.setDefaultTimeout(15_000);
     const { invoke, environment, workspace, model, container } = await prepare(page);
     const scenarios = record.scenarios as Record<string, unknown>;
@@ -405,6 +406,7 @@ test.describe(`goal loop: ${platform}`, () => {
 
     // A reload mid-goal renders from the snapshot.
     await page.reload();
+    await open(environment.name);
     await expect(page.getByTestId("goal-pill")).toBeVisible();
 
     // Away from the tab, the loop keeps going with nothing mounted.

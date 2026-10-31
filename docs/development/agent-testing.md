@@ -1155,7 +1155,7 @@ session writes.
 
 ### Live goal suite
 
-`mise run test:agent:goals [--credential-source <platform>]… [--environment local|container]`
+`mise run test:agent:goals [--credential-source <platform>]… [--environment local|container] [--browser-only]`
 gives each platform a disposable profile holding that platform's host credential
 alone, runs `e2e/agent-testing/goals-live.spec.ts`, then stops and resets it. It
 drives the goal loop through every scenario and asserts on the durable goal record

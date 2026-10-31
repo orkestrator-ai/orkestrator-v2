@@ -6,6 +6,55 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { StorageService } from "./storage.js";
 
 describe("StorageService control job tabs", () => {
+  test("keeps a job's completion action on its tab across a later session bind", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-control-job-marker-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+
+    try {
+      await storage.ensureNativeAgentJobTab({
+        environmentId: "env-1",
+        tabId: "agent-job-resolve",
+        agent: "codex",
+        completionAction: "refresh-pr-after-agent-completion",
+      });
+      const bound = await storage.ensureNativeAgentJobTab({
+        environmentId: "env-1",
+        tabId: "agent-job-resolve",
+        agent: "codex",
+        providerSessionId: "provider-session-1",
+      });
+
+      expect(bound.root).toMatchObject({
+        tabs: [
+          {
+            id: "agent-job-resolve",
+            jobCompletionAction: "refresh-pr-after-agent-completion",
+            nativeAgentData: { sessionId: "provider-session-1" },
+          },
+        ],
+      });
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("retries converge on one durable tab and bind the provider session", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "ork-control-job-tab-"));
     const storage = new StorageService(dataDir);

@@ -662,6 +662,9 @@ export interface PersistedNativeAgentPendingSteer {
   createdAt: string;
 }
 
+/** What a backend-owned native job does when its agent finishes (Resolve's PR refresh). */
+export type NativeAgentJobCompletionAction = "refresh-pr-after-agent-completion";
+
 /**
  * Durable mapping between a logical UI tab and the provider session that owns
  * its transcript. The backend creates this mapping atomically, so any number of

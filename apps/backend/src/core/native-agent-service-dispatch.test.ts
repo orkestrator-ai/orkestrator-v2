@@ -1758,6 +1758,139 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("a resend to a Resolve tab already seen idle still refreshes the PR", async () => {
+    const { provider } = createProviderStub("codex", {
+      activity: async () => "idle",
+    });
+    const invoke = mock(async () => undefined) as unknown as Invoke;
+
+    await withService(
+      {
+        prefix: "orkestrator-native-pr-refresh-resend-",
+        environment: {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+          prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+        },
+        provider: async () => provider,
+        invoke,
+      },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "codex", "resolve"),
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: "resolve",
+          providerSessionId: "provider-resolve",
+        });
+        // The first observation of an armed idle session is its own completion.
+        await service.reconcileAgentActivity();
+        await service.reconcileAgentActivity();
+        (invoke as unknown as ReturnType<typeof mock>).mockClear();
+
+        await expect(
+          service.dispatchIntent({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "resolve",
+            prompt: "Resolve conflicts",
+            requestId: "resolve-2",
+          }),
+        ).resolves.toMatchObject({ outcome: "accepted" });
+        await service.reconcileAgentActivity();
+
+        expect(invoke).toHaveBeenCalledWith("pr_monitor_agent_turn_completed", {
+          environmentId: "env-1",
+        });
+      },
+    );
+  });
+
+  describe("promptReadiness", () => {
+    const input = {
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:tab",
+    } as const;
+    const key = nativeAgentSessionStorageKey("env-1", "codex", "env-env-1:tab");
+
+    async function withSession(
+      status: ProviderStatus,
+      run: (harness: {
+        storage: Awaited<ReturnType<typeof createStorage>>;
+        service: NativeAgentService;
+      }) => Promise<void>,
+    ): Promise<void> {
+      const { provider } = createProviderStub("codex", { status: async () => status });
+      await withService(
+        { prefix: "orkestrator-native-prompt-readiness-", provider: async () => provider },
+        async ({ storage, service }) => {
+          await storage.adoptNativeAgentSession({
+            key,
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: input.logicalSessionKey,
+            providerSessionId: "provider-tab",
+          });
+          await run({ storage, service });
+        },
+      );
+    }
+
+    test("reads an idle session as idle and a running or blocked one as busy", async () => {
+      await withSession("idle", async ({ service }) => {
+        expect(await service.promptReadiness(input)).toBe("idle");
+      });
+      await withSession("running", async ({ service }) => {
+        expect(await service.promptReadiness(input)).toBe("busy");
+      });
+      await withSession("blocked", async ({ service }) => {
+        expect(await service.promptReadiness(input)).toBe("busy");
+      });
+    });
+
+    test("an idle session with queued prompts is busy, so a resend cannot overtake them", async () => {
+      await withSession("idle", async ({ storage, service }) => {
+        await storage.savePromptQueue(`codex\u0000${input.logicalSessionKey}`, "env-1", [
+          { id: "row-1", requestId: "request-1", text: "Earlier prompt" },
+        ]);
+        expect(await service.promptReadiness(input)).toBe("busy");
+      });
+    });
+
+    test("a failed session, a missing one or a parked queue is unavailable", async () => {
+      await withSession("error", async ({ service }) => {
+        expect(await service.promptReadiness(input)).toBe("unavailable");
+      });
+      await withSession("idle", async ({ service }) => {
+        expect(
+          await service.promptReadiness({ ...input, logicalSessionKey: "env-env-1:gone" }),
+        ).toBe("unavailable");
+      });
+      await withSession("idle", async ({ storage, service }) => {
+        const queueKey = `codex\u0000${input.logicalSessionKey}`;
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "row-1", requestId: "request-1", text: "Earlier prompt" },
+        ]);
+        await storage.reservePromptQueueHeadForDispatch(queueKey);
+        await storage.failPromptQueueDispatch(queueKey, "request-1", "refused");
+        expect(await service.promptReadiness(input)).toBe("unavailable");
+      });
+    });
+
+    test("a tab being closed is unavailable", async () => {
+      await withSession("idle", async ({ storage, service }) => {
+        await storage.updateEnvironment("env-1", {
+          tabTeardownIntents: {
+            tab: { tabId: "tab", kind: "codex-native", createdAt: new Date(0).toISOString() },
+          },
+        } as never);
+        expect(await service.promptReadiness(input)).toBe("unavailable");
+      });
+    });
+  });
+
   test("two supervisors drain a queued prompt through one provider dispatch", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-service-"));
     const firstStorage = await createStorage(dataDir);

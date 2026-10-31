@@ -1614,6 +1614,41 @@ export class NativeAgentService {
   async dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {
     return this.dispatchIntentInternal(input, false);
   }
+
+  /**
+   * Whether an existing tab's session can take another prompt, for a caller
+   * choosing between that tab and a new one. `busy` means the prompt has to wait
+   * in the durable queue. `unavailable` means it would not run there: no session,
+   * a tab being closed, a parked dispatch or queue, or a failed provider session
+   * (the queue parks a prompt behind a terminal error rather than sending it).
+   * Never creates a session; a read that fails answers `unavailable`.
+   */
+  async promptReadiness(
+    input: NativeAgentProjectionInput,
+  ): Promise<"idle" | "busy" | "unavailable"> {
+    try {
+      const environment = await this.storage.getEnvironment(input.environmentId);
+      if (hasPendingTabTeardown(environment, input.logicalSessionKey)) return "unavailable";
+      const resolved = await this.resolveProjectionSession(input);
+      if (!resolved) return "unavailable";
+      const { session, provider } = resolved;
+      if (session.pendingDispatch || session.pendingSteer) return "unavailable";
+      const queue = await this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`);
+      if (queue?.dispatchError) return "unavailable";
+      const { status } = await readProviderStatus(provider, session.providerSessionId);
+      if (status === "running" || status === "blocked") return "busy";
+      if (status !== "idle") return "unavailable";
+      // Sending past a backlog would overtake prompts the user queued first.
+      return queue &&
+        (queue.outstandingClaim !== undefined ||
+          queue.inFlight !== undefined ||
+          queue.messages.length > 0)
+        ? "busy"
+        : "idle";
+    } catch {
+      return "unavailable";
+    }
+  }
   private async dispatchIntentInternal(
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,

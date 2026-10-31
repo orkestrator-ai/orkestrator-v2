@@ -20,6 +20,7 @@ import {
   selectedTabIsSetupHandoffSource,
   suppressLateSetupTabAdditions,
 } from "./storage-shared.js";
+import type { NativeAgentJobCompletionAction } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
@@ -533,6 +534,8 @@ export class SessionsRepository {
     title?: string;
     isReviewTab?: boolean;
     activate?: boolean;
+    /** Durable record of the job this tab runs; a user-editable title cannot identify it. */
+    completionAction?: NativeAgentJobCompletionAction;
   }): Promise<PersistedPaneLayout> {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.repos.projects.getEnvironment(input.environmentId);
@@ -593,6 +596,7 @@ export class SessionsRepository {
         nativeAgentData,
         ...(input.title?.trim() ? { displayTitle: input.title.trim() } : {}),
         ...(input.isReviewTab === true ? { isReviewTab: true } : {}),
+        ...(input.completionAction ? { jobCompletionAction: input.completionAction } : {}),
       };
       if (existingTab) Object.assign(existingTab, tab);
       else target.tabs.push(tab);

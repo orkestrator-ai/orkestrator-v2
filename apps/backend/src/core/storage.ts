@@ -46,6 +46,7 @@ import type {
 import type {
   EnvironmentUnreadReason,
   IncompleteTurnNotice,
+  NativeAgentJobCompletionAction,
   NativeAgentSessionBackendTitle,
 } from "./models.js";
 import type { NativeAgentDisplayTailDeletion } from "./native-agent-display-tail-store.js";
@@ -721,6 +722,7 @@ export class StorageService {
     title?: string;
     isReviewTab?: boolean;
     activate?: boolean;
+    completionAction?: NativeAgentJobCompletionAction;
   }): Promise<PersistedPaneLayout> {
     return this.repos.sessions.ensureNativeAgentJobTab(input);
   }

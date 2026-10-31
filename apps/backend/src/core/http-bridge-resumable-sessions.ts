@@ -33,10 +33,17 @@ export async function readBridgeResumableSessions(
   if (!payload || !Array.isArray(payload.sessions)) {
     throw new ProviderUnavailableError(`${agent} returned a malformed session list`);
   }
-  return payload.sessions.slice(0, 512).flatMap((candidate) => {
+  let liveCount = 0;
+  let archivedCount = 0;
+  return payload.sessions.flatMap((candidate) => {
     const session = asRecord(candidate);
     const id = nonEmptyString(session?.id);
     if (!id) return [];
+    // Independent quotas keep archived conversations discoverable when the
+    // live list fills its cap. The decoded body is already byte bounded.
+    if (session?.archived === true) {
+      if (archivedCount++ >= 512) return [];
+    } else if (liveCount++ >= 512) return [];
     const createdAt = nonEmptyString(session?.createdAt);
     const updatedAt = nonEmptyString(session?.updatedAt) ?? nonEmptyString(session?.lastActivity);
     const status =

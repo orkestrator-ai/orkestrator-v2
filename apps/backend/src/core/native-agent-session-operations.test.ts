@@ -264,6 +264,30 @@ describe("NativeAgentSessionOperations", () => {
       expect(entries.map((entry) => entry.sessionId)).toEqual(["new", "old", "undated"]);
     });
 
+    test.each([512, 513])(
+      "reserves archived capacity alongside %s live entries",
+      async (liveCount) => {
+        const { operations } = harness({
+          provider: {
+            listResumableSessions: async () => [
+              ...Array.from({ length: liveCount }, (_, index) => ({ sessionId: `live-${index}` })),
+              ...Array.from({ length: 513 }, (_, index) => ({
+                sessionId: `archived-${index}`,
+                archived: true,
+              })),
+            ],
+          },
+        });
+        const entries = await operations.listProjectionResumableSessions({
+          ...identity,
+          includeArchived: true,
+        });
+        expect(entries.filter((entry) => !entry.archived)).toHaveLength(512);
+        expect(entries.filter((entry) => entry.archived)).toHaveLength(512);
+        expect(entries[512]).toMatchObject({ sessionId: "archived-0", archived: true });
+      },
+    );
+
     test("asks for archived rows only where they exist, and lists them last", async () => {
       const asked: unknown[] = [];
       const listResumableSessions = async (options?: unknown) => {

@@ -912,9 +912,16 @@ export async function setResumableAgentArchived(
   archived: boolean,
 ): Promise<"archived" | "unarchived" | "in-use" | "failed"> {
   if (agentId.startsWith("bc-")) return "failed";
-  if (archived && [...sessions.values()].some((state) => state.agentId === agentId)) {
+  if (
+    agentArchiveOperations.has(agentId) ||
+    sessionResumesByAgentId.has(agentId) ||
+    (archived && [...sessions.values()].some((state) => state.agentId === agentId))
+  ) {
     return "in-use";
   }
+  // Reserve synchronously: adoption and other archive mutations refuse while
+  // the SDK call is in flight, before either side can change the agent.
+  agentArchiveOperations.add(agentId);
   try {
     const api = cursorAgentApi();
     const options = { cwd: workingDirectory };
@@ -925,6 +932,8 @@ export async function setResumableAgentArchived(
       error instanceof Error ? error.message : error,
     );
     return "failed";
+  } finally {
+    agentArchiveOperations.delete(agentId);
   }
   return archived ? "archived" : "unarchived";
 }
@@ -969,6 +978,11 @@ export async function resumeSession(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
   agentMcp?: AgentMcpConnection,
 ): Promise<SessionState> {
+  if (agentArchiveOperations.has(agentId)) {
+    throw new SessionConflictError(
+      "This Cursor conversation is being archived or restored; retry once it completes",
+    );
+  }
   const requestedPolicyKey = resumePolicyKey(policy);
   const requestedMcpKey = mcpConnectionKey(agentMcp);
   const existing = Array.from(sessions.values()).find((state) => state.agentId === agentId);
@@ -1035,6 +1049,8 @@ export async function resumeSession(
     }
   }
 }
+
+const agentArchiveOperations = new Set<string>();
 
 const sessionResumesByAgentId = new Map<
   string,

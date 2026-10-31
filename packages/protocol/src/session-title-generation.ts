@@ -23,5 +23,6 @@ export function isSessionTitleGenerationPolicy(
 }
 
 export function resolveSessionTitleGenerationPolicy(value: unknown): SessionTitleGenerationPolicy {
-  return isSessionTitleGenerationPolicy(value) ? value : DEFAULT_SESSION_TITLE_GENERATION_POLICY;
+  if (value === undefined) return DEFAULT_SESSION_TITLE_GENERATION_POLICY;
+  return isSessionTitleGenerationPolicy(value) ? value : "off";
 }

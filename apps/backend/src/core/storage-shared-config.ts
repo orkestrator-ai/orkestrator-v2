@@ -49,7 +49,10 @@ import {
   MAX_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
   MIN_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
 } from "@orkestrator/protocol/claude-background-commands";
-import { isSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
+import {
+  isSessionTitleGenerationPolicy,
+  resolveSessionTitleGenerationPolicy,
+} from "@orkestrator/protocol/session-title-generation";
 import {
   LEGACY_GLOBAL_AGENT_KEYS,
   LEGACY_REPOSITORY_AGENT_KEYS,
@@ -193,9 +196,10 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   )
     ? global.claudeBackgroundCommandLimitHours
     : undefined;
-  const sessionTitleGeneration = isSessionTitleGenerationPolicy(global.sessionTitleGeneration)
-    ? global.sessionTitleGeneration
-    : undefined;
+  const sessionTitleGeneration =
+    global.sessionTitleGeneration === undefined
+      ? undefined
+      : resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration);
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
   const terminalHistoryRetention = normalizeTerminalHistoryRetention({
     enabled: global.terminalHistoryEnabled,

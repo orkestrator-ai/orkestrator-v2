@@ -88,6 +88,7 @@ export function NativeResumeSessionDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestGenerationRef = useRef(0);
+  const choiceGenerationRef = useRef(0);
 
   // Latest-props refs, so the fetch below can be keyed on `open` alone.
   const fetchSessionsRef = useRef(fetchSessions);
@@ -138,6 +139,7 @@ export function NativeResumeSessionDialog({
       // Ignore a request started for a previous open cycle or component
       // instance. It may still settle, but it no longer owns state.
       requestGenerationRef.current += 1;
+      choiceGenerationRef.current += 1;
     };
   }, [open]);
 
@@ -218,12 +220,20 @@ export function NativeResumeSessionDialog({
 
   /** The provider refuses to continue an archived conversation, so restore it first. */
   const choose = async (session: ResumableSession) => {
+    const choiceGeneration = ++choiceGenerationRef.current;
     if (session.archived && !(await restore(session))) return;
+    if (choiceGeneration !== choiceGenerationRef.current) return;
     onResume(session.id);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) choiceGenerationRef.current += 1;
+        onOpenChange(nextOpen);
+      }}
+    >
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>Resume Session</DialogTitle>

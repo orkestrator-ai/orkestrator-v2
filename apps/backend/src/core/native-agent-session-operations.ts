@@ -272,15 +272,17 @@ export class NativeAgentSessionOperations {
       const parsed = raw ? Date.parse(raw) : Number.NaN;
       return Number.isNaN(parsed) ? 0 : parsed;
     };
+    let liveCount = 0;
+    let archivedCount = 0;
     return entries
       .filter((entry) => entry.sessionId !== currentResumableSessionId)
       .sort(
-        // Archived rows go last, so they can never crowd a live one past the cap.
+        // Each category has its own quota, with archived rows shown last.
         (left, right) =>
           Number(left.archived === true) - Number(right.archived === true) ||
           activityAt(right) - activityAt(left),
       )
-      .slice(0, 512);
+      .filter((entry) => (entry.archived === true ? archivedCount++ < 512 : liveCount++ < 512));
   }
 
   async resumeProjectionSession(

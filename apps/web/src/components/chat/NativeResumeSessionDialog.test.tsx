@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   NativeResumeSessionDialog,
   shortResumeSessionId,
@@ -167,7 +167,7 @@ describe("NativeResumeSessionDialog", () => {
     });
 
     test("a refused restore does not resume and keeps the row archived", async () => {
-      const onResume = mock(() => {});
+      const onResume = mock((_sessionId: string) => {});
       const onArchive = mock(async () => {
         throw new Error("Cursor could not unarchive this conversation");
       });
@@ -184,7 +184,7 @@ describe("NativeResumeSessionDialog", () => {
     });
 
     test("the restore button puts a row back without resuming it", async () => {
-      const onResume = mock(() => {});
+      const onResume = mock((_sessionId: string) => {});
       const onArchive = mock(async (_id: string, _archived: boolean) => undefined);
       renderDialog(rows, { onArchive, onResume });
       await waitFor(() => expect(screen.getByText("Live one")).toBeTruthy());
@@ -247,6 +247,89 @@ describe("NativeResumeSessionDialog", () => {
     );
     expect(screen.getByText("Alpha")).toBeTruthy();
   });
+
+  test.each(["select", "dismiss", "close", "reopen", "unmount"] as const)(
+    "ignores a delayed archived choice after %s",
+    async (action) => {
+      const pending = deferred<void>();
+      const onArchive = mock(() => pending.promise);
+      const onResume = mock((_sessionId: string) => {});
+      const onOpenChange = mock(() => {});
+      const props = {
+        open: true,
+        agentLabel: "Test",
+        onOpenChange,
+        onResume,
+        onArchive,
+        fetchSessions: async () => [
+          { id: "kept", title: "Archived choice", archived: true },
+          { id: "live", title: "Live choice" },
+        ],
+      };
+      const { rerender, unmount } = render(<NativeResumeSessionDialog {...props} />);
+      fireEvent.click(await screen.findByLabelText("Show archived (1)"));
+      fireEvent.click(await screen.findByText("Archived choice"));
+      expect(onArchive).toHaveBeenCalledWith("kept", false);
+      expect(onResume).not.toHaveBeenCalled();
+
+      if (action === "select") fireEvent.click(screen.getByText("Live choice"));
+      // Exercise the dialog's callback before the parent updates its open prop.
+      if (action === "dismiss") {
+        fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+      }
+      if (action === "close" || action === "reopen") {
+        rerender(<NativeResumeSessionDialog {...props} open={false} />);
+        if (action === "reopen") {
+          rerender(<NativeResumeSessionDialog {...props} />);
+          await screen.findByText("Live choice");
+        }
+      }
+      if (action === "unmount") unmount();
+      await act(async () => {
+        pending.resolve();
+        await pending.promise;
+      });
+      expect(onResume.mock.calls).toEqual(action === "select" ? [["live"]] : []);
+    },
+  );
+
+  test.each([512, 513])(
+    "keeps archived history restorable after reopening with %s live rows",
+    async (liveCount) => {
+      let archived = false;
+      const props = {
+        open: true,
+        agentLabel: "Test",
+        onOpenChange: () => {},
+        onResume: mock(() => {}),
+        onArchive: mock(async (_id: string, value: boolean) => {
+          archived = value;
+        }),
+        fetchSessions: mock(async () => [
+          ...Array.from({ length: liveCount }, (_, index) => ({
+            id: `live-${index}`,
+            title: `Live ${index}`,
+          })),
+          { id: "kept", title: "Kept history", archived },
+        ]),
+      };
+      const { rerender } = render(<NativeResumeSessionDialog {...props} />);
+      fireEvent.click(
+        within(
+          (await screen.findByText("Kept history")).closest("div.group") as HTMLElement,
+        ).getByRole("button", { name: "Remove from list" }),
+      );
+      await waitFor(() => expect(archived).toBe(true));
+      rerender(<NativeResumeSessionDialog {...props} open={false} />);
+      rerender(<NativeResumeSessionDialog {...props} />);
+      fireEvent.click(await screen.findByLabelText("Show archived (1)"));
+      fireEvent.click(await screen.findByText("Kept history"));
+      await waitFor(() => expect(props.onResume).toHaveBeenCalledWith("kept"));
+      expect(props.onArchive).toHaveBeenLastCalledWith("kept", false);
+      expect(props.fetchSessions).toHaveBeenCalledTimes(2);
+    },
+  );
 
   test("resumes the clicked session by id", async () => {
     const { onResume } = renderDialog([{ id: "session-abc", title: "Pick me" }]);

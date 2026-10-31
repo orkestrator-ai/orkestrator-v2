@@ -54,6 +54,29 @@ describe("HTTP bridge resume-list archive", () => {
     ]);
   });
 
+  test.each([512, 513])(
+    "retains independent live and archive quotas with %s live rows",
+    async (liveCount) => {
+      const { provider } = httpProvider(
+        () =>
+          Response.json({
+            sessions: [
+              ...Array.from({ length: liveCount }, (_, index) => ({ id: `live-${index}` })),
+              ...Array.from({ length: 513 }, (_, index) => ({
+                id: `archived-${index}`,
+                archived: true,
+              })),
+            ],
+          }),
+        codexConnection,
+      );
+      const entries = await provider.listResumableSessions!({ includeArchived: true });
+      expect(entries.filter((entry) => !entry.archived)).toHaveLength(512);
+      expect(entries.filter((entry) => entry.archived)).toHaveLength(512);
+      expect(entries[512]).toEqual({ sessionId: "archived-0", archived: true });
+    },
+  );
+
   test("surfaces the bridge's refusal", async () => {
     const { provider } = httpProvider(
       () => Response.json({ error: "This conversation is open in a tab" }, { status: 409 }),

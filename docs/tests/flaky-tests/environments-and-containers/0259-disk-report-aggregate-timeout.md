@@ -326,3 +326,19 @@ mise run test:logged -- --name disk-report-preparation-owner -- bun test ./tests
 No implementation, assertion, timeout or skip changed. The exact repository
 command was rerun through `test:logged` as `review-default-suite`; its result
 is recorded in agent-engines todo 1020.
+
+## Session history review fixes — 2026-10-31
+
+- **Original command:** `mise run test:logged -- --name review-full-suite -- mise run test`;
+  the root group used one isolated Bun worker alongside workspace, bridge and
+  component-browser validation.
+- **Failure:** the isolated-checkout report case exceeded five seconds
+  (5,031.34 ms). Evidence: `orkestrator-test-run.oNZxqS/root-and-agent-support-tests.log`
+  under the host temporary directory, compressed at aggregate finalization.
+- **Complete unchanged owner:** `mise run test:logged -- --name review-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  also timed out at 5,074.09 ms: nine passed, one failed and one between-test
+  error (`report.status` was `null`), 7.4 seconds overall. Failure artifact:
+  `orkestrator-test-run.kYmOyu` under the host temporary directory.
+- **Assessment:** this run has no isolated pass, so it is not newly classified
+  as flaky. Earlier confirmed observations remain unchanged. No disk-report
+  implementation, assertion or deadline was changed for the session-history work.

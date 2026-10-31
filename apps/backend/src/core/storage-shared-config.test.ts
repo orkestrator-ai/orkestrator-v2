@@ -751,7 +751,7 @@ describe("session title generation config storage", () => {
     });
   });
 
-  test("drops an unknown persisted policy", async () => {
+  test("disables generation for an unknown persisted policy", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const persisted = structuredClone(defaultConfig()) as unknown as Record<string, unknown>;
       (persisted.global as Record<string, unknown>).sessionTitleGeneration = "everywhere";
@@ -760,7 +760,7 @@ describe("session title generation config storage", () => {
         `${JSON.stringify(persisted)}\n`,
         "utf8",
       );
-      expect((await storage.loadConfig()).global.sessionTitleGeneration).toBeUndefined();
+      expect((await storage.loadConfig()).global.sessionTitleGeneration).toBe("off");
     });
   });
 });

@@ -4,6 +4,8 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentAccountsSnapshot } from "@orkestrator/protocol/agent-accounts";
+import { defaultConfig } from "./storage.js";
+import { withTemporaryStorage } from "./storage-test-support.js";
 import type { CommandContext } from "./commands-context.js";
 import * as accounts from "./agent-accounts.js";
 import * as active from "./agent-accounts-active.js";
@@ -38,6 +40,29 @@ describe("production session title service", () => {
   ] as const)("honors production generation gates (%j)", (env, enabled) => {
     expect(sessionTitleGenerationEnabled(env)).toBe(enabled);
   });
+
+  test.each(["newer-policy", null, 42, ""])(
+    "unknown stored policy %j runs no strategy",
+    async (invalid) => {
+      await withTemporaryStorage(async (storage, dataDir) => {
+        const persisted = structuredClone(defaultConfig());
+        (persisted.global as unknown as Record<string, unknown>).sessionTitleGeneration = invalid;
+        await writeFile(join(dataDir, "config.json"), JSON.stringify(persisted));
+        expect((await storage.loadConfig()).global.sessionTitleGeneration).toBe("off");
+        const accountRead = spyOn(accounts, "listAgentAccounts");
+        restores.push(() => accountRead.mockRestore());
+        const service = createSessionTitleService({ storage } as CommandContext);
+        try {
+          await expect(
+            service.generate({ agent: "pi", source: "Private fixture" }),
+          ).resolves.toBeNull();
+          expect(accountRead).not.toHaveBeenCalled();
+        } finally {
+          await service.shutdown();
+        }
+      });
+    },
+  );
 
   test.each(["codex", "claude"] as const)(
     "selects the signed-in active %s account and managed binary",

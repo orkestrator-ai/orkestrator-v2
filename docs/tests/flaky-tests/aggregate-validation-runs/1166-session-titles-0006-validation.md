@@ -59,3 +59,76 @@ nested-submodule cases already have cases in their groups. The second group
 fails on `origin/main` too, alone, on this host, matching
 [1101](1101-codex-typed-prompts-0211-validation.md); none is caused by this
 branch.
+
+## Structured review fixes — 2026-10-31
+
+The six findings and coverage gaps are addressed: delayed picker restores are
+invalidated by a newer choice or close cycle, Cursor archive/adoption admission
+is mutually exclusive, live and archived history have independent 512-row
+quotas, Codex responses have independent 900 KiB category budgets and 512-character
+titles, invalid stored title policies become `off`, and the optional pinned
+Codex parser probe skips without its executable.
+
+Targeted backend, web, Cursor, Codex and protocol regressions passed. All five
+affected packages passed typechecking; changed TypeScript files passed formatting
+and lint. The real pinned Codex parser and offline loopback title runner passed
+without a model call, after downloading the pinned executable. The initial
+backend-focused run also passed before that download.
+
+`mise run test:logged -- --name review-full-suite -- mise run test` exited 1 after
+871.7 seconds. Backend passed (11,712 passed, 103 skipped), along with desktop,
+protocol, web-public, CLI, toolchain and protocol-lockfile checks. Web had 10,879
+passed, ten skipped and two failures; root had 3,310 passed and one failure.
+
+| Owner | Observation and disposition |
+| --- | --- |
+| `bridges/codex-bridge/src/app-server-runtime-sessions.test.ts` | Four explicit-title cases caught an initial 256-character listing truncation. Fixed the bound to the established 512-character contract; complete owning file passed with the archive and tail owners (`review-codex-size-and-titles`, 5.1 s). |
+| `bridges/codex-bridge/src/app-server-runtime-archive.test.ts` | The initial stress fixture exceeded five seconds under aggregate load. Reduced its input from 20,000 to 1,024 characters per title while retaining thousands of rows and added a separate worst-case JSON-escaping budget check. Both owner and combined regression run passed. |
+| `bridges/codex-bridge/src/runtime-env.test.ts` | Known 15-second timeout; unchanged owner passed alone (0.6 s), tracked in case 0093. |
+| `tests/unit/disk-report.test.ts` | Known five-second timeout; unchanged owner still timed out (nine passed, one failed, one error), recorded in case 0259 without claiming a new isolated pass. |
+| `apps/web/src/components/settings/machine-sign-in-routing.test.tsx` | Unchanged owner passed alone (2.6 s), case 1321. |
+| `apps/web/src/components/federation/node-action-requests.test.tsx` | Unchanged owner passed alone (7.3 s), recurrence recorded in case 1313. |
+| `apps/backend/tests/container-readiness.test.ts` | Preparation's early-probe count failure passed in the unchanged complete owner (6.9 s), case 1461. |
+
+Evidence is retained in `orkestrator-test-run.oNZxqS` (aggregate groups) and
+`orkestrator-test-run.6PffaS` (wrapper), under the host temporary directory.
+
+An additional slow-tier diagnostic guard (`review-root-guards`) failed on 26
+pre-existing files with unsafe DOM absence assertions. A scanner comparison
+against `HEAD` verified that neither changed web test adds an unsafe assertion
+(`review-changed-diagnostic-audit`, exit 0). The flake-index owner passed.
+This audit failure is separate from the default test tier.
+
+The corrected complete Codex bridge package then passed:
+`mise run test:logged -- --name review-codex-package -- sh -c 'cd bridges/codex-bridge && bun run test:bridge'`
+(exit 0, 97.5 seconds).
+
+`mise run test:logged -- --name review-browser -- mise run test:browser` completed
+its component suite with 983 passed, 106 skipped and 11 failures in 20.4 minutes;
+the public-site step did not execute after that failure. All four native resume
+picker cases passed (two scenarios at both viewport sizes).
+
+The unchanged browser owners and picker were rerun with one worker:
+
+```sh
+mise run test:logged -- --name review-browser-failed-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/NativeResumeSession.spec.ts e2e/ClaudeInteractions.spec.ts e2e/DesignCanvas.spec.ts e2e/EnvironmentSettingsDrawer.spec.ts e2e/GlobalSettings.spec.ts e2e/PipelineFlow.spec.ts e2e/AgentLaunchDialog.spec.ts e2e/StreamingTranscript.spec.ts e2e/ToolGroupFold.spec.ts --workers=1
+```
+
+Result: 147 passed, three skipped and two failed in 5.9 minutes. Both remaining
+failures were `selects a native branch suggestion with the keyboard and confirms`
+in `AgentLaunchDialog.spec.ts`, at mobile and desktop viewports. That owner
+retains its earlier native branch-picker failure (see cases 0822, 0958, 1251 and
+1323); it is not newly classified as flaky. Claude interaction reload, design
+canvas, environment drawer, global settings, pipeline reload, transcript find
+and growing tool-group failures passed in these unchanged complete owning files
+(known recurrences include cases 0252, 0174, 0278, 0767 and 0793). The data-saving
+gateway owner was run separately.
+
+Browser failure evidence: `orkestrator-test-run.MA9mVk/review-browser.log.gz`
+(aggregate) and `orkestrator-test-run.3xOaJv/review-browser-failed-owners.log.gz`
+(one-worker owners), under the host temporary directory. Browser traces were
+written under `output/playwright/test-results/`; owner runs reuse that directory.
+
+The complete data-saving gateway owner passed separately:
+`mise run test:logged -- --name review-data-saving-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1`
+(exit 0, 34.3 seconds; recurrence in case 1310).

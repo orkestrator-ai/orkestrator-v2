@@ -381,13 +381,15 @@ export class CodexRuntimeTail {
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     return {
       sessions: [
-        ...[...merged.values()].sort(byActivity),
-        // After every live row: the backend caps the list it reads.
+        ...boundedResumeRows([...merged.values()].sort(byActivity)),
+        // Independent count and byte quotas preserve room for both lists.
         ...(options.includeArchived
-          ? [...archivedRows.values()]
-              .filter((row) => !merged.has(row.id))
-              .sort(byActivity)
-              .map((row) => ({ ...row, archived: true as const }))
+          ? boundedResumeRows(
+              [...archivedRows.values()]
+                .filter((row) => !merged.has(row.id))
+                .sort(byActivity)
+                .map((row) => ({ ...row, archived: true as const })),
+            )
           : []),
       ],
       cwd,
@@ -448,4 +450,19 @@ export class CodexRuntimeTail {
       storage: this.lifecycle.getStorageStats(),
     };
   }
+}
+
+/** Each category fits comfortably inside half the backend's 2 MiB body limit. */
+function boundedResumeRows<T extends { id: string; title?: string }>(rows: T[]): T[] {
+  const result: T[] = [];
+  let remaining = 900 * 1024;
+  for (const row of rows) {
+    if (result.length >= 512) break;
+    const bounded = { ...row, title: row.title?.slice(0, 512) };
+    const bytes = Buffer.byteLength(JSON.stringify(bounded), "utf8") + 1;
+    if (bytes > remaining) continue;
+    remaining -= bytes;
+    result.push(bounded);
+  }
+  return result;
 }

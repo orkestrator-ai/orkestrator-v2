@@ -56,6 +56,22 @@ describe("StorageService build pipelines", () => {
     });
   });
 
+  test("lists only one environment's pipelines in one project", async () => {
+    await withStorage(async (storage) => {
+      await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot());
+      await storage.saveBuildPipeline("p2", "proj-1", "e2", 1, { id: "p2", phase: "building" });
+      await storage.saveBuildPipeline("p3", "proj-1", "e1", 1, { id: "p3", phase: "complete" });
+
+      const ids = async (projectId: string, environmentId: string) =>
+        (await storage.listBuildPipelinesForEnvironment(projectId, environmentId))
+          .map((record) => record.id)
+          .sort();
+      expect(await ids("proj-1", "e1")).toEqual(["p1", "p3"]);
+      expect(await ids("proj-1", "e3")).toEqual([]);
+      expect(await ids("proj-2", "e1")).toEqual([]);
+    });
+  });
+
   test("increments the revision on every write", async () => {
     await withStorage(async (storage) => {
       expect((await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot())).revision).toBe(

@@ -76,6 +76,7 @@ import {
   supersedeSessionsFrom,
   verificationFeedbackBefore,
 } from "./build-pipeline-rewind.js";
+import { pruneKeyInformationAfterRewind } from "./build-pipeline-key-information.js";
 import {
   codeRewindBackupRef,
   codeRewindRecord,
@@ -1418,6 +1419,12 @@ export class BuildPipelineLifecycle {
         at,
       );
       pruneRoundReviewReports(candidate);
+      pruneKeyInformationAfterRewind(
+        candidate,
+        iteration,
+        restart.kind === "session" &&
+          (restart.phase === "pr" || restart.phase === "resolve-conflicts"),
+      );
       if (
         supersededSessions > 0 ||
         code ||

@@ -1,4 +1,5 @@
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -563,9 +564,12 @@ describe("Codex app-server configuration", () => {
       "mcp_servers.orkestrator.required",
       "mcp_servers.orkestrator.startup_timeout_sec",
       // The mail and artifact tools alone are approved; the server default is untouched.
-      ...[...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map(
-        (name) => `mcp_servers.orkestrator.tools.${name}.approval_mode`,
-      ),
+      ...[
+        ...AGENT_MAIL_TOOL_NAMES,
+        ...ARTIFACT_TOOL_NAMES,
+        ...AGENT_GOAL_TOOL_NAMES,
+        ...KEY_INFORMATION_TOOL_NAMES,
+      ].map((name) => `mcp_servers.orkestrator.tools.${name}.approval_mode`),
     ]);
     expect(overrides["mcp_servers.orkestrator.tools.send_message.approval_mode"]).toBe(
       JSON.stringify("approve"),

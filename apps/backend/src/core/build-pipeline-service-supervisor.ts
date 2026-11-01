@@ -68,6 +68,7 @@ import {
 } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { carriesFixBaseline, retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-information.js";
 import { archiveValidationRun } from "./build-pipeline-validation-history.js";
 import {
   safeParseStructuredReviewReport,
@@ -2027,6 +2028,7 @@ export class BuildPipelineSupervisor {
     session.reviewIssueCounts = pipelineReviewIssueCounts(report);
     pipeline.structuredReview = report;
     retainRoundReviewReport(pipeline, session, report);
+    recordReviewIssuesInKeyInformation(pipeline, session, report);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
     const next = stageAfterReview(report);
     await this.startStage(pipeline, next.sessionPhase, next.phase);

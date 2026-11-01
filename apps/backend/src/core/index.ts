@@ -1266,6 +1266,12 @@ export class OrkestratorBackend {
       },
     );
     context.buildPipelines = this.buildPipelines;
+    // Stage agents keep the pipeline's key information through the agent tools.
+    (
+      this.agentTools as {
+        setKeyInformationToolHost?: AgentToolsServer["setKeyInformationToolHost"];
+      }
+    ).setKeyInformationToolHost?.(this.buildPipelines.keyInformationHost());
     this.multiReviews = new MultiReviewService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {

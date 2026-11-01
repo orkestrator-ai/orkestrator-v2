@@ -23,6 +23,10 @@ import {
 } from "./agent-interactions.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 import {
+  isBuildPipelineKeyInformation,
+  type BuildPipelineKeyInformation,
+} from "./build-pipeline-key-information.js";
+import {
   ACCEPTANCE_CRITERION_STATUSES,
   isAcceptanceCriterionStatus,
   isTicketKind,
@@ -1327,6 +1331,12 @@ export interface BuildPipeline {
    * kept on its rewind instead ({@link PipelineRewind.validationRun}).
    */
   validationHistory?: PipelineValidationSummary[];
+  /**
+   * The running brief behind the header's Key information panel, written by
+   * the stages through the key information tools and by the backend as review
+   * issues and verdicts arrive (`build-pipeline-key-information.ts`).
+   */
+  keyInformation?: BuildPipelineKeyInformation;
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -2179,6 +2189,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       (!Array.isArray(value.validationHistory) ||
         value.validationHistory.length > MAX_PIPELINE_VALIDATION_HISTORY ||
         !value.validationHistory.every(isPipelineValidationSummary))) ||
+    (value.keyInformation !== undefined && !isBuildPipelineKeyInformation(value.keyInformation)) ||
     (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
     (value.reviewPreparation !== undefined && !isBuildStepConfig(value.reviewPreparation)) ||
     (value.environmentOptions !== undefined &&

@@ -23,6 +23,7 @@
  */
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import {
   ARTIFACT_TOOL_NAMES,
   ORKESTRATOR_ARTIFACT_MCP_PATH,
@@ -141,13 +142,16 @@ import {
  * Per-tool MCP approval for Orkestrator's mail and transcript-artifact tools
  * (keyed by the raw tool name). Always approved: mail only writes to
  * Orkestrator's message store and is how a worker reports back; artifact tools
- * only write to Orkestrator's bounded artifact store and never the workspace.
+ * only write to Orkestrator's bounded artifact store and never the workspace;
+ * a build pipeline stage's key information tools only write its pipeline record.
  */
 const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
-  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map((name) => [
-    name,
-    { approval_mode: "approve" },
-  ]),
+  [
+    ...AGENT_MAIL_TOOL_NAMES,
+    ...ARTIFACT_TOOL_NAMES,
+    ...AGENT_GOAL_TOOL_NAMES,
+    ...KEY_INFORMATION_TOOL_NAMES,
+  ].map((name) => [name, { approval_mode: "approve" }]),
 );
 
 /**

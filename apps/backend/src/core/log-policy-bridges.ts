@@ -87,14 +87,14 @@ export async function listRunningBridgeTargets(
       ),
     ),
   );
-  const lookups = containerIds.flatMap((containerId) =>
-    LOG_POLICY_BRIDGES.map((agent) => ({ containerId, agent })),
-  );
+  const lookupCount = containerIds.length * LOG_POLICY_BRIDGES.length;
   let next = 0;
   await Promise.all(
-    Array.from({ length: Math.min(CONTAINER_LOOKUP_CONCURRENCY, lookups.length) }, async () => {
-      while (next < lookups.length) {
-        const { containerId, agent } = lookups[next++]!;
+    Array.from({ length: Math.min(CONTAINER_LOOKUP_CONCURRENCY, lookupCount) }, async () => {
+      while (next < lookupCount) {
+        const index = next++;
+        const containerId = containerIds[Math.floor(index / LOG_POLICY_BRIDGES.length)]!;
+        const agent = LOG_POLICY_BRIDGES[index % LOG_POLICY_BRIDGES.length]!;
         const target = await containerTarget(containerId, agent, dependencies).catch(() => null);
         if (target) {
           targets.push(target);

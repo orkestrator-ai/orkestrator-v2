@@ -184,7 +184,8 @@ export class LogPolicyService {
       const id = targetIdentity(target);
       if (seen.has(id) || seen.size >= MAX_TRACKED_BRIDGES) return;
       seen.add(id);
-      deliveries.push(this.deliver(target));
+      // Discovery can still be in flight when delivery settles; observe rejection now.
+      deliveries.push(this.deliver(target).catch(() => undefined));
     };
     try {
       targets = await this.options.listRunningBridges(deliver);

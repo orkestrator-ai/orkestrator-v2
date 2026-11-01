@@ -1155,6 +1155,16 @@ export class ConnectionManager {
     };
   }
 
+  /**
+   * Whether a scope's bound machine is this computer's own backend, even when
+   * it is reached over a route (a command node's window showing this computer
+   * as a leaf). Unproved identities answer false.
+   */
+  isScopeOnThisDevice(scope = DEFAULT_CONNECTION_SCOPE): boolean {
+    const localId = this.localHello?.installationId;
+    return Boolean(localId) && this.getBackendIdentity(scope).backendId === localId;
+  }
+
   async bind(
     scope: string,
     connectionId = this.catalogue.activeConnectionId,

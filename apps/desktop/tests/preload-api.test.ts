@@ -429,6 +429,36 @@ test("workspace-only snapshots publish trusted gateway and stable machine metada
   });
 });
 
+test("the gateway says when it leads back to this computer, and only then", () => {
+  const exposeWith = (backendOnThisDevice: unknown) => {
+    const exposed = new Map<string, unknown>();
+    exposeActiveConnectionGateway(
+      {
+        exposeInMainWorld: (key, value) => {
+          exposed.set(key, value);
+        },
+      },
+      {
+        sendSync: (channel) =>
+          channel.endsWith("gateway-sync")
+            ? {
+                baseUrl: "https://laptop.example",
+                connectionId: "workspace:uuid",
+                backendId: "bk_laptop",
+                legacyOrigin: null,
+                backendOnThisDevice,
+              }
+            : { activeConnectionId: "workspace:uuid", connections: [] },
+      },
+    );
+    return exposed.get("orkestratorGateway") as Record<string, unknown>;
+  };
+
+  expect(exposeWith(true).backendOnThisDevice).toBe(true);
+  expect("backendOnThisDevice" in exposeWith(false)).toBe(false);
+  expect("backendOnThisDevice" in exposeWith("true")).toBe(false);
+});
+
 test("the portal channel is exposed only in a workspace realm", async () => {
   const exposed = new Map<string, unknown>();
   const ipc = createIpcMock();

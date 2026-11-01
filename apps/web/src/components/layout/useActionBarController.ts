@@ -43,7 +43,7 @@ import * as backend from "@/lib/backend";
 import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
-import { isGatewayBrowserPreviewSupported, isRemoteGatewayConnection } from "@/lib/gateway-url";
+import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { getReviewAgent, type ReviewLaunchSelection } from "@/components/review/ReviewLaunchDialog";
 import { type MultiReviewLaunchSelection } from "@/components/review/MultiReviewLaunchDialog";
@@ -557,10 +557,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   });
   const canLaunchResolve =
     canLaunchBackendJob || Boolean(selectedEnvironmentId && hasOpenResolveTab);
-  const editorUnavailableOnRemoteConnection = isRemoteGatewayConnection();
+  const editorOnAnotherDevice = isBackendOnAnotherDevice();
   // For containers, we need containerId; for local environments, we need worktreePath
   const canOpenEditor =
-    !editorUnavailableOnRemoteConnection &&
+    !editorOnAnotherDevice &&
     isRunning &&
     ((isLocalEnvironment && !!selectedEnvironment?.worktreePath) ||
       (!isLocalEnvironment && !!selectedEnvironment?.containerId));
@@ -601,7 +601,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   // Handler for opening in editor
   const handleOpenInEditor = useCallback(async () => {
-    if (editorUnavailableOnRemoteConnection) return;
+    if (editorOnAnotherDevice) return;
 
     // Extract values for type safety
     const worktreePath = selectedEnvironment?.worktreePath;
@@ -630,7 +630,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   }, [
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
-    editorUnavailableOnRemoteConnection,
+    editorOnAnotherDevice,
     isLocalEnvironment,
     config.global.preferredEditor,
   ]);
@@ -1429,7 +1429,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     canCreateTab,
     canLaunchBackendJob,
     canLaunchResolve,
-    editorUnavailableOnRemoteConnection,
+    editorOnAnotherDevice,
     canOpenEditor,
     handleOpenInEditor,
     canCopyEnvironmentUrl,
@@ -2237,7 +2237,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     canCreateTab,
     canLaunchBackendJob,
     canLaunchResolve,
-    editorUnavailableOnRemoteConnection,
+    editorOnAnotherDevice,
     canOpenEditor,
     environmentPortAddress,
     environmentBrowserUrl,

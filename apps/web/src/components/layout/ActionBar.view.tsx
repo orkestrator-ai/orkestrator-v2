@@ -309,7 +309,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     canCreateTab,
     canLaunchBackendJob,
     canLaunchResolve,
-    editorUnavailableOnRemoteConnection,
+    editorOnAnotherDevice,
     canOpenEditor,
     environmentPortAddress,
     environmentBrowserUrl,
@@ -1104,9 +1104,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           {config.global.preferredEditor === "cursor" ? "Cursor" : "VS Code"}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {editorUnavailableOnRemoteConnection
-                            ? "Unavailable for remote connections"
-                            : "⌘O"}
+                          {editorOnAnotherDevice ? "Environment is on another computer" : "⌘O"}
                         </p>
                       </>
                     }

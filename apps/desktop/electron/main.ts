@@ -1282,6 +1282,7 @@ function registerIpc(): void {
         connectionId: identity.connectionId,
         backendId: identity.backendId,
         legacyOrigin: identity.legacyOrigin,
+        backendOnThisDevice: manager().isScopeOnThisDevice(context.scope),
         ...(context.target && context.portalScope
           ? {
               workspaceTarget: context.target,

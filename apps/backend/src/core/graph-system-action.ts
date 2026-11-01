@@ -14,7 +14,8 @@
  *   action's probe whether the effect happened. Keys are per run, plus node and iteration
  *   where the effect belongs to one activation slot ({@link slotKey}); never
  *   per attempt, so a retry or a restart of the node finds the same key.
- *   Within one process, effects with the same key run one at a time.
+ *   Within one backend, effects with the same key run one at a time
+ *   ({@link GraphSystemActionMemory}).
  */
 import type { GraphPlanSystemNode } from "@orkestrator/protocol/graphs/compile";
 import {
@@ -113,16 +114,38 @@ export interface GraphSystemEffectOptions<T> {
   probe?: (intent: GraphEffectRecord) => Promise<T | undefined>;
 }
 
-const effectLocks = new Map<string, Promise<unknown>>();
+/**
+ * What system actions remember between calls in one backend: the effect locks
+ * that run effects with the same run and key one at a time, and
+ * `wait-for-checks`' final-read failures per activation. Held by the system
+ * executor, which the backend builds once, so two backends in one process
+ * never share it (docs/architecture/backend-runtime.md).
+ */
+export class GraphSystemActionMemory {
+  private readonly effectLocks = new Map<string, Promise<unknown>>();
+  private readonly readFailures = new Map<string, number>();
 
-async function withEffectLock<T>(key: string, work: () => Promise<T>): Promise<T> {
-  const previous = effectLocks.get(key) ?? Promise.resolve();
-  const next = previous.catch(() => undefined).then(work);
-  effectLocks.set(key, next);
-  try {
-    return await next;
-  } finally {
-    if (effectLocks.get(key) === next) effectLocks.delete(key);
+  /** Runs `work` after the previous effect with this key settles. */
+  async withEffectLock<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.effectLocks.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(work);
+    this.effectLocks.set(key, next);
+    try {
+      return await next;
+    } finally {
+      if (this.effectLocks.get(key) === next) this.effectLocks.delete(key);
+    }
+  }
+
+  /** Counts one more failed final read for the activation; returns the count. */
+  recordReadFailure(key: string): number {
+    const failures = (this.readFailures.get(key) ?? 0) + 1;
+    this.readFailures.set(key, failures);
+    return failures;
+  }
+
+  forgetReadFailures(key: string): void {
+    this.readFailures.delete(key);
   }
 }
 
@@ -133,6 +156,8 @@ export interface GraphSystemActionScope {
   environmentId: string;
   artifacts: GraphArtifactStore;
   now(): Date;
+  /** The executor's memory (process memory; a restart starts empty). */
+  memory: GraphSystemActionMemory;
 }
 
 export class GraphSystemActionContext {
@@ -144,6 +169,7 @@ export class GraphSystemActionContext {
   /** `node#iter=N[#branch=K]`: the activation without its attempt. */
   readonly slot: string;
   readonly now: () => Date;
+  readonly memory: GraphSystemActionMemory;
   /** Output port → stored artifact id. */
   readonly outputs: Record<string, string> = {};
   private readonly artifacts: GraphArtifactStore;
@@ -160,6 +186,7 @@ export class GraphSystemActionContext {
     this.environmentId = scope.environmentId;
     this.artifacts = scope.artifacts;
     this.now = scope.now;
+    this.memory = scope.memory;
     this.params = graphSystemActionParams(scope.node.action, scope.node.params);
     this.slot = graphActivationSlot({
       nodeId: scope.activation.nodeId,
@@ -295,7 +322,7 @@ export class GraphSystemActionContext {
     options: GraphSystemEffectOptions<T> = {},
   ): Promise<T> {
     const journal = this.deps.storage.graphEffects;
-    return withEffectLock(`${this.run.id}\0${key}`, async () => {
+    return this.memory.withEffectLock(`${this.run.id}\0${key}`, async () => {
       const begun = await journal.beginGraphEffect({
         runId: this.run.id,
         key,

@@ -9,6 +9,7 @@ import { parseForkWorkerLaunch } from "./coordinator-fork-worker.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { runCommand } from "./shell.js";
 import { StorageService, createEnvironment, createProject } from "./storage.js";
 
@@ -85,7 +86,10 @@ beforeEach(async () => {
   context = {
     storage,
     coordinators: coordinator,
-    runtime: { environments: { fence: new EnvironmentMutationFence() } },
+    runtime: {
+      environments: { fence: new EnvironmentMutationFence() },
+      coordinatorRequests: new CoordinatorRequestFlights(),
+    },
   } as CommandContext;
   commands = createCommandRegistry();
   started = [];
@@ -266,6 +270,7 @@ test("a lost remote fork response recovers project mapping, origin, association 
         return { outcome: "ok", result };
       },
     },
+    runtime: { coordinatorRequests: new CoordinatorRequestFlights() },
   } as unknown as CommandContext;
   try {
     const input = {

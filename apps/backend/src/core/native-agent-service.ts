@@ -896,9 +896,14 @@ export class NativeAgentService {
     const signInGuidance = guidance
       ? { signInGuidance: (agent: string) => guidance(environmentId, agent) }
       : {};
+    const research = this.options.openCodeCoordinatorResearch;
+    const optional = {
+      ...signInGuidance,
+      ...(research ? { openCodeCoordinatorResearch: research } : {}),
+    };
     return typeof this.storage.getDataDir === "function"
-      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig, ...signInGuidance }
-      : { environmentId, loadConfig, ...signInGuidance };
+      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig, ...optional }
+      : { environmentId, loadConfig, ...optional };
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */

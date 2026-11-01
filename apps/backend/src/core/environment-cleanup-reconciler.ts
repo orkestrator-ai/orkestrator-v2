@@ -61,6 +61,7 @@ function retryDueAt(entry: EnvironmentCleanupEntry): number {
   return last + environmentCleanupRetryDelayMs(entry.attempts);
 }
 
+/** Process-wide on purpose: it only de-duplicates a log line. */
 const exhaustedWarnings = new Set<string>();
 
 export type EnvironmentCleanupReconcileResult = {
@@ -624,6 +625,10 @@ export async function sweepAbandonedTempFiles(
   return removed;
 }
 
+/**
+ * Process-wide on purpose. The first only de-duplicates a log line; the second
+ * is keyed by the data directory, so it is per backend already.
+ */
 const loggedSweepFailures = new Set<string>();
 const reportedStrayWithContent = new Map<string, number>();
 
@@ -697,6 +702,7 @@ type ScheduledReconcile = {
   cancelled: boolean;
 };
 
+/** Process-wide on purpose: keyed by the data directory, so it is per backend already. */
 const scheduled = new Map<string, ScheduledReconcile>();
 
 /**

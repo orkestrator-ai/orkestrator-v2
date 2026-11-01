@@ -114,9 +114,6 @@ export function graphCheckState(
   return pending > 0 ? "pending" : "passed";
 }
 
-/** Final-read failures per activation (process memory; a restart reads again). */
-const readFailures = new Map<string, number>();
-
 interface WaitRecord {
   startedAt: number;
   deadline: number;
@@ -221,7 +218,7 @@ export const waitForChecksAction: GraphSystemActionHandler = {
     const read = await readRollup(ctx, pr.url);
     let result: GraphCheckSummaryV1;
     if (read) {
-      readFailures.delete(memory);
+      ctx.memory.forgetReadFailures(memory);
       const counts = parsePrCheckSummary(read.rollup);
       const failing = graphFailingChecks(read.rollup);
       const state = graphCheckState(counts.total, counts.pending, failing.length);
@@ -237,10 +234,10 @@ export const waitForChecksAction: GraphSystemActionHandler = {
         failing,
       };
     } else {
-      const failures = (readFailures.get(memory) ?? 0) + 1;
-      readFailures.set(memory, failures);
+      // Final-read failures per activation (process memory; a restart reads again).
+      const failures = ctx.memory.recordReadFailure(memory);
       if (failures < MAX_FINAL_READ_FAILURES) return waiting(now + FINAL_READ_RETRY_MS);
-      readFailures.delete(memory);
+      ctx.memory.forgetReadFailures(memory);
       // The counts alone: failing checks are listed without names.
       const total = summary?.total ?? 0;
       const pending = summary?.pending ?? 0;

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
 import type { PlanUsageState } from "./plan-usage-cache.js";
 import type {
@@ -490,6 +491,13 @@ export interface NativeAgentServiceOptions {
    * that nothing else closes.
    */
   environmentFence?: Pick<EnvironmentMutationFence, "beginAgentWork" | "assertAcceptsAgentWork">;
+  /**
+   * The backend's OpenCode coordinator research registrations
+   * (`runtime.localServers.openCodeAgentTools.research`), which a coordinator's
+   * OpenCode provider reads its research tool ids from. Without it a
+   * coordinator gets no research tools.
+   */
+  openCodeCoordinatorResearch?: NativeAgentProviderEnvironment["openCodeCoordinatorResearch"];
   /** Reports newly persisted, content-free background questions to the shell. */
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */

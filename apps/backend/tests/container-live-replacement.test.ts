@@ -449,8 +449,7 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
   live(
     "a rebuild cancelled during copy removes the candidate and keeps the source",
     async () => {
-      const { replaceRuntimePreservingState, requestReplacementCancellation } =
-        await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c15");
       const before = await exec(containerId, WORKSPACE_SNAPSHOT);
       const emit = fixture.context.emit;
@@ -459,7 +458,9 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
           payload as { snapshot?: { operation?: { operationId: string; phase: string } } }
         )?.snapshot;
         if (snapshot?.operation?.phase === "copying") {
-          requestReplacementCancellation(snapshot.operation.operationId);
+          fixture.context.runtime.environments.requestReplacementCancellation(
+            snapshot.operation.operationId,
+          );
         }
         emit(event, payload);
       };

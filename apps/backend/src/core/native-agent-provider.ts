@@ -8,6 +8,7 @@ import {
 import { HttpBridgeProvider } from "./http-bridge-provider.js";
 import type { HttpBridgeProviderDependencies } from "./http-bridge-transport.js";
 import type { AppConfig } from "./models.js";
+import type { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import { OpenCodeProvider, type OpenCodeProviderDependencies } from "./opencode-provider.js";
 import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
@@ -42,6 +43,15 @@ export interface NativeAgentProviderEnvironment {
    * snapshot reports a sign-in problem.
    */
   signInGuidance?: (agent: string) => Promise<string | undefined>;
+  /**
+   * The backend's OpenCode coordinator research registrations
+   * (`runtime.localServers.openCodeAgentTools.research`). Absent without a
+   * backend, which then grants a coordinator no research tools.
+   */
+  openCodeCoordinatorResearch?: Pick<
+    OpenCodeCoordinatorResearch,
+    "ensure" | "invalidate" | "toolIds"
+  >;
 }
 
 /**

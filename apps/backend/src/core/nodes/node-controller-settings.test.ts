@@ -5,6 +5,7 @@ import {
   type InheritedGlobalSettings,
 } from "@orkestrator/protocol/controller-settings";
 import type { BackendId, RouteId } from "@orkestrator/protocol/federation";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 import { LeafControllerSettings } from "./node-controller-settings.js";
 import { MemoryNodeStorage, TestNodeNetwork } from "./node-network-test-support.js";
@@ -154,7 +155,7 @@ describe("settings a command node hands down", () => {
   test("unsupported settings commands are remembered separately for the connection", async () => {
     const { command, leaf, sends, setSettings } = await setup({ terminalScrollback: 7000 });
     leaf.commands.set(SYNC_CONTROLLER_SETTINGS_COMMAND, () => {
-      throw new Error(`Unknown command: ${SYNC_CONTROLLER_SETTINGS_COMMAND}`);
+      throw new Error(unknownBackendCommandMessage(SYNC_CONTROLLER_SETTINGS_COMMAND));
     });
     await command.service.addNode({
       routes: [{ id: "primary" as RouteId, kind: "https", enabled: true, origin: leaf.origin }],

@@ -46,7 +46,7 @@ import {
   type MermaidPreview,
 } from "@/lib/chat/rich-markdown/mermaid-render";
 import { rasterizeSvgToPng, standaloneSvg } from "@/lib/chat/rich-markdown/svg-export";
-import { useDialogFocusReturn } from "@/lib/chat/rich-markdown/dialog-focus";
+import { useDialogFocusReturn } from "@/lib/dialog-focus";
 import {
   useRichBlockVisibility,
   useRichRenderPriority,

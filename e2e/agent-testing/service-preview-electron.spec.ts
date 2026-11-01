@@ -142,6 +142,7 @@ interface ViewInfo {
 
 let stack: Stack | null = null;
 const outputTails = new WeakMap<ElectronApplication, () => string>();
+const previewOutput = new WeakMap<ElectronApplication, () => string[]>();
 
 function s(): Stack {
   if (!stack) throw new Error("Service preview stack is not running");
@@ -214,6 +215,11 @@ async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "
       ORKESTRATOR_PREVIEW_TRANSPORT: "1",
       // Never contend for the fixed control-MCP port an installed app may own.
       ORKESTRATOR_CONTROL_MCP_PORT: "0",
+      // No startup container-to-host probe: on a host whose firewall drops
+      // Docker traffic its result dialog opens when the probe ends and takes
+      // keyboard focus mid-test (flake 0620), and each run's probe network
+      // would outlive this disposable profile.
+      ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
       // Partition retention passes every 2 s instead of after a minute
       // (agent-test runtimes only), so the retention test sees one run.
       [AGENT_TEST_PREVIEW_RETENTION_ENV]: "2000",
@@ -223,12 +229,24 @@ async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "
   dismissStartupDialogs(app);
   // A bounded tail of main-process output, for startup diagnostics only.
   let tail = "";
-  const keep = (chunk: Buffer) => {
-    tail = (tail + chunk.toString("utf8")).slice(-4_000);
+  // Main's preview transport warnings (static text, e.g. a failed release), so
+  // a release check can say whether one was reported (flake 0622).
+  let previewLines: string[] = [];
+  const keep = () => {
+    let partial = "";
+    return (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      tail = (tail + text).slice(-4_000);
+      const lines = (partial + text).split("\n");
+      partial = lines.pop()!.slice(-1_000);
+      const matched = lines.filter((line) => line.includes("[Previews]"));
+      if (matched.length > 0) previewLines = [...previewLines, ...matched].slice(-20);
+    };
   };
-  app.process().stdout?.on("data", keep);
-  app.process().stderr?.on("data", keep);
+  app.process().stdout?.on("data", keep());
+  app.process().stderr?.on("data", keep());
   outputTails.set(app, () => tail);
+  previewOutput.set(app, () => previewLines.map((line) => line.slice(0, 300)));
   const window = await app.firstWindow({ timeout: 90_000 }).catch((error: Error) => {
     throw new Error(`${error.message}\nElectron output tail:\n${tail}`);
   });
@@ -1318,12 +1336,79 @@ async function focusApp(): Promise<void> {
   await s().window.mouse.move(1, 1);
 }
 
+/**
+ * Count the keydowns the main renderer has received and finished handling,
+ * and keep the last few with where focus was. Radix menus move focus in a
+ * zero-delay timer queued while the keydown is dispatched. This listener runs
+ * first (window, capture phase) and queues a timer that queues another, so the
+ * second runs after Radix's: once the count rises, the key reached the page and
+ * any focus move it caused has landed, however late Chromium runs timers
+ * (flake 0620). A renderer reload drops the counter; call again after one.
+ */
+async function watchKeys(page = s().window): Promise<void> {
+  await page.evaluate(() => {
+    const host = globalThis as { __keyWatch?: { handled: number; seen: string[] } };
+    if (host.__keyWatch) return;
+    const watch = { handled: 0, seen: [] as string[] };
+    host.__keyWatch = watch;
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        const at = (document.activeElement?.textContent ?? "").trim().slice(0, 12);
+        watch.seen = [...watch.seen, `${event.key}@${at}`].slice(-16);
+        setTimeout(() =>
+          setTimeout(() => {
+            watch.handled += 1;
+          }),
+        );
+      },
+      true,
+    );
+  });
+}
+
+function keyWatch(page = s().window): Promise<{ handled: number; seen: string[] }> {
+  return page.evaluate(
+    () =>
+      (globalThis as { __keyWatch?: { handled: number; seen: string[] } }).__keyWatch ?? {
+        handled: -1,
+        seen: [],
+      },
+  );
+}
+
+/** Press `key` and wait until the page has handled it, including timers it queued (see `watchKeys`). */
+async function pressHandled(key: string, page = s().window): Promise<void> {
+  const before = (await keyWatch(page)).handled;
+  await page.keyboard.press(key);
+  await expect
+    .poll(async () => (await keyWatch(page)).handled)
+    .toBeGreaterThan(before)
+    .catch(async (error: Error) => {
+      throw new Error(
+        `${key} was not handled by the page: ${error.message}\n${JSON.stringify(await keyWatch(page))}`,
+      );
+    });
+}
+
+/** The titles of the dialogs open in the renderer, for failure messages. */
+function openDialogs(page = s().window): Promise<string[]> {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]')).map((element) =>
+      (element.querySelector("h2")?.textContent ?? element.getAttribute("aria-label") ?? "")
+        .trim()
+        .slice(0, 60),
+    ),
+  );
+}
+
 /** Open the visible tab's service picker from the keyboard and choose the item matching `item`. */
 async function chooseFromPicker(current: string, item: RegExp): Promise<void> {
   const page = s().window;
   await focusApp();
+  await watchKeys(page);
   await page.getByRole("button", { name: `Preview service ${current}` }).focus();
-  await page.keyboard.press("Enter");
+  await pressHandled("Enter", page);
   await expect(page.getByRole("menu")).toBeVisible();
   // Radix moves focus to the first item once the menu has opened.
   await expect.poll(async () => (await focused()).inMenu).toBe(true);
@@ -1333,22 +1418,26 @@ async function chooseFromPicker(current: string, item: RegExp): Promise<void> {
       const now = await focused();
       trail.push(`${now.text.slice(0, 12)}${now.pageFocused ? "" : " (page unfocused)"}`);
       if (item.test(now.text)) break;
-      await page.keyboard.press(key);
-      // Radix moves focus to the next item in a timer; wait for it to land
-      // (at either end of the menu it stays put).
-      await expect
-        .poll(async () => (await focused()).text, { timeout: 2_000 })
-        .not.toBe(now.text)
-        .catch(() => undefined);
+      // Once handled, any focus move has landed: unchanged focus means the
+      // end of the menu, never a move still on its way.
+      await pressHandled(key, page);
+      if ((await focused()).text === now.text) break;
     }
     if (item.test((await focused()).text)) break;
   }
   const chosen = await focused();
   const items = await page.getByRole("menuitem").allInnerTexts();
-  expect(chosen.inMenu && item.test(chosen.text), JSON.stringify({ chosen, trail, items })).toBe(
-    true,
-  );
-  await page.keyboard.press("Enter");
+  expect(
+    chosen.inMenu && item.test(chosen.text),
+    JSON.stringify({
+      chosen,
+      trail,
+      items,
+      keys: (await keyWatch(page)).seen,
+      dialogs: await openDialogs(page),
+    }),
+  ).toBe(true);
+  await pressHandled("Enter", page);
   await expect(page.getByRole("menu")).toHaveCount(0);
 }
 
@@ -2205,7 +2294,11 @@ async function startRemoteBackend(validateCapabilities?: () => void): Promise<Re
   try {
     // The backend's environment is built synchronously when it spawns.
     await withEnvironment(
-      { ORKESTRATOR_PREVIEW_TRANSPORT: "1", ORKESTRATOR_CONTROL_MCP_PORT: "0" },
+      {
+        ORKESTRATOR_PREVIEW_TRANSPORT: "1",
+        ORKESTRATOR_CONTROL_MCP_PORT: "0",
+        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
+      },
       () =>
         backendProcess.start({
           isDev: true,
@@ -2306,15 +2399,23 @@ function useConnection(page: Page, connectionId: string): Promise<unknown> {
 test("windows on different backends never share previews, and switches release on the issuing backend", async () => {
   const testInfo = test.info();
   testInfo.setTimeout(300_000);
-  const remote = await startRemoteBackend();
-  // Only this test's own views from here on.
+  // Only this test's own views from here on. Window 1 keeps a destroyed tab's
+  // service attachment through its transport's 30-second retirement lease, so
+  // the Local counts below start once those leases have ended: one ending
+  // mid-test shifts every later count by one (flake 0622). Tearing down first
+  // lets the remote backend's start overlap the wait.
   await uiStore("selectProject", null);
   for (const tabId of Object.values(UI_TABS))
     await preview("destroy", tabId).catch(() => undefined);
+  const remote = await startRemoteBackend();
   await attachService("a", "multi-a");
   await waitForService("a");
   await inService("a", `window.__multiKept = "svc-a"; true`);
-  const localBaseline = (await accessStats()).attachments;
+  // Window 1's "a" is then the only Local attachment.
+  await expect
+    .poll(async () => (await accessStats()).attachments, { timeout: 60_000, intervals: [1_000] })
+    .toBe(1);
+  const localBaseline = 1;
 
   // A second window, first on Local with a service of its own.
   const [second] = await Promise.all([
@@ -2537,7 +2638,7 @@ test("windows on different backends never share previews, and switches release o
     .toBe(0)
     .catch(async (error: Error) => {
       throw new Error(
-        `${error.message}\n${JSON.stringify({ closedAfterMs: closedAfter, sinceCloseMs: Date.now() - closeStarted, local: await accessStats() })}`,
+        `${error.message}\n${JSON.stringify({ closedAfterMs: closedAfter, sinceCloseMs: Date.now() - closeStarted, local: await accessStats(), previews: previewOutput.get(s().app)?.() ?? [] })}`,
       );
     });
   record(testInfo, "window-close", JSON.stringify({ closedAfterMs: closedAfter }));
@@ -2647,10 +2748,31 @@ test("a remote terminal link opens the native localhost forward in a separate br
         },
       );
       const terminalScreen = second.locator("#external-preview-terminal .xterm-screen");
-      const bounds = await terminalScreen.boundingBox();
-      if (!bounds) throw new Error("Missing remote terminal screen");
-      await second.mouse.move(bounds.x + 15, bounds.y + 10);
-      await expect(terminalScreen).toHaveClass(/xterm-cursor-pointer/);
+      // Two things in the new window can take the hover (flake 2390). "GitHub
+      // CLI Not Found" opens there once its host-tool check finishes
+      // (`dismissStartupDialogs`), and the modal turns off pointer events on
+      // the page, so a hover or link click it interrupts is lost. And until
+      // xterm's stylesheet applies, its screen sits lower, so a point measured
+      // then misses it. Wait for the dialog (a page-side wait, which the
+      // dismiss handler does not race) and its dismissal, then hover a freshly
+      // measured point until xterm shows the link.
+      await second
+        .waitForFunction(
+          () =>
+            Array.from(document.querySelectorAll("button")).some(
+              (button) => button.textContent?.trim() === "Continue Without GitHub CLI",
+            ),
+          undefined,
+          { timeout: 15_000 },
+        )
+        .catch(() => undefined);
+      await expect(second.getByRole("dialog")).toHaveCount(0, { timeout: 30_000 });
+      await expect(async () => {
+        const bounds = await terminalScreen.boundingBox();
+        if (!bounds) throw new Error("Missing remote terminal screen");
+        await second.mouse.move(bounds.x + 15, bounds.y + 10);
+        await expect(terminalScreen).toHaveClass(/xterm-cursor-pointer/, { timeout: 1_000 });
+      }).toPass({ timeout: 15_000 });
       await terminalScreen.click({ position: { x: 15, y: 10 }, modifiers: ["Control"] });
       const openedUrls = () =>
         s().app.evaluate(() => (globalThis as any).__previewExternalUrls as string[]);

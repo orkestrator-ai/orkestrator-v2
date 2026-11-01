@@ -384,6 +384,8 @@ export interface ReviewFanoutHost {
   readonly reviewInstruction?: string;
   /** Names the owner in user-facing failure text. */
   readonly label: string;
+  /** The environment its reviewers run in. */
+  readonly environmentId?: string;
   /** Package consumers use provider plan/read-only mode, including repair turns. */
   readonly reviewerMode?: "plan" | "build";
   /** Durable session key for one reviewer. Must be stable across restarts. */
@@ -702,6 +704,7 @@ function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecor
   const toolName = workflowResultToolName("review-report");
   return {
     workflowId: host.workflowId,
+    ...(host.environmentId ? { environmentId: host.environmentId } : {}),
     sessionPhase: "review",
     ...(host.reviewerMode ? { mode: host.reviewerMode } : {}),
     wording: {

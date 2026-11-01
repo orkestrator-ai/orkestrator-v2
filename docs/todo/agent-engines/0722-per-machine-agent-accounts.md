@@ -194,8 +194,12 @@ this machine can produce):
   `list_machine_agent_accounts`). A summary line per platform counts the
   machines on it and switches every machine that has it but uses another;
   by machine, a cell off it offers **Use preferred** or says **No preferred
-  login**. Nothing switches by itself. See
-  [Assumptions and decisions](#assumptions-and-decisions).
+  login**. The preferred login switches nothing by itself. See
+  [Assumptions and decisions](#assumptions-and-decisions). Updated 2026-11-01:
+  [automatic switching](../../architecture/agent-accounts.md#automatic-switching)
+  is an explicit opt-in exception to "nothing switches by itself" for the machine
+  as a whole. It follows reset times, not this preference, which still moves
+  nothing. See [1250](1250-automatic-account-switching-live-checks.md).
 - **A leaf's own window** shows Settings → Machines → Agent accounts limited
   to itself, where it showed nothing before.
 - `accountInfo()`, Cursor's `NO_OPEN_BROWSER` and Codex's access-only
@@ -311,7 +315,11 @@ see [Assumptions and decisions](#assumptions-and-decisions).
   account with that email by itself. (c) A preference kept by the machine
   answering the overview that only flags machines and offers an explicit
   switch, here or for every machine at once.
-- **Choice.** (c).
+- **Choice.** (c). Still so for the preferred login. On 2026-11-01 the user chose
+  [automatic switching](1250-automatic-account-switching-live-checks.md) as an
+  explicit opt-in exception to "nothing switches by itself": off by default, ticked
+  per provider, following weekly reset times rather than this preference, and
+  turned off by any manual switch. The reasons below still apply to the preference.
 - **Why.** Switching is the one account action that changes which
   subscription pays for a machine's next prompt. A leaf that switched by
   itself (on attach, on a new login, on a settings sync) would do it while

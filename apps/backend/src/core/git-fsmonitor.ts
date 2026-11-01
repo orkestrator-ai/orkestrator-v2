@@ -43,6 +43,10 @@ export async function stopGitFsmonitorDaemon(
   ).catch(() => undefined);
 }
 
+/**
+ * Process-wide on purpose: keyed by worktree path, and the migration edits that
+ * worktree's own config file on the host, whichever backend asks.
+ */
 const fsmonitorMigrations = new Map<string, Promise<void>>();
 
 /**

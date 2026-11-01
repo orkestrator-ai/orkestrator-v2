@@ -24,7 +24,7 @@ describe("Electron packaging configuration", () => {
         directories: { buildResources: string; output: string };
         electronFuses: { runAsNode: boolean };
         files: string[];
-        extraResources: Array<{ from: string; to: string; filter: string[] }>;
+        extraResources: Array<{ from: string; to: string; filter?: string[] }>;
         mac: {
           icon: string;
           minimumSystemVersion: string;
@@ -133,6 +133,8 @@ describe("Electron packaging configuration", () => {
         expect.objectContaining({ from: "bridges/acp-bridge", to: "acp-bridge" }),
         expect.objectContaining({ from: "bridges/cursor-bridge", to: "cursor-bridge" }),
         expect.objectContaining({ from: "binaries", to: "bin", filter: ["bun"] }),
+        // The About panel's icon on Linux and Windows (`about-panel.ts`).
+        { from: "apps/desktop/electron/resources/icon.png", to: "icon.png" },
       ]),
     );
     expect(electronTsconfig.compilerOptions.outDir).toBe("dist");
@@ -143,6 +145,7 @@ describe("Electron packaging configuration", () => {
     expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
     expect(desktopMain).toContain("userDataDirectoryName(isDev)");
     expect(desktopMain).toContain("app.setDesktopName(LINUX_DESKTOP_ENTRY_FILENAME)");
+    expect(desktopMain).toContain("app.setAboutPanelOptions(");
     expect(desktopMain).toContain("createToolchainProgressController");
     expect(desktopMain).toContain("onUnexpectedClose: () => app.quit()");
     expect(desktopMain).toContain("await toolchainProgress.close()");

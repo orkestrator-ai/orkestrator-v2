@@ -160,19 +160,24 @@ function osFallback(platform: NodeJS.Platform, release: string): string {
   return `${platform} ${release}`;
 }
 
-/** `PRETTY_NAME` from os-release, else `NAME` and `VERSION_ID`. */
+/**
+ * `PRETTY_NAME` from os-release, else `NAME`. `VERSION_ID` is added when the
+ * name carries no number of its own, and `ID_LIKE` names the distributions a
+ * derivative follows: Omarchy's whole `PRETTY_NAME` is `Omarchy`, which reads
+ * here as `Omarchy 4.0.6 (like arch)`.
+ */
 export function parseOsRelease(text: string): string | null {
   const fields = new Map<string, string>();
   for (const line of text.split("\n")) {
     const match = line.trim().match(/^([A-Z_]+)=(.*)$/);
     if (match) fields.set(match[1]!, match[2]!.replace(/^(["'])(.*)\1$/, "$2").trim());
   }
-  const pretty = fields.get("PRETTY_NAME");
-  if (pretty) return pretty;
-  const name = fields.get("NAME");
+  const name = fields.get("PRETTY_NAME") || fields.get("NAME");
   if (!name) return null;
   const version = fields.get("VERSION_ID");
-  return version ? `${name} ${version}` : name;
+  const versioned = version && !/[0-9]/.test(name) ? `${name} ${version}` : name;
+  const like = (fields.get("ID_LIKE") ?? "").split(/\s+/).filter((id) => /^[a-z0-9._-]+$/.test(id));
+  return like.length > 0 ? `${versioned} (like ${like.join(", ")})` : versioned;
 }
 
 export interface OsDescriptionDependencies {

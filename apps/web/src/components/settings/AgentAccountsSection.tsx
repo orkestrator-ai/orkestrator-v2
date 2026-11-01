@@ -10,11 +10,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Loader2, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
+import { AutoSwitchBadge } from "@/components/settings/AutoSwitchBadge";
 import { useAccountMachine } from "@/components/settings/account-machine";
 import { StalePlanUsageNote } from "@/components/settings/PlanUsageSection";
+import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   cancelAgentAccountLogin,
@@ -24,6 +27,8 @@ import {
   removeAgentAccount,
   renameAgentAccount,
   setActiveAgentAccount,
+  setAgentAccountAutoSwitchEnabled,
+  setAgentAccountAutoSwitchIncluded,
   startAgentAccountLogin,
 } from "@/lib/backend";
 import type {
@@ -32,6 +37,7 @@ import type {
   AgentAccountsSnapshot,
   AgentAccountSummary,
 } from "@orkestrator/protocol/agent-accounts";
+import type { AgentAccountAutoSwitchState } from "@orkestrator/protocol/agent-account-auto-switch";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { SETTINGS_CARD_CLASS, SettingsSectionHeader } from "./SettingsPageLayout";
@@ -118,17 +124,77 @@ function AccountUsage({
   );
 }
 
+/**
+ * The provider's main tick and which state this machine is in. A manual switch
+ * leaves it unticked and pinned, so ticking it again is what resumes.
+ */
+function AutoSwitchControls({
+  platformLabel,
+  state,
+  accounts,
+  busy,
+  machineName,
+  onChange,
+}: {
+  platformLabel: string;
+  state: AgentAccountAutoSwitchState;
+  accounts: AgentAccountSummary[];
+  busy: boolean;
+  machineName: string | null;
+  onChange: (enabled: boolean) => void;
+}) {
+  const pinned = accounts.find((account) => account.id === state.pinnedAccountId);
+  const moved = state.lastSwitch
+    ? accounts.find((account) => account.id === state.lastSwitch?.toAccountId)
+    : undefined;
+  return (
+    <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+      <div className="flex items-start gap-2">
+        <Checkbox
+          id={`auto-switch-${platformLabel}`}
+          className="mt-0.5"
+          checked={state.mode === "automatic"}
+          disabled={busy}
+          onCheckedChange={(checked) => onChange(checked === true)}
+        />
+        <div className="min-w-0 space-y-1">
+          <label
+            htmlFor={`auto-switch-${platformLabel}`}
+            className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground"
+          >
+            Automatically use the account whose weekly limit resets soonest
+            <AutoSwitchBadge state={state} pinnedLabel={pinned?.label} />
+          </label>
+          <p className="text-xs text-muted-foreground">
+            {state.mode === "pinned"
+              ? `A manual switch pinned ${pinned?.label ?? "this account"}${machineName ? ` on ${machineName}` : ""}, so automatic switching is off here. Tick this to turn it back on.`
+              : `Moves on at 98% of the general weekly limit, or when a fresh reading confirms it is used up, and resends the work it stopped. Applies to ${platformLabel} on every machine this one controls. Fable, other model limits and the 5-hour limit never move it. Switching by hand pins that account and turns this off until you tick it again.`}
+          </p>
+          {state.mode === "automatic" && moved ? (
+            <p className="text-xs text-muted-foreground">Last moved to {moved.label}.</p>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AccountRow({
   account,
   busy,
   usageReloadToken,
+  autoSwitchIncluded,
   onUse,
   onRename,
   onRemove,
+  onAutoSwitchIncluded,
 }: {
   account: AgentAccountSummary;
   busy: boolean;
   usageReloadToken: string;
+  /** Absent from a machine that predates automatic switching. */
+  autoSwitchIncluded?: boolean;
+  onAutoSwitchIncluded: (included: boolean) => void;
   onUse: () => void;
   onRename: (label: string) => Promise<void>;
   onRemove: () => void;
@@ -184,6 +250,19 @@ function AccountRow({
             </p>
           )}
           {identity ? <p className="mt-0.5 text-xs text-muted-foreground">{identity}</p> : null}
+          {autoSwitchIncluded !== undefined && account.signedIn ? (
+            <label className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Checkbox
+                aria-label={`Include ${account.label} in automatic switching`}
+                checked={autoSwitchIncluded}
+                disabled={busy}
+                onCheckedChange={(checked) => onAutoSwitchIncluded(checked === true)}
+              />
+              {account.identity.email
+                ? "Include in automatic switching"
+                : "Include in automatic switching on this machine (it has no email to match elsewhere)"}
+            </label>
+          ) : null}
           {account.privateEntries?.length ? (
             <p className="mt-1 text-xs text-amber-500">
               No longer shared with the host login: {account.privateEntries.join(", ")}.{" "}
@@ -284,6 +363,8 @@ export function AgentAccountsSection({
   useEffect(() => {
     void reload();
   }, [reload]);
+  // Automatic switching moves the active account with no one here.
+  useAgentAccountsChanged(platform, () => void reload());
 
   const previousLoginState = useRef<AgentAccountLoginProgress["state"]>("idle");
   const applyLogin = useCallback(
@@ -362,6 +443,7 @@ export function AgentAccountsSection({
     snapshot?.accounts.filter((account) => account.platform === platform) ?? [],
   );
   const otherLoginPending = login.state === "pending" && !loginHere;
+  const autoSwitch = snapshot?.autoSwitch?.[platform];
 
   return (
     <section aria-label={`${platformLabel} accounts`} className={cn(SETTINGS_CARD_CLASS, "p-4")}>
@@ -421,6 +503,26 @@ export function AgentAccountsSection({
         </p>
       ) : null}
 
+      {autoSwitch ? (
+        <AutoSwitchControls
+          platformLabel={platformLabel}
+          state={autoSwitch}
+          accounts={accounts}
+          busy={busy}
+          machineName={machineName}
+          onChange={(enabled) =>
+            void run(() =>
+              setAgentAccountAutoSwitchEnabled(
+                platform,
+                enabled,
+                autoSwitch.pinnedAccountId !== undefined,
+                machine,
+              ),
+            )
+          }
+        />
+      ) : null}
+
       {snapshot ? (
         <ul className="mt-4 space-y-2">
           {accounts.map((account) => (
@@ -429,6 +531,20 @@ export function AgentAccountsSection({
               account={account}
               busy={busy}
               usageReloadToken={`${reloadToken}:${usageReloadToken}`}
+              {...(autoSwitch
+                ? { autoSwitchIncluded: autoSwitch.includedAccountIds.includes(account.id) }
+                : {})}
+              onAutoSwitchIncluded={(included) =>
+                void run(() =>
+                  setAgentAccountAutoSwitchIncluded(
+                    platform,
+                    account.id,
+                    account.identity.email,
+                    included,
+                    machine,
+                  ),
+                )
+              }
               onUse={() =>
                 void run(() => setActiveAgentAccount(platform, account.id, machine), true)
               }

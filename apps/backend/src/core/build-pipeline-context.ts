@@ -86,7 +86,7 @@ export type BuildPipelineServiceOptions = {
   /** Narrow production-provider seam used by deterministic backend tests. */
   providerDependencies?: Pick<
     ProviderDependencies,
-    "openCodeClient" | "monitorRetryMs" | "planUsage"
+    "openCodeClient" | "monitorRetryMs" | "planUsage" | "usageLimitStops"
   >;
   workflowResults?: WorkflowResultService;
   workflowResultRollout?: WorkflowResultRollout;

@@ -14,6 +14,7 @@ import {
 } from "@orkestrator/protocol/agents-md-orkestrator";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { validateGitRefName } from "./commands-agent-support.js";
+import type { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 import { gitHubCli } from "./github-cli-binary.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
@@ -259,26 +260,23 @@ export function agentsMdPrBody(changes: readonly AgentsMdChange[], reason: strin
   ].join("\n");
 }
 
-const running = new Map<string, Promise<AgentsMdPrResult>>();
-
-/** One run per request key in this process; a concurrent call shares it. */
-export function openAgentsMdPullRequest(input: {
-  root: string;
-  baseBranch: string;
-  /** Hex key derived from the request; names the branch and the worktree. */
-  key: string;
-  changes: AgentsMdChange[];
-  reason: string;
-  nodeName?: string;
-  deps?: AgentsMdPrDependencies;
-  /** The backend's storage, for `gh`'s selected credential when `deps` is left out. */
-  gitHubConfig?: GitHubCliConfigSource;
-}): Promise<AgentsMdPrResult> {
-  const existing = running.get(input.key);
-  if (existing) return existing;
-  const run = withPrivateDirectory(input).finally(() => running.delete(input.key));
-  running.set(input.key, run);
-  return run;
+/** One run per request key in this backend; a concurrent call shares it. */
+export function openAgentsMdPullRequest(
+  runs: Pick<CoordinatorRequestFlights, "joinAgentsMdPullRequest">,
+  input: {
+    root: string;
+    baseBranch: string;
+    /** Hex key derived from the request; names the branch and the worktree. */
+    key: string;
+    changes: AgentsMdChange[];
+    reason: string;
+    nodeName?: string;
+    deps?: AgentsMdPrDependencies;
+    /** The backend's storage, for `gh`'s selected credential when `deps` is left out. */
+    gitHubConfig?: GitHubCliConfigSource;
+  },
+): Promise<AgentsMdPrResult> {
+  return runs.joinAgentsMdPullRequest(input.key, () => withPrivateDirectory(input));
 }
 
 async function withPrivateDirectory(

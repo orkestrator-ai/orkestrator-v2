@@ -8,6 +8,7 @@ import { agentsMdBaseBranch } from "./agents-md-commands.js";
 import { agentsMdBranchName, agentsMdRequestKey } from "./agents-md-pr.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { runCommand } from "./shell.js";
@@ -76,6 +77,7 @@ beforeEach(async () => {
     storage,
     coordinators: coordinator,
     nodeCoordination: { actions: requests },
+    runtime: { coordinatorRequests: new CoordinatorRequestFlights() },
   } as unknown as CommandContext;
   commands = createCommandRegistry();
   commands.set("get_node_status", (async () => ({ nodeId: "bk_self" })) as CommandHandler);
@@ -231,7 +233,7 @@ describe("AGENTS.md command credential wiring", () => {
         },
         context,
       );
-      expect(open).toHaveBeenCalledWith({
+      expect(open).toHaveBeenCalledWith(context.runtime.coordinatorRequests, {
         root: path.join(root, "checkout"),
         baseBranch: "main",
         key,

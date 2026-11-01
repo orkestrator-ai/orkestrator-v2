@@ -546,6 +546,8 @@ export interface MultiReviewWorkflow {
     resultReminderSent?: boolean;
     /** The step's one continuation after a provider restart was spent. */
     restartContinuationSent?: boolean;
+    /** Times this step turn was resent after the weekly limit stopped it. */
+    usageLimitResends?: number;
     idleResultPolls?: number;
     /** Bounded terminal polls while the provider finalizes cumulative usage. */
     usageFinalizationPolls?: number;
@@ -903,6 +905,7 @@ function isActiveRequest(
       "continuationPrompt",
       "resultReminderSent",
       "restartContinuationSent",
+      "usageLimitResends",
       "idleResultPolls",
       "usageFinalizationPolls",
     ]) &&
@@ -922,6 +925,9 @@ function isActiveRequest(
     (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
+    (value.usageLimitResends === undefined ||
+      (Number.isSafeInteger(value.usageLimitResends) &&
+        (value.usageLimitResends as number) >= 0)) &&
     optionalPollCount(value.idleResultPolls) &&
     (value.usageFinalizationPolls === undefined ||
       (Number.isSafeInteger(value.usageFinalizationPolls) &&

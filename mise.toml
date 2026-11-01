@@ -352,6 +352,10 @@ run = [
   "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
 ]
 
+[tasks."verify:accounts:resend-live"]
+description = "Prove automatic switching's resend across a real bridge replacement (real bridges and pinned CLIs, scripted provider, no billed turn)"
+run = "bun test --cwd apps/backend ./tests/account-switch-resend-live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
+
 [tasks."verify:claude:mcp-live"]
 description = "Prove Claude MCP removal and rename on a running CLI (real CLI, no credentials)"
 run = "bun test --cwd bridges/claude-bridge ./src/services/session-manager-prompt-mcp-sync.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"

@@ -8,7 +8,6 @@ import type { CommandContext } from "./commands-context.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { readLocalServerStatus, startLocalServerUnlocked } from "./commands-servers.js";
 import { CoordinatorService } from "./coordinator-service.js";
-import { openCodeCoordinatorResearchToolIds } from "./opencode-coordinator-research.js";
 import { runCommand } from "./shell.js";
 import { createOpenCodeProviderLogin } from "./opencode-provider-login.js";
 import type { OpenCodeAgentToolsTuning } from "./opencode-agent-tools.js";
@@ -170,7 +169,9 @@ process.on("SIGTERM", () => process.exit(0));
 
     await startLocalServerUnlocked(runtimeId, context, "opencode");
     expect(await posted()).toEqual([SCOPED_URL, researchUrl]);
-    expect(openCodeCoordinatorResearchToolIds(`local:${runtimeId}`)).toEqual([]);
+    expect(
+      context.runtime.localServers.openCodeAgentTools.research.toolIds(`local:${runtimeId}`),
+    ).toEqual([]);
   });
 
   test("starts only once its Control MCP is connected, and keeps it on every later reconcile", async () => {

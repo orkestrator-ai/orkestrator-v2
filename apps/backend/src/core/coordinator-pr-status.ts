@@ -14,7 +14,12 @@ import {
   isPrMergeability,
   type PrMergeReadiness,
 } from "@orkestrator/protocol/pr-merge-readiness";
-import type { PrCheckSummary, PrState } from "@orkestrator/protocol/pr-monitor";
+import {
+  copyPrCheckSummary,
+  prRequiredCheckFailures,
+  type PrCheckSummary,
+  type PrState,
+} from "@orkestrator/protocol/pr-monitor";
 import type { CoordinatorStatus } from "./coordinator-status-wakes.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -51,7 +56,7 @@ const PR_STATES: ReadonlySet<unknown> = new Set(["open", "closed", "merged"]);
 
 function checkSummaryFrom(value: unknown): PrCheckSummary | null {
   if (!isRecord(value)) return null;
-  const { passed, total, pending } = value;
+  const { passed, total, pending, requiredFailed } = value;
   if (
     typeof passed !== "number" ||
     typeof total !== "number" ||
@@ -59,7 +64,12 @@ function checkSummaryFrom(value: unknown): PrCheckSummary | null {
     ![passed, total, pending].every((count) => Number.isSafeInteger(count) && count >= 0)
   )
     return null;
-  return { passed, total, pending };
+  return copyPrCheckSummary({
+    passed,
+    total,
+    pending,
+    ...(typeof requiredFailed === "number" ? { requiredFailed } : {}),
+  });
 }
 
 /**
@@ -98,16 +108,35 @@ export function prReadingFrom(environment: JsonRecord, health: CoordinatorPrHeal
   return reading;
 }
 
-export function prChecks(
-  summary: PrCheckSummary | null,
-): { passed: number; failed: number; pending: number; total: number } | null {
+/**
+ * A coordinator's check counts. `failed` is every failing check, as before;
+ * `requiredFailed` is how many of those GitHub requires, or null when GitHub
+ * did not say (then any of them may be required).
+ */
+export function prChecks(summary: PrCheckSummary | null): {
+  passed: number;
+  failed: number;
+  requiredFailed: number | null;
+  pending: number;
+  total: number;
+} | null {
   if (!summary || summary.total <= 0) return null;
+  const { failed, required } = prRequiredCheckFailures(summary);
   return {
     passed: summary.passed,
-    failed: Math.max(0, summary.total - summary.passed - summary.pending),
+    failed,
+    requiredFailed: required,
     pending: summary.pending,
     total: summary.total,
   };
+}
+
+/**
+ * The failing checks that wake a coordinator: the required ones, or every
+ * failing check when GitHub did not say which are required.
+ */
+function blockingCheckFailures(checks: ReturnType<typeof prChecks>): number {
+  return checks ? (checks.requiredFailed ?? checks.failed) : 0;
 }
 
 export function prReadiness(reading: CoordinatorPrReading): PrMergeReadiness {
@@ -248,8 +277,9 @@ function prCondition(reading: CoordinatorPrReading): PrCondition {
   if (reading.prState === "closed") return "closed";
   if (reading.prState !== "open") return "unknown";
   if (reading.hasMergeConflicts === true || reading.mergeability === "dirty") return "conflicts";
-  const checks = prChecks(reading.checkSummary);
-  if (checks && checks.failed > 0) return "checks-failed";
+  // A failing check GitHub does not require is not news: the PR stays quiet
+  // (and not ready, the shimmer's rule) until a required one fails.
+  if (blockingCheckFailures(prChecks(reading.checkSummary)) > 0) return "checks-failed";
   const readiness = prReadiness(reading);
   if (readiness.ready) return "ready";
   if (
@@ -275,6 +305,13 @@ function bounded(value: string, limit = 400): string {
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
 
+function failedDetail(checks: NonNullable<ReturnType<typeof prChecks>>): string {
+  if (checks.failed === 0) return "";
+  return checks.requiredFailed === null
+    ? " (required unknown)"
+    : ` (${checks.requiredFailed} required)`;
+}
+
 /** One line of the PR's state, for a notice. Content-free: states and counts. */
 export function prStateLine(reading: CoordinatorPrReading): string {
   const checks = prChecks(reading.checkSummary);
@@ -284,7 +321,7 @@ export function prStateLine(reading: CoordinatorPrReading): string {
     `conflicts: ${reading.hasMergeConflicts === null ? "unknown" : reading.hasMergeConflicts ? "yes" : "no"}`,
     `mergeability: ${reading.mergeability ?? "unknown"}`,
     checks
-      ? `checks: ${checks.passed} passed, ${checks.failed} failed, ${checks.pending} pending of ${checks.total}`
+      ? `checks: ${checks.passed} passed, ${checks.failed} failed${failedDetail(checks)}, ${checks.pending} pending of ${checks.total}`
       : "checks: none reported",
     `ready to merge: ${readiness.ready ? "yes" : `no (${readiness.reason})`}`,
   ].join("; ");
@@ -369,14 +406,27 @@ export function pullRequestStatus(
           "Resolve them with resolve_conflicts (the worker's Resolve tab), or tell the user.",
         ]),
       };
-    case "checks-failed":
+    case "checks-failed": {
+      const known = prChecks(reading.checkSummary)?.requiredFailed !== null;
       return {
         wake: true,
-        status: make("checks-failed", "pr-checks-failed", "failure", "has failing checks", [
-          state,
-          "Read the failing checks in the pull request; a worker can fix them on its branch.",
-        ]),
+        status: make(
+          "checks-failed",
+          "pr-checks-failed",
+          "failure",
+          known ? "has failing required checks" : "has failing checks",
+          [
+            state,
+            ...(known
+              ? []
+              : [
+                  "A check failed (it may not be required): GitHub did not say which checks are required.",
+                ]),
+            "Read the failing checks in the pull request; a worker can fix them on its branch.",
+          ],
+        ),
       };
+    }
     case "ready":
       return {
         wake: true,

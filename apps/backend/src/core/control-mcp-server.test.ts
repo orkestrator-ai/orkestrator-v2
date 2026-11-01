@@ -694,6 +694,21 @@ describe("Orkestrator control MCP server", () => {
     ).toBe(true);
     expect(
       (
+        await server.callCoordinatorTool(side, "get_worker_changes", {
+          environmentId: "env-1",
+          diffScope: "staged",
+        })
+      ).isError,
+    ).toBe(true);
+    await server.callCoordinatorTool(side, "get_worker_changes", {
+      environmentId: "env-1",
+      diffScope: "split",
+    });
+    expect(
+      invocations.findLast((entry) => entry.command === "get_coordinator_worker_changes")?.args,
+    ).toMatchObject({ input: { environmentId: "env-1", diffScope: "split" } });
+    expect(
+      (
         await server.callCoordinatorTool(side, "fork_worker", {
           requestId: "r",
           environmentId: "e",

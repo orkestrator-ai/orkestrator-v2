@@ -16,7 +16,6 @@
 
 The design canvas test appears sensitive to the suite's six-worker parallel load. The design canvas code did not change in this task; investigate the timeout under controlled parallel load.
 
-
 ## Mobile layout follow-up main merge recurrence — 2026-10-16
 
 - **Original command:** `ORKESTRATOR_E2E_PORT=52464 CI=1 mise run test:logged -- --name merge-latest-browser -- mise run test:browser`
@@ -83,7 +82,6 @@ case at 30000 ms (335 passed, 80 skipped, five failures across 420 cases).
 then passed the owning file in 27.2 seconds. Browser reruns ran sequentially.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iMEuX0/browser.log.gz`.
 
-
 ## Public landing-page review recurrence — 2026-10-18
 
 The desktop `canvas edits, script isolation, missed events, conflict and reload`
@@ -107,7 +105,6 @@ one worker and separate output directories: `e2e/AgentUsage.spec.ts` in 27.5 s
 `mise run test:logged -- --name <label> -- bunx playwright test --config e2e/playwright.config.ts <owning-file> --workers=1 --output=<directory>`.
 These ENOENT failures were caused by the overlapping validation commands,
 not evidence of intermittent product behavior.
-
 
 ## Landing-page main merge recurrence — 2026-10-18
 
@@ -172,7 +169,6 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 - `mise run test:logged -- --name merge-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the complete unchanged owner, exit 0 in 14.0 s.
 - Evidence: `orkestrator-test-run.mgE8Fb/merge-browser.log.gz` under the host temporary directory. No assertion, deadline or skip changed; host contention remains a hypothesis.
 
-
 ## Repository-sidebar review validation — 2026-10-22
 
 - **Original command:** `mise run test:logged -- --name browser-suite -- mise run test:browser`, nine workers alongside repository validation on the shared host. The component suite reported 437 passed, 85 skipped and four failed in 9.4 minutes. Both unchanged canvas viewport cases exceeded the 30-second test deadline. The other failures were Monaco startup and a new sidebar test's reload synchronization, corrected in the same change.
@@ -180,20 +176,17 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 - **Evidence:** host temporary directory `orkestrator-test-run.QC9tF3/browser-suite.log.gz`; original traces under `output/playwright/test-results/DesignCanvas-*`. The sidebar fixes are commit `6d6f9b83f`; its final focused browser rerun passed all 30 cases.
 - **Assessment:** confirmed intermittent recurrence. Host or fixture contention remains a hypothesis. No canvas implementation, assertion, timeout or skip changed; the original aggregate remains failed.
 
-
 ## Leaf coordinator review validation — 2026-10-24
 
 - `mise run test:logged -- --name browser-tests -- mise run test:browser` ran nine workers alongside repository checks: 537 passed, 101 skipped and four failed (282.4 s). The unchanged mobile canvas case could not find Element inspector at line 98 within five seconds. The other failures were mobile design history and both native branch-suggestion cases; see [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md).
 - The complete unchanged owner passed both viewport cases alone: `ORKESTRATOR_E2E_PORT=14373 mise run test:logged -- --name canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/playwright/canvas-owner` (exit 0, 16.3 s).
 - Evidence: host temporary artifact `orkestrator-test-run.E4tM8D/browser-tests.log.gz`. No canvas implementation, assertion, timeout or skip changed. Shared-host or fixture contention remains a hypothesis; the original aggregate remains failed.
 
-
 ## Leaf grouping main merge — 2026-10-24
 
 - `ORKESTRATOR_E2E_PORT=53444 ORKESTRATOR_PUBLIC_E2E_PORT=53445 mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers alongside repository validation on the shared host: 544 passed, 102 skipped and six failed in 9.4 minutes. Both canvas viewport cases exceeded the 30-second deadline; mobile was waiting to click Close inspector.
 - `ORKESTRATOR_E2E_PORT=59580 mise run test:logged -- --name merge-design-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/agent-testing/merge-design-owner` passed the complete unchanged owner, exit 0 in 34.3 s.
 - Evidence: host temporary artifact `orkestrator-test-run.EtTM9R/merge-browser.log.gz`; original traces under `output/playwright/test-results/`. No implementation, assertion, timeout or skip changed. The original aggregate remains failed; see [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md) for the other owners.
-
 
 ## Mixed-version compatibility main merge — 2026-10-24
 
@@ -274,11 +267,9 @@ suite's and were not chased. A quiet nine-worker `mise run test:browser` run
 to confirm no recurrence is listed in
 [0036](../../../todo/design-canvas/0036-design-canvas-qualification.md).
 
-
 ## Shared Codex state review fixes — 2026-10-26
 
 Reopened for a recurrence after the 2026-10-25 fix. Both viewport cases reached their deadlines in the nine-worker component browser suite on `74841142b`; the mobile case was waiting for the replacement iframe element's `display: inline-block`. The complete unchanged owner passed both viewport cases with one worker in 60.6 s: `ORKESTRATOR_E2E_PORT=62459 mise run test:logged -- --name codex-auth-owner-designcanvas -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output output/playwright/codex-auth-owner-designcanvas`. This does not establish that the earlier Apply styles race returned; the new stall's cause remains unknown. The original command and broader results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md). No implementation, assertion, timeout or skip changed in this owner.
-
 
 ## Uniform app shortcuts review recurrence — 2026-10-28
 
@@ -355,3 +346,27 @@ Playwright 1.64.0 with Chromium 156, shared with other builds throughout
 - **Not run:** a nine-worker `mise run test:browser`. On this host Docker
   churn from other builds aborts dev-server loads in any long browser run
   (2340), so it would not have shown whether this owner recurs.
+
+## Reviewer start failure (todo 1090) — 2026-11-01
+
+Preparation's browser validation on `agent-start-failure-28f9b34a1026-r1`
+reported the desktop case at its 30-second deadline. The branch does not touch
+the canvas, its fixture or this spec. The only branch files in the fixture's
+import graph are additive optional fields and validators in `packages/protocol`.
+
+- **Unchanged owner:** passed alone on the branch and on `origin/main`
+  (`93b99bfba`). A nine-worker `--repeat-each=6` run on `origin/main` with
+  DataSavingGateway passed 24 of 24. The nine-worker component suite on
+  `origin/main` did not hit it (1029 passed, 108 skipped, one flaky, two failed;
+  see [1310](../previews-annotations-and-gateway/1310-data-saving-gateway-browser-timeout.md#reviewer-start-failure-todo-1090--2026-11-01)).
+- **Reproduced on `origin/main`:** this spec's own throttle,
+  `CI=1 ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE=8 bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --repeat-each=2`,
+  failed all four runs at the 30-second deadline: mobile at the reconnect
+  snapshot poll (line 208) and at `page.reload()` (209), and desktop waiting
+  for `Changed while away` (202 and 210). These are the steps that aggregate
+  failures have reported. Evidence: `orkestrator-test-run.cN314m/main-designcanvas-throttle8.log.gz`
+  under the host temporary directory.
+- **Assessment:** the same as the 2026-10-25 throttle runs. After the Apply
+  styles fix, the remaining failure is the 30-second budget running out while
+  the page is starved of CPU. The step that is running at the deadline varies.
+  No implementation, assertion, timeout or skip changed.

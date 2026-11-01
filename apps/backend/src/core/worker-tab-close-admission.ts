@@ -1,4 +1,9 @@
-/** Admission spans asynchronous delegation persistence and coordinator tab close. */
+/**
+ * Admission spans asynchronous delegation persistence and coordinator tab close.
+ * Per backend but still module state: the coordinator store calls it with no
+ * runtime in reach. Not moved yet
+ * (docs/todo/backend-structure/1070-backend-module-state-beyond-0390.md).
+ */
 const closing = new Set<string>();
 const pending = new Map<string, number>();
 // A remote tab lives in the command node's namespace, independently of a local

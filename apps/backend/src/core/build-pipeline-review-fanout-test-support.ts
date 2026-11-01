@@ -379,6 +379,11 @@ export async function withPipeline(
     storage: StorageService;
     provider: FanoutProvider;
     providers: Map<BuildPipelineAgent, FanoutProvider>;
+    /**
+     * Agents whose provider cannot be created, with the error it throws: a
+     * reviewer of one fails before it has a session, as a missing bridge does.
+     */
+    unstartable: Map<BuildPipelineAgent, string>;
     read: (id: string) => Promise<BuildPipeline>;
     /**
      * The probed worktree. `failAfterPackage` fails every probe once a review
@@ -442,6 +447,7 @@ export async function withPipeline(
     ["cursor", new FanoutProvider("cursor")],
     ["pi", new FanoutProvider("pi")],
   ]);
+  const unstartable = new Map<BuildPipelineAgent, string>();
   const worktree = {
     head: HEAD,
     fingerprint: FINGERPRINT,
@@ -503,7 +509,11 @@ export async function withPipeline(
     new BuildPipelineService(storage, invoke, {
       autoAdvance: false,
       environmentGit: options.environmentGit,
-      provider: async (_pipeline, agent) => providers.get(agent)!,
+      provider: async (_pipeline, agent) => {
+        const unavailable = unstartable.get(agent);
+        if (unavailable !== undefined) throw new Error(unavailable);
+        return providers.get(agent)!;
+      },
       transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
       ...(options.structuredResultDeadlineMs !== undefined
         ? { structuredResultDeadlineMs: options.structuredResultDeadlineMs }
@@ -541,6 +551,7 @@ export async function withPipeline(
       storage,
       provider,
       providers,
+      unstartable,
       read,
       worktree,
       packageGeneration,

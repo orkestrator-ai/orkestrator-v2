@@ -13,6 +13,7 @@ import {
   assertElectronReadiness,
   compileElectronForDevelopment,
   electronLaunchForRuntime,
+  electronLaunch,
   electronReadinessTimeoutMs,
   outputTail,
   startDevelopment,
@@ -124,9 +125,14 @@ describe("Electron readiness", () => {
     const { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: _, ...notOptedIn } = env;
     expect(electronLaunchForRuntime("agent-test", "linux", notOptedIn).switches).toEqual([]);
   });
-  test.each(["development", "agent-test"] as const)(
-    "wires Electron spawn settings and keeps readiness during status persistence (%s)",
-    async (flavor) => {
+  test.each([
+    ["development", false],
+    ["agent-test", false],
+    ["development", true],
+    ["agent-test", true],
+  ] as const)(
+    "wires Electron spawn settings and keeps readiness during status persistence (%s, explicit=%s)",
+    async (flavor, explicitHeadless) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
       const roots = {
         developmentRoot: path.join(root, "dev"),
@@ -134,6 +140,7 @@ describe("Electron readiness", () => {
         homeDir: root,
       };
       const args = parseDevArguments(["--profile", "ready-race"]);
+      args.headlessElectron = explicitHeadless;
       const profile = resolveRuntimeProfile({
         repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
         requestedId: args.profile,
@@ -184,6 +191,7 @@ describe("Electron readiness", () => {
       let electronOptions: SpawnOptions | undefined;
       try {
         await startDevelopment(args, flavor, {
+          platform: "linux",
           roots,
           prune: async () => [],
           typecheck: () => ({ status: 0 }),
@@ -228,9 +236,13 @@ describe("Electron readiness", () => {
             if (status.status === "ready") setImmediate(() => electron.emit("exit", 0, null));
           },
         });
-        const headless = flavor === "agent-test" && process.platform === "linux";
+        const headless = explicitHeadless || flavor === "agent-test";
         expect(electronArgs).toEqual([
-          ...(headless ? ["--ozone-platform=headless", "--disable-gpu"] : []),
+          ...(explicitHeadless
+            ? ["--ozone-platform=headless"]
+            : headless
+              ? ["--ozone-platform=headless", "--disable-gpu"]
+              : []),
           "apps/desktop/dist/electron/main.js",
         ]);
         expect(electronOptions?.env).not.toBe(process.env);
@@ -262,6 +274,66 @@ describe("Electron readiness", () => {
       }
     },
   );
+});
+
+describe("Electron launch", () => {
+  test("rejects unsupported headless startup before building or spawning", async () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      let touched = false;
+      const args = parseDevArguments(["--profile", "unsupported"]);
+      args.headlessElectron = true;
+      await expect(
+        startDevelopment(args, "agent-test", {
+          platform,
+          typecheck: () => {
+            touched = true;
+            return { status: 0 };
+          },
+          spawn: (() => {
+            touched = true;
+            throw new Error("unexpected spawn");
+          }) as typeof import("node:child_process").spawn,
+          prune: async () => {
+            touched = true;
+            return [];
+          },
+        }),
+      ).rejects.toThrow("only supported on Linux");
+      expect(touched).toBe(false);
+    }
+  });
+
+  const env = {
+    DISPLAY: ":0",
+    WAYLAND_DISPLAY: "wayland-1",
+    ELECTRON_OZONE_PLATFORM_HINT: "wayland",
+    ELECTRON_RUN_AS_NODE: "1",
+    PATH: "/usr/bin",
+  };
+
+  test("a normal launch keeps the display and never runs Electron as Node", () => {
+    const launch = electronLaunch(false, "linux", env);
+    expect(launch.switches).toEqual([]);
+    expect(launch.env).toEqual({
+      DISPLAY: ":0",
+      WAYLAND_DISPLAY: "wayland-1",
+      ELECTRON_OZONE_PLATFORM_HINT: "wayland",
+      PATH: "/usr/bin",
+    });
+    expect(env.ELECTRON_RUN_AS_NODE).toBe("1");
+  });
+
+  test("headless selects the headless Ozone platform with no display to open a window on", () => {
+    const launch = electronLaunch(true, "linux", env);
+    expect(launch.switches).toEqual(["--ozone-platform=headless"]);
+    expect(launch.env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  test("headless is refused where Ozone does not apply", () => {
+    expect(() => electronLaunch(true, "darwin", env)).toThrow("only supported on Linux");
+    expect(() => electronLaunch(true, "win32", env)).toThrow("only supported on Linux");
+    expect(electronLaunch(false, "darwin", env).switches).toEqual([]);
+  });
 });
 
 describe("startup failure output", () => {

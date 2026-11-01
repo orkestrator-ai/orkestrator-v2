@@ -212,6 +212,10 @@ export function pinnedBundleCandidates(
   ];
 }
 
+/**
+ * Process-wide on purpose: verified bytes of a pinned bundle file, keyed by
+ * bundle and directory, the same for every backend.
+ */
 const cache = new Map<string, Promise<Uint8Array>>();
 
 /** Loads and verifies a pinned bundle. Cached per process after verification. */

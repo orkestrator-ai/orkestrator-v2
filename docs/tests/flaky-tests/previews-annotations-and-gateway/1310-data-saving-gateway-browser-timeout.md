@@ -60,3 +60,39 @@ recorded in [1254](../aggregate-validation-runs/1254-merge-readiness-review-vali
 - **Evidence:** `orkestrator-test-run.MA9mVk/review-browser.log.gz` under the host
   temporary directory; aggregate details in case 1166. No implementation,
   assertion, timeout or skip changed.
+
+## Reviewer start failure (todo 1090) — 2026-11-01
+
+- **Recurrence:** preparation's browser validation on
+  `agent-start-failure-28f9b34a1026-r1` reported the mobile case at its
+  60-second deadline. The branch does not touch this spec, its fixtures or the
+  gateway; the only branch files in the fixture's import graph are additive
+  optional fields and validators in `packages/protocol`.
+- **Unchanged owner, both branches:** the earlier stage's reruns passed it on
+  the branch and on `origin/main` (`93b99bfba`). The `origin/main` rerun used
+  two workers alongside AgentLaunchDialog and DesignCanvas (8 tests, 6 passed;
+  the two failures were the native branch cases of [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md)).
+  A nine-worker `--repeat-each=6` run of this owner with DesignCanvas on
+  `origin/main` passed 24 of 24 (57.2 s, load average about 11). A nine-worker
+  run of the whole component suite on `origin/main`
+  (`CI=1 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=9 ORKESTRATOR_REVIEW_VALIDATION=1 bunx playwright test --config e2e/playwright.config.ts`)
+  did not hit it: 1029 passed, 108 skipped, one flaky (1249), two failed
+  (0493's AgentLaunchDialog cases).
+- **Reproduced on `origin/main` under CPU starvation:** in a detached
+  `origin/main` worktree, a temporary, uncommitted diagnostic applied CDP
+  `Emulation.setCPUThrottlingRate` to both pages right after `newPage()`, then
+  `bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1 --repeat-each=2`
+  ran. At rate 6 all four passed (79.6 s). At rate 20 one of four failed with
+  this case's exact signature: `Test timeout of 60000ms exceeded`, then
+  `browserContext.close: Target page, context or browser has been closed` in
+  the `finally` block. The other three passed in about 54 s each, against
+  roughly 16–25 s unthrottled. Evidence:
+  `orkestrator-test-run.34LeNi/main-datasaving-throttle20.log.gz` under the host
+  temporary directory.
+- **Assessment:** the 60-second budget runs out when the browser is starved of
+  CPU. No single step hangs; the whole scenario slows toward the deadline, and
+  the step that is running when it expires varies. The context-close error is
+  a consequence of the deadline, not a cause. This makes host CPU contention
+  the demonstrated mechanism, though it does not prove that contention was the
+  cause of each aggregate failure. No implementation, assertion, timeout or
+  skip changed.

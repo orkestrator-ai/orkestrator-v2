@@ -10,3 +10,4 @@
 - **Isolated rerun:** the unchanged owner passed alone (`svc0042-owner-workspace-realm-electron`, 1 passed, 63.0 s), and the second full suite (`svc0042-suite-2`) passed it.
 - **Evidence:** `output/agent-testing/svc0042-suite-1/electron/results.json`.
 - **Hypothesis:** a backend or design-canvas writer had not exited when the recursive remove ran. Not established. No assertion, timeout or skip changed.
+- **Recurrence (2026-11-01):** `ENOTEMPTY … rmdir '<tmp>/orkestrator-electron-realm-*/dev/profiles/electron-realm/data'` in `t1170-electron-suite-1`, after Electron crashed with `SIGSEGV` mid-test (1302), so the backend it had started may still have been writing. The cleanup error replaced the test's own failure in Playwright's report; read the trace for the first error.

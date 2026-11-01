@@ -6,7 +6,6 @@ import { StorageService, createProject } from "./storage.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { startEnvironmentSetupOnce } from "./commands-environment.js";
-import { projectHomeTesting } from "./project-home-environment.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 import type { Environment } from "./models.js";
@@ -72,7 +71,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   try {
-    projectHomeTesting.reset();
     runtime.shutdown();
     await rm(root, { recursive: true, force: true });
   } finally {

@@ -17,7 +17,7 @@ import {
   validateSelection,
   type ControlMcpInvoker,
 } from "./control-shared-actions.js";
-import { WORKER_CHANGES_LIMITS } from "./coordinator-worker-changes-limits.js";
+import { WORKER_CHANGES_LIMITS, WORKER_DIFF_SCOPES } from "./coordinator-worker-changes-limits.js";
 
 /**
  * Coordinator tools that read or branch off one worker: `get_worker_changes`
@@ -76,7 +76,7 @@ export function registerCoordinatorWorkerTools(
     {
       title: "Read what a worker changed",
       description:
-        "Read a worker environment's changes, local or container, without fetching its branch: its branch and base, the commits since the base, the files changed since the base (committed and uncommitted together) with status and line counts, the files not yet committed, and a unified diff of the listed files. Read-only, never the project checkout (read that directly). Everything is bounded; when something is cut the result says truncated and how to narrow: page files with offset, pass paths (files or directories), or file for one file's whole diff. Pass nodeId for a worker on another connected node.",
+        "Read a worker environment's changes, local or container, without fetching its branch: its branch and base, the commits since the base, the files changed since the base (committed and uncommitted together) with status and line counts, the files its commits changed, the files not yet committed, and a unified diff of the listed files. The diff is base to working tree unless diffScope asks for committed (base to HEAD), uncommitted (HEAD to working tree) or split (both, separately). Read-only, never the project checkout (read that directly). Everything is bounded; when something is cut the result says truncated and how to narrow: page files with offset, pass paths (files or directories), or file for one file's whole diff. Pass nodeId for a worker on another connected node.",
       inputSchema: z
         .object({
           environmentId,
@@ -103,6 +103,12 @@ export function registerCoordinatorWorkerTools(
             .boolean()
             .optional()
             .describe("false lists files and counts without diffs."),
+          diffScope: z
+            .enum(WORKER_DIFF_SCOPES)
+            .optional()
+            .describe(
+              "Which diff: sinceBase (default, base to working tree, in diffs), committed (base to HEAD, in committedDiffs), uncommitted (HEAD to working tree, in uncommittedDiffs) or split (both, sharing maxDiffBytes).",
+            ),
           maxDiffFiles: z.number().int().min(0).max(L.maxDiffFiles).optional(),
           maxDiffBytes: z
             .number()

@@ -139,7 +139,7 @@ import {
   withResumeCleanupNotices,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import { hideMachineOutputText } from "@/lib/structured-review-messages";
+import { hideMachineOutputText } from "@orkestrator/protocol/structured-review-transcript";
 import {
   createPeerMailNativeMessagesFromCarrier,
   isPeerMailCarrierContent,

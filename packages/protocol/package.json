@@ -195,6 +195,8 @@
     "./ssh-agent-socket": "./src/ssh-agent-socket.ts",
     "./structured-review": "./src/structured-review.ts",
     "./structured-review-summary": "./src/structured-review-summary.ts",
+    "./structured-review-transcript": "./src/structured-review-transcript.ts",
+    "./transcript-json-payload": "./src/transcript-json-payload.ts",
     "./structured-output": "./src/structured-output.ts",
     "./workflow-json-schema": "./src/workflow-json-schema.ts",
     "./workflow-results": "./src/workflow-results.ts",

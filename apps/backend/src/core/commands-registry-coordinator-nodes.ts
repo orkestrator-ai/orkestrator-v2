@@ -16,6 +16,7 @@ import {
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
@@ -118,7 +119,7 @@ export async function coordinatorNodeTarget(
       })
       .catch((error: unknown) => {
         // An older node does not know the controller commands yet.
-        if (error instanceof Error && error.message.includes(`Unknown command: ${command}`)) {
+        if (isUnknownCommandError(error, command)) {
           throw new Error(
             `${node.view.displayName} runs an older Orkestrator that cannot do this yet; update it, then retry.`,
           );

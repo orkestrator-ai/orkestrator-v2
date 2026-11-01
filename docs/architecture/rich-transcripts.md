@@ -534,7 +534,7 @@ are separate actions; Copy message includes each artifact's one-line text
 summary. Toolbar buttons have accessible names and pressed states; dialogs
 trap focus, close on Escape and restore focus. Radix returns focus only to a
 `DialogTrigger`, so dialogs opened from a toolbar button spread
-`useDialogFocusReturn()` (`lib/chat/rich-markdown/dialog-focus.ts`) onto
+`useDialogFocusReturn()` (`lib/dialog-focus.ts`) onto
 their `DialogContent` (the source viewer and the expanded table do; the
 expanded Mermaid dialog does not yet).
 

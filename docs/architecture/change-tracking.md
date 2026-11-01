@@ -26,6 +26,7 @@ do not add up to `thread-net`.
 | `tool-payload` | Proposal, patch, replacement fragments or content-only payload | `changes.scope.tool-payload` |
 | `operation-volume` | One selected contribution per canonical attempt (structured edits only), per turn and per thread segment | `changes.scope.operation-volume` |
 | `uncommitted-net` | `HEAD` (or the empty tree when unborn) → working tree, untracked included | `changes.scope.uncommitted-net` |
+| `committed-net` | the environment's own base (`environment-net`'s immutable baseline commit) → `HEAD`; unavailable until that baseline exists | `changes.scope.committed-net` |
 | `staged` | `HEAD` → index | `changes.scope.staged` |
 | `unstaged` | index → working tree, untracked included | `changes.scope.unstaged` |
 | `commit` | the commit's first parent (or the empty tree) → the commit | `changes.scope.commit` |
@@ -130,7 +131,7 @@ Backend services (one composition root, `service.ts`):
 | `ChangeRetentionService` | `retention.ts` | Reachability GC, quotas |
 | `ChangeTrackingPolicyRegistry` | `policy-registry.ts` | Every budget and cadence |
 | shared physical work | `shared-physical-work.ts` | Alias scan joins, refcounted watchers |
-| `GitScopeService` | `git-scopes.ts` | `uncommitted-net`, `staged`, `unstaged`, `commit`, `pull-request` |
+| `GitScopeService` | `git-scopes.ts` | `uncommitted-net`, `committed-net`, `staged`, `unstaged`, `commit`, `pull-request` |
 | compatibility | `legacy-payload.ts`, `legacy-import.ts` | Legacy payload measurement, backend-generated legacy counts, journal import |
 
 ## Physical ownership
@@ -242,7 +243,7 @@ Commands (`commands-registry-changes.ts`):
 | `changes_get_tool_presentations` | Tool presentations and summary projections for transcript rows |
 | `changes_get_history` | Persisted turns of a thread, paged; no worktree scan |
 | `changes_get_thread` | The thread's current segment resource |
-| `changes_resolve_live_detail` | Live row → immutable file identity, or `stale-revision` |
+| `changes_resolve_live_detail` | Live row of `environment-net`, `uncommitted-net` or `committed-net` → immutable file identity, or `stale-revision`; `committed-net` reads `HEAD`'s blob, never the working tree, and Git-filtered rows are refused |
 | `changes_get_diff` | Backend-rendered hunks for a diff identity; `body-expired` never falls back to disk |
 | `changes_refresh` | Fenced refresh; settles only on a pass started after the request |
 | `changes_get_handoff` | Backend-serialized handoff text |

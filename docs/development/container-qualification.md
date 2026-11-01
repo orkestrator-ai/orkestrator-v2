@@ -51,6 +51,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; pinned to the in-container firewall), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
+| Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
@@ -64,7 +65,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Registry | `scripts/measure-registry-image.sh [--transfer <platform>] [--dind <platform>] [--json <file>] <image-ref>` | Compressed manifest and layer bytes, blob transfer time, cold pull |
 | Upgrade and rollback | `bun scripts/qualify-backend-upgrade-rollback.ts [--old-ref <ref>] [--floor-ref <ref>] [--main-ref <ref>] [--report <file>]` | Backend upgrade over an older release's data and containers; the floor's refusal of a newer directory |
 | Real stack, terminal Claude | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL=1 mise run test:agent:docker` | A real `claude` turn in a **Claude CLI** tab, foreground and background: the Claude state signal's working and waiting latency against the activity and completion budgets, no missed ring (`container-claude-terminal-signal.spec.ts`) |
-| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
+| Linux Engine, CI | `.github/workflows/container-live-qualification.yml` (weekly, on demand, and on pull requests that change the suites, the signal scripts or the benchmark harness) | Every live suite on `ubuntu-24.04` and `ubuntu-24.04-arm`, both container change-signal live tests, the design export test (`export-container.test.ts`), the exec-cost script, then the benchmarks (C28); the numbers are uploaded as `container-benchmarks-<platform>` |
 | Egress gateway prototype | `scripts/qualify-egress-gateway.sh [image]` | The 2026-10-22 prototype of the gateway topology; the backend's own gateway is covered by the live firewall, network, readiness and replacement suites above |
 
 `test:logged` kills a command that prints nothing for 300 s, and Bun prints
@@ -116,6 +117,61 @@ Live tests start runtimes through `tests/container-live-start.ts`
 (`startRuntime`): Docker refuses a runtime whose egress gateway is not
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
+
+## UI response under multi-environment load, first run on a busy host (2026-11-01)
+
+Todo [0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md)
+task 3, with the [probe](#ui-response-under-multi-environment-load) at
+`5616f272`. This is a first sample on a busy shared host, not a reference
+figure.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, 16 CPUs, 62 GiB),
+  Docker Engine 29.9.2 rootful. Other builds were running on the host
+  throughout. The load average was 58.7, 66.1 and 62.7 at the start of the
+  three phases, and the host CPU was 97.6–99.9% busy in every phase. All 10
+  running containers were this profile's, so the competing load was not in
+  Docker.
+- **Profile:** `dev:test --fixture-environments container
+  --no-agent-credentials --agent-platforms claude --headless-electron`.
+  Three busy environments, one target, and the profile's own
+  `fixture-container`, all restricted, all under the built-in default (no
+  CPU cap, 8 GiB, 4,096 PIDs). There were no provider turns. Default
+  options: 2 spin loops per busy container, 20 switches, 3 stop and start
+  cycles and a 20 s watch per phase. Headless Chromium at 1440 × 900.
+- **Load:** each busy container used 189–193% CPU in the busy phase and
+  2–3% in the idle phases.
+
+Medians with p95 in brackets, in milliseconds unless stated:
+
+| Measure | Idle 1 | Busy | Idle 2 |
+| --- | --- | --- | --- |
+| Row selected and painted | 5.3 (13.8) | 5.3 (13.3) | 7.4 (13.4) |
+| `<main>` settled after a switch | 589 (1,067) | 594 (1,015) | 317 (706) |
+| Frame interval; stalls over 50 ms | 16.7 (16.7), max 16.8; 0 | 16.7 (16.7), max 33.4; 0 | 16.7 (16.7), max 33.3; 0 |
+| Long tasks; slow events | 0; 0 | 0; 0 | 0; 0 |
+| Timer lag (250 ms timer) | 0.3 (3.1) | 1.3 (6.6) | 0.3 (3.8) |
+| `get_environments` round trip | 13.0 (38.2) | 18.7 (64.8) | 12.1 (31.3) |
+| `stop_environment` round trip | 10.9 s (11.2 s) | 11.1 s (11.6 s) | 10.7 s (11.5 s) |
+| `start_environment` round trip | 4.3 s (4.4 s) | 5.4 s (5.9 s) | 4.2 s (4.5 s) |
+| Sidebar after the stop reply | 63 (64) | 59 (82) | 62 (68) |
+| Sidebar after the start reply | 54 (61) | 58 (58) | 43 (49) |
+
+The first visit to each environment, before the phases: selected in
+13.4 ms and settled in 115 ms (medians of 4). There were no failures, missed
+signals or renderer reloads. The dialogs dismissed were "Docker containers
+can't reach Orkestrator", which the host firewall triggers and which was left
+unchanged.
+
+On this host, about 5.7 CPUs of container load changed nothing the renderer
+showed. Selection painted within a frame, with no long tasks and no stalls.
+The sidebar trailed lifecycle replies by about 60 ms in every phase. The
+backend slowed against either idle phase: the `get_environments` round trip
+rose 1.4–1.5× (p95 1.7–2.1×) and `start_environment` 1.24–1.27×. `<main>` settle times varied
+more between the two idle phases (589 against 317 ms) than between idle and
+busy, so this sample cannot attribute them to the load. Every stop took
+10.5–11.6 s with or without load, against 0.1–0.6 s for the benchmark's bare
+`docker stop`; that is recorded in
+[2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md).
 
 ## Egress gateway conditions on Linux Engine (2026-10-31)
 
@@ -741,6 +797,27 @@ network and the benchmark harness) had not kept up with account switching
 from view when it was started again. Both are fixed. Detail and decisions are
 in [0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
+## Build-pipeline rewind review evidence (2026-11-01)
+
+The review fixes passed all three live build-pipeline rewind cases on Linux
+amd64, Docker Engine 29.9.2, using `orkestrator-v2:dev-3e57790310c6`
+(image ID `sha256:d0cc33252a29f76e08cf502d36bde24520346d485355ce0ccc1737c4d56074b7`).
+The run completed in 14.5 seconds:
+
+```bash
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:dev-3e57790310c6 \
+  mise run test:logged -- --name review-repair-live-rewind -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./tests/build-pipeline-code-rewind-docker.test.ts --parallel=1
+```
+
+This exercised real container Git backup and reset, restart and lease-push
+instructions, refusal while paused, and completion of a journaled reset after
+unpause. The providers were harness fakes; no provider turns were taken.
+The logged runner reported exit 0 and removed its passing output under the
+normal retention policy. Docker Desktop, rootless Docker, and egress-gateway
+configurations were outside this focused run.
+
 ## Provider-state review evidence (2026-10-16)
 
 The provider-state review fixes were exercised on native arm64 Docker Desktop
@@ -942,6 +1019,59 @@ Engine amd64. Their results are in
 [0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md#evidence-2026-10-25).
 Rerun them when a workload grows (a new browser default, a heavier build),
 before you change the default.
+
+### UI response under multi-environment load
+
+`e2e/perf/multi-environment-ui-perf.ts` times the browser UI while several
+container environments are busy. It is a probe, not a test: it has no
+targets and fails only when it cannot run. It attaches to a running
+disposable profile with container fixtures and never starts an agent
+session.
+
+```bash
+# In its own long-lived terminal; --headless-electron keeps the profile's
+# window out of the desktop session on Linux.
+mise run dev:test --profile ui-load --fixture-environments container \
+  --no-agent-credentials --agent-platforms claude --headless-electron
+# Once `mise run dev:status --profile ui-load --json` reports ready:
+mise exec -- bun e2e/perf/multi-environment-ui-perf.ts --profile ui-load \
+  [--environments 3] [--workers 2] [--memory-mib 0] [--phases idle,busy,idle] \
+  [--switches 20] [--status-cycles 3] [--watch-seconds 20] [--settle-seconds 10]
+# Afterwards:
+mise run dev:stop --profile ui-load && mise run dev:reset --profile ui-load
+```
+
+It adds `--environments` container environments (`ui-load-busy-N`) and a
+`ui-load-target` to the fixture project, and signs a headless Chromium in
+through `dev:login`. Startup dialogs such as "Claude Code Is Not Logged In"
+are dismissed for that page only. In each `busy` phase, every
+`ui-load-busy-N` container runs a load through `docker exec`, and only after
+its `environment-id` label has been checked. The load is `--workers` shell
+spin loops (one CPU each), a workspace file rewritten every second, and an
+optional `--memory-mib` held by Node. The containers keep the budget the
+backend gave them. `idle` phases measure with the same environments running
+and no load. Each phase records:
+
+- **watch:** animation-frame intervals, long tasks, slow events (16 ms or
+  more), the lag of a 250 ms timer, and the `get_environments` round trip
+  from the page, one every 100 ms.
+- **switch:** time from `pointerdown` on a sidebar row to the first frame in
+  which the row is selected (`selectMs`). The frame time is when the frame
+  starts, so this is accurate to one frame and can be slightly negative.
+  `settledMs` runs to the last change under `<main>` before 300 ms of quiet.
+- **status:** `stop_environment` and `start_environment` on `ui-load-target`,
+  sent from the page. Each records its round trip and when the sidebar marker
+  showed the result. `stopLagMs` and `startLagMs` are that time minus the
+  round trip, so they measure how far the UI trails the reply.
+- **host:** load average, host CPU busy from `/proc/stat`, the probe
+  containers' `docker stats` CPU and the number of running containers.
+
+Every environment is visited once before the first phase, so phases compare
+warm switches; the cold visits are reported separately. The report under
+`output/benchmarks/multi-environment-ui/` holds numbers and dialog titles
+only, no tokens, paths or contents. The probe deletes its environments, also
+on failure. A run is a sample of one host at one time; record the host load
+with it.
 
 ### Exec cost and container change signals
 

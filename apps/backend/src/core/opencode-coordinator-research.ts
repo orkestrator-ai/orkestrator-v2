@@ -15,69 +15,91 @@ import type { CoordinatorResearchMcpServer } from "@orkestrator/protocol/coordin
 import { openCodeHealthHeaders } from "./commands-server-health.js";
 import { readBoundedOpenCodeResponse } from "./opencode-bounded-response.js";
 
-/**
- * Exact research tool ids per OpenCode server, keyed like the agent-tools
- * configuration (`local:<runtime id>`), set at launch and forgotten with it.
- */
-const researchToolIds = new Map<string, readonly string[]>();
 type ResearchRegistration = {
   input: ResearchInput;
   generation: number;
   ready: boolean;
   pending?: Promise<readonly string[]>;
 };
-const registrations = new Map<string, ResearchRegistration>();
 
-/** Disposal drops runtime MCP registrations, but persisted session rules survive. */
-export function invalidateOpenCodeCoordinatorResearch(serverKey: string): void {
-  researchToolIds.delete(serverKey);
-  const registration = registrations.get(serverKey);
-  if (registration) {
-    registration.generation += 1;
-    registration.ready = false;
-    registration.pending = undefined;
-  }
-}
+/**
+ * One backend's coordinator research registrations, keyed like the
+ * agent-tools configuration (`local:<runtime id>`): set at launch and
+ * forgotten with it. Owned by the backend's `OpenCodeAgentToolsReconciler`
+ * (`runtime.localServers.openCodeAgentTools.research`), whose cancellation
+ * forgets the same keys.
+ */
+export class OpenCodeCoordinatorResearch {
+  /** Exact research tool ids per OpenCode server. */
+  private readonly researchToolIds = new Map<string, readonly string[]>();
+  private readonly registrations = new Map<string, ResearchRegistration>();
 
-/** Restore the launcher-owned endpoint before granting any exact tool permissions. */
-export async function ensureOpenCodeCoordinatorResearch(
-  serverKey: string,
-  signal?: AbortSignal,
-): Promise<readonly string[]> {
-  const registration = registrations.get(serverKey);
-  if (!registration) return [];
-  if (registration.ready) return openCodeCoordinatorResearchToolIds(serverKey);
-  if (registration.pending) return registration.pending;
-  const generation = registration.generation;
-  const pending = registerResearchServers({
-    ...registration.input,
-    // Launch signals expire; every instance restoration needs a fresh deadline.
-    signal: signal
-      ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
-      : AbortSignal.timeout(15_000),
-  })
-    .then((allowed) => {
-      if (registrations.get(serverKey) !== registration || registration.generation !== generation) {
-        throw new Error("OpenCode research instance changed during registration");
-      }
-      registration.ready = true;
-      researchToolIds.set(serverKey, allowed);
-      return allowed;
-    })
-    .finally(() => {
-      if (registration.pending === pending) registration.pending = undefined;
+  /**
+   * Register `servers` on a coordinator's OpenCode server and record the exact
+   * tool ids they contributed. A server that does not connect is skipped:
+   * research is optional, and the coordinator context only offers tools it has.
+   */
+  configure(input: ResearchInput): Promise<readonly string[]> {
+    this.researchToolIds.delete(input.serverKey);
+    this.registrations.set(input.serverKey, {
+      input: { ...input, signal: undefined },
+      generation: 0,
+      ready: false,
     });
-  registration.pending = pending;
-  return pending;
-}
+    return this.ensure(input.serverKey, input.signal);
+  }
 
-export function openCodeCoordinatorResearchToolIds(serverKey: string): readonly string[] {
-  return researchToolIds.get(serverKey) ?? [];
-}
+  /** Disposal drops runtime MCP registrations, but persisted session rules survive. */
+  invalidate(serverKey: string): void {
+    this.researchToolIds.delete(serverKey);
+    const registration = this.registrations.get(serverKey);
+    if (registration) {
+      registration.generation += 1;
+      registration.ready = false;
+      registration.pending = undefined;
+    }
+  }
 
-export function forgetOpenCodeCoordinatorResearch(serverKey: string): void {
-  researchToolIds.delete(serverKey);
-  registrations.delete(serverKey);
+  /** Restore the launcher-owned endpoint before granting any exact tool permissions. */
+  ensure(serverKey: string, signal?: AbortSignal): Promise<readonly string[]> {
+    const registration = this.registrations.get(serverKey);
+    if (!registration) return Promise.resolve([]);
+    if (registration.ready) return Promise.resolve(this.toolIds(serverKey));
+    if (registration.pending) return registration.pending;
+    const generation = registration.generation;
+    const pending = registerResearchServers({
+      ...registration.input,
+      // Launch signals expire; every instance restoration needs a fresh deadline.
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+        : AbortSignal.timeout(15_000),
+    })
+      .then((allowed) => {
+        if (
+          this.registrations.get(serverKey) !== registration ||
+          registration.generation !== generation
+        ) {
+          throw new Error("OpenCode research instance changed during registration");
+        }
+        registration.ready = true;
+        this.researchToolIds.set(serverKey, allowed);
+        return allowed;
+      })
+      .finally(() => {
+        if (registration.pending === pending) registration.pending = undefined;
+      });
+    registration.pending = pending;
+    return pending;
+  }
+
+  toolIds(serverKey: string): readonly string[] {
+    return this.researchToolIds.get(serverKey) ?? [];
+  }
+
+  forget(serverKey: string): void {
+    this.researchToolIds.delete(serverKey);
+    this.registrations.delete(serverKey);
+  }
 }
 
 /** OpenCode's MCP tool key part: other characters than these become `_`. */
@@ -133,11 +155,6 @@ async function listResearchTools(url: string, signal?: AbortSignal): Promise<str
   }
 }
 
-/**
- * Register `servers` on a coordinator's OpenCode server and record the exact
- * tool ids they contributed. A server that does not connect is skipped: research
- * is optional, and the coordinator context only offers tools it has.
- */
 type ResearchInput = {
   serverKey: string;
   port: number;
@@ -146,18 +163,6 @@ type ResearchInput = {
   servers: readonly CoordinatorResearchMcpServer[];
   signal?: AbortSignal;
 };
-
-export async function configureOpenCodeCoordinatorResearch(
-  input: ResearchInput,
-): Promise<readonly string[]> {
-  researchToolIds.delete(input.serverKey);
-  registrations.set(input.serverKey, {
-    input: { ...input, signal: undefined },
-    generation: 0,
-    ready: false,
-  });
-  return ensureOpenCodeCoordinatorResearch(input.serverKey, input.signal);
-}
 
 async function registerResearchServers(input: ResearchInput): Promise<readonly string[]> {
   if (input.servers.length === 0) return [];

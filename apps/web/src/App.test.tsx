@@ -218,7 +218,21 @@ mock.module("@/components/ui/alert-dialog", () => ({
       {children}
     </button>
   ),
-  AlertDialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AlertDialogContent: ({
+    children,
+    onOpenAutoFocus,
+    onCloseAutoFocus,
+  }: React.ComponentProps<typeof realAlertDialog.AlertDialogContent>) => (
+    <div
+      data-focus-return-wired={
+        typeof onOpenAutoFocus === "function" && typeof onCloseAutoFocus === "function"
+          ? "true"
+          : "false"
+      }
+    >
+      {children}
+    </div>
+  ),
   AlertDialogDescription: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   AlertDialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   AlertDialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -3056,6 +3070,29 @@ describe("App startup checks and global events", () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+
+  test.each([
+    ["docker", "Docker Is Not Running"],
+    ["ai", "AI CLI Required"],
+    ["claude", "Claude Code Is Not Logged In"],
+    ["github", "GitHub CLI Not Found"],
+  ])("wires focus return to the %s startup notice", async (notice, title) => {
+    if (notice === "docker") mockCheckDocker.mockImplementation(async () => false);
+    if (notice === "ai") {
+      mockCheckClaudeCli.mockImplementation(async () => false);
+      mockGetAvailableAiCli.mockImplementation(async () => null);
+    }
+    if (notice === "claude") mockCheckClaudeConfig.mockImplementation(async () => false);
+    if (notice === "github") mockCheckGithubCli.mockImplementation(async () => false);
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+    render(<App />);
+    const heading = await screen.findByText(title);
+    // The real hook is used here; the dialog mock exposes its received callbacks.
+    // Behavior of these callbacks with the real Radix wrapper is covered by dialog-focus.test.tsx.
+    expect(
+      heading.closest("[data-focus-return-wired]")?.getAttribute("data-focus-return-wired"),
+    ).toBe("true");
   });
 
   test("shows and dismisses the GitHub CLI warning", async () => {

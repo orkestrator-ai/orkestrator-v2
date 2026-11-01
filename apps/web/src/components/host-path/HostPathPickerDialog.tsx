@@ -42,6 +42,8 @@ export function HostPathPickerDialog() {
   const loadGeneration = useRef(0);
   const createOperation = useRef<object | null>(null);
   const navigationPending = useRef(false);
+  /** Set when the address is typed into after the current listing started. */
+  const addressEdited = useRef(false);
   const addressId = useId();
   const newFolderId = useId();
 
@@ -66,12 +68,15 @@ export function HostPathPickerDialog() {
       const generation = ++loadGeneration.current;
       createOperation.current = null;
       navigationPending.current = true;
+      addressEdited.current = false;
       return listHostDirectory(path, { includeFiles: isFileMode, showHidden: hidden })
         .then(
           (result) => {
             if (generation !== loadGeneration.current) return;
             setListing(result);
-            setAddressInput(result.path);
+            // A path typed while this listing loaded is the user's next
+            // navigation; replacing it would submit this folder instead (0208).
+            if (!addressEdited.current) setAddressInput(result.path);
             // A typed path that names a file selects it instead of just opening its folder.
             // Older remote backends omit requestedFile; preserve their exact-path selection.
             const requestedFile =
@@ -233,7 +238,10 @@ export function HostPathPickerDialog() {
           <Input
             id={addressId}
             value={addressInput}
-            onChange={(event) => setAddressInput(event.target.value)}
+            onChange={(event) => {
+              addressEdited.current = true;
+              setAddressInput(event.target.value);
+            }}
             spellCheck={false}
             autoComplete="off"
             className="font-mono text-xs"

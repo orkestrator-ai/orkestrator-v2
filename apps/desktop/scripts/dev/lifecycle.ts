@@ -397,6 +397,28 @@ export async function seedAgentTestProfileState(
 const ELECTRON_READINESS_TIMEOUT_MS = 60_000;
 
 /**
+ * Electron's leading switches and environment. `--headless-electron` (Linux
+ * only) selects Chromium's headless Ozone platform and drops the display
+ * variables, so the profile cannot open a window in the session that started
+ * it. The switch has to be on the command line: appended from the main script
+ * it is read too late.
+ */
+export function electronLaunch(
+  headless: boolean,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): { switches: string[]; env: NodeJS.ProcessEnv } {
+  const result = { ...env };
+  delete result.ELECTRON_RUN_AS_NODE;
+  if (!headless) return { switches: [], env: result };
+  if (platform !== "linux") throw new Error("--headless-electron is only supported on Linux");
+  delete result.DISPLAY;
+  delete result.WAYLAND_DISPLAY;
+  delete result.ELECTRON_OZONE_PLATFORM_HINT;
+  return { switches: ["--ozone-platform=headless"], env: result };
+}
+
+/**
  * How long the launcher waits for Electron to announce readiness before
  * killing it, or `null` to wait for as long as Electron stays alive.
  *
@@ -410,6 +432,33 @@ const ELECTRON_READINESS_TIMEOUT_MS = 60_000;
  */
 export function electronReadinessTimeoutMs(flavor: "development" | "agent-test"): number | null {
   return flavor === "agent-test" ? ELECTRON_READINESS_TIMEOUT_MS : null;
+}
+
+/** Set to `1` to start an agent-test profile's Electron without any display (Linux only). */
+export const AGENT_TEST_HEADLESS_ELECTRON_ENV = "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON";
+
+/**
+ * Chromium switches and display variables for the profile's Electron.
+ *
+ * On a shared Linux host the inherited `DISPLAY` and `WAYLAND_DISPLAY` belong
+ * to whoever is signed in, so an agent-test window would open on their
+ * desktop. With the opt-in, Electron runs on Chromium's headless Ozone
+ * platform with the GPU off and never sees those variables; the browser
+ * suites drive the gateway, not this window. Other flavors and platforms are
+ * unchanged, so a variable left in a shell cannot hide `mise run dev`.
+ */
+export function electronLaunchForRuntime(
+  flavor: "development" | "agent-test",
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): { switches: string[]; env: NodeJS.ProcessEnv } {
+  const headless =
+    flavor === "agent-test" &&
+    platform === "linux" &&
+    env[AGENT_TEST_HEADLESS_ELECTRON_ENV] === "1";
+  const launch = electronLaunch(headless, platform, env);
+  if (headless) launch.switches.push("--disable-gpu");
+  return launch;
 }
 
 /**
@@ -517,6 +566,7 @@ export async function startDevelopment(
   args: DevArguments,
   flavor: "development" | "agent-test",
   dependencies: ElectronCompilationDependencies & {
+    platform?: NodeJS.Platform;
     roots?: RuntimeProfileRoots;
     prune?: typeof pruneProfiles;
     turbo?: TurboRunner;
@@ -525,6 +575,8 @@ export async function startDevelopment(
     writeStatus?: typeof atomicWriteJson;
   } = {},
 ): Promise<void> {
+  // Refuse an unsupported platform before anything is built or started.
+  electronLaunch(args.headlessElectron === true, dependencies.platform ?? process.platform, {});
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
   const existingStatusPath = statusManifestPath(existingProfile);
   const existingStatus = await readStatus(existingStatusPath);
@@ -686,11 +738,14 @@ export async function startDevelopment(
     });
     await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
 
-    const electronEnv = { ...process.env };
-    delete electronEnv.ELECTRON_RUN_AS_NODE;
+    const platform = dependencies.platform ?? process.platform;
+    const launch = args.headlessElectron
+      ? electronLaunch(true, platform, process.env)
+      : electronLaunchForRuntime(flavor, platform, process.env);
+    const electronEnv = launch.env;
     electron = (dependencies.spawn ?? spawn)(
       electronExecutable,
-      ["apps/desktop/dist/electron/main.js"],
+      [...launch.switches, "apps/desktop/dist/electron/main.js"],
       {
         cwd: repositoryRoot,
         detached: true,

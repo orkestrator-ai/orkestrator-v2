@@ -10,6 +10,9 @@
  * Kept free of imports so any module can resolve it without a cycle.
  */
 
+// Per backend but still module state: the binary comes from the backend's data
+// directory and gh channel, so a second backend overwrites the first's choice.
+// Not moved yet (docs/todo/backend-structure/1070-backend-module-state-beyond-0390.md).
 let managedGitHubCli: string | undefined;
 
 /** Set once at startup from the backend's activated toolchain. */

@@ -287,6 +287,15 @@ describe("StorageService build pipelines", () => {
     });
   });
 
+  test("keeps a linked pipeline that another environment owns", async () => {
+    await withStorage(async (storage) => {
+      await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot());
+
+      expect(await storage.deleteBuildPipelinesByEnvironment("fork-of-e1", "p1")).toEqual([]);
+      expect(await storage.getBuildPipeline("p1")).toMatchObject({ environmentId: "e1" });
+    });
+  });
+
   test("rejects blank identifiers", async () => {
     await withStorage(async (storage) => {
       await expect(storage.getBuildPipeline("")).rejects.toThrow("must not be blank");

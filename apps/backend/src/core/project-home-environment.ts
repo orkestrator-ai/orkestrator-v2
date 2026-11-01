@@ -1,3 +1,4 @@
+import type { EnvironmentOperations } from "./environment-operations.js";
 import type { Environment, Project } from "./models.js";
 import { runCommand } from "./shell.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
@@ -49,8 +50,6 @@ export interface EnsureProjectHomeResult {
   created: boolean;
 }
 
-const ensureTasks = new Map<string, Promise<EnsureProjectHomeResult>>();
-
 /** The live project home of `projectId`, if one has been created. */
 export function findProjectHomeEnvironment(
   environments: readonly Environment[],
@@ -63,23 +62,19 @@ export function findProjectHomeEnvironment(
 /**
  * Returns the project's home environment, creating it on first use.
  *
- * Idempotent and serialized per project so two windows cannot create two
+ * Idempotent and serialized per project within one backend
+ * (`environments.joinProjectHomeEnsure`), so two windows cannot create two
  * homes. Every call re-reads the checkout root and its current branch, so a
  * branch switched outside the environment (from the coordinator toolbar or a
  * terminal) is reflected before review or PR work starts. A branch change
  * clears PR metadata that belonged to the previous branch.
  */
 export function ensureProjectHomeEnvironment(
+  environments: Pick<EnvironmentOperations, "joinProjectHomeEnsure">,
   projectId: string,
   dependencies: ProjectHomeDependencies,
 ): Promise<EnsureProjectHomeResult> {
-  const pending = ensureTasks.get(projectId);
-  if (pending) return pending;
-  const task = ensureOnce(projectId, dependencies).finally(() => {
-    if (ensureTasks.get(projectId) === task) ensureTasks.delete(projectId);
-  });
-  ensureTasks.set(projectId, task);
-  return task;
+  return environments.joinProjectHomeEnsure(projectId, () => ensureOnce(projectId, dependencies));
 }
 
 async function ensureOnce(
@@ -197,12 +192,6 @@ export async function refreshProjectHomeBranch(
   const updates = projectHomeBranchUpdates(environment, liveBranch);
   return updates ? storage.updateEnvironment(environment.id, updates) : environment;
 }
-
-export const projectHomeTesting = {
-  reset(): void {
-    ensureTasks.clear();
-  },
-};
 
 /** Reconcile against the configured checkout before exposing home actions. */
 export async function reconcileProjectHomeEnvironment(

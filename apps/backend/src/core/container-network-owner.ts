@@ -8,7 +8,11 @@ import { runCommand } from "./shell.js";
  * owner. A leaf, so `commands-container-exec` can use it without a cycle.
  */
 
-/** Workload id → the container that owns its network namespace. Immutable. */
+/**
+ * Workload id → the container that owns its network namespace. Immutable.
+ * Process-wide on purpose: a container's network mode is a fact about the
+ * Docker daemon, the same for every backend.
+ */
 const networkOwners = new Map<string, string>();
 const MAX_NETWORK_OWNERS = 512;
 

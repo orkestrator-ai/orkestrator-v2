@@ -148,6 +148,8 @@ export interface ChangeProjection {
   ownerGeneration: string;
   revision: number;
   measurementId: string | null;
+  /** Immutable endpoints used by this measurement, when known. */
+  baselineVersion?: string | null;
   /** Backend-selected presentation priority over the independent fields. */
   state: ChangeProjectionState;
   availability: "ready" | "pending" | "unavailable" | "deleted";

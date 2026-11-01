@@ -4,7 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { mcpManagementErrorFromUnknown } from "@orkestrator/protocol/mcp-management";
 
@@ -16,6 +16,8 @@ import {
   createMcpRuntimeProbe,
 } from "./commands-registry-mcp.js";
 import { SENTINEL, createFixture, type Fixture } from "./mcp-management/test-support.js";
+import { portableInputRevisionDirectory } from "./portable-inputs.js";
+import * as shell from "./shell.js";
 
 describe("MCP management commands", () => {
   let fixture: Fixture;
@@ -470,4 +472,60 @@ test("Claude staging is refreshed on start so defaults refresh needs no staged w
       throw new Error("should not rewrite");
     }),
   ).toBe("not-needed");
+});
+
+describe("staged defaults writer", () => {
+  let dataDir: string;
+  const revision = "rtest0001-0123abcd";
+  const writer = () =>
+    createStagedDefaultsWriter({ storage: { getDataDir: () => dataDir } } as never);
+  const revisionDirectory = () => portableInputRevisionDirectory(dataDir, "env", revision);
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-staged-defaults-"));
+    spyOn(shell, "runCommand").mockImplementation(async () => ({
+      stdout: `${revision}\n`,
+      stderr: "",
+    }));
+  });
+
+  afterEach(() => {
+    mock.restore();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test("an input staged with nothing for the file needs no update", async () => {
+    fs.mkdirSync(revisionDirectory(), { recursive: true });
+    fs.writeFileSync(path.join(revisionDirectory(), "manifest.json"), "{}");
+    expect(
+      await writer().update("env", "container", "codex:user", () => {
+        throw new Error("should not rewrite");
+      }),
+    ).toBe("not-needed");
+    expect(fs.readdirSync(revisionDirectory())).toEqual(["manifest.json"]);
+  });
+
+  test("a staged file is rewritten", async () => {
+    fs.mkdirSync(path.join(revisionDirectory(), "codex-home"), { recursive: true });
+    const staged = path.join(revisionDirectory(), "codex-home/config.toml");
+    fs.writeFileSync(staged, "old");
+    expect(await writer().update("env", "container", "codex:user", (text) => `${text}+new`)).toBe(
+      "updated",
+    );
+    expect(fs.readFileSync(staged, "utf8")).toBe("old+new");
+  });
+
+  test("a missing revision directory or an unreadable staged file stays unavailable", async () => {
+    expect(await writer().update("env", "container", "codex:user", (text) => text)).toBe(
+      "unavailable",
+    );
+    fs.mkdirSync(path.join(revisionDirectory(), "codex-home"), { recursive: true });
+    fs.symlinkSync(
+      path.join(dataDir, "elsewhere.toml"),
+      path.join(revisionDirectory(), "codex-home/config.toml"),
+    );
+    expect(await writer().update("env", "container", "codex:user", (text) => text)).toBe(
+      "unavailable",
+    );
+  });
 });

@@ -94,6 +94,7 @@ export function graphAgentBranch(
           ...(session.providerSessionId !== undefined
             ? { providerSessionId: session.providerSessionId }
             : {}),
+          agentStarted: session.agentStarted ?? session.dispatchState === "sent",
           requestId: session.requestId,
           dispatchState: session.dispatchState,
           resultTransport: session.resultTransport as WorkflowResultTransport,
@@ -115,6 +116,9 @@ export function graphAgentBranch(
           ...(session.restartContinuationSent !== undefined
             ? { restartContinuationSent: session.restartContinuationSent }
             : {}),
+          ...(session.usageLimitResends !== undefined
+            ? { usageLimitResends: session.usageLimitResends }
+            : {}),
           ...(session.idlePolls !== undefined ? { idleResultPolls: session.idlePolls } : {}),
           ...(session.progressAt !== undefined ? { progressAt: session.progressAt } : {}),
           ...(session.progressDigest !== undefined
@@ -132,6 +136,7 @@ export function graphAgentBranch(
             ? { commandSandboxOff: session.commandSandboxOff }
             : {}),
           ...(session.startedAt !== undefined ? { startedAt: session.startedAt } : {}),
+          ...(session.turnStartedAt !== undefined ? { turnStartedAt: session.turnStartedAt } : {}),
         }
       : {}),
   };
@@ -151,6 +156,7 @@ export function graphAgentSession(
     ...(branch.model !== undefined && !branch.modelUnpinned ? { model: branch.model } : {}),
     ...(branch.reasoningEffort !== undefined ? { effort: branch.reasoningEffort } : {}),
     providerSessionId: branch.providerSessionId,
+    ...(branch.agentStarted !== undefined ? { agentStarted: branch.agentStarted } : {}),
     requestId: branch.requestId,
     dispatchState: branch.dispatchState,
     resultTransport: branch.resultTransport ?? "tool-v1",
@@ -164,6 +170,7 @@ export function graphAgentSession(
     ...(extras.continuedFrom !== undefined ? { continuedFrom: extras.continuedFrom } : {}),
     ...(extras.turnMode !== undefined ? { turnMode: extras.turnMode } : {}),
     ...(branch.startedAt !== undefined ? { startedAt: branch.startedAt } : {}),
+    ...(branch.turnStartedAt !== undefined ? { turnStartedAt: branch.turnStartedAt } : {}),
     ...(branch.resultSubmission !== undefined ? { resultSubmission: branch.resultSubmission } : {}),
     ...(branch.schemaRepairAttempts !== undefined
       ? { repairAttempts: branch.schemaRepairAttempts }
@@ -175,6 +182,9 @@ export function graphAgentSession(
     ...(branch.resultReminderSent !== undefined ? { reminderSent: branch.resultReminderSent } : {}),
     ...(branch.restartContinuationSent !== undefined
       ? { restartContinuationSent: branch.restartContinuationSent }
+      : {}),
+    ...(branch.usageLimitResends !== undefined
+      ? { usageLimitResends: branch.usageLimitResends }
       : {}),
     ...(branch.idleResultPolls !== undefined ? { idlePolls: branch.idleResultPolls } : {}),
     ...(branch.usageFinalizationPolls !== undefined

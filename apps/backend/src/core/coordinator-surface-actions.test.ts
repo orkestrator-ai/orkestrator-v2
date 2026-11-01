@@ -13,6 +13,7 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { runCommand } from "./shell.js";
 import { StorageService, createEnvironment, createProject } from "./storage.js";
 
@@ -110,7 +111,10 @@ beforeEach(async () => {
   context = {
     storage,
     coordinators: coordinator,
-    runtime: { environments: { fence: new EnvironmentMutationFence() } },
+    runtime: {
+      environments: { fence: new EnvironmentMutationFence() },
+      coordinatorRequests: new CoordinatorRequestFlights(),
+    },
   } as CommandContext;
   commands = createCommandRegistry();
 });

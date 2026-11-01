@@ -140,3 +140,22 @@ Backend reported 12,374 passed, 107 skipped and two failed across 837 files
 signal assertion (0491), whose complete unchanged owner passed alone in
 0.5 s. Web passed all 11,114 tests, and every other workspace package passed.
 Root and agent-support, bridges and the protocol lockfile groups passed too.
+
+## Linux canvas main-merge recurrence — 2026-11-01
+
+`mise run test` completed in 169.0 s with one failure:
+`a command node's deliverNow on this leaf > node coordinator requests stay
+pending while held, until injection` in
+`apps/backend/src/core/nodes/node-coordination.test.ts:348` (29.35 ms).
+The expected injected mail was still pending injection. The complete unchanged
+owner passed alone (exit zero, 0.9 s):
+
+```sh
+mise run test:logged -- --name merge-node-coordination -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/nodes/node-coordination.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/tmp/orkestrator-test-run.v8xYu2/`. All other workspace packages,
+root and agent-support tests, bridges and protocol lockfile checks passed.
+The resolved launcher owner, format, lint and typecheck checks also passed.
+No node-coordination code, assertion, deadline or skip changed. This confirms
+a recurrence that passes alone; the aggregate remains non-green.

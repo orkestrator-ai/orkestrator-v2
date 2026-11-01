@@ -87,7 +87,7 @@ a transcript.
   with no session yet are nodes too. Once the pass is retired, each reviewer
   session keeps how it ended (`reviewerOutcome`), a bounded `error` (2,000
   characters) and per-severity `reviewIssueCounts`; older records without them
-  fall back to the session status. Reviewers that failed before session creation
+  fall back to the session status. Failed reviewers without a mirrored session row
   are retained in the consolidation session’s `sessionlessReviewers` summary
   (at most one entry per panel slot, bounded model and error text), so their
   model and diagnostic remain inspectable after the live pass is retired.
@@ -95,6 +95,15 @@ a transcript.
   remain valid. A retried reviewer replaces its failed
   attempt in the same slot, and the inspector says how many earlier attempts
   there were.
+- **A reviewer that could not start.** A reviewer that fails before its first agent
+  turn is accepted (a missing bridge or CLI, unavailable bridge auth) carries
+  `startFailed` on its live record. The session ID alone does not prove startup: `agentStarted` records acceptance.
+  A retired pass's `sessionlessReviewers` preserve `startFailed` explicitly;
+  entries without it retain a generic failure label. Its node and inspector read "Could not start", and a
+  notice above the graph names each such reviewer of the newest pass, with
+  its agent and error (`ReviewerStartFailureNotice`). The Multi Review
+  overview shows the same notice. The rest of the panel carries on, and each
+  round tries the reviewer again ([to-do 1090](../todo/coordinator-and-multi-review/1090-cursor-reviewer-cannot-start-on-standalone-backend.md)).
 - **Read-only review.** Reviewers, consolidation and Verify must leave HEAD
   and the Git-visible paths as they found them. Reviewers and consolidation
   also run in provider read-only mode, as Multi Review's do. The backend
@@ -435,10 +444,20 @@ action.
    preview read (`expectedHead`); a branch that moved since is refused. Inside
    the pipeline lock, before any state changes, the backend checks again,
    keeps the old tip at `refs/orkestrator/build-pipeline-rewinds/<pipeline>/<rewind>`
-   (`git update-ref`), and runs `git reset --hard <target>`. A refused or failed
-   reset leaves the record untouched. The rewind then records `code` (from, to,
-   dropped commits, backup ref, upstream and its dropped count), and a repeat of
-   the same request is a no-op like any restart.
+   (`git update-ref`), and runs `git reset --hard <target>`. A refused request
+   leaves the record untouched. An admitted one journals the rewind's `code`
+   (from, to, dropped commits, backup ref, upstream and its dropped count) with
+   `pending` before Git changes, and nothing else runs on the pipeline until
+   the reset finishes; a repeat of the same request is a no-op like any
+   restart.
+   In a container environment every Git command runs as
+   `docker exec -w /workspace <container> git …`. When the container is
+   paused, stopped or gone, the refusal says so (`EnvironmentUnavailableError`
+   from `createPipelineEnvironmentGit`, which reads the container's state
+   rather than passing on Docker's text). A reset already journaled is
+   retried on every supervisor pass, logged once per reason, and each control
+   in the meantime says the rewind has not finished; the reset completes, and
+   the step starts, once the container answers again.
 4. **Pushed commits and the pull request.** When the upstream had commits the
    reset dropped, every Ship until a live Ship completes after the rewind is
    told to push with `git push --force-with-lease` (never plain `--force`, never

@@ -2,7 +2,9 @@
 
 ## Task analysis
 
-Analysed 2026-10-31 against `main` at `931e55417`.
+Analysed 2026-10-31 against `main` at `931e55417`. Tasks 5 to 8 rechecked and
+worked on 2026-11-01 against `main` at `93b99bfba`: all three code problems were
+still present.
 
 A review of what coordinators could not do (2026-10-30) led to ten new
 Control MCP tools and one new status-wake resource, built on branch
@@ -29,10 +31,10 @@ This file holds that qualification and the gaps the build left.
 2. **Live PR follow against GitHub**: one PR followed through opened, conflicts, resolve, checks failed, ready and merged. Status: open (needs a GitHub test repository).
 3. **Answer relay in the app**: the approval dialog, an edited answer and a real worker resuming. Status: open.
 4. **Remote-node paths live**: the new tools' `nodeId` paths over a real node link. Status: open (needs two nodes).
-5. **Sidebar fork keeps the source's build pipeline**: deleting a user's fork deletes the source worker's pipeline record. Status: open.
-6. **PR follow gaps**: PR-tab failure and remote Merge and Cleanup wakes are done; reopened PRs remain outside a finished follow. Status: open (reopened PR policy only).
-7. **"Checks failed" counts checks that are not required**: Status: open.
-8. **Separate committed and uncommitted diffs in `get_worker_changes`**: Status: open.
+5. **Sidebar fork keeps the source's build pipeline**: deleting a user's fork deletes the source worker's pipeline record. Status: done (2026-11-01).
+6. **PR follow gaps**: PR-tab failure and remote Merge and Cleanup wakes are done; reopened PRs remain outside a finished follow. Status: decided, keep the terminal-follow policy (2026-11-01); reopen only when a coordinator needs it.
+7. **"Checks failed" counts checks that are not required**: Status: done (2026-11-01); live GitHub evidence is part of task 2.
+8. **Separate committed and uncommitted diffs in `get_worker_changes`**: Status: done (2026-11-01); live coordinator use is part of task 1.
 
 ### 1. Live `gap-tools` scenario
 
@@ -157,11 +159,24 @@ coordinator forks (`forkEnvironmentRecord` with `keepBuildPipeline: false`).
 `create_pr` already treats a fork as not owning the pipeline
 (`coordinator-pr.ts`).
 
-**Investigation.** Not reproduced; read from the code only.
+**Investigation.** Still true on 2026-11-01: `delete_environment` passed the
+environment's `buildPipelineId` to `deleteBuildPipelinesByEnvironment`, which
+removed the linked record and its transcripts whoever owned it. Reproduced by a
+storage test before the fix. The link-only branch exists for one case: a new
+pipeline has a blank `environmentId` until `create_environment` links it. No
+other path relies on deleting by link.
+
+**Done.** `deleteBuildPipelinesByEnvironment` follows the link only when the
+linked pipeline is unowned (blank `environmentId`) or owned by the environment
+being deleted; a pipeline owned by another environment keeps its record and
+transcripts. Tests: `commands-environment-cleanup.test.ts` ("deleting a
+sidebar fork keeps the source's pipeline"), `storage-build-pipelines.test.ts`
+and `storage-build-pipeline-transcripts.test.ts`. The sidebar fork still copies
+`buildPipelineId`.
 
 **Decisions.**
 
-- **Fix the fork, or the delete?**
+- **Fix the fork, or the delete?** Chose the recommended delete fix.
   - **Make delete remove only pipelines whose `environmentId` is the deleted environment (recommended).**
     - Pros: protects every path that copies the link, not just Fork.
     - Cons: needs a check that nothing relies on deleting by link.
@@ -186,6 +201,13 @@ remote merge followed by deletion before reconciliation, restart deduplication,
 and launch retries after the PR URL appears or conflicts clear. Live GitHub
 and two-node qualification remain tasks 2 and 4.
 
+**Recommendation (2026-11-01).** Keep the terminal-follow policy. A reopen is
+rare, the user who reopens it is present, and a coordinator that needs to know
+can start a new follow (`get_environment` shows the PR open again). Retaining
+closed follows would poll every finished PR for the life of the association,
+and the remote path would need tombstones that never expire. Revisit only if a
+coordinator workflow is seen to lose a reopened PR.
+
 **Decisions.**
 
 - **Follow reopened PRs?**
@@ -206,12 +228,43 @@ failing wakes the coordinator.
 `blocked` mergeability was rejected as the signal because it also covers
 required reviews.
 
-**Investigation.** The monitor's `gh` query does not fetch required-check
-status.
+**Investigation.** Still true on 2026-11-01: `prCondition` returned
+`checks-failed` for any failure in the rollup. `gh pr view --json
+statusCheckRollup` has no required flag; GraphQL's
+`isRequired(pullRequestNumber:)` on `CheckRun` and `StatusContext` has. `gh pr
+checks --required` was rejected: it has no head guard, and it treats a PR with
+no required checks as an error, which the monitor could not tell from a failed
+read.
+
+**Done.** The ticket asked for required checks only, so this departs from the
+recommended "accept it" option, keeping its notice as the fallback:
+
+- `PrCheckSummary` gains an optional `requiredFailed`
+  (`packages/protocol/src/pr-monitor.ts`), relayed in node summaries and the
+  `environment-pr-health` key.
+- The monitor asks `pr-required-checks.ts`'s GraphQL query only when the
+  rollup shows a failing check, inside the same `pr-check-rollup` span, and
+  caches the answer per PR, head commit and failing-check set (30 minutes; a
+  failed lookup retries after 5). A PR whose optional check keeps failing is
+  asked once per push, not on every 20 s poll, so the "heavier query on every
+  poll" con no longer applies.
+- `pr-checks-failed` fires only when a required check fails. A PR whose only
+  failures are optional stays quiet (`pr-open`, no wake) and is still not ready
+  to merge, the shimmer's rule. `prChecks` keeps `failed` (every failing
+  check) and adds `requiredFailed`.
+- **Fallback:** when GitHub does not say which checks are required (a token
+  that cannot read it, more than 100 checks, the head moved between the two
+  reads, a non-github.com host, or an older node that does not relay the
+  count), `requiredFailed` is null, every failing check counts, and the notice
+  says "A check failed (it may not be required)".
+
+The sidebar's red check badge still counts every failing check, as GitHub's own
+page does.
 
 **Decisions.**
 
-- **Fetch required status, or accept it?**
+- **Fetch required status, or accept it?** Chose to fetch, only on failure and
+  cached, with the recommended notice as the fallback.
   - **Accept it, and say "a check failed (it may not be required)" in the notice (recommended).**
     - Pros: no extra GitHub query per poll.
     - Cons: an occasional needless wake.
@@ -229,12 +282,41 @@ ways shows one combined diff.
 uncommitted-only comparisons; using it keeps its guards against git filter,
 textconv and external-diff programs.
 
-**Investigation.** Not needed for the use it was built for (checking work
-before review).
+**Investigation.** Still true on 2026-11-01. Change tracking's live detail
+(`resolveLiveDetail`) reads both sides as raw bytes (`git cat-file blob` and
+the owner's file read) and diffs them in-process, so it never runs a filter,
+textconv or external-diff program. It only accepted `environment-net` rows.
+
+**Done.** The ticket asked for separate diffs, so this departs from the
+recommended "wait" option, over change tracking as that option required:
+
+- A new Git scope, `committed-net` (`git-scopes.ts`): the base commit the
+  environment's own measurement uses, to `HEAD`, measured with the same
+  guarded `git diff --no-ext-diff --no-textconv` as the other Git scopes. It
+  is unavailable (`baseline-unavailable`) until `environment-net` has an
+  immutable base. `uncommitted-net` and `committed-net` split `environment-net`
+  at `HEAD`.
+- `resolveLiveDetail` also serves `uncommitted-net` rows (HEAD blob to working
+  tree) and `committed-net` rows (base blob to HEAD blob). Rows Git measures
+  through a filter driver are refused with `git-filter-unsupported`.
+- `get_worker_changes` adds a `committed` file list, marks `sinceBase` files
+  `committed: true` as well as `uncommitted: true`, and takes
+  `diffScope: "sinceBase" | "committed" | "uncommitted" | "split"`.
+  `committed` and `uncommitted` answer in `committedDiffs` and
+  `uncommittedDiffs`; `split` returns both, halving the byte budget.
+- **Older callers:** without `diffScope` the answer is unchanged (`diffs`,
+  base to working tree); the new `committed` list and flags are additive. An
+  older node that ignores `diffScope` answers with the combined diff, and the
+  caller adds `diffScopeUnsupported` to say so.
+
+Tests: `coordinator-worker-changes.integration.test.ts` (real Git: one file
+changed in a commit and again uncommitted shows each side's lines apart),
+`coordinator-worker-changes.test.ts`, `git-scopes.test.ts` and
+`control-mcp-server.test.ts`.
 
 **Decisions.**
 
-- **Add them?**
+- **Add them?** Chose the `scope` option, named `diffScope`, plus `split`.
   - **Wait until a coordinator needs them (recommended).**
     - Pros: no new git calls that bypass change tracking's guards.
     - Cons: a reviewer cannot tell committed from uncommitted lines in one
@@ -244,6 +326,10 @@ before review).
     - Cons: change-tracking work for a need not yet seen.
 
 ## Current state
+
+On 2026-11-01 tasks 5, 7 and 8 were fixed and task 6 was decided (keep the
+terminal-follow policy); see each task. Tasks 1 to 4 need live providers,
+GitHub or two nodes and were not run.
 
 All eight items from the review are built. Targeted coordinator regressions,
 the storage writer guard, backend and protocol typechecks, scoped formatting
@@ -263,10 +349,33 @@ were not checked by name. All of these were fixed on the same branch.
 
 ### Code
 
-1. Task 5 (fork and pipeline deletion), task 6 (reopened PR policy).
-   Tasks 7 and 8 are recommended as no-ops for now.
+None. Task 6 is decided as no change. Tasks 7 and 8 also need live
+qualification: the required-checks query against a real repository with branch
+protection (task 2) and a coordinator using `diffScope` (task 1).
 
 ## Assumptions and decisions
+
+### 2026-11-01: tasks 5 to 8
+
+- **Task 5.** Fixed the delete, the recommended option, rather than the fork,
+  so every path that copies `buildPipelineId` is covered and the sidebar fork
+  keeps its link. Assumed nothing relies on deleting another environment's
+  pipeline by link; the only link-only case left is an unowned pipeline.
+- **Task 6.** Recommend and keep the terminal-follow policy (see task 6).
+- **Task 7.** The ticket's acceptance asks for required checks only, which
+  overrides the file's "accept it" recommendation; its notice is kept as the
+  fallback. Assumed `isRequired` is answered by the same `gh` credential the
+  monitor already uses; a token that cannot read it falls back. The ready-to-
+  merge rule is unchanged, so an optional failure still blocks the shimmer and
+  reports `prNotReadyReason: "checks-failing"`.
+- **Task 8.** The ticket's acceptance asks for separate diffs, which overrides
+  the file's "wait" recommendation. Built on change tracking, as the file's
+  other option required, so no new unguarded Git call was added. Assumed a new
+  measurement scope is acceptable in the ledger; a backend older than this one
+  reading that ledger would not recognise `committed-net` rows (they are
+  on-demand and only created by `get_worker_changes`). Each read of a worker's
+  changes now runs one more guarded `git diff` pair, and later scans recompute
+  `committed-net` like `uncommitted-net` once a coordinator has asked.
 
 ### Task 6: completion recovery
 

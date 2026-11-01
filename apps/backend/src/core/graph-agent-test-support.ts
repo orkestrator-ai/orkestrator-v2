@@ -171,6 +171,9 @@ export class FakeAgentProvider {
     return [...this.sessions.values()].flatMap((session) => session.turns);
   }
 
+  /** The account-switching verdict; only a test exercising it sets one. */
+  usageLimitStop?: BuildPipelineProvider["usageLimitStop"];
+
   /** Called at each status read: a test may crash there. */
   beforeObserve?: (sessionId: string) => Promise<void> | void;
 
@@ -185,6 +188,7 @@ export class FakeAgentProvider {
     };
     return {
       agent: this.agent,
+      ...(this.usageLimitStop ? { usageLimitStop: this.usageLimitStop } : {}),
       createSession: async (
         _phase: string,
         _label: string,

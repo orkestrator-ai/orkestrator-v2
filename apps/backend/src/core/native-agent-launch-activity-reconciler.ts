@@ -1,3 +1,4 @@
+import { workflowBridgeRunning } from "./native-agent-provider.js";
 import type {
   BuildPipelineAgent,
   AgentActivityState,
@@ -45,6 +46,7 @@ import {
   type NativeAgentObservationWakeReason,
 } from "./native-agent-observation.js";
 import { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
+import type { NativeAgentUsageLimitResend } from "./native-agent-usage-limit-resend.js";
 import {
   PromptRejectedError,
   ProviderUnavailableError,
@@ -97,6 +99,7 @@ export interface NativeAgentLaunchActivityReconcilerHost {
   providerRegistry: ProviderRegistry;
   observations: NativeAgentObservationBroker;
   turnRecovery: NativeAgentTurnRecovery;
+  usageLimitResend?: NativeAgentUsageLimitResend;
   now(): number;
   isStopped(): boolean;
   /** Resolve a provider for observation only, never starting a bridge. */
@@ -194,6 +197,7 @@ export class NativeAgentLaunchActivityReconciler {
   private readonly providerRegistry: ProviderRegistry;
   private readonly observations: NativeAgentObservationBroker;
   private readonly turnRecovery: NativeAgentTurnRecovery;
+  private readonly usageLimitResend?: NativeAgentUsageLimitResend;
 
   constructor(private readonly host: NativeAgentLaunchActivityReconcilerHost) {
     this.storage = host.storage;
@@ -202,6 +206,7 @@ export class NativeAgentLaunchActivityReconciler {
     this.providerRegistry = host.providerRegistry;
     this.observations = host.observations;
     this.turnRecovery = host.turnRecovery;
+    this.usageLimitResend = host.usageLimitResend;
   }
 
   /** The last provider-owned activity observed for a durable session. */
@@ -583,6 +588,7 @@ export class NativeAgentLaunchActivityReconciler {
   async hasObservedLiveWork(environmentId: string, agent: BuildPipelineAgent): Promise<boolean> {
     const provider = this.providerRegistry.cached(providerCacheKey(environmentId, agent));
     if (provider && this.providerRegistry.hasDispatchInFlight(provider)) return true;
+    if (workflowBridgeRunning(environmentId, agent)) return true;
     const sessions = await this.storage.listNativeAgentSessions();
     return sessions.some((session) => {
       if (session.environmentId !== environmentId || session.agent !== agent) return false;
@@ -1083,7 +1089,12 @@ export class NativeAgentLaunchActivityReconciler {
           }
           this.observations.noteGroupObserved(groupKey, {
             settledIdle:
-              settledIdle && !group.some((session) => this.turnRecovery.hasCandidate(session.key)),
+              settledIdle &&
+              !group.some(
+                (session) =>
+                  this.turnRecovery.hasCandidate(session.key) ||
+                  this.usageLimitResend?.hasCandidate(session.key) === true,
+              ),
             wakeupQualified: this.observationWakeupQualified(first.agent, provider),
           });
         } catch (error) {
@@ -1231,7 +1242,8 @@ export class NativeAgentLaunchActivityReconciler {
       return (
         observed?.providerSessionId === session.providerSessionId &&
         observed.state === "idle" &&
-        !this.turnRecovery.hasCandidate(session.key)
+        !this.turnRecovery.hasCandidate(session.key) &&
+        !this.usageLimitResend?.hasCandidate(session.key)
       );
     });
     if (!retained) return false;
@@ -1487,6 +1499,7 @@ export class NativeAgentLaunchActivityReconciler {
     }
     // Incomplete-turn recovery keys its candidates on these applied edges.
     this.turnRecovery.noteActivity(session, state, previous);
+    this.usageLimitResend?.noteActivity(session, state, previous);
     if (owner === "environment") {
       const sources = activityByEnvironment.get(session.environmentId) ?? {};
       sources[session.key] = {

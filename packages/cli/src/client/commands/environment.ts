@@ -26,6 +26,7 @@ import {
   REQUEST_ID_OPTION,
   stringOption,
   submit,
+  submitForWait,
   TIMEOUT_OPTION,
   waitForEnvironment,
   waitForOperation,
@@ -49,6 +50,11 @@ function waitOption(conditions: EnvironmentCondition[]): OptionSpec {
   };
 }
 
+/** Observation left after submission; a recovered lost response shares one deadline. */
+function remainingBudget(budget: number, recoveryDeadline: number | undefined): number {
+  return recoveryDeadline === undefined ? budget : Math.max(0, recoveryDeadline - Date.now());
+}
+
 async function lifecycle(
   context: CommandContext,
   parsed: ParsedCommand,
@@ -64,12 +70,14 @@ async function lifecycle(
   if (parsed.options.timeout !== undefined && wait === undefined) {
     throw new CliError("invalid-input", "--timeout needs --wait");
   }
-  const { session, result, receipt, warnings } = await submit<Record<string, unknown>>(
-    context,
-    action,
-    { environmentId, ...extraInput },
-    parsed.options,
-  );
+  const input = { environmentId, ...extraInput };
+  const budget = (parsed.options.timeout as number | undefined) ?? DEFAULT_WAIT_MS;
+  // With --wait a lost response is recovered by request key (`submitForWait`).
+  const submitted = wait
+    ? await submitForWait<Record<string, unknown>>(context, action, input, parsed.options, budget)
+    : await submit<Record<string, unknown>>(context, action, input, parsed.options);
+  const { session, receipt, warnings } = submitted;
+  const result = submitted.result ?? receipt?.result;
   let finalReceipt: PublicReceipt | undefined = receipt;
   let environment: PublicEnvironmentSummary | null | undefined;
   if (wait) {
@@ -79,7 +87,7 @@ async function lifecycle(
       environmentId,
       wait,
       receipt,
-      (parsed.options.timeout as number | undefined) ?? DEFAULT_WAIT_MS,
+      remainingBudget(budget, "deadline" in submitted ? submitted.deadline : undefined),
     );
     finalReceipt = waited.receipt ?? finalReceipt;
     environment = waited.environment;
@@ -569,19 +577,30 @@ export const environmentCommands: CommandSpec[] = [
       if (options["exit-code"] === true && options.wait !== true) {
         throw new CliError("invalid-input", "--exit-code needs --wait");
       }
-      const { session, receipt, result, warnings } = await submit<Record<string, unknown>>(
-        context,
-        "environment.exec",
-        {
-          environmentId: parsed.positionals.environment,
-          argv,
-          ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-          ...(Object.keys(env).length > 0 ? { env } : {}),
-          ...(stdinBase64 !== undefined ? { stdinBase64 } : {}),
-          ...(options["exec-timeout"] !== undefined ? { timeoutMs: options["exec-timeout"] } : {}),
-        },
-        options,
-      );
+      const input = {
+        environmentId: parsed.positionals.environment,
+        argv,
+        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+        ...(stdinBase64 !== undefined ? { stdinBase64 } : {}),
+        ...(options["exec-timeout"] !== undefined ? { timeoutMs: options["exec-timeout"] } : {}),
+      };
+      const budget = (options.timeout as number | undefined) ?? DEFAULT_WAIT_MS;
+      // With --wait a lost response is recovered by request key. The lookup
+      // only finds the admitted operation; whether its worker has claimed it
+      // is still decided by the backend's reconciliation while we observe.
+      const submitted =
+        options.wait === true
+          ? await submitForWait<Record<string, unknown>>(
+              context,
+              "environment.exec",
+              input,
+              options,
+              budget,
+            )
+          : await submit<Record<string, unknown>>(context, "environment.exec", input, options);
+      const { session, receipt, warnings } = submitted;
+      const result = submitted.result ?? receipt?.result;
       if (!receipt) throw new CliError("response-invalid", "environment.exec returned no receipt");
       if (options.wait !== true) {
         return {
@@ -598,7 +617,7 @@ export const environmentCommands: CommandSpec[] = [
         context,
         session,
         receipt,
-        (options.timeout as number | undefined) ?? DEFAULT_WAIT_MS,
+        remainingBudget(budget, "deadline" in submitted ? submitted.deadline : undefined),
       );
       // Human mode shows the command's own output (bounded tails); machine
       // modes read it explicitly with `run output`.

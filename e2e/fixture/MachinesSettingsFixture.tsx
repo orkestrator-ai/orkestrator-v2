@@ -6,6 +6,7 @@ import { useAppDialogStore } from "../../apps/web/src/stores/appDialogStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import type { Environment } from "../../apps/web/src/types";
 import type { ConnectionList, ConnectToRemoteInput } from "@orkestrator/protocol/connections";
+import { FullscreenSettingsLayout } from "../../apps/web/src/components/settings/FullscreenSettingsLayout";
 import { MachinesSettings } from "../../apps/web/src/components/settings/machines/MachinesSettings";
 
 const rebuildMode = new URLSearchParams(window.location.search).has("rebuild");
@@ -121,7 +122,9 @@ function hostAccounts() {
     accounts: ["claude", "codex"].map((platform) => ({
       id: "default",
       platform,
-      label: "Host login",
+      label: new URLSearchParams(window.location.search).has("accountLayout")
+        ? "Engineering production account — developer@long-company-name.example"
+        : "Host login",
       isDefault: true,
       isActive: true,
       signedIn: true,
@@ -230,6 +233,19 @@ export function MachinesSettingsFixture() {
   useState(installMachinesFixture);
   const [showMachines, setShowMachines] = useState(true);
   useEffect(() => onGlobalSettingsCloseRequest(() => setShowMachines(false)), []);
+  if (new URLSearchParams(window.location.search).has("accountLayout")) {
+    return (
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => {}}
+        title="Settings"
+        menuItems={[{ id: "machines", label: "Machines", icon: null }]}
+        defaultSection="machines"
+      >
+        {() => <MachinesSettings />}
+      </FullscreenSettingsLayout>
+    );
+  }
   return (
     <main className="p-4">
       <AppDialogHost />

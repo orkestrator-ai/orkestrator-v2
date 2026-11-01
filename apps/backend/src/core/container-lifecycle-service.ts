@@ -60,7 +60,12 @@ export class ContainerLifecycleError extends Error {
   }
 }
 
-/** Operations executing in this process, keyed `${registry}:${operationId}`. */
+/**
+ * Operations executing in this process, keyed `${registry}:${operationId}`.
+ * Process-wide on purpose, as are the phase clocks below: the registry is the
+ * data directory's Docker owner namespace, so two backends with their own data
+ * directories never share an entry.
+ */
 const activeOperations = new Set<string>();
 
 /**
@@ -605,7 +610,11 @@ export type ContainerOwnership =
   | { verdict: "foreign"; reason: "other-owner" | "not-orkestrator" | "unlabelled-unassigned" }
   | { verdict: "unknown"; reason: "unreachable" | "malformed" };
 
-/** Positive owner-label verdicts: labels are immutable for a container id. */
+/**
+ * Positive owner-label verdicts: labels are immutable for a container id.
+ * Process-wide on purpose: a verdict is a fact about the Docker container, and
+ * a hit counts only for the owner namespace the caller asks with.
+ */
 const ownedByLabel = new Map<string, string>();
 const OWNED_CACHE_LIMIT = 2_048;
 

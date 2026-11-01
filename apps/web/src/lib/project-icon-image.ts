@@ -1,11 +1,9 @@
+import type { HostImageFile } from "@/lib/backend/files-sessions";
 import {
   MAX_PROJECT_ICON_LENGTH,
   PROJECT_ICON_SIZE,
   normalizeProjectIcon,
 } from "@orkestrator/protocol/project-icon";
-
-/** What the icon picker offers; a favicon (`.ico`) is named because some systems give it no type. */
-export const PROJECT_ICON_FILE_ACCEPT = "image/*,.ico";
 
 const IMAGE_FILE_NAME = /\.(?:png|jpe?g|webp|gif|svg|ico|bmp|avif)$/i;
 
@@ -50,6 +48,14 @@ export async function projectIconFromFile(file: File): Promise<string> {
     if (icon && icon.length <= MAX_PROJECT_ICON_LENGTH) return icon;
   }
   throw new Error("The image could not be made small enough");
+}
+
+/** Wraps an image read from the backend host as a `File` for `projectIconFromFile`. */
+export function fileFromHostImage(image: HostImageFile): File {
+  const binary = atob(image.base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return new File([bytes], image.name, { type: image.mimeType });
 }
 
 function loadImage(file: File): Promise<HTMLImageElement> {

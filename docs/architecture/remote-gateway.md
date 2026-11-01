@@ -181,9 +181,12 @@ for existing services that remote clients reach directly over the tailnet.
   compressed; event streams are not.
 - `on`: `body` plus gzip on direct `/__orkestrator/events` streams
   (`GzipEventClientWriter`) and proxied event streams
-  (`createSseGzipCompressor`). Each frame is sync-flushed, so delivery stays
-  incremental. A client that does not negotiate gzip gets identity; a
-  direct stream sends `Vary: Accept-Encoding` either way.
+  (`createSseGzipCompressor`). Each frame, keepalive comment and
+  `gateway.keepalive` event is sync-flushed, so delivery stays incremental. A
+  client that does not negotiate gzip gets identity. Both kinds of stream send
+  `Vary: Accept-Encoding` either way. A proxied upstream that sends
+  `Cache-Control: no-transform`, or that already sent a coded body, is forwarded
+  as it is.
 
 Streaming gzip contexts are shared by direct and proxied streams and capped at
 `MAX_CONCURRENT_STREAMING_COMPRESSIONS` (8); a stream that finds the pool full
@@ -206,6 +209,27 @@ Neither default has changed. The measurement plan and the first in-process
 baseline are in
 [0052-remote-client-bandwidth.md](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md);
 the harness is `apps/backend/scripts/remote-bandwidth-baseline.ts`.
+
+`apps/backend/tests/gateway-sse-gzip-routes.test.ts` and
+`e2e/SseGzipStreaming.spec.ts` prove incremental delivery directly, through
+HTTP/1.1 and HTTP/2 test proxies, and in real browsers.
+
+### Through Tailscale Serve
+
+Serve is the reference route for remote measurements, with the direct tailnet
+listener as the control. Read from Tailscale's source at v1.102.4 and Go's
+`httputil`, not yet measured on a tailnet: Serve is a plain Go reverse proxy,
+which flushes `text/event-stream` immediately and does not encode bodies, and it
+sets no server write or idle timeout that would end a quiet stream.
+
+One thing does change on that path. Serve leaves Go's automatic transport
+compression on, so a client that sends **no** `Accept-Encoding` still costs a
+streaming gzip context: the gateway sees Go's `gzip`, and Go decodes it again for
+the client. Browsers always send the header, and an explicit `identity` is not
+overridden, so only non-browser clients that omit it are affected.
+
+`apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
+changes a gzip stream; the steps for a real tailnet are in the to-do.
 
 ## Loopback client gateway (SSH forwarding target)
 
@@ -472,6 +496,12 @@ The picker's **New folder** button creates one folder inside the folder being
 browsed with the `create_host_directory` command, then opens it. The name must
 be a single path component (no separators, `.` or `..`); missing parents are
 never created and an existing entry is reported rather than reused.
+
+The project icon setting uses the picker in file mode, starting in the
+project's local path, and reads the chosen image with `read_host_image_file`
+(image extensions only, at most 5 MB). Before browsing, when no icon is set,
+`find_project_icons` checks the usual favicon, app icon and logo locations in
+the project root, common app subfolders, and `apps/*` / `packages/*`.
 
 Out of scope: pickers whose target is not a host path (for example, MCP server
 working directories, which can resolve inside a container) and file uploads from

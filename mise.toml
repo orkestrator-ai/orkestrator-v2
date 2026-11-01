@@ -352,9 +352,21 @@ run = [
   "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
 ]
 
+[tasks."verify:accounts:resend-live"]
+description = "Prove automatic switching's resend across a real bridge replacement (real bridges and pinned CLIs, scripted provider, no billed turn)"
+run = "bun test --cwd apps/backend ./tests/account-switch-resend-live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
+
 [tasks."verify:claude:mcp-live"]
 description = "Prove Claude MCP removal and rename on a running CLI (real CLI, no credentials)"
 run = "bun test --cwd bridges/claude-bridge ./src/services/session-manager-prompt-mcp-sync.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
+
+[tasks."verify:claude:first-turn-live"]
+description = "Prove what a parked Claude spare does and refuses, on the pinned CLI (real CLI, no credentials, no model)"
+run = "bun test --cwd bridges/claude-bridge ./src/services/claude-first-turn.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
+
+[tasks."measure:claude:first-turn"]
+description = "Time a first Claude turn cold, on a spare and warm (real CLI, no credentials, no model)"
+run = "bun bridges/claude-bridge/src/services/claude-first-turn.live-probe.ts 5"
 
 [tasks."verify:claude:plugin-mcp-live"]
 description = "Prove the MCP editor's Claude plugin rows match the pinned CLI (real CLI, no credentials)"
@@ -370,6 +382,10 @@ run = "bun test --cwd apps/backend ./tests/opencode-mcp-reload-live.test.ts --pa
 description = "Prove the MCP editor's Codex trust and merge rules match the pinned binary (real binary, no credentials)"
 env = { RUN_LIVE_CODEX_MCP = "1" }
 run = "bun test --cwd apps/backend ./tests/codex-mcp-parity-live.test.ts --parallel=1"
+
+[tasks."verify:codex:network-approval"]
+description = "Prove a managed-network approval saves no rule, and where an accepted amendment is stored, on the pinned Codex (disposable container, no credentials)"
+run = "bash scripts/verify-codex-network-approval.sh"
 
 [tasks."verify:grok:mcp-live"]
 description = "Prove the MCP editor's Grok trust, source and precedence rules match the pinned binary (real binary, no credentials)"

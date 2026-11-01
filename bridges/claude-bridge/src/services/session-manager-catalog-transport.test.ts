@@ -4,6 +4,7 @@ import {
   createSession,
   getSession,
   inspectDuringTurn,
+  mockGetMcpRuntimeConfig,
   mockQuery,
   nextQueryCall,
   queryControlOverrides,
@@ -17,6 +18,7 @@ import {
   configureClaudeSession,
   gracefulInterruptClaudeSession,
   isClosedTransportError,
+  performSessionMcpAction,
   readClaudeCommandCatalogue,
   readSessionCommands,
   readSessionMcpServers,
@@ -228,6 +230,37 @@ function idleSession(title: string): SessionState {
 }
 
 describe("Claude MCP inventory without a live control", () => {
+  test("seeds a probe action's list from the init rows, with the launch record's layers", async () => {
+    const base = mockGetMcpRuntimeConfig.getMockImplementation()!;
+    mockGetMcpRuntimeConfig.mockImplementationOnce(async () => ({
+      ...(await base()),
+      layers: new Map([
+        ["late", "project"],
+        ["orkestrator", "orkestrator"],
+      ]),
+    }));
+    const session = idleSession("init mcp layers");
+    await runTurn(session.id, [
+      init({
+        mcp_servers: [
+          { name: "late", status: "pending", source: "dynamic" },
+          { name: "orkestrator", status: "pending", source: "dynamic" },
+        ],
+      }),
+      { type: "result", subtype: "success" },
+    ]);
+    queryControlOverrides.mcpServerStatus = async () => [
+      { name: "late", status: "connected", scope: "user" },
+    ];
+    await performSessionMcpAction(session.id, "late", "reconnect");
+    await nextQueryCall();
+    const rows = await readSessionMcpServers(session.id);
+    expect(rows.map(({ id, status, scope }) => ({ id, status, scope }))).toEqual([
+      { id: "late", status: "connected", scope: "project" },
+      { id: "orkestrator", status: "connecting", scope: "orkestrator" },
+    ]);
+  });
+
   test("keeps each init status and layer instead of collapsing to connected or failed", async () => {
     const session = idleSession("init mcp statuses");
     await runTurn(session.id, [

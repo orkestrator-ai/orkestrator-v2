@@ -154,7 +154,12 @@ export async function resolveQueryPlan(
   // server cannot ride in through the one channel the CLI still honours
   // when `settingSources` is empty.
   const [
-    { servers: mcpServers, names: mcpServerNames, revision: mcpConfigRevision },
+    {
+      servers: mcpServers,
+      names: mcpServerNames,
+      layers: mcpServerLayers,
+      revision: mcpConfigRevision,
+    },
     { plugins, coordinatorSkills },
   ] = await Promise.all([
     getMcpRuntimeConfig(
@@ -306,6 +311,7 @@ export async function resolveQueryPlan(
     effortLevel,
     mcpServers,
     mcpServerNames,
+    mcpServerLayers,
     accountOnlyMcpServers,
     mcpConfigRevision,
     plugins,
@@ -339,6 +345,7 @@ export function recordMcpConfigRevision(
   mcp: ClaudeRuntimeMcp,
 ): void {
   const { mcpConfigRevision } = plan;
+  session.mcpServerLayers = plan.mcpServerLayers;
   if (!mcpConfigRevision) return;
   const staleServers = reportedStaleServers(mcp);
   session.mcpConfigRevision = {

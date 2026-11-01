@@ -45,6 +45,7 @@ import type {
   TranscriptReadWindow,
 } from "./build-pipeline-transcript-store.js";
 import type {
+  AgentActivityCompletionOutcome,
   EnvironmentUnreadReason,
   IncompleteTurnNotice,
   NativeAgentJobCompletionAction,
@@ -470,7 +471,10 @@ export class StorageService {
     source: AgentActivitySource = "frontend",
     observerId?: string,
     stale = false,
-    options: { completionAttention?: boolean } = {},
+    options: {
+      completionAttention?: boolean;
+      completionOutcome?: AgentActivityCompletionOutcome;
+    } = {},
   ): Promise<Environment> {
     return this.repos.projects.setEnvironmentAgentActivity(
       environmentId,
@@ -650,6 +654,14 @@ export class StorageService {
     limits: import("@orkestrator/protocol/container-resources").ContainerResourceLimits | undefined,
   ): Promise<AppConfig> {
     return this.repos.config.setContainerResourceLimits(limits);
+  }
+
+  updateAgentAccountAutoSwitchSettings(
+    update: (
+      current: AppConfig["global"]["agentAccountAutoSwitch"],
+    ) => NonNullable<AppConfig["global"]["agentAccountAutoSwitch"]>,
+  ): Promise<AppConfig> {
+    return this.repos.config.updateAgentAccountAutoSwitchSettings(update);
   }
 
   setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
@@ -1039,12 +1051,17 @@ export class StorageService {
   dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
-      dispatched: false;
-      mailRefused?: true;
-      /** Recorded under the session's persisted notice field; `null` clears it. */
-      incompleteTurnNotice?: IncompleteTurnNotice | null;
-    }>,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<
+      | void
+      | {
+          dispatched: false;
+          mailRefused?: true;
+          /** Recorded under the session's persisted notice field; `null` clears it. */
+          incompleteTurnNotice?: IncompleteTurnNotice | null;
+        }
+      /** The provider accepted the turn in this mode. */
+      | { dispatched: true; mode: "plan" | "build" | undefined }
+    >,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
     admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
   ): Promise<{

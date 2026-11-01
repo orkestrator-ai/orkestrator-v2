@@ -133,7 +133,7 @@ Analysed 2026-10-30 against main at `6ce02251b`.
 **Investigation.** Changelogs, `.d.ts` diffs and the regenerated Codex protocol, per provider:
 
 - **Claude** (Claude Code 2.1.310–2.1.314, Agent SDK 0.3.310–0.3.314):
-  - Adopt later: `permissions.blockWritesOutsideWorkingDirectories` (a worktree-confinement policy; needs a product decision, and also removes EnterWorktree/ExitWorktree); `prewarm()` in `/core` with `claim()` now deciding `.mcp.json` servers and plugins (a spare-process lifecycle change, see 0005).
+  - Adopt later: `permissions.blockWritesOutsideWorkingDirectories` (a worktree-confinement policy; needs a product decision, and also removes EnterWorktree/ExitWorktree); `prewarm()` in `/core` with `claim()` now deciding `.mcp.json` servers and plugins (assessed 2026-11-01 and not adopted, see 0005).
   - Not relevant: the split cache-creation token counts (`cacheCreationEphemeral5mInputTokens`, `…1hInputTokens`; cost comes from `costUSD`); typed auto-mode settings; AskUserQuestion `annotations[q].unanswered` (the model does not see it); the `mcpMount` rule source; `'Now using credits'` usage prefix; new `sdk-tools.d.ts` output fields; managed `pluginDigests`.
   - Behaviour, no code change: settings left out of `settingSources` no longer supply auto-mode rules or saved consents (what coordinators intend); `claude -p` startup failures now exit 1 with the error (checked in [0006](0006-session-titles-and-history.md) task 1: the title runner rejects any non-zero exit, so no change was needed); Monitor commands now run Bash-matching PreToolUse hooks.
 - **Codex** (0.165.0, 0.166.0):

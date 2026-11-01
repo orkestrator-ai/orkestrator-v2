@@ -265,7 +265,7 @@ replay shows it as the card, never as a message the user typed. See
 - Never offer or send an exec-policy or network-policy amendment
   (`acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`). Codex
   writes an accepted one into `CODEX_HOME/rules/`, where it applies to every
-  later Codex session on the host, and app-server 0.164.0 has no method to
+  later Codex session on the host, and app-server 0.166.0 has no method to
   list or remove it. `approvals.ts` drops the amendments from the descriptor
   and the backend ignores `amendments` from an older bridge. The exec-policy
   prefix alone is forwarded as `proposedCommandPrefix`, a preselection hint
@@ -276,6 +276,10 @@ replay shows it as the card, never as a message the user typed. See
   without `grantRoot`. `live-policy-amendment.test.ts` proves an Orkestrator
   rule answers the identical command and `CODEX_HOME/rules/` stays empty.
   `live-policy-amendment.test.ts` proves Approve saves no rule (no credits).
+- A managed-network approval has `networkApprovalContext` and no `command`
+  (0.166.0), so the host alone is what a person approves. Codex raises it only
+  when `/etc/codex/requirements.toml` enables its proxy, so
+  `mise run verify:codex:network-approval` proves it in a disposable container.
 - Every turn runs in Codex's Default collaboration mode, which refuses
   `request_user_input`. Threads of a watched session (any policy but
   `pipeline`) carry `features.default_mode_request_user_input = true`

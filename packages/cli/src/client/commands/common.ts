@@ -315,6 +315,13 @@ export async function waitForEnvironment(
   timeoutMs: number,
 ): Promise<{ environment: PublicEnvironmentSummary | null; receipt?: PublicReceipt }> {
   let latestReceipt = receipt;
+  const deadline = Date.now() + timeoutMs;
+  const remaining = (): number => {
+    if (context.signal?.aborted) throw new ObservationStopped("signal", signalName(context.signal));
+    const budget = deadline - Date.now();
+    if (budget <= 0) throw new ObservationStopped("deadline");
+    return budget;
+  };
   const conditionMet = (environment: PublicEnvironmentSummary | null): boolean => {
     if (condition === "deleted") return environment === null;
     if (!environment) return false;
@@ -325,8 +332,10 @@ export async function waitForEnvironment(
   try {
     return await observe<{ environment: PublicEnvironmentSummary | null; receipt?: PublicReceipt }>(
       async () => {
+        remaining();
         if (latestReceipt && !isTerminalReceipt(latestReceipt)) {
-          latestReceipt = await readOperation(session, latestReceipt.operationId);
+          latestReceipt = await readOperation(session, latestReceipt.operationId, remaining());
+          remaining();
         }
         if (latestReceipt && isTerminalReceipt(latestReceipt)) {
           const failure = receiptFailure(latestReceipt);
@@ -334,13 +343,18 @@ export async function waitForEnvironment(
         }
         let environment: PublicEnvironmentSummary | null;
         try {
-          environment = await session.read<PublicEnvironmentSummary>("environment.get", {
-            environmentId,
-          });
+          const snapshot = await session.readWithReceipt<PublicEnvironmentSummary>(
+            "environment.get",
+            { environmentId },
+            remaining(),
+          );
+          environment = snapshot.result;
         } catch (error) {
           if (error instanceof CliError && error.code === "not-found") environment = null;
           else throw error;
         }
+        // Even a successful (or not-found) response must arrive within the budget.
+        remaining();
         if (condition !== "deleted" && !environment) {
           throw new CliError(
             "not-found",
@@ -374,9 +388,14 @@ export async function waitForEnvironment(
       { timeoutMs, signal: context.signal },
     );
   } catch (error) {
-    if (error instanceof ObservationStopped) {
+    const stopped = context.signal?.aborted
+      ? new ObservationStopped("signal", signalName(context.signal))
+      : Date.now() >= deadline && error instanceof CliError && error.code === "connection-failed"
+        ? new ObservationStopped("deadline")
+        : error;
+    if (stopped instanceof ObservationStopped) {
       throw stoppedError(
-        error,
+        stopped,
         latestReceipt?.action ?? "environment.get",
         latestReceipt,
         `the environment (${condition})`,

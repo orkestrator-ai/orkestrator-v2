@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import { describe, expect, jest, mock, test } from "bun:test";
 import {
   createSession,
@@ -150,12 +151,21 @@ describe("bridge-wide reads from a running CLI", () => {
     jest.useFakeTimers();
     try {
       const catalog = getAvailableModelCatalog();
+      // File identity checks finish before the live read arms its deadline.
+      for (let turn = 0; turn < 200 && initializationResult.mock.calls.length < 1; turn += 1) {
+        await stat(import.meta.path);
+      }
       expect(initializationResult).toHaveBeenCalledTimes(1);
-      jest.advanceTimersByTime(LIVE_CLAUDE_READ_TIMEOUT_MS);
-      await Promise.resolve();
-      await Promise.resolve();
+      let finished = false;
+      void catalog.then(() => {
+        finished = true;
+      });
+      for (let turn = 0; turn < 20 && !finished; turn += 1) {
+        jest.advanceTimersByTime(LIVE_CLAUDE_READ_TIMEOUT_MS);
+        await stat(import.meta.path);
+      }
       expect(initializationResult).toHaveBeenCalledTimes(2);
-      jest.advanceTimersByTime(LIVE_CLAUDE_READ_TIMEOUT_MS);
+      expect(finished).toBe(true);
       expect((await catalog).models[0]?.id).toBe("claude-opus-mock");
     } finally {
       jest.useRealTimers();

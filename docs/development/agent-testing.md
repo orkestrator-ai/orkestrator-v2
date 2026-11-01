@@ -352,6 +352,14 @@ when Settings > Disk usage names a folder for new dev worktrees, so the browser
 suites see the same layout on every host. Pass `--use-dev-worktree-folder` to
 place them in that folder instead; `mise run dev` always uses it.
 
+On Linux, `--headless-electron` (also `dev:test` only) runs Electron on
+Chromium's headless Ozone platform without `DISPLAY` or `WAYLAND_DISPLAY`, so
+the profile opens no window in the desktop session that started it. Use it on
+a shared host when only the browser surface is under test; the renderer is
+still at `browserUrl`. Do not use it for native-window, menu or clipboard QA.
+The switch has to be on Electron's command line, so the launcher adds it;
+Electron's main script cannot apply it.
+
 The launcher prints what it seeded, what it could not seed, and what Electron
 will therefore download. A first run on a host without the pinned versions needs
 network access for that download, and it is the slow part of startup — narrowing
@@ -888,10 +896,15 @@ A full-mode pass is still needed for the tool-call checks.
 `e2e/agent-testing/mcp-ui-matrix.spec.ts` drives the MCP editor's conflict
 recovery and secret replacement at 1440 and 390 px, then a Claude session
 with one healthy and one failing fixture server: reconnect from the live
-panel and a hard reload. No model is called: without a login the Claude CLI
-still connects and reports its MCP servers before the turn fails. It needs
-`ORKESTRATOR_AGENT_TEST_MCP_UI=1`, and its live case skips unless the
-profile lists no Claude credential source:
+panel and a hard reload. The reconnect runs through a probe, so the case also
+asserts that it changes only its own row, that the injected `orkestrator`
+server stays, that project servers read `project`, and that a name saved in two
+layers opens the project row. No model is called: without a login the Claude
+CLI still connects and reports its MCP servers before the turn fails. It exits
+straight after, usually before they connect, so the case writes a
+`UserPromptSubmit` hook into its own worktree that holds the CLI open for 8
+seconds. It needs `ORKESTRATOR_AGENT_TEST_MCP_UI=1`, and its live case skips
+unless the profile lists no Claude credential source:
 
 ```bash
 mise run dev:test --profile mcp-ui --fixture --no-agent-credentials --agent-platforms claude

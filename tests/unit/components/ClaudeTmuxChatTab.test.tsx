@@ -2332,6 +2332,50 @@ Running 1 Explore agent...
     expect(useClaudeTmuxStore.getState().getTab("tab-1").busy).toBe(false);
   });
 
+  test("a turn that ends in StopFailure stops the thinking indicator", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().setBusy("tab-1", true);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "prompt",
+        event_kind: "UserPromptSubmit",
+        payload: {},
+      });
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "failure",
+        event_kind: "StopFailure",
+        payload: { message: "API Error: 400 fake refusal" },
+      });
+    });
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").busy).toBe(false);
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents.at(-1)).toMatchObject({
+      kind: "StopFailure",
+      message: "API Error: 400 fake refusal",
+    });
+  });
+
   test("does not render non-actionable hook notifications above the transcript", async () => {
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
       environmentId: "env-1",

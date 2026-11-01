@@ -120,4 +120,12 @@ describe("development CLI arguments", () => {
       "only supported by mise run dev:test",
     );
   });
+
+  test("only dev:test runs Electron headless", () => {
+    expect(parseAgentTestArguments(["--fixture"]).headlessElectron).toBeUndefined();
+    expect(parseAgentTestArguments(["--headless-electron"]).headlessElectron).toBe(true);
+    expect(() => parseDevArguments(["--headless-electron"])).toThrow(
+      "only supported by mise run dev:test",
+    );
+  });
 });

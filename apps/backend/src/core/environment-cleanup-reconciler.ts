@@ -18,6 +18,7 @@ import {
   environmentCleanupLedger,
   environmentCleanupSweepState,
   isEnvironmentCleanupExhausted,
+  isEnvironmentCleanupRetryableByVersion,
   type EnvironmentCleanupEntry,
 } from "./environment-cleanup-ledger.js";
 import {
@@ -32,10 +33,12 @@ import {
   environmentStateKey,
   isEnvironmentStateKey,
 } from "./environment-state-paths.js";
+import { APP_VERSION } from "./constants.js";
 import { isPidAlive } from "./local-server-reaper.js";
 import type { Project } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { pathExists, runCommand } from "./shell.js";
+import { configuredWorktreeLocations, validateWorktreeLocation } from "./worktree-locations.js";
 
 export { MAX_ENVIRONMENT_CLEANUP_ATTEMPTS } from "./environment-cleanup-ledger.js";
 const RETRY_BASE_MS = 60_000;
@@ -49,6 +52,8 @@ export const ORPHANED_STATE_MIN_AGE_MS = 60 * 60_000;
 
 export type EnvironmentCleanupReconcileOptions = CleanupStepOptions & {
   now?: () => Date;
+  /** The running backend's version; tests set it to simulate an upgrade. */
+  backendVersion?: string;
 };
 
 export function environmentCleanupRetryDelayMs(attempts: number): number {
@@ -61,6 +66,7 @@ function retryDueAt(entry: EnvironmentCleanupEntry): number {
   return last + environmentCleanupRetryDelayMs(entry.attempts);
 }
 
+/** Process-wide on purpose: it only de-duplicates a log line. */
 const exhaustedWarnings = new Set<string>();
 
 export type EnvironmentCleanupReconcileResult = {
@@ -79,6 +85,7 @@ export async function reconcileEnvironmentCleanup(
   options: EnvironmentCleanupReconcileOptions = {},
 ): Promise<EnvironmentCleanupReconcileResult> {
   const now = options.now ?? (() => new Date());
+  const backendVersion = options.backendVersion ?? APP_VERSION;
   const ledger = environmentCleanupLedger(context.storage.getDataDir());
   const entries = await ledger.list();
   if (entries.length === 0) return { attempted: 0, nextDueAt: null };
@@ -87,8 +94,22 @@ export async function reconcileEnvironmentCleanup(
   );
   let attempted = 0;
   let nextDueAt: number | null = null;
-  for (const entry of entries) {
-    if (liveIds.has(entry.environmentId)) continue;
+  for (const listed of entries) {
+    if (liveIds.has(listed.environmentId)) continue;
+    let entry = listed;
+    if (
+      isEnvironmentCleanupExhausted(entry) &&
+      isEnvironmentCleanupRetryableByVersion(entry, backendVersion) &&
+      (await ledger.rearmForVersion(entry.environmentId, backendVersion))
+    ) {
+      exhaustedWarnings.delete(entry.environmentId);
+      console.info(
+        `[backend] Retrying cleanup for deleted environment ${entry.environmentId} once under backend ${backendVersion}; it had stopped after ${entry.attempts} attempts`,
+      );
+      const rearmed = await ledger.get(entry.environmentId);
+      if (!rearmed) continue;
+      entry = rearmed;
+    }
     if (isEnvironmentCleanupExhausted(entry)) {
       if (!exhaustedWarnings.has(entry.environmentId)) {
         exhaustedWarnings.add(entry.environmentId);
@@ -108,7 +129,7 @@ export async function reconcileEnvironmentCleanup(
       await enqueueEnvironmentLifecycleOperation(entry.environmentId, context, async () => {
         const current = await ledger.get(entry.environmentId);
         if (!current) return;
-        await ledger.noteAttempt(current.environmentId, now());
+        await ledger.noteAttempt(current.environmentId, now(), backendVersion);
         let worktreeDone = !current.pending.includes("worktree");
         for (const step of ENVIRONMENT_CLEANUP_STEPS) {
           if (!current.pending.includes(step)) continue;
@@ -290,8 +311,11 @@ async function localProjects(
 async function ownedWorkspacePaths(
   context: CommandContext,
   run: CleanupCommandRunner,
+  chosenRoots: string[],
 ): Promise<string[]> {
-  const claimed: string[] = [];
+  // A folder chosen for worktrees is never itself a stray, even when it lies
+  // inside the backend's root.
+  const claimed: string[] = [...chosenRoots];
   for (const environment of await context.storage.loadEnvironments()) {
     if (environment.worktreePath) claimed.push(environment.worktreePath);
   }
@@ -345,6 +369,51 @@ async function inspectWorkspaceDirectory(
   return { hasContent: false, newestMtimeMs };
 }
 
+/**
+ * Folders outside the backend's root that Orkestrator itself chose for
+ * worktrees: those live environments and ledger entries recorded, and the
+ * Settings > Disk usage location when this backend creates worktrees there.
+ * Each must still pass the checks a new location passes, and be stored in the
+ * canonical form creation recorded, so a retargeted symlink is never followed.
+ */
+async function chosenWorkspaceRoots(context: CommandContext, baseDir: string): Promise<string[]> {
+  const recorded = new Set<string>();
+  for (const environment of await context.storage.loadEnvironments()) {
+    if (environment.worktreeBaseDir) recorded.add(environment.worktreeBaseDir);
+  }
+  for (const entry of await environmentCleanupLedger(context.storage.getDataDir()).list()) {
+    if (entry.worktreeRoot) recorded.add(entry.worktreeRoot);
+  }
+  if (!context.worktreeDir) {
+    const configured = configuredWorktreeLocations(await context.storage.loadConfig()).environments;
+    if (configured) recorded.add(configured);
+  }
+  if (recorded.size === 0) return [];
+  const base = await canonicalForms(baseDir);
+  // A checkout's own directories are the user's, whatever their names.
+  const checkouts = (
+    await Promise.all(
+      (await localProjects(context)).map(({ projectPath }) => canonicalForms(projectPath)),
+    )
+  ).flat();
+  const roots = new Set<string>();
+  for (const root of recorded) {
+    let canonical: string;
+    try {
+      canonical = validateWorktreeLocation(root, {
+        label: "Worktree location",
+        dataDir: context.storage.getDataDir(),
+      });
+    } catch {
+      continue;
+    }
+    if (canonical !== path.resolve(root) || base.includes(canonical)) continue;
+    if (checkouts.some((checkout) => isSameOrInside(checkout, canonical))) continue;
+    roots.add(canonical);
+  }
+  return [...roots];
+}
+
 export type StrayWorkspaceSweepResult = {
   removed: number;
   /** Unowned directories kept because they hold something besides build logs. */
@@ -356,6 +425,10 @@ export type StrayWorkspaceSweepResult = {
  * nothing but build logs a process re-created after its worktree was removed.
  * Creation never allocates a path that already exists, and the age check
  * covers a worktree whose environment record is still being written.
+ *
+ * Chosen folders are protected as roots, but their unknown children are never
+ * swept: a branch-style name cannot prove ownership in a mixed-use folder.
+ * Exact recorded paths are handled separately by ledger reconciliation.
  */
 export async function sweepStrayWorkspaceDirectories(
   context: CommandContext,
@@ -365,6 +438,7 @@ export async function sweepStrayWorkspaceDirectories(
   const run = options.run ?? runCommand;
   const result: StrayWorkspaceSweepResult = { removed: 0, keptWithContent: 0 };
   const baseDir = getWorktreeBaseDir(context);
+  const chosenRoots = await chosenWorkspaceRoots(context, baseDir);
   let names: string[];
   try {
     names = (await readdir(baseDir, { withFileTypes: true }))
@@ -374,9 +448,21 @@ export async function sweepStrayWorkspaceDirectories(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return result;
     throw error;
   }
-  if (names.length === 0) return result;
+  if (names.length > 0) {
+    const owned = await ownedWorkspacePaths(context, run, chosenRoots);
+    await sweepStrayWorkspaceRoot(baseDir, names, owned, now, result);
+  }
+  return result;
+}
+
+async function sweepStrayWorkspaceRoot(
+  baseDir: string,
+  names: string[],
+  owned: string[],
+  now: () => Date,
+  result: StrayWorkspaceSweepResult,
+): Promise<void> {
   const canonicalBase = await realpath(baseDir);
-  const owned = await ownedWorkspacePaths(context, run);
   for (const name of names) {
     const forms = [path.resolve(baseDir, name), path.join(canonicalBase, name)];
     if (owned.some((claimed) => forms.some((form) => isSameOrInside(form, claimed)))) continue;
@@ -396,7 +482,6 @@ export async function sweepStrayWorkspaceDirectories(
       );
     }
   }
-  return result;
 }
 
 /**
@@ -624,6 +709,10 @@ export async function sweepAbandonedTempFiles(
   return removed;
 }
 
+/**
+ * Process-wide on purpose. The first only de-duplicates a log line; the second
+ * is keyed by the data directory, so it is per backend already.
+ */
 const loggedSweepFailures = new Set<string>();
 const reportedStrayWithContent = new Map<string, number>();
 
@@ -697,6 +786,7 @@ type ScheduledReconcile = {
   cancelled: boolean;
 };
 
+/** Process-wide on purpose: keyed by the data directory, so it is per backend already. */
 const scheduled = new Map<string, ScheduledReconcile>();
 
 /**

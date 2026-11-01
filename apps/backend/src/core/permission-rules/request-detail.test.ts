@@ -38,6 +38,14 @@ describe("codexRuleDetail", () => {
         true,
       )?.subject,
     ).toEqual({ kind: "network-host", host: "registry.npmjs.org" });
+    // Codex 0.166.0 sends a managed-network approval with no command at all.
+    expect(
+      codexRuleDetail(
+        { ruleEligible: true, networkHost: "probe-host.example.test" },
+        "command-approval",
+        true,
+      )?.subject,
+    ).toEqual({ kind: "network-host", host: "probe-host.example.test" });
     // Pi sends paths relative to its working directory.
     expect(
       codexRuleDetail(

@@ -41,7 +41,7 @@ import {
 } from "lucide-react";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { pickHostPath } from "@/lib/host-path-picker";
-import { PROJECT_ICON_FILE_ACCEPT, projectIconFromFile } from "@/lib/project-icon-image";
+import { fileFromHostImage, projectIconFromFile } from "@/lib/project-icon-image";
 import { ProjectIconImage } from "@/components/federation/MachineDot";
 import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/types";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -58,6 +58,14 @@ const DEFAULT_CONFIG: RepositoryConfig = {
   defaultBranch: "main",
   prBaseBranch: "main",
 };
+
+/** `path` relative to the project folder when it is inside it, else unchanged. */
+function relativeToRoot(path: string, root: string): string {
+  const base = root.replace(/[\\/]+$/, "");
+  return path.startsWith(base) && /[\\/]/.test(path.charAt(base.length))
+    ? path.slice(base.length + 1)
+    : path;
+}
 
 export function RepositorySettings({
   project,
@@ -86,7 +94,6 @@ export function RepositorySettings({
   const [icon, setIcon] = useState<string | null>(project.icon ?? null);
   const iconConversionGeneration = useRef(0);
   const [isConvertingIcon, setIsConvertingIcon] = useState(false);
-  const iconInputRef = useRef<HTMLInputElement>(null);
   const [projectNameError, setProjectNameError] = useState<string | null>(null);
   const [isReadingRemote, setIsReadingRemote] = useState(false);
   const remoteReadGeneration = useRef(0);
@@ -214,16 +221,56 @@ export function RepositorySettings({
     }
   };
 
-  const handleIconFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    // The same file chosen again after Remove must fire another change.
-    event.target.value = "";
-    const generation = ++iconConversionGeneration.current;
-    setIsConvertingIcon(Boolean(file));
-    if (!file) return;
+  /** Scales one image to the icon; false when it could not be used. */
+  const tryIconFile = async (file: File, generation: number, reportFailure: boolean) => {
     try {
       const converted = await projectIconFromFile(file);
       if (generation === iconConversionGeneration.current) setIcon(converted);
+      return true;
+    } catch (err) {
+      if (reportFailure && generation === iconConversionGeneration.current) {
+        const message = err instanceof Error ? err.message : "The image could not be used";
+        toast.error("Could not use that image", { description: message });
+      }
+      return false;
+    }
+  };
+
+  // Without an icon, look where projects usually keep one (favicons, app
+  // icons, logos) before browsing; browsing starts in the project's folder.
+  const handleChooseIcon = async () => {
+    const root = localPath.trim();
+    const generation = ++iconConversionGeneration.current;
+    setIsConvertingIcon(true);
+    try {
+      if (!icon && root) {
+        const found = await backend.findProjectIcons(root).catch(() => [] as string[]);
+        for (const candidate of found) {
+          if (generation !== iconConversionGeneration.current) return;
+          const image = await backend.readHostImageFile(candidate).catch(() => null);
+          if (!image || generation !== iconConversionGeneration.current) continue;
+          if (await tryIconFile(fileFromHostImage(image), generation, false)) {
+            if (generation === iconConversionGeneration.current) {
+              toast.success("Found the project's icon", {
+                description: `${relativeToRoot(image.path, root)}. Use Change Image to browse for another.`,
+              });
+            }
+            return;
+          }
+        }
+        if (generation !== iconConversionGeneration.current) return;
+      }
+      setIsConvertingIcon(false);
+      const selected = await pickHostPath({
+        mode: "file",
+        title: "Select Icon Image",
+        defaultPath: root || undefined,
+      });
+      if (!selected || generation !== iconConversionGeneration.current) return;
+      setIsConvertingIcon(true);
+      const image = await backend.readHostImageFile(selected);
+      if (generation !== iconConversionGeneration.current) return;
+      await tryIconFile(fileFromHostImage(image), generation, true);
     } catch (err) {
       if (generation !== iconConversionGeneration.current) return;
       const message = err instanceof Error ? err.message : "The image could not be used";
@@ -514,23 +561,19 @@ export function RepositorySettings({
                     <House className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
                   )}
                 </span>
-                <input
-                  ref={iconInputRef}
-                  id="projectIcon"
-                  type="file"
-                  accept={PROJECT_ICON_FILE_ACCEPT}
-                  className="sr-only"
-                  tabIndex={-1}
-                  onChange={(event) => void handleIconFile(event)}
-                />
                 <Button
+                  id="projectIcon"
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => iconInputRef.current?.click()}
-                  disabled={isSaving}
+                  onClick={() => void handleChooseIcon()}
+                  disabled={isSaving || isConvertingIcon}
                 >
-                  <ImageUp className="mr-2 h-4 w-4" />
+                  {isConvertingIcon ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <ImageUp className="mr-2 h-4 w-4" />
+                  )}
                   {icon ? "Change Image…" : "Choose Image…"}
                 </Button>
                 {(icon || isConvertingIcon) && (
@@ -550,7 +593,9 @@ export function RepositorySettings({
               </div>
               <p className="text-xs text-muted-foreground">
                 Any image or favicon, shown beside the project name in the sidebar whichever way it
-                is grouped. Without one, the sidebar shows a home in the machine&apos;s colour.
+                is grouped. Choosing first looks for the project&apos;s own favicon or logo, then
+                browses from its folder. Without one, the sidebar shows a home in the machine&apos;s
+                colour.
               </p>
             </div>
             <div className="grid gap-2">

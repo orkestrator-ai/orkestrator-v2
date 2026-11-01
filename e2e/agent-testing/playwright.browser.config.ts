@@ -46,6 +46,7 @@ export default defineConfig({
     "close-retention-live.spec.ts",
     "codex-typed-prompts-live.spec.ts",
     "codex-refused-login-live.spec.ts",
+    "codex-saved-rules-live.spec.ts",
     "bug-report-live.spec.ts",
     "slash-command-inactive.spec.ts",
     "slash-command-picker.spec.ts",

@@ -236,6 +236,13 @@ export interface StartupAgentSessionSnapshot {
 }
 
 /**
+ * How a source's work ended, when it knows: `failed` rings `agent_failed`, and
+ * `none` means nothing completed, so going idle rings nothing. Absent, the
+ * source's working-to-idle edge says the work finished.
+ */
+export type AgentActivityCompletionOutcome = "failed" | "none";
+
+/**
  * Content-free cause of an environment's unread badge.
  *
  * - `agent_finished`: an agent turn ended.
@@ -708,6 +715,11 @@ export interface PersistedNativeAgentSession {
   /** Exact backend-authored frame that may be hidden on the first matching user echo. */
   initialPromptPresentation?: TrustedUserPromptPresentation;
   dispatchedRequestIds?: string[];
+  /**
+   * The mode the newest accepted turn was sent in. A prompt can state its own
+   * mode without changing `controls`, so a continuation of that turn reads it here.
+   */
+  lastDispatchedTurn?: { requestId: string; mode?: "plan" | "build" };
   /** Retained only while the provider outcome is ambiguous. */
   pendingDispatch?: PersistedNativeAgentPendingDispatch;
   /** Retained until an ambiguous steer is authoritatively reconciled or discarded. */
@@ -1175,6 +1187,8 @@ export interface AppConfig {
      */
     reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
+    /** The automatic-account ticks; see `updateAgentAccountAutoSwitchSettings`. */
+    agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
     /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal
      * operations setting rather than a user-facing transport choice; changes

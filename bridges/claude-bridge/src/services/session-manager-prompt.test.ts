@@ -4115,6 +4115,38 @@ describe("sendPrompt", () => {
     expect(session.status).toBe("error");
   });
 
+  test("a limit refusal's words become the turn's error, so the backend can see the limit", async () => {
+    const session = createSession("result-success-is-error-limit");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "You've hit your limit · resets 3pm (Europe/London)",
+    });
+    call.finish();
+
+    await expect(promptPromise).rejects.toThrow("You've hit your limit");
+    expect(session.status).toBe("error");
+    expect(session.error).toBe("You've hit your limit · resets 3pm (Europe/London)");
+  });
+
+  test("any other text in an error result stays out of the turn's error", async () => {
+    const session = createSession("result-success-is-error-other");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success", is_error: true, result: "My private answer" });
+    call.finish();
+
+    await expect(promptPromise).rejects.toThrow("Claude ended the turn on an API error.");
+    expect(session.error).toBe("Claude ended the turn on an API error.");
+  });
+
   test("keeps task settlement at receive time when an API error ends the turn", async () => {
     const session = createSession("result-error-task-settlement");
     track(session.id);

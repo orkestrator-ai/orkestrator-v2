@@ -11,7 +11,7 @@ import type {
 import { claudePlanWindowFromLabel } from "@orkestrator/protocol/plan-usage";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
-import { mcpScope } from "./mcp-runtime-status.js";
+import { mcpScope, type McpServerLayers } from "./mcp-runtime-status.js";
 import {
   claudeExecutableOptions,
   generateMessageId,
@@ -23,6 +23,7 @@ import {
   sessionOperationError,
   sessions,
 } from "./session-manager-core.js";
+import { resetClaudeModelCatalogForTesting } from "./claude-model-catalog.js";
 import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
 import { claudePermissionMode, claudeTurnPolicy } from "./claude-query-config.js";
 import { eventEmitter } from "./event-emitter.js";
@@ -41,6 +42,7 @@ export { readClaudeAuthStatus } from "./claude-sign-in.js";
 
 export function resetClaudeCatalogCachesForTesting(): void {
   resetClaudeSignInForTesting();
+  resetClaudeModelCatalogForTesting();
 }
 
 /**
@@ -245,7 +247,7 @@ function mcpError(error: string): string {
   return redactSecrets(error).slice(0, 2_000);
 }
 
-function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
+function normalizeMcp(status: McpServerStatus, layers?: McpServerLayers): NativeAgentMcpServer {
   const mappedStatus = status.status === "pending" ? "connecting" : status.status;
   const tools = (status.tools ?? [])
     .map((tool) => tool.name)
@@ -262,7 +264,7 @@ function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
     id: status.name,
     name: status.serverInfo?.name || status.name,
     status: mappedStatus,
-    scope: mcpScope(status.scope, status.name, status.source),
+    scope: mcpScope(status.scope, status.name, status.source, layers),
     ...(transport ? { transport } : {}),
     toolCount: tools.length,
     ...(tools.length ? { tools } : {}),
@@ -271,19 +273,16 @@ function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
   };
 }
 
-export async function readSessionMcpServers(sessionId: string): Promise<NativeAgentMcpServer[]> {
-  const session = sessions.get(sessionId);
-  if (!session) return [];
-  const control = readableControl(session);
-  if (control?.mcpServerStatus) {
-    try {
-      session.mcpInventory = (await control.mcpServerStatus()).slice(0, 128).map(normalizeMcp);
-    } catch (error) {
-      // Keep the last inventory rather than failing the read; the turn query
-      // exited before it could answer.
-      rethrowUnlessClosedTransport(error);
-    }
-  } else if (!session.mcpInventory && session.initData?.mcpServers) {
+function liveMcpInventory(
+  session: SessionState,
+  statuses: McpServerStatus[],
+): NativeAgentMcpServer[] {
+  return statuses.slice(0, 128).map((status) => normalizeMcp(status, session.mcpServerLayers));
+}
+
+/** The last inventory, seeded from the init rows when no CLI answered a read. */
+function retainedMcpInventory(session: SessionState): NativeAgentMcpServer[] | undefined {
+  if (!session.mcpInventory && session.initData?.mcpServers) {
     session.mcpInventory = session.initData.mcpServers.slice(0, 128).map((server) => ({
       id: server.name,
       name: server.name,
@@ -302,7 +301,48 @@ export async function readSessionMcpServers(sessionId: string): Promise<NativeAg
       ...(server.error ? { error: mcpError(server.error) } : {}),
     }));
   }
-  return session.mcpInventory ?? [];
+  return session.mcpInventory;
+}
+
+/**
+ * Put a probe's answer for the one server it acted on into the session's list.
+ *
+ * A probe is a bare CLI: it has none of the servers the bridge passes inline
+ * (Orkestrator's own) and reads the files by its own rules, so its list is not
+ * this session's. The row keeps the layer the session loaded it from, and a
+ * name the session never listed stays out. The next read from a running CLI
+ * replaces the whole list.
+ */
+function applyProbeMcpStatus(
+  session: SessionState,
+  serverId: string,
+  statuses: McpServerStatus[],
+): void {
+  const status = statuses.find((candidate) => candidate.name === serverId);
+  if (!status) return;
+  const inventory = retainedMcpInventory(session);
+  session.mcpInventory = inventory?.map((row) => {
+    if (row.id !== serverId) return row;
+    const updated = normalizeMcp(status, session.mcpServerLayers);
+    return { ...updated, scope: row.scope ?? updated.scope };
+  });
+}
+
+export async function readSessionMcpServers(sessionId: string): Promise<NativeAgentMcpServer[]> {
+  const session = sessions.get(sessionId);
+  if (!session) return [];
+  const control = readableControl(session);
+  if (control?.mcpServerStatus) {
+    try {
+      session.mcpInventory = liveMcpInventory(session, await control.mcpServerStatus());
+    } catch (error) {
+      // Keep the last inventory rather than failing the read; the turn query
+      // exited before it could answer.
+      rethrowUnlessClosedTransport(error);
+    }
+    return session.mcpInventory ?? [];
+  }
+  return retainedMcpInventory(session) ?? [];
 }
 
 export async function performSessionMcpAction(
@@ -333,7 +373,9 @@ export async function performSessionMcpAction(
       await control.reconnectMcpServer?.(serverId);
     }
     if (control.mcpServerStatus) {
-      session.mcpInventory = (await control.mcpServerStatus()).slice(0, 128).map(normalizeMcp);
+      const statuses = await control.mcpServerStatus();
+      if (probe) applyProbeMcpStatus(session, serverId, statuses);
+      else session.mcpInventory = liveMcpInventory(session, statuses);
     }
     return {};
   } finally {

@@ -7,7 +7,7 @@
  * (`get_projects`, `get_environment_snapshots`): names, status and activity
  * only, never transcripts, prompts, paths or credentials. Summary reads ask
  * for {@link NODE_SUMMARY_ENVIRONMENT_READ_ARGS}, which adds the node's PR
- * monitor health to each environment. The search fields
+ * monitor health and live pipeline membership to each environment. The search fields
  * (`pathName`, `worktreeName`, `defaultBranch`, `createdAt`) carry what the
  * project search matches on: a directory's last segment, never its path.
  */
@@ -25,14 +25,20 @@ import type { NodeView } from "./command-nodes.js";
 import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
 import { isPrMergeability } from "./pr-merge-readiness.js";
 import { normalizeProjectIcon } from "./project-icon.js";
-import { isPrCheckSummary, type PrCheckSummary, type PrState } from "./pr-monitor.js";
+import {
+  copyPrCheckSummary,
+  isPrCheckSummary,
+  type PrCheckSummary,
+  type PrState,
+} from "./pr-monitor.js";
 
 export const NODE_SUMMARY_CHANGED_EVENT = "node-summary-changed";
 
 /**
  * Extra `get_environment_snapshots` arguments for a summary read: each
  * environment then carries confirmation, viewer permission and check counts from the
- * node's runtime PR monitor. Nodes that predate it ignore the argument.
+ * node's runtime PR monitor, plus pipeline membership from existing records.
+ * Nodes that predate it ignore the argument.
  */
 export const NODE_SUMMARY_ENVIRONMENT_READ_ARGS = { includePrMonitorHealth: true } as const;
 
@@ -89,6 +95,14 @@ export interface NodeEnvironmentSummary {
   createdAt?: string;
   deleting: boolean;
   isProjectHome: boolean;
+  /**
+   * An existing build pipeline record names this environment, so
+   * another machine's row can carry the same pipe marker as the node's own.
+   * Absent otherwise, and from nodes that predate it.
+   */
+  buildPipeline?: true;
+  /** The node will merge this environment's PR once it is ready. */
+  autoMerge?: true;
   /**
    * The node's last PR reading, so a command node can decide "ready to merge"
    * (`pr-merge-readiness.ts`) for another machine's rows. States only, never
@@ -268,6 +282,8 @@ export function toNodeEnvironmentSummary(
       raw.lifecycleOperation === "deleting" ||
       (typeof raw.deletionRequestedAt === "string" && raw.deletionRequestedAt.length > 0),
     isProjectHome: raw.projectHome === true,
+    ...(raw.buildPipeline === true ? { buildPipeline: true as const } : {}),
+    ...(raw.autoMerge === true ? { autoMerge: true as const } : {}),
     ...(PR_STATES.has(raw.prState) ? { prState: raw.prState as PrState } : {}),
     ...(typeof raw.hasMergeConflicts === "boolean"
       ? { prHasMergeConflicts: raw.hasMergeConflicts }
@@ -275,11 +291,7 @@ export function toNodeEnvironmentSummary(
     ...(isPrMergeability(raw.prMergeability) ? { prMergeability: raw.prMergeability } : {}),
     ...(isPrCheckSummary(raw.prCheckSummary)
       ? {
-          prCheckSummary: {
-            passed: raw.prCheckSummary.passed,
-            total: raw.prCheckSummary.total,
-            pending: raw.prCheckSummary.pending,
-          },
+          prCheckSummary: copyPrCheckSummary(raw.prCheckSummary),
         }
       : {}),
     ...(raw.prMonitorConfirmed === true ? { prMonitorConfirmed: true as const } : {}),

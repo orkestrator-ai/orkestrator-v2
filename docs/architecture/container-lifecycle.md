@@ -1209,7 +1209,9 @@ follower. Backend shutdown stops every follower.
 
 Claude started in a container terminal reports its state through the hooks the
 entrypoint writes into `~/.claude/settings.json`: `UserPromptSubmit` writes
-`working` and `Stop` writes `waiting` to `/tmp/.claude-state`. Bridge sessions
+`working` and `Stop` writes `waiting` to `/tmp/.claude-state`. A turn that ends on
+an API error runs `StopFailure` instead of `Stop`, which is not installed here, so
+it reads `working` until the next prompt (to-do 1200). Bridge sessions
 (`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set) write nothing. The same file sets
 bypass permissions as the default mode and records its consent
 (`skipDangerousModePermissionPrompt`), the only place current Claude Code

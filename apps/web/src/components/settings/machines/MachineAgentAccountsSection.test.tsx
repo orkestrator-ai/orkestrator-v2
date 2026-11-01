@@ -200,6 +200,28 @@ describe("MachineAgentAccountsSection", () => {
     expect(rows[0]?.textContent).toContain("MBP3");
   });
 
+  test("wide lets the table grow past the page to its container's width", async () => {
+    await act(async () => {
+      render(<MachineAgentAccountsSection wide />);
+    });
+    await screen.findAllByTestId("machine-agent-accounts-row");
+    const table = screen.getByTestId("machine-agent-accounts-table");
+    expect(table.className).toContain("w-max");
+    expect(table.className).toContain("max-w-[100cqw]");
+    expect(table.className).toContain("min-w-full");
+    // Each login shows its whole label instead of a capped, truncated one.
+    const cell = screen.getByRole("combobox", { name: "Claude Code account on Studio" });
+    expect(cell.className).not.toContain("max-w-[15rem]");
+  });
+
+  test("without wide the table stays within the page", async () => {
+    await act(async () => {
+      render(<MachineAgentAccountsSection nodeId="node-leaf" />);
+    });
+    await screen.findAllByTestId("machine-agent-accounts-row");
+    expect(screen.getByTestId("machine-agent-accounts-table").className).not.toContain("w-max");
+  });
+
   test("re-reads only the machine whose accounts changed", async () => {
     await act(async () => {
       render(<MachineAgentAccountsSection />);

@@ -4,6 +4,7 @@ import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
 import {
   machineColorLabel,
   machineDotClass,
+  machineOutlineClass,
   machineTextClass,
 } from "@/lib/federation/machine-colors";
 import { cn } from "@/lib/utils";
@@ -140,18 +141,34 @@ export function MachineHomeIcon({
 }
 
 /**
- * A repository group's leading home, two text lines tall, in the command
- * node's colour: the group belongs to the machine that commands the others.
+ * A repository group's leading home, two text lines tall, outlined in the
+ * command node's colour: the group belongs to the machine that commands the
+ * others. The command node's own icon for the project replaces the home.
  */
-export function CommandNodeHomeIcon({ colorToken }: { colorToken: string | undefined }) {
+export function CommandNodeHomeIcon({
+  colorToken,
+  projectIcon,
+}: {
+  colorToken: string | undefined;
+  /** The command node's icon for this repository's project. */
+  projectIcon?: string | null;
+}) {
+  const icon = normalizeProjectIcon(projectIcon);
   return (
     <span
       data-testid="command-node-home-icon"
       data-machine-color={colorToken ?? "neutral"}
       aria-hidden="true"
-      className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.06]"
+      className={cn(
+        "flex size-8 shrink-0 items-center justify-center rounded-lg border bg-white/[0.06]",
+        machineOutlineClass(colorToken),
+      )}
     >
-      <House className={cn("h-4 w-4", machineTextClass(colorToken))} />
+      {icon ? (
+        <ProjectIconImage src={icon} className="h-5 w-5 rounded-[4px]" />
+      ) : (
+        <House className={cn("h-4 w-4", machineTextClass(colorToken))} />
+      )}
     </span>
   );
 }

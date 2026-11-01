@@ -6,7 +6,7 @@ import {
   parseRecreateEnvironmentRequest,
 } from "@orkestrator/protocol/container-lifecycle";
 import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js";
-import { rebuildPreview, requestReplacementCancellation } from "./container-replacement.js";
+import { rebuildPreview } from "./container-replacement.js";
 import { listRecoveryCopies } from "./recovery-copies.js";
 import { applyEnvironmentAllowedDomains, environmentNetworkPolicy } from "./container-network.js";
 import {
@@ -176,9 +176,17 @@ export function registerEnvironmentCommands(
     await runtime.prMonitor.sync(context);
     const environments = await load();
     const announced = runtime.prMonitor.announcedStates();
+    // Match the local sidebar's pipeline.environmentId membership. Persisted
+    // buildPipelineId can outlive deletion and is also copied onto forks.
+    const buildEnvironmentIds = new Set(
+      (await storage.listBuildPipelines(asString(args.projectId, "projectId"))).map(
+        (pipeline) => pipeline.environmentId,
+      ),
+    );
     return environments.map((environment) => ({
       ...environment,
       ...runtime.prMonitor.relayedHealth(environment, announced),
+      ...(buildEnvironmentIds.has(environment.id) ? { buildPipeline: true as const } : {}),
     }));
   });
   /**
@@ -380,15 +388,19 @@ export function registerEnvironmentCommands(
     assertOnlyKeys(args, ["projectId"], "arguments");
     const projectId = asString(args.projectId, "projectId");
     const { storage } = context;
-    const { environment } = await ensureProjectHomeEnvironment(projectId, {
-      storage,
-      resolveRoot: (project) => resolveProjectGitRoot(storage, project.id),
-      readBranch: readCheckoutBranch,
-      createRecord: (id, name) => createEnvironment(id, { name, environmentType: "local" }),
-      clearTerminalSessions: async (environmentId) => {
-        await storage.clearBackendTerminalSessionIds?.(environmentId);
+    const { environment } = await ensureProjectHomeEnvironment(
+      context.runtime.environments,
+      projectId,
+      {
+        storage,
+        resolveRoot: (project) => resolveProjectGitRoot(storage, project.id),
+        readBranch: readCheckoutBranch,
+        createRecord: (id, name) => createEnvironment(id, { name, environmentType: "local" }),
+        clearTerminalSessions: async (environmentId) => {
+          await storage.clearBackendTerminalSessionIds?.(environmentId);
+        },
       },
-    });
+    );
     // The home is a tracked worktree like any other: its watcher is what
     // announces a dropped or edited file as a change.
     await context.runtime.diffStats.sync(context);
@@ -700,7 +712,7 @@ export function registerEnvironmentCommands(
       context,
     );
   });
-  register("cancel_container_operation", async (args, { storage }) => {
+  register("cancel_container_operation", async (args, { storage, runtime }) => {
     assertOnlyKeys(args, ["environmentId", "operationId"], "arguments");
     const environmentId = asString(args.environmentId, "environmentId");
     const operationId = asString(args.operationId, "operationId");
@@ -719,7 +731,7 @@ export function registerEnvironmentCommands(
     ) {
       return { cancelled: false };
     }
-    requestReplacementCancellation(operationId);
+    runtime.environments.requestReplacementCancellation(operationId);
     return { cancelled: true, pending: true };
   });
   register("recreate_environment", async (args, context) => {

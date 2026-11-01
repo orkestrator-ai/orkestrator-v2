@@ -196,6 +196,139 @@ describe("Electron StorageService", () => {
     );
   });
 
+  describe("how a source says its work ended", () => {
+    async function working(source: "multi-review" | "graph-run" = "multi-review") {
+      const storage = new StorageService(await createTempDir("ork-storage-activity-outcome-"));
+      await storage.init();
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      let time = Date.parse(environment.agentActivityUpdatedAt!) + 1_000;
+      const next = () => new Date((time += 1_000)).toISOString();
+      await storage.setEnvironmentAgentActivity(environment.id, "working", next(), source);
+      return { storage, id: environment.id, next };
+    }
+    const end = { idle: "idle", source: "multi-review" } as const;
+
+    test("a success survives a sibling ending quietly", async () => {
+      const { storage, id, next } = await working();
+      await storage.setEnvironmentAgentActivity(id, "working", next(), "claude-tmux");
+      const success = await storage.setEnvironmentAgentActivity(id, "idle", next(), "multi-review");
+      expect(success.agentActivityState).toBe("working");
+      expect(success.unreadReason).toBe("agent_finished");
+      const end = await storage.setEnvironmentAgentActivity(
+        id,
+        "idle",
+        next(),
+        "claude-tmux",
+        undefined,
+        false,
+        { completionOutcome: "none" },
+      );
+      expect(end.agentActivityState).toBe("idle");
+      expect(end.hasUnreadWork).toBe(true);
+      expect(end.unreadReason).toBe("agent_finished");
+    });
+
+    test("no outcome keeps the aggregate's finished bell", async () => {
+      const { storage, id, next } = await working();
+      await expect(
+        storage.setEnvironmentAgentActivity(id, end.idle, next(), end.source),
+      ).resolves.toMatchObject({ hasUnreadWork: true, unreadReason: "agent_finished" });
+    });
+
+    test("failed rings agent_failed, and bumps the activity token", async () => {
+      const { storage, id, next } = await working();
+      const at = next();
+      await expect(
+        storage.setEnvironmentAgentActivity(id, end.idle, at, end.source, undefined, false, {
+          completionOutcome: "failed",
+        }),
+      ).resolves.toMatchObject({
+        hasUnreadWork: true,
+        unreadReason: "agent_failed",
+        lastActivityAt: at,
+      });
+    });
+
+    test("failed rings only on the source's own working edge", async () => {
+      const { storage, id, next } = await working("graph-run");
+      const updated = await storage.setEnvironmentAgentActivity(
+        id,
+        end.idle,
+        next(),
+        end.source,
+        undefined,
+        false,
+        { completionOutcome: "failed" },
+      );
+      expect(updated.agentActivityState).toBe("working");
+      expect(updated.hasUnreadWork ?? false).toBe(false);
+    });
+
+    test("none rings nothing going idle, and still rings going waiting", async () => {
+      const quiet = await working();
+      const idle = await quiet.storage.setEnvironmentAgentActivity(
+        quiet.id,
+        end.idle,
+        quiet.next(),
+        end.source,
+        undefined,
+        false,
+        { completionOutcome: "none" },
+      );
+      expect(idle.agentActivityState).toBe("idle");
+      expect(idle.hasUnreadWork ?? false).toBe(false);
+
+      const sibling = await working();
+      await sibling.storage.setEnvironmentAgentActivity(
+        sibling.id,
+        "waiting",
+        sibling.next(),
+        "graph-run",
+      );
+      await expect(
+        sibling.storage.setEnvironmentAgentActivity(
+          sibling.id,
+          end.idle,
+          sibling.next(),
+          end.source,
+          undefined,
+          false,
+          { completionOutcome: "none" },
+        ),
+      ).resolves.toMatchObject({
+        agentActivityState: "waiting",
+        hasUnreadWork: true,
+        unreadReason: "agent_waiting",
+      });
+    });
+
+    test("an aggregate's finished bell does not replace an unread failure", async () => {
+      const { storage, id, next } = await working();
+      await storage.setEnvironmentAgentActivity(id, "working", next(), "graph-run");
+      await storage.setEnvironmentAgentActivity(
+        id,
+        end.idle,
+        next(),
+        end.source,
+        undefined,
+        false,
+        {
+          completionOutcome: "failed",
+        },
+      );
+      await expect(
+        storage.setEnvironmentAgentActivity(id, end.idle, next(), "graph-run"),
+      ).resolves.toMatchObject({ unreadReason: "agent_failed" });
+
+      // Once it has been read, the next end speaks for itself.
+      await storage.setEnvironmentUnread(id, false);
+      await storage.setEnvironmentAgentActivity(id, "working", next(), "graph-run");
+      await expect(
+        storage.setEnvironmentAgentActivity(id, end.idle, next(), "graph-run"),
+      ).resolves.toMatchObject({ hasUnreadWork: true, unreadReason: "agent_finished" });
+    });
+  });
+
   test("accepts backend-owned native activity without renderer observer ids", async () => {
     const dataDir = await createTempDir("ork-storage-native-agent-activity-");
     const storage = new StorageService(dataDir);

@@ -480,6 +480,12 @@ describe("what the machine reports about itself", () => {
     expect(
       await describeOs({
         platform: "linux",
+        readFile: async () => 'PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nVERSION_ID="13"\n',
+      }),
+    ).toBe("Debian GNU/Linux 13 (trixie)");
+    expect(
+      await describeOs({
+        platform: "linux",
         readFile: async (path) => {
           seen.push(path);
           if (path === "/etc/os-release") throw new Error("missing");
@@ -496,6 +502,38 @@ describe("what the machine reports about itself", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  test("a Linux name with no number gains its version, and a derivative names its base", () => {
+    // beelink's /etc/os-release, read 2026-11-01: the whole PRETTY_NAME is "Omarchy".
+    const omarchy = [
+      'NAME="Omarchy"',
+      'PRETTY_NAME="Omarchy"',
+      "ID=omarchy",
+      "ID_LIKE=arch",
+      'BUILD_ID="4.0.6"',
+      'VERSION_ID="4.0.6"',
+      'HOME_URL="https://omarchy.org/"',
+    ].join("\n");
+    expect(parseOsRelease(omarchy)).toBe("Omarchy 4.0.6 (like arch)");
+    expect(
+      parseOsRelease(
+        'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nVERSION_ID="24.04"\nID=ubuntu\nID_LIKE=debian\n',
+      ),
+    ).toBe("Ubuntu 24.04.1 LTS (like debian)");
+    // A name that already carries a number is not given a second one.
+    expect(parseOsRelease('PRETTY_NAME="Alpine Linux v3.20"\nVERSION_ID=3.20.3\n')).toBe(
+      "Alpine Linux v3.20",
+    );
+    expect(parseOsRelease('PRETTY_NAME="Rocky Linux 9.4"\nID_LIKE="rhel centos fedora"\n')).toBe(
+      "Rocky Linux 9.4 (like rhel, centos, fedora)",
+    );
+    // Arch is rolling: no VERSION_ID and nothing it derives from.
+    expect(parseOsRelease('PRETTY_NAME="Arch Linux"\nBUILD_ID=rolling\nID=arch\n')).toBe(
+      "Arch Linux",
+    );
+    // Only os-release identifiers are kept from ID_LIKE.
+    expect(parseOsRelease('NAME="Odd"\nID_LIKE="arch <b>x</b>"\n')).toBe("Odd (like arch)");
   });
 
   test("Windows names itself, and an unknown platform is described plainly", async () => {

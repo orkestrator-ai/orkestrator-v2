@@ -251,6 +251,7 @@ adding a test, check where its scenario class is already proved:
 | Retry and retention | `retry-and-retention` scenario; `public-api-projects.test.ts` and `public-api-recovery.test.ts` (one execution, conflict, deleted-resource replay, retired namespace, corrupt store) |
 | Setup failure | `setup-failure` scenario; `public-api-launch.test.ts` (setup, then exactly one initial prompt) |
 | Lost prompt acknowledgement | `public-api-sessions.test.ts` (unknown dispatch parks, blocks other prompts, retries under the same key; discard stays unknown) |
+| Lost mutation response | `lost-response` scenario, local and container (a loopback proxy in front of the real backend delivers `environment start` only after the client's first key lookup came back `not-found`, as an admission slower than the request timeout, and loses the `exec` answer after admission; `--wait` recovers by request key, the child's exit code passes through, the command runs once); `client-waits.test.ts` (session, environment and exec recovery, key never appearing, shared deadline, unclaimed exec observed as pending); `scenario-lossy-proxy.test.ts` |
 | Client exit | `client-exit` scenario (CLI killed mid-start; a second environment runs; the first settles) |
 | Fast or multiple turns | `public-api-sessions.test.ts` (own-request evidence only, independent sessions, consecutive runs) |
 | Backend or bridge restart | `public-api-recovery.test.ts`, `public-api-exec.test.ts` (dead-generation start interrupted, create settled from state, exec worker reconciled, not re-run) |
@@ -268,8 +269,8 @@ adding a test, check where its scenario class is already proved:
 | Live provider turn | `live-session` scenario (opt-in, `--provider`): one bounded turn with a file assertion and a follow-up |
 
 `setup-failure`, `client-exit` and `project-init` run locally only. The local
-matrix has nine credential-free cases; the container matrix has seven,
-including `foreign-owner` and `project-cascade`. A fake backend that only
+matrix has ten credential-free cases; the container matrix has eight,
+including `foreign-owner`, `lost-response` and `project-cascade`. A fake backend that only
 exercises parsing does not count as gateway, backend or provider coverage. Do not claim Docker or live
 coverage from scripted adapters, or UI rehydration from API polling alone.
 Gaps and the qualification evidence log are in

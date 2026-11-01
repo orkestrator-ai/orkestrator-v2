@@ -1,5 +1,6 @@
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { copyOutBounded, extractSingleTarFile } from "./docker-copy-out.js";
+import type { EnvironmentOperations } from "./environment-operations.js";
 import { runCommand } from "./shell.js";
 
 /**
@@ -313,11 +314,14 @@ export async function ensureCurrentBootReady(
 // ---------------------------------------------------------------------------
 
 /**
- * Environments and containers being drained. New workload (bridges,
- * terminals, setup) is fenced while an explicit stop is draining. The fence is
- * in memory on purpose: a drain only exists inside one lifecycle operation.
+ * Containers being drained. New workload (bridges, terminals, setup) is
+ * fenced while an explicit stop is draining. The fence is in memory on
+ * purpose: a drain only exists inside one lifecycle operation. The draining
+ * environments are per backend (`EnvironmentOperations`); the containers are
+ * process-wide on purpose (docs/architecture/backend-runtime.md): a container
+ * id names one Docker container, and new work into a container that is
+ * stopping is refused whichever backend asks.
  */
-const drainingEnvironments = new Set<string>();
 const drainingContainers = new Set<string>();
 
 function drainingError(): Error {
@@ -329,12 +333,11 @@ function drainingError(): Error {
   );
 }
 
-export function isEnvironmentDraining(environmentId: string): boolean {
-  return drainingEnvironments.has(environmentId);
-}
-
-export function assertEnvironmentNotDraining(environmentId: string): void {
-  if (drainingEnvironments.has(environmentId)) throw drainingError();
+export function assertEnvironmentNotDraining(
+  environments: Pick<EnvironmentOperations, "isDraining">,
+  environmentId: string,
+): void {
+  if (environments.isDraining(environmentId)) throw drainingError();
 }
 
 export function assertContainerNotDraining(containerId: string): void {
@@ -342,16 +345,17 @@ export function assertContainerNotDraining(containerId: string): void {
 }
 
 export async function withEnvironmentDraining<T>(
+  environments: Pick<EnvironmentOperations, "beginDrain">,
   environmentId: string,
   containerId: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  drainingEnvironments.add(environmentId);
+  const endDrain = environments.beginDrain(environmentId);
   drainingContainers.add(containerId);
   try {
     return await run();
   } finally {
-    drainingEnvironments.delete(environmentId);
+    endDrain();
     drainingContainers.delete(containerId);
   }
 }

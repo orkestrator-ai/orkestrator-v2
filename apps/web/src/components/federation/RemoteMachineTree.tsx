@@ -24,6 +24,7 @@ import {
   Copy,
   FolderInput,
   FolderMinus,
+  GitMerge,
   GripVertical,
   Laptop,
   LayoutGrid,
@@ -40,6 +41,7 @@ import {
 } from "lucide-react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { GithubIcon } from "@/components/icons/GithubIcon";
+import { PipeIcon } from "@/components/icons/PipeIcon";
 import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -901,8 +903,21 @@ export function RemoteEnvironmentItem({
                     signal={nameSignal}
                     className="truncate font-medium leading-4"
                   >
-                    {environment.name}
+                    {environment.buildPipeline
+                      ? environment.name.replace(/^Build:\s*/, "")
+                      : environment.name}
                   </EnvironmentNameShimmer>
+                  {environment.buildPipeline && (
+                    <PipeIcon className="h-3 w-3 shrink-0 translate-y-px text-white" />
+                  )}
+                  {environment.autoMerge && (
+                    <GitMerge
+                      className="h-3 w-3 shrink-0 translate-y-px text-white"
+                      role="img"
+                      aria-label="Auto-merge on"
+                      data-testid="environment-auto-merge-icon"
+                    />
+                  )}
                   <EnvironmentNameSignalMarker
                     signal={nameSignal}
                     descriptionId={nameSignalDescriptionId}

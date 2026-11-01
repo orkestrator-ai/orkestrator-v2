@@ -783,10 +783,12 @@ export class TmuxSession {
   }
 
   private emitHook(context: CommandContext, event: PendingHookEvent): void {
-    this.updateBusyFromHookKind(event.kind, context);
-    if (event.kind === "Stop") this.scheduleCompletionNotification(context);
+    this.updateBusyFromHookKind(event, context);
+    if (event.kind === "Stop" || event.kind === "StopFailure") {
+      this.scheduleCompletionNotification(context);
+    }
     let emittedPayload = event.payload;
-    if (event.kind === "Notification" || event.kind === "Stop") {
+    if (event.kind === "Notification" || event.kind === "Stop" || event.kind === "StopFailure") {
       const payload =
         event.payload && typeof event.payload === "object"
           ? (event.payload as Record<string, unknown>)
@@ -794,14 +796,20 @@ export class TmuxSession {
       const rawMessage =
         typeof payload?.message === "string"
           ? payload.message
-          : event.kind === "Stop"
-            ? "Claude finished responding"
-            : "Claude sent a notification";
+          : event.kind === "StopFailure"
+            ? typeof payload?.last_assistant_message === "string"
+              ? payload.last_assistant_message
+              : "Claude's turn failed with an error"
+            : event.kind === "Stop"
+              ? "Claude finished responding"
+              : "Claude sent a notification";
       const message = boundedInfoEventMessage(rawMessage);
       // Bound the message the subscribers get too. Retaining a trimmed copy
       // while broadcasting the original would move the cost rather than remove
       // it: the payload is fanned out to every SSE listener.
-      if (payload && typeof payload.message === "string") {
+      if (payload && event.kind === "StopFailure") {
+        emittedPayload = { ...payload, message, last_assistant_message: message };
+      } else if (payload && typeof payload.message === "string") {
         emittedPayload = { ...payload, message };
       }
       const duplicateIndex = this.infoEvents.findIndex(
@@ -836,18 +844,31 @@ export class TmuxSession {
     });
   }
 
-  private updateBusyFromHookKind(kind: string, context: CommandContext): void {
+  private updateBusyFromHookKind(event: PendingHookEvent, context: CommandContext): void {
+    const { kind } = event;
     const previous = this.busy;
     if (kind === "UserPromptSubmit") {
       this.setBusyState(true);
       this.completionGeneration += 1;
       this.stopCompletionObserved = false;
     }
-    if (kind === "Stop") this.setBusyState(false);
-    if (previous !== this.busy) {
-      // Do not make the stdout/hook loop wait for storage; the next observation
-      // also reconciles this source if the write fails.
-      void context.runtime.tmux.persistEnvironmentActivity(context, this.environmentId);
+    if (kind === "Stop" || kind === "StopFailure") this.setBusyState(false);
+    // Do not make the stdout/hook loop wait for storage; the next observation
+    // also reconciles this source if the write fails.
+    const tmux = context.runtime.tmux;
+    if (kind === "Stop") {
+      void tmux.noteTurnFinished(context, this.environmentId);
+    } else if (kind === "StopFailure") {
+      void tmux
+        .noteTurnFailed(context, this.environmentId, `claude-tmux:${this.sessionId}:${event.id}`)
+        .catch((error: unknown) => {
+          console.warn(
+            `[tmux] failed to record a failed turn for ${this.environmentId}:`,
+            error instanceof Error ? error.name : "unknown error",
+          );
+        });
+    } else if (previous !== this.busy) {
+      void tmux.persistEnvironmentActivity(context, this.environmentId);
     }
   }
 

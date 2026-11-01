@@ -267,6 +267,7 @@ export class ChangeProjectionService {
     return {
       ...base,
       measurementId: measurement.measurementId,
+      baselineVersion: measurement.baselineVersion,
       state,
       availability: "ready",
       observationState,

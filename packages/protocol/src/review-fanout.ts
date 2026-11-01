@@ -150,6 +150,8 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    * second restart fails the reviewer instead of looping.
    */
   restartContinuationSent?: boolean;
+  /** Times this turn was resent after the weekly limit stopped it. */
+  usageLimitResends?: number;
   idleResultPolls?: number;
   /** Last time the supervisor observed this reviewer's transcript change. */
   progressAt?: string;
@@ -162,6 +164,16 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   stalledSince?: string;
   report?: StructuredReviewReport;
   error?: string;
+  /**
+   * The reviewer failed before its first agent turn was accepted: its bridge, CLI or
+   * provider could not be started on this host, so `error` is why the agent
+   * could not start rather than anything it reviewed. Its panel says so, and
+   * the review carries on with the reviewers that did start. Read it only on
+   * a `failed` reviewer.
+   */
+  startFailed?: boolean;
+  /** Whether this session has accepted an agent turn (allocation alone is insufficient). */
+  agentStarted?: boolean;
   /**
    * Findings reported through `report_finding` while the reviewer runs, oldest
    * first. Dropped when its report is accepted; kept, unconfirmed, when it
@@ -187,6 +199,7 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    */
   commandSandboxOff?: string;
   startedAt?: string;
+  turnStartedAt?: string;
   completedAt?: string;
 }
 
@@ -209,6 +222,8 @@ export interface ReviewWorktreeSnapshotRecord {
 export interface ReviewConsolidationSession {
   /** One durable continuation after a provider restart cut the turn short. */
   restartContinuationSent?: boolean;
+  /** Times this turn was resent after the weekly limit stopped it. */
+  usageLimitResends?: number;
   /** The one durable reminder to submit a missing tool-mode report was spent. */
   resultReminderSent?: boolean;
   continuationPrompt?: string;
@@ -414,7 +429,10 @@ const REVIEWER_KEYS = [
   "continuationPrompt",
   "resultReminderSent",
   "restartContinuationSent",
+  "usageLimitResends",
   "error",
+  "startFailed",
+  "agentStarted",
   "tokenCount",
   "cacheReadTokens",
   "usageFinalizationPolls",
@@ -423,6 +441,7 @@ const REVIEWER_KEYS = [
   "progressDigest",
   "stalledSince",
   "startedAt",
+  "turnStartedAt",
   "completedAt",
 ] as const;
 
@@ -462,8 +481,11 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
+    optionalCount(value.usageLimitResends) &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
+    (value.agentStarted === undefined || typeof value.agentStarted === "boolean") &&
+    (value.startFailed === undefined || typeof value.startFailed === "boolean") &&
     optionalCount(value.tokenCount) &&
     optionalCount(value.cacheReadTokens) &&
     optionalFinalUsagePollCount(value.usageFinalizationPolls) &&
@@ -472,6 +494,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     optionalProgressDigest(value.progressDigest) &&
     optionalDate(value.stalledSince) &&
     optionalDate(value.startedAt) &&
+    optionalDate(value.turnStartedAt) &&
     optionalDate(value.completedAt) &&
     (value.report === undefined || isStructuredReviewReport(value.report)) &&
     (value.provisionalFindings === undefined ||
@@ -569,6 +592,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     record(value) &&
     hasOnlyKeys(value, [
       "restartContinuationSent",
+      "usageLimitResends",
       "resultReminderSent",
       "continuationPrompt",
       "sessionKey",
@@ -592,6 +616,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     ]) &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
+    optionalCount(value.usageLimitResends) &&
     (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     optionalString(value.continuationPrompt, 100_000) &&
     nonBlank(value.sessionKey) &&
@@ -698,6 +723,13 @@ export function reviewersSettled(reviewers: readonly ReviewerRecord[]): boolean 
   return !reviewers.some(
     (reviewer) => reviewer.status === "pending" || reviewer.status === "running",
   );
+}
+
+/** A failed reviewer whose agent never started; see {@link ReviewerRecord.startFailed}. */
+export function reviewerCouldNotStart(
+  reviewer: Pick<ReviewerRecord, "status" | "startFailed">,
+): boolean {
+  return reviewer.status === "failed" && reviewer.startFailed === true;
 }
 
 /** The reviewers whose reports are usable inputs to consolidation. */

@@ -510,6 +510,28 @@ describe("delete_environment durable child-state cleanup", () => {
     );
   });
 
+  test("deleting a sidebar fork keeps the source's pipeline", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        // The sidebar's Fork copies the source's buildPipelineId onto e1.
+        await storage.addEnvironment(
+          environment({ id: "source", buildPipelineId: "pipeline-1", order: 1 }),
+        );
+        await storage.saveBuildPipeline("pipeline-1", "p1", "source", 1, { id: "pipeline-1" });
+        await storage.addEnvironment(environment({ buildPipelineId: "pipeline-1" }));
+        await storage.saveBuildPipeline("fork-pipeline", "p1", "e1", 1, { id: "fork-pipeline" });
+      },
+      async (invokeDelete, storage) => {
+        await invokeDelete();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await storage.getBuildPipeline("fork-pipeline")).toBeNull();
+        expect(await storage.getBuildPipeline("pipeline-1")).toMatchObject({
+          environmentId: "source",
+        });
+      },
+    );
+  });
+
   test("rejects delayed saves once deletion is marked and then sweeps older saves", async () => {
     await withDeleteCommand(
       async (storage) => {

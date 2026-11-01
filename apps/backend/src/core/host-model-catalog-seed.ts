@@ -16,6 +16,10 @@ export const HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS = 30_000;
 // Reserved scope for host-only conversations with no project configuration.
 export const HOST_OPENCODE_CATALOG_SCOPE = "host:opencode";
 
+// Per backend but still module state: keyed by platform (and project), so two
+// backends share one seed flight and cooldown. Not moved yet: the sign-in reset
+// is called from account code
+// (docs/todo/backend-structure/1070-backend-module-state-beyond-0390.md).
 const failedAt = new Map<string, number>();
 const generations = new Map<string, number>();
 const flights = new Map<string, { generation: number; promise: Promise<boolean> }>();

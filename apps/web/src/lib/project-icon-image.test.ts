@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isProjectIconFile } from "./project-icon-image";
+import { fileFromHostImage, isProjectIconFile } from "./project-icon-image";
 
 describe("isProjectIconFile", () => {
   test("accepts any image type, favicons included", () => {
@@ -16,6 +16,22 @@ describe("isProjectIconFile", () => {
 
   test("rejects a typed file that is not an image", () => {
     expect(isProjectIconFile({ name: "favicon.ico", type: "text/plain" })).toBe(false);
+  });
+});
+
+describe("fileFromHostImage", () => {
+  test("rebuilds the host file's bytes, name and type", async () => {
+    const file = fileFromHostImage({
+      path: "/repo/public/favicon.ico",
+      name: "favicon.ico",
+      mimeType: "image/x-icon",
+      base64: btoa(String.fromCharCode(0, 0, 1, 0, 255)),
+    });
+
+    expect(file.name).toBe("favicon.ico");
+    expect(file.type).toBe("image/x-icon");
+    expect(isProjectIconFile(file)).toBe(true);
+    expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([0, 0, 1, 0, 255]);
   });
 });
 

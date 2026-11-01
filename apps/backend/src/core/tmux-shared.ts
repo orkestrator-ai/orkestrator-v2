@@ -217,6 +217,7 @@ export const HOOK_EVENT_KINDS = new Set([
   "PostToolUse",
   "UserPromptSubmit",
   "Stop",
+  "StopFailure",
   "SubagentStop",
   "Notification",
   "SessionStart",

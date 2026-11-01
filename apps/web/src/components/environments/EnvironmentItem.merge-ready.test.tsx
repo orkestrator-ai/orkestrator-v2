@@ -65,7 +65,8 @@ function nameElement(): HTMLElement {
 
 function row(): HTMLElement {
   // Exact: the ready state is a description, so the row's name never changes.
-  return screen.getByRole("button", { name: "ship-the-feature" });
+  // Only a merged PR adds its icon's label.
+  return screen.getByRole("button", { name: /^ship-the-feature( Merged)?$/ });
 }
 
 /** Text of the elements `aria-describedby` names, as assistive tech reads it. */

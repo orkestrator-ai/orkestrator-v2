@@ -260,6 +260,26 @@ describe("EnvironmentItem auto-merge", () => {
   });
 });
 
+describe("EnvironmentItem merged pull request", () => {
+  test("shows the violet PR merged icon to the right of the name once merged", () => {
+    renderItem(environmentFixture({ name: "feature-work", prState: "merged", autoMerge: true }));
+    const icon = screen.getByRole("img", { name: "Merged" });
+    expect(icon.getAttribute("class")).toContain("text-violet-400");
+    const name = screen.getByText("feature-work");
+    expect(name.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The merged icon replaces the auto-merge icon rather than doubling it.
+    expect(screen.queryByRole("img", { name: "Auto-merge on" })).toBeNull();
+  });
+
+  test("shows no merged icon while the PR is open or closed", () => {
+    renderItem(environmentFixture({ name: "feature-work", prState: "open" }));
+    expect(screen.queryByRole("img", { name: "Merged" })).toBeNull();
+    cleanup();
+    renderItem(environmentFixture({ name: "feature-work", prState: "closed" }));
+    expect(screen.queryByRole("img", { name: "Merged" })).toBeNull();
+  });
+});
+
 test("a renamed project home shows its saved display name", () => {
   renderItem(environmentFixture({ projectHome: true, name: "Release checkout" }));
   expect(screen.getByRole("button", { name: /Release checkout/ })).toBeTruthy();

@@ -230,8 +230,9 @@ export interface ForkEnvironmentOptions {
   base?: EnvironmentForkBase;
   /**
    * Whether the fork keeps the source's build pipeline ID (the sidebar fork
-   * does). A coordinator's fork does not: deleting an environment deletes its
-   * linked pipeline, and the supervisor finds a pipeline's environment by it.
+   * does). A coordinator's fork does not: the supervisor finds a pipeline's
+   * environment by it. Deleting a fork never deletes the source's pipeline,
+   * because deletion follows the link only for a pipeline no environment owns.
    */
   keepBuildPipeline?: boolean;
   /** Last edits to the new record, after its branch and base are set, before it is saved. */

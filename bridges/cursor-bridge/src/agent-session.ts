@@ -313,6 +313,13 @@ export function setCursorMcpConfigHomeForTests(home?: string): void {
   configHomeForTests = home;
 }
 
+let skillsProjectForTests: string | undefined;
+
+/** Point coordinator skill discovery at a temporary project; never the checkout's own skills. */
+export function setCursorSkillsProjectForTests(directory?: string): void {
+  skillsProjectForTests = directory;
+}
+
 /** Fingerprints of the MCP files each attached agent was created from. */
 const attachedConfigKeys = new WeakMap<SessionState, string>();
 /** The per-file digests behind each attached agent's fingerprint, and when they were read. */
@@ -489,7 +496,9 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   }
   // The user's and the project's skills, served by a read-only tool of the
   // bridge's own: the SDK cannot load skills without a whole settings layer.
-  const skills = readOnly ? hostSkillCustomTools(process.env, workingDirectory) : undefined;
+  const skills = readOnly
+    ? hostSkillCustomTools(process.env, skillsProjectForTests ?? workingDirectory)
+    : undefined;
   const customTools =
     hosted || research || skills
       ? { ...skills?.customTools, ...research?.customTools, ...hosted?.customTools }

@@ -75,9 +75,65 @@ describe("describeApproval", () => {
     expect(approval.expiresAt).toBe(301_000);
   });
 
+  test("a managed-network approval, which has no command, can be approved", () => {
+    // The params real Codex 0.166.0 sent for a blocked host (todo 0160, task 2).
+    const params = {
+      kind: "command",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "network#local#http#probe-host.example.test#80#0c70e7ad",
+      startedAtMs: 5,
+      environmentId: "local",
+      reason: "Network access to probe-host.example.test requires approval",
+      networkApprovalContext: { host: "probe-host.example.test", protocol: "http" },
+      proposedNetworkPolicyAmendments: [
+        { host: "probe-host.example.test", action: "allow" },
+        { host: "probe-host.example.test", action: "deny" },
+      ],
+      availableDecisions: [
+        "accept",
+        "acceptForSession",
+        {
+          applyNetworkPolicyAmendment: {
+            network_policy_amendment: { host: "probe-host.example.test", action: "allow" },
+          },
+        },
+        "cancel",
+      ],
+    };
+    const approval = describeWith("item/commandExecution/requestApproval", params);
+
+    expect(approval.command).toBeUndefined();
+    expect(approval.networkHost).toBe("probe-host.example.test");
+    expect(approval.actionable).toBe(true);
+    expect(approval.ruleEligible).toBe(true);
+    expect(approval).not.toHaveProperty("amendments");
+    expect(
+      buildApprovalResponse("item/commandExecution/requestApproval", "approve", params).result,
+    ).toEqual({ decision: "accept" });
+    expect(describeApprovalOutcome(approval, "deny", "answered")).toBe(
+      "You declined permission to reach `probe-host.example.test`.",
+    );
+  });
+
+  test("a network approval with only a display command stays ineligible for a rule", () => {
+    const approval = describeWith("item/commandExecution/requestApproval", {
+      commandActions: [{ type: "unknown", command: "curl one.example" }],
+      networkApprovalContext: { host: "one.example", protocol: "https" },
+    });
+    expect(approval.actionable).toBe(true);
+    expect(approval.ruleEligible).toBeUndefined();
+    expect(
+      describeWith("execCommandApproval", {
+        networkApprovalContext: { host: "one.example", protocol: "https" },
+      }).ruleEligible,
+    ).toBeUndefined();
+  });
+
   test("never offers the policy amendments app-server proposes", () => {
     // Accepting one saves a rule in the user's Codex home that Orkestrator
-    // cannot list or revoke (todo 0160), so the descriptor carries none.
+    // can list read-only but cannot revoke (todo 0160), so the descriptor
+    // carries none.
     const approval = describeWith("item/commandExecution/requestApproval", {
       threadId: "thread-1",
       command: "curl https://one.example",

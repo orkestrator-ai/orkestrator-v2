@@ -32,6 +32,8 @@ export const INHERITED_GLOBAL_SETTING_KEYS = [
   "terminalAppearance",
   "terminalScrollback",
   "agentMessaging",
+  // The automatic-account ticks, by email. Each machine applies them to its own logins.
+  "agentAccountAutoSwitch",
 ] as const;
 
 export type InheritedGlobalSettingKey = (typeof INHERITED_GLOBAL_SETTING_KEYS)[number];

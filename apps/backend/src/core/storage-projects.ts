@@ -17,7 +17,7 @@ import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
 import { isPrMergeability } from "@orkestrator/protocol/pr-merge-readiness";
 import { parseEnvironmentDiffBaseOverride } from "@orkestrator/protocol/diff-stats";
-import type { EnvironmentUnreadReason } from "./models.js";
+import type { AgentActivityCompletionOutcome, EnvironmentUnreadReason } from "./models.js";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
   AGENT_ACTIVITY_SOURCES,
@@ -1402,7 +1402,10 @@ export class ProjectsRepository {
     source: AgentActivitySource = "frontend",
     observerId?: string,
     stale = false,
-    options: { completionAttention?: boolean } = {},
+    options: {
+      completionAttention?: boolean;
+      completionOutcome?: AgentActivityCompletionOutcome;
+    } = {},
   ): Promise<Environment> {
     if (!isOneOf(state, AGENT_ACTIVITY_STATES)) {
       throw new Error("state must be idle, working, or waiting");
@@ -1505,14 +1508,29 @@ export class ProjectsRepository {
         (nextAggregate === "working" ||
           nextAggregate === "waiting" ||
           (previousAggregate === "working" && nextAggregate === "idle"));
+      // A failure belongs to this source's own work, so it rings on the source's
+      // edge: a sibling that keeps the aggregate working could otherwise end
+      // later with attention turned off, and the failure would never ring.
+      const failedEnd =
+        options.completionOutcome === "failed" &&
+        previousSource?.state === "working" &&
+        state !== "working";
       // Native reconciliation owns exact per-session attention edges. Its
       // aggregate can later go idle when a detached shell exits, after the
       // root completion was already announced and read.
+      // A sibling may end quietly later. Announce known success on this
+      // source's own edge so that later idle write cannot swallow it.
+      const successfulEnd =
+        previousSource?.state === "working" &&
+        state === "idle" &&
+        options.completionOutcome === undefined;
       const completionTransition =
         options.completionAttention !== false &&
-        previousAggregate === "working" &&
-        (nextAggregate === "idle" || nextAggregate === "waiting");
-      if (activityTransition) {
+        (successfulEnd ||
+          (previousAggregate === "working" &&
+            ((nextAggregate === "idle" && options.completionOutcome !== "none") ||
+              nextAggregate === "waiting")));
+      if (activityTransition || failedEnd || completionTransition) {
         const previousLastActivityAt = Date.parse(environment.lastActivityAt ?? "");
         environment.lastActivityAt = new Date(
           Math.max(
@@ -1523,13 +1541,21 @@ export class ProjectsRepository {
           ),
         ).toISOString();
       }
-      if (completionTransition) {
+      if (failedEnd) {
         environment.hasUnreadWork = true;
-        environment.unreadReason = nextAggregate === "waiting" ? "agent_waiting" : "agent_finished";
+        environment.unreadReason = "agent_failed";
+      } else if (completionTransition) {
+        // The aggregate alone cannot say what ended, so it must not replace a
+        // failure nobody has read with "completed its work".
+        const unreadFailure =
+          environment.hasUnreadWork === true && environment.unreadReason === "agent_failed";
+        environment.hasUnreadWork = true;
+        if (nextAggregate === "waiting") environment.unreadReason = "agent_waiting";
+        else if (!unreadFailure) environment.unreadReason = "agent_finished";
       }
       // The lease itself must persist (its expiry is enforced from disk), but
       // the backup rotation is skipped: only volatile activity fields changed.
-      await this.saveEnvironments(environments, { backup: completionTransition });
+      await this.saveEnvironments(environments, { backup: failedEnd || completionTransition });
       // A pure lease renewal — same aggregate, same per-source and observer
       // states, only timestamps refreshed — is not announced. Announcing it
       // made every connected client refetch every project on each renewal

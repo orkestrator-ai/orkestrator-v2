@@ -4,6 +4,7 @@ import {
   type MachineLoadView,
   type MachineUnavailableReason,
 } from "@orkestrator/protocol/machine-load";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { ControlMcpInvoker } from "./control-shared-actions.js";
 
@@ -16,15 +17,6 @@ export const MACHINE_LOAD_NODE_TIMEOUT_MS = 2_000;
 
 function unavailable(reason: MachineUnavailableReason, detail: string): MachineLoadView {
   return { status: "unavailable", reason, detail };
-}
-
-/** Both wordings: a real backend's, and the plainer one some node peers answer with. */
-function isUnknownCommand(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : "";
-  return (
-    message.includes(`Unknown backend command: ${MACHINE_LOAD_COMMAND}`) ||
-    message.includes(`Unknown command: ${MACHINE_LOAD_COMMAND}`)
-  );
 }
 
 function viewOf(value: unknown): MachineLoadView {
@@ -73,7 +65,7 @@ export async function readNodeMachineLoad(
         ? viewOf(routed.result)
         : unavailable("error", `The connection to ${node.name} was lost before it answered.`),
     (error: unknown) => {
-      if (isUnknownCommand(error)) {
+      if (isUnknownCommandError(error, MACHINE_LOAD_COMMAND)) {
         compatibilityPathUsage.record("machine-load.older-node");
         return unavailable(
           "older-version",

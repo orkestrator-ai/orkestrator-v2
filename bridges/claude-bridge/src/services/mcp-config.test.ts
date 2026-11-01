@@ -18,6 +18,7 @@ import {
 import { setClaudeHomeForTesting } from "./claude-home.js";
 import { claudeArtifactServerTools } from "./claude-workflow-result-tools.js";
 import { clearJsonFileCache } from "./json-file-cache.js";
+import { initMcpServerStatus, mcpScope } from "./mcp-runtime-status.js";
 
 describe("configToSdkFormat", () => {
   test("converts an http server config", () => {
@@ -317,6 +318,93 @@ describe("mcp config resolution", () => {
         args: undefined,
         env: undefined,
       });
+    });
+
+    test("tags each server with the layer that won its name", async () => {
+      await writeClaudeJson({
+        mcpServers: {
+          onlyUser: { command: "a" },
+          userThenLocal: { command: "b" },
+          userThenProject: { command: "c" },
+        },
+        projects: {
+          [cwd]: {
+            mcpServers: {
+              userThenLocal: { command: "d" },
+              localThenProject: { command: "e" },
+              remote: { type: "sse", url: "http://127.0.0.1:2/local" },
+            },
+          },
+        },
+      });
+      await writeFile(
+        join(cwd, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            userThenProject: { command: "f" },
+            localThenProject: { command: "g" },
+            remote: { type: "sse", url: "http://127.0.0.1:1/sse" },
+          },
+        }),
+      );
+
+      const { layers, servers } = await getMcpRuntimeConfig(cwd, {});
+      expect(Object.fromEntries(layers)).toEqual({
+        onlyUser: "user",
+        userThenLocal: "local",
+        userThenProject: "project",
+        localThenProject: "project",
+      });
+      expect(servers.remote).toBeUndefined();
+      expect(layers.has("remote")).toBe(false);
+      expect(mcpScope("local", "remote", "local", layers)).toBe("local");
+      expect(initMcpServerStatus({ name: "remote", source: "local" }, layers).scope).toBe("local");
+    });
+
+    test("tags injected servers as Orkestrator's, over a file claiming their names", async () => {
+      await writeFile(
+        join(cwd, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            orkestrator: { command: "impostor" },
+            "orkestrator-artifacts": { command: "impostor" },
+            mine: { command: "mine" },
+          },
+        }),
+      );
+      const connection = { url: "http://127.0.0.1:9/mcp", token: "t", design: true };
+
+      const injected = await getMcpRuntimeConfig(cwd, {}, connection);
+      expect(Object.fromEntries(injected.layers)).toEqual({
+        orkestrator: "orkestrator",
+        "orkestrator-design": "orkestrator",
+        mine: "project",
+      });
+      const withArtifacts = await getMcpRuntimeConfig(
+        cwd,
+        {},
+        {
+          ...connection,
+          artifacts: { token: "a" },
+        },
+      );
+      expect(withArtifacts.layers.get("orkestrator-artifacts")).toBe("orkestrator");
+
+      // No connection: the file's server of that name is what the CLI runs.
+      const bare = await getMcpRuntimeConfig(cwd, {});
+      expect(bare.layers.get("orkestrator")).toBe("project");
+    });
+
+    test("a layer never names a server the session's selection left out", async () => {
+      await writeClaudeJson({ mcpServers: { kept: { command: "a" }, dropped: { command: "b" } } });
+      const { layers } = await getMcpRuntimeConfig(
+        cwd,
+        {},
+        undefined,
+        "user",
+        (name) => name === "kept",
+      );
+      expect(Object.fromEntries(layers)).toEqual({ kept: "user" });
     });
 
     // The `user` scope (legacy boolean `false`) is what a session without

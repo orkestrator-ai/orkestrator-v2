@@ -443,6 +443,8 @@ export async function createCommandFixtures() {
         order: number;
       };
       repositoryConfig?: RepositoryConfig;
+      /** Whether a local setup command list is approved; every list is by default. */
+      setupApproved?: (projectId: string, hash: string) => boolean;
       globalConfig?: Record<string, unknown>;
       cacheAgentModelCatalog?: (
         agent: "claude" | "codex" | "cursor" | "grok",
@@ -637,6 +639,18 @@ export async function createCommandFixtures() {
           };
         }),
         getRepositoryConfig: mock(async () => repositoryConfig),
+        // Local setup commands count as approved unless a test says otherwise:
+        // the trust gate (`setup-approval.ts`) has its own tests.
+        setupApprovals: {
+          isSetupCommandsApproved: mock(
+            (projectId: string, hash: string) => options.setupApproved?.(projectId, hash) ?? true,
+          ),
+          approveSetupCommands: mock(() => undefined),
+        },
+        recordEnvironmentAgentAttention: mock(async (environmentId: string) => ({
+          environment: environments.find((entry) => entry.id === environmentId),
+          recorded: true,
+        })),
       },
     } as unknown as CommandContext;
 

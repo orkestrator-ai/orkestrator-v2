@@ -96,7 +96,7 @@ The material risks are concentrated in four themes:
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
 | M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Verified |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
-| M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Verified |
+| M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Fixed (see §4) |
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
 | M7 | Medium | Electron | OS sandbox disabled for every window that loads the preload | Reported |
 | M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Reported |
@@ -358,7 +358,13 @@ runs that program on the host.
 
 ### M5. Repository-provided `setupLocal` runs automatically on the host
 
-**Status:** Verified
+**Status:** Fixed. A local environment's `setupLocal` runs unasked only when
+it is exactly the default branch's or a list the user approved for the
+project on that machine; otherwise setup is held for the user, who can run it
+once, approve it for the project, approve it on every machine with the
+project, or skip it. `orkestrator-ai.json` is opened with `O_NOFOLLOW`. See
+[setup-approval.md](../architecture/setup-approval.md). The original finding
+follows.
 
 **Where**
 - `apps/backend/src/core/commands-environment.ts:436-448`: `readSetupLocalCommands` reads `orkestrator-ai.json` from the *new worktree* (with `fs.readFile`, which follows symlinks).
@@ -502,7 +508,7 @@ write and terminal calls when the policy denies them.
 
 | ID | Title | Where | Notes / fix | Status |
 | --- | --- | --- | --- | --- |
-| L1 | `.env` seeding and `filesToCopy` write through symlinks in a fresh local worktree | `commands-environment.ts:2214-2221`, `commands-project-files.ts:80-82` | A branch-committed `.env` symlink to a non-existent path makes the backend copy the user's real `.env` there. `filesToCopy` can overwrite existing host files. Use `writeConfinedFile(..., {exclusive:true})` or `O_NOFOLLOW\|O_EXCL`. | Verified |
+| L1 | `.env` seeding and `filesToCopy` write through symlinks in a fresh local worktree | `commands-environment.ts:2214-2221`, `commands-project-files.ts:80-82` | A branch-committed `.env` symlink to a non-existent path makes the backend copy the user's real `.env` there. `filesToCopy` can overwrite existing host files. Use `writeConfinedFile(..., {exclusive:true})` or `O_NOFOLLOW\|O_EXCL`. | Fixed: seeding checks with `lstat`, and `filesToCopy` refuses a destination with a link at or above it (`unlinkedDestination`) |
 | L2 | Bridge and agent-MCP tokens passed in `docker exec` argv | `commands-containers.ts:921-947`, `commands-registry-servers.ts:407-699` | Visible to local users via `ps`/`/proc` while the CLI runs. Use stdin, as `syncContainerCursorApiKey` already does. | Reported |
 | L3 | Only the `runAsNode` Electron fuse is set | `package.json:52-54` | `--inspect` works in packaged builds, which lets a local process inherit the app's macOS TCC grants. Disable `enableNodeCliInspectArguments` and `enableNodeOptionsEnvironmentVariable`, and enable asar integrity and `onlyLoadAppFromAsar`. | Verified |
 | L4 | `ELECTRON_DEV=1` is honoured in packaged builds | `apps/desktop/electron/main.ts:177` | With `VITE_DEV_SERVER_URL`, a packaged app can load a remote page as the trusted renderer. Gate on `!app.isPackaged`. | Verified |

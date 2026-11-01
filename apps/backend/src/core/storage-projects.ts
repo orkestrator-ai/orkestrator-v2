@@ -466,6 +466,8 @@ export class ProjectsRepository {
     this.repos.graphTemplates.deleteGraphProjectSettings(projectId);
     // Its coordinator tab groups and upstream-merge decline.
     this.repos.clientState.deleteProjectClientState(projectId);
+    // So do the setup commands approved for it on this machine.
+    this.repos.setupApprovals.deleteSetupApprovalsForProject(projectId);
     this.context.changes.announce("project", projectId, undefined, undefined, true);
   }
 
@@ -1057,6 +1059,10 @@ export class ProjectsRepository {
       }
       if ("setupOverride" in updates && typeof updates.setupOverride === "boolean") {
         environment.setupOverride = updates.setupOverride;
+      }
+      if ("setupApprovalRequired" in updates) {
+        // Cleared as an explicit `false`: renderers merge snapshots field-by-field.
+        environment.setupApprovalRequired = updates.setupApprovalRequired === true;
       }
       if ("autoMerge" in updates) {
         // Off is an explicit `false`, like lifecycleError's `null`: renderers
@@ -1807,6 +1813,10 @@ export class ProjectsRepository {
     environmentId: string,
     attentionKeys: readonly string[],
     occurredAt: string,
+    reason: Extract<
+      EnvironmentUnreadReason,
+      "agent_question" | "setup_approval"
+    > = "agent_question",
   ): Promise<{ environment: Environment; recorded: boolean }> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
@@ -1845,7 +1855,7 @@ export class ProjectsRepository {
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
       const unreadBefore = environment.hasUnreadWork === true;
       environment.hasUnreadWork = true;
-      environment.unreadReason = "agent_question";
+      environment.unreadReason = reason;
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (!unreadBefore) this.notifyAttention(environment);

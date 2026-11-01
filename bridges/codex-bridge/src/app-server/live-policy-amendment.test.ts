@@ -25,15 +25,22 @@
  *
  *   RUN_LIVE_CODEX_APP_SERVER=1 \
  *     bun test bridges/codex-bridge/src/app-server/live-policy-amendment.test.ts
+ *
+ * The same checks for a managed-network approval run under a second gate.
+ * Codex only asks about a host when `/etc/codex/requirements.toml` enables its
+ * network proxy, so they run in a disposable container:
+ *
+ *   mise run verify:codex:network-approval
  */
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
+  codexRuleEntries,
   commandArgv,
   findPermissionRule,
   permissionRuleOffer,
@@ -55,10 +62,14 @@ const NativeResponse =
 
 const LIVE = process.env.RUN_LIVE_CODEX_APP_SERVER === "1";
 const describeLive = LIVE ? describe : describe.skip;
+const describeLiveNetwork =
+  process.env.RUN_LIVE_CODEX_NETWORK_APPROVAL === "1" ? describe : describe.skip;
 
 const CLIENT_INFO = { name: "orkestrator", title: "Orkestrator", version: "2.4.9" };
 const TOUCHED = "policy-amendment-probe.txt";
 const CELL = `text(JSON.stringify(await tools.exec_command({ cmd: "touch ${TOUCHED}" })));`;
+const NETWORK_HOST = "policy-amendment-probe.example.test";
+const NETWORK_CELL = `text(JSON.stringify(await tools.exec_command({ cmd: "curl -sS --max-time 5 http://${NETWORK_HOST}/" })));`;
 const APPROVAL_METHOD = "item/commandExecution/requestApproval";
 
 const POLICY: NativeAgentExecutionPolicy = {
@@ -71,9 +82,9 @@ const POLICY: NativeAgentExecutionPolicy = {
 
 /**
  * A Responses WebSocket: a prewarm gets an empty response, each turn's first
- * sample runs {@link CELL}, and its second ends the turn.
+ * sample runs `cell`, and its second ends the turn.
  */
-function startScriptedResponses() {
+function startScriptedResponses(cell: string) {
   let sampled = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -100,7 +111,7 @@ function startScriptedResponses() {
                   id: `ctc_probe_${sampled}`,
                   call_id: `call_probe_${sampled}`,
                   name: "exec",
-                  input: CELL,
+                  input: cell,
                   status: "completed",
                 }
               : {
@@ -187,12 +198,53 @@ async function savedRules(codexHome: string): Promise<string[]> {
 }
 
 /**
- * Runs two turns of the same command, answering each approval with `answer`.
- * `bridge` approves through the bridge, as the card's Approve does; `raw`
- * writes app-server's own amendment straight to its stdin, which is what the
- * bridge sent for "Approve with command policy" before todo 0160.
+ * How each approval is answered. `bridge` and `bridge-session` go through the
+ * bridge, as the card's Approve and Approve for session do. The `raw-*` answers
+ * write app-server's own amendment straight to its stdin, which is what the
+ * bridge sent for "Approve with command policy" and "Approve with network
+ * policy" before todo 0160. `orkestrator-rule` is the run in the file comment.
  */
-async function runProbe(answer: "bridge" | "raw-amendment" | "orkestrator-rule", turns = 2) {
+type ProbeAnswer =
+  | "bridge"
+  | "bridge-session"
+  | "raw-amendment"
+  | "raw-network-allow"
+  | "raw-network-deny"
+  | "orkestrator-rule";
+
+function rawAmendment(answer: ProbeAnswer, params: Record<string, unknown>): unknown {
+  if (answer === "raw-amendment") {
+    return {
+      acceptWithExecpolicyAmendment: { execpolicy_amendment: params.proposedExecpolicyAmendment },
+    };
+  }
+  const proposed = params.proposedNetworkPolicyAmendments as Array<{ action: string }>;
+  const action = answer === "raw-network-allow" ? "allow" : "deny";
+  return {
+    applyNetworkPolicyAmendment: {
+      network_policy_amendment: proposed.find((entry) => entry.action === action),
+    },
+  };
+}
+
+/**
+ * The bridge's engine on a throwaway Codex home and a loopback model. `network`
+ * turns on Codex's managed proxy and has each turn reach {@link NETWORK_HOST}
+ * under `on-request`, so the only approval is the one about the host.
+ */
+async function withProbe<T>(
+  answer: ProbeAnswer,
+  options: { network?: boolean },
+  body: (probe: {
+    codexHome: string;
+    raw: RawApproval[];
+    presented: ApprovalRequest[];
+    answeredBy: Array<"person" | "rule">;
+    rules: NativeAgentPermissionRule[];
+    newThread: () => Promise<string>;
+    runTurn: (thread: string) => Promise<void>;
+  }) => Promise<T>,
+): Promise<T> {
   const codexHome = await mkdtemp(join(tmpdir(), "ork-amendment-home-"));
   const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-amendment-ws-")));
   await mkdir(join(workspace, ".git"), { recursive: true });
@@ -203,7 +255,7 @@ async function runProbe(answer: "bridge" | "raw-amendment" | "orkestrator-rule",
     JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
     { mode: 0o600 },
   );
-  const responses = startScriptedResponses();
+  const responses = startScriptedResponses(options.network ? NETWORK_CELL : CELL);
   const probe: { seen: RawApproval[]; child?: ReturnType<typeof spawn> } = { seen: [] };
   const engine = new AppServerEngine({
     codexPath: await resolveCodexBinary(),
@@ -214,11 +266,16 @@ async function runProbe(answer: "bridge" | "raw-amendment" | "orkestrator-rule",
     configOverrides: {
       ...codexAppServerConfigOverrides({}),
       openai_base_url: JSON.stringify(responses.baseUrl),
+      ...(options.network
+        ? {
+            "features.network_proxy.enabled": "true",
+            "features.network_proxy.mode": JSON.stringify("limited"),
+          }
+        : {}),
     },
     supervisorOverrides: { pidFileEnabled: false, spawnProcess: observingSpawn(probe) },
   });
   const presented: ApprovalRequest[] = [];
-  const rulesAfterTurn: string[][] = [];
   // Orkestrator's rule store and who answered each approval, for the rule run.
   const rules: NativeAgentPermissionRule[] = [];
   const answeredBy: Array<"person" | "rule"> = [];
@@ -271,17 +328,15 @@ async function runProbe(answer: "bridge" | "raw-amendment" | "orkestrator-rule",
           engine.resolveApproval(request.approvalId, "approve");
           return;
         }
+        if (answer === "bridge-session") {
+          engine.resolveApproval(request.approvalId, "approve-for-session");
+          return;
+        }
         const raw = probe.seen.at(-1)!;
         probe.child!.stdin!.write(
           `${JSON.stringify({
             id: raw.id,
-            result: {
-              decision: {
-                acceptWithExecpolicyAmendment: {
-                  execpolicy_amendment: raw.params.proposedExecpolicyAmendment,
-                },
-              },
-            },
+            result: { decision: rawAmendment(answer, raw.params) },
           })}\n`,
         );
       }, 50);
@@ -293,41 +348,103 @@ async function runProbe(answer: "bridge" | "raw-amendment" | "orkestrator-rule",
   engine.subscribe((event: EngineEvent) => {
     if (event.kind === "turn.completed") completed?.();
   });
-  const config: EngineTurnConfig = {
-    mode: "build",
-    cwd: workspace,
-    sandbox: "read-only",
-    approvalPolicy: "untrusted",
-    policy: POLICY,
-  };
+  const config: EngineTurnConfig = options.network
+    ? {
+        mode: "build",
+        cwd: workspace,
+        sandbox: "workspace-write",
+        approvalPolicy: "on-request",
+        policy: POLICY,
+      }
+    : {
+        mode: "build",
+        cwd: workspace,
+        sandbox: "read-only",
+        approvalPolicy: "untrusted",
+        policy: POLICY,
+      };
   try {
     await engine.start();
-    const thread = await engine.startThread({ config });
-    for (let turn = 0; turn < turns; turn += 1) {
-      // The rule is removed before the last turn of the rule run.
-      if (answer === "orkestrator-rule" && turn === turns - 1) rules.length = 0;
-      const turnCompleted = new Promise<void>((resolve) => {
-        completed = resolve;
-      });
-      await engine.startTurn({
-        handle: thread.handle,
-        input: [{ type: "text", text: "Run the probe." }],
-        config,
-      });
-      await withTimeout(turnCompleted, 60_000, "the turn to complete");
-      rulesAfterTurn.push(await savedRules(codexHome));
-    }
-    return {
-      raw: probe.seen.map((entry) => entry.params),
+    return await body({
+      codexHome,
+      raw: probe.seen,
       presented,
-      rulesAfterTurn,
       answeredBy,
-    };
+      rules,
+      newThread: async () => (await engine.startThread({ config })).handle,
+      runTurn: async (thread) => {
+        const turnCompleted = new Promise<void>((resolve) => {
+          completed = resolve;
+        });
+        await engine.startTurn({
+          handle: thread,
+          input: [{ type: "text", text: "Run the probe." }],
+          config,
+        });
+        await withTimeout(turnCompleted, 60_000, "the turn to complete");
+      },
+    });
   } finally {
     await engine.stop();
     await responses.stop();
   }
 }
+
+/** Runs `turns` turns of the same command on one thread. */
+async function runProbe(answer: ProbeAnswer, turns = 2, options: { network?: boolean } = {}) {
+  return withProbe(answer, options, async (probe) => {
+    const thread = await probe.newThread();
+    const rulesAfterTurn: string[][] = [];
+    for (let turn = 0; turn < turns; turn += 1) {
+      // The rule is removed before the last turn of the rule run.
+      if (answer === "orkestrator-rule" && turn === turns - 1) probe.rules.length = 0;
+      await probe.runTurn(thread);
+      rulesAfterTurn.push(await savedRules(probe.codexHome));
+    }
+    return {
+      raw: probe.raw.map((entry) => entry.params),
+      presented: probe.presented,
+      rulesAfterTurn,
+      answeredBy: probe.answeredBy,
+    };
+  });
+}
+
+/**
+ * Saves a rule with a `raw-*` answer, then removes it the way Settings →
+ * Permissions tells a user to. Returns what each step asked and what the rules
+ * file listed. A thread reads the rules once, when it starts: the one already
+ * running keeps the removed rule, and a new one asks again.
+ */
+async function runSavedRuleLifecycle(answer: ProbeAnswer, options: { network?: boolean } = {}) {
+  return withProbe(answer, options, async (probe) => {
+    const rulesFile = join(probe.codexHome, "rules", "default.rules");
+    const asks: Record<string, number> = {};
+    const step = async (name: string, thread: string) => {
+      const before = probe.raw.length;
+      await probe.runTurn(thread);
+      asks[name] = probe.raw.length - before;
+    };
+    const running = await probe.newThread();
+    await step("saved", running);
+    const listed = codexRuleEntries(await readFile(rulesFile, "utf8"));
+    await step("same thread", running);
+    await step("new thread", await probe.newThread());
+    await rm(rulesFile);
+    await step("removed, running thread", running);
+    await step("removed, new thread", await probe.newThread());
+    return { asks, listed };
+  });
+}
+
+/** What {@link runSavedRuleLifecycle} expects of any saved rule. */
+const SAVED_RULE_ASKS = {
+  saved: 1,
+  "same thread": 0,
+  "new thread": 0,
+  "removed, running thread": 0,
+  "removed, new thread": 1,
+};
 
 describeLive("live policy amendment", () => {
   test("approving a command that proposes an exec-policy amendment saves no rule", async () => {
@@ -357,6 +474,30 @@ describeLive("live policy amendment", () => {
     expect(result.presented).toHaveLength(1);
   }, 180_000);
 
+  test("a saved command rule is listed, and once removed a new thread asks again", async () => {
+    const result = await runSavedRuleLifecycle("raw-amendment");
+    expect(result.listed).toEqual([
+      `prefix_rule(pattern=["touch", "${TOUCHED}"], decision="allow")`,
+    ]);
+    expect(result.asks).toEqual(SAVED_RULE_ASKS);
+  }, 240_000);
+
+  test("Approve for session saves no rule and ends with the thread", async () => {
+    const result = await withProbe("bridge-session", {}, async (probe) => {
+      const thread = await probe.newThread();
+      await probe.runTurn(thread);
+      await probe.runTurn(thread);
+      const asksInThread = probe.raw.length;
+      await probe.runTurn(await probe.newThread());
+      return {
+        asksInThread,
+        asksAfterNewThread: probe.raw.length,
+        rules: await savedRules(probe.codexHome),
+      };
+    });
+    expect(result).toEqual({ asksInThread: 1, asksAfterNewThread: 2, rules: [] });
+  }, 180_000);
+
   test("an Orkestrator rule answers the identical command, and asks again once removed", async () => {
     const result = await runProbe("orkestrator-rule", 3);
     // Codex asked every time: the rule lives only in Orkestrator.
@@ -368,5 +509,55 @@ describeLive("live policy amendment", () => {
     expect(result.answeredBy).toEqual(["person", "rule", "person"]);
     // Every answer was allow-once, so Codex saved nothing.
     expect(result.rulesAfterTurn).toEqual([[], [], []]);
+  }, 240_000);
+});
+
+describeLiveNetwork("live managed-network approval", () => {
+  const networkRule = (decision: "allow" | "deny", verb: string) =>
+    `network_rule(host="${NETWORK_HOST}", protocol="http", decision="${decision}", justification="${verb} http access to ${NETWORK_HOST}")`;
+
+  test("Approve on a host saves no rule, and the next request asks again", async () => {
+    const result = await runProbe("bridge", 2, { network: true });
+    // Codex proposed both a durable allow and a durable deny, and sent no command...
+    expect(result.raw[0]?.proposedNetworkPolicyAmendments).toEqual([
+      { host: NETWORK_HOST, action: "allow" },
+      { host: NETWORK_HOST, action: "deny" },
+    ]);
+    expect(result.raw[0]?.command).toBeUndefined();
+    // ...the card can approve it, and offers neither.
+    expect(result.presented[0]?.networkHost).toBe(NETWORK_HOST);
+    expect(result.presented[0]?.actionable).toBe(true);
+    expect(result.presented[0]?.ruleEligible).toBe(true);
+    expect(result.presented[0]).not.toHaveProperty("amendments");
+    expect(result.presented).toHaveLength(2);
+    expect(result.rulesAfterTurn).toEqual([[], []]);
+  }, 180_000);
+
+  test("Approve for session saves no rule and ends with the thread", async () => {
+    const result = await withProbe("bridge-session", { network: true }, async (probe) => {
+      const thread = await probe.newThread();
+      await probe.runTurn(thread);
+      await probe.runTurn(thread);
+      const asksInThread = probe.raw.length;
+      await probe.runTurn(await probe.newThread());
+      return {
+        asksInThread,
+        asksAfterNewThread: probe.raw.length,
+        rules: await savedRules(probe.codexHome),
+      };
+    });
+    expect(result).toEqual({ asksInThread: 1, asksAfterNewThread: 2, rules: [] });
+  }, 180_000);
+
+  test("an accepted allow amendment is one network_rule line in rules/default.rules (control)", async () => {
+    const result = await runSavedRuleLifecycle("raw-network-allow", { network: true });
+    expect(result.listed).toEqual([networkRule("allow", "Allow")]);
+    expect(result.asks).toEqual(SAVED_RULE_ASKS);
+  }, 240_000);
+
+  test("an accepted deny amendment is stored the same way (control)", async () => {
+    const result = await runSavedRuleLifecycle("raw-network-deny", { network: true });
+    expect(result.listed).toEqual([networkRule("deny", "Deny")]);
+    expect(result.asks).toEqual(SAVED_RULE_ASKS);
   }, 240_000);
 });

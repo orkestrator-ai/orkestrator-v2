@@ -319,6 +319,56 @@ describe("Codex interaction adapter", () => {
     expect(bodies).toEqual([{ decision: "approve" }]);
   });
 
+  test("Codex lets a user approve a managed-network request that has no command", async () => {
+    const requestedAt = Date.now();
+    let approvals: Array<Record<string, unknown>> = [
+      {
+        approvalId: "network-host",
+        kind: "command",
+        requestedAt,
+        expiresAt: requestedAt + 60_000,
+        reason: "Network access to probe-host.example.test requires approval",
+        networkHost: "probe-host.example.test",
+        actionable: true,
+        ruleEligible: true,
+      },
+    ];
+    const bodies: unknown[] = [];
+    const { provider } = httpProvider((url, init) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals });
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
+      if (url.endsWith("/network-host")) {
+        bodies.push(JSON.parse(String(init.body)));
+        approvals = [];
+        return Response.json({ status: "applied" });
+      }
+      return new Response(null, { status: 404 });
+    }, codexConnection);
+
+    const request = (await provider.interactions!.listPendingInteractions("session-1"))
+      .requests[0]!;
+    expect(request.presentation.title).toBe("Approve network access");
+    expect(request.presentation.body).toContain("Network host: probe-host.example.test");
+    expect(request.presentation.confirmDisabled).toBe(false);
+
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", request.id, {
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        interactionId: request.id,
+        sessionId: request.sessionId,
+        action: "answer",
+        answer: {
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          interactionId: request.id,
+          sessionId: request.sessionId,
+          answers: [],
+        },
+        resolvedAt: Math.max(Date.now(), request.createdAt),
+      }),
+    ).resolves.toMatchObject({ result: "applied" });
+    expect(bodies).toEqual([{ decision: "approve" }]);
+  });
+
   test("Codex isolates malformed siblings and degrades large file and MCP payloads", async () => {
     const requestedAt = Date.now();
     const expiresAt = requestedAt + 60_000;

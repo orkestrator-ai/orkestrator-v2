@@ -479,7 +479,8 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       : [];
     const inferredActionable =
       kind === "command-approval"
-        ? command !== null
+        ? // A managed-network approval names only the host (Codex 0.166.0).
+          command !== null || networkHost !== null
         : kind === "file-approval"
           ? rawChanges.length > 0
           : requestedPermissions.length > 0;
@@ -506,7 +507,9 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       presentation: {
         title:
           kind === "command-approval"
-            ? "Approve command"
+            ? command === null && networkHost !== null
+              ? "Approve network access"
+              : "Approve command"
             : kind === "file-approval"
               ? "Approve file changes"
               : "Approve permissions",

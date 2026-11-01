@@ -127,7 +127,10 @@ export interface ApprovalRequest {
   reason?: string;
   /** Write access being requested for the rest of the session. */
   grantRoot?: string;
-  /** Host being reached, for a managed-network prompt. */
+  /**
+   * Host being reached, for a managed-network prompt. Codex 0.166.0 sends no
+   * `command` with one: the host is all there is to approve.
+   */
   networkHost?: string;
   /** True when the protocol has a real "and stop asking" variant for this method. */
   supportsApproveForSession: boolean;
@@ -265,14 +268,13 @@ export function describeApproval(options: {
   // Only the v2 command method sends app-server's own command string; the
   // fallbacks above are for display. `writeStdin` is input to a running
   // terminal, which no command rule may answer.
-  const exactCommand =
+  const v2Command =
     options.method === "item/commandExecution/requestApproval" &&
-    (params.kind === undefined || params.kind === null || params.kind === "command") &&
-    typeof params.command === "string" &&
-    params.command.length > 0;
+    (params.kind === undefined || params.kind === null || params.kind === "command");
+  const exactCommand = v2Command && typeof params.command === "string" && params.command.length > 0;
   const ruleEligible =
     networkContext !== undefined
-      ? kind === "command" && exactCommand
+      ? v2Command && (exactCommand || command === undefined)
       : kind === "command"
         ? exactCommand
         : kind === "file-change"
@@ -281,7 +283,7 @@ export function describeApproval(options: {
   const proposal = exactCommand ? proposedPrefix(params.proposedExecpolicyAmendment) : undefined;
   const actionable =
     kind === "command"
-      ? command !== undefined
+      ? command !== undefined || networkContext !== undefined
       : kind === "file-change"
         ? Boolean(changes?.length)
         : permissions !== undefined && (permissions.network || permissions.fileSystem);
@@ -414,7 +416,9 @@ export function describeApprovalOutcome(
     request.kind === "command"
       ? request.command
         ? `permission to run \`${request.command}\``
-        : "permission to run a command"
+        : request.networkHost
+          ? `permission to reach \`${request.networkHost}\``
+          : "permission to run a command"
       : request.kind === "file-change"
         ? request.changes?.length
           ? `permission to change ${request.changes.length} file(s)`

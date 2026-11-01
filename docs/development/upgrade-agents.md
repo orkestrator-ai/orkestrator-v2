@@ -908,13 +908,22 @@ the pinned binary's parser over the production argument shape.
 
    Orkestrator never offers or sends Codex's exec-policy and network-policy
    amendments (see `bridges/codex-bridge/AGENTS.md`): accepting one writes a
-   rule into the Codex home that Orkestrator cannot list or revoke. The test expects 0.164.0's (and 0.166.0's)
+   rule into the Codex home that Orkestrator can show but not revoke. The test expects 0.164.0's (and 0.166.0's)
    behaviour: an `untrusted` command approval carries
    `proposedExecpolicyAmendment`, **Approve** leaves `CODEX_HOME/rules/`
    empty, and the identical command asks again in the next turn. Its control
-   answers with the amendment itself and finds `rules/default.rules`. If a
-   release adds an app-server method that lists and removes saved rules, add
-   a list-and-revoke surface before offering the amendments again.
+   answers with the amendment itself and finds `rules/default.rules`, then
+   removes the rule and expects only a new thread to ask again. If a release
+   adds an app-server method that lists and removes saved rules, add a
+   list-and-revoke surface before offering the amendments again.
+
+   Then run the same checks for a host, which also shows whether network rules
+   are still where Settings → Permissions reads them. It needs Docker, downloads
+   the pinned Linux binary inside a disposable container, and spends no credits:
+
+   ```bash
+   mise run verify:codex:network-approval
+   ```
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

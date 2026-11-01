@@ -923,11 +923,11 @@ export function describePermissionRule(rule: Pick<NativeAgentPermissionRule, "ki
 
 /**
  * A file in which a provider keeps its own "always allow" rules: Codex's
- * `rules/*.rules` (Starlark `prefix_rule(...)`, including any saved by the
- * Codex amendment options removed in todo 0160) and Claude's
- * `permissions.allow` in its settings files. Orkestrator only shows these; it
- * never edits them, because neither provider documents a format or offers an
- * API Orkestrator could change them through.
+ * `rules/*.rules` (Starlark `prefix_rule(...)` and `network_rule(...)`,
+ * including any saved by the Codex amendment options removed in todo 0160) and
+ * Claude's `permissions.allow` in its settings files. Orkestrator only shows
+ * these; it never edits them: neither provider offers an API to change them
+ * through, and Codex's docs mark its rules format experimental.
  */
 export interface ExternalPermissionRuleFile {
   provider: "codex" | "claude";
@@ -948,4 +948,17 @@ export interface ExternalPermissionRuleFile {
 
 export interface ExternalPermissionRulesSnapshot {
   files: ExternalPermissionRuleFile[];
+}
+
+/**
+ * The rule lines of a Codex Starlark rules file: everything but blanks and
+ * comments. Codex 0.166.0 saves one rule per line, `prefix_rule(...)` for a
+ * command and `network_rule(...)` for a host; a hand-written rule can span
+ * lines, and is then shown line by line.
+ */
+export function codexRuleEntries(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
 }

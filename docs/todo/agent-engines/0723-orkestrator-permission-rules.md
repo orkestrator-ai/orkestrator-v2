@@ -291,7 +291,10 @@ of a badge while another environment is on screen in a running app.
   - **Point the profile's Codex at a loopback model.**
     - Pros: no credits.
     - Cons: no such option exists for `dev:test` today; building it is new
-      scope.
+      scope. (2026-11-01: `codex-saved-rules-live.spec.ts`, from 0160, now does
+      this for a real Codex card with a made-up key, by setting
+      `openai_base_url` in the profile's own Codex home. It does not open the
+      panel or run the two-environment check, so this task stays open.)
 
 ### 6. Claude Bash suggestion shape
 

@@ -27,6 +27,7 @@ import {
   isPlanUsagePlatform,
   PLAN_USAGE_PLATFORMS,
   stalePlanUsageSnapshot,
+  type PlanUsagePaidOverage,
   type PlanUsagePlatform,
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
@@ -273,6 +274,37 @@ export function claudePlanWindows(value: unknown): NativeAgentAccountUsageWindow
     });
   }
   return windows;
+}
+
+/**
+ * Whether Claude can bill past the plan: `extra_usage`, the object Claude Code's
+ * own `/usage` reads (`is_enabled`, Agent SDK `rate_limits.extra_usage`).
+ */
+export function claudePaidOverage(value: unknown): PlanUsagePaidOverage | undefined {
+  const body = asRecord(value);
+  const extra = asRecord((asRecord(body?.usage) ?? body)?.extra_usage);
+  const enabled = extra?.is_enabled ?? extra?.isEnabled ?? extra?.enabled;
+  return typeof enabled === "boolean" ? { enabled } : undefined;
+}
+
+/**
+ * Whether Codex can bill past the plan: `credits.has_credits` or `unlimited`,
+ * plus `ordinaryUsageAllowed: false`, the provider's own word that the included
+ * allowance is unavailable and credits may be used instead.
+ */
+export function codexPaidOverage(value: unknown): PlanUsagePaidOverage | undefined {
+  const body = asRecord(value);
+  if (!body) return undefined;
+  const sources = [...codexDedicatedSources(body), body];
+  const credits = sources
+    .map((source) => asRecord(source.credits))
+    .find((entry) => entry !== null && entry !== undefined);
+  const hasCredits = credits?.has_credits ?? credits?.hasCredits;
+  const unlimited = credits?.unlimited === true;
+  const ordinary = body.ordinary_usage_allowed ?? body.ordinaryUsageAllowed;
+  if (typeof hasCredits !== "boolean" && !unlimited && ordinary !== false) return undefined;
+  const enabled = hasCredits === true || unlimited;
+  return { enabled, ...(ordinary === false ? { inUse: true } : {}) };
 }
 
 /** Codex reports window length as seconds on HTTP and as minutes on app-server. */
@@ -725,8 +757,9 @@ async function readClaudePlanUsage(
   const windows = claudePlanWindows(body);
   const readIso = new Date(runtime.now()).toISOString();
   // A payload this read cannot recognise is not evidence of an unmetered plan.
+  const paidOverage = claudePaidOverage(body);
   return windows.length > 0
-    ? okSnapshot("claude", windows, readIso)
+    ? { ...okSnapshot("claude", windows, readIso), ...(paidOverage ? { paidOverage } : {}) }
     : unavailableSnapshot("claude", "Claude did not report plan usage for this account.", readIso);
 }
 
@@ -774,8 +807,9 @@ async function readCodexPlanUsage(
   if (status < 200 || status >= 300) throw usageRequestFailed(response, runtime.now());
   const readIso = new Date(runtime.now()).toISOString();
   const { windows, plan } = codexPlanWindows(body, runtime.now());
+  const paidOverage = codexPaidOverage(body);
   return windows.length > 0
-    ? okSnapshot("codex", windows, readIso, plan)
+    ? { ...okSnapshot("codex", windows, readIso, plan), ...(paidOverage ? { paidOverage } : {}) }
     : unavailableSnapshot("codex", "Codex did not report plan limits for this account.", readIso);
 }
 

@@ -656,6 +656,14 @@ export class StorageService {
     return this.repos.config.setContainerResourceLimits(limits);
   }
 
+  updateAgentAccountAutoSwitchSettings(
+    update: (
+      current: AppConfig["global"]["agentAccountAutoSwitch"],
+    ) => NonNullable<AppConfig["global"]["agentAccountAutoSwitch"]>,
+  ): Promise<AppConfig> {
+    return this.repos.config.updateAgentAccountAutoSwitchSettings(update);
+  }
+
   setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.repos.config.setGitHubCliReminderDismissed(dismissed);
   }

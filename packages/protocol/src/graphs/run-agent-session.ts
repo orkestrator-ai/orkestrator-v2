@@ -124,6 +124,8 @@ export interface GraphAgentSessionState {
   continuationPrompt?: string;
   reminderSent?: boolean;
   restartContinuationSent?: boolean;
+  /** Times this turn was resent after the weekly limit stopped it. */
+  usageLimitResends?: number;
   idlePolls?: number;
   usagePolls?: number;
   progressAt?: string;
@@ -149,6 +151,7 @@ export const GRAPH_AGENT_SESSION_FIELDS = [
   "continuationPrompt",
   "reminderSent",
   "restartContinuationSent",
+  "usageLimitResends",
   "idlePolls",
   "usagePolls",
   "progressAt",
@@ -343,7 +346,7 @@ export function checkGraphAgentSessionFields(
       errors.add(field(name), "type", "Expected a boolean");
     }
   }
-  for (const name of ["idlePolls", "usagePolls"] as const) {
+  for (const name of ["idlePolls", "usagePolls", "usageLimitResends"] as const) {
     if (value[name] !== undefined) checkPolls(value[name], field(name), errors, B.maxPolls);
   }
   if (value.progressDigest !== undefined) {

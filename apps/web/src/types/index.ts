@@ -643,6 +643,7 @@ export interface GlobalConfig {
   /** Reviewer focus presets; absent means the shipped five (`review-lens.ts`). */
   reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
   agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
+  agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
 }
 
 export type { GatewayTokenSettings, WebClientStatus } from "./webClient.js";

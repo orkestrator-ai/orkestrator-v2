@@ -21,7 +21,9 @@ import {
   readAgentAccountUsage,
   removeAgentAccount,
   renameAgentAccount,
+  resumeAgentAccountAutoSwitch,
   setActiveAgentAccount,
+  setAgentAccountAutoSwitch,
   startAgentAccountLogin,
   submitAgentAccountLoginCode,
 } from "./agent-accounts.js";
@@ -117,6 +119,43 @@ export function registerAgentAccountCommands(
       asAccountPlatform(args.platform),
       asNonBlankString(args.accountId, "accountId"),
     );
+  });
+  /**
+   * The automatic-switching ticks. Separate from `update_global_config`, which
+   * never writes them, so a settings form holding an older config or a
+   * coordinator's change cannot undo the other.
+   */
+  register("set_agent_account_auto_switch", async (args, context) => {
+    assertOnlyKeys(args, ["platform", "enabled", "email", "accountId", "included"], "arguments");
+    const platform = asAccountPlatform(args.platform);
+    const enabled =
+      args.enabled === undefined ? undefined : asRequiredBoolean(args.enabled, "enabled");
+    const email = asOptionalString(args.email);
+    const accountId = asOptionalString(args.accountId);
+    const included =
+      args.included === undefined ? undefined : asRequiredBoolean(args.included, "included");
+    if (enabled === undefined && included === undefined) {
+      throw new Error("Expected enabled, or included with an email or accountId");
+    }
+    if (included !== undefined && (email === undefined) === (accountId === undefined)) {
+      throw new Error("Expected included with either an email or an accountId");
+    }
+    const snapshot = await setAgentAccountAutoSwitch(context, platform, {
+      ...(enabled !== undefined ? { enabled } : {}),
+      ...(email !== undefined ? { email } : {}),
+      ...(accountId !== undefined ? { accountId } : {}),
+      ...(included !== undefined ? { included } : {}),
+    });
+    context.accountAutoSwitch?.nudge(platform);
+    return snapshot;
+  });
+  /** Ends this machine's pin. Its own copy of the ticks is left alone. */
+  register("resume_agent_account_auto_switch", async (args, context) => {
+    assertOnlyKeys(args, ["platform"], "arguments");
+    const platform = asAccountPlatform(args.platform);
+    const snapshot = await resumeAgentAccountAutoSwitch(context, platform);
+    context.accountAutoSwitch?.nudge(platform);
+    return snapshot;
   });
   register("rename_agent_account", async (args, context) => {
     assertOnlyKeys(args, ["platform", "accountId", "label"], "arguments");

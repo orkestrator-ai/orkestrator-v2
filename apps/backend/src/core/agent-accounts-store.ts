@@ -1,4 +1,10 @@
 import {
+  AUTO_SWITCH_REASONS,
+  type AgentAccountAutoSwitchLastSwitch,
+  type AutoSwitchReason,
+} from "@orkestrator/protocol/agent-account-auto-switch";
+import {
+  AGENT_ACCOUNT_PLATFORMS,
   DEFAULT_AGENT_ACCOUNT_ID,
   isAgentAccountPlatform,
   MAX_AGENT_ACCOUNT_LABEL_LENGTH,
@@ -26,6 +32,18 @@ export interface StoredAgentAccount {
   identity?: AgentAccountIdentity;
 }
 
+/**
+ * What automatic switching keeps per machine, per platform. The ticks that
+ * travel are in the global config; these never leave the machine.
+ */
+export interface StoredAgentAccountAutoSwitch {
+  /** A manual switch: automatic switching stays off here until ticked again. */
+  pin?: { accountId: string; pinnedAt: string };
+  /** Accounts with no email whose own tick is on; they cannot be matched elsewhere. */
+  includedAccountIds?: string[];
+  lastSwitch?: AgentAccountAutoSwitchLastSwitch;
+}
+
 export interface AgentAccountStore {
   version: 1;
   /** Durable renewal revision compared with running containers. */
@@ -38,6 +56,7 @@ export interface AgentAccountStore {
    * account here or elsewhere is switched because of it.
    */
   preferred?: PreferredAgentIdentities;
+  autoSwitch?: Partial<Record<AgentAccountPlatform, StoredAgentAccountAutoSwitch>>;
 }
 
 export function emptyAgentAccountStore(): AgentAccountStore {
@@ -68,6 +87,41 @@ function parseIdentity(value: unknown): AgentAccountIdentity | undefined {
   if (organizationName) identity.organizationName = organizationName;
   if (plan) identity.plan = plan;
   return Object.keys(identity).length > 0 ? identity : undefined;
+}
+
+function parseAutoSwitch(value: unknown): AgentAccountStore["autoSwitch"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const parsed: NonNullable<AgentAccountStore["autoSwitch"]> = {};
+  for (const platform of AGENT_ACCOUNT_PLATFORMS) {
+    const entry = (value as Record<string, unknown>)[platform] as
+      Record<string, unknown> | undefined;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const state: StoredAgentAccountAutoSwitch = {};
+    const pin = entry.pin as Record<string, unknown> | undefined;
+    const pinnedId = pin && optionalString(pin.accountId, 128);
+    const pinnedAt = pin && optionalString(pin.pinnedAt, 64);
+    if (pinnedId && pinnedAt) state.pin = { accountId: pinnedId, pinnedAt };
+    if (Array.isArray(entry.includedAccountIds)) {
+      const ids = entry.includedAccountIds.filter(
+        (id): id is string => id === DEFAULT_AGENT_ACCOUNT_ID || isStoredAgentAccountId(id),
+      );
+      if (ids.length) state.includedAccountIds = Array.from(new Set(ids));
+    }
+    const last = entry.lastSwitch as Record<string, unknown> | undefined;
+    const from = last && optionalString(last.fromAccountId, 128);
+    const to = last && optionalString(last.toAccountId, 128);
+    const at = last && optionalString(last.at, 64);
+    if (from && to && at && (AUTO_SWITCH_REASONS as readonly unknown[]).includes(last?.reason)) {
+      state.lastSwitch = {
+        fromAccountId: from,
+        toAccountId: to,
+        at,
+        reason: last?.reason as AutoSwitchReason,
+      };
+    }
+    if (Object.keys(state).length) parsed[platform] = state;
+  }
+  return Object.keys(parsed).length ? parsed : undefined;
 }
 
 function parseAccount(value: unknown): StoredAgentAccount | undefined {
@@ -110,6 +164,8 @@ export function parseAgentAccountStore(value: unknown): AgentAccountStore {
   }
   const preferred = parsePreferredAgentIdentities(record.preferred);
   if (Object.keys(preferred).length) store.preferred = preferred;
+  const autoSwitch = parseAutoSwitch(record.autoSwitch);
+  if (autoSwitch) store.autoSwitch = autoSwitch;
   const seen = new Set<string>();
   for (const entry of Array.isArray(record.accounts) ? record.accounts : []) {
     const account = parseAccount(entry);

@@ -2,11 +2,12 @@ import { invoke } from "@/lib/native/backend";
 import { portalInvoke } from "@/lib/portal/portal-transport";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { portalStore } from "@/lib/portal/portal-store";
-import { invokeCommandNodeSetting } from "@/lib/portal/command-node-config";
+import { invokeCommandNodeSetting, settingsOnCommandNode } from "@/lib/portal/command-node-config";
 import type {
   AgentAccountLoginProgress,
   AgentAccountPlatform,
   AgentAccountsSnapshot,
+  AgentAccountSummary,
   AgentSessionAccount,
   AgentSignInTerminal,
   HostAgentSignIns,
@@ -66,6 +67,50 @@ export async function setActiveAgentAccount(
     platform,
     accountId,
   });
+}
+
+/**
+ * Change an automatic-switching tick, and show `machine` the result.
+ *
+ * The ticks that travel belong to the command node, which hands them to its
+ * machines: the main tick, and an account's tick by its email. An account with no
+ * email cannot be matched on another machine, so its tick stays on `machine`.
+ * Ticking the main tick is also what ends a pin, and a pin belongs to the machine
+ * it was set on. A machine that predates this never reports a pin to end.
+ */
+export async function setAgentAccountAutoSwitch(
+  platform: AgentAccountPlatform,
+  change:
+    | { enabled: boolean; pinned?: boolean }
+    | { account: Pick<AgentAccountSummary, "id" | "identity">; included: boolean },
+  machine?: AccountMachine,
+): Promise<AgentAccountsSnapshot> {
+  if ("enabled" in change) {
+    await invokeCommandNodeSetting("set_agent_account_auto_switch", {
+      platform,
+      enabled: change.enabled,
+    });
+    const onAnotherMachine =
+      machine === undefined
+        ? settingsOnCommandNode()
+        : machine !== null && machine !== portalStore.getState().selfId;
+    if (change.enabled && change.pinned && onAnotherMachine) {
+      await machineInvoke(machine, "resume_agent_account_auto_switch", { platform });
+    }
+  } else if (change.account.identity.email) {
+    await invokeCommandNodeSetting("set_agent_account_auto_switch", {
+      platform,
+      email: change.account.identity.email,
+      included: change.included,
+    });
+  } else {
+    await machineInvoke(machine, "set_agent_account_auto_switch", {
+      platform,
+      accountId: change.account.id,
+      included: change.included,
+    });
+  }
+  return listAgentAccounts(machine);
 }
 
 export async function renameAgentAccount(

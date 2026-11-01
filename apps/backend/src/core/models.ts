@@ -1182,6 +1182,8 @@ export interface AppConfig {
      */
     reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
+    /** The automatic-account ticks; see `updateAgentAccountAutoSwitchSettings`. */
+    agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
     /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal
      * operations setting rather than a user-facing transport choice; changes

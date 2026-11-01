@@ -36,6 +36,11 @@ import {
 } from "./nodes/index.js";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
+import {
+  AGENT_ACCOUNT_AUTO_SWITCHED_EVENT,
+  isAgentAccountAutoSwitchedEvent,
+} from "@orkestrator/protocol/agent-account-auto-switch";
+import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
@@ -47,6 +52,15 @@ import {
   type CompatibilityPathUsageSink,
 } from "./compatibility-path-usage.js";
 import { compatibilityPathUsageDatabaseSink } from "./compatibility-path-usage-store.js";
+import {
+  applyAutomaticAccountSwitch,
+  autoSwitchSettings,
+  listAgentAccounts,
+  readAgentAccountUsage,
+} from "./agent-accounts.js";
+import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
+import { mailAutoSwitchNotice } from "./agent-accounts-auto-switch-notices.js";
+import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -304,6 +318,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
+  private accountAutoSwitch!: AgentAccountAutoSwitcher;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private codexLoginRefresher: ((home: string) => Promise<void>) | null = null;
   private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
@@ -728,7 +743,10 @@ export class OrkestratorBackend {
         : {}),
       inheritableSettings: async () =>
         pickInheritedGlobalSettings((await storage.loadConfig()).global),
-      onInheritedSettingsChanged: () => storage.announceInheritedSettingsChanged(),
+      onInheritedSettingsChanged: () => {
+        storage.announceInheritedSettingsChanged();
+        for (const platform of AGENT_ACCOUNT_PLATFORMS) this.accountAutoSwitch?.nudge(platform);
+      },
     });
     context.machineLoad = this.machineLoad;
     context.nodes = this.nodes;
@@ -766,6 +784,20 @@ export class OrkestratorBackend {
         collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
       }),
     );
+    this.nodePortal.readModel.onNodeEvent((event, payload, nodeId) => {
+      if (event !== AGENT_ACCOUNT_AUTO_SWITCHED_EVENT) return;
+      if (!isAgentAccountAutoSwitchedEvent(payload)) return;
+      void this.nodePortal
+        .summaries([nodeId])
+        .then(
+          (result) => result.nodes[0]?.view.displayName ?? nodeId,
+          () => nodeId,
+        )
+        .then((machineName) => mailAutoSwitchNotice(storage, payload, machineName))
+        .catch(() => {
+          console.warn("[agent-accounts] Another machine's automatic switch notice failed");
+        });
+    });
     bridgeRemoteCoordinatorEvents({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
       settleRemoteWorker: (nodeId, environmentId) =>
@@ -807,6 +839,29 @@ export class OrkestratorBackend {
       toolsEnabled: () => this.transcriptArtifacts?.toolsEnabled() === true,
     };
     const artifactLedger = () => this.transcriptArtifacts ?? null;
+    this.accountAutoSwitch = new AgentAccountAutoSwitcher({
+      settings: () => autoSwitchSettings(context),
+      snapshot: () => listAgentAccounts(context),
+      readUsage: (platform, accountId, { force }) =>
+        readAgentAccountUsage(context, platform, accountId, {
+          force,
+          reader: (readContext, readPlatform, readOptions) =>
+            readContext.runtime.accounts.readPlanUsage(readContext, readPlatform, readOptions),
+        }),
+      switchAccount: (platform, accountId, automatic) =>
+        applyAutomaticAccountSwitch(context, platform, accountId, automatic),
+      sessionAccount: (environmentId, platform) =>
+        readSessionAgentAccount(context, environmentId, platform),
+      bridgeBusy: (environmentId, platform) =>
+        this.nativeAgents.hasObservedLiveWork(environmentId, platform),
+      notify: async (notice) => {
+        // A command node's own coordinators, and through its event stream the
+        // coordinators of whichever command node this machine is attached to.
+        options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, notice);
+        await mailAutoSwitchNotice(storage, notice, "this machine");
+      },
+    });
+    context.accountAutoSwitch = this.accountAutoSwitch;
     this.nativeAgents = new NativeAgentService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -823,6 +878,7 @@ export class OrkestratorBackend {
           : {}),
         localBridgeAccountId: (key) => this.runtime.localServers.launchedAccountId(key),
         planUsage: this.runtime.accounts.planUsage,
+        usageLimitStops: this.accountAutoSwitch,
         signInGuidance: (environmentId, agent) =>
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
@@ -1188,7 +1244,10 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
-        providerDependencies: { planUsage: this.runtime.accounts.planUsage },
+        providerDependencies: {
+          planUsage: this.runtime.accounts.planUsage,
+          usageLimitStops: this.accountAutoSwitch,
+        },
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
@@ -1217,7 +1276,10 @@ export class OrkestratorBackend {
       {
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
-        providerDependencies: { planUsage: this.runtime.accounts.planUsage },
+        providerDependencies: {
+          planUsage: this.runtime.accounts.planUsage,
+          usageLimitStops: this.accountAutoSwitch,
+        },
         resolveAgentToolConnection,
         assertAgentToolsReachable,
         artifactDispatch,
@@ -1368,7 +1430,10 @@ export class OrkestratorBackend {
       storage,
       invoke: invokeCommand,
       workflowResults: this.workflowResults,
-      providerDependencies: { planUsage: this.runtime.accounts.planUsage },
+      providerDependencies: {
+        planUsage: this.runtime.accounts.planUsage,
+        usageLimitStops: this.accountAutoSwitch,
+      },
       agentTools: this.agentTools as Parameters<typeof installGraphAgentExecutor>[0]["agentTools"],
       ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
       toolResultsEnabled: (agent) => this.workflowResultRollout.allows(agent, "graph-output"),
@@ -1817,6 +1882,7 @@ export class OrkestratorBackend {
     });
     this.hostSuspendDetector.start();
     this.machineLoad.start();
+    this.accountAutoSwitch.start();
     // Containers hold Claude logins access-only; this hands them each host
     // renewal and renews the host login before it lapses.
     this.claudeLoginKeeper ??= new ContainerClaudeLoginKeeper(this.context, {
@@ -2633,6 +2699,7 @@ export class OrkestratorBackend {
     this.hostSuspendDetector?.stop();
     this.hostSuspendDetector = null;
     this.machineLoad.stop();
+    this.accountAutoSwitch?.stop();
     this.claudeLoginKeeper?.stop();
     this.claudeLoginKeeper = null;
     this.containerLoginFileWatcher?.stop();

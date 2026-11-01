@@ -6,6 +6,8 @@ import type { CommandContext } from "./commands-context.js";
 import { ERROR_CACHE_TTL_MS, contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
 import {
+  claudePaidOverage,
+  codexPaidOverage,
   CLAUDE_USAGE_URL,
   CODEX_USAGE_URL,
   CURSOR_API_BASE,
@@ -230,6 +232,38 @@ describe("claudePlanWindows", () => {
   test("returns nothing for a payload with no utilization anywhere", () => {
     expect(claudePlanWindows({ organization: { name: "acme" } })).toEqual([]);
     expect(claudePlanWindows("nope")).toEqual([]);
+  });
+});
+
+describe("paid usage past the plan", () => {
+  test("Claude's extra usage says whether it is on", () => {
+    expect(claudePaidOverage({ extra_usage: { is_enabled: true, utilization: 12 } })).toEqual({
+      enabled: true,
+    });
+    expect(claudePaidOverage({ usage: { extra_usage: { is_enabled: false } } })).toEqual({
+      enabled: false,
+    });
+    expect(claudePaidOverage({ seven_day: { utilization: 1 } })).toBeUndefined();
+    expect(claudePaidOverage(undefined)).toBeUndefined();
+  });
+
+  test("Codex's credits and its ordinary-usage answer say whether it is on and in use", () => {
+    expect(codexPaidOverage({ credits: { has_credits: true, balance: "$4" } })).toEqual({
+      enabled: true,
+    });
+    expect(codexPaidOverage({ credits: { has_credits: false, unlimited: false } })).toEqual({
+      enabled: false,
+    });
+    expect(codexPaidOverage({ rateLimits: { credits: { hasCredits: true } } })).toEqual({
+      enabled: true,
+    });
+    expect(codexPaidOverage({ credits: { unlimited: true } })).toEqual({ enabled: true });
+    expect(
+      codexPaidOverage({ ordinaryUsageAllowed: false, rateLimits: { credits: null } }),
+    ).toEqual({ enabled: false, inUse: true });
+    // A balance alone says nothing about whether credits are on.
+    expect(codexPaidOverage({ credits: { balance: "$0" } })).toBeUndefined();
+    expect(codexPaidOverage(undefined)).toBeUndefined();
   });
 });
 

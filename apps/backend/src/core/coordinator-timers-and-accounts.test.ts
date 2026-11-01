@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { AgentAccountAutoSwitchState } from "@orkestrator/protocol/agent-account-auto-switch";
 import type {
   AgentAccountsSnapshot,
   AgentAccountSummary,
@@ -63,6 +64,8 @@ let usage: Record<string, Record<string, PlanUsageSnapshot>>;
 let environments: Environment[];
 let sessions: PersistedNativeAgentSession[];
 let invoke: ControlMcpInvoker;
+let autoSwitch: Record<string, AgentAccountAutoSwitchState | undefined>;
+const tickCalls: Array<{ machine: string; command: string; args: Record<string, unknown> }> = [];
 
 function account(
   id: string,
@@ -104,6 +107,7 @@ function snapshotOf(machine: string): AgentAccountsSnapshot {
       claude: rows.find((row) => row.isActive)?.id ?? "default",
       codex: "default",
     },
+    ...(autoSwitch[machine] ? { autoSwitch: { claude: autoSwitch[machine] } } : {}),
   };
 }
 
@@ -129,6 +133,10 @@ function accountCommand(machine: string, command: string, args: Record<string, u
       }));
       return snapshotOf(machine);
     }
+    case "set_agent_account_auto_switch":
+    case "resume_agent_account_auto_switch":
+      tickCalls.push({ machine, command, args });
+      return snapshotOf(machine);
     default:
       throw new Error(`Unexpected account command: ${command}`);
   }
@@ -208,6 +216,7 @@ beforeEach(async () => {
   mail.length = 0;
   switches.length = 0;
   notified.length = 0;
+  autoSwitch = {};
   accounts = {
     [SELF]: [
       account("default", "Host login", { active: true, email: "me@example.com" }),
@@ -308,6 +317,8 @@ beforeEach(async () => {
       case "list_agent_accounts":
       case "get_agent_account_usage":
       case "set_active_agent_account":
+      case "set_agent_account_auto_switch":
+      case "resume_agent_account_auto_switch":
         return accountCommand(SELF, command, args) as T;
       case "get_project_usage_limits":
         return (await readProjectUsageLimits(
@@ -657,6 +668,144 @@ describe("provider accounts", () => {
     expect(names).not.toContain("switch_provider_account");
     expect(names).not.toContain("list_provider_accounts");
     expect(names).not.toContain("get_usage_limits");
+  });
+});
+
+describe("automatic switching", () => {
+  beforeEach(() => {
+    tickCalls.length = 0;
+  });
+
+  test("a main coordinator sees the state and each account's tick", async () => {
+    autoSwitch[SELF] = {
+      mode: "pinned",
+      pinnedAccountId: "acct-work",
+      includedAccountIds: ["acct-work"],
+      lastSwitch: {
+        fromAccountId: "default",
+        toAccountId: "acct-work",
+        reason: "limit",
+        at: "2026-11-01T00:00:00.000Z",
+      },
+    };
+    const listed = (await call("main", "list_provider_accounts", { platform: "claude" }))
+      .structuredContent as { providers: { claude: Record<string, unknown> } };
+    expect(listed.providers.claude.autoSwitch).toMatchObject({
+      mode: "pinned",
+      pinnedAccountId: "acct-work",
+      lastSwitch: { reason: "limit" },
+    });
+    const rows = listed.providers.claude.accounts as Array<Record<string, unknown>>;
+    expect(rows.find((row) => row.accountId === "acct-work")?.autoSwitchIncluded).toBe(true);
+    expect(rows.find((row) => row.accountId !== "acct-work")?.autoSwitchIncluded).toBe(false);
+  });
+
+  test("a machine that predates it simply shows no state", async () => {
+    const listed = (await call("main", "list_provider_accounts", { platform: "claude" }))
+      .structuredContent as { providers: { claude: Record<string, unknown> } };
+    expect(listed.providers.claude.autoSwitch).toBeUndefined();
+  });
+
+  test("changes the main tick here without asking for approval", async () => {
+    autoSwitch[SELF] = { mode: "automatic", includedAccountIds: [] };
+    const result = await call("main", "set_account_auto_switch", {
+      platform: "claude",
+      enabled: true,
+    });
+    expect(result.structuredContent).toMatchObject({ autoSwitch: { mode: "automatic" } });
+    expect(tickCalls).toEqual([
+      {
+        machine: SELF,
+        command: "set_agent_account_auto_switch",
+        args: { platform: "claude", enabled: true },
+      },
+    ]);
+    expect(await actions.list()).toEqual([]);
+    expect(switches).toEqual([]);
+  });
+
+  test("ticking with a machine named ends that machine's pin, keeping the ticks here", async () => {
+    await call("main", "set_account_auto_switch", {
+      platform: "claude",
+      enabled: true,
+      nodeId: LEAF,
+    });
+    expect(tickCalls).toEqual([
+      {
+        machine: SELF,
+        command: "set_agent_account_auto_switch",
+        args: { platform: "claude", enabled: true },
+      },
+      {
+        machine: LEAF,
+        command: "resume_agent_account_auto_switch",
+        args: { platform: "claude" },
+      },
+    ]);
+  });
+
+  test("an account's tick travels by email; one with no email stays on its machine", async () => {
+    accounts[LEAF] = [
+      account("mailed", "Mailed", { active: true, email: "m@example.com" }),
+      account("keyed", "API key"),
+    ];
+    await call("main", "set_account_auto_switch", {
+      platform: "claude",
+      accountId: "mailed",
+      included: false,
+      nodeId: LEAF,
+    });
+    await call("main", "set_account_auto_switch", {
+      platform: "claude",
+      accountId: "keyed",
+      included: true,
+      nodeId: LEAF,
+    });
+    expect(tickCalls).toEqual([
+      {
+        machine: SELF,
+        command: "set_agent_account_auto_switch",
+        args: { platform: "claude", email: "m@example.com", included: false },
+      },
+      {
+        machine: LEAF,
+        command: "set_agent_account_auto_switch",
+        args: { platform: "claude", accountId: "keyed", included: true },
+      },
+    ]);
+  });
+
+  test("refuses an account it cannot find, and a call that changes nothing", async () => {
+    const unknown = await call("main", "set_account_auto_switch", {
+      platform: "claude",
+      accountId: "nobody",
+      included: true,
+    });
+    expect(unknown.isError).toBe(true);
+    const nothing = await call("main", "set_account_auto_switch", { platform: "claude" });
+    expect(nothing.isError).toBe(true);
+    expect(tickCalls).toEqual([]);
+  });
+
+  test("a coordinator's own switch still needs the user's approval", async () => {
+    autoSwitch[SELF] = { mode: "automatic", includedAccountIds: ["acct-work"] };
+    const result = await call("main", "switch_provider_account", {
+      requestId: "needs-approval",
+      platform: "claude",
+      accountId: "acct-work",
+      reason: "The user asked.",
+    });
+    expect(result.structuredContent).toMatchObject({ state: "pending" });
+    expect(switches).toEqual([]);
+  });
+
+  test("a side agent cannot reach it", async () => {
+    const result = await call("side", "set_account_auto_switch", {
+      platform: "claude",
+      enabled: true,
+    }).catch(() => ({ isError: true }));
+    expect(result.isError).toBe(true);
+    expect(tickCalls).toEqual([]);
   });
 });
 

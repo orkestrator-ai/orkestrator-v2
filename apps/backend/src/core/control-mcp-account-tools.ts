@@ -5,6 +5,7 @@ import {
   type AgentAccountPlatform,
   type AgentAccountSummary,
 } from "@orkestrator/protocol/agent-accounts";
+import type { AgentAccountAutoSwitchState } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   agentAccountSwitchEffect,
   exhaustedUsageWindows,
@@ -49,6 +50,7 @@ export const ACCOUNT_TOOL_CAPABILITIES: ReadonlyArray<readonly [string, string]>
   // Main coordinator only: side agents are not granted `accounts`.
   ["list_provider_accounts", "accounts"],
   ["switch_provider_account", "accounts"],
+  ["set_account_auto_switch", "accounts"],
 ];
 
 const NO_ACCOUNTS_NOTE =
@@ -158,9 +160,16 @@ function usageSummary(value: unknown, now: number): JsonRecord {
   };
 }
 
-function accountView(account: AgentAccountSummary, usage: JsonRecord | null): JsonRecord {
+function accountView(
+  account: AgentAccountSummary,
+  usage: JsonRecord | null,
+  autoSwitch: AgentAccountAutoSwitchState | undefined,
+): JsonRecord {
   const exhausted = usage?.exhausted === true;
   return {
+    ...(autoSwitch
+      ? { autoSwitchIncluded: autoSwitch.includedAccountIds.includes(account.id) }
+      : {}),
     accountId: account.id,
     label: account.label,
     ...(account.identity.email ? { email: account.identity.email } : {}),
@@ -175,6 +184,21 @@ function accountView(account: AgentAccountSummary, usage: JsonRecord | null): Js
       : usage?.status === "ok" && usage.stale !== true && usage.measured === true
         ? !exhausted
         : "unknown",
+  };
+}
+
+function autoSwitchView(state: AgentAccountAutoSwitchState): JsonRecord {
+  return {
+    mode: state.mode,
+    ...(state.pinnedAccountId ? { pinnedAccountId: state.pinnedAccountId } : {}),
+    includedAccountIds: state.includedAccountIds,
+    ...(state.lastSwitch ? { lastSwitch: state.lastSwitch } : {}),
+    meaning:
+      state.mode === "automatic"
+        ? "The backend moves this machine by itself. A manual switch pins it and turns this off."
+        : state.mode === "pinned"
+          ? "A manual switch pinned this account. Automatic switching stays off until the tick is set again."
+          : "Automatic switching is off.",
   };
 }
 
@@ -239,29 +263,108 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       const providers: JsonRecord = {};
       for (const name of platforms) {
         const accounts = snapshot.accounts.filter((account) => account.platform === name);
+        const autoSwitch = snapshot.autoSwitch?.[name];
         const views = await Promise.all(
           accounts.map(async (account) => {
-            if (includeUsage === false || !account.signedIn) return accountView(account, null);
+            if (includeUsage === false || !account.signedIn) {
+              return accountView(account, null, autoSwitch);
+            }
             try {
               const usage = await machine.call<unknown>("get_agent_account_usage", {
                 platform: name,
                 accountId: account.id,
               });
-              return accountView(account, usageSummary(usage, at));
+              return accountView(account, usageSummary(usage, at), autoSwitch);
             } catch (error) {
-              return accountView(account, {
-                status: "error",
-                message: error instanceof Error ? error.message.slice(0, 300) : "Usage read failed",
-              });
+              return accountView(
+                account,
+                {
+                  status: "error",
+                  message:
+                    error instanceof Error ? error.message.slice(0, 300) : "Usage read failed",
+                },
+                autoSwitch,
+              );
             }
           }),
         );
-        providers[name] = { activeAccountId: snapshot.active[name], accounts: views };
+        providers[name] = {
+          activeAccountId: snapshot.active[name],
+          ...(autoSwitch ? { autoSwitch: autoSwitchView(autoSwitch) } : {}),
+          accounts: views,
+        };
       }
       return toolResult({
         machine: { nodeId: machine.nodeId, name: machine.nodeName, self: machine.self },
         providers,
         note: NO_ACCOUNTS_NOTE,
+      });
+    },
+  );
+
+  server.registerTool(
+    "set_account_auto_switch",
+    {
+      title: "Change automatic account switching",
+      description:
+        "Turn automatic account switching on or off for a provider, or change whether one account is included. When on, the backend keeps the machine on the included signed-in account whose general weekly limit resets soonest, moves on at 98% of that limit or when a fresh reading confirms a limit error used it up, and resends the work the weekly limit stopped. The ticks apply on every machine this one controls, matched by email; an account with no email has its tick on its own machine only and stays out until ticked. With enabled true it also ends this machine's pin, or the pin on nodeId, left by a manual switch. list_provider_accounts shows the state. Only when the user asked for it.",
+      inputSchema: z.object({
+        platform: z.enum(AGENT_ACCOUNT_PLATFORMS),
+        enabled: z.boolean().optional().describe("The provider's main tick."),
+        accountId: z
+          .string()
+          .trim()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("One account from list_provider_accounts, with included."),
+        included: z.boolean().optional().describe("That account's own tick."),
+        nodeId: nodeIdField.describe(
+          "The machine the account or pin is on; omit for this one. The ticks themselves stay here.",
+        ),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ platform, enabled, accountId, included, nodeId }) => {
+      if (enabled === undefined && accountId === undefined) {
+        throw new Error("Pass enabled, or accountId with included.");
+      }
+      if ((accountId === undefined) !== (included === undefined)) {
+        throw new Error("accountId and included go together.");
+      }
+      const machine = await machineFor(invoke, nodeId);
+      if (enabled !== undefined) {
+        await invoke("set_agent_account_auto_switch", { platform, enabled });
+        if (enabled && !machine.self) {
+          await machine.call("resume_agent_account_auto_switch", { platform });
+        }
+      }
+      if (accountId !== undefined && included !== undefined) {
+        const account = (await machineAccounts(machine)).accounts.find(
+          (entry) => entry.platform === platform && entry.id === accountId,
+        );
+        if (!account) {
+          throw new Error(
+            `${machine.nodeName} has no ${platform} account ${accountId}; take one from list_provider_accounts.`,
+          );
+        }
+        const email = account.identity.email;
+        if (email) {
+          await invoke("set_agent_account_auto_switch", { platform, email, included });
+        } else {
+          await machine.call("set_agent_account_auto_switch", { platform, accountId, included });
+        }
+      }
+      const state = (await machineAccounts(machine)).autoSwitch?.[platform];
+      return toolResult({
+        machine: { nodeId: machine.nodeId, name: machine.nodeName, self: machine.self },
+        platform,
+        ...(state ? { autoSwitch: autoSwitchView(state) } : {}),
       });
     },
   );

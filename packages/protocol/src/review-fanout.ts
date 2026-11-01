@@ -150,6 +150,8 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    * second restart fails the reviewer instead of looping.
    */
   restartContinuationSent?: boolean;
+  /** Times this turn was resent after the weekly limit stopped it. */
+  usageLimitResends?: number;
   idleResultPolls?: number;
   /** Last time the supervisor observed this reviewer's transcript change. */
   progressAt?: string;
@@ -209,6 +211,8 @@ export interface ReviewWorktreeSnapshotRecord {
 export interface ReviewConsolidationSession {
   /** One durable continuation after a provider restart cut the turn short. */
   restartContinuationSent?: boolean;
+  /** Times this turn was resent after the weekly limit stopped it. */
+  usageLimitResends?: number;
   /** The one durable reminder to submit a missing tool-mode report was spent. */
   resultReminderSent?: boolean;
   continuationPrompt?: string;
@@ -414,6 +418,7 @@ const REVIEWER_KEYS = [
   "continuationPrompt",
   "resultReminderSent",
   "restartContinuationSent",
+  "usageLimitResends",
   "error",
   "tokenCount",
   "cacheReadTokens",
@@ -462,6 +467,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
+    optionalCount(value.usageLimitResends) &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
     optionalCount(value.tokenCount) &&
@@ -569,6 +575,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     record(value) &&
     hasOnlyKeys(value, [
       "restartContinuationSent",
+      "usageLimitResends",
       "resultReminderSent",
       "continuationPrompt",
       "sessionKey",
@@ -592,6 +599,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     ]) &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
+    optionalCount(value.usageLimitResends) &&
     (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     optionalString(value.continuationPrompt, 100_000) &&
     nonBlank(value.sessionKey) &&

@@ -1,4 +1,5 @@
 /** Shared provider factory used by interactive native-agent sessions. */
+import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import type { BridgeConnection, NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
 import { HttpBridgeProvider } from "./http-bridge-provider.js";
 import type { HttpBridgeProviderDependencies } from "./http-bridge-transport.js";
@@ -7,6 +8,7 @@ import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import { OpenCodeProvider, type OpenCodeProviderDependencies } from "./opencode-provider.js";
 import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
 import { resolveCodexBridgeDefaultModel } from "./session-held-model.js";
+import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
 import type { WorkflowResultReader } from "./workflow-result-service.js";
 
 export * from "./agent-provider-contract.js";
@@ -75,6 +77,8 @@ export type ProviderDependencies = HttpBridgeProviderDependencies &
     workflowResults?: WorkflowResultReader;
     /** Platform-specific dependencies are derived from this; explicit ones win. */
     environment?: NativeAgentProviderEnvironment;
+    /** Automatic account switching, which turns a workflow's weekly-limit stop into a resend. */
+    usageLimitStops?: Pick<UsageLimitStops, "handleLimitStop">;
   };
 
 export function createNativeAgentProvider(
@@ -94,6 +98,11 @@ export function createNativeAgentProvider(
           dependencies.onObservationHint,
           dependencies.planUsage,
         );
+  const { usageLimitStops } = dependencies;
+  if (usageLimitStops && isAgentAccountPlatform(connection.agent)) {
+    const platform = connection.agent;
+    provider.usageLimitStop = (input) => usageLimitStops.handleLimitStop({ ...input, platform });
+  }
   // Codex runs the model its session was created with; the other bridges carry
   // the model on each prompt and keep the configured one.
   if (connection.agent === "codex") {

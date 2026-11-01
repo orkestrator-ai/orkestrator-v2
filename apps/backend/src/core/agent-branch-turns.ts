@@ -19,6 +19,7 @@ import {
 import {
   workflowResultReminderPrompt,
   workflowRestartContinuationPrompt,
+  workflowUsageLimitContinuationPrompt,
 } from "./workflow-result-missing.js";
 
 /** Bounds the durable correction budget for a rejected result. */
@@ -164,6 +165,37 @@ export async function prepareAgentBranchRestartContinuation<B extends AgentBranc
   context.host.pollGate?.clear(agentBranchPollScope(context, branch, "idle"));
   await context.commits.commit();
   return true;
+}
+
+/**
+ * Queues a continuation for a branch the weekly limit stopped, once automatic
+ * switching has moved the machine. The caller decided it may run; the count is
+ * what `handleLimitStop` bounds.
+ */
+export async function prepareAgentBranchUsageLimitContinuation<B extends AgentBranchRecord>(
+  context: AgentBranchContext<B>,
+  branch: B,
+  toolName: string,
+): Promise<void> {
+  if (!branch.providerSessionId) throw new Error("The branch has no session to continue");
+  const toolResult = branch.resultTransport === "tool-v1";
+  const prompt = workflowUsageLimitContinuationPrompt({
+    workLabel: context.host.wording.workLabel,
+    resultLabel: context.host.wording.resultLabel,
+    ...(toolResult ? { toolName } : {}),
+  });
+  if (toolResult && branch.requestId) await context.host.closeResult?.(branch.requestId);
+  branch.usageLimitResends = (branch.usageLimitResends ?? 0) + 1;
+  branch.continuationPrompt = prompt;
+  delete branch.schemaRepairPrompt;
+  branch.requestId = randomUUID();
+  branch.dispatchState = "prepared";
+  branch.resultSubmission = toolResult ? "preparing" : undefined;
+  branch.progressAt = agentBranchNowIso();
+  delete branch.stalledSince;
+  delete branch.idleResultPolls;
+  context.host.pollGate?.clear(agentBranchPollScope(context, branch, "idle"));
+  await context.commits.commit();
 }
 
 /**

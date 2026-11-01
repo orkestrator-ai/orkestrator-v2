@@ -69,6 +69,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowRestartContinuationPrompt,
+  workflowUsageLimitContinuationPrompt,
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
@@ -470,6 +471,7 @@ export class BuildPipelineReviewFanout {
       ...(this.deps.pollGate ? { pollGate: this.deps.pollGate(pipeline) } : {}),
       sessionKeyFor: (reviewer) => reviewerSessionKey(pipeline, reviewer),
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
+      environmentId: pipeline.environmentId,
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
       providerUnavailable: (selection, provider) =>
         this.deps.providerUnavailable?.(
@@ -1148,7 +1150,18 @@ export class BuildPipelineReviewFanout {
       );
     }
     const restartInterrupted = status === "error" && interruption === "restart";
-    if ((status === "error" && !restartInterrupted) || status === "missing") {
+    let usageLimitResend = false;
+    if (status === "error" && !restartInterrupted) {
+      const verdict = await provider.usageLimitStop?.({
+        environmentId: pipeline.environmentId,
+        requestId: consolidation.requestId,
+        error: statusDetail,
+        resends: consolidation.usageLimitResends ?? 0,
+      });
+      if (verdict === "wait") return { kind: "working" };
+      usageLimitResend = verdict === "resend";
+    }
+    if ((status === "error" && !restartInterrupted && !usageLimitResend) || status === "missing") {
       return {
         kind: "failed",
         error:
@@ -1167,6 +1180,28 @@ export class BuildPipelineReviewFanout {
             consolidation.providerSessionId,
             consolidation.requestId,
           );
+    if (usageLimitResend && result?.ok !== true) {
+      consolidation.usageLimitResends = (consolidation.usageLimitResends ?? 0) + 1;
+      await this.prepareConsolidationFollowUp(
+        pipeline,
+        consolidation,
+        undefined,
+        workflowUsageLimitContinuationPrompt({
+          workLabel: "consolidation",
+          resultLabel: "consolidated report",
+          ...(consolidation.resultTransport === "tool-v1"
+            ? { toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND) }
+            : {}),
+        }),
+      );
+      // The next pass reconnects, which is what moves the bridge to the new account.
+      await this.deps.providerUnavailable?.(
+        pipeline,
+        consolidation.agent as BuildPipelineAgent,
+        provider,
+      );
+      return { kind: "working" };
+    }
     if (restartInterrupted && result?.ok !== true) {
       if (consolidation.restartContinuationSent) {
         return {
@@ -1391,14 +1426,14 @@ export class BuildPipelineReviewFanout {
   private async prepareConsolidationFollowUp(
     pipeline: BuildPipeline,
     consolidation: ReviewConsolidationSession,
-    spend: "restartContinuationSent" | "resultReminderSent",
+    spend: "restartContinuationSent" | "resultReminderSent" | undefined,
     prompt: string,
   ): Promise<void> {
     const previousRequestId = consolidation.requestId;
     consolidation.requestId = randomUUID();
     consolidation.state = "prepared";
     consolidation.createdAt = reviewFanoutNowIso();
-    consolidation[spend] = true;
+    if (spend) consolidation[spend] = true;
     consolidation.continuationPrompt = prompt;
     delete consolidation.schemaRepairPrompt;
     delete consolidation.idleResultPolls;
@@ -1485,6 +1520,7 @@ export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
   delete reviewer.continuationPrompt;
   delete reviewer.resultReminderSent;
   delete reviewer.restartContinuationSent;
+  delete reviewer.usageLimitResends;
   delete reviewer.idleResultPolls;
   delete reviewer.progressAt;
   delete reviewer.progressDigest;

@@ -1,3 +1,4 @@
+import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
 import type { SDKMessage, SDKStartupFailureReason } from "@anthropic-ai/claude-agent-sdk";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import type { SdkResultMessage } from "../../types/index.js";
@@ -69,6 +70,8 @@ export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): st
       return "Claude requires a working command sandbox, and it cannot run here (for example, bubblewrap is missing or the platform is unsupported). Make the sandbox available or have the requirement changed, then retry.";
   }
 }
+
+const MAX_USAGE_LIMIT_ERROR_CHARS = 500;
 
 /** How the CLI ends a turn that a graceful interrupt stopped. */
 const STOPPED_TERMINAL_REASONS: ReadonlySet<string> = new Set([
@@ -291,9 +294,17 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
     const startupFailure = resultMsg.startup_failure_reason
       ? claudeStartupFailureMessage(resultMsg.startup_failure_reason)
       : undefined;
+    // A refused turn's words are only in `result` ("You've hit your limit ·
+    // resets 3pm"), and the turn's error is how the backend learns of the limit.
+    // Other API errors keep the fixed text: `result` can hold the model's own.
+    const usageLimit =
+      resultMsg.subtype === "success" && classifyUsageLimitError(resultMsg.result)
+        ? (resultMsg.result as string).trim().slice(0, MAX_USAGE_LIMIT_ERROR_CHARS)
+        : undefined;
     const resultError =
       startupFailure ||
       resultMsg.errors?.filter(Boolean).join("\n") ||
+      usageLimit ||
       (resultMsg.subtype === "success"
         ? "Claude ended the turn on an API error."
         : `Claude query failed: ${resultMsg.subtype}`);

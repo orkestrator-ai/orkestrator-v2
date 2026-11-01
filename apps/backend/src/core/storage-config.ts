@@ -713,6 +713,10 @@ export class ConfigRepository {
       if (config.global.worktreeLocations !== undefined)
         validated.worktreeLocations = config.global.worktreeLocations;
       else delete validated.worktreeLocations;
+      // Written only by `updateAgentAccountAutoSwitchSettings`, likewise.
+      if (config.global.agentAccountAutoSwitch !== undefined)
+        validated.agentAccountAutoSwitch = config.global.agentAccountAutoSwitch;
+      else delete validated.agentAccountAutoSwitch;
       // Written only by `setGitHubCliReminderDismissed`, likewise.
       if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
       else delete validated.githubCliReminderDismissed;
@@ -811,6 +815,23 @@ export class ConfigRepository {
   }
 
   /** Turn the startup GitHub CLI reminder off, or back on. */
+  /** The only writer of `agentAccountAutoSwitch`; see `update_global_config`'s exception. */
+  async updateAgentAccountAutoSwitchSettings(
+    update: (
+      current: AppConfig["global"]["agentAccountAutoSwitch"],
+    ) => NonNullable<AppConfig["global"]["agentAccountAutoSwitch"]>,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadOwnConfig();
+      const next = update(config.global.agentAccountAutoSwitch);
+      if (Object.keys(next).length > 0) config.global.agentAccountAutoSwitch = next;
+      else delete config.global.agentAccountAutoSwitch;
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
+      return this.withInheritedSettings(config);
+    });
+  }
+
   async setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();

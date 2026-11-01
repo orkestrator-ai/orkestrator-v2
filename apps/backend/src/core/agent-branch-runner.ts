@@ -54,6 +54,7 @@ import {
   prepareAgentBranchReminder,
   prepareAgentBranchRepair,
   prepareAgentBranchRestartContinuation,
+  prepareAgentBranchUsageLimitContinuation,
 } from "./agent-branch-turns.js";
 import {
   AgentBranchDispatchSetupError,
@@ -702,7 +703,22 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     // failure: a result it already submitted is still accepted below, and
     // otherwise the same session continues the work once.
     const restartInterrupted = status === "error" && observation.interruption === "restart";
-    if ((status === "error" && !restartInterrupted) || status === "missing") {
+    // Nor is the weekly limit, once automatic switching moved this machine: a
+    // result it submitted is still accepted, and otherwise the session continues
+    // on the new account.
+    let usageLimitResend = false;
+    if (status === "error" && !restartInterrupted && host.environmentId) {
+      const verdict = await provider.usageLimitStop?.({
+        environmentId: host.environmentId,
+        requestId,
+        error: statusDetail,
+        resends: branch.usageLimitResends ?? 0,
+      });
+      await host.assertFence();
+      if (verdict === "wait") return "continue";
+      usageLimitResend = verdict === "resend";
+    }
+    if ((status === "error" && !restartInterrupted && !usageLimitResend) || status === "missing") {
       return failSession();
     }
     if (branch.resultTransport === "tool-v1") {
@@ -714,6 +730,13 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         : await provider.structured<unknown>(providerSessionId, requestId);
     await host.assertFence();
     const resultTurn = host.resultTurn(branch, requestId);
+    if (usageLimitResend && result?.ok !== true) {
+      await finalUsage();
+      await prepareAgentBranchUsageLimitContinuation(this.context, branch, resultTurn.toolName);
+      // The next pass reconnects, which is what moves the bridge to the new account.
+      await host.providerUnavailable?.(branch, provider);
+      return "stop";
+    }
     // An interrupted structured-output turn records a provider failure, not a
     // result; only an accepted result outlives the restart.
     if (restartInterrupted && result?.ok !== true) {

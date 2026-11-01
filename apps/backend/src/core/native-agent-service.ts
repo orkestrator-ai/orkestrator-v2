@@ -143,6 +143,7 @@ import {
   type NativeAgentObservationWakeReason,
 } from "./native-agent-observation.js";
 import { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
+import { NativeAgentUsageLimitResend } from "./native-agent-usage-limit-resend.js";
 import { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import { NativeAgentInteractionTracker } from "./native-agent-interaction-tracker.js";
 import { NativeAgentLaunchActivityReconciler } from "./native-agent-launch-activity-reconciler.js";
@@ -511,6 +512,7 @@ export class NativeAgentService {
    * strategy, and the manual-prompt claims that keep it from racing the user.
    */
   private readonly turnRecovery: NativeAgentTurnRecovery;
+  private readonly usageLimitResend: NativeAgentUsageLimitResend;
 
   sessionPendingInteractions(
     input: NativeAgentProjectionInput,
@@ -630,6 +632,17 @@ export class NativeAgentService {
         this.dispatchPromptInternal(input, prepare, false, false, true),
       observedActivity: (key) => this.launches.observedActivity(key),
     });
+    this.usageLimitResend = new NativeAgentUsageLimitResend({
+      storage,
+      stops: () => this.options.usageLimitStops,
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      requestOutcome: (input) => this.sessionRequestOutcome(input),
+      observedActivity: (key) => this.launches.observedActivity(key),
+      // It continues a turn something else started, so it keeps that origin.
+      dispatchPrompt: (input, prepare) =>
+        this.dispatchPromptInternal(input, prepare, false, false, true),
+    });
     // Optional because narrow test doubles of the storage omit the store.
     this.permissionRules =
       typeof storage.permissionRuleStore === "function"
@@ -683,6 +696,7 @@ export class NativeAgentService {
         this.dispatchQueuedAsyncQuestionAnswer(input, resolved, text, requestId),
       recordObservedTurnOutcome: (session, status, detail, provider) =>
         this.recordObservedTurnOutcome(session, status, detail, provider),
+      usageLimitResendPending: (key) => this.usageLimitResend.isPending(key),
       settleAmbiguousDispatch: (input, key, requestId, provider) =>
         this.settleAmbiguousDispatch(input, key, requestId, provider),
       settleAmbiguousSteer: (input, key, requestId, provider) =>
@@ -695,6 +709,7 @@ export class NativeAgentService {
       providerRegistry: this.providerRegistry,
       observations: this.observations,
       turnRecovery: this.turnRecovery,
+      usageLimitResend: this.usageLimitResend,
       now: () => this.now(),
       isStopped: () => this.stopped,
       observeProvider: (input) => this.observeProvider(input),
@@ -3853,17 +3868,20 @@ export class NativeAgentService {
     while (
       this.launches.pendingLaunchTasks().length > 0 ||
       this.promptQueues.pendingDrains().length > 0 ||
-      this.turnRecovery.pendingTasks().length > 0
+      this.turnRecovery.pendingTasks().length > 0 ||
+      this.usageLimitResend.pendingTasks().length > 0
     ) {
       await Promise.allSettled([
         ...this.launches.pendingLaunchTasks(),
         ...this.promptQueues.pendingDrains(),
         ...this.turnRecovery.pendingTasks(),
+        ...this.usageLimitResend.pendingTasks(),
       ]);
     }
     await this.providerRegistry.shutdown();
     this.observations.clear();
     this.turnRecovery.clear();
+    this.usageLimitResend.clear();
     this.catalogs.clear();
     this.projections.clear();
   }

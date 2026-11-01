@@ -57,6 +57,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowRestartContinuationPrompt,
+  workflowUsageLimitContinuationPrompt,
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import type { AgentActivityCompletionOutcome, AppConfig, Environment } from "./models.js";
@@ -446,6 +447,7 @@ function resetReviewerForRestart(
   delete reviewer.schemaRepairAttempts;
   delete reviewer.resultReminderSent;
   delete reviewer.restartContinuationSent;
+  delete reviewer.usageLimitResends;
   delete reviewer.schemaRepairPrompt;
   delete reviewer.continuationPrompt;
   delete reviewer.idleResultPolls;
@@ -536,7 +538,7 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   ) => Promise<BuildPipelineProvider>;
   providerDependencies?: Pick<
     ProviderDependencies,
-    "openCodeClient" | "monitorRetryMs" | "planUsage"
+    "openCodeClient" | "monitorRetryMs" | "planUsage" | "usageLimitStops"
   >;
   workflowResults?: WorkflowResultService;
   workflowResultRollout?: WorkflowResultRollout;
@@ -1431,6 +1433,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete reviewer.schemaRepairAttempts;
           delete reviewer.resultReminderSent;
           delete reviewer.restartContinuationSent;
+          delete reviewer.usageLimitResends;
           delete reviewer.schemaRepairPrompt;
           delete reviewer.idleResultPolls;
           delete reviewer.progressAt;
@@ -1534,6 +1537,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             delete reviewer.schemaRepairAttempts;
             delete reviewer.resultReminderSent;
             delete reviewer.restartContinuationSent;
+            delete reviewer.usageLimitResends;
             delete reviewer.schemaRepairPrompt;
             delete reviewer.idleResultPolls;
             delete reviewer.progressAt;
@@ -3555,6 +3559,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       targetBranch: workflow.targetBranch,
       reviewInstruction: workflow.reviewInstruction,
       label: "Multi Review",
+      environmentId: workflow.environmentId,
       sessionKeyFor: (reviewer) =>
         reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id),
       sessionLabelFor: (_reviewer, index) => `Multi Review · Reviewer ${index + 1}`,
@@ -4351,7 +4356,21 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     // a result it already submitted is still accepted below, and otherwise
     // the same session continues the step once.
     const restartInterrupted = status === "error" && observation.interruption === "restart";
-    if ((status === "error" && !restartInterrupted) || status === "missing") {
+    // The weekly limit stopping the turn is not the model's failure either, when
+    // automatic switching moved this machine to another account.
+    let usageLimitResend = false;
+    if (status === "error" && !restartInterrupted) {
+      const verdict = await provider.usageLimitStop?.({
+        environmentId: workflow.environmentId,
+        requestId: request.requestId,
+        error: statusDetail,
+        resends: request.usageLimitResends ?? 0,
+      });
+      await this.assertFence(workflow.id, token);
+      if (verdict === "wait") return;
+      usageLimitResend = verdict === "resend";
+    }
+    if ((status === "error" && !restartInterrupted && !usageLimitResend) || status === "missing") {
       throw sessionFailure();
     }
     if (request.resultTransport === "tool-v1") {
@@ -4364,6 +4383,22 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     await this.assertFence(workflow.id, token);
     // An interrupted structured-output turn records a provider failure, not a
     // result; only an accepted result outlives the restart.
+    if (usageLimitResend && result?.ok !== true) {
+      const toolResult = request.resultTransport === "tool-v1";
+      request.usageLimitResends = (request.usageLimitResends ?? 0) + 1;
+      await this.prepareStepFollowUp(workflow, token, request, session, {
+        prompt: workflowUsageLimitContinuationPrompt({
+          workLabel: stepWorkLabel(request.kind),
+          resultLabel,
+          ...(toolResult
+            ? { toolName: workflowResultToolName(this.stepResultKind(request.kind)) }
+            : {}),
+        }),
+      });
+      // The next pass reconnects, which is what moves the bridge to the new account.
+      await this.evictUnreachableProvider(workflow, selection, provider);
+      return;
+    }
     if (restartInterrupted && result?.ok !== true) {
       if (request.restartContinuationSent === true) throw sessionFailure();
       const toolResult = request.resultTransport === "tool-v1";
@@ -4724,7 +4759,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     token: string,
     request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
-    followUp: { prompt: string; spend: "resultReminderSent" | "restartContinuationSent" },
+    followUp: { prompt: string; spend?: "resultReminderSent" | "restartContinuationSent" },
   ): Promise<void> {
     const previousRequestId = request.requestId;
     if (request.resultTransport === "tool-v1") {
@@ -4734,7 +4769,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     request.requestId = requestId;
     request.state = "prepared";
     request.createdAt = nowIso();
-    request[followUp.spend] = true;
+    if (followUp.spend) request[followUp.spend] = true;
     request.continuationPrompt = followUp.prompt;
     delete request.schemaRepairPrompt;
     if (request.resultTransport === "tool-v1") request.resultSubmission = "preparing";

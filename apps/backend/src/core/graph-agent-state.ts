@@ -115,6 +115,9 @@ export function graphAgentBranch(
           ...(session.restartContinuationSent !== undefined
             ? { restartContinuationSent: session.restartContinuationSent }
             : {}),
+          ...(session.usageLimitResends !== undefined
+            ? { usageLimitResends: session.usageLimitResends }
+            : {}),
           ...(session.idlePolls !== undefined ? { idleResultPolls: session.idlePolls } : {}),
           ...(session.progressAt !== undefined ? { progressAt: session.progressAt } : {}),
           ...(session.progressDigest !== undefined
@@ -175,6 +178,9 @@ export function graphAgentSession(
     ...(branch.resultReminderSent !== undefined ? { reminderSent: branch.resultReminderSent } : {}),
     ...(branch.restartContinuationSent !== undefined
       ? { restartContinuationSent: branch.restartContinuationSent }
+      : {}),
+    ...(branch.usageLimitResends !== undefined
+      ? { usageLimitResends: branch.usageLimitResends }
       : {}),
     ...(branch.idleResultPolls !== undefined ? { idlePolls: branch.idleResultPolls } : {}),
     ...(branch.usageFinalizationPolls !== undefined

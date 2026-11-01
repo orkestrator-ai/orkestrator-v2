@@ -199,3 +199,21 @@ mise exec -- bun test src/core/design/browser-profiles.test.ts
 
 run from `apps/backend`. No design code, assertion, timeout or skip changed.
 Asynchronous ledger removal remains a hypothesis.
+
+## Codex saved-rules review observation (2026-11-01)
+
+Preparation at `a534624935abc5da6e1ef787fb42300830cd20eb` ran `mise run test`
+and repeated the stale-ledger assertion (172.62 ms) while validating the Codex
+saved-rules ticket. The original evidence is retained in
+`.orkestrator/review-artifacts/review-validation-c412558e-d8d4-4963-9650-c35bc996a110/validation-04.stdout.txt`.
+The unchanged complete owner passed with one worker on the fix branch (0.8 s)
+and in a detached `origin/main` worktree at `0bd214ee4` (0.3 s), with separately
+installed dependencies:
+
+```sh
+mise run test:logged -- --name branch-browser-profile -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+No cleanup implementation, assertion, timeout, or skip changed. This isolated
+pass confirms the existing intermittent observation; it does not establish a new
+root cause or resolve the flake.

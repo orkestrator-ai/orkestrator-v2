@@ -487,7 +487,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     const actionable = inferredActionable && request.actionable !== false;
     // `request.amendments` (bridges before todo 0160, such as an older
     // container image) is ignored on purpose. Accepting one saves a rule in the
-    // user's Codex home that Orkestrator can neither list nor revoke, so the
+    // user's Codex home that Orkestrator can list read-only but cannot revoke, so the
     // card offers plain approval only.
     const body = truncatedJoinedText([
       ...(reason ? [`Reason: ${boundedText(reason, "Reason")}`] : []),

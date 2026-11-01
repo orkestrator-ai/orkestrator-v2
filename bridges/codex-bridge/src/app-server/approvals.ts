@@ -23,7 +23,7 @@
  *    user's Codex home that every later Codex session on the host obeys.
  *    app-server has no method to list or remove those rules, so Orkestrator
  *    neither offers nor sends them: a rule it saved would be one it could never
- *    show or revoke (todo 0160).
+ *    revoke (todo 0160).
  */
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import type { EngineGeneration } from "../engine/types.js";
@@ -337,7 +337,7 @@ export interface ApprovalResponsePayload {
  *
  * Never answers with `acceptWithExecpolicyAmendment` or
  * `applyNetworkPolicyAmendment`, whatever the request proposed: both save a
- * rule in the user's Codex home that Orkestrator cannot list or revoke.
+ * rule in the user's Codex home that Orkestrator can list read-only but cannot revoke.
  */
 export function buildApprovalResponse(
   method: InteractiveApprovalMethod,

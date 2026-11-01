@@ -132,7 +132,8 @@ describe("describeApproval", () => {
 
   test("never offers the policy amendments app-server proposes", () => {
     // Accepting one saves a rule in the user's Codex home that Orkestrator
-    // cannot list or revoke (todo 0160), so the descriptor carries none.
+    // can list read-only but cannot revoke (todo 0160), so the descriptor
+    // carries none.
     const approval = describeWith("item/commandExecution/requestApproval", {
       threadId: "thread-1",
       command: "curl https://one.example",

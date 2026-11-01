@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { expect, test, type Page } from "@playwright/test";
+import { snapshotFixtureFiles } from "./codex-fixture-files";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   authenticatedInvoke,
@@ -73,112 +74,126 @@ test.describe("Codex approval card and saved rules", () => {
       (project) => project.localPath === status.testProject,
     )!;
     expect(fixture).toBeTruthy();
-    const model = await startModel();
     // A top-level key, so it goes before any table Codex has added.
     const configFile = path.join(codexHome, "config.toml");
     const earlierConfig = existsSync(configFile)
       ? readFileSync(configFile, "utf8").replace(/^openai_base_url = .*\n/m, "")
       : "";
-    writeFileSync(
-      configFile,
-      `openai_base_url = ${JSON.stringify(model.baseUrl)}\n${earlierConfig}`,
-      { mode: 0o600 },
-    );
+    const restoreFiles = snapshotFixtureFiles([configFile, path.join(rulesDir, "default.rules")]);
     const environments: string[] = [];
-    const openEnvironment = sidebarNavigator(page, fixture.name);
-    const rulesFiles = () => (existsSync(rulesDir) ? readdirSync(rulesDir) : []);
+    const model = await startModel();
+    try {
+      writeFileSync(
+        configFile,
+        `openai_base_url = ${JSON.stringify(model.baseUrl)}\n${earlierConfig}`,
+        { mode: 0o600 },
+      );
+      const openEnvironment = sidebarNavigator(page, fixture.name);
+      const rulesFiles = () => (existsSync(rulesDir) ? readdirSync(rulesDir) : []);
 
-    /** A new environment under an Ask policy, whose Codex thread starts now. */
-    const openCodex = async (name: string) => {
-      const environment = await invoke<Environment>("create_environment", {
-        projectId: fixture.id,
-        name: `${name}-${Date.now()}`,
-        environmentType: "local",
-      });
-      environments.push(environment.id);
-      await invoke("update_environment_agent_settings", {
-        environmentId: environment.id,
-        agentSettings: { executionPolicy: { approvals: "ask" } },
-      });
-      await invoke("start_environment", { environmentId: environment.id });
-      const tabId = `${name}-tab`;
-      const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
-        environmentId: environment.id,
-      });
-      await invoke("save_pane_layout", {
-        environmentId: environment.id,
-        expectedRevision: layout?.revision ?? 0,
-        layout: {
-          version: PANE_LAYOUT_VERSION,
-          containerId: null,
-          activePaneId: `${name}-pane`,
-          root: {
-            kind: "leaf",
-            id: `${name}-pane`,
-            activeTabId: tabId,
-            tabs: [
-              {
-                id: tabId,
-                type: "agent-native",
-                nativeAgentData: {
-                  environmentId: environment.id,
-                  platform: "codex",
-                  isLocal: true,
+      /** A new environment under an Ask policy, whose Codex thread starts now. */
+      const openCodex = async (name: string) => {
+        const environment = await invoke<Environment>("create_environment", {
+          projectId: fixture.id,
+          name: `${name}-${Date.now()}`,
+          environmentType: "local",
+        });
+        environments.push(environment.id);
+        await invoke("update_environment_agent_settings", {
+          environmentId: environment.id,
+          agentSettings: { executionPolicy: { approvals: "ask" } },
+        });
+        await invoke("start_environment", { environmentId: environment.id });
+        const tabId = `${name}-tab`;
+        const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+          environmentId: environment.id,
+        });
+        await invoke("save_pane_layout", {
+          environmentId: environment.id,
+          expectedRevision: layout?.revision ?? 0,
+          layout: {
+            version: PANE_LAYOUT_VERSION,
+            containerId: null,
+            activePaneId: `${name}-pane`,
+            root: {
+              kind: "leaf",
+              id: `${name}-pane`,
+              activeTabId: tabId,
+              tabs: [
+                {
+                  id: tabId,
+                  type: "agent-native",
+                  nativeAgentData: {
+                    environmentId: environment.id,
+                    platform: "codex",
+                    isLocal: true,
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-      });
-      const identity = {
-        environmentId: environment.id,
-        agent: "codex",
-        logicalSessionKey: `env-${environment.id}:${tabId}`,
-      };
-      const projection = () => invoke<Projection | null>("get_native_agent_projection", identity);
-      await page.goto(status.browserUrl!);
-      await openEnvironment(environment.name);
-      await expect(page.getByTestId("shared-native-compose-bar")).toBeVisible({ timeout: 90_000 });
-      let sent = 0;
-      return {
-        send: async () => {
-          sent += 1;
-          const dispatched = await invoke<{ outcome: string; error?: string }>(
-            "dispatch_native_agent_intent",
-            {
+        });
+        const identity = {
+          environmentId: environment.id,
+          agent: "codex",
+          logicalSessionKey: `env-${environment.id}:${tabId}`,
+        };
+        const projection = () => invoke<Projection | null>("get_native_agent_projection", identity);
+        await page.goto(status.browserUrl!);
+        await openEnvironment(environment.name);
+        await expect(page.getByTestId("shared-native-compose-bar")).toBeVisible({
+          timeout: 90_000,
+        });
+        let sent = 0;
+        const running = (
+          await invoke<Environment[]>("get_environments", { projectId: fixture.id })
+        ).find((entry) => entry.id === environment.id);
+        expect(running?.worktreePath).toBeTruthy();
+        const probePath = path.join(running!.worktreePath!, PROBE_FILE);
+        return {
+          probePath,
+          send: async () => {
+            sent += 1;
+            const dispatched = await invoke<{
+              outcome: string;
+              error?: string;
+            }>("dispatch_native_agent_intent", {
               ...identity,
               requestId: `${name}-${sent}-${Date.now()}`,
               mode: "build",
               prompt: "Run the probe.",
-            },
-          );
-          expect(dispatched.outcome, dispatched.error).not.toBe("rejected");
-          await expect
-            .poll(async () => (await projection())?.turn.phase, { timeout: 60_000 })
-            .not.toBe("idle");
-        },
-        finished: () =>
-          expect
-            .poll(async () => (await projection())?.turn.phase, {
-              timeout: 120_000,
-              intervals: [1_000],
-            })
-            .toBe("idle"),
+            });
+            expect(dispatched.outcome, dispatched.error).not.toBe("rejected");
+            await expect
+              .poll(async () => (await projection())?.turn.phase, {
+                timeout: 60_000,
+              })
+              .not.toBe("idle");
+          },
+          finished: () =>
+            expect
+              .poll(async () => (await projection())?.turn.phase, {
+                timeout: 120_000,
+                intervals: [1_000],
+              })
+              .toBe("idle"),
+        };
       };
-    };
-    const approve = (target: Page) => target.getByRole("button", { name: "Approve", exact: true });
-    const openPermissions = async () => {
-      await page.getByRole("button", { name: "Global settings" }).click();
-      await page
-        .getByRole("navigation", { name: "Settings sections" })
-        .getByRole("button", { name: "Permissions", exact: true })
-        .click();
-      const region = page.getByRole("region", { name: "Rules outside Orkestrator" });
-      await expect(region).toBeVisible({ timeout: 30_000 });
-      return region;
-    };
+      const approve = (target: Page) =>
+        target.getByRole("button", { name: "Approve", exact: true });
+      const openPermissions = async () => {
+        await page.getByRole("button", { name: "Global settings" }).click();
+        await page
+          .getByRole("navigation", { name: "Settings sections" })
+          .getByRole("button", { name: "Permissions", exact: true })
+          .click();
+        const region = page.getByRole("region", {
+          name: "Rules outside Orkestrator",
+        });
+        await expect(region).toBeVisible({ timeout: 30_000 });
+        return region;
+      };
 
-    try {
       await test.step("the card offers plain approval, and Approve saves no rule", async () => {
         const codex = await openCodex("rules-card");
         await codex.send();
@@ -189,7 +204,9 @@ test.describe("Codex approval card and saved rules", () => {
         await expect(page.getByText(/command policy|network policy|Broader approval/)).toHaveCount(
           0,
         );
-        await page.screenshot({ path: test.info().outputPath("codex-card.png") });
+        await page.screenshot({
+          path: test.info().outputPath("codex-card.png"),
+        });
         await approve(page).click();
         await codex.finished();
         expect(rulesFiles()).toEqual([]);
@@ -214,11 +231,15 @@ test.describe("Codex approval card and saved rules", () => {
         await expect(file).toContainText("new Codex sessions ask again");
         await expect(file).toContainText("a session already running keeps the rule");
         await expect(file.getByRole("button")).toHaveCount(0);
-        await page.screenshot({ path: test.info().outputPath("rules-outside-orkestrator.png") });
+        await page.screenshot({
+          path: test.info().outputPath("rules-outside-orkestrator.png"),
+        });
 
         const codex = await openCodex("rules-saved");
+        rmSync(codex.probePath, { force: true });
         await codex.send();
         await codex.finished();
+        expect(existsSync(codex.probePath)).toBe(true);
         await expect(approve(page)).toHaveCount(0);
       });
 
@@ -236,10 +257,14 @@ test.describe("Codex approval card and saved rules", () => {
         expect(rulesFiles()).toEqual([]);
       });
     } finally {
-      model.child.kill();
       for (const environmentId of environments) {
         await invoke("stop_environment", { environmentId }).catch(() => undefined);
         await invoke("delete_environment", { environmentId }).catch(() => undefined);
+      }
+      try {
+        restoreFiles();
+      } finally {
+        model.child.kill();
       }
     }
   });

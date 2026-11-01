@@ -322,6 +322,9 @@ describe("a command node's deliverNow on this leaf", () => {
           agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 1 },
         });
         await deliver("Uses the first wake budget.");
+        // Settle this delivery before releasing another message. Otherwise its
+        // busy backoff can expire under suite load and consume the next turn.
+        await world.finishTurn(recipient);
       }
       const result = await deliver("Pending remote request.");
       expect(result.placement).toBe(held ? "inject-held" : "pending-inject");

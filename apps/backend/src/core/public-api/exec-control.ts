@@ -197,9 +197,10 @@ export async function stopEnvironmentExecWorkers(
   try {
     await stopGoalCheckWorkers(environmentId, context);
   } catch (error) {
-    // Like command workers below, goal checks die with their workspace or
-    // container; only callers that must prove them stopped are blocked.
-    if (options.requireStopped) throw error;
+    // Local workers are detached host processes: removing their workspace
+    // does not stop them. Only container teardown can tolerate a failed drain.
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (options.requireStopped || environment?.environmentType === "local") throw error;
     console.warn(`[public-api] Could not stop goal checks: ${boundedMessage(error)}`);
   }
   // Partial storage adapters (compatibility fixtures) have no operation store.

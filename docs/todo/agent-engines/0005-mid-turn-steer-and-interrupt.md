@@ -1,28 +1,32 @@
 # Mid-turn steer and interrupt
 
-Checked against `main` at `863b5782` (2026-10-27).
+Checked against `main` at `0658de646` (2026-11-01) for tasks 1, 2, 3 and 9; the
+other tasks were last checked at `863b5782` (2026-10-27).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 2, 3 and 9 rechecked
+2026-11-01 against `0658de646` at Agent SDK and CLI `0.3.314` / `2.1.314`.
 
 ### Tasks
 
-1. **Collapse Claude task-to-process maps**: move `backgroundTaskControls`, `backgroundTaskCandidates` and `settlingBackgroundTasks` into runtime state. Status: open.
-2. **Live Claude model catalogue**: read models from the live runtime instead of a separate control-only probe. Status: open (the file's description of the probe is out of date).
-3. **Warm first Claude turn**: avoid the cold spawn on an environment's first turn, then measure. Status: open.
+1. **Collapse Claude task-to-process maps**: move `backgroundTaskControls`, `backgroundTaskCandidates` and `settlingBackgroundTasks` into runtime state. Status: done (landed in #1331; rechecked 2026-11-01).
+2. **Live Claude model catalogue**: read models from the live runtime instead of a separate control-only probe. Status: done (live read landed in #1331; the probe cache and its bound added 2026-11-01).
+3. **Warm first Claude turn**: avoid the cold spawn on an environment's first turn, then measure. Status: closed, not adopted (measured 2026-11-01; see "`prewarm()` not adopted").
 4. **Cursor `SendOptions.local.force`**: use it for a wedged agent. Status: deferred (until wedged agents are seen).
 5. **OpenCode steer**: needs OpenCode 2.x and an expected-turn precondition. Status: blocked (OpenCode 2.x; pin is `1.19.4`).
 6. **Grok steer**: ACP has no mid-turn input; interjection stays behind its unsafe flag. Status: blocked (ACP / Grok).
 7. **Inactive-path steer qualification on Claude and Cursor**: steer, switch away, return, reload. Status: open.
 8. **Warm Claude CLI app-path qualification**: follow-up, mode and permission changes, parked approval and MCP change on one CLI through the app. Status: open.
-9. **Re-measure the first turn**: after task 3. Status: blocked (on task 3).
+9. **Re-measure the first turn**: after task 3. Status: open (task 3 changed nothing to re-measure; what is left is the split with a real login, which needs a billed turn).
 
 ### 1. Collapse Claude task-to-process maps
 
 **Problem.** Background-task stop and runtime teardown still go through per-control maps that, with one CLI per session, only ever name that session's runtime. The indirection is a source of ownership bugs.
 
 **Context.** Decision 6 in "Warm Claude runtime" kept these maps because they carry the strict-owner stop rule. 0013 (Claude prompt-stream state) touches the same files; 0004 says mid-session parameter changes ride on this item.
+
+**Recheck, 2026-11-01.** Done on `main`, so the rest of this section is history. None of the three names is left in the code. `runtime.tasks` (`ClaudeRuntimeTasks` in `session-manager-background-tasks.ts`) holds them, `backgroundTaskOwner` is the strict-owner rule and `endClaudeRuntime` settles them through `releaseClaudeRuntimeTasks`. The build took a third option to the two below: no generation counter, because a process releases everything it owned before a successor can start (see "Task ownership is the runtime's state"). No code changed here.
 
 **Investigation.** Still accurate. `backgroundTaskControls` is a `Map<string, ClaudeQueryControl>` on the session (`bridges/claude-bridge/src/types/index.ts:782`), filled at `services/session-manager-background-tasks.ts:449` and `services/session-manager-prompt-handlers/system-tasks.ts:162`; `backgroundTaskCandidates` at `session-manager-background-tasks.ts:91-119`. The three maps are referenced 37 times in `session-manager-background-tasks.ts` (792 lines) plus `session-manager-persistence.ts`, `session-manager-prompt-hooks.ts` and `session-manager-prompt-turn-lifecycle.ts`. `stopBackgroundTask` is at `session-manager-background-tasks.ts:623`, `endClaudeRuntime` at `session-manager-prompt-launch.ts:103`. Recent related work: #1264 (`e2130297`, resume cleanup of orphaned tasks).
 
@@ -49,6 +53,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The catalogue route is `bridges/claude-bridge/src/routes/config.ts:12`. AGENTS.md notes `createProbe()` spawns a whole CLI and is cached for commands and MCP.
 
+**Recheck, 2026-11-01.** The live read was on `main` already (`live-claude-control.ts`). It reads `initializationResult()` rather than `supportedModels()`, which at SDK 0.3.314 is still the same held promise (`supportedModels(){return(await this.initialization).models}` in `sdk.mjs`), so the two recommended options below give one answer. The cold probe was still uncached and unbounded. That part is now `claude-model-catalog.ts`; see "Model catalogue: what a read may reuse".
+
 **Investigation.** Partly out of date. The probe is no longer a `maxTurns: 0` query: `getAvailableModelCatalog` (`services/session-manager-interactions.ts:226`) now uses `controlOnlyQuery` (`services/control-only-query.ts`), whose header records that `maxTurns: 0` was dropped by SDK 0.3.309 and an empty prompt ran real model turns. The read is still a fresh CLI per call, uncached, and never consults a live runtime. `createProbe` is at `services/session-manager-catalog.ts:222`. Command discovery already reads `initializationResult()` from its probe for the version (`services/session-manager-commands.ts:511-514`), so the pattern exists.
 
 **Decisions.**
@@ -73,6 +79,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Problem.** The first turn in an environment pays a cold CLI spawn (4.3-5.2 s to first text in the recorded measurements) against about 1 s warm.
 
 **Context.** The file names `startup()` / `WarmQuery`; the memory budget is bounded by decision 2 (three idle CLIs).
+
+**Recheck, 2026-11-01.** Assessed at SDK `0.3.314` and closed without adopting either surface. The recommended `prewarm()` does not fit, for reasons the code and a measurement give; see "`prewarm()` not adopted". The surfaces are now at `sdk.d.ts:2904` (`prewarm`), `:9794` (`SpareProcess`), `:332` (`ClaimOptions`) and `:9970` (`startup`).
 
 **Investigation.** Still unused. Pinned SDK `0.3.309` has `startup()` (`bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:9882`), `WarmQuery` (:10269) and a newer `prewarm()` (:2889) that parks a spare process before its session is known and binds it with `SpareProcess.claim` (cwd, model, permission mode, settings overlay); it notes about 230-260 MB while parked and needs `options.cwd` for containerised hosts.
 
@@ -173,9 +181,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The table in "Warm Claude runtime" is the baseline.
 
-**Investigation.** Nothing to measure until task 3 lands.
+**Investigation.** Task 3 landed nothing, so there is no after to measure. `mise run measure:claude:first-turn` repeats the no-login timings on any build. The open question is the split of a real first turn; see "Needs verification".
 
-**Decisions.** None: follows task 3 with the same method (haiku, prompt to first assistant text, bridge level).
+**Decisions.** None: a real-login run keeps the same method (haiku, prompt to first assistant text, bridge level), and it is billed.
 
 Users should be able to redirect or stop a running turn without losing work, on
 every provider whose vendor surface allows it. Steer and the graceful abort
@@ -236,15 +244,18 @@ agent is seen.
     owned through `releaseClaudeRuntimeTasks`. Nothing about task ownership is
     kept on the session any more.
   - The model catalogue (`getAvailableModelCatalog` in
-    `session-manager-interactions.ts`), the account (`probeAccount` in
+    `claude-model-catalog.ts`), the account (`probeAccount` in
     `claude-sign-in.ts`) and the plan-usage windows (`readClaudePlanUsage` in
     `session-manager-catalog.ts`) ask an open runtime first
     (`live-claude-control.ts`): models and account from its held initialize
     answer, plan usage over its control channel. A control-only probe runs only
-    when no running CLI answers. MCP actions already used the session's live
+    when no running CLI answers. For models it is shared, bounded and reused
+    until the CLI file or the account changes; the static catalogue answers
+    only when the probe fails. MCP actions already used the session's live
     control and probe only without one.
-  - `startup()` / `WarmQuery` are not used: measured, the spawn and initialize
-    they save is about 0.2 s (see "Assumptions and decisions").
+  - `startup()`, `WarmQuery` and `prewarm()` are not used: measured, what they
+    save is small against a first turn, and a spare cannot resume or take a
+    launch decided by the prompt (see "Assumptions and decisions").
   - Bridge tests cover an idle steer reading back as `absent` and the
     interrupt receipt (`session-manager-catalog-steer.test.ts`,
     `routes/session.test.ts`), the warm runtime's join, window, cap,
@@ -447,7 +458,9 @@ Decisions, each the option built:
   signed-in live answer counts, because a signed-out one would keep the
   composer locked after a terminal login only a probe can see; a login revoked
   since is caught by the turn that fails (`noteClaudeAuthenticationFailure`).
-  The model list may lag a sign-in by up to the idle window. A CLI launched
+  A CLI launched under another account than the last account read saw no
+  longer answers for models (2026-11-01), so the list lags a sign-in only until
+  an account read notices it. A CLI launched
   without user and project settings (a coordinator) is skipped, because a
   probe reads those settings and they can narrow `availableModels`; one
   launched without local settings is accepted.
@@ -479,6 +492,111 @@ Decisions, each the option built:
 - **Cons.** The first turn in an environment still pays its spawn; with
   the bridge's own probes paging the binary in, that part is about 0.2 s.
 
+### Model catalogue: what a read may reuse (2026-11-01, task 2)
+
+- **Options.** (a) No cache: a probe per read when no CLI runs. (b) Cache keyed
+  by CLI and account, invalidated on change (the option marked recommended).
+  (c) Rely on the backend's own 5-minute catalogue cache.
+- **Choice: (b)**, in `claude-model-catalog.ts`. A read takes the first that
+  answers: a running CLI, the kept answer, one shared probe, the static
+  catalogue. The static answer reports `source: "fallback"` and is never kept.
+- **Why.** The backend's cache still costs a process every 5 minutes for as long
+  as a tab is open with no CLI running, and parallel reads each spawned their
+  own. The read also had no time limit of its own, which sharing a probe would
+  have made dangerous: a wedged CLI would have held every later read.
+- **What differs from the recommendation.**
+  - The key uses the CLI file's path, size and modified time instead of its
+    version, so checking it runs nothing (`--version` is a process).
+  - An hour's expiry is added as a backstop, because a terminal login with no
+    account read in between reports nothing.
+- **Decisions inside it.**
+  - The account comes from the same initialize answer, so it costs no request.
+    The answer is compared with the account the last account read saw, without
+    starting a read. A failed read says nothing and keeps the answer.
+  - Only a signed-in answer naming its account is kept. A signed-out list would
+    otherwise have to wait for the login to be noticed.
+  - A running CLI's answer is kept too, so the read after it is released spawns
+    nothing. It carries the same launch-time staleness as the live read.
+  - An explicit refresh (`POST /global/refresh-catalog`) drops the answer, and a
+    probe already running at that moment answers its reader without being kept.
+  - A probe gets 25 s, inside the backend's 30 s request limit.
+- **Pros.** At most one probe an hour per account and CLI with no running CLI,
+  against up to twelve; no process pile-up.
+- **Cons.** A model added server-side with no CLI or account change reaches users
+  after a refresh or within the hour. A coordinator's CLI is still skipped for
+  reads, as before.
+
+### `prewarm()` not adopted (2026-11-01, task 3)
+
+- **Measured.** `mise run measure:claude:first-turn`
+  (`claude-first-turn.live-probe.ts`): the pinned CLI and the real bridge against
+  a local scripted model, with a fake key and a throwaway `HOME`. No login, no
+  billed turn. The model answers at once, so each figure is what the turn pays
+  *before* the model: milliseconds to the first model request, median of five.
+  Two sessions on the same host: an earlier one (load not recorded) and one
+  saturated by parallel builds (load about 43):
+
+  | Case | Earlier: cold / spare / warm | Busy: cold / spare / warm |
+  | --- | --- | --- |
+  | SDK, bare | 128 / 54 / 8 | 986 / 355 / 66 |
+  | SDK, 3 stdio MCP servers | 169 / 91 / 9 | 1,284 / 416 / 56 |
+  | SDK, a 2 s MCP server, inline | 2,175 / 2,089 / – | 3,005 / 2,411 / 115 |
+  | SDK, a 2 s MCP server in `.mcp.json` | 2,140 / 2,077 / – | 2,727 / 2,284 / 106 |
+  | SDK, non-essential traffic on | 244–487 / 48–55 / – | 893 / 272 / 52 |
+  | Bridge route, bare | 197 / – / 21 | 1,296 / – / 173 |
+  | Bridge route, `.mcp.json` | 227 / – / 21 | 1,228 / – / 149 |
+
+  The earlier column took five runs except the 2 s and traffic rows (three). A
+  spare held 164–179 MB resident and was ready in about 100 ms (600 ms busy).
+  The first exec of the binary this session, on an external volume, took 2,582 ms.
+- **What a spare does.** It saves 75–630 ms: the process start. It made no model
+  request while parked; with non-essential traffic on it sent one `HEAD /api/hello`,
+  carrying only the fake key here.
+- **What it does not do.** A slow MCP server holds the first model call either
+  way: the spare's 2 s server still cost 2 s after 1.5 s parked, so it was not
+  connected ahead of the claim, despite the SDK's description.
+- **What the SDK refuses or fixes** (proved by `claude-first-turn.live.test.ts`,
+  `mise run verify:claude:first-turn-live`). `prewarm({ resume })` throws: "a spare
+  has none". A `sessionId` given at prewarm is kept, and `ClaimOptions` has no
+  `sessionId`, so a spare keeping the bridge's deterministic id belongs to one
+  session already, not to an environment.
+- **Options.** (a) The recommended `prewarm()` spare, claimed by the first prompt.
+  (b) `startup()` on tab open. (c) A spare only for a new session on a matching
+  profile. (d) Do not adopt, and close with this evidence.
+- **Choice: (d).**
+- **Why not the recommendation.** Against `claudeQueryOptions`:
+  - Every reopened conversation resumes, and a spare cannot.
+  - The first turn's `agentMcp` URL and bearer token are resolved per dispatch
+    (`resolveAgentMcp` in `native-agent-service.ts`) and `mcpServers` is fixed at
+    prewarm, so an ordinary first turn would miss the spare or start without the
+    Orkestrator tools a workflow result needs.
+  - `allowedTools`, `disallowedTools`, the read-only hook, the sandbox and
+    `allowDangerouslySkipPermissions` are fixed at prewarm and follow the prompt's
+    policy and approval mode. Claiming on a mismatch would run a turn with tools
+    pre-approved that the user did not choose; a miss wastes the spare.
+  - `env` carries the GitHub credential the turn's policy decides, also fixed.
+  - The bridge has no tab-open signal, and `prepareDispatch` arrives immediately
+    before the prompt, so it gives no lead time.
+  - `prewarm()` is still `@alpha`.
+  - (c) keeps all of this but the resume, for the same saving and a second launch
+    path into the turn lifecycle.
+- **Also tried, not adopted, one run each on the busy host, a 2 s server beside a
+  fast one.** `MCP_CONNECTION_NONBLOCKING=true`: 2,833 ms against 2,862, no gain.
+  `MCP_TIMEOUT=500`: 1,266 ms, but only by giving up on any server slower than
+  that, which a real server can be.
+- **The billing and account rule.** Nothing was built, so no warm process exists
+  to start a turn or hold an account. A future spare would need the proof above
+  that parking calls no model. It parks on the bridge's own login, and an account
+  switch replaces the bridge, so the spare would go with it.
+- **Pros.** No speculative 165–180 MB per tab, no second launch path, and no
+  chance of a claim running under a boundary the prompt did not ask for.
+- **Cons.** The first turn keeps its 0.1–0.6 s process start. The 4.3–5.2 s
+  against about 1 s in the "Warm Claude runtime" table is **not explained** by this
+  fixture: a no-login cold turn reached the model in about 0.2 s through the bridge.
+  The rest is outside what can be measured without a login (see "Needs verification").
+- **Reopen if** a real-login split shows a large part a spare would save, or the
+  SDK makes `claim()` accept `resume` and inline MCP servers.
+
 ### Cursor `force` deferred (2026-10-27, was Code item 4)
 
 - **Options.** (a) Send with `local.force` whenever a send finds an active
@@ -505,10 +623,13 @@ Decisions, each the option built:
   send two follow-ups into the same warm CLI, then stop the agent: it must stop
   (`ok`) and its snapshot settle; after the CLI is released, a stop for a task
   it owned must answer `no_control_channel`.
-- **First-turn cost split.** The 0.2 s spawn measurement used a bare
-  configuration with no MCP servers, plugins or login. How much of a 4–5 s
-  first turn with the bridge's real launch options is resume, MCP connects and
-  the first model call is not measured.
+- **First-turn cost split.** With no login and a scripted model, the bridge
+  reaches the model about 0.2 s after a prompt (1.3 s on a saturated host), and a slow MCP
+  server adds its whole start-up. How much of a 4–5 s first turn with a real
+  login is sign-in reads, real MCP servers, plugins, a new TLS connection, and the
+  first model call on an uncached prompt is not measured, because it takes a
+  billed turn. Run through the bridge with a real login on a throwaway profile,
+  and read `prewarm()`'s decision again against the result.
 
 ## Related
 

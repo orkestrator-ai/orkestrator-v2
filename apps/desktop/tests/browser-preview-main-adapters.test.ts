@@ -46,7 +46,7 @@ describe("browser preview main adapters", () => {
       logError,
     });
 
-    adapters.openExternal("https://example.com/success");
+    await adapters.openExternal("https://example.com/success");
     await flushPromises();
     expect(openExternal).toHaveBeenCalledWith("https://example.com/success");
     expect(logError).not.toHaveBeenCalled();
@@ -54,11 +54,13 @@ describe("browser preview main adapters", () => {
     openExternal.mockImplementationOnce(async () => {
       throw failure;
     });
-    adapters.openExternal("https://example.com/failure");
+    await expect(adapters.openExternal("https://example.com/failure")).rejects.toThrow(
+      "Could not open your browser.",
+    );
     await flushPromises();
     expect(logError).toHaveBeenCalledWith(
       "[BrowserPreview] Failed to open link externally:",
-      failure,
+      expect.objectContaining({ message: "Could not open your browser." }),
     );
   });
 });

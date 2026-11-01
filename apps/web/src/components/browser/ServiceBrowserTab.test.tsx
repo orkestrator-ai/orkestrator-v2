@@ -520,6 +520,19 @@ describe("service browser tabs", () => {
       expectStillOnTypedPath(typed);
     });
 
+    test("submitting the refused path again explicitly retries the native load", async () => {
+      const typed = await typeAgainstView();
+      typed.emitState({
+        ...viewState("/next", 3),
+        blockedNavigation: { host: "sso.example" },
+        sessionImport: { state: "idle" },
+      });
+      const address = screen.getByLabelText("Browser address") as HTMLInputElement;
+      expect(address.value).toBe("http://localhost:3000/sign-in");
+      fireEvent.submit(address.closest("form")!);
+      await waitFor(() => expect(typed.browserPreview.reload).toHaveBeenCalledWith("browser-1"));
+    });
+
     test("a redirect commits as a navigation and is followed", async () => {
       const typed = await typeAgainstView();
       typed.emitState({ ...viewState("/next", 3), loading: true });
@@ -615,6 +628,17 @@ describe("service browser tabs", () => {
       await renderWithState({ sessionImport: { state: "imported", cookies: 2, skipped: 1 } });
       expect(screen.getByRole("status").textContent).toContain("Copied 2 cookies; 1 could not");
       expect(screen.queryByRole("button", { name: "Bring sign-in back" })).toBeNull();
+    });
+
+    test("a refusal after copying replaces success with the host and retry actions", async () => {
+      await renderWithState({
+        ...blocked,
+        sessionImport: { state: "imported", cookies: 1, skipped: 0 },
+      });
+      expect(screen.getByRole("status").textContent).toContain("accounts.google.com can't open");
+      expect(screen.getByRole("status").textContent).not.toContain("Sign-in copied");
+      screen.getByRole("button", { name: "Bring sign-in back" });
+      screen.getByRole("button", { name: "Open in browser" });
     });
 
     test("a service the browser cannot reach cannot start the sign-in there", async () => {

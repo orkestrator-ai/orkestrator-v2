@@ -21,7 +21,7 @@ export interface InitializeBrowserPreviewsOptions {
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
   emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => void;
-  openExternal: (url: string) => void;
+  openExternal: (url: string) => Promise<void> | void;
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
   requestPreviewShortcut: (tabId: string, shortcut: AppShortcutId) => void;

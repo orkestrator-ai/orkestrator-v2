@@ -542,9 +542,15 @@ function ServicePreview({
       setAttachError(null);
       if (parsed.kind === "path") {
         stopAnnotationForPageChange();
+        const resubmitted = parsed.path === routeRef.current.path;
         setPath(parsed.path);
         persistPath(parsed.path);
-        if (mode === "compatibility") setIframeRevision((value) => value + 1);
+        if (resubmitted && nativeAttachedRef.current) {
+          void reloadBrowserPreview(tabId)
+            .then(applyNativeState)
+            .catch((error: unknown) => setAttachError(errorMessage(error)));
+        } else if (resubmitted) setAttachNonce((value) => value + 1);
+        if (!nativeBrowserPreview) setIframeRevision((value) => value + 1);
         return;
       }
       try {
@@ -575,7 +581,9 @@ function ServicePreview({
     },
     [
       address,
-      mode,
+      applyNativeState,
+      nativeBrowserPreview,
+      tabId,
       persistPath,
       retarget,
       service,
@@ -911,7 +919,10 @@ function ServicePreview({
               </DropdownMenuItem>
               {nativeState?.sessionImport && (
                 <DropdownMenuItem
-                  onSelect={() => setConfirmingSessionImport(true)}
+                  onSelect={() => {
+                    dialogOpenerRef.current = optionsTriggerRef.current;
+                    setConfirmingSessionImport(true);
+                  }}
                   className="gap-2"
                 >
                   <LogIn className="h-3.5 w-3.5" />
@@ -998,6 +1009,13 @@ function ServicePreview({
         applicationPort={service?.definition.applicationPort}
         onOpenChange={setConfirmingSessionImport}
         onConfirm={startSessionImport}
+        onCloseAutoFocus={(event) => {
+          const opener = dialogOpenerRef.current;
+          dialogOpenerRef.current = null;
+          if (!opener?.isConnected) return;
+          event.preventDefault();
+          opener.focus();
+        }}
       />
       {dialog === "register" || dialog === "edit" ? (
         <PreviewServiceDialog

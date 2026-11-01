@@ -368,13 +368,13 @@ export class PreviewTransportManager {
   /**
    * Store a browser's cookies in one service's partition. Ingress is always
    * `127.0.0.1` and cookies ignore ports, so they outlive a change of listener.
-   * A `Cookie` header carries no attributes, so each is HttpOnly and session
-   * lifetime is the application's to enforce; **Reset site data** removes them.
+   * A `Cookie` header carries no attributes: HttpOnly comes from the one-time
+   * page, and session lifetime is the application's to enforce; **Reset site data** removes them.
    * One the session refuses (a `__Host-` name over HTTP) counts as skipped.
    */
   async importSessionCookies(
     target: Pick<BrowserPreviewServiceTarget, "backendInstanceId" | "serviceId">,
-    cookies: Array<{ name: string; value: string }>,
+    cookies: Array<{ name: string; value: string; httpOnly?: boolean }>,
   ): Promise<{ imported: number; skipped: number }> {
     const store = this.options.sessionFor(this.options.partitionFor(target)).cookies;
     if (!store) throw previewFailure("unsupported");
@@ -386,7 +386,7 @@ export class PreviewTransportManager {
           name: cookie.name,
           value: cookie.value,
           path: "/",
-          httpOnly: true,
+          httpOnly: cookie.httpOnly ?? true,
           secure: false,
           sameSite: "lax",
           expirationDate,

@@ -1688,6 +1688,7 @@ describe("BrowserTab", () => {
     let navigation = 3;
     const native = installNativePreview({
       attach: mock(async (input: { url: string }) => previewState({ url: input.url, navigation })),
+      navigate: mock(async (_tabId: string, url: string) => previewState({ url, navigation })),
     });
     render(
       <BrowserTab

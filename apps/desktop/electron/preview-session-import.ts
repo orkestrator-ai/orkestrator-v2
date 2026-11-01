@@ -9,6 +9,7 @@ import { BROWSER_RESTRICTED_PORTS } from "./preview-external-forward.js";
 export interface ImportedCookie {
   name: string;
   value: string;
+  httpOnly?: boolean;
 }
 
 export interface SessionCookieWriteResult {
@@ -25,9 +26,12 @@ export type PreviewSessionImportResult =
 
 export interface PreviewSessionImportOptions {
   openExternal: (url: string) => Promise<void> | void;
-  /** Store the cookies. Only names and values are known: a `Cookie` header has no attributes. */
+  /** Store header names/values with the script visibility reported by the one-time page. */
   write: (cookies: ImportedCookie[]) => Promise<SessionCookieWriteResult>;
   onSettled: (result: PreviewSessionImportResult) => void;
+  /** Collect at this application path, including cookies scoped to its ancestors. */
+  applicationPath?: string;
+  signal?: AbortSignal;
   ttlMs?: number;
 }
 
@@ -99,19 +103,27 @@ export function isSessionImportRequest(request: IncomingMessage, port: number): 
   return !purpose.includes("prefetch") && !purpose.includes("prerender");
 }
 
-function page(response: ServerResponse, status: number, title: string, detail: string): void {
+function page(
+  response: ServerResponse,
+  status: number,
+  title: string,
+  detail: string,
+  script?: string,
+): void {
+  if (response.destroyed) return;
+  const nonce = randomBytes(16).toString("base64url");
   response.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
     "x-frame-options": "DENY",
-    "content-security-policy":
-      "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+    "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'`,
   });
   response.end(
     `<!doctype html><meta charset="utf-8"><title>${title}</title>` +
       `<body style="font:15px/1.5 system-ui;max-width:32rem;margin:15vh auto;padding:0 1.5rem">` +
-      `<h1 style="font-size:20px">${title}</h1><p>${detail}</p>`,
+      `<h1 style="font-size:20px">${title}</h1><p>${detail}</p>` +
+      (script ? `<script nonce="${nonce}">${script}</script>` : ""),
   );
 }
 
@@ -162,32 +174,40 @@ function closeServers(servers: Server[]): void {
  * any `localhost` port receives what the browser holds for the application,
  * HttpOnly session cookies included.
  *
- * The listener exists for one import, answers one random path, and closes when
- * it has been used or has expired. Cookie values are handed to `write` and go
- * nowhere else: not to the page, not to a log.
+ * The listener exists for one import and answers one application path with a
+ * random query credential. It closes after use or expiry. Cookie values go to
+ * `write` and are never echoed into HTML, logs or state events.
  */
 export async function startPreviewSessionImport(
   options: PreviewSessionImportOptions,
 ): Promise<PreviewSessionImportHandle> {
-  const path = `/session-import/${randomBytes(32).toString("base64url")}`;
+  // A query credential lets the browser send cookies for the actual app path.
+  const appUrl = new URL(options.applicationPath ?? "/", "http://localhost");
+  if (appUrl.origin !== "http://localhost") throw new Error("Invalid application path.");
+  const path = `${appUrl.pathname}?session-import=${randomBytes(32).toString("base64url")}`;
   let port = 0;
   let servers: Server[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   let finished = false;
+  let cancelled = false;
+  let opened = false;
+  let claimed = false;
   const finish = () => {
     finished = true;
     if (timer) clearTimeout(timer);
     timer = null;
   };
   const settle = (response: ServerResponse | null, result: PreviewSessionImportResult) => {
+    options.signal?.removeEventListener("abort", cancel);
     const close = () => closeServers(servers);
-    if (response && !response.writableFinished) response.once("close", close);
+    if (response && !response.writableFinished && !response.destroyed && !response.closed)
+      response.once("close", close);
     else close();
-    options.onSettled(result);
+    if (!cancelled) options.onSettled(result);
   };
 
   const handler = (request: IncomingMessage, response: ServerResponse) => {
-    if (finished) {
+    if (finished || claimed) {
       page(response, 410, "This link has ended", "Start again from Orkestrator.");
       return;
     }
@@ -195,41 +215,93 @@ export async function startPreviewSessionImport(
       page(response, 404, "Not found", "This page has nothing here.");
       return;
     }
-    if (!isSessionImportRequest(request, port)) {
-      page(response, 403, "Open this link directly", "Start again from Orkestrator.");
-      return;
-    }
-    finish();
-    const { cookies, skipped } = parseBrowserCookies(request.headers.cookie);
-    if (cookies.length === 0) {
+    if (request.method === "GET" && !opened && isSessionImportRequest(request, port)) {
+      opened = true;
       page(
         response,
         200,
-        "No sign-in found",
-        "This browser has no cookies for localhost. Sign in to your app here first, then try again from Orkestrator.",
+        "Copying sign-in",
+        "Keep this page open while Orkestrator copies your cookies.",
+        `fetch(location.href, {method:"POST", credentials:"same-origin", body:document.cookie})
+          .then(r => r.text()).then(html => {document.open(); document.write(html); document.close();})
+          .catch(() => {document.querySelector("p").textContent = "This link has ended. Try again from Orkestrator.";});`,
       );
-      settle(response, { kind: "empty" });
       return;
     }
-    options.write(cookies).then(
-      (written) => {
-        if (written.imported === 0) {
-          page(response, 200, "Nothing copied", "Orkestrator could not use these cookies.");
-          settle(response, { kind: "empty" });
-          return;
-        }
-        page(response, 200, "Sign-in copied", "You can close this tab and return to Orkestrator.");
-        settle(response, {
-          kind: "imported",
-          imported: written.imported,
-          skipped: written.skipped + skipped,
-        });
-      },
-      () => {
-        page(response, 500, "Could not copy your sign-in", "Try again from Orkestrator.");
-        settle(response, { kind: "failed" });
-      },
-    );
+    if (
+      !opened ||
+      request.method !== "POST" ||
+      request.headers.host !== `localhost:${port}` ||
+      request.headers.origin !== `http://localhost:${port}`
+    ) {
+      page(response, 403, "Open this link directly", "Start again from Orkestrator.");
+      return;
+    }
+    // Reserve the one use before reading the bounded body. The lifetime timer
+    // still closes a client that never finishes sending its readable cookies.
+    claimed = true;
+    let body = "";
+    let bytes = 0;
+    request.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > MAX_HEADER_BYTES) {
+        finish();
+        settle(null, { kind: "failed" });
+      } else body += chunk.toString("utf8");
+    });
+    request.on("error", () => {
+      if (!finished) {
+        finish();
+        settle(null, { kind: "failed" });
+      }
+    });
+    request.on("end", () => {
+      if (finished) return;
+      finish();
+      const { cookies, skipped } = parseBrowserCookies(request.headers.cookie);
+      const readable = parseBrowserCookies(body).cookies;
+      for (const cookie of cookies) {
+        cookie.httpOnly = !readable.some(
+          (item) => item.name === cookie.name && item.value === cookie.value,
+        );
+      }
+      if (cookies.length === 0) {
+        page(
+          response,
+          200,
+          "No sign-in found",
+          "This browser has no cookies for localhost. Sign in to your app here first, then try again from Orkestrator.",
+        );
+        settle(response, { kind: "empty" });
+        return;
+      }
+      Promise.resolve()
+        .then(() => (cancelled ? { imported: 0, skipped: 0 } : options.write(cookies)))
+        .then(
+          (written) => {
+            if (written.imported === 0) {
+              page(response, 200, "Nothing copied", "Orkestrator could not use these cookies.");
+              settle(response, { kind: "empty" });
+              return;
+            }
+            page(
+              response,
+              200,
+              "Sign-in copied",
+              "You can close this tab and return to Orkestrator.",
+            );
+            settle(response, {
+              kind: "imported",
+              imported: written.imported,
+              skipped: written.skipped + skipped,
+            });
+          },
+          () => {
+            page(response, 500, "Could not copy your sign-in", "Try again from Orkestrator.");
+            settle(response, { kind: "failed" });
+          },
+        );
+    });
   };
 
   const bound = await bindLoopback(handler);
@@ -240,18 +312,22 @@ export async function startPreviewSessionImport(
     settle(null, { kind: "expired" });
   }, options.ttlMs ?? IMPORT_TTL_MS);
   timer.unref?.();
+  const cancel = () => {
+    cancelled = true;
+    finish();
+    closeServers(servers);
+    options.signal?.removeEventListener("abort", cancel);
+  };
+  options.signal?.addEventListener("abort", cancel, { once: true });
+  if (options.signal?.aborted) {
+    cancel();
+    return { cancel };
+  }
   try {
     await options.openExternal(`http://localhost:${port}${path}`);
   } catch (error) {
-    finish();
-    closeServers(servers);
+    cancel();
     throw error;
   }
-  return {
-    cancel: () => {
-      if (finished) return;
-      finish();
-      closeServers(servers);
-    },
-  };
+  return { cancel };
 }

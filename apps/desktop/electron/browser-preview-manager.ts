@@ -91,6 +91,7 @@ interface ManagedPreview {
   blockedHost: string | null;
   sessionImport: BrowserPreviewSessionImport;
   sessionImportHandle: PreviewSessionImportHandle | null;
+  sessionImportAbort: AbortController | null;
   /** Advances on every start and dismissal, so a superseded import cannot report. */
   sessionImportRun: number;
 }
@@ -129,7 +130,7 @@ export interface BrowserPreviewManagerOptions {
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
   emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => void;
-  openExternal: (url: string) => void;
+  openExternal: (url: string) => Promise<void> | void;
   writeClipboardText: (text: string) => void;
   focusAddressBar: (tabId: string) => void;
   /**
@@ -262,6 +263,8 @@ function validateBounds(bounds: BrowserPreviewBounds, zoomFactor: number): Recta
 }
 
 export class BrowserPreviewManager {
+  private readonly serviceCookieWrites = new Map<string, Promise<SessionCookieWriteResult>>();
+  private readonly resettingServices = new Set<string>();
   private readonly previews = new Map<string, ManagedPreview>();
   private readonly clipboardUserActivations = new WeakMap<WebContents, number>();
   /**
@@ -530,15 +533,40 @@ export class BrowserPreviewManager {
   async resetServiceSiteData(target: BrowserPreviewServiceTarget): Promise<void> {
     const transport = this.options.transport;
     if (!transport) throw previewFailure("unsupported");
-    await transport.resetSiteData(target);
-    for (const preview of this.previews.values()) {
-      const owner = preview.service ? transport.target(preview.service.key) : null;
-      if (
-        owner?.serviceId === target.serviceId &&
-        owner.backendInstanceId === target.backendInstanceId
-      ) {
-        preview.view.webContents.reload();
+    const key = `${target.backendInstanceId}:${target.serviceId}`;
+    if (this.resettingServices.has(key))
+      throw previewFailure("configuration-conflict", {
+        message: "Site data is already being cleared.",
+      });
+    this.resettingServices.add(key);
+    try {
+      for (const [tabId, preview] of this.previews) {
+        const owner = preview.service && transport.target(preview.service.key);
+        if (
+          owner?.serviceId !== target.serviceId ||
+          owner.backendInstanceId !== target.backendInstanceId
+        )
+          continue;
+        this.stopSessionImport(preview);
+        preview.sessionImport = { state: "idle" };
+        preview.blockedHost = null;
+        this.emit(tabId, preview);
       }
+      // Cookie stores cannot abort a set already in progress. Clear only after
+      // every admitted write has settled, while refusing new import admission.
+      const pending = this.serviceCookieWrites.get(key);
+      if (pending) await Promise.allSettled([pending]);
+      await transport.resetSiteData(target);
+      for (const [tabId, preview] of this.previews) {
+        const owner = preview.service && transport.target(preview.service.key);
+        if (
+          owner?.serviceId === target.serviceId &&
+          owner.backendInstanceId === target.backendInstanceId
+        )
+          this.reload(tabId);
+      }
+    } finally {
+      this.resettingServices.delete(key);
     }
   }
 
@@ -557,7 +585,14 @@ export class BrowserPreviewManager {
         message: "This preview cannot copy a sign-in from your browser.",
       });
     }
+    const writeKey = `${target.backendInstanceId}:${target.serviceId}`;
+    if (this.resettingServices.has(writeKey) || this.serviceCookieWrites.has(writeKey))
+      throw previewFailure("configuration-conflict", {
+        message: "This service’s site data is being updated. Try again shortly.",
+      });
     this.stopSessionImport(preview);
+    const controller = new AbortController();
+    preview.sessionImportAbort = controller;
     const run = preview.sessionImportRun;
     const serviceKey = preview.service.key;
     const current = () => this.previews.get(tabId) === preview && preview.sessionImportRun === run;
@@ -566,7 +601,23 @@ export class BrowserPreviewManager {
     try {
       const handle = await startPreviewSessionImport({
         openExternal: (url) => this.options.openExternal(url),
-        write: (cookies) => write(target, cookies),
+        applicationPath: new URL(preview.requestedUrl).pathname,
+        signal: controller.signal,
+        write: async (cookies) => {
+          if (
+            !current() ||
+            this.resettingServices.has(writeKey) ||
+            this.serviceCookieWrites.has(writeKey)
+          )
+            throw new Error("Import cancelled.");
+          const pending = write(target, cookies);
+          this.serviceCookieWrites.set(writeKey, pending);
+          try {
+            return await pending;
+          } finally {
+            this.serviceCookieWrites.delete(writeKey);
+          }
+        },
         onSettled: (result) => {
           if (!current()) return;
           preview.sessionImportHandle = null;
@@ -577,8 +628,8 @@ export class BrowserPreviewManager {
               skipped: result.skipped,
             };
             preview.blockedHost = null;
-            for (const other of this.previews.values()) {
-              if (other.service?.key === serviceKey) other.view.webContents.reload();
+            for (const [otherTabId, other] of this.previews) {
+              if (other.service?.key === serviceKey) this.reload(otherTabId);
             }
           } else {
             preview.sessionImport = { state: result.kind };
@@ -586,7 +637,8 @@ export class BrowserPreviewManager {
           this.emit(tabId, preview);
         },
       });
-      if (current()) preview.sessionImportHandle = handle;
+      if (current() && preview.sessionImport.state === "waiting")
+        preview.sessionImportHandle = handle;
       else handle.cancel();
     } catch {
       // Listener and browser-launch errors can name local paths; the state is enough.
@@ -613,7 +665,7 @@ export class BrowserPreviewManager {
    * sign-in provider's registered callback returns. The renderer names the port
    * because only the service snapshot knows a container's published one.
    */
-  openServiceSignIn(tabId: string, port: number): BrowserPreviewState {
+  async openServiceSignIn(tabId: string, port: number): Promise<BrowserPreviewState> {
     const preview = this.get(tabId);
     const transport = this.options.transport;
     if (!preview.service || !transport?.sessionImportAvailable?.()) {
@@ -625,13 +677,19 @@ export class BrowserPreviewManager {
       throw previewFailure("invalid-request", { message: "Invalid service port." });
     }
     const contents = preview.view.webContents;
-    const path = transport.describe(contents.getURL() || preview.requestedUrl)?.path ?? "/";
-    this.options.openExternal(`http://localhost:${port}${path}`);
+    const path = transport.describe(preview.requestedUrl || contents.getURL())?.path ?? "/";
+    try {
+      await this.options.openExternal(`http://localhost:${port}${path}`);
+    } catch {
+      throw new Error("Could not open your browser.");
+    }
     return this.snapshot(tabId, preview);
   }
 
   private stopSessionImport(preview: ManagedPreview): void {
     preview.sessionImportRun += 1;
+    preview.sessionImportAbort?.abort();
+    preview.sessionImportAbort = null;
     preview.sessionImportHandle?.cancel();
     preview.sessionImportHandle = null;
   }
@@ -756,7 +814,11 @@ export class BrowserPreviewManager {
     preview.error = null;
     preview.loading = true;
     this.advanceDocument(tabId, preview);
-    preview.view.webContents.reload();
+    if (preview.service) {
+      // reload() has no target if the first document never committed. Retry
+      // the requested application URL explicitly, including refused paths.
+      void this.load(tabId, preview, preview.requestedUrl);
+    } else preview.view.webContents.reload();
     return this.snapshot(tabId, preview);
   }
 
@@ -937,6 +999,7 @@ export class BrowserPreviewManager {
       blockedHost: null,
       sessionImport: { state: "idle" },
       sessionImportHandle: null,
+      sessionImportAbort: null,
       sessionImportRun: 0,
       ...(service ? { service: service.service } : {}),
     };
@@ -1027,7 +1090,9 @@ export class BrowserPreviewManager {
                     this.emit(tabId, preview);
                   });
               } else if (externalBrowserUrl) {
-                this.options.openExternal(params.linkURL);
+                void Promise.resolve(this.options.openExternal(params.linkURL)).catch(
+                  () => undefined,
+                );
               }
             },
           },

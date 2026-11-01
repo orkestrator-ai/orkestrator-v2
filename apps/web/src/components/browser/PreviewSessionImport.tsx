@@ -23,6 +23,12 @@ function notice(
   sessionImport: BrowserPreviewSessionImport,
   blockedHost: string | undefined,
 ): { title: string; detail: string; retry: boolean } | null {
+  if (blockedHost && sessionImport.state !== "waiting")
+    return {
+      title: `${blockedHost} can't open inside a preview.`,
+      detail: "To sign in, use your browser, then bring that session here.",
+      retry: true,
+    };
   switch (sessionImport.state) {
     case "waiting":
       return {
@@ -58,13 +64,7 @@ function notice(
         retry: true,
       };
     case "idle":
-      return blockedHost
-        ? {
-            title: `${blockedHost} can't open inside a preview.`,
-            detail: "To sign in, use your browser, then bring that session here.",
-            retry: true,
-          }
-        : null;
+      return null;
   }
 }
 
@@ -140,22 +140,25 @@ export function PreviewSessionImportDialog({
   applicationPort,
   onOpenChange,
   onConfirm,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   applicationPort: number | undefined;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
+  onCloseAutoFocus?: (event: Event) => void;
 }): ReactNode {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <AlertDialogHeader>
           <AlertDialogTitle>Copy your sign-in from your browser?</AlertDialogTitle>
           <AlertDialogDescription>
-            Your default browser opens a one-time page, and every cookie it holds for localhost is
-            copied into this preview. That includes cookies from your other local apps, and{" "}
-            {applicationPort ? `the app on port ${applicationPort}` : "this app"} will receive all
-            of them. Reset this site's data removes them.
+            Your default browser opens a one-time page, and every cookie available at this page’s
+            path on localhost is copied into this preview. That includes cookies from your other
+            local apps, and {applicationPort ? `the app on port ${applicationPort}` : "this app"}{" "}
+            will receive all of them. Cookies at other paths require opening that path in the
+            preview and copying again. Reset this site's data removes them.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

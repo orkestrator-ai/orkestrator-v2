@@ -28,10 +28,10 @@ const BROWSER_NAVIGATION = {
 };
 
 /** A request as a browser sends it: `Host` and `Cookie` cannot be set through `fetch`. */
-function visit(
+function requestPage(
   url: string,
   headers: Record<string, string>,
-  options: { method?: string; address?: string } = {},
+  options: { method?: string; address?: string; body?: string } = {},
 ): Promise<PageResponse> {
   const parsed = new URL(url);
   return new Promise((resolve, reject) => {
@@ -39,7 +39,7 @@ function visit(
       {
         host: options.address ?? "127.0.0.1",
         port: Number(parsed.port),
-        path: parsed.pathname,
+        path: parsed.pathname + parsed.search,
         method: options.method ?? "GET",
         agent: false,
         headers: { host: parsed.host, ...headers },
@@ -53,8 +53,26 @@ function visit(
       },
     );
     request.on("error", reject);
-    request.end();
+    request.end(options.body);
   });
+}
+
+async function visit(
+  url: string,
+  headers: Record<string, string>,
+  options: { method?: string; address?: string; body?: string } = {},
+): Promise<PageResponse> {
+  const page = await requestPage(url, headers, options);
+  if (page.status !== 200 || !page.body.includes("Copying sign-in")) return page;
+  return requestPage(
+    url,
+    {
+      host: new URL(url).host,
+      origin: new URL(url).origin,
+      ...(headers.cookie ? { cookie: headers.cookie } : {}),
+    },
+    { ...options, method: "POST", body: options.body ?? "" },
+  );
 }
 
 describe("parseBrowserCookies", () => {
@@ -136,7 +154,9 @@ describe("startPreviewSessionImport", () => {
       cookie: "session=secret-value; orkestrator_gateway_auth=gateway-value",
     });
     expect(page.status).toBe(200);
-    expect(first.write).toHaveBeenCalledWith([{ name: "session", value: "secret-value" }]);
+    expect(first.write).toHaveBeenCalledWith([
+      { name: "session", value: "secret-value", httpOnly: true },
+    ]);
     expect(first.results).toEqual([{ kind: "imported", imported: 1, skipped: 1 }]);
     expect(page.body).not.toContain("secret-value");
     expect(page.body).not.toContain("gateway-value");
@@ -257,6 +277,106 @@ describe("startPreviewSessionImport", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  test("copies the requested app path and preserves script readability", async () => {
+    let url = "";
+    const write = mock(async (cookies: ImportedCookie[]) => ({
+      imported: cookies.length,
+      skipped: 0,
+    }));
+    const handle = await startPreviewSessionImport({
+      applicationPath: "/app/account?private=value",
+      openExternal: (value) => {
+        url = value;
+      },
+      write,
+      onSettled: () => undefined,
+    });
+    handles.push(handle);
+    expect(new URL(url).pathname).toBe("/app/account");
+    expect(url).not.toContain("private");
+    await visit(
+      url,
+      { ...BROWSER_NAVIGATION, cookie: "session=secret; csrf=readable" },
+      { body: "csrf=readable" },
+    );
+    expect(write).toHaveBeenCalledWith([
+      { name: "session", value: "secret", httpOnly: true },
+      { name: "csrf", value: "readable", httpOnly: false },
+    ]);
+  });
+
+  test("a POST must follow the navigation and come from the listener's origin", async () => {
+    const { url, write } = await start();
+    const headers = { origin: new URL(url).origin, cookie: "session=secret" };
+    expect((await requestPage(url, headers, { method: "POST" })).status).toBe(403);
+    await requestPage(url, BROWSER_NAVIGATION);
+    expect(
+      (
+        await requestPage(
+          url,
+          { ...headers, origin: "http://attacker.example" },
+          { method: "POST" },
+        )
+      ).status,
+    ).toBe(403);
+    expect(write).not.toHaveBeenCalled();
+    await requestPage(url, headers, { method: "POST" });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  test("an oversized readable-cookie body closes without writing and reports failure", async () => {
+    const { url, write, results } = await start();
+    await requestPage(url, BROWSER_NAVIGATION);
+    await requestPage(
+      url,
+      { origin: new URL(url).origin, cookie: "a=1" },
+      { method: "POST", body: "x".repeat(33 * 1024) },
+    ).catch(() => undefined);
+    expect(write).not.toHaveBeenCalled();
+    expect(results).toEqual([{ kind: "failed" }]);
+    await refusesConnection(url);
+  });
+
+  test("disconnecting while a write is pending still closes the listener", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { url, results } = await start({
+      write: async () => {
+        entered();
+        await gate;
+        return { imported: 1, skipped: 0 };
+      },
+    });
+    await requestPage(url, BROWSER_NAVIGATION);
+    const parsed = new URL(url);
+    const request = httpRequest(
+      {
+        host: "127.0.0.1",
+        port: parsed.port,
+        path: parsed.pathname + parsed.search,
+        method: "POST",
+        headers: { host: parsed.host, origin: parsed.origin, cookie: "session=secret" },
+      },
+      (response) => response.resume(),
+    );
+    const disconnected = new Promise<void>((resolve) => request.on("close", resolve));
+    request.on("error", () => undefined);
+    request.end();
+    await writing;
+    request.destroy();
+    await disconnected;
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(results).toEqual([{ kind: "imported", imported: 1, skipped: 0 }]);
+    await refusesConnection(url);
+  });
+
   test("a browser that fails to open leaves no listener behind", async () => {
     let opened = "";
     await expect(
@@ -320,6 +440,18 @@ describe("PreviewTransportManager session cookies", () => {
     });
     expect(details).not.toHaveProperty("domain");
     expect(details.expirationDate).toBeGreaterThan(before);
+  });
+
+  test("keeps a CSRF cookie readable while protecting the session cookie", async () => {
+    const { manager, set } = transport();
+    await manager.importSessionCookies(target, [
+      { name: "session", value: "secret", httpOnly: true },
+      { name: "csrf", value: "token", httpOnly: false },
+    ]);
+    expect(set.mock.calls.map(([details]) => details)).toMatchObject([
+      { name: "session", httpOnly: true },
+      { name: "csrf", httpOnly: false },
+    ]);
   });
 
   test("a cookie the session refuses counts as skipped, not as a failure", async () => {

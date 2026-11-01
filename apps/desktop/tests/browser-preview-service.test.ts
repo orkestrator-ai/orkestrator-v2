@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { request as httpRequest } from "node:http";
+import { createBrowserPreviewMainAdapters } from "../electron/browser-preview-main-adapters";
 import { describe, expect, mock, test } from "bun:test";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
@@ -121,7 +122,7 @@ function harness() {
   };
   const emitState = mock(() => undefined);
   const emitOpenLink = mock(() => undefined);
-  const openExternal = mock(() => undefined);
+  const openExternal = mock(async (_url: string): Promise<void> => undefined);
   const menuTemplates: MenuItemConstructorOptions[][] = [];
   const openServiceExternally = mock(async (_target: BrowserPreviewServiceTarget) => undefined);
   const manager = new BrowserPreviewManager({
@@ -139,9 +140,14 @@ function harness() {
         contentView: { addChildView: () => undefined, removeChildView: () => undefined },
         webContents: { getZoomFactor: () => 1 },
       }) as never,
+    ...createBrowserPreviewMainAdapters({
+      emitToRenderers: () => undefined,
+      openExternal,
+      writeClipboardText: () => undefined,
+      logError: () => undefined,
+    }),
     emitState,
     emitOpenLink,
-    openExternal,
     writeClipboardText: () => undefined,
     focusAddressBar: () => undefined,
     requestPreviewShortcut: () => undefined,
@@ -462,7 +468,7 @@ describe("service previews in BrowserPreviewManager", () => {
     await manager.attach({ tabId: "tab", service: service("svc_aaaaaaaa"), bounds, visible: true });
     await manager.resetServiceSiteData(service("svc_aaaaaaaa"));
     expect(transport.resetSiteData).toHaveBeenCalled();
-    expect(views[0]!.webContents.reload).toHaveBeenCalled();
+    expect(views[0]!.webContents.loadURL).toHaveBeenCalledTimes(2);
   });
 
   test("opening a service link externally goes through the preview origin, never the ingress URL", async () => {
@@ -615,16 +621,21 @@ describe("service previews in BrowserPreviewManager", () => {
 });
 
 describe("copying a browser sign-in into a service preview", () => {
-  const visit = (url: string, cookie?: string) =>
+  const requestPage = (url: string, cookie?: string, post = false) =>
     new Promise<number>((resolve, reject) => {
       const parsed = new URL(url);
       const request = httpRequest(
         {
           host: "127.0.0.1",
           port: Number(parsed.port),
-          path: parsed.pathname,
+          path: parsed.pathname + parsed.search,
           agent: false,
-          headers: { host: parsed.host, ...(cookie ? { cookie } : {}) },
+          method: post ? "POST" : "GET",
+          headers: {
+            host: parsed.host,
+            ...(post ? { origin: parsed.origin } : {}),
+            ...(cookie ? { cookie } : {}),
+          },
         },
         (response) => {
           response.resume();
@@ -634,6 +645,11 @@ describe("copying a browser sign-in into a service preview", () => {
       request.on("error", reject);
       request.end();
     });
+
+  const visit = async (url: string, cookie?: string) => {
+    const status = await requestPage(url, cookie);
+    return status === 200 ? requestPage(url, cookie, true) : status;
+  };
 
   async function attached(serviceId = "svc_aaaaaaaa", tabId = "tab", path = "/sign-in") {
     const fixture = harness();
@@ -706,7 +722,7 @@ describe("copying a browser sign-in into a service preview", () => {
     expect(state.sessionImport).toBeUndefined();
     expect(state.blockedNavigation).toBeUndefined();
     await expect(fixture.manager.startSessionImport("tab")).rejects.toThrow("cannot copy");
-    expect(() => fixture.manager.openServiceSignIn("tab", 3000)).toThrow("cannot open");
+    await expect(fixture.manager.openServiceSignIn("tab", 3000)).rejects.toThrow("cannot open");
     expect(fixture.openExternal).not.toHaveBeenCalled();
   });
 
@@ -746,16 +762,152 @@ describe("copying a browser sign-in into a service preview", () => {
 
     expect(transport.importSessionCookies).toHaveBeenCalledWith(
       expect.objectContaining({ backendInstanceId: "bk_backend_1", serviceId: "svc_aaaaaaaa" }),
-      [{ name: "session", value: "abc" }],
+      [{ name: "session", value: "abc", httpOnly: true }],
     );
-    expect(views[0]!.webContents.reload).toHaveBeenCalledTimes(1);
-    expect(views[1]!.webContents.reload).toHaveBeenCalledTimes(1);
+    expect(views[0]!.webContents.loadURL).toHaveBeenCalledTimes(2);
+    expect(views[1]!.webContents.loadURL).toHaveBeenCalledTimes(2);
     expect(views[2]!.webContents.reload).not.toHaveBeenCalled();
     // A tab that was unmounted while the browser opened reads this on return.
     const state = manager.setBounds("tab", bounds);
     expect(state.sessionImport).toEqual({ state: "imported", cookies: 1, skipped: 0 });
     expect(state.blockedNavigation).toBeUndefined();
     expect(JSON.stringify(state)).not.toContain("abc");
+  });
+
+  test.each(["tab", "same-service"])(
+    "reset from %s cancels outstanding links and clears notices",
+    async (resetTab) => {
+      const fixture = await attached();
+      await fixture.manager.attach({
+        tabId: "same-service",
+        service: service("svc_aaaaaaaa"),
+        bounds,
+        visible: true,
+      });
+      await fixture.manager.startSessionImport("tab");
+      const link = openedLink(fixture);
+      const target = fixture.manager.setBounds(resetTab, bounds).service!;
+      await fixture.manager.resetServiceSiteData(service(target.serviceId));
+      await expect(visit(link, "session=old")).rejects.toThrow();
+      expect(fixture.transport.importSessionCookies).not.toHaveBeenCalled();
+      expect(fixture.manager.setBounds("tab", bounds).sessionImport).toEqual({ state: "idle" });
+    },
+  );
+
+  test("reset waits for an in-flight write and refuses imports until storage is clear", async () => {
+    const fixture = await attached();
+    let release!: () => void;
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const order: string[] = [];
+    fixture.transport.importSessionCookies = mock(async () => {
+      entered();
+      await gate;
+      order.push("write");
+      return { imported: 1, skipped: 0 };
+    });
+    fixture.transport.resetSiteData = mock(async () => {
+      order.push("clear");
+    });
+    await fixture.manager.startSessionImport("tab");
+    const request = visit(openedLink(fixture), "session=old").catch(() => 0);
+    await writing;
+    const reset = fixture.manager.resetServiceSiteData(service("svc_aaaaaaaa"));
+    expect(order).toEqual([]);
+    await expect(fixture.manager.startSessionImport("tab")).rejects.toThrow();
+    release();
+    await reset;
+    await request;
+    expect(order).toEqual(["write", "clear"]);
+    expect(fixture.manager.setBounds("tab", bounds).sessionImport).toEqual({ state: "idle" });
+    expect(fixture.views[0]!.webContents.loadURL).toHaveBeenCalledTimes(2);
+  });
+
+  test.each(["dismiss", "close"])(
+    "%s during a write closes the listener and suppresses its outcome",
+    async (action) => {
+      const fixture = await attached();
+      let release!: () => void;
+      let entered!: () => void;
+      const writing = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fixture.transport.importSessionCookies = mock(async () => {
+        entered();
+        await gate;
+        return { imported: 1, skipped: 0 };
+      });
+      await fixture.manager.startSessionImport("tab");
+      const link = openedLink(fixture);
+      const request = visit(link, "session=old").catch(() => 0);
+      await writing;
+      if (action === "close") fixture.manager.destroy("tab");
+      else fixture.manager.dismissSessionNotice("tab");
+      await expect(visit(link)).rejects.toThrow();
+      release();
+      await request;
+      await settle();
+      expect(fixture.views[0]!.webContents.loadURL).toHaveBeenCalledTimes(1);
+      if (action === "dismiss")
+        expect(fixture.manager.setBounds("tab", bounds).sessionImport).toEqual({ state: "idle" });
+    },
+  );
+
+  test("reset closes the listener even while the external opener has not resolved", async () => {
+    const fixture = await attached();
+    let release!: () => void;
+    fixture.openExternal.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const starting = fixture.manager.startSessionImport("tab");
+    while (fixture.openExternal.mock.calls.length === 0) await settle();
+    const link = openedLink(fixture);
+    await fixture.manager.resetServiceSiteData(service("svc_aaaaaaaa"));
+    await expect(visit(link)).rejects.toThrow();
+    release();
+    await starting;
+    expect(fixture.manager.setBounds("tab", bounds).sessionImport).toEqual({ state: "idle" });
+  });
+
+  test("production adapter rejection fails immediately and closes the issued link", async () => {
+    const fixture = await attached();
+    fixture.openExternal.mockRejectedValue(new Error("private launch detail"));
+    const state = await fixture.manager.startSessionImport("tab");
+    expect(state.sessionImport).toEqual({ state: "failed" });
+    expect(JSON.stringify(state)).not.toContain("private launch detail");
+    await expect(visit(openedLink(fixture))).rejects.toThrow();
+    await expect(fixture.manager.openServiceSignIn("tab", 3000)).rejects.toThrow(
+      "Could not open your browser.",
+    );
+  });
+
+  test("reload retries the requested URL even when the first document never committed", async () => {
+    const fixture = await attached("svc_aaaaaaaa", "tab", "/app/sign-in");
+    const contents = fixture.views[0]!.webContents;
+    contents.url = "";
+    blockNavigation(contents, "https://accounts.google.com/");
+    await fixture.manager.startSessionImport("tab");
+    expect(new URL(openedLink(fixture)).pathname).toBe("/app/sign-in");
+    await visit(openedLink(fixture), "session=abc");
+    expect(contents.loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:41001/app/sign-in");
+    blockNavigation(contents, "https://accounts.google.com/");
+    const refused = fixture.manager.setBounds("tab", bounds);
+    expect(refused.blockedNavigation).toEqual({ host: "accounts.google.com" });
+    expect(refused.sessionImport?.state).toBe("imported");
+    fixture.manager.reload("tab");
+    expect(contents.loadURL).toHaveBeenCalledTimes(3);
+    expect(contents.reload).not.toHaveBeenCalled();
   });
 
   test("a browser with no cookies reloads nothing", async () => {
@@ -801,10 +953,12 @@ describe("copying a browser sign-in into a service preview", () => {
 
   test("opens the page the tab is on at the application's own address", async () => {
     const fixture = await attached("svc_aaaaaaaa", "tab", "/sign-in?returnTo=%2Fstart");
-    fixture.manager.openServiceSignIn("tab", 3000);
+    await fixture.manager.openServiceSignIn("tab", 3000);
     expect(openedLink(fixture)).toBe("http://localhost:3000/sign-in?returnTo=%2Fstart");
     for (const port of [0, 70_000, 1.5, Number.NaN]) {
-      expect(() => fixture.manager.openServiceSignIn("tab", port)).toThrow("Invalid service port");
+      await expect(fixture.manager.openServiceSignIn("tab", port)).rejects.toThrow(
+        "Invalid service port",
+      );
     }
   });
 });

@@ -486,7 +486,9 @@ the preview. No provider or application setup is needed
 3. **Bring sign-in back** (also **Bring sign-in from browser…** in the preview
    options menu), after a confirmation, opens a one-time page in the user's
    default browser. Cookies ignore ports, so that page receives everything the
-   browser holds for `localhost`, HttpOnly session cookies included.
+   browser holds for `localhost` at the requested application path, HttpOnly
+   session cookies included. Cookies at other paths require visiting that path in the
+   preview and copying again; the confirmation explains this scope.
 4. Main stores the cookies in that service's partition and reloads the service's
    views. The outcome is `sessionImport` in the view's state, so a tab unmounted
    meanwhile reads it on return.
@@ -495,22 +497,28 @@ The boundaries:
 
 - **Local connections only.** `sessionImport` is absent on a remote connection,
   so this machine's `localhost` cookies never reach another machine.
-- **Everything on `localhost` is copied, except Orkestrator's reserved cookies.**
+- **Cookies at the selected path are copied, except Orkestrator's reserved cookies.**
   A browser cannot say which application set a cookie, so the previewed
   application receives the user's other local applications' cookies, as it would
   if the user ran it in that browser. The confirmation says so. **Reset site
   data** removes them.
 - **The page is its own credential.** A listener bound to both loopback families
-  for one import answers one random path, for a top-level navigation addressed to
-  `localhost` that no site started (`Sec-Fetch-Site: none`). Anything else is
-  refused without using up the link. It closes after use, after two minutes, on
-  cancel, and when its tab closes.
-- **A copy, not a link.** Each cookie becomes HttpOnly and host-only on
-  `127.0.0.1`, with a one-week lifetime, because a `Cookie` header carries no
-  attributes. A cookie that needs HTTPS (a `__Host-` name) cannot be stored and
+  for one import answers the application path with a random query credential,
+  for a top-level navigation addressed to `localhost` that no site started
+  (`Sec-Fetch-Site: none`). Anything else is refused without using up the link. The page posts `document.cookie` to the same
+  credentialed URL, with an exact Origin check and a bounded body, to distinguish
+  readable cookies from HttpOnly cookies. It closes after use, after two minutes,
+  on cancel, and when its tab closes.
+- **A copy, not a link.** Each cookie stays HttpOnly or JavaScript-readable and
+  becomes host-only on `127.0.0.1`, with a one-week lifetime, because a `Cookie`
+  header carries no path, expiry, Secure or SameSite attributes. Imported cookies use Path=/ and
+  SameSite=Lax. A cookie that needs HTTPS (a `__Host-` name) cannot be stored and
   is counted as skipped. The two sessions are the same session on the server, so
-  signing out in either may end both. Values never reach a page, a log or a state
-  event; only counts do.
+  signing out in either may end both. Cookie values are never echoed in HTML,
+  logs or state events; only counts are reported. Reset cancels every service
+  view’s pending import, waits for any admitted writes, then clears storage before reloading the views. Dismissal or
+  close stops the listener and suppresses late outcomes; a write already admitted
+  can finish, and reset waits for it.
 
 The user's default browser is the one consulted, whichever one they signed in
 with. Services the browser cannot reach directly (a container service with no

@@ -126,7 +126,10 @@ export type BrowserPreviewController = {
   openServiceExternally?(target: BrowserPreviewServiceTarget): Promise<void>;
   startSessionImport?(tabId: string): Promise<BrowserPreviewState>;
   dismissSessionNotice?(tabId: string): BrowserPreviewState;
-  openServiceSignIn?(tabId: string, port: number): BrowserPreviewState;
+  openServiceSignIn?(
+    tabId: string,
+    port: number,
+  ): Promise<BrowserPreviewState> | BrowserPreviewState;
 };
 
 export type MainIpcDependencies = {

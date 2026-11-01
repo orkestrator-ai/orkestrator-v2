@@ -37,7 +37,7 @@ import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { request as httpRequest } from "node:http";
-import { cp, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -1221,7 +1221,6 @@ test("a path typed into the address bar loads instead of bouncing back to the pa
 
 test("a sign-in refused inside the preview comes back from a real browser", async ({ browser }) => {
   const page = s().window;
-  const port = fixtureOf("a").port;
   // Capture shell.openExternal so qualification never opens the user's browser.
   await s().app.evaluate(({ shell }) => {
     const state = globalThis as any;
@@ -1258,16 +1257,29 @@ test("a sign-in refused inside the preview comes back from a real browser", asyn
       .poll(openedUrls)
       .toEqual([expect.stringMatching(new RegExp(`^http://localhost:\\d+/app/next$`))]);
 
+    expect(await inService<number>("a", `fetch("/app/session-check").then(r => r.status)`)).toBe(
+      403,
+    );
     await notice().getByRole("button", { name: "Bring sign-in back" }).click();
     // The confirmation covers the page, so the native view hides for it.
     await expect(page.getByRole("alertdialog")).toContainText("every cookie");
+    await mkdir(path.join(repositoryRoot, "output/visual-previews"), { recursive: true });
+    await page.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/signin-review-confirm-desktop.png"),
+    });
     await expectVisibility("a", [false]);
+    const confirmationHost = await s().app.browserWindow(page);
+    await confirmationHost.evaluate((window) => window.setSize(500, 850));
+    await page.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/signin-review-confirm-narrow.png"),
+    });
+    await confirmationHost.evaluate((window) => window.setSize(1440, 960));
     await page.getByRole("button", { name: "Copy sign-in" }).click();
     await expect(notice()).toContainText("Waiting for your browser.");
     await expectVisibility("a", [true]);
     await expect.poll(async () => (await openedUrls()).length).toBe(2);
     const link = (await openedUrls())[1]!;
-    expect(link).toMatch(/^http:\/\/localhost:\d+\/session-import\//);
+    expect(link).toMatch(/^http:\/\/localhost:\d+\/app\/next\?session-import=/);
 
     // A real browser: its localhost cookies were set for another port entirely.
     await externalContext.addCookies([
@@ -1275,16 +1287,19 @@ test("a sign-in refused inside the preview comes back from a real browser", asyn
         name: "signed_in",
         value: "from-browser.sig%3D",
         domain: "localhost",
-        path: "/",
+        path: "/app",
         httpOnly: true,
       },
+      { name: "csrf", value: "readable-token", domain: "localhost", path: "/app" },
       { name: "orkestrator_gateway_auth", value: "gateway", domain: "localhost", path: "/" },
     ]);
+    await uiTab("b").click();
     const external = await externalContext.newPage();
     await external.goto(link);
     await expect(external.getByRole("heading")).toHaveText("Sign-in copied");
     expect(await external.content()).not.toContain("from-browser");
 
+    await uiTab("a").click();
     await expect(notice()).toContainText("Sign-in copied");
     await expect(notice()).toContainText("1 could not be used");
     await waitForService("a", "/app/next");
@@ -1293,8 +1308,21 @@ test("a sign-in refused inside the preview comes back from a real browser", asyn
     // Through the real ingress and tunnel to the application, value untouched.
     expect((await echoed()).cookie).toContain("signed_in=from-browser.sig%3D");
     expect((await echoed()).cookie).not.toContain("orkestrator_gateway_auth");
-    // A copied cookie is HttpOnly whatever it was, so page script cannot read it.
+    // Session cookies stay HttpOnly, while CSRF code can still read its token.
     expect(await inService<string>("a", "document.cookie")).not.toContain("signed_in");
+    expect(await inService<string>("a", "document.cookie")).toContain("csrf=readable-token");
+    expect(
+      await inService<number>(
+        "a",
+        `fetch("/app/session-check", {method:"POST"}).then(r => r.status)`,
+      ),
+    ).toBe(403);
+    expect(
+      await inService<number>(
+        "a",
+        `fetch("/app/session-check", {method:"POST", headers:{"x-csrf-token":document.cookie.split("; ").find(p => p.startsWith("csrf="))?.slice(5) ?? ""}}).then(r => r.status)`,
+      ),
+    ).toBe(200);
     // The sibling service's partition never saw it.
     const sibling = await inService<{ cookie: string | null }>(
       "b",
@@ -1311,6 +1339,18 @@ test("a sign-in refused inside the preview comes back from a real browser", asyn
     await uiStore("selectProjectAndEnvironment", s().projectId, s().environmentId);
     await closeStartupDialogs();
     await expect(notice()).toContainText("Sign-in copied");
+    await inService("a", `location.href = "https://accounts.google.invalid/auth"; true`);
+    await expect(notice()).toContainText("accounts.google.invalid can't open");
+    await expect(notice().getByRole("button", { name: "Bring sign-in back" })).toBeVisible();
+    await page.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/signin-review-refused-desktop.png"),
+    });
+    const host = await s().app.browserWindow(page);
+    await host.evaluate((window) => window.setSize(500, 850));
+    await page.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/signin-review-refused-narrow.png"),
+    });
+    await host.evaluate((window) => window.setSize(1440, 960));
     await notice().getByRole("button", { name: "Dismiss" }).click();
     await expect(notice()).toHaveCount(0);
   } finally {
@@ -1322,6 +1362,136 @@ test("a sign-in refused inside the preview comes back from a real browser", asyn
     // Leave the partition as later tests expect it.
     await preview("resetServiceSiteData", serviceTarget("a", "/app/next")).catch(() => undefined);
     await waitForService("a", "/app/next");
+  }
+});
+
+test("an import recovers a first refused load and retries the same typed path", async ({
+  browser,
+}) => {
+  const page = s().window;
+  const context = await browser.newContext();
+  await s().app.evaluate(({ shell }) => {
+    const state = globalThis as any;
+    state.__savedImportRetryOpener = shell.openExternal;
+    state.__importRetryLink = "";
+    shell.openExternal = async (url: string) => {
+      state.__importRetryLink = url;
+    };
+  });
+  const link = () => s().app.evaluate(() => (globalThis as any).__importRetryLink as string);
+  try {
+    await uiTab("b").click();
+    await preview("destroy", "first-import");
+    const initial = await preview<BrowserPreviewState>("attach", {
+      tabId: "first-import",
+      service: serviceTarget("a", "/app/needs-session"),
+      bounds: BOUNDS,
+      visible: false,
+    });
+    await expect
+      .poll(
+        async () =>
+          (await preview<BrowserPreviewState>("setVisible", "first-import", false))
+            .blockedNavigation?.host,
+      )
+      .toBe("accounts.google.invalid");
+    expect(initial.url).not.toContain("/app/needs-session");
+    await context.addCookies([
+      {
+        name: "signed_in",
+        value: "from-browser.sig%3D",
+        domain: "localhost",
+        path: "/app",
+        httpOnly: true,
+      },
+    ]);
+    await preview("startSessionImport", "first-import");
+    const external = await context.newPage();
+    await external.goto(await link());
+    await expect(external.getByRole("heading")).toHaveText("Sign-in copied");
+    await expect
+      .poll(
+        async () => (await preview<BrowserPreviewState>("setVisible", "first-import", false)).url,
+      )
+      .toContain("/app/needs-session");
+    await preview("resetServiceSiteData", serviceTarget("a"));
+    // A second application scope is collected at its own path too.
+    await context.addCookies([
+      {
+        name: "signed_in",
+        value: "from-browser.sig%3D",
+        domain: "localhost",
+        path: "/api",
+        httpOnly: true,
+      },
+    ]);
+    await preview("attach", {
+      tabId: "first-import",
+      service: serviceTarget("a", "/api/session-check"),
+      bounds: BOUNDS,
+      visible: false,
+    });
+    await preview("startSessionImport", "first-import");
+    expect(new URL(await link()).pathname).toBe("/api/session-check");
+    await external.goto(await link());
+    await expect(external.getByRole("heading")).toHaveText("Sign-in copied");
+    await expect
+      .poll(() =>
+        s().app.evaluate(({ webContents }) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((contents) => contents.getURL().includes("/api/session-check"));
+          return contents?.executeJavaScript("JSON.parse(document.body.innerText).allowed");
+        }),
+      )
+      .toBe(true);
+    await preview("destroy", "first-import");
+    await preview("resetServiceSiteData", serviceTarget("a"));
+    await uiTab("a").click();
+    const address = page.getByRole("textbox", { name: "Browser address" }).first();
+    const before = fixtureOf("a").requests.filter(
+      (request) => request.path === "/app/needs-session",
+    ).length;
+    await address.fill("/app/needs-session");
+    await address.press("Enter");
+    await expect
+      .poll(
+        () =>
+          fixtureOf("a").requests.filter((request) => request.path === "/app/needs-session").length,
+      )
+      .toBeGreaterThan(before);
+    const attempts = fixtureOf("a").requests.filter(
+      (request) => request.path === "/app/needs-session",
+    ).length;
+    await address.press("Enter");
+    await expect
+      .poll(
+        () =>
+          fixtureOf("a").requests.filter((request) => request.path === "/app/needs-session").length,
+      )
+      .toBeGreaterThan(attempts);
+    await address.fill("/app/next");
+    await address.press("Enter");
+    await waitForService("a", "/app/next");
+    // A pending import issued by either tab cannot reauthenticate after reset.
+    for (const resetFrom of ["a", "b"] as const) {
+      await preview("startSessionImport", UI_TABS.a);
+      const stale = await link();
+      if (resetFrom === "b") await uiTab("b").click();
+      await preview("resetServiceSiteData", serviceTarget("a"));
+      await expect(external.goto(stale)).rejects.toThrow();
+      await uiTab("a").click();
+      await expect(page.getByRole("status", { name: "Sign-in notice" })).toHaveCount(0);
+    }
+    await address.fill("/app/next");
+    await address.press("Enter");
+    await waitForService("a", "/app/next");
+  } finally {
+    await preview("destroy", "first-import").catch(() => undefined);
+    await context.close();
+    await s().app.evaluate(({ shell }) => {
+      shell.openExternal = (globalThis as any).__savedImportRetryOpener;
+    });
   }
 });
 
@@ -1740,6 +1910,17 @@ test("the picker, service dialog, diagnostics and Cmd/Ctrl+L work from the keybo
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   expect((await focused()).label).toBe("Preview service svc-a");
+
+  const options = page.getByRole("button", { name: "Preview options" });
+  await options.focus();
+  await page.keyboard.press("Enter");
+  const importItem = page.getByRole("menuitem", { name: "Bring sign-in from browser…" });
+  await importItem.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(options).toBeFocused();
 
   // Service dialog: reached from the picker, focus stays inside while tabbing,
   // and Escape closes it without registering anything.

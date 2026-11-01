@@ -462,6 +462,14 @@ export function MultiReviewFlowFixture() {
         ],
       };
     }
+    if (params.has("fixCompletedPr")) {
+      snapshot.autoPr = true;
+      snapshot.autoPrLaunch = {
+        state: "launched",
+        requestId: `multi-review-pr:${snapshot.id}`,
+        tabId: "fix-pr",
+      };
+    }
     if (params.has("cleanReviewPr")) {
       snapshot.autoPr = true;
       snapshot.autoPrLaunch = {

@@ -69,6 +69,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowRestartContinuationPrompt,
+  workflowUsageLimitContinuationPrompt,
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
@@ -134,6 +135,7 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-information.js";
 import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard";
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
@@ -470,6 +472,7 @@ export class BuildPipelineReviewFanout {
       ...(this.deps.pollGate ? { pollGate: this.deps.pollGate(pipeline) } : {}),
       sessionKeyFor: (reviewer) => reviewerSessionKey(pipeline, reviewer),
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
+      environmentId: pipeline.environmentId,
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
       providerUnavailable: (selection, provider) =>
         this.deps.providerUnavailable?.(
@@ -909,6 +912,7 @@ export class BuildPipelineReviewFanout {
             {
               id: reviewer.id.slice(0, 128),
               slot,
+              startFailed: reviewer.startFailed === true,
               agent: reviewer.agent as BuildPipelineAgent,
               ...(reviewer.model && !reviewer.modelUnpinned
                 ? { model: reviewer.model.slice(0, 256) }
@@ -1148,7 +1152,19 @@ export class BuildPipelineReviewFanout {
       );
     }
     const restartInterrupted = status === "error" && interruption === "restart";
-    if ((status === "error" && !restartInterrupted) || status === "missing") {
+    let usageLimitResend = false;
+    if (status === "error" && !restartInterrupted) {
+      const verdict = await provider.usageLimitStop?.({
+        environmentId: pipeline.environmentId,
+        requestId: consolidation.requestId,
+        error: statusDetail,
+        resends: consolidation.usageLimitResends ?? 0,
+        turnStartedAt: consolidation.createdAt,
+      });
+      if (verdict === "wait") return { kind: "working" };
+      usageLimitResend = verdict === "resend";
+    }
+    if ((status === "error" && !restartInterrupted && !usageLimitResend) || status === "missing") {
       return {
         kind: "failed",
         error:
@@ -1167,6 +1183,28 @@ export class BuildPipelineReviewFanout {
             consolidation.providerSessionId,
             consolidation.requestId,
           );
+    if (usageLimitResend && result?.ok !== true) {
+      consolidation.usageLimitResends = (consolidation.usageLimitResends ?? 0) + 1;
+      await this.prepareConsolidationFollowUp(
+        pipeline,
+        consolidation,
+        undefined,
+        workflowUsageLimitContinuationPrompt({
+          workLabel: "consolidation",
+          resultLabel: "consolidated report",
+          ...(consolidation.resultTransport === "tool-v1"
+            ? { toolName: workflowResultToolName(CONSOLIDATION_RESULT_KIND) }
+            : {}),
+        }),
+      );
+      // The next pass reconnects, which is what moves the bridge to the new account.
+      await this.deps.providerUnavailable?.(
+        pipeline,
+        consolidation.agent as BuildPipelineAgent,
+        provider,
+      );
+      return { kind: "working" };
+    }
     if (restartInterrupted && result?.ok !== true) {
       if (consolidation.restartContinuationSent) {
         return {
@@ -1246,6 +1284,7 @@ export class BuildPipelineReviewFanout {
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = provenance.report;
     retainRoundReviewReport(pipeline, session, provenance.report);
+    recordReviewIssuesInKeyInformation(pipeline, session, provenance.report);
     pipeline.structuredReviewRequestId = consolidation.requestId;
     if (consolidation.resultTransport === "tool-v1") {
       pipeline.pendingResultConsumptions = Array.from(
@@ -1391,14 +1430,14 @@ export class BuildPipelineReviewFanout {
   private async prepareConsolidationFollowUp(
     pipeline: BuildPipeline,
     consolidation: ReviewConsolidationSession,
-    spend: "restartContinuationSent" | "resultReminderSent",
+    spend: "restartContinuationSent" | "resultReminderSent" | undefined,
     prompt: string,
   ): Promise<void> {
     const previousRequestId = consolidation.requestId;
     consolidation.requestId = randomUUID();
     consolidation.state = "prepared";
     consolidation.createdAt = reviewFanoutNowIso();
-    consolidation[spend] = true;
+    if (spend) consolidation[spend] = true;
     consolidation.continuationPrompt = prompt;
     delete consolidation.schemaRepairPrompt;
     delete consolidation.idleResultPolls;
@@ -1476,6 +1515,7 @@ export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
   dropProvisionalFindings(reviewer);
   delete reviewer.sessionKey;
   delete reviewer.providerSessionId;
+  delete reviewer.agentStarted;
   delete reviewer.requestId;
   delete reviewer.dispatchState;
   delete reviewer.resultTransport;
@@ -1485,6 +1525,7 @@ export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
   delete reviewer.continuationPrompt;
   delete reviewer.resultReminderSent;
   delete reviewer.restartContinuationSent;
+  delete reviewer.usageLimitResends;
   delete reviewer.idleResultPolls;
   delete reviewer.progressAt;
   delete reviewer.progressDigest;
@@ -1495,6 +1536,7 @@ export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
   delete reviewer.commandSandboxOff;
   delete reviewer.report;
   delete reviewer.error;
+  delete reviewer.startFailed;
   delete reviewer.startedAt;
   delete reviewer.completedAt;
 }

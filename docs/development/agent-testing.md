@@ -63,6 +63,25 @@ mise run test:agent:browser:isolated --agent-platforms codex,opencode
 The runner owns `--profile` and `--fixture` and rejects anything else before it
 creates a profile.
 
+On a shared Linux host, a profile's Electron window would otherwise open on the
+signed-in user's desktop (it inherits `DISPLAY` and `WAYLAND_DISPLAY`). Set
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` for `dev:test` or either isolated
+task to start it on Chromium's headless Ozone platform with the GPU off and
+both display variables removed; the browser suites drive the gateway, not that
+window. It applies only to agent-test profiles on Linux, and Electron specs,
+which need the real window, are not supported in this mode:
+
+```bash
+ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 mise run test:agent:design:isolated
+```
+
+On Linux, Chromium aborts in-flight requests, including loopback ones, with
+`net::ERR_NETWORK_CHANGED` whenever a network interface or address changes,
+and Docker adds or removes a bridge or veth for every network and container it
+creates or deletes. A browser suite running beside other Docker work on the
+same host can therefore lose Vite module loads and render a blank page; see
+flake [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli`), because `cli-ui.spec.ts` drives
 `packages/cli/dist`.
@@ -196,6 +215,54 @@ ORKESTRATOR_AGENT_TEST_PROFILE=grok-login-qa ORKESTRATOR_AGENT_TEST_DOCKER=1 ORK
 mise run dev:stop --profile grok-login-qa
 mise run dev:reset --profile grok-login-qa
 ```
+
+## Container app wiring qualification
+
+`e2e/agent-testing/container-files-wiring.spec.ts` checks the Files panel on a
+container in a real browser with no provider turns: a change written in the
+container shows through the 5 s poll, across an inactive-environment switch, a
+hidden document, a reload and a second window, and a revert from the panel
+restores the file without starting a container fetch. It also checks that a
+tree revision announced while the document was hidden still shows on a local
+worktree after return.
+
+`e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
+container UI on the same profile:
+
+- **Merge from the UI.** Every `gh` call for a container runs inside it, so the
+  spec installs a stand-in `gh` in the container
+  (`e2e/agent-testing/container-fake-gh.sh`), which merges with plain Git into
+  the fixture's bare origin. The PR monitor, the toolbar, the merge dialog,
+  `merge_environment_pr` and the merged state in a second window, after an
+  environment switch and after a reload are the real app. GitHub itself is
+  not covered.
+- **Validation output.** Real commands run in the container through the
+  validation worker. A pipeline record naming that run is imported, and the
+  Build tab's Tests view reads each command's output back from the container.
+- **The coordinator view.** Delegations to the container and the local
+  environment, a repository context change, and the delegations closing when
+  their environments stop. Each is checked across an environment switch, a
+  hidden document, a reload and a second window. The coordinator test stops
+  and restarts both fixture environments.
+
+Both specs' tests are named "Docker fixture", so `mise run test:agent:docker`
+runs them. Results are recorded in
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
+
+```bash
+mise run dev:test --profile container-wiring-qa --fixture --fixture-environments local,container \
+  --no-agent-credentials --agent-platforms codex
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=container-wiring-qa ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name container-wiring -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-files-wiring.spec.ts container-app-wiring.spec.ts --workers=1
+mise run dev:stop --profile container-wiring-qa
+mise run dev:reset --profile container-wiring-qa
+```
+
+Start the profile once with `--fixture`: a restart with `--fixture` leaves the
+previous start's environments broken under the same names
+([2180](../todo/cross-cutting/2180-fixture-restart-orphans-earlier-environments.md)).
+`ORKESTRATOR_AGENT_TEST_CONTAINER_ENV` and `ORKESTRATOR_AGENT_TEST_LOCAL_ENV`
+name other environments when needed.
 
 ## Start or reuse a profile manually
 
@@ -351,6 +418,14 @@ A new agent-test profile keeps its worktrees under `<profile>/worktrees/` even
 when Settings > Disk usage names a folder for new dev worktrees, so the browser
 suites see the same layout on every host. Pass `--use-dev-worktree-folder` to
 place them in that folder instead; `mise run dev` always uses it.
+
+On Linux, `--headless-electron` (also `dev:test` only) runs Electron on
+Chromium's headless Ozone platform without `DISPLAY` or `WAYLAND_DISPLAY`, so
+the profile opens no window in the desktop session that started it. Use it on
+a shared host when only the browser surface is under test; the renderer is
+still at `browserUrl`. Do not use it for native-window, menu or clipboard QA.
+The switch has to be on Electron's command line, so the launcher adds it;
+Electron's main script cannot apply it.
 
 The launcher prints what it seeded, what it could not seed, and what Electron
 will therefore download. A first run on a host without the pinned versions needs

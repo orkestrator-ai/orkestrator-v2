@@ -140,6 +140,7 @@ beforeEach(async () => {
     coordinators: world.coordinator,
     nodes: { status: async () => ({ nodeId: "bk_command", mode: "command" }) },
     nodePortal,
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
   coordination = new NodeCoordination({
     storage: world.storage,

@@ -39,7 +39,7 @@ export interface MachineLoadWindow {
 
 export interface MachineLoadReport {
   osFamily: MachineOsFamily;
-  /** Readable OS name and version: `macOS 26.1`, `Arch Linux`. */
+  /** Readable OS name and version: `macOS 26.1`, `Arch Linux`, `Omarchy 4.0.6 (like arch)`. */
   os: string;
   arch: string;
   cpuCores: number;

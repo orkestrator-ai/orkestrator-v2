@@ -3,6 +3,15 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
+  isAutoSwitchAccountIncluded,
+  normalizeAgentAccountAutoSwitchSettings,
+  withAutoSwitchTicks,
+  type AgentAccountAutoSwitchSettings,
+  type AgentAccountAutoSwitchState,
+  type AgentAccountAutoSwitchStates,
+  type AutoSwitchReason,
+} from "@orkestrator/protocol/agent-account-auto-switch";
+import {
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
   DEFAULT_AGENT_ACCOUNT_ID,
@@ -20,7 +29,12 @@ import type { CommandContext } from "./commands-context.js";
 import { resolveClaudeBinary, resolveCodexBinary } from "./commands-agent-support.js";
 import { getClaudeOAuthAccessToken, readRuntimeHostClaudeCredentials } from "./commands-files.js";
 import { runCommand } from "./shell.js";
-import { isStoredAgentAccountId, type StoredAgentAccount } from "./agent-accounts-store.js";
+import {
+  isStoredAgentAccountId,
+  type AgentAccountStore,
+  type StoredAgentAccount,
+  type StoredAgentAccountAutoSwitch,
+} from "./agent-accounts-store.js";
 import {
   agentAccountHome,
   claudeAccountLoginState,
@@ -151,12 +165,56 @@ export async function listAgentAccounts(context: CommandContext): Promise<AgentA
       };
     }),
   );
+  const settings = await autoSwitchSettings(context);
   return {
     accounts,
     active: {
       claude: store.active.claude ?? DEFAULT_AGENT_ACCOUNT_ID,
       codex: store.active.codex ?? DEFAULT_AGENT_ACCOUNT_ID,
     },
+    autoSwitch: Object.fromEntries(
+      AGENT_ACCOUNT_PLATFORMS.map((platform) => [
+        platform,
+        autoSwitchState(platform, settings, store, accounts),
+      ]),
+    ) as AgentAccountAutoSwitchStates,
+  };
+}
+
+/** The ticks this machine follows: its command node's, or its own without one. */
+export async function autoSwitchSettings(
+  context: CommandContext,
+): Promise<AgentAccountAutoSwitchSettings> {
+  const { global } = await context.storage.loadConfig();
+  return normalizeAgentAccountAutoSwitchSettings(global.agentAccountAutoSwitch);
+}
+
+function autoSwitchState(
+  platform: AgentAccountPlatform,
+  settings: AgentAccountAutoSwitchSettings,
+  store: AgentAccountStore,
+  accounts: readonly AgentAccountSummary[],
+): AgentAccountAutoSwitchState {
+  const ticks = settings[platform];
+  const stored = store.autoSwitch?.[platform];
+  return {
+    mode: !ticks?.enabled ? "off" : stored?.pin ? "pinned" : "automatic",
+    // Kept while off too: ticking it again on this machine still has to end it.
+    ...(stored?.pin
+      ? { pinnedAccountId: stored.pin.accountId, pinnedAt: stored.pin.pinnedAt }
+      : {}),
+    includedAccountIds: accounts
+      .filter(
+        (account) =>
+          account.platform === platform &&
+          isAutoSwitchAccountIncluded(
+            account.identity,
+            ticks,
+            stored?.includedAccountIds?.includes(account.id) === true,
+          ),
+      )
+      .map((account) => account.id),
+    ...(stored?.lastSwitch ? { lastSwitch: stored.lastSwitch } : {}),
   };
 }
 
@@ -166,9 +224,19 @@ function assertKnownAccountId(accountId: string): void {
   }
 }
 
+type AutomaticSwitch = {
+  expectedActive: string;
+  reason: AutoSwitchReason;
+  expectedIdentity?: string;
+};
+
 /**
  * Make an account the one new launches use. Running bridges are not touched:
  * each moves over on its next use once idle (see `localBridgeIsOnActiveAccount`).
+ *
+ * This is every manual switch (Settings, the agent panel, a coordinator), so
+ * while automatic switching is on it pins the account in the same write and
+ * automatic switching stays off here until the user ticks it again.
  */
 export async function setActiveAgentAccount(
   context: CommandContext,
@@ -176,13 +244,88 @@ export async function setActiveAgentAccount(
   accountId: string,
 ): Promise<AgentAccountsSnapshot> {
   assertKnownAccountId(accountId);
+  const ticked = (await autoSwitchSettings(context))[platform]?.enabled === true;
+  const changed = await switchActiveAccount(context, platform, accountId, { pin: ticked });
+  if (changed) announceAccountsChanged(context, platform);
+  return listAgentAccounts(context);
+}
+
+/**
+ * Automatic switching's own switch. It never pins. It gives way, returning
+ * false, when a manual switch got in first: a pin or another active account.
+ */
+export async function applyAutomaticAccountSwitch(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  accountId: string,
+  automatic: AutomaticSwitch,
+): Promise<boolean> {
+  assertKnownAccountId(accountId);
+  const changed = await switchActiveAccount(context, platform, accountId, { automatic });
+  if (changed) announceAccountsChanged(context, platform);
+  return changed;
+}
+
+async function switchActiveAccount(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  accountId: string,
+  options: { pin?: boolean; automatic?: AutomaticSwitch },
+): Promise<boolean> {
   const accounts = context.runtime.accounts;
-  const changed = await accounts.withMutation(async () => {
+  return accounts.withMutation(async () => {
+    if (options.automatic) {
+      const latest = await listAgentAccounts(context);
+      const target = latest.accounts.find(
+        (entry) => entry.platform === platform && entry.id === accountId,
+      );
+      if (
+        latest.autoSwitch?.[platform]?.mode !== "automatic" ||
+        !latest.autoSwitch[platform]?.includedAccountIds.includes(accountId) ||
+        !target ||
+        (options.automatic.expectedIdentity !== undefined &&
+          JSON.stringify(target.identity) !== options.automatic.expectedIdentity)
+      )
+        return false;
+    }
     const outgoing = accounts.planUsage.cache.lastOk(platform);
+    const nowIso = new Date().toISOString();
+    let pinned = false;
+    let gaveWay = false;
     const previous = await context.storage.agentAccounts.mutateAgentAccounts<string | undefined>(
       (store) => {
         const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
-        if (current === accountId) return { store, result: undefined };
+        const { automatic } = options;
+        if (
+          automatic &&
+          (current !== automatic.expectedActive || store.autoSwitch?.[platform]?.pin)
+        ) {
+          gaveWay = true;
+          return { store, result: undefined };
+        }
+        const machine = store.autoSwitch?.[platform];
+        const autoSwitch =
+          options.pin || (!automatic && machine?.pin)
+            ? { ...machine, pin: { accountId, pinnedAt: nowIso } }
+            : automatic
+              ? {
+                  ...machine,
+                  lastSwitch: {
+                    fromAccountId: current,
+                    toAccountId: accountId,
+                    reason: automatic.reason,
+                    at: nowIso,
+                  },
+                }
+              : machine;
+        const withAutoSwitch: AgentAccountStore = autoSwitch
+          ? { ...store, autoSwitch: { ...store.autoSwitch, [platform]: autoSwitch } }
+          : store;
+        if (current === accountId) {
+          // Picking the account already in use is still the user's choice.
+          pinned = options.pin === true && machine?.pin?.accountId !== accountId;
+          return { store: options.pin ? withAutoSwitch : store, result: undefined };
+        }
         const active = { ...store.active };
         if (accountId === DEFAULT_AGENT_ACCOUNT_ID) {
           delete active[platform];
@@ -192,9 +335,11 @@ export async function setActiveAgentAccount(
           }
           active[platform] = accountId;
         }
-        return { store: { ...store, active }, result: current };
+        return { store: { ...withAutoSwitch, active }, result: current };
       },
     );
+    if (pinned) return true;
+    if (gaveWay) return false;
     // Readers take this same lock before selecting an account and before
     // publishing a result. No reader can observe a half-completed switch.
     bumpUsageGeneration(context, platform);
@@ -207,8 +352,70 @@ export async function setActiveAgentAccount(
     }
     return previous !== undefined;
   });
-  if (changed) announceAccountsChanged(context, platform);
+}
+
+/**
+ * Change this machine's own copy of the ticks. A machine with a command node
+ * refuses, because its copy stays overridden: a client sends them to the command
+ * node. An account with no email has its tick here and nowhere else. A pin is not
+ * touched: the tick is shared and a pin belongs to one machine, so ticking it again
+ * also calls `resumeAgentAccountAutoSwitch` on the machine that shows the pin.
+ */
+export async function setAgentAccountAutoSwitch(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  change: { enabled?: boolean; email?: string; accountId?: string; included?: boolean },
+): Promise<AgentAccountsSnapshot> {
+  await context.runtime.accounts.withMutation(async () => {
+    if (change.enabled !== undefined || change.email !== undefined) {
+      await context.storage.updateAgentAccountAutoSwitchSettings((current) =>
+        withAutoSwitchTicks(normalizeAgentAccountAutoSwitchSettings(current), platform, change),
+      );
+    }
+    if (change.accountId !== undefined && change.included !== undefined) {
+      const { accountId, included } = change;
+      await mutateMachineAutoSwitch(context, platform, (machine) => {
+        const ids = new Set(machine.includedAccountIds ?? []);
+        if (included) ids.add(accountId);
+        else ids.delete(accountId);
+        if (ids.size) machine.includedAccountIds = [...ids];
+        else delete machine.includedAccountIds;
+      });
+    }
+  });
+  announceAccountsChanged(context, platform);
   return listAgentAccounts(context);
+}
+
+/** The tick came back: end this machine's pin, leaving its own ticks alone. */
+export async function resumeAgentAccountAutoSwitch(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+): Promise<AgentAccountsSnapshot> {
+  await mutateMachineAutoSwitch(context, platform, (machine) => {
+    delete machine.pin;
+  });
+  announceAccountsChanged(context, platform);
+  return listAgentAccounts(context);
+}
+
+async function mutateMachineAutoSwitch(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  change: (machine: StoredAgentAccountAutoSwitch) => void,
+): Promise<void> {
+  await context.storage.agentAccounts.mutateAgentAccounts((store) => {
+    const machine = { ...store.autoSwitch?.[platform] };
+    change(machine);
+    const autoSwitch = { ...store.autoSwitch };
+    if (Object.keys(machine).length) autoSwitch[platform] = machine;
+    else delete autoSwitch[platform];
+    const { autoSwitch: _previous, ...rest } = store;
+    return {
+      store: Object.keys(autoSwitch).length ? { ...rest, autoSwitch } : rest,
+      result: undefined,
+    };
+  });
 }
 
 export async function renameAgentAccount(

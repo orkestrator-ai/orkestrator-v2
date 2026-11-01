@@ -1,6 +1,6 @@
 # Resume dialog archived restore timeout under load
 
-- **ID:** 1602
+- **ID:** 1653
 - **Status:** open
 - **Date observed:** 2026-11-01
 - **Test:** `NativeResumeSessionDialog > keeps archived history restorable after reopening with %s live rows`, both parameterized cases.

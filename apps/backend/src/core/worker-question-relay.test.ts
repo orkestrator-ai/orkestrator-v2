@@ -9,6 +9,7 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { isNodeExcludedCommand, isWorkspaceExcludedCommand } from "./nodes/node-routing.js";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
@@ -133,7 +134,10 @@ beforeEach(async () => {
   context = {
     storage,
     coordinators: coordinator,
-    runtime: { environments: { fence: new EnvironmentMutationFence() } },
+    runtime: {
+      environments: { fence: new EnvironmentMutationFence() },
+      coordinatorRequests: new CoordinatorRequestFlights(),
+    },
     nativeAgents: { sessionPendingInteractions: async () => pending },
   } as unknown as CommandContext;
   commands = createCommandRegistry();

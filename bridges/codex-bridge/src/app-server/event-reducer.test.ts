@@ -327,6 +327,19 @@ describe("usage and limits", () => {
     });
   });
 
+  test("only the general limit's rate-limit updates are read as the account's", () => {
+    const update = (limitId?: string) =>
+      reduce("account/rateLimits/updated", {
+        rateLimits: {
+          ...(limitId ? { limitId } : {}),
+          secondary: { usedPercent: 100, windowDurationMins: 10_080 },
+        },
+      });
+    expect(update("codex_other")).toEqual([]);
+    expect(update("codex")[0]).toMatchObject({ kind: "account.rateLimits.updated" });
+    expect(update()[0]).toMatchObject({ kind: "account.rateLimits.updated" });
+  });
+
   test("normalizes account rate-limit windows", () => {
     const events = reduce("account/rateLimits/updated", {
       rateLimits: {

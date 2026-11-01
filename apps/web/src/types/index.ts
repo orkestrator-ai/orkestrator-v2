@@ -583,6 +583,8 @@ export interface GlobalConfig {
   githubCliReminderDismissed?: boolean;
   /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
   sshAgentSocketPath?: string;
+  /** Auto-merge waits for non-required checks to pass. Absent is on. */
+  autoMergeRequireChecks?: boolean;
   /** Absolute folder new projects are cloned into on this machine (copies from other machines). */
   defaultProjectsDirectory?: string;
   /** Deliver the host's Claude Code OAuth credential into containers. */
@@ -644,6 +646,7 @@ export interface GlobalConfig {
   /** Reviewer focus presets; absent means the shipped five (`review-lens.ts`). */
   reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
   agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
+  agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
 }
 
 export type { GatewayTokenSettings, WebClientStatus } from "./webClient.js";

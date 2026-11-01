@@ -71,3 +71,47 @@ Original command: `mise run test:logged -- --name merge-electron -- mise run tes
 - **Service preview rollout (0042), 2026-10-25:** no recurrence in 6 runs on
   branch `todo-0042-service-preview-rollout-f64ae24ade8a`; the window was gone
   208 to 230 ms after `close()` and the remote release followed in time.
+
+## Baseline-count race fixed; window-close symptom open (to-do 0042 task 11), 2026-11-01
+
+The baseline-count race is resolved; the original window-close symptom remains
+open pending reproduction and an explanation. Run on Linux (beelink), branch
+`preview-flakes-d5abda30c5f5-r1` from
+`main` at `93b99bfba`, with one worker while other builds ran on the host.
+Electron used a private Xvfb display inside a private, loopback-only network
+namespace. Durations are not reference figures.
+
+- **Cause of the recurring failure** (2026-10-24 twice and 2026-10-25, all at
+  the attachment-count poll straight after window 2 attached `svc-b`): the
+  test destroys window 1's earlier tabs, then reads the Local attachment
+  count as its baseline. A destroyed tab's service keeps its attachment
+  through the transport's 30-second retirement lease
+  (`PreviewTransportManager.release`), so window 1's `svc-b`, shown by the
+  Reset site data test just before, was still counted. When opening the second
+  window and attaching took longer than the lease, the lease ended between the
+  baseline and the poll. The count was then one lower than the test expected:
+  it waited for baseline + 1 and saw the baseline. Only slow runs (a full
+  Electron suite on a loaded host) take that long.
+- **Reproduction:** a temporary hook (not committed) held the unchanged test
+  for 32 seconds after the baseline read, sampling the count every 2 seconds.
+  The baseline was 2 (window 1's held `svc-a` and its leased `svc-b`). It
+  stayed 2 until the sample at about 30 seconds, which read 1. The poll then
+  failed with `Expected: 3, Received: 2`, at the same check as the
+  recurrences.
+- **Fix:** the test now destroys window 1's tabs before it starts the second
+  backend, attaches its own `svc-a`, and then waits up to 60 seconds for that
+  to be the only Local attachment before it counts. With the same 32-second
+  hold the count stayed at 1 and the test passed. Unforced, it passed 3 of 3
+  with the two tests before it, 2 of 2 on two pinned CPU cores, and in all
+  four complete-owner runs after the fix. No timeout on a release was raised
+  and nothing was skipped.
+- **The original window-close failure** (2026-10-21, once) was not reproduced,
+  and the lease does not explain it: closing a window disposes its transport,
+  which releases every attachment at once, without a lease. The step has timed
+  the close and the release separately since 2026-10-21 and has passed in
+  every run since, including every run of this test listed in to-do 0042. Its
+  failure message now also lists the main process's `[Previews]` lines, such
+  as `Failed to release preview attachment.`, which tells a failed release
+  from a slow close. Keep this case open and capture those diagnostics if it
+  fails again with the window gone.
+

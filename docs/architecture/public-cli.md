@@ -353,16 +353,23 @@ when rows cannot fit; aggregate totals remain available.
 `not-found` and `history-expired` are distinct and neither is evidence that
 nothing ran.
 
-`session start --wait` and `session prompt --wait` do this themselves when the
-submission's response is lost (`transport-uncertain`, for example an admission
-slower than the client's 60 s request timeout). They look the run up by its
+`session start --wait`, `session prompt --wait`, `environment
+start|stop|recreate|delete --wait` and `environment exec --wait` do this
+themselves when the submission's response is lost (`transport-uncertain`, for
+example an admission slower than the client's 60 s request timeout, which a
+container start under load can outlast). They look the run up by its
 saved key and server-validated canonical intent and scope until it appears,
 then keep waiting. Recovery shares one `--timeout` deadline measured from
 before submission; a warning names the recovery. Ordinary successful
 submissions get the full observation duration after admission. If the key
 never appears, exit 4 stands. Definitive lookup errors and signal interruptions
 remain visible with the saved key details. A locally known changed intent is
-refused before sending. Nothing is resubmitted.
+refused before sending. Nothing is resubmitted. For exec the lookup only proves
+admission: a found operation whose worker has not yet claimed it is observed
+like any other pending exec, never treated as lost or started again.
+`environment launch --wait ready`, `project remove --wait` and the `host`
+commands do not recover yet; on a lost response they exit 4 with the
+`run get --request-id` recovery command.
 
 ### Retention and expiry
 
@@ -864,7 +871,9 @@ isolated backends started through the packaged launcher (disposable data and
 worktree roots, argv-only driver, owned cleanup, private manifest under
 `output/cli-scenarios/<run>/`). Credential-free by default:
 `read-only`, `local-lifecycle`, `retry-and-retention`, `setup-failure`,
-`client-exit`, `exec`, `wrong-profile`, `project-cascade` (a started and a
+`client-exit`, `exec`, `lost-response` (a proxy admits `environment start` only
+after the client's first key lookup and loses the `exec` answer after
+admission; `--wait` must recover by request key and run the command once), `wrong-profile`, `project-cascade` (a started and a
 stopped environment deleted by `project remove --cascade`; checkout and origin
 kept) and `project-init` (local only: no remote, a local environment starts
 from the repository's own `main`). The container matrix adds

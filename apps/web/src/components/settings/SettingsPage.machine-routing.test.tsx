@@ -117,7 +117,7 @@ afterEach(() => {
   useAccountMachineStore.getState().choose(undefined);
   workspace.mockReset();
 });
-function mount(section: "general" | "review" | "experimental" = "general") {
+function mount(section: "general" | "version-control" | "review" | "experimental" = "general") {
   return render(
     <FederationProvider>
       <SettingsPage open onOpenChange={() => {}} defaultSection={section} />
@@ -138,8 +138,9 @@ test("leaf window selects command, bound leaf and another leaf without mixing co
   ).toBe(false);
   fireEvent.click(screen.getAllByRole("button", { name: /^Command/ })[0]!);
   await directory("/command/projects");
-  for (const label of ["Browse for the default projects folder", "Browse for SSH agent socket"])
-    expect((screen.getByLabelText(label) as HTMLButtonElement).disabled).toBe(true);
+  expect(
+    (screen.getByLabelText("Browse for the default projects folder") as HTMLButtonElement).disabled,
+  ).toBe(true);
   fireEvent.change(screen.getByLabelText("Default projects folder"), {
     target: { value: "/command/changed" },
   });
@@ -166,9 +167,16 @@ test("leaf window selects command, bound leaf and another leaf without mixing co
   ).toBe(true);
   fireEvent.click(screen.getAllByRole("button", { name: /^Leaf/ })[0]!);
   await directory("/leaf/projects");
-  expect((screen.getByLabelText("Browse for SSH agent socket") as HTMLButtonElement).disabled).toBe(
-    false,
-  );
+});
+
+test("version control reveals the SSH agent socket picker only on this window's machine", async () => {
+  mount("version-control");
+  const browse = () => screen.getByLabelText("Browse for SSH agent socket") as HTMLButtonElement;
+  await waitFor(() => expect(browse().disabled).toBe(false));
+  fireEvent.click(screen.getAllByRole("button", { name: /^Command/ })[0]!);
+  await waitFor(() => expect(browse().disabled).toBe(true));
+  fireEvent.click(screen.getAllByRole("button", { name: /^Leaf/ })[0]!);
+  await waitFor(() => expect(browse().disabled).toBe(false));
 });
 
 test("locked command-node section saves independently loaded command config", async () => {

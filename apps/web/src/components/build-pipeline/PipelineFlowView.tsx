@@ -3,10 +3,12 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   ChevronDown,
   ChevronRight,
@@ -35,6 +37,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { flowAttemptKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { useOptionalTerminalContext, type CreateTabOptions } from "@/contexts/TerminalContext";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { usePullRequest } from "@/hooks/usePullRequest";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { modelsForAgent } from "@/lib/agent-launch";
@@ -48,22 +51,20 @@ import { FlowInspectorHeader, FlowInspectorPanel } from "@/components/flow-graph
 import { defaultFlowSelection } from "@/components/flow-graph/flow-graph-model";
 import { reviewerStatusNote } from "@/components/review/multi-review-steps";
 import { ReviewValidationStatus } from "@/components/review/ReviewValidationStatus";
+import { ReviewerStartFailureNotice } from "@/components/review/ReviewerStartFailureNotice";
 import { WorkflowResultStatus } from "@/components/review/WorkflowResultStatus";
 import {
   pipelineFlowModel,
   pipelinePackageRestartStageId,
   pipelineReviewPassNodes,
+  pipelineReviewerStartFailures,
   pipelineSkipAction,
   type PipelineFlowModel,
   type PipelineFlowNode,
 } from "./pipeline-flow";
 import { PipelineFlowGraph, pipelineNodeView } from "./PipelineFlowGraph";
 import { PipelinePullRequestView, usePipelinePullRequest } from "./PipelinePullRequestView";
-import {
-  PipelineSessionTranscript,
-  pipelineAcceptsMessages,
-  reviewReportSession,
-} from "./PipelineSessionTranscript";
+import { PipelineSessionTranscript, pipelineAcceptsMessages } from "./PipelineSessionTranscript";
 import { PipelineTicketView } from "./PipelineTicketView";
 import { PipelineAddressReport } from "./PipelineAddressReport";
 import { usePipelineCodeRewind } from "./PipelineCodeRewindDialog";
@@ -157,6 +158,12 @@ export interface PipelineFlowViewProps {
   notices?: ReactNode;
   /** The error already rendered in this view's notices, to avoid repeating it. */
   visibleError?: string;
+  /**
+   * Where the pipeline toolbar (the graph toggle, step count and elapsed time)
+   * renders: the tab header's slot, or inline above the graph when omitted.
+   * Null while the slot has not mounted yet.
+   */
+  toolbarSlot?: HTMLElement | null;
 }
 
 /**
@@ -179,6 +186,7 @@ export function PipelineFlowView({
   layout,
   notices,
   visibleError,
+  toolbarSlot,
 }: PipelineFlowViewProps) {
   const panelId = `${useId()}inspector`;
   const graphId = `${panelId}-graph`;
@@ -518,19 +526,7 @@ export function PipelineFlowView({
     views.set(node.id, view);
   }
 
-  const reportOwner = reviewReportSession(pipeline);
-  const reportHint =
-    !passKey &&
-    pipeline.structuredReview &&
-    reportOwner &&
-    selected?.session?.sessionKey !== reportOwner.sessionKey &&
-    model.nodes.some((node) => node.id === reportOwner.sessionKey)
-      ? {
-          id: reportOwner.sessionKey,
-          title: model.nodes.find((node) => node.id === reportOwner.sessionKey)!.title,
-          issues: pipeline.structuredReview.issues.length,
-        }
-      : null;
+  const startFailures = pipelineReviewerStartFailures(model);
 
   // The live run's steps; a previous attempt is history.
   const liveNodes = model.nodes.filter((node) => !node.superseded);
@@ -572,55 +568,60 @@ export function PipelineFlowView({
     selected.session === currentSession &&
     pipelineAcceptsMessages(pipeline);
   const showTranscript = selected.session !== undefined && !selected.placeholder;
+  const inHeader = toolbarSlot !== undefined;
+  const graphToggle = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-7 gap-1.5 px-2 text-xs"
+      aria-expanded={!collapsed}
+      aria-controls={graphId}
+      onClick={() => setCollapsed(viewKey, !collapsed)}
+    >
+      {collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+      {passKey ? "Review" : "Pipeline"}
+    </Button>
+  );
+  const progress = (
+    <span
+      data-testid="pipeline-progress"
+      className="truncate text-[11px] text-muted-foreground tabular-nums"
+    >
+      {summary}
+      {elapsed ? ` · ${elapsed}` : ""}
+    </span>
+  );
 
   return (
     <div ref={setTabRoot} className="relative flex min-h-0 flex-1 flex-col">
-      <div
-        data-testid="pipeline-flow-scroll"
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]"
-      >
+      <OverviewScroll>
         <div className="@container flex min-h-full flex-col">
           {notices}
-          {reportHint ? (
-            <button
-              type="button"
-              className="flex w-full shrink-0 items-center gap-2 border-b border-cyan-500/20 bg-cyan-500/5 px-4 py-2 text-left text-xs text-cyan-200/90 transition-colors hover:bg-cyan-500/10"
-              onClick={() => onPin(reportHint.id)}
-            >
-              <ClipboardCheck className="h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 truncate">
-                The review reported {reportHint.issues} issue{reportHint.issues === 1 ? "" : "s"} —
-                open {reportHint.title} to read the report.
-              </span>
-            </button>
+          {startFailures.failures.length > 0 ? (
+            <div className="shrink-0 border-b border-divider px-3 py-2">
+              <ReviewerStartFailureNotice
+                failures={startFailures.failures.map((node) => ({
+                  name: node.title,
+                  agent: node.agent ?? node.reviewer?.agent ?? "unknown agent",
+                  error: node.error,
+                }))}
+                panelSize={startFailures.panelSize}
+                onShow={() => onPin(startFailures.failures[0]!.id)}
+              />
+            </div>
           ) : null}
-          <div className="flex shrink-0 items-center gap-2 border-b border-divider px-3 py-1.5">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 px-2 text-xs"
-              aria-expanded={!collapsed}
-              aria-controls={graphId}
-              onClick={() => setCollapsed(viewKey, !collapsed)}
-            >
+          {inHeader ? null : (
+            <div className="flex shrink-0 items-center gap-2 border-b border-divider px-3 py-1.5">
+              {graphToggle}
+              {progress}
               {collapsed ? (
-                <ChevronRight className="size-3.5" />
-              ) : (
-                <ChevronDown className="size-3.5" />
-              )}
-              {passKey ? "Review" : "Pipeline"}
-            </Button>
-            <span className="truncate text-[11px] text-muted-foreground">
-              {summary}
-              {elapsed ? ` · ${elapsed}` : ""}
-            </span>
-            {collapsed ? (
-              <span className="ml-auto truncate text-[11px] text-muted-foreground">
-                {selected.title} · {selectedView.statusLabel}
-              </span>
-            ) : null}
-          </div>
+                <span className="ml-auto truncate text-[11px] text-muted-foreground">
+                  {selected.title} · {selectedView.statusLabel}
+                </span>
+              ) : null}
+            </div>
+          )}
           <div id={graphId} hidden={collapsed} className={cn(collapsed && "hidden")}>
             {collapsed ? null : (
               <PipelineFlowGraph
@@ -717,8 +718,36 @@ export function PipelineFlowView({
             />
           </FlowInspectorPanel>
         </div>
-      </div>
+      </OverviewScroll>
       {codeRewind.dialog}
+      {toolbarSlot
+        ? createPortal(
+            <div data-testid="pipeline-toolbar" className="flex min-w-0 items-center gap-1">
+              {graphToggle}
+              {progress}
+            </div>,
+            toolbarSlot,
+          )
+        : null}
+    </div>
+  );
+}
+
+/**
+ * The graph and inspector's shared scroll area. A stable gutter keeps the
+ * graph's width, and so its zoom, from changing when the inspector grows enough
+ * to need a scrollbar. The reader's place survives another tab taking over.
+ */
+function OverviewScroll({ children }: { children: ReactNode }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useScrollOffsetAcrossHide(scrollRef);
+  return (
+    <div
+      ref={scrollRef}
+      data-testid="pipeline-flow-scroll"
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]"
+    >
+      {children}
     </div>
   );
 }

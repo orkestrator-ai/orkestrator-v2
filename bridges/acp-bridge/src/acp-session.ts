@@ -121,6 +121,8 @@ import { emptySessionConfig } from "./acp-persistence.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
 import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
 import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
+import { sessionInstructionsMeta } from "./acp-provider-config.js";
+import { sessionInstructions } from "./acp-session-instructions.js";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
   AGENT_INTERACTION_LIMITS,
@@ -478,6 +480,16 @@ export async function createSessionReserved(
         cwd: workingDirectory,
         additionalDirectories: [],
         mcpServers: configuredAcpMcpServers(spawnOptions.agentMcp),
+        ...sessionInstructionsMeta(
+          providerConfig,
+          await sessionInstructions(
+            effectiveTurnExecutionPolicy({
+              policy: spawnOptions.policy,
+              readOnly: spawnOptions.readOnly,
+            }),
+            workingDirectory,
+          ),
+        ),
       },
       RPC_TIMEOUT_MS,
       signal,
@@ -654,6 +666,10 @@ async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
         cwd: workingDirectory,
         additionalDirectories: [],
         mcpServers: configuredAcpMcpServers(state.agentMcp),
+        ...sessionInstructionsMeta(
+          providerConfig,
+          await sessionInstructions(effectiveTurnExecutionPolicy(state), workingDirectory),
+        ),
       },
       RPC_TIMEOUT_MS,
     );

@@ -742,7 +742,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
               model,
               agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
               variant,
-              ...openCodePromptToolOptions(options, reviewEnabled),
+              ...openCodePromptToolOptions(
+                options,
+                reviewEnabled,
+                this.sessionPolicies.get(sessionId),
+              ),
             },
           };
           response = await this.client.session.promptAsync(

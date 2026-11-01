@@ -194,7 +194,15 @@ export async function stopEnvironmentExecWorkers(
   context: CommandContext,
   options: { requireStopped?: boolean } = {},
 ): Promise<void> {
-  await stopGoalCheckWorkers(environmentId, context, options);
+  try {
+    await stopGoalCheckWorkers(environmentId, context, options);
+  } catch (error) {
+    // Local workers are detached host processes: removing their workspace
+    // does not stop them. Only container teardown can tolerate a failed drain.
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (options.requireStopped || environment?.environmentType === "local") throw error;
+    console.warn(`[public-api] Could not stop goal checks: ${boundedMessage(error)}`);
+  }
   // Partial storage adapters (compatibility fixtures) have no operation store.
   if (typeof context.storage.publicOperations?.listActivePublicOperations !== "function") return;
   const environment = await context.storage.getEnvironment(environmentId);
@@ -278,7 +286,8 @@ async function stopGoalCheckWorkers(
       throw new Error("Invalid goal check worker list");
     operations = listed;
   } catch (error) {
-    if (options.requireStopped) throw new Error("Goal check workers could not be verified stopped");
+    if (options.requireStopped || environment.environmentType === "local")
+      throw new Error("Goal check workers could not be verified stopped");
     console.warn(`[public-api] Could not list goal check workers: ${boundedMessage(error)}`);
     return;
   }

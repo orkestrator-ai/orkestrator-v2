@@ -14,6 +14,13 @@
 const DATABASE_LOCKED = /database is locked/i;
 /** The stderr kept per starting server: enough for SQLite's one-line error. */
 export const OPENCODE_STARTUP_STDERR_TAIL_BYTES = 4_096;
+/**
+ * How long a starting server's exit waits for its stdio to close before the
+ * failure is decided from the stderr read so far. `exit` can come before the
+ * last stderr chunk is read; `close` follows once every pipe has ended, which
+ * a surviving grandchild holding the pipe could postpone indefinitely.
+ */
+export const OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS = 1_000;
 const DEFAULT_LOCKED_START_RETRY_DELAYS_MS: readonly number[] = [500, 2_000];
 
 /**

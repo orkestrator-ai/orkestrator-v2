@@ -41,6 +41,11 @@ jobs:
           ORKESTRATOR_E2E_BROWSER: ${{ matrix.browser }}
         run: mise run test:logged -- --name mobile-shell-${{ matrix.browser }} -- bunx playwright test --config e2e/playwright.config.ts e2e/MobileAppShellLayout.spec.ts --workers=1
 
+      - name: Test overview scroll preservation
+        env:
+          ORKESTRATOR_E2E_BROWSER: ${{ matrix.browser }}
+        run: mise run test:logged -- --name overview-scroll-${{ matrix.browser }} -- bunx playwright test --config e2e/playwright.config.ts e2e/PipelineFlow.spec.ts e2e/GraphRunFlow.spec.ts --grep 'overview.*scroll position' --workers=1
+
       - name: Upload browser failure evidence
         if: ${{ failure() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

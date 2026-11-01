@@ -215,6 +215,7 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
     {
       ...claudeLaunchResourceProfile(plugins, queryEnvironment),
       settingSources: JSON.stringify(plan.settingSources),
+      repositoryInstructions: plan.repositoryInstructions ?? "",
     },
     plan.readOnlyCommandSandbox,
   );
@@ -307,6 +308,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     launch: {
       ...claudeLaunchedProfile(session, options, plan.readOnlyCommandSandbox),
       settingSources: JSON.stringify(plan.settingSources),
+      repositoryInstructions: plan.repositoryInstructions ?? "",
       ...claudeLaunchResourceProfile(plugins, queryEnvironment),
     },
     mcpServers: mcpServersKey,
@@ -387,6 +389,7 @@ function joinableRuntime(turn: TurnState, plan: QueryPlan): ClaudeRuntime | unde
   const requested = {
     ...claudeLaunchProfile(turn.session, turn.options, plan.readOnlyCommandSandbox),
     settingSources: JSON.stringify(plan.settingSources),
+    repositoryInstructions: plan.repositoryInstructions ?? "",
     ...claudeLaunchResourceProfile(plan.plugins, plan.queryEnvironment),
   };
   return claudeLaunchConflict(running.launch, requested) ? undefined : running;

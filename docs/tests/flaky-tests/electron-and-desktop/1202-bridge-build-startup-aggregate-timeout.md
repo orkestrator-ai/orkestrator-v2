@@ -160,3 +160,11 @@ remains a hypothesis; the passing owner does not make the aggregate pass.
   directory. The aggregate remained non-green. The complete unchanged owner
   passed separately; no owning implementation, assertion, deadline or skip
   changed. The cause remains unconfirmed.
+
+## Automatic account switching validation — 2026-11-01
+
+- **Original command:** `mise run test` at `aefd1d122`, beside `mise run test:browser` with six workers, worktree on `/Volumes/Lexar`, after about 815 s waiting at 18/18 host slots.
+- **Failure:** the successful-start test exceeded its deadline (15,005.08 ms), and Bun killed one dangling process. The desktop package task took about 40 s. Case [1652](../aggregate-validation-runs/1652-automatic-account-switching-validation.md) has the rest of the run.
+- **Complete unchanged owner:** `bun test scripts/dev/bridge-builds.test.ts` from `apps/desktop` passed, 23 of 23, in 1.0 s.
+- **`origin/main` `93b99bfba`: not reproduced.** Five `mise run test` runs in a `/tmp` worktree; two more on `/Volumes/Lexar`, the first beside the full browser suite with six workers; six runs of the desktop package alone; 12 runs of the owner alone under 36 busy loops on 18 CPUs; 22 runs of the desktop package on `/Volumes/Lexar` under 18 busy loops and six disk writers, about 13 to 16 s each against 12 s unloaded.
+- **Assessment:** CPU and disk contention produced at this scale do not explain it, so "scheduling pressure" is weaker than earlier entries assumed. The aggregate's parallel file scheduling, or the other worktrees' load at 18/18 slots, were not reproduced here and remain possible. The cause is not established. The branch changes nothing under `apps/desktop`, and this case was first recorded on 2026-10-27, before the branch existed.

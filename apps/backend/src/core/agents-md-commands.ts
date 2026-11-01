@@ -165,7 +165,7 @@ export function registerAgentsMdCommands(
     const changes = parseAgentsMdChanges(args.changes);
     const reason = proposalReason(args.reason);
     const root = await resolveProjectGitRoot(context.storage, projectId);
-    return openAgentsMdPullRequest({
+    return openAgentsMdPullRequest(context.runtime.coordinatorRequests, {
       root,
       baseBranch: await agentsMdBaseBranch(context, projectId),
       key,

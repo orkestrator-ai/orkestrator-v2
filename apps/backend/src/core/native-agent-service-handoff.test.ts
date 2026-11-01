@@ -161,10 +161,12 @@ async function consumedHandoff(storage: StorageService): Promise<unknown> {
 describe("handoff delivery at dispatch", () => {
   test("the first prompt from any sender carries the history, journaled with the request", async () => {
     await withDestination({}, async ({ service, storage, send }) => {
-      await expect(service.dispatchIntent(dispatch("first"))).resolves.toEqual({
-        outcome: "accepted",
-        requestId: "first",
-      });
+      await expect(service.dispatchIntent({ ...dispatch("first"), mode: "plan" })).resolves.toEqual(
+        {
+          outcome: "accepted",
+          requestId: "first",
+        },
+      );
       const sent = promptOf(send.mock.calls[0]);
       expect(textCarriesAgentHandoff(sent, "handoff-1")).toBe(true);
       expect(sent).toEndWith("Carry on");
@@ -172,15 +174,20 @@ describe("handoff delivery at dispatch", () => {
       const session = await storage.getNativeAgentSession(SESSION_KEY);
       expect(session?.dispatchedRequestIds).toEqual(["first"]);
       expect(session?.deliveredAgentHandoffIds).toEqual(["handoff-1"]);
+      expect(session?.lastDispatchedTurn).toEqual({ requestId: "first", mode: "plan" });
       expect(await consumedHandoff(storage)).toBe("handoff-1");
     });
   });
 
   test("the second prompt is plain", async () => {
-    await withDestination({}, async ({ service, send }) => {
+    await withDestination({}, async ({ service, storage, send }) => {
       await service.dispatchIntent(dispatch("first"));
-      await service.dispatchIntent(dispatch("second", "Next"));
+      await service.dispatchIntent({ ...dispatch("second", "Next"), mode: "build" });
       expect(promptOf(send.mock.calls[1])).toBe("Next");
+      expect((await storage.getNativeAgentSession(SESSION_KEY))?.lastDispatchedTurn).toEqual({
+        requestId: "second",
+        mode: "build",
+      });
     });
   });
 

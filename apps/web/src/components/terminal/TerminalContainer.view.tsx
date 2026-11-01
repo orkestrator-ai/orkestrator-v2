@@ -1027,8 +1027,8 @@ export function TerminalContainer({
       // hydration; targeting the literal "default" would be a no-op and make
       // this effect initialize forever because build tabs are excluded from
       // `seededTabs` above.
-      const initialPaneId =
-        usePaneLayoutStore.getState().environments.get(environmentId)?.activePaneId ?? "default";
+      const initialPaneState = usePaneLayoutStore.getState().environments.get(environmentId);
+      const initialPaneId = initialPaneState?.activePaneId ?? "default";
 
       const launchAgent = claudeOptions?.launchAgent ?? false;
       if (launchAgent) setHasAppliedClaudeOptions(true);
@@ -1054,7 +1054,18 @@ export function TerminalContainer({
         // a second initial prompt.
         return;
       }
-      addTab(initialPaneId, { id: "default", type: "plain" }, environmentId);
+      // A build tab the backend selected (a pipeline started on an existing
+      // environment, whose layout held only that tab) stays selected: the
+      // default terminal joins it without taking the user off the pipeline.
+      const initialLeaf = initialPaneState
+        ? getAllLeaves(initialPaneState.root).find((leaf) => leaf.id === initialPaneId)
+        : undefined;
+      const buildTabSelected =
+        initialLeaf?.tabs.find((tab) => tab.id === initialLeaf.activeTabId)?.type ===
+        "claude-build";
+      addTab(initialPaneId, { id: "default", type: "plain" }, environmentId, {
+        activate: !buildTabSelected,
+      });
     }
   }, [
     isEnvironmentRunning,

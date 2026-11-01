@@ -152,7 +152,7 @@ describe("Docker settings section", () => {
         </DockerAvailabilityProvider>,
       );
       expect(screen.getByText(/Docker is not running/)).toBeTruthy();
-      expect(screen.queryByText("System Resources")).toBeNull();
+      expect(screen.queryByText("System Resources") === null).toBe(true);
       expect(callbacks.size).toBe(0);
       view.rerender(
         <DockerAvailabilityProvider available>
@@ -210,7 +210,7 @@ describe("Docker settings section", () => {
       const probe = [...callbacks.values()].find(({ delay }) => delay === 5_000)!;
       await act(async () => probe.callback());
       expect(screen.getByText(/Docker is not running/)).toBeTruthy();
-      expect(screen.queryByText("System Resources")).toBeNull();
+      expect(screen.queryByText("System Resources") === null).toBe(true);
       expect(callbacks.size).toBe(1);
       const statsReads = calls.filter((command) => command === "get_docker_system_stats").length;
       await act(async () => probe.callback());
@@ -282,14 +282,14 @@ describe("Docker settings section", () => {
       expect(statsReads).toBe(2);
       probeState = "available";
       await act(async () => probe!());
-      expect(screen.queryByText("Link interrupted")).toBeNull();
+      expect(screen.queryByText("Link interrupted") === null).toBe(true);
       expect(screen.getByRole("alertdialog")).toBe(dialog);
       await act(async () => refresh!());
       expect(statsReads).toBe(3);
       probeState = "stopped";
       await act(async () => probe!());
-      expect(screen.queryByRole("alertdialog")).toBeNull();
-      expect(screen.queryByText("System Resources")).toBeNull();
+      expect(screen.queryByRole("alertdialog") === null).toBe(true);
+      expect(screen.queryByText("System Resources") === null).toBe(true);
       expect(callbacks.size).toBe(1);
       probeState = "available";
       await act(async () => probe!());
@@ -348,7 +348,7 @@ describe("Docker settings section", () => {
       failing = false;
       await act(async () => Array.from(callbacks.values())[0]!());
       await screen.findByText("System Resources");
-      expect(screen.queryByText("Node unavailable")).toBeNull();
+      expect(screen.queryByText("Node unavailable") === null).toBe(true);
       expect(reads).toContain("get_docker_system_stats");
       expect(callbacks.size).toBe(3);
       view.unmount();

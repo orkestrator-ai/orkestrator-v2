@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { downloadText } from "@/lib/chat/artifact-download";
 import { copyRichText } from "@/lib/chat/rich-markdown/clipboard";
-import { useDialogFocusReturn } from "@/lib/chat/rich-markdown/dialog-focus";
+import { useDialogFocusReturn } from "@/lib/dialog-focus";
 import type { HastNode } from "@/lib/chat/rich-markdown/markdown-search";
 import {
   nodeSourceSlice,

@@ -1512,6 +1512,56 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(reviewerError.className).not.toContain("truncate");
   });
 
+  test("names a reviewer whose agent could not start, with why, above the graph (todo 1090)", async () => {
+    const reason = "codex bridge directory not found: /data/resources/codex-bridge";
+    const ready = readyWorkflow();
+    ready.phase = "reviewing";
+    ready.reviewers[1] = {
+      ...ready.reviewers[1]!,
+      status: "failed",
+      error: reason,
+      startFailed: true,
+    };
+    delete ready.reviewers[1]!.providerSessionId;
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    const notice = await screen.findByTestId("reviewer-start-failures");
+    expect(notice.textContent).toContain(
+      "Reviewer 2 (Codex) could not start, so this review is missing its findings.",
+    );
+    expect(notice.textContent).toContain(`Reviewer 2 · Codex: ${reason}`);
+    // The node's status names it too; its face shows the reason.
+    expect(flowNode("Reviewer 2 ·").getAttribute("aria-label")).toContain("Could not start");
+    expect(flowNode("Reviewer 2 ·").querySelector("[data-flow-node-error]")?.textContent).toBe(
+      reason,
+    );
+  });
+
+  test("a reviewer that failed after it started raises no start notice", async () => {
+    const ready = readyWorkflow();
+    ready.reviewers[0] = { ...ready.reviewers[0]!, status: "failed", error: "Session failed" };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    await screen.findAllByText("Session failed");
+    expect(screen.queryByTestId("reviewer-start-failures") === null).toBe(true);
+  });
+
   test("bounds a long reviewer failure while keeping its complete text available", async () => {
     const ready = readyWorkflow();
     const longReviewerError = `Provider failure: ${"unbroken-session-token/".repeat(256)}`;

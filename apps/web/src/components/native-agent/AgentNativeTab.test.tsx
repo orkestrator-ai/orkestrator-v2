@@ -8027,7 +8027,7 @@ describe("AgentNativeTab", () => {
       const prompt = screen.getByText("Review the current changes");
       // jsdom does not apply Tailwind styles. Check the ancestor that actually
       // hides the transcript rather than only checking that its text exists.
-      expect(prompt.closest(".opacity-0")).toBeNull();
+      expect(prompt.closest(".opacity-0") === null).toBe(true);
       expect(screen.getAllByText("Review the current changes")).toHaveLength(1);
     };
     const { container, rerender } = render(
@@ -8212,7 +8212,7 @@ describe("AgentNativeTab", () => {
     await act(async () => settleEnsure!());
     await screen.findByText("Adding the toggle");
     const prompt = screen.getByText("Add a dark mode toggle");
-    expect(prompt.closest(".opacity-0")).toBeNull();
+    expect(prompt.closest(".opacity-0") === null).toBe(true);
     const list = screen.getByTestId("native-agent-transcript-test-list");
     const rows = [...list.children].map((row) => row.textContent ?? "");
     expect(rows.findIndex((row) => row.includes("Add a dark mode toggle"))).toBeLessThan(
@@ -8240,7 +8240,7 @@ describe("AgentNativeTab", () => {
     );
     // The echo replaces the preview exactly once.
     expect(screen.getAllByText("Add a dark mode toggle")).toHaveLength(1);
-    expect(screen.queryByText(/^Starting /)).toBeNull();
+    expect(screen.queryByText(/^Starting /) === null).toBe(true);
   });
 
   test.each(["rejected", "transport", "exception"] as const)(
@@ -8271,13 +8271,13 @@ describe("AgentNativeTab", () => {
       await waitFor(() =>
         expect(screen.getByRole("textbox").textContent).toBe("Recover this opening prompt"),
       );
-      expect(screen.queryByText(/^Starting /)).toBeNull();
-      expect(container.querySelector(".agent-thinking-shimmer")).toBeNull();
+      expect(screen.queryByText(/^Starting /) === null).toBe(true);
+      expect(container.querySelector(".agent-thinking-shimmer") === null).toBe(true);
       expect(
         within(screen.getByTestId("native-agent-transcript-test-list")).queryByText(
           "Recover this opening prompt",
-        ),
-      ).toBeNull();
+        ) === null,
+      ).toBe(true);
       expect(
         useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", tabId))?.text,
       ).toBe("Recover this opening prompt");

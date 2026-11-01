@@ -766,7 +766,12 @@ overwritten. `refresh_mcp_environment_defaults` applies exactly that preview
 changes on top, and rewrites the server map of the container's staged input so
 the next boot inherits the same servers. Claude's staged `.claude.json` is
 already re-staged before every start, so its refresh reports `stagedCopy:
-"not-needed"` rather than a failure.
+"not-needed"` rather than a failure. So does a refresh of a file nothing was
+staged for (the backend user had none when the container was created, or the
+provider's inputs were not authorized): the entrypoint copies only files that
+exist, so the next boot keeps the refreshed container file. `unavailable` is
+left for a missing input revision or a staged file that cannot be read or
+replaced.
 
 **Rebuilds.** A real rebuild creates its candidate through
 `createDockerContainer`, which stages a fresh input revision from the backend

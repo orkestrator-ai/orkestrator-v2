@@ -89,8 +89,8 @@ export function ErrorNotice({
           <p className="break-words">{message}</p>
           {credential && (
             <p className="text-xs text-destructive/80">
-              The pull request viewer uses the GitHub credentials configured in Settings → GitHub.
-              Add a token there (or enable host GitHub CLI credentials) and retry.
+              The pull request viewer uses the GitHub credentials configured in Settings → Version
+              control. Add a token there (or enable host GitHub CLI credentials) and retry.
             </p>
           )}
         </div>

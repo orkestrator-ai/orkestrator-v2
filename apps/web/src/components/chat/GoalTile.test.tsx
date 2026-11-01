@@ -51,7 +51,7 @@ describe("GoalTurnTile", () => {
     expect(row.dataset.expanded).toBe("false");
     expect(row.textContent).toContain("Goal turn 3 of 20");
     expect(row.textContent).toContain("Make the build **green**");
-    expect(screen.queryByText("You")).toBeNull();
+    expect(screen.queryByText("You") === null).toBe(true);
     expect(container.textContent).not.toContain("orkestrator-goal");
     // Nothing a user bubble offers: no copy, no resend.
     expect(screen.getAllByRole("button")).toHaveLength(1);
@@ -65,7 +65,7 @@ describe("GoalTurnTile", () => {
     );
     const body = container.querySelector("[data-agent-chat-search-content]")!;
     expect(body.textContent).toBe("Make the build **green**");
-    expect(body.querySelector("strong")).toBeNull();
+    expect(body.querySelector("strong") === null).toBe(true);
     expect(screen.getByText("bun test")).toBeTruthy();
   });
 
@@ -87,7 +87,7 @@ describe("GoalTurnTile", () => {
     expect(screen.getByText("Check failed, exit 2")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Goal turn 3 of 20/ }));
     expect(screen.getByText("<img src=x> 1 failing")).toBeTruthy();
-    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("img") === null).toBe(true);
   });
 
   test("opens by itself for transcript find", () => {
@@ -114,7 +114,7 @@ test("carrier-like text in the middle of a message renders as the user's message
   const content = `Why does ${renderGoalCarrier(goal())} show up?`;
   const row = createGoalTurnNativeMessage(providerRow(content)) ?? providerRow(content);
   const { container } = render(<NativeMessage message={row} />);
-  expect(container.querySelector("[data-goal-turn-tile]")).toBeNull();
+  expect(container.querySelector("[data-goal-turn-tile]") === null).toBe(true);
   expect(screen.getByText("You")).toBeTruthy();
   expect(container.textContent).toContain("Why does");
 });
@@ -145,7 +145,7 @@ describe("GoalStatusRow", () => {
       );
       const rendered = container.querySelector<HTMLElement>(`[data-goal-status-row="${kind}"]`)!;
       expect(rendered.textContent).toContain(text);
-      expect(screen.queryByRole("button")).toBeNull();
+      expect(screen.queryByRole("button") === null).toBe(true);
       unmount();
     }
   });

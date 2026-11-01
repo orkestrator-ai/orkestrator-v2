@@ -1,7 +1,7 @@
 # Private canvas import picker: "Select file" stayed disabled late in the real-stack suite (`e2e/agent-testing/design-canvas.spec.ts`)
 
 - **ID:** 0208
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-14
 - **Test:** `e2e/agent-testing/design-canvas.spec.ts:230 › private canvases
   survive reload and can be retired to recover quota`.
@@ -63,3 +63,49 @@ stays open; see the follow-up in
 ## Runtime-state ownership main merge — 2026-10-24
 
 The merge parents are feature `3b5f889149d8c3603c869cd15b51d67af39c9aa6` and main `0014505caeed69395b3cc996dd541fcc6df12c23`. The renderer and both browser owning files match `origin/main`; no assertion, timeout or skip changed. `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated` used credential-free Codex profile `qa-browser-a81b23d3-fdf`, one browser worker, alongside other validating worktrees. It reached its 900 s test deadline after starting case 56 of 83, with four recorded failures and no complete Playwright summary (923.2 s including lifecycle). Its runner stopped/reset the profile. Evidence: host temporary artifact `orkestrator-test-run.flXegA/merge-isolated-browser.log.gz`. The import picker's Select file button stayed disabled at `design-canvas.spec.ts:354` for five seconds. The complete unchanged design owner ran with `ORKESTRATOR_AGENT_TEST_PROFILE=merge-runtime-docker-1024 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-runtime-docker-1024-design mise run test:logged -- --name merge-design-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/design-canvas.spec.ts --workers=1`: one passed, one failed (106.6 s logged). The text-fallback layout case still lacked `.private/hidden.orkdes` at its five-second poll; the private import-picker case passed. Evidence: host temporary artifact `orkestrator-test-run.CJdR89/merge-design-owner.log.gz` and `output/agent-testing/merge-runtime-docker-1024-design/browser/`. This individual case passed, but the complete owner remains non-green; no new flake classification is inferred.
+
+## Root cause and fix — 2026-11-01
+
+A product race in the host path picker, not profile state.
+`HostPathPickerDialog` starts its first listing (the home folder, because the
+design import passes no default path) when it opens, and every listing that
+lands wrote its folder into the address field. The case fills the field and
+then presses Enter. When the home listing landed between those two steps, it
+replaced the typed `private-import.orkdes` path with the home folder, Enter
+browsed that folder, no file was selected, and **Select file** stayed
+disabled. A slow `list_host_directory` (a busy backend late in a long suite)
+widens the window; a fresh profile closes it, which is why the case only ever
+failed late in a suite.
+
+- **Unit reproduction.** "a path typed while the first listing loads
+  survives that listing (flake 0208)" in
+  `apps/web/src/components/host-path/HostPathPickerDialog.test.tsx` holds
+  the first listing, types a path, then releases it. Without the fix the
+  field read `/home/me` and the test failed; with it, all 23 picker tests
+  pass.
+- **Real-stack reproduction** (diagnostic spec edit, not committed): the
+  case's `page.route` held the picker's first `list_host_directory` until the
+  path was typed, released it, and waited for its response before Enter.
+  Against a headless `dev:test --fixture --fixture-environments
+  local,container --no-agent-credentials --agent-platforms codex` profile on
+  Linux: without the fix, **Select file** stayed disabled at
+  `design-canvas.spec.ts:454` (the diagnostic file's line for `:420`) in 2 of
+  2 runs, the original symptom. With the fix the case passed 2 of 2 (1.2 min
+  and 56.4 s); a third attempt failed earlier on a reset module fetch. These
+  runs also routed Vite module requests through Playwright and dismissed the
+  profile's Docker firewall warning, because of
+  [2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
+  and the host's firewall.
+- **Fix.** The picker tracks whether the address was typed into after the
+  current listing started, and a landing listing no longer replaces a typed
+  path. Navigation (Enter, a row, Parent or Home) starts a new listing and
+  clears the mark, so the field still shows each listed folder.
+- **Not confirmed:** a full `test:agent:browser` run. The unchanged isolated
+  design task (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 mise run
+  test:agent:design:isolated`) failed all three cases before reaching the
+  picker, each on a page that never rendered: 112–210 module requests aborted
+  in each trace, the 2340 signature, while other builds were starting
+  containers (load 43–57).
+- The 2026-10-15 "blank dark page after reload" recurrence matches 2340's
+  symptom, but that run was on macOS with Docker Desktop, which 2340 does not
+  affect; its cause stays unknown.

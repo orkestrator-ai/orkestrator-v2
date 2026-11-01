@@ -34,6 +34,23 @@ import type { GraphRunsStorage } from "./storage-graph-runs.js";
 export type EnvironmentGit = (environmentId: string, args: string[]) => Promise<string>;
 
 /**
+ * Git could not run in the environment at all (its container is stopped,
+ * paused or gone), as opposed to Git answering with an error. Steps below that
+ * read a Git failure as an answer ("no upstream", "no backup yet") let this
+ * through rather than act on a wrong answer.
+ */
+export class EnvironmentUnavailableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "EnvironmentUnavailableError";
+  }
+}
+
+function rethrowUnavailable(error: unknown): void {
+  if (error instanceof EnvironmentUnavailableError) throw error;
+}
+
+/**
  * `git status --porcelain --untracked-files=all` in the environment's worktree,
  * retried once without the fsmonitor daemon after a timeout.
  */
@@ -85,7 +102,8 @@ export async function inspectCodeRewind(
   let aheadOutput: string;
   try {
     aheadOutput = await git(environmentId, ["rev-list", "--count", `HEAD..${target}`]);
-  } catch {
+  } catch (error) {
+    rethrowUnavailable(error);
     throw new Error(
       `The commit this step started from (${target.slice(0, 12)}) is no longer in the repository.`,
     );
@@ -125,8 +143,9 @@ export async function inspectCodeRewind(
     ref = (
       await git(environmentId, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
     ).trim();
-  } catch {
+  } catch (error) {
     // No upstream: nothing was pushed from this branch, or it was never set.
+    rethrowUnavailable(error);
   }
   if (ref) {
     upstream = {
@@ -156,7 +175,13 @@ export async function resetWorktreeToCommit(
   }
   if (head === reset.to && head !== reset.from) {
     // A crash after reset but before the final save: prove this intent's backup.
-    const backup = (await git(environmentId, ["rev-parse", reset.backupRef])).trim();
+    let backup: string;
+    try {
+      backup = (await git(environmentId, ["rev-parse", reset.backupRef])).trim();
+    } catch (error) {
+      rethrowUnavailable(error);
+      throw new Error("The pending rewind's backup ref is missing.");
+    }
     if (backup !== reset.from) throw new Error("The pending rewind's backup does not match.");
     return;
   }
@@ -169,7 +194,8 @@ export async function resetWorktreeToCommit(
   let backup: string | undefined;
   try {
     backup = (await git(environmentId, ["rev-parse", reset.backupRef])).trim();
-  } catch {
+  } catch (error) {
+    rethrowUnavailable(error);
     /* Not created yet. */
   }
   if (backup && backup !== reset.from)

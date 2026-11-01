@@ -692,6 +692,14 @@ export class StorageService {
     return this.repos.config.setContainerResourceLimits(limits);
   }
 
+  updateAgentAccountAutoSwitchSettings(
+    update: (
+      current: AppConfig["global"]["agentAccountAutoSwitch"],
+    ) => NonNullable<AppConfig["global"]["agentAccountAutoSwitch"]>,
+  ): Promise<AppConfig> {
+    return this.repos.config.updateAgentAccountAutoSwitchSettings(update);
+  }
+
   setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.repos.config.setGitHubCliReminderDismissed(dismissed);
   }
@@ -1389,6 +1397,13 @@ export class StorageService {
 
   listAllBuildPipelines(): Promise<PersistedBuildPipeline[]> {
     return this.repos.buildPipelines.listAllBuildPipelines();
+  }
+
+  listBuildPipelinesForEnvironment(
+    projectId: string,
+    environmentId: string,
+  ): Promise<PersistedBuildPipeline[]> {
+    return this.repos.buildPipelines.listBuildPipelinesForEnvironment(projectId, environmentId);
   }
 
   saveBuildPipeline(

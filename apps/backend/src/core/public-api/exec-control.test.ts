@@ -1,4 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { CommandContext } from "../commands-context.js";
 import * as shell from "../shell.js";
 import { stopEnvironmentExecWorkers } from "./exec-control.js";
@@ -64,4 +67,29 @@ test("a valid goal-check list cancels and cleans up its worker", async () => {
   );
   await stopEnvironmentExecWorkers("env-1", context, { requireStopped: true });
   expect(actions).toEqual(["list-goal-checks", "cancel", "cleanup"]);
+});
+
+test("an unreadable local goal-check list prevents teardown even without strict verification", async () => {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-local-goal-drain-"));
+  try {
+    await fs.mkdir(path.join(dataDir, "exec-runs", `goal-check-${"a".repeat(64)}`), {
+      recursive: true,
+    });
+    const localContext = {
+      appRoot: dataDir,
+      resourceRoot: dataDir,
+      storage: {
+        getEnvironment: async () => ({ ...environment, environmentType: "local" }),
+        getDataDir: () => dataDir,
+      },
+    } as unknown as CommandContext;
+    const command = spyOn(shell, "runCommand").mockResolvedValue({ stdout: "{}", stderr: "" });
+    spies.push(command);
+    await expect(stopEnvironmentExecWorkers("env-1", localContext)).rejects.toThrow(
+      "Goal check workers could not be verified stopped",
+    );
+    expect(command).toHaveBeenCalledTimes(1);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
 });

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import path from "node:path";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
 import { ControlMcpServer } from "./control-mcp-server.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
@@ -92,11 +93,15 @@ beforeEach(async () => {
       }) => {
         routed.push(command);
         await beforeLeafCommand?.(command);
-        const result = await commands.get(command)!(args, leafContext);
+        // A leaf without the command answers as a real gateway passes it on.
+        const handler = commands.get(command);
+        if (!handler) throw new Error(unknownBackendCommandMessage(command));
+        const result = await handler(args, leafContext);
         if (loseAnswer.delete(command)) return { outcome: "unknown" };
         return { outcome: "ok", result };
       },
     },
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
   mcp = new ControlMcpServer(
     world.root,
@@ -154,6 +159,21 @@ test("a terminal on another node runs once, across a lost answer and a replay", 
     "different payload",
   );
   expect(routed.filter((command) => command === "launch_controller_terminal")).toHaveLength(2);
+});
+
+test("a node from before a controller command is told to update, with nothing run", async () => {
+  const launch = mock(async () => ({}));
+  commands.set("launch_terminal_job", launch as unknown as CommandHandler);
+  commands.delete("launch_controller_terminal");
+  const result = await tool("launch_terminal", {
+    requestId: "older",
+    environmentId: workerId,
+    command: "bun test",
+  });
+  expect(result.isError).toBe(true);
+  expect(result.text).toContain("Build node runs an older Orkestrator");
+  expect(routed.filter((command) => command === "launch_controller_terminal")).toHaveLength(1);
+  expect(launch).not.toHaveBeenCalled();
 });
 
 for (const [tabType, options, expected] of [

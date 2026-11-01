@@ -1477,7 +1477,8 @@ test.each(["stop", "delete", "move"] as const)(
     const worker = runGoalCheck(environment, context, {
       goalId: "lifecycle-check",
       iteration: 1,
-      command: "sleep 120 & echo $! > goal-child.pid; echo $$ > goal-parent.pid; wait",
+      // The parent pid is written first: the wait below polls only the child's.
+      command: "echo $$ > goal-parent.pid; sleep 120 & echo $! > goal-child.pid; wait",
       timeoutMs: 120_000,
     });
     const pidFile = path.join(environment.worktreePath!, "goal-child.pid");

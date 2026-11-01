@@ -25,11 +25,20 @@ describe("globalConfigPatchFromCoreFields", () => {
 
   test("sends only the changed fields", () => {
     const changes = globalConfigPatchFromCoreFields(
-      { ...baseline, terminalScrollback: 1234, allowedDomains: ["a.test"] },
+      {
+        ...baseline,
+        terminalScrollback: 1234,
+        allowedDomains: ["a.test"],
+        autoMergeRequireChecks: false,
+      },
       baseline,
     );
     expect(changes).toEqual({
-      patch: { terminalScrollback: 1234, allowedDomains: ["a.test"] },
+      patch: {
+        terminalScrollback: 1234,
+        allowedDomains: ["a.test"],
+        autoMergeRequireChecks: false,
+      },
       unset: [],
     });
   });

@@ -135,7 +135,10 @@ viewport. It pages only from a direct cursor
 (`canLoadEarlierAutomatically`), so a joined mint or joined page, each a
 whole-transcript read, still needs the button. A page that leaves the head
 where it was (superseded by a poll, or failed) is retried once; after a second
-it stops until the head moves some other way.
+it stops until the head moves some other way. Those two pages per head count
+for the whole session, even if the head moved in between, so a transcript that
+keeps collapsing back to its live tail cannot load and lose the same page over
+and over.
 
 If an OpenCode view retains only a failed message's inline error row after
 dropping its oversized main row, no kept row can name a whole-message cursor.
@@ -151,8 +154,22 @@ row in a `RecentlyRevisedRows` list and passes the ids as `revisedMessageIds`;
 the v2 summary then carries those rows as `revisedMessages`, up to
 `BRIDGE_REVISED_MESSAGES_MAX` (32) rows and `BRIDGE_REVISED_MESSAGES_MAX_BYTES`
 (256 KiB). Rows omitted by those bounds change `historyReconciliationToken`,
-which invalidates retained history so the client pages it again. The rules
-for noting a row are in [`bridges/AGENTS.md`](../../bridges/AGENTS.md)
+which tells readers their retained copies may be stale. The token moves with
+the content of the omitted rows, so a large row that keeps changing moves it on
+every change: the row holding a Claude turn's Agent calls gains parts with each
+tool its subagents call, can pass 512 KiB, and once a newer row exists it sits
+outside the window.
+
+The native tab therefore never takes rows off screen for a moved token while
+the view names a direct cursor. It re-reads the rows it holds, walking back from
+the tail's cursor (`reconcileHeldHistory`), and replaces the copies that
+changed, at most once per `HELD_HISTORY_RECONCILE_INTERVAL_MS` (30 s). The debt
+outlives a remount (`heldHistoryReconcileOwed`) and settles only when a walk
+finishes with the token unmoved. Without a direct cursor the rows are dropped
+and paged again. A new history epoch always drops them at once, because that
+history no longer exists.
+
+The rules for noting a row are in [`bridges/AGENTS.md`](../../bridges/AGENTS.md)
 ("Transcript rows").
 
 ## Row boundaries

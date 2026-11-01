@@ -1,5 +1,6 @@
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { ClientEnvironment, Environment } from "./models.js";
+import type { EnsureProjectHomeResult } from "./project-home-environment.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 
 export type EnvironmentSetupSession = {
@@ -26,8 +27,10 @@ export type ClientEnvironmentSetupStartResult = Omit<EnvironmentSetupStartResult
 
 /**
  * In-flight environment work of one backend instance: setup sessions, the
- * start/setup/baseline dedupe tasks, the per-environment lifecycle queue and
- * the delete and merge guards, and the replacement and move fence (`fence`).
+ * start/setup/baseline dedupe tasks, the per-environment lifecycle queue,
+ * the allowlist apply queue, the project-home ensures, stop drains, container
+ * replacement cancellations, the delete and merge guards, and the replacement
+ * and move fence (`fence`).
  * Owned by `BackendRuntime` and reached through `context.runtime.environments`
  * at call time.
  *
@@ -48,6 +51,13 @@ export class EnvironmentOperations {
   private readonly deleting = new Set<string>();
   private readonly merging = new Set<string>();
   private readonly mergeCleanupRecoveries = new Map<string, Promise<void>>();
+  private readonly projectHomeEnsures = new Map<string, Promise<EnsureProjectHomeResult>>();
+  /** Allowlist applies into the running container, one per environment at a time. */
+  private readonly allowedDomainsApplies = new Map<string, Promise<void>>();
+  /** Environments whose explicit stop is draining their container's workload. */
+  private readonly draining = new Set<string>();
+  /** Container replacements whose user asked to stop before commit, by operation id. */
+  private readonly replacementCancellations = new Set<string>();
 
   // Setup sessions and tasks
 
@@ -151,6 +161,66 @@ export class EnvironmentOperations {
       }
     });
     return result;
+  }
+
+  // Project homes and allowlist applies
+
+  /** Joins the project's in-flight project-home ensure, or begins one. */
+  joinProjectHomeEnsure(
+    projectId: string,
+    ensure: () => Promise<EnsureProjectHomeResult>,
+  ): Promise<EnsureProjectHomeResult> {
+    return dedupe(this.projectHomeEnsures, projectId, ensure);
+  }
+
+  /**
+   * Runs `apply` after the environment's previous allowlist apply settles,
+   * whatever its outcome. Callers receive the original result or rejection.
+   */
+  enqueueAllowedDomainsApply<T>(environmentId: string, apply: () => Promise<T>): Promise<T> {
+    const previous = this.allowedDomainsApplies.get(environmentId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(apply);
+    const settled = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.allowedDomainsApplies.set(environmentId, settled);
+    void settled.then(() => {
+      if (this.allowedDomainsApplies.get(environmentId) === settled) {
+        this.allowedDomainsApplies.delete(environmentId);
+      }
+    });
+    return next;
+  }
+
+  // Stop drains (`container-readiness.ts` fences the container itself)
+
+  isDraining(environmentId: string): boolean {
+    return this.draining.has(environmentId);
+  }
+
+  /** Marks the environment draining until the returned function is called. */
+  beginDrain(environmentId: string): () => void {
+    this.draining.add(environmentId);
+    return () => {
+      this.draining.delete(environmentId);
+    };
+  }
+
+  // Container replacement cancellation
+
+  /** The replacement stops at its next phase boundary and rolls back. */
+  requestReplacementCancellation(operationId: string): void {
+    this.replacementCancellations.add(operationId);
+  }
+
+  isReplacementCancellationRequested(operationId: string): boolean {
+    return this.replacementCancellations.has(operationId);
+  }
+
+  /** Called once the replacement commits or fails. */
+  forgetReplacementCancellation(operationId: string): void {
+    this.replacementCancellations.delete(operationId);
   }
 
   // Delete and merge guards

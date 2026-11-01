@@ -10,6 +10,7 @@ import {
   BOOT_STATUS_PATH,
   ContainerInitializationError,
   assertContainerNotDraining,
+  assertEnvironmentNotDraining,
   bootProbeScript,
   drainContainerProcesses,
   ensureCurrentBootReady,
@@ -18,6 +19,7 @@ import {
   waitForContainerBoot,
   withEnvironmentDraining,
 } from "../src/core/container-readiness";
+import { EnvironmentOperations } from "../src/core/environment-operations";
 import { tempDir, withDockerScript } from "./container-lifecycle-fixtures";
 
 const cleanup: string[] = [];
@@ -446,15 +448,20 @@ exit 0
 describe("draining", () => {
   test("fences new work only while the drain runs", async () => {
     let fenced = false;
-    await withEnvironmentDraining("env-1", "container-1", async () => {
+    const environments = new EnvironmentOperations();
+    await withEnvironmentDraining(environments, "env-1", "container-1", async () => {
       try {
         assertContainerNotDraining("container-1");
       } catch (error) {
         fenced = String(error).includes("operation-in-progress");
       }
+      expect(() => assertEnvironmentNotDraining(environments, "env-1")).toThrow(
+        "operation-in-progress",
+      );
     });
     expect(fenced).toBe(true);
     expect(() => assertContainerNotDraining("container-1")).not.toThrow();
+    expect(() => assertEnvironmentNotDraining(environments, "env-1")).not.toThrow();
   });
 
   test("reports what the drain signalled and what remained", async () => {

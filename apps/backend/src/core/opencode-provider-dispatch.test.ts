@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,8 @@ import {
 } from "./native-agent-provider.js";
 import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
 import {
+  openCodeArtifactGrantInstruction,
+  openCodePromptToolOptions,
   openCodeWorkflowResultDenyPermissionRules,
   openCodeWorkflowResultPermissionRules,
   openCodeWorkflowResultToolId,
@@ -168,10 +171,24 @@ describe("OpenCode provider dispatch", () => {
         'scopeCapability set exactly to "artifact-grant-secret"',
       );
       expect(JSON.stringify(withGrant?.parts)).not.toContain("artifact-grant-secret");
-      expect(plain?.system).toBeUndefined();
+      // Every prompt carries the instructions all providers receive; only the
+      // granted one adds the capability after them.
+      expect(withGrant?.system).toStartWith(agentSystemInstructions());
+      expect(plain?.system).toBe(agentSystemInstructions());
     } finally {
       await provider.dispose?.();
     }
+  });
+
+  test("a read-only coordinator prompt carries no shared agent instructions", () => {
+    const coordinator = resolveNativeAgentExecutionPolicy(
+      { environmentType: "local", networkAccessMode: "full" },
+      "coordinator",
+    );
+    expect(openCodePromptToolOptions({}, false, coordinator).system).toBeUndefined();
+    expect(openCodePromptToolOptions({ artifactGrant: "grant" }, false, coordinator).system).toBe(
+      openCodeArtifactGrantInstruction("grant"),
+    );
   });
 
   test("a pre-prompt MCP failure stays retryable and does not write a prompt", async () => {

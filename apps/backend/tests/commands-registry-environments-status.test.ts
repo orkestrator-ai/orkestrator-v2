@@ -621,6 +621,45 @@ exit 0
     ]);
   });
 
+  for (const failure of ["enumeration", "cancellation", "nonterminal"] as const) {
+    test(`container teardown tolerates goal-check ${failure} failure, but move requires a drain`, async () => {
+      const environment = createEnvironment({
+        id: "env-drain-failure",
+        environmentType: "containerized",
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const { stopEnvironmentExecWorkers } = await import("../src/core/public-api/exec-control.js");
+      const operationId = `goal-check-${"a".repeat(64)}`;
+      await withFakeDocker(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+${ownedContainerInspect()}
+if [ "$1" = "exec" ]; then
+  payload=$(cat)
+  case "$payload" in
+    *'"action":"list-goal-checks"'*) ${failure === "enumeration" ? "exit 1" : `echo '["${operationId}"]'; exit 0`} ;;
+    *'"action":"cancel"'*) ${failure === "nonterminal" ? 'echo \'{"status":"running"}\'; exit 0' : "exit 1"} ;;
+  esac
+fi
+exit 0
+`,
+        async ({ all }) => {
+          await expect(
+            stopEnvironmentExecWorkers(environment.id, context, { requireStopped: true }),
+          ).rejects.toThrow();
+          expect(await fs.readFile(all, "utf8")).not.toContain("stop container-1");
+          await createCommandRegistry().get("stop_environment")!(
+            { environmentId: environment.id },
+            context,
+          );
+          expect(await fs.readFile(all, "utf8")).toContain("stop container-1");
+        },
+      );
+    });
+  }
+
   test("strict lifecycle commands never stop, recreate, or delete a foreign container", async () => {
     const environment = createEnvironment({
       id: "env-foreign-container",
@@ -654,7 +693,7 @@ exit 0
 
         const log = await fs.readFile(all, "utf8");
         expect(log.match(/inspect -f/g)).toHaveLength(3);
-        expect(log).not.toContain("exec ");
+        expect(log).not.toMatch(/^exec /m);
         expect(log).not.toContain("stop foreign-container");
         expect(log).not.toContain("rm -f foreign-container");
       },

@@ -23,6 +23,10 @@ import {
 } from "./agent-interactions.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 import {
+  isBuildPipelineKeyInformation,
+  type BuildPipelineKeyInformation,
+} from "./build-pipeline-key-information.js";
+import {
   ACCEPTANCE_CRITERION_STATUSES,
   isAcceptanceCriterionStatus,
   isTicketKind,
@@ -727,6 +731,8 @@ export function isPipelineTranscriptReference(
 export interface PipelineSession {
   /** One durable continuation after a provider restart cut the turn short. */
   restartContinuationSent?: boolean;
+  /** Times this stage turn was resent after the weekly limit stopped it. */
+  usageLimitResends?: number;
   /**
    * The one automatic reminder to submit a missing tool-mode result was
    * already spent, so a stage that ignores it fails instead of looping.
@@ -991,8 +997,9 @@ export interface PipelineReviewIssueCounts {
 
 export type PipelineReviewerOutcome = "completed" | "failed" | "cancelled";
 
-/** Bounded history for a reviewer whose provider session could not be created. */
+/** Bounded history for a failed reviewer without a mirrored pipeline session row. */
 export interface PipelineSessionlessReviewer {
+  startFailed?: boolean;
   id: string;
   slot: number;
   agent: BuildPipelineAgent;
@@ -1006,6 +1013,7 @@ function isPipelineSessionlessReviewer(value: unknown): value is PipelineSession
     isRecord(value) &&
     isNonBlankString(value.id) &&
     value.id.length <= 128 &&
+    (value.startFailed === undefined || typeof value.startFailed === "boolean") &&
     isNonNegativeInteger(value.slot) &&
     value.slot < MAX_BUILD_PIPELINE_REVIEWERS &&
     BUILD_PIPELINE_AGENTS.includes(value.agent as BuildPipelineAgent) &&
@@ -1323,6 +1331,12 @@ export interface BuildPipeline {
    * kept on its rewind instead ({@link PipelineRewind.validationRun}).
    */
   validationHistory?: PipelineValidationSummary[];
+  /**
+   * The running brief behind the header's Key information panel, written by
+   * the stages through the key information tools and by the backend as review
+   * issues and verdicts arrive (`build-pipeline-key-information.ts`).
+   */
+  keyInformation?: BuildPipelineKeyInformation;
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -1720,6 +1734,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
     (value.restartContinuationSent === undefined ||
       typeof value.restartContinuationSent === "boolean") &&
+    (value.usageLimitResends === undefined || isNonNegativeInteger(value.usageLimitResends)) &&
     (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
     (value.structuredReportRepairAttempts === undefined ||
       isNonNegativeInteger(value.structuredReportRepairAttempts)) &&
@@ -2174,6 +2189,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       (!Array.isArray(value.validationHistory) ||
         value.validationHistory.length > MAX_PIPELINE_VALIDATION_HISTORY ||
         !value.validationHistory.every(isPipelineValidationSummary))) ||
+    (value.keyInformation !== undefined && !isBuildPipelineKeyInformation(value.keyInformation)) ||
     (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
     (value.reviewPreparation !== undefined && !isBuildStepConfig(value.reviewPreparation)) ||
     (value.environmentOptions !== undefined &&

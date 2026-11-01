@@ -458,7 +458,7 @@ function environmentListFingerprint(result: {
 
 /** What a coordinator's environment reads say about a worker's pull request. */
 const COORDINATOR_PR_FIELDS_NOTE =
-  " A worker with a pull request also has prHasMergeConflicts, prMergeability, prChecks (passed, failed, pending and total counts) and prReadyToMerge (with prNotReadyReason when false), from the PR monitor; ready means only the user's merge is left.";
+  " A worker with a pull request also has prHasMergeConflicts, prMergeability, prChecks (passed, failed, pending and total counts, and requiredFailed: how many failing checks GitHub requires, null when it did not say) and prReadyToMerge (with prNotReadyReason when false), from the PR monitor; ready means only the user's merge is left.";
 
 /** A PR that starts conflicting, fails a check or becomes ready is a different answer. */
 function prFingerprint(environment: JsonRecord): unknown[] {

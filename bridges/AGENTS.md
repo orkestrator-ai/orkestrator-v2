@@ -97,9 +97,9 @@ once newer rows push it out of the live tail.
   is always in the window, and noting it turns every streamed write into
   `revisedMessages` once it ages out. Clear the list when the history is
   replaced. Pass `revisedRowsOverflowVersion` with the notes: count/byte
-  omissions produce `historyReconciliationToken`, whose change invalidates
-  retained history so it can be re-paged. Tokens stay stable during unrelated
-  live deltas; bounded notes must never silently certify stale held rows.
+  omissions produce `historyReconciliationToken`, whose change makes readers
+  re-read the history they hold. Tokens stay stable during unrelated live
+  deltas; bounded notes must never silently certify stale held rows.
 - **Pages never cut a row.** A page sends a row larger than its target whole,
   up to `BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES`, because the next cursor starts
   before that row, never inside it.
@@ -192,6 +192,22 @@ When touching command discovery or dispatch:
 - **Catalogue reads are metadata.** They must not touch `lastAccessed`,
   hydrate a transcript or re-attach an idle session; push freshness rides on
   `commandRevision` in the snapshot the backend already reads.
+
+## Orkestrator's agent instructions
+
+What Orkestrator tells every agent about itself (image previews, where
+documents go) is `GENERAL_AGENT_INSTRUCTIONS` in
+`packages/protocol/src/agent-system-instructions.ts`, and every bridge
+delivers it through its own channel
+([agent-engines.md](../docs/architecture/agent-engines.md#orkestrators-agent-instructions)).
+Never add such a rule to one bridge's prompt alone: add it to the general
+block, and keep a bridge's own lines for what only that provider needs. A
+new bridge must deliver the block too, and not to a read-only coordinator.
+Writable sessions also read the repository's AGENTS.md. Read-only sessions
+(including coordinators and reviews) exclude branch-controlled instructions:
+where the provider loads it only together with the checkout's executable
+configuration, the bridge sends `readRepositoryInstructions` itself rather
+than trusting that configuration.
 
 ## Packaging
 

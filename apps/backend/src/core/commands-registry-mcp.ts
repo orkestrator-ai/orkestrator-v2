@@ -418,10 +418,8 @@ export function createStagedDefaultsWriter(
       const revision = await containerLabel(containerId, DOCKER_LABEL_INPUTS_REVISION);
       if (!revision) return "unavailable";
       const dataDir = context.storage.getDataDir();
-      const file = path.join(
-        portableInputRevisionDirectory(dataDir, environmentId, revision),
-        relative,
-      );
+      const revisionDirectory = portableInputRevisionDirectory(dataDir, environmentId, revision);
+      const file = path.join(revisionDirectory, relative);
       let text: string;
       try {
         const handle = await fs.open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
@@ -432,8 +430,14 @@ export function createStagedDefaultsWriter(
         } finally {
           await handle.close();
         }
-      } catch {
-        // Nothing was staged, so nothing is mounted to carry a new copy.
+      } catch (error) {
+        // Nothing was staged for this file, so the entrypoint copies nothing over
+        // it at the next boot and the refreshed container file stays; a rebuild
+        // stages the backend user's current file anyway.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          const staged = await fs.lstat(revisionDirectory).catch(() => null);
+          if (staged?.isDirectory()) return "not-needed";
+        }
         return "unavailable";
       }
       const written = await replaceStagedInputFile(

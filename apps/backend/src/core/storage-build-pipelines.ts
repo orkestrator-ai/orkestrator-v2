@@ -453,6 +453,22 @@ export class BuildPipelinesRepository {
     return record ? structuredClone(record) : null;
   }
 
+  /**
+   * The records of one environment in one project. Only those are copied, so
+   * a caller that asks for every agent tool request stays cheap when the
+   * environment has none.
+   */
+  async listBuildPipelinesForEnvironment(
+    projectId: string,
+    environmentId: string,
+  ): Promise<PersistedBuildPipeline[]> {
+    return Object.values(await this.loadBuildPipelines())
+      .filter(
+        (pipeline) => pipeline.projectId === projectId && pipeline.environmentId === environmentId,
+      )
+      .map((record) => structuredClone(record));
+  }
+
   async listBuildPipelines(projectId: string): Promise<PersistedBuildPipeline[]> {
     if (!isNonBlankString(projectId)) {
       throw new Error("Build pipeline project ID must not be blank");
@@ -651,7 +667,19 @@ export class BuildPipelinesRepository {
     const { removedIds, transcriptOwners, commit } = await this.enqueueBuildPipelineMutation(
       async () => {
         const loaded = await this.loadBuildPipelineState();
-        const linkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
+        const requestedLinkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
+        // The link alone decides only while the pipeline is unowned: a newly
+        // created pipeline has a blank environmentId until create_environment
+        // links it. A pipeline owned by another environment stays, record and
+        // transcripts: a sidebar fork copies its source's buildPipelineId.
+        const linkedRecord = requestedLinkedId ? loaded.records[requestedLinkedId] : undefined;
+        const linkedId =
+          requestedLinkedId &&
+          (!linkedRecord ||
+            !linkedRecord.environmentId ||
+            linkedRecord.environmentId === environmentId)
+            ? requestedLinkedId
+            : null;
         const removedPipelines = Object.values(loaded.records).filter(
           (pipeline) => pipeline.environmentId === environmentId || pipeline.id === linkedId,
         );

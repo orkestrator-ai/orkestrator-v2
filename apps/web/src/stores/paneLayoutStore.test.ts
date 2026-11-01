@@ -1510,6 +1510,19 @@ describe("paneLayoutStore environment scoping", () => {
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
   });
 
+  test("adds a tab without changing the selection when asked not to activate it", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", { id: "first", type: "plain" }, "env-a", { activate: false });
+    // An empty pane has nothing to keep selected.
+    expect(store.getActivePane("env-a")?.activeTabId).toBe("first");
+    store.addTab("default", { id: "second", type: "plain" }, "env-a", { activate: false });
+    expect(store.getActivePane("env-a")?.activeTabId).toBe("first");
+    expect(store.getAllTabs("env-a").map((tab) => tab.id)).toEqual(["first", "second"]);
+    store.addTab("default", { id: "third", type: "plain" }, "env-a");
+    expect(store.getActivePane("env-a")?.activeTabId).toBe("third");
+  });
+
   test("reads environment-scoped getters without relying on the active environment", () => {
     const store = usePaneLayoutStore.getState();
 

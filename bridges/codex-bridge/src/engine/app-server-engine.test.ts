@@ -1,4 +1,5 @@
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import {
   BUILD,
   PLAN,
@@ -851,9 +852,12 @@ describe("thread lifecycle", () => {
           startup_timeout_sec: 15,
           // Only the mail and artifact tools bypass the ordinary approval policy.
           tools: Object.fromEntries(
-            [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map(
-              (name) => [name, { approval_mode: "approve" }],
-            ),
+            [
+              ...AGENT_MAIL_TOOL_NAMES,
+              ...ARTIFACT_TOOL_NAMES,
+              ...AGENT_GOAL_TOOL_NAMES,
+              ...KEY_INFORMATION_TOOL_NAMES,
+            ].map((name) => [name, { approval_mode: "approve" }]),
           ),
         },
       });

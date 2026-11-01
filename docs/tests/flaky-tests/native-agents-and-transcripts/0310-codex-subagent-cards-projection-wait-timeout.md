@@ -129,3 +129,24 @@ passed both complete owners (10 tests, 5.1 s, exit 0).
 - **Assessment:** confirmed intermittent recurrence. This review changes the
   OpenCode retry and ACP persistence/prompt paths; it does not change the Codex
   subagent fixture, implementation, assertion, timeout or skip.
+
+
+## Held-history reconciliation review — 2026-11-01
+
+The exact `mise run test` rerun observed `recovering` rather than `idle` at
+`apps/backend/tests/codex-subagent-cards.test.ts:170` after 2229.63 ms, with two
+backend workers. The backend group reported 12,521 passed, 107 skipped and
+three failed. The complete unchanged owner passed alone with
+`mise run test:logged -- --name current-codex-cards -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures`
+(exit zero, 4.9 s). Evidence: `/tmp/orkestrator-test-run.NettPR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed after completion). No owner implementation, assertion, deadline or
+skip changed; the isolated pass does not make the aggregate green.
+
+## Frontend-to-backend branch main merge — 2026-11-01
+
+- **Original command:** `mise run test:logged -- --name merge-tests-final -- mise run test`, Bun 1.4.4 on the shared Linux host. Workspace/root/bridge/protocol groups reserved 6/1/2/1 worker slots; backend used four parallel workers.
+- **Failure:** `Codex sub-agent cards through the bridge and backend projection > each child keeps one card, its transcript and status across a fresh backend and a cold restart` received `recovering` instead of `idle` at line 170 after 920.68 ms.
+- **Counts:** backend 12,912 passed, 112 skipped, one failed across 867 files (179.32 s). Web, root, bridges and protocol groups passed; the aggregate failed after 325.8 s.
+- **Complete unchanged owning-file rerun:** `mise run test:logged -- --name merge-codex-subagent-isolated -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed (one test, 1.1 s).
+- **Evidence:** `/tmp/orkestrator-test-run.egszoc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.DtSUk4/merge-tests-final.log.gz`.
+- **Assessment:** recurrence of the existing cold-restart observation mismatch. The first default aggregate's workspace group passed. No owning-test assertion, timeout or skip was changed; the isolated pass does not make the final aggregate green.

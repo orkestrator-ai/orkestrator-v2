@@ -314,6 +314,67 @@ describe("container status and fetch scripts against a local remote", () => {
     ]);
   }, 30_000);
 
+  test("a scanned commit revert skips fetching but recovers after an unscanned shallow re-clone", async () => {
+    const box = container();
+    const creationCommit = git(workspace, "rev-parse", "HEAD");
+    const original = git(workspace, "show", `${creationCommit}:base.txt`) + "\n";
+    await box.read(creationCommit);
+    await box.policy.idle();
+    const oldRepoId = box.policy.knownRepoId(box.id);
+    const exec = (_containerId: string, script: string) =>
+      shell(workspace, script.replaceAll("cd /workspace", "cd ."));
+    await fs.writeFile(path.join(workspace, "base.txt"), "edited\n");
+    await revertContainerFile(box.id, "base.txt", creationCommit, {
+      exec,
+      fetches: box.policy,
+    });
+    expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe(original);
+    expect(box.fetchCalls).toEqual([]);
+
+    await pushToRemote("base.txt", "new remote baseline\n");
+    await fs.rm(workspace, { recursive: true, force: true });
+    git(root, "clone", "-q", "--depth=1", `file://${remote}`, workspace);
+    expect(
+      Bun.spawnSync(["git", "cat-file", "-e", creationCommit], {
+        cwd: workspace,
+        env,
+      }).exitCode,
+    ).not.toBe(0);
+    // No status read: the action must not trust this stale cached identity.
+    expect(box.policy.knownRepoId(box.id)).toBe(oldRepoId);
+    await fs.writeFile(path.join(workspace, "base.txt"), "edited again\n");
+    await revertContainerFile(box.id, "base.txt", creationCommit, {
+      exec,
+      fetches: box.policy,
+    });
+    expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe(original);
+    expect(box.fetchCalls).toEqual([creationCommit]);
+  }, 30_000);
+
+  test("a failed identity probe skips refresh and still reverts from local refs", async () => {
+    const box = container();
+    const original = git(workspace, "show", "origin/main:base.txt") + "\n";
+    await fs.writeFile(path.join(workspace, "base.txt"), "local edit\n");
+    let calls = 0;
+    let refreshCalls = 0;
+    await revertContainerFile(box.id, "base.txt", "main", {
+      exec: async (_containerId, script) => {
+        calls += 1;
+        if (calls === 1) throw new Error("identity probe unavailable");
+        return shell(workspace, script.replaceAll("cd /workspace", "cd ."));
+      },
+      fetches: {
+        refreshForAction: async () => {
+          refreshCalls += 1;
+          return true;
+        },
+      },
+    });
+    expect(calls).toBe(2);
+    expect(refreshCalls).toBe(0);
+    expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe(original);
+  }, 30_000);
+
   test("a revert resolves the same base the old inline fetch did", async () => {
     const box = container();
     // The revert script's own `cd /workspace` is the container's clone.

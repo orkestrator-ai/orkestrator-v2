@@ -369,6 +369,33 @@ describe("ContainerGitFetchPolicy", () => {
     expect(owner.policy.knownRepoId("container-1")).toBeUndefined();
   });
 
+  test("a revert against a commit the scan classified never fetches", async () => {
+    // Found live (todo 0048): every new container compares against its
+    // creation commit, and each Files-panel revert used to fetch that SHA.
+    const owner = createPolicy({ auto: () => ok() });
+    const commit = scope("container-1", SHA_A);
+    owner.policy.observe(commit, "commit");
+    for (let index = 0; index < 3; index += 1) {
+      expect(await owner.policy.refreshForAction(commit)).toBe(false);
+      await owner.time.advance(20_000);
+    }
+    expect(owner.calls).toHaveLength(0);
+    expect(owner.fetchKind()?.requested ?? 0).toBe(0);
+    expect(owner.policy.status().records).toBe(0);
+    expect(owner.policy.freshness("container-1", SHA_A)).toEqual({ state: "not-required" });
+
+    // A different clone in the same container has not been classified yet.
+    await owner.policy.refreshForAction(scope("container-1", SHA_A, `${REPO}-recloned`));
+    expect(owner.calls).toHaveLength(1);
+
+    // Neither has a recreated container: the classification is per generation.
+    owner.policy.observe(commit, "commit");
+    owner.policy.forgetContainer("container-1");
+    await owner.time.advance(20_000);
+    expect(await owner.policy.refreshForAction(commit)).toBe(true);
+    expect(owner.calls).toHaveLength(2);
+  });
+
   test("a fetch reporting a different clone is superseded and stamps nothing", async () => {
     const owner = createPolicy({ auto: () => ok(SHA_A, SHA_B, "/workspace\t/other\t1:1") });
     owner.policy.observe(scope(), "tracking-ref");

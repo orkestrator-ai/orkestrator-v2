@@ -13,6 +13,7 @@ import {
   emptyControllerSettingsStore,
   type ControllerSettingsStore,
 } from "@orkestrator/protocol/controller-settings";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerNodeCommands } from "../commands-registry-nodes.js";
@@ -195,7 +196,10 @@ export class TestNodeNetwork {
       node.received.push({ command: body.command, controller });
       const extra = node.commands.get(body.command);
       const handler = this.commands.get(body.command);
-      if (!handler && !extra) return json(500, { error: `Unknown command: ${body.command}` });
+      if (!handler && !extra) {
+        // A real gateway answers with the backend's own wording.
+        return json(500, { error: unknownBackendCommandMessage(body.command) });
+      }
       try {
         const result = extra
           ? await extra(
@@ -244,7 +248,7 @@ export class TestNodeNetwork {
       local: {
         invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
           const handler = node.commands.get(command);
-          if (!handler) throw new Error(`Unknown command ${command}`);
+          if (!handler) throw new Error(unknownBackendCommandMessage(command));
           return (await handler(args)) as T;
         },
       },

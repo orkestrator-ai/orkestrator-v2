@@ -212,7 +212,16 @@ interface PaneLayoutState {
   applyAuthoritativeLayout: (environmentId: string, restored: EnvironmentPaneState) => void;
 
   // Tab management
-  addTab: (paneId: string, tab: TabInfo, environmentId?: string) => void;
+  /**
+   * Adds a tab and selects it. `activate: false` adds a new tab without
+   * changing the pane's selection; an existing tab is selected either way.
+   */
+  addTab: (
+    paneId: string,
+    tab: TabInfo,
+    environmentId?: string,
+    options?: { activate?: boolean },
+  ) => void;
   canAddTabInSplit: (paneId: string, environmentId: string) => boolean;
   addTabInSplit: (paneId: string, tab: TabInfo, environmentId: string) => boolean;
   removeTab: (paneId: string, tabId: string, environmentId?: string) => void;
@@ -715,7 +724,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     pruneUnreferencedAgentHandoffs(environmentId, restored.root);
   },
 
-  addTab: (paneId, tab, environmentId) => {
+  addTab: (paneId, tab, environmentId, options) => {
     const state = get();
     // Use explicit environmentId if provided, otherwise fall back to activeEnvironmentId
     const envId = environmentId ?? state.activeEnvironmentId;
@@ -754,7 +763,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newRoot = updateLeaf(envState.root, paneId, (leaf) => ({
       ...leaf,
       tabs: [...leaf.tabs, canonicalTab],
-      activeTabId: tab.id,
+      activeTabId: options?.activate === false && leaf.activeTabId ? leaf.activeTabId : tab.id,
     }));
 
     const newEnvs = new Map(state.environments);

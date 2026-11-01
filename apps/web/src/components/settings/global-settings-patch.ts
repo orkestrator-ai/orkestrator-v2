@@ -29,6 +29,7 @@ export interface CoreFieldsSnapshot {
   allowedDomains: string[];
   useHostGitHubCredentials: boolean;
   sshAgentSocketPath: string;
+  autoMergeRequireChecks: boolean;
   defaultProjectsDirectory: string;
   useHostClaudeCredentials: boolean;
   preferredEditor: PreferredEditor;
@@ -66,6 +67,7 @@ const STORED_AS_IS = [
   "envFilePatterns",
   "allowedDomains",
   "useHostGitHubCredentials",
+  "autoMergeRequireChecks",
   "useHostClaudeCredentials",
   "preferredEditor",
   "enabledAgentPlatforms",

@@ -1598,6 +1598,68 @@ describe("TerminalContainer", () => {
   });
 
   /**
+   * A pipeline started on an existing environment with no persisted layout
+   * gets one holding only its build tab, selected (`ensureBuildPipelineTab`).
+   * The default terminal seeded beside it must not take the selection, or the
+   * user lands on a new terminal and that choice is persisted over the
+   * backend's (todo 0048, task 4).
+   */
+  test("keeps a restored build-only layout's build tab selected while seeding the terminal", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "pipeline-existing",
+      environmentId: "env-hidden",
+      environmentType: "containerized",
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "build-pipeline-existing",
+            type: "claude-build",
+            buildTabData: {
+              pipelineId: pipeline.id,
+              environmentId: "env-hidden",
+              taskId: pipeline.taskId,
+              isLocal: false,
+            },
+          },
+        ],
+        activeTabId: "build-pipeline-existing",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const state = usePaneLayoutStore.getState().environments.get("env-hidden");
+      const tabs = state && state.root.kind === "leaf" ? state.root.tabs : [];
+      expect(tabs.map((tab) => tab.id)).toEqual(["build-pipeline-existing", "default"]);
+    });
+    const seeded = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    expect(seeded.root.kind === "leaf" ? seeded.root.activeTabId : null).toBe(
+      "build-pipeline-existing",
+    );
+  });
+
+  /**
    * The build supervisor inserts its tab as soon as the backend returns a
    * pipeline, which is always before the environment is running and therefore
    * always before this container's initial-layout effect can run. Counting that

@@ -17,6 +17,7 @@ import {
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
 import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-defaults";
+import { normalizeAgentAccountAutoSwitchSettings } from "@orkestrator/protocol/agent-account-auto-switch";
 import { sanitizeReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
@@ -216,6 +217,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       ? { ...DEFAULT_AGENT_MESSAGING_SETTINGS }
       : { ...DEFAULT_AGENT_MESSAGING_SETTINGS, enabled: false },
   );
+  const agentAccountAutoSwitch = normalizeAgentAccountAutoSwitchSettings(
+    global.agentAccountAutoSwitch,
+  );
   const hasExplicitGitHubCredentialSource = typeof global.useHostGitHubCredentials === "boolean";
   const hasLegacyGitHubToken =
     typeof global.githubToken === "string" && global.githubToken.trim().length > 0;
@@ -339,6 +343,8 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     JSON.stringify(global.openCodeModelProviders) === JSON.stringify(openCodeModelProviders) &&
     JSON.stringify(global.agentSettings) === JSON.stringify(agentSettings) &&
     JSON.stringify(global.agentMessaging) === JSON.stringify(agentMessaging) &&
+    JSON.stringify(global.agentAccountAutoSwitch ?? {}) ===
+      JSON.stringify(agentAccountAutoSwitch) &&
     JSON.stringify(global.notificationSounds) === JSON.stringify(notificationSounds) &&
     JSON.stringify(global.reviewLensPresets) === JSON.stringify(reviewLensPresets) &&
     global.coordinatorProviderTiers === coordinatorProviderTiers &&
@@ -370,6 +376,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       openCodeModelProviders,
       agentMessaging,
       notificationSounds,
+      ...(Object.keys(agentAccountAutoSwitch).length > 0 ? { agentAccountAutoSwitch } : {}),
       ...(reviewLensPresets === undefined ? {} : { reviewLensPresets }),
     } as unknown as AppConfig["global"],
   };

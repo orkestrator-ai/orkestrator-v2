@@ -96,6 +96,8 @@ export type CommandContext = {
   nodePortal?: import("./nodes/index.js").NodePortal;
   /** Leaf mail, the outbox and user-approved action requests. */
   nodeCoordination?: import("./nodes/index.js").NodeCoordination;
+  /** Automatic account switching; see `agent-accounts-auto-switch.ts`. */
+  accountAutoSwitch?: import("./agent-accounts-auto-switch.js").AgentAccountAutoSwitcher;
   projectGit?: ProjectGitService;
   controlMcp?: {
     getSettings(): ControlMcpSettings;

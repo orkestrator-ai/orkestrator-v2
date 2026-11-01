@@ -111,6 +111,7 @@ export interface ClaudeLaunchProfile {
   bypassCapable: boolean;
   plugins?: string;
   credentials?: string;
+  repositoryInstructions?: string;
   cwd: string;
   /**
    * The turn's execution policy, which fixes the tool allow/deny lists, the
@@ -273,7 +274,9 @@ export function assertClaudeRuntimeStaticAccepts(
 export async function assertClaudeRuntimeAccepts(
   session: SessionState,
   options: PromptOptions | undefined,
-  resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials"> & { settingSources?: string },
+  resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials" | "repositoryInstructions"> & {
+    settingSources?: string;
+  },
   readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>,
 ): Promise<void> {
   const runtime = openClaudeRuntime(session);
@@ -421,6 +424,11 @@ export function claudeLaunchConflict(
   if (request.thinking === "adaptive" && runtime.thinking !== "adaptive")
     return "adaptive thinking";
   if (request.bypassCapable && !runtime.bypassCapable) return "bypass permission capability";
+  if (
+    request.repositoryInstructions !== undefined &&
+    runtime.repositoryInstructions !== request.repositoryInstructions
+  )
+    return "repository instructions";
   if (request.plugins !== undefined && runtime.plugins !== request.plugins) return "plugins";
   if (request.credentials !== undefined && runtime.credentials !== request.credentials)
     return "managed credentials";

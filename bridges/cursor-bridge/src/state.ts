@@ -262,6 +262,16 @@ export interface SessionState {
   /** The SDK's own agent id. Stable across bridge restarts; what resume takes. */
   agentId?: string;
   /**
+   * Whether the attached agent loads the checkout's AGENTS.md itself: its
+   * settings sources include `project`. Set on every attach.
+   */
+  loadsProjectRules?: boolean;
+  /**
+   * The agent the repository's AGENTS.md was last sent to (`cursorPromptText`).
+   * In memory only: after a restart it is sent once more.
+   */
+  repositoryInstructionsAgentId?: string;
+  /**
    * Detached to adopt a configuration or model change and not yet reattached. The
    * next attach must resume `agentId` or fail; it may never quietly start a
    * new conversation. Persisted, because a restart does not change that.

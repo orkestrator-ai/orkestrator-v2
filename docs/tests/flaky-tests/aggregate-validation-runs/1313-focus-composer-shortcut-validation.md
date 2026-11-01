@@ -132,3 +132,17 @@ The original aggregate completed in 351.4 s. Web reported 11,111 passed,
 ten skipped and three failed across 733 files (343.48 s); the other two
 failures were settings guard references to a removed component, repaired
 without changing its layout assertions. The backend passed all 12,376 tests.
+
+
+## Held-history reconciliation review — 2026-11-01
+
+Preparation's `mise run test` repeated
+`root-change approval handles over-limit and still permits rejection` in
+`apps/web/src/components/federation/node-action-requests.test.tsx` after
+6641.19 ms against its 5000 ms deadline. The web group used two workers and
+reported 11,148 passed, ten skipped and four failed (803.26 s). The unchanged
+complete owner passed alone with
+`mise run test:logged -- --name prior-node-action-failure -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures`
+(exit zero, 7.3 s). Preparation evidence is
+`.orkestrator/review-artifacts/review-validation-b8f98852-001a-4729-aa23-7e07f56c9ac5/validation-04.stdout.txt`.
+No owner implementation, assertion, timeout or skip changed.

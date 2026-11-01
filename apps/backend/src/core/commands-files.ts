@@ -2046,7 +2046,7 @@ export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
 export interface ContainerRevertDeps {
   /** Runs a script in the container (`dockerExec`). */
   exec: (containerId: string, script: string) => Promise<string>;
-  fetches: Pick<ContainerGitFetchPolicy, "knownRepoId" | "refreshForAction">;
+  fetches: Pick<ContainerGitFetchPolicy, "refreshForAction">;
   /** The shared `git-docker-scan` pool, so the fetch never overlaps a scan of the container. */
   admission?: Pick<WorkAdmissionPool, "run"> | null;
 }
@@ -2067,9 +2067,11 @@ export async function revertContainerFile(
   deps: ContainerRevertDeps,
 ): Promise<void> {
   const refresh = async () => {
-    const repoId =
-      deps.fetches.knownRepoId(containerId) ??
-      parseContainerRepoProbe(await deps.exec(containerId, CONTAINER_REPO_PROBE_SCRIPT));
+    // A workspace can be replaced between the last scan and this action.
+    // Only a fresh identity can authorize skipping the recovery fetch.
+    const repoId = parseContainerRepoProbe(
+      await deps.exec(containerId, CONTAINER_REPO_PROBE_SCRIPT),
+    );
     await deps.fetches.refreshForAction({ containerId, repoId, ref: branch });
   };
   try {

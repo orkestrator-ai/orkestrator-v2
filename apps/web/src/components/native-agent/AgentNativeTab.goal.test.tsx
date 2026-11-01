@@ -329,7 +329,7 @@ describe("/goal in the composer", () => {
   test("with the capability off it is an ordinary prompt and nothing is offered", async () => {
     goalCapability = false;
     const { input } = await renderTab("tab-goal-off", "/goal ship it");
-    expect(screen.queryByTestId("goal-open-button")).toBeNull();
+    expect(screen.queryByTestId("goal-open-button") === null).toBe(true);
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     expect(runNativeAgentGoalCommandMock).not.toHaveBeenCalled();
@@ -339,7 +339,7 @@ describe("/goal in the composer", () => {
 describe("the goal surface", () => {
   test("no goal: a quiet button opens the form", async () => {
     await renderTab("tab-goal-none");
-    expect(screen.queryByTestId("goal-pill")).toBeNull();
+    expect(screen.queryByTestId("goal-pill") === null).toBe(true);
     fireEvent.click(screen.getByTestId("goal-open-button"));
     expect((await screen.findByRole("dialog")).textContent).toContain("Set a goal");
   });
@@ -350,7 +350,7 @@ describe("the goal surface", () => {
     const pill = await screen.findByTestId("goal-pill");
     expect(pill.dataset.goalStatus).toBe("checking");
     expect(pill.textContent).toContain("2/20");
-    expect(screen.queryByTestId("goal-open-button")).toBeNull();
+    expect(screen.queryByTestId("goal-open-button") === null).toBe(true);
     fireEvent.click(pill);
     expect((await screen.findByRole("dialog")).textContent).toContain("bun test");
   });

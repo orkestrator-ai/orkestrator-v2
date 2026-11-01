@@ -61,7 +61,7 @@ export function restoreSteeredQueueItem(
  */
 export type NativeAgentDispatchOutcome =
   | void
-  | { dispatched: true; deliveredAgentHandoffId?: string }
+  | { dispatched: true; deliveredAgentHandoffId?: string; mode?: "plan" | "build" }
   | {
       dispatched: false;
       mailRefused?: true;
@@ -274,6 +274,9 @@ export class NativeAgentDeliveries {
               ),
             }
           : {}),
+        lastDispatchedTurn: outcome?.dispatched
+          ? { requestId, ...(outcome.mode ? { mode: outcome.mode } : {}) }
+          : undefined,
         updatedAt: nowIso(),
       };
       sessions[key] = updated;
@@ -388,6 +391,10 @@ export class NativeAgentDeliveries {
       const carriedHandoffId: unknown = session.pendingDispatch.agentHandoffId;
       sessions[key] = {
         ...session,
+        lastDispatchedTurn: {
+          requestId,
+          mode: session.pendingDispatch.mode ?? session.controls?.mode,
+        },
         pendingDispatch: undefined,
         retiredDispatch: undefined,
         dispatchedRequestIds: session.dispatchedRequestIds?.includes(requestId)
@@ -625,6 +632,12 @@ export class NativeAgentDeliveries {
       pendingSteer: undefined,
       ...(settlement === "applied"
         ? {
+            lastDispatchedTurn: {
+              requestId,
+              mode: session.lastDispatchedTurn
+                ? session.lastDispatchedTurn.mode
+                : session.controls?.mode,
+            },
             dispatchedRequestIds: [
               ...(session.dispatchedRequestIds ?? []).filter((id) => id !== requestId).slice(-999),
               requestId,

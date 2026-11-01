@@ -1,4 +1,4 @@
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import { EnvironmentUnavailableError, type EnvironmentGit } from "./workspace-code-rewind.js";
 import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv, type GitHubCliConfigSource } from "./github-credentials.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
@@ -14,7 +14,7 @@ import {
   reviewArtifactDirectory,
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
-import { spawnCommand, runCommand } from "./shell.js";
+import { CommandFailedError, spawnCommand, runCommand } from "./shell.js";
 import { retryGitWithoutFsmonitorOnTimeout } from "./git-fsmonitor.js";
 import { writeConfinedFile, workspaceFilePath } from "./path-safety.js";
 import { DOCKER_LABEL_OWNER } from "./constants.js";
@@ -211,16 +211,68 @@ export type ReviewPreparationFileNote = {
   reason: string;
 };
 
-/** The build pipeline's Git port always resolves the current environment. */
+/** `docker inspect`'s `State.Status` for a container. */
+export type ContainerStatusReader = (containerId: string) => Promise<string>;
+
+const readContainerStatus: ContainerStatusReader = async (containerId) =>
+  (
+    await runCommand("docker", ["inspect", "-f", "{{.State.Status}}", containerId], {
+      timeoutMs: 10_000,
+    })
+  ).stdout.trim();
+
+/**
+ * Why a container cannot run commands, or undefined while it is running (a
+ * failure is then the command's own). Docker's exec refusal is daemon text
+ * naming the container ID, so the state is read rather than the message.
+ */
+async function containerUnavailableReason(
+  containerId: string,
+  readStatus: ContainerStatusReader,
+): Promise<string | undefined> {
+  let status: string;
+  try {
+    status = await readStatus(containerId);
+  } catch {
+    // An inspect failure cannot distinguish a missing container from an
+    // unavailable daemon or a timeout. Keep the refusal without guessing.
+    return "The environment's container status could not be checked. Check that Docker is running and the environment is available, then try again.";
+  }
+  if (status === "running") return undefined;
+  if (status === "paused") {
+    return "The environment's container is paused. Unpause it, then try again.";
+  }
+  return "The environment's container is not running. Start the environment, then try again.";
+}
+
+/**
+ * The workflows' Git port always resolves the current environment. When Git
+ * cannot run in a container environment at all, it throws an
+ * {@link EnvironmentUnavailableError} saying why, instead of Docker's text.
+ */
 export function createPipelineEnvironmentGit(
   storage: { getEnvironment: (id: string) => Promise<Environment | null> },
   fence: Pick<EnvironmentMutationFence, "beginMutation">,
   createRunner = createGitEnvironmentCommandRunner,
+  readStatus: ContainerStatusReader = readContainerStatus,
 ): EnvironmentGit {
   return async (environmentId, args) => {
     const environment = await storage.getEnvironment(environmentId);
     if (!environment) throw new Error("Environment not found");
-    return createRunner(environment, fence)("git", args, 60_000);
+    try {
+      return await createRunner(environment, fence)("git", args, 60_000);
+    } catch (error) {
+      if (
+        environment.environmentType !== "local" &&
+        environment.containerId &&
+        error instanceof CommandFailedError &&
+        !error.timedOut
+      ) {
+        const reason = await containerUnavailableReason(environment.containerId, readStatus);
+        if (reason) throw new EnvironmentUnavailableError(reason, { cause: error });
+      }
+      throw error;
+    }
   };
 }
 
@@ -1452,6 +1504,32 @@ export function isValidPrUrl(value: unknown): value is string {
 const PASSING_CHECK_OUTCOMES = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const PENDING_CHECK_STATES = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING"]);
 
+/** Where one GraphQL CheckRun or StatusContext entry stands. */
+export function prCheckOutcome(raw: unknown): "passed" | "pending" | "failed" {
+  const check = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const conclusion = typeof check.conclusion === "string" ? check.conclusion.toUpperCase() : null;
+  const status = typeof check.status === "string" ? check.status.toUpperCase() : null;
+  const state = typeof check.state === "string" ? check.state.toUpperCase() : null;
+
+  // A live CheckRun can temporarily retain its previous conclusion while a
+  // new run is queued. Its current status is authoritative over that stale
+  // conclusion, otherwise a running check would be shown as passed.
+  if (status !== null && status !== "COMPLETED") return "pending";
+  if (
+    (conclusion && PASSING_CHECK_OUTCOMES.has(conclusion)) ||
+    (state && PASSING_CHECK_OUTCOMES.has(state))
+  ) {
+    return "passed";
+  }
+  if (
+    (state !== null && PENDING_CHECK_STATES.has(state)) ||
+    (status === null && state === null && conclusion === null)
+  ) {
+    return "pending";
+  }
+  return "failed";
+}
+
 /** Reduces GraphQL CheckRun and StatusContext entries into one stable UI summary. */
 export function parsePrCheckSummary(value: unknown): PrCheckSummary {
   if (!Array.isArray(value)) return { passed: 0, total: 0, pending: 0 };
@@ -1459,27 +1537,9 @@ export function parsePrCheckSummary(value: unknown): PrCheckSummary {
   let passed = 0;
   let pending = 0;
   for (const raw of value) {
-    const check = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-    const conclusion = typeof check.conclusion === "string" ? check.conclusion.toUpperCase() : null;
-    const status = typeof check.status === "string" ? check.status.toUpperCase() : null;
-    const state = typeof check.state === "string" ? check.state.toUpperCase() : null;
-
-    // A live CheckRun can temporarily retain its previous conclusion while a
-    // new run is queued. Its current status is authoritative over that stale
-    // conclusion, otherwise a running check would be shown as passed.
-    if (status !== null && status !== "COMPLETED") {
-      pending += 1;
-    } else if (
-      (conclusion && PASSING_CHECK_OUTCOMES.has(conclusion)) ||
-      (state && PASSING_CHECK_OUTCOMES.has(state))
-    ) {
-      passed += 1;
-    } else if (
-      (state !== null && PENDING_CHECK_STATES.has(state)) ||
-      (status === null && state === null && conclusion === null)
-    ) {
-      pending += 1;
-    }
+    const outcome = prCheckOutcome(raw);
+    if (outcome === "passed") passed += 1;
+    else if (outcome === "pending") pending += 1;
   }
 
   return { passed, total: value.length, pending };

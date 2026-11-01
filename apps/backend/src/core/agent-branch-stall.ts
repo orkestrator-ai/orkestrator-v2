@@ -24,6 +24,12 @@ export function agentBranchPollScope<B extends AgentBranchRecord>(
   return `${context.host.workflowId}\0${branch.id}\0${kind}`;
 }
 
+/** Allocation is not acceptance; legacy sent journals still prove startup. */
+export function classifyAgentBranchStartFailure(branch: AgentBranchRecord): void {
+  if (branch.agentStarted ?? branch.dispatchState === "sent") delete branch.startFailed;
+  else branch.startFailed = true;
+}
+
 /** Ends a branch that can make no further progress, best-effort aborting its turn. */
 export async function failAgentBranch<B extends AgentBranchRecord>(
   context: AgentBranchContext<B>,
@@ -36,6 +42,7 @@ export async function failAgentBranch<B extends AgentBranchRecord>(
     context.host.progress.forget(branch.providerSessionId);
   }
   branch.status = "failed";
+  classifyAgentBranchStartFailure(branch);
   branch.error = error;
   branch.completedAt = agentBranchNowIso();
   delete branch.stalledSince;

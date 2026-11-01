@@ -1,14 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import {
-  DEFAULT_REVIEW_INSTRUCTION,
   DEFAULT_REVIEW_PROMPT_TEMPLATE,
-  REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
   createReviewPrompt,
-  createPRPrompt,
   createPushChangesPrompt,
-  createResolveConflictsPrompt,
-} from "./git-workflows";
-import { REVIEW_INSTRUCTION_MAX_LENGTH } from "@orkestrator/protocol/review-instruction";
+  defaultPrTargetBranch,
+} from "./git-workflow-prompts";
+import { createPRPrompt, createResolveConflictsPrompt } from "./pr-prompt";
+import { REVIEW_INSTRUCTION_MAX_LENGTH } from "./review-prompt";
+import {
+  DEFAULT_REVIEW_INSTRUCTION,
+  REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
+} from "./review-workflow";
+
+describe("defaultPrTargetBranch", () => {
+  test("uses the repository's PR base branch", () => {
+    expect(defaultPrTargetBranch("develop")).toBe("develop");
+  });
+
+  test("falls back to main for a missing or cleared base", () => {
+    expect(defaultPrTargetBranch(undefined)).toBe("main");
+    expect(defaultPrTargetBranch(null)).toBe("main");
+    // Repository settings persist a cleared base as "".
+    expect(defaultPrTargetBranch("")).toBe("main");
+    expect(defaultPrTargetBranch("   ")).toBe("main");
+  });
+});
 
 // --- createReviewPrompt ---
 

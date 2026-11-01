@@ -127,7 +127,7 @@ import {
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
 import { findMultiReviewFixReport } from "@/lib/multi-review-fix-tab";
 import {

@@ -21,7 +21,7 @@ import {
 import {
   structuredReviewFindingsSummary,
   structuredReviewVerdictSummary,
-} from "@/lib/review/structured-review-summary";
+} from "@orkestrator/protocol/structured-review-summary";
 
 export type JsonContainer = Record<string, unknown> | unknown[];
 

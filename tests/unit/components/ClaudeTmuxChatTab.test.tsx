@@ -36,7 +36,7 @@ import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 
 import * as realReactVirtuoso from "react-virtuoso";
 
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 
 import { mockReadImage } from "../../mocks/clipboard";
 

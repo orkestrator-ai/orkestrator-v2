@@ -61,7 +61,7 @@ import {
   prependAgentHandoffHistory,
   resetAgentHandoffCache,
 } from "@/lib/agent-handoff";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { getReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";

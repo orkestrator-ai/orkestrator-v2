@@ -3,8 +3,8 @@ import type {
   ReviewOverallRisk,
   ReviewVerdictReady,
   StructuredReviewReport,
-} from "@orkestrator/protocol/structured-review";
-import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
+} from "./structured-review";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "./testing/structured-review-fixtures";
 import { structuredReviewVerdictSummary } from "./structured-review-summary";
 
 function reportWithCounts(issueCount: number, coverageGapCount: number): StructuredReviewReport {

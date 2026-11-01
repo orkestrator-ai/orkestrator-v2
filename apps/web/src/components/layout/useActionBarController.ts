@@ -29,12 +29,14 @@ import type {
 } from "@orkestrator/protocol/action-defaults";
 import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
 import {
-  createPRPrompt,
-  createReviewPrompt,
   createPushChangesPrompt,
-  createResolveConflictsPrompt,
-  createOrkestratorScriptPrompt,
-} from "@/prompts";
+  createReviewPrompt,
+  defaultPrTargetBranch,
+  PUSH_CHANGES_TAB_TITLE,
+  REVIEW_TAB_TITLE,
+} from "@orkestrator/protocol/git-workflow-prompts";
+import { createOrkestratorScriptPrompt } from "@orkestrator/protocol/orkestrator-script-prompt";
+import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import * as backend from "@/lib/backend";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
@@ -746,8 +748,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     ) => {
       if (!createTab || !selectedEnvironmentId || !selectedProjectId || !canCreateTab) return;
 
-      const repoConfig = config.repositories[selectedProjectId];
-      const targetBranch = repoConfig?.prBaseBranch || "main";
+      // The same target-branch rule the backend's `review.start` action applies.
+      const targetBranch = defaultPrTargetBranch(
+        config.repositories[selectedProjectId]?.prBaseBranch,
+      );
       const reviewPrompt = createReviewPrompt(targetBranch, config.global.reviewInstruction);
 
       // A plain click has no dialog to configure the run, so the Defaults tab is
@@ -782,7 +786,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         // succeeds. If persistence fails, the native tab can still retry the
         // launch instead of becoming an empty, unrecoverable review tab.
         initialPrompt: reviewPrompt,
-        displayTitle: "Review",
+        displayTitle: REVIEW_TAB_TITLE,
         isReviewTab: true,
         agentLaunchMode: "native",
         ...launchOptions,
@@ -1702,7 +1706,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           environmentId,
           agent,
           prompt: pushPrompt,
-          title: "Git Push",
+          title: PUSH_CHANGES_TAB_TITLE,
           conversationMode: "build",
           activateTab: true,
           ...(defaultForAgent?.model ? { modelId: defaultForAgent.model } : {}),

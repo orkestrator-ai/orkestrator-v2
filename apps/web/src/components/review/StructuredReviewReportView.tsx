@@ -18,7 +18,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
-import { structuredReviewVerdictSummary } from "@/lib/review/structured-review-summary";
+import { structuredReviewVerdictSummary } from "@orkestrator/protocol/structured-review-summary";
 import { cn } from "@/lib/utils";
 
 // Re-exported for the callers that already reach for it here.

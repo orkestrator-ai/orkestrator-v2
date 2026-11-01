@@ -20,6 +20,7 @@ import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-default
 import { normalizeAgentAccountAutoSwitchSettings } from "@orkestrator/protocol/agent-account-auto-switch";
 import { sanitizeReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
+import { resolveLogDetail } from "@orkestrator/protocol/log-policy";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
 import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
@@ -184,6 +185,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       ? undefined
       : resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration);
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
+  // The one-time upgrade from a single `debugLogging` switch: whoever had it on
+  // keeps saving (the switch itself) and bridge detail (this mapping).
+  const logDetail = resolveLogDetail(global);
   const terminalHistoryRetention = normalizeTerminalHistoryRetention({
     enabled: global.terminalHistoryEnabled,
     sessionMb: global.terminalHistoryRetentionMb,
@@ -331,6 +335,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.claudeBackgroundCommandLimitHours === claudeBackgroundCommandLimitHours &&
     global.sessionTitleGeneration === sessionTitleGeneration &&
     global.debugLogRetentionDays === debugLogRetentionDays &&
+    JSON.stringify(global.logDetail) === JSON.stringify(logDetail) &&
     global.terminalHistoryEnabled === terminalHistoryRetention.enabled &&
     global.terminalHistoryRetentionMb === terminalHistoryRetention.sessionMb &&
     global.terminalHistoryGlobalRetentionMb === terminalHistoryRetention.globalMb &&
@@ -364,6 +369,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       claudeBackgroundCommandLimitHours,
       sessionTitleGeneration,
       debugLogRetentionDays,
+      logDetail,
       terminalHistoryEnabled: terminalHistoryRetention.enabled,
       terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,
       terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,

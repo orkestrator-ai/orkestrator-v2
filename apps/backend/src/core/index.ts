@@ -1,3 +1,6 @@
+import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
+import { listRunningBridgeTargets } from "./log-policy-bridges.js";
+import { LogPolicyService } from "./log-policy-service.js";
 import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
 import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
@@ -296,6 +299,8 @@ export class OrkestratorBackend {
   private readonly agentMail: AgentMailService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly runtime: BackendRuntime;
+  private readonly applicationLogging: InstalledApplicationLogging | null;
+  private stopLogPolicyListener: (() => void) | null = null;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   /** Remote-initiated updates of this host; see host-maintenance.ts. */
@@ -383,6 +388,8 @@ export class OrkestratorBackend {
 
   constructor(options: {
     dataDir: string;
+    /** This process's own log writer; null or absent when the desktop records its output. */
+    applicationLogging?: InstalledApplicationLogging | null;
     toolchainBinDir: string;
     appRoot: string;
     resourceRoot: string;
@@ -562,6 +569,7 @@ export class OrkestratorBackend {
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
+    this.applicationLogging = options.applicationLogging ?? null;
     this.runtime =
       options.runtime ??
       new BackendRuntime({
@@ -1728,6 +1736,8 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    // After `init`, which applies the upgrade from the single logging switch.
+    this.startLogPolicy();
     try {
       this.runtime.changeTracking?.start();
     } catch (error) {
@@ -2680,9 +2690,24 @@ export class OrkestratorBackend {
     return (await handler(args, this.context)) as T;
   }
 
+  private startLogPolicy(): void {
+    const logPolicy = new LogPolicyService({
+      dataDir: this.context.storage.getDataDir(),
+      logging: this.applicationLogging,
+      listRunningBridges: () => listRunningBridgeTargets(this.context),
+    });
+    this.runtime.logPolicy = logPolicy;
+    logPolicy.start();
+    this.stopLogPolicyListener = this.context.storage.addResourceChangeListener((change) => {
+      if (change.resource === "config") logPolicy.configChanged();
+    });
+  }
+
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    this.stopLogPolicyListener?.();
+    this.runtime.logPolicy?.stop();
     // Bounded and never rejects: a running host check removes its probe
     // network (or shutdown removes it) before the process exits.
     const reachabilitySettled = this.containerHostReachability?.dispose();

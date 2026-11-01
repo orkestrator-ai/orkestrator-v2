@@ -17,7 +17,9 @@ import path from "node:path";
 import {
   installProductionApplicationLogging,
   pruneExpiredApplicationLogs,
+  readApplicationLogPolicy,
   readApplicationLogSettings,
+  readStoredApplicationLogPolicy,
   registerApplicationLoggingShutdown,
   type ApplicationLoggingQuitHost,
   type InstalledApplicationLogging,
@@ -89,16 +91,21 @@ describe("production application log settings", () => {
     expect(readApplicationLogSettings(dataDir)).toEqual({ enabled: false, retentionDays: 7 });
   });
 
-  test("does not install when logging is disabled", async () => {
+  test("installs but writes nothing while saving is off", async () => {
     const dataDir = await temporaryDirectory();
     await writeFile(
       path.join(dataDir, "config.json"),
       JSON.stringify({ global: { debugLogging: false } }),
     );
-    const originalLog = console.log;
-    expect(installProductionApplicationLogging({ dataDir })).toBeNull();
-    expect(console.log).toBe(originalLog);
-    expect(await readdir(dataDir)).toEqual(["config.json"]);
+    const logging = installProductionApplicationLogging({ dataDir });
+    try {
+      console.log("not saved");
+      await logging.flush();
+      expect(logging.settings()).toEqual({ enabled: false, retentionDays: 7 });
+      expect(await readdir(dataDir)).toEqual(["config.json"]);
+    } finally {
+      await logging.stop();
+    }
   });
 });
 
@@ -623,7 +630,8 @@ describe("application logging shutdown", () => {
     let stopCalls = 0;
     const logging = {
       logDirectory: "/tmp/logs",
-      retentionDays: 7,
+      settings: () => ({ enabled: true, retentionDays: 7 }),
+      updateSettings: () => {},
       flush: async () => {},
       dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
       stop: () => {
@@ -653,7 +661,8 @@ describe("application logging shutdown", () => {
     const app = fakeApp();
     const logging = {
       logDirectory: "/tmp/logs",
-      retentionDays: 7,
+      settings: () => ({ enabled: true, retentionDays: 7 }),
+      updateSettings: () => {},
       flush: async () => {},
       dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
       stop: () => new Promise<void>(() => {}),
@@ -669,7 +678,8 @@ describe("application logging shutdown", () => {
     const app = fakeApp();
     const logging = {
       logDirectory: "/tmp/logs",
-      retentionDays: 7,
+      settings: () => ({ enabled: true, retentionDays: 7 }),
+      updateSettings: () => {},
       flush: async () => {},
       dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
       stop: () => Promise.reject(new Error("disk gone")),
@@ -699,7 +709,8 @@ describe("application logging shutdown", () => {
     };
     const logging = {
       logDirectory: "/tmp/logs",
-      retentionDays: 7,
+      settings: () => ({ enabled: true, retentionDays: 7 }),
+      updateSettings: () => {},
       flush: async () => {},
       dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
       stop: async () => {},
@@ -725,7 +736,8 @@ describe("application logging shutdown", () => {
     const order: string[] = [];
     const logging = {
       logDirectory: "/tmp/logs",
-      retentionDays: 7,
+      settings: () => ({ enabled: true, retentionDays: 7 }),
+      updateSettings: () => {},
       flush: async () => {},
       dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
       stop: async () => {
@@ -752,7 +764,8 @@ describe("application logging shutdown", () => {
     let closed = false;
     const logging = {
       logDirectory: "/tmp/logs",
-      retentionDays: 7,
+      settings: () => ({ enabled: true, retentionDays: 7 }),
+      updateSettings: () => {},
       flush: async () => {},
       dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),
       stop: async () => {
@@ -776,5 +789,117 @@ describe("application logging shutdown", () => {
     app.emit();
     expect(app.preventedCount).toBe(0);
     expect(app.quitCount).toBe(0);
+  });
+});
+
+describe("live settings", () => {
+  async function savedLines(dataDir: string): Promise<string> {
+    const logDirectory = path.join(dataDir, "logs");
+    const files = await readdir(logDirectory);
+    const contents = await Promise.all(
+      files.map((file) => readFile(path.join(logDirectory, file), "utf8")),
+    );
+    return contents.join("");
+  }
+
+  test("turning saving on and off takes effect at once, with its own markers", async () => {
+    const dataDir = await temporaryDirectory();
+    await writeFile(
+      path.join(dataDir, "config.json"),
+      JSON.stringify({ global: { debugLogging: false } }),
+    );
+    const logging = installProductionApplicationLogging({ dataDir });
+    try {
+      console.log("off before");
+      logging.updateSettings({ enabled: true, retentionDays: 7 });
+      console.log("on");
+      logging.updateSettings({ enabled: false, retentionDays: 7 });
+      console.log("off after");
+      await logging.flush();
+      const saved = await savedLines(dataDir);
+      expect(saved).toContain("on");
+      expect(saved).toContain("capture.started");
+      expect(saved).toContain("capture.stopped");
+      expect(saved).not.toContain("off before");
+      expect(saved).not.toContain("off after");
+      expect(logging.settings().enabled).toBe(false);
+    } finally {
+      await logging.stop();
+    }
+  });
+
+  test("turning saving off announces a drop it would otherwise never report", async () => {
+    const dataDir = await enabledDataDir();
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      bounds: { maxPendingBytes: 1 },
+    });
+    try {
+      console.log("does not fit");
+      expect(logging.dropStats().droppedEntries).toBeGreaterThan(0);
+      logging.updateSettings({ enabled: false, retentionDays: 7 });
+      expect(logging.dropStats()).toEqual({ droppedEntries: 0, droppedBytes: 0 });
+      await logging.flush();
+      expect(await savedLines(dataDir)).toContain("entries.dropped");
+    } finally {
+      await logging.stop();
+    }
+  });
+
+  test("a shorter retention sweeps straight away, and a sweep follows saving", async () => {
+    const dataDir = await enabledDataDir();
+    const logDirectory = path.join(dataDir, "logs");
+    await mkdir(logDirectory, { recursive: true });
+    const old = path.join(logDirectory, "orkestrator-ai-2026-01-01.log");
+    await writeFile(old, "old\n");
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    await utimes(old, threeDaysAgo, threeDaysAgo);
+    const logging = installProductionApplicationLogging({ dataDir });
+    const exists = () =>
+      stat(old).then(
+        () => true,
+        () => false,
+      );
+    try {
+      await logging.flush();
+      expect(await exists()).toBe(true);
+
+      logging.updateSettings({ enabled: false, retentionDays: 1 });
+      await Bun.sleep(30);
+      expect(await exists()).toBe(true);
+
+      logging.updateSettings({ enabled: true, retentionDays: 1 });
+      for (let waited = 0; waited < 2_000 && (await exists()); waited += 10) await Bun.sleep(10);
+      expect(await exists()).toBe(false);
+      expect(logging.settings().retentionDays).toBe(1);
+    } finally {
+      await logging.stop();
+    }
+  });
+
+  test("reads both settings, applying the upgrade to a config from before the split", async () => {
+    const dataDir = await temporaryDirectory();
+    await writeFile(
+      path.join(dataDir, "config.json"),
+      JSON.stringify({ global: { debugLogging: true, debugLogRetentionDays: 30 } }),
+    );
+    expect(readApplicationLogPolicy(dataDir)).toEqual({
+      saving: { enabled: true, retentionDays: 30 },
+      detail: { level: "info", areaLevels: { bridge: "debug" } },
+    });
+    await writeFile(
+      path.join(dataDir, "config.json"),
+      JSON.stringify({
+        global: { debugLogging: true, logDetail: { level: "warn", areaLevels: {} } },
+      }),
+    );
+    expect(readApplicationLogPolicy(dataDir).detail).toEqual({ level: "warn", areaLevels: {} });
+  });
+
+  test("a running process keeps its settings when the file cannot be read", async () => {
+    const dataDir = await temporaryDirectory();
+    expect(readStoredApplicationLogPolicy(dataDir)).toBeNull();
+    await writeFile(path.join(dataDir, "config.json"), "{ torn");
+    expect(readStoredApplicationLogPolicy(dataDir)).toBeNull();
   });
 });

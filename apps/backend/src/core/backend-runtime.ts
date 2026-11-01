@@ -1,3 +1,4 @@
+import type { LogPolicyService } from "./log-policy-service.js";
 import {
   AgentAccountsRuntime,
   type AgentAccountsRuntimeOptions,
@@ -86,6 +87,11 @@ export class BackendRuntime {
    * fixtures, where the `changes_*` commands report it unavailable.
    */
   changeTracking: ChangeTrackingService | null = null;
+  /**
+   * Live logging settings (docs/architecture/logging.md). Attached by the backend
+   * once storage exists; absent in lightweight command fixtures.
+   */
+  logPolicy: LogPolicyService | null = null;
 
   constructor(options: BackendRuntimeOptions) {
     this.diffStats = new DiffStatsTracking({

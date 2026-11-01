@@ -10,6 +10,7 @@
  */
 import { LEGACY_ENABLED_AGENT_PLATFORMS, type AgentPlatform } from "./agent-platforms.js";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "./agent-mail.js";
+import { defaultLogDetail } from "./log-policy.js";
 import { DEFAULT_CODEX_MODEL_ID, DEFAULT_CODEX_REASONING_EFFORT } from "./codex-model-catalog.js";
 import { COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION } from "./coordinator.js";
 import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "./debug-logging.js";
@@ -89,6 +90,7 @@ export function createDefaultGlobalConfig() {
     terminalHistoryRetentionDays: DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     experimentalCodexRawEventLogging: true,
     debugLogging: false,
+    logDetail: defaultLogDetail(),
     debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
     webClientEnabled: true,
     notificationSounds: { ...DEFAULT_NOTIFICATION_SOUND_SETTINGS },

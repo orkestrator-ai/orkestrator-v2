@@ -800,7 +800,7 @@ A coordinator's `get_environment` and `list_environments` rows for a worker
 with a pull request carry, besides `prUrl` and `prState`,
 `prHasMergeConflicts`, `prMergeability` (`clean`, `blocked`, `dirty`,
 `behind`, `unstable`, `unknown`, `unavailable`), `prChecks` (`passed`,
-`failed`, `pending` and `total` counts, or null) and `prReadyToMerge` with
+`failed`, `pending` and `total` counts, plus `requiredFailed`, or null) and `prReadyToMerge` with
 `prNotReadyReason` when false (`coordinator-pr-status.ts`). Readiness is
 `evaluatePrMergeReadiness` (`packages/protocol/src/pr-merge-readiness.ts`),
 the rule behind the sidebar's shimmer, with the PR monitor's confirmation as
@@ -810,6 +810,14 @@ node's rows the health its summaries relay while that node is connected and
 current. Other nodes' rows carry `prState` and these fields but never a URL,
 since summaries do not. They are states and counts only, never check names
 or logs. Operator reads are unchanged.
+
+`requiredFailed` is GitHub's `isRequired`, which the PR monitor asks only
+when its rollup shows a failing check, cached per PR head and failing set
+(`pr-required-checks.ts`). A PR whose only failing checks are not required
+stays quiet: no `pr-checks-failed` wake, and still not ready to merge. When
+GitHub does not answer, or an older node does not relay the count, it is
+null and every failing check counts; that notice says the check may not be
+required.
 
 ## Worker delegation
 
@@ -1162,7 +1170,7 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
-| Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a check failed (`pr-checks-failed`), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
+| Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a required check failed (`pr-checks-failed`; any failing check when GitHub does not say which are required), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
 | Pull request | its Resolve tab finished (`resolve-finished`), with the PR's state after the PR monitor's recheck | `settled` |
 | Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |

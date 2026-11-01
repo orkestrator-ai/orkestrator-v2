@@ -24,6 +24,14 @@ import {
   prViewerRepository,
   type PrViewerPermissionCache,
 } from "./pr-viewer-permission.js";
+import {
+  failingCheckNames,
+  parsePrRequiredChecks,
+  PR_REQUIRED_CHECKS_TIMEOUT_MS,
+  prRequiredChecksArgs,
+  type PrRequiredChecksCache,
+} from "./pr-required-checks.js";
+import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 
 export type StoredKanbanTask = Awaited<ReturnType<KanbanStorage["getKanbanTasks"]>>[number];
 
@@ -154,6 +162,14 @@ export function getPrMonitorCheckRequest(prUrl: string): PrMonitorCheckRequest {
 }
 
 export function parsePrMonitorCheckResponse(stdout: string, expectedHeadSha?: string | null) {
+  return parsePrMonitorCheckRollup(stdout, expectedHeadSha).summary;
+}
+
+/** The rollup's summary, with the head it describes and the names of its failing checks. */
+export function parsePrMonitorCheckRollup(
+  stdout: string,
+  expectedHeadSha?: string | null,
+): { summary: PrCheckSummary; headSha: string | null; failing: string[] } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout.trim());
@@ -163,10 +179,37 @@ export function parsePrMonitorCheckResponse(stdout: string, expectedHeadSha?: st
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("Failed to parse gh PR check output");
   }
-  if (expectedHeadSha && (parsed as Record<string, unknown>).headRefOid !== expectedHeadSha) {
+  const { headRefOid, statusCheckRollup } = parsed as Record<string, unknown>;
+  if (expectedHeadSha && headRefOid !== expectedHeadSha) {
     throw new Error("PR head changed while reading checks");
   }
-  return parsePrCheckSummary((parsed as Record<string, unknown>).statusCheckRollup);
+  return {
+    summary: parsePrCheckSummary(statusCheckRollup),
+    headSha:
+      typeof headRefOid === "string" && /^[a-f0-9]{40}$/i.test(headRefOid) ? headRefOid : null,
+    failing: failingCheckNames(statusCheckRollup),
+  };
+}
+
+/**
+ * Adds how many failing checks GitHub requires, asking through the same
+ * runner only when a check fails and the cache has no answer for this head
+ * and failing set. Never fails the reading: unknown leaves it absent.
+ */
+async function withRequiredFailures(
+  rollup: ReturnType<typeof parsePrMonitorCheckRollup>,
+  prUrl: string,
+  cache: PrRequiredChecksCache | undefined,
+  runGh: (args: string[]) => Promise<string>,
+): Promise<PrCheckSummary> {
+  const { summary, headSha, failing } = rollup;
+  if (!cache || !headSha || failing.length === 0) return summary;
+  const args = prRequiredChecksArgs(prUrl);
+  if (!args) return summary;
+  const requiredFailed = await cache.resolve(prUrl, headSha, failing, async () =>
+    parsePrRequiredChecks(await runGh(args), headSha),
+  );
+  return requiredFailed === null ? summary : { ...summary, requiredFailed };
 }
 
 export function parsePrMonitorDetectionResponse(
@@ -298,6 +341,8 @@ export async function detectEnvironmentPullRequest(
     storage?: StorageService;
     /** Fills `viewerCanMerge` for an open PR; omitted, it stays absent. */
     viewerPermissions?: PrViewerPermissionCache;
+    /** Fills the check summary's `requiredFailed` when a check fails; omitted, it stays absent. */
+    requiredChecks?: PrRequiredChecksCache;
   } = {},
 ): Promise<PrDetection | null> {
   if (target.projectHome) {
@@ -349,16 +394,20 @@ export async function detectEnvironmentPullRequest(
     const checkRequest = getPrMonitorCheckRequest(detection.url);
     try {
       recurringWorkMetrics.requested("pr-check-rollup");
+      const runGh = async (args: string[], timeoutMs: number) =>
+        (
+          await runCommand(gitHubCli(), args, {
+            cwd: worktreePath,
+            timeoutMs,
+            env: await gitHubCliEnv(options.storage),
+          })
+        ).stdout;
       const checkSummary = await recurringWorkMetrics.observe("pr-check-rollup", async () =>
-        parsePrMonitorCheckResponse(
-          (
-            await runCommand(gitHubCli(), checkRequest.args, {
-              cwd: worktreePath,
-              timeoutMs: 10_000,
-              env: await gitHubCliEnv(options.storage),
-            })
-          ).stdout,
-          detection.headSha,
+        withRequiredFailures(
+          parsePrMonitorCheckRollup(await runGh(checkRequest.args, 10_000), detection.headSha),
+          detection.url,
+          options.requiredChecks,
+          (args) => runGh(args, PR_REQUIRED_CHECKS_TIMEOUT_MS),
         ),
       );
       return {
@@ -395,13 +444,23 @@ export async function detectEnvironmentPullRequest(
   try {
     recurringWorkMetrics.requested("pr-check-rollup");
     const checkSummary = await recurringWorkMetrics.observe("pr-check-rollup", async () =>
-      parsePrMonitorCheckResponse(
-        await dockerExec(
-          containerId,
-          withContainerRuntimeCredential(checkRequest.shellCommand),
-          10_000,
+      withRequiredFailures(
+        parsePrMonitorCheckRollup(
+          await dockerExec(
+            containerId,
+            withContainerRuntimeCredential(checkRequest.shellCommand),
+            10_000,
+          ),
+          detection.headSha,
         ),
-        detection.headSha,
+        detection.url,
+        options.requiredChecks,
+        (args) =>
+          dockerExec(
+            containerId,
+            withContainerRuntimeCredential(["gh", ...args].map(quoteShell).join(" ")),
+            PR_REQUIRED_CHECKS_TIMEOUT_MS,
+          ),
       ),
     );
     return {

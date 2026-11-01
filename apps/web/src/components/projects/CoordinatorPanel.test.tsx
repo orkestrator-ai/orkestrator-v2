@@ -1018,7 +1018,23 @@ describe("CoordinatorPanel", () => {
       },
     );
 
-    test.each(["empty", "attachment", "command"] as const)(
+    test("ignores an empty message before upstream preflight", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      const fetches = await fetchesAfterOpen();
+      await sendFollowUp("  ");
+      await act(async () => {});
+      expect(
+        useNativeComposeStore.getState().drafts.get(launchSessionKey)?.submissionError,
+      ).toBeUndefined();
+      expect(fetchGit.mock.calls.length).toBe(fetches);
+      expect(syncGit).not.toHaveBeenCalled();
+      expect(dispatchIntent).not.toHaveBeenCalled();
+      expect(mergeDialog() === null).toBe(true);
+      expect(storedDecline()).toBeUndefined();
+    });
+
+    test.each(["attachment", "command"] as const)(
       "rejects %s locally before upstream preflight",
       async (kind) => {
         ensuredGit = behindGit();
@@ -1044,9 +1060,7 @@ describe("CoordinatorPanel", () => {
               annotations: [{ id: "a1", text: "Reference", comment: "" }],
             }),
           );
-        await sendFollowUp(
-          kind === "empty" ? "  " : kind === "command" ? "!git status" : "Read the attachment",
-        );
+        await sendFollowUp(kind === "command" ? "!git status" : "Read the attachment");
         await waitFor(() =>
           expect(
             useNativeComposeStore.getState().drafts.get(launchSessionKey)?.submissionError,

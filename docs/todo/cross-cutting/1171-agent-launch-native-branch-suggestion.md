@@ -112,6 +112,35 @@ None.
   e2e/AgentLaunchDialogNativePopup.spec.ts`. A pass answers the open question
   below. A failure there would be a real Chrome or app regression.
 
+### Review follow-up (2026-11-01)
+
+The review correctly distinguishes `fill()` coverage from native popup selection:
+the default test does not prove that Chrome's suggestion UI fills the field.
+Keep the unlocked-desktop qualification outstanding until the opt-in spec passes;
+passing default tests or skipping the native spec cannot close this gap.
+
+The follow-up host also reports `CGSSessionScreenIsLocked = 1` from
+`CGSessionCopyCurrentDictionary()` (queried through Swift/CoreGraphics). The
+session cannot supply the required unlocked-desktop qualification.
+
+The follow-up command was:
+
+```bash
+ORKESTRATOR_E2E_NATIVE_POPUPS=1 ORKESTRATOR_E2E_PORT=14872 \
+  mise run test:logged -- --name agent-launch-native-review -- \
+  bunx playwright test --config e2e/playwright.config.ts \
+  e2e/AgentLaunchDialogNativePopup.spec.ts --workers=1
+```
+
+Result: exit 1, two failures (mobile and desktop), each at the expected
+`release/2.0` assertion with actual value `rel`. Separate failure logs are in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.sWlELR`;
+Playwright traces are under `output/playwright/test-results/`. The original
+review package and its artifacts were left intact. This reproduces the symptom
+on a locked host; it does not prove that locking is the only cause or qualify
+the native path. The coverage finding remains unresolved pending the unlocked
+desktop run above. No test was weakened or skipped to make this run green.
+
 ## Constraints and rationale
 
 - No skip without the probe; the case exists because bundled Chromium cannot

@@ -17,8 +17,10 @@ import {
   nativeAgentRestrictsUserMcp,
   nativeAgentUserMcpGrant,
   type NativeAgentExecutionPolicy,
+  type NativeAgentMcpServer,
 } from "@orkestrator/protocol/native-agent";
 import { readJsonSliceCached, readJsonSliceCachedWithDigest } from "./json-file-cache.js";
+import type { McpServerLayers } from "./mcp-runtime-status.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
@@ -422,10 +424,18 @@ export function claudeUserMcpQueryOptions(policy: NativeAgentExecutionPolicy | u
 async function loadScopedMcpServers(
   cwd: string,
   scope: McpSourceScope,
-): Promise<{ configs: McpServersConfig; revision: McpConfigRevision }> {
+): Promise<{
+  configs: McpServersConfig;
+  layers: Map<string, "user" | "local" | "project">;
+  revision: McpConfigRevision;
+}> {
   if (scope === "none") {
     const sources = { user: "excluded", project: "excluded" } as const;
-    return { configs: {}, revision: { fingerprint: revisionFingerprint(sources), sources, scope } };
+    return {
+      configs: {},
+      layers: new Map(),
+      revision: { fingerprint: revisionFingerprint(sources), sources, scope },
+    };
   }
   const path = claudeJsonPath();
   const [global, projectGlobal, projectLocal] = await Promise.all([
@@ -455,11 +465,20 @@ async function loadScopedMcpServers(
     ...projectGlobal?.value,
     ...projectLocal?.value,
   };
+  // Set in the merge's order, so each name ends on the layer that won it.
+  const layers = new Map<string, "user" | "local" | "project">();
+  for (const name of Object.keys(global.value ?? {})) layers.set(name, "user");
+  for (const name of Object.keys(projectGlobal?.value ?? {})) layers.set(name, "local");
+  for (const name of Object.keys(projectLocal?.value ?? {})) layers.set(name, "project");
   const sources = {
     user: sourceDigest(global.digest),
     project: projectLocal ? sourceDigest(projectLocal.digest) : "excluded",
   };
-  return { configs, revision: { fingerprint: revisionFingerprint(sources), sources, scope } };
+  return {
+    configs,
+    layers,
+    revision: { fingerprint: revisionFingerprint(sources), sources, scope },
+  };
 }
 
 /**
@@ -532,6 +551,8 @@ export async function getMcpRuntimeConfig(
 ): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
+  /** The layer each server came from, for the live panel. No credentials. */
+  layers: McpServerLayers;
   revision: McpConfigRevision;
 }> {
   const scoped = await loadScopedMcpServers(cwd, normalizeScope(sources));
@@ -541,6 +562,9 @@ export async function getMcpRuntimeConfig(
   const configs = allowConfigured
     ? Object.fromEntries(Object.entries(scoped.configs).filter(([name]) => allowConfigured(name)))
     : scoped.configs;
+  const layers = new Map<string, NonNullable<NativeAgentMcpServer["scope"]>>(
+    Array.from(scoped.layers).filter(([name]) => Object.hasOwn(configs, name)),
+  );
   const agentServer =
     getOrkestratorAgentMcpServerFromConnection(connection) ?? getOrkestratorAgentMcpServer(env);
   const servers = toSdkServers(configs);
@@ -549,17 +573,25 @@ export async function getMcpRuntimeConfig(
   // tools (or capture their bearer token) by claiming the same server name.
   if (agentServer) {
     servers[AGENT_MCP_SERVER_NAME] = agentServer;
-    if (connection?.design)
+    layers.set(AGENT_MCP_SERVER_NAME, "orkestrator");
+    if (connection?.design) {
       servers["orkestrator-design"] = {
         ...agentServer,
         url: new URL("/design-mcp", agentServer.url).toString(),
       };
+      layers.set("orkestrator-design", "orkestrator");
+    }
   }
   // Reserved like the agent server: a configured server of this name never
   // receives the grant or stands in for the backend's artifact tools.
   const artifactServer = getOrkestratorArtifactMcpServer(connection);
-  if (artifactServer) servers[ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME] = artifactServer;
-  else delete servers[ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME];
+  if (artifactServer) {
+    servers[ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME] = artifactServer;
+    layers.set(ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME, "orkestrator");
+  } else {
+    delete servers[ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME];
+    layers.delete(ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME);
+  }
   // A coordinator loads no configured servers (`none`), only the remote
   // research servers its launcher named as process authority. They come from
   // the environment, never from a file the checkout could edit.
@@ -581,6 +613,7 @@ export async function getMcpRuntimeConfig(
       ...(artifactServer ? [ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME] : []),
       ...research.map((server) => server.name),
     ]),
+    layers,
     revision,
   };
 }

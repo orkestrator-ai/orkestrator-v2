@@ -180,6 +180,11 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   already did. The backend re-reads both on every session projection
   (`native-agent-transcript-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
+- **A probe's list is not the session's.** It has none of the inline servers, so
+  an MCP action through a probe updates only the row it acted on
+  (`performSessionMcpAction`). Only a control of the session's own CLI replaces
+  `mcpInventory`, and the layers come from the launch record, because the CLI
+  reports an inline server as `dynamic` (`session.mcpServerLayers`).
 - **Every SDK frame has a declared fate.** `HANDLED_SDK_MESSAGE_TYPES` and
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the
   SDK's own unions, so an SDK bump that adds a message type or `system`

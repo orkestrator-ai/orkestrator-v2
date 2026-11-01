@@ -58,7 +58,9 @@ export async function handleInitMessage(turn: TurnState, message: SDKMessage): P
   // Statuses are kept as reported: a server still connecting or waiting for a
   // sign-in is not a failure, and the live panel's no-control fallback reads
   // these rows as they are.
-  const mcpServerStatuses: McpServerRuntimeStatus[] = regularMcpServers.map(initMcpServerStatus);
+  const mcpServerStatuses: McpServerRuntimeStatus[] = regularMcpServers.map((server) =>
+    initMcpServerStatus(server, session.mcpServerLayers),
+  );
 
   const { statuses: pluginStatuses, errors: pluginErrors } = pluginStatusesFromInit(initMsg);
   const previousPluginErrors = new Set(session.pluginErrorSignatures);

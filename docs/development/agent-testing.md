@@ -888,10 +888,15 @@ A full-mode pass is still needed for the tool-call checks.
 `e2e/agent-testing/mcp-ui-matrix.spec.ts` drives the MCP editor's conflict
 recovery and secret replacement at 1440 and 390 px, then a Claude session
 with one healthy and one failing fixture server: reconnect from the live
-panel and a hard reload. No model is called: without a login the Claude CLI
-still connects and reports its MCP servers before the turn fails. It needs
-`ORKESTRATOR_AGENT_TEST_MCP_UI=1`, and its live case skips unless the
-profile lists no Claude credential source:
+panel and a hard reload. The reconnect runs through a probe, so the case also
+asserts that it changes only its own row, that the injected `orkestrator`
+server stays, that project servers read `project`, and that a name saved in two
+layers opens the project row. No model is called: without a login the Claude
+CLI still connects and reports its MCP servers before the turn fails. It exits
+straight after, usually before they connect, so the case writes a
+`UserPromptSubmit` hook into its own worktree that holds the CLI open for 8
+seconds. It needs `ORKESTRATOR_AGENT_TEST_MCP_UI=1`, and its live case skips
+unless the profile lists no Claude credential source:
 
 ```bash
 mise run dev:test --profile mcp-ui --fixture --no-agent-credentials --agent-platforms claude

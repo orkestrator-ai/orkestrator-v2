@@ -2,6 +2,7 @@ import { memo, useState, useId, useRef, type ComponentType, type ReactNode } fro
 import { Checkbox } from "@/components/ui/checkbox";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { PipeIcon } from "@/components/icons/PipeIcon";
+import { PullRequestStateIcon } from "@/components/pull-requests/PullRequestStateIcon";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
 import { EnvironmentStatusMarker } from "./EnvironmentStatusMarker";
@@ -537,13 +538,21 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   {isBuildEnvironment && (
                     <PipeIcon className="h-3 w-3 shrink-0 translate-y-px text-white" />
                   )}
-                  {environment.autoMerge === true && (
-                    <GitMerge
-                      className="h-3 w-3 shrink-0 translate-y-px text-white"
-                      role="img"
-                      aria-label="Auto-merge on"
-                      data-testid="environment-auto-merge-icon"
+                  {environment.prState === "merged" ? (
+                    <PullRequestStateIcon
+                      state="merged"
+                      isDraft={false}
+                      className="h-3 w-3 translate-y-px"
                     />
+                  ) : (
+                    environment.autoMerge === true && (
+                      <GitMerge
+                        className="h-3 w-3 shrink-0 translate-y-px text-white"
+                        role="img"
+                        aria-label="Auto-merge on"
+                        data-testid="environment-auto-merge-icon"
+                      />
+                    )
                   )}
                   <EnvironmentNameSignalMarker
                     signal={nameSignal}

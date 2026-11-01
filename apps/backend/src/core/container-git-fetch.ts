@@ -305,9 +305,16 @@ export class ContainerGitFetchPolicy {
    * reverts (the old inline fetch ran on every one). Resolves `true` when a
    * fetch ran and succeeded; never rejects.
    *
+   * A ref the latest scan of this clone classified as `commit` is skipped:
+   * the action resolves it locally, and it names the same commit forever.
+   * Every container created since `createdFromCommit` compares against such
+   * a commit, so before this check each revert spent a `docker exec` and an
+   * admission slot on `git fetch origin <sha>`.
+   *
    * Like {@link recover}, call it inside the container's admission slot.
    */
   async refreshForAction(scope: ContainerFetchScope): Promise<boolean> {
+    if (this.classifiedAsCommit(scope)) return false;
     this.remember(scope, undefined);
     const record = this.record(scope);
     this.metrics.requested("git-fetch-container");
@@ -463,6 +470,17 @@ export class ContainerGitFetchPolicy {
         state.baselines.delete(oldest);
       }
     }
+  }
+
+  /** The latest scan of this container generation and clone resolved `ref` as a commit. */
+  private classifiedAsCommit(scope: ContainerFetchScope): boolean {
+    const state = this.scopes.get(scope.containerId);
+    return (
+      state !== undefined &&
+      state.generation === this.generations.get(scope.containerId) &&
+      state.repoId === scope.repoId &&
+      state.baselines.get(scope.ref) === "commit"
+    );
   }
 
   private generationOf(containerId: string): number {

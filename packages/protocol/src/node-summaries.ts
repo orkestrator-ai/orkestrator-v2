@@ -101,8 +101,22 @@ export interface NodeEnvironmentSummary {
    * Absent otherwise, and from nodes that predate it.
    */
   buildPipeline?: true;
+  /**
+   * A working build pipeline runs in this environment
+   * (`isWorkingBuildPipeline`), so its row reads "working" as it does on its
+   * own machine. Absent otherwise, and from nodes that predate it.
+   */
+  buildActive?: true;
   /** The node will merge this environment's PR once it is ready. */
   autoMerge?: true;
+  /**
+   * Unread agent mail across the environment's mailboxes, counted as its own
+   * machine's row counts it. A count only, never a message. Absent while the
+   * node's agent messaging is off, with no unread mail, or from older nodes.
+   */
+  agentMailUnread?: number;
+  /** One of its mailboxes has a failed injection. Absent like `agentMailUnread`. */
+  agentMailFailed?: true;
   /**
    * The node's last PR reading, so a command node can decide "ready to merge"
    * (`pr-merge-readiness.ts`) for another machine's rows. States only, never
@@ -247,6 +261,18 @@ export function toNodeProjectSummary(
   };
 }
 
+/** Above this a row shows "99+" anyway; the bound keeps a summary row small. */
+export const MAX_SUMMARY_MAIL_COUNT = 9_999;
+
+function isMailCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= MAX_SUMMARY_MAIL_COUNT
+  );
+}
+
 export function toNodeEnvironmentSummary(
   nodeId: BackendId,
   raw: Record<string, unknown>,
@@ -283,7 +309,10 @@ export function toNodeEnvironmentSummary(
       (typeof raw.deletionRequestedAt === "string" && raw.deletionRequestedAt.length > 0),
     isProjectHome: raw.projectHome === true,
     ...(raw.buildPipeline === true ? { buildPipeline: true as const } : {}),
+    ...(raw.buildActive === true ? { buildActive: true as const } : {}),
     ...(raw.autoMerge === true ? { autoMerge: true as const } : {}),
+    ...(isMailCount(raw.agentMailUnread) ? { agentMailUnread: raw.agentMailUnread } : {}),
+    ...(raw.agentMailFailed === true ? { agentMailFailed: true as const } : {}),
     ...(PR_STATES.has(raw.prState) ? { prState: raw.prState as PrState } : {}),
     ...(typeof raw.hasMergeConflicts === "boolean"
       ? { prHasMergeConflicts: raw.hasMergeConflicts }

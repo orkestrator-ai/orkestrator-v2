@@ -459,3 +459,56 @@ test("a leaf's PR monitor health hint re-reads that project's summaries with the
     model.stop();
   }
 });
+
+test("a leaf's agent-mail change re-reads every project for the rows' mail badges", async () => {
+  const { TestNodeNetwork, settle } = await import("./node-network-test-support.js");
+  const network = new TestNodeNetwork();
+  const command = await network.add("command", { forceRegistration: true });
+  const leaf = await network.add("leaf");
+  let unread = 0;
+  const reads: string[] = [];
+  leaf.commands.set("get_projects", () => [
+    { id: "p1", name: "One" },
+    { id: "p2", name: "Two" },
+  ]);
+  leaf.commands.set("get_environment_snapshots", (args) => {
+    reads.push(String(args.projectId));
+    return [
+      {
+        id: `${args.projectId}-env`,
+        projectId: args.projectId,
+        name: "feature",
+        status: "running",
+        ...(unread > 0 && args.projectId === "p2" ? { agentMailUnread: unread } : {}),
+      },
+    ];
+  });
+  await command.service.addNode({
+    routes: [{ id: "primary" as never, kind: "https", enabled: true, origin: leaf.origin }],
+    token: leaf.token,
+  });
+  const model = new NodeReadModel({
+    nodes: command.service,
+    emit: () => undefined,
+    fetchImpl: network.fetch,
+    reconcileMs: 60_000,
+    refreshDebounceMs: 0,
+  });
+  try {
+    await model.start();
+    await settle(40);
+    const mailOf = async () =>
+      (await model.summaries()).nodes[0]!.environments.find((row) => row.projectId === "p2")
+        ?.agentMailUnread;
+    expect(await mailOf()).toBeUndefined();
+
+    unread = 3;
+    reads.length = 0;
+    leaf.emit("resource-changed", { resource: "agent-mail-summary", id: "all", revision: 1 });
+    await settle(40);
+    expect(reads.sort()).toEqual(["p1", "p2"]);
+    expect(await mailOf()).toBe(3);
+  } finally {
+    model.stop();
+  }
+});

@@ -106,3 +106,33 @@ export function isCreateFeatureBuildInput(value: unknown): value is CreateFeatur
         value.requestId.length <= 256))
   );
 }
+
+/**
+ * What a feature-build idempotency key stands for: the request minus the key.
+ *
+ * The backend binds a `requestId` to the arguments it first saw (it stores a
+ * hash of this string) and refuses to reuse it for anything else. A launcher
+ * compares the same string to tell "the same request again", which must reuse
+ * the key, from "a different request", which must mint a new one. Both sides
+ * use this one function so they cannot disagree on what "the same" means.
+ *
+ * Keys are sorted because a request's shape depends on which optional fields
+ * are present, and two objects that differ only in insertion order are the
+ * same request. Undefined values are dropped for the same reason.
+ */
+export function featureBuildRequestIdentity(request: CreateFeatureBuildInput): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([, entry]) => entry !== undefined)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, entry]) => [key, canonical(entry)]),
+      );
+    }
+    return value;
+  };
+  const { requestId: _requestId, ...withoutKey } = request;
+  return JSON.stringify(canonical(withoutKey));
+}

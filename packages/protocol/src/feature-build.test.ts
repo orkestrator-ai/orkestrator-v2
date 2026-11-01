@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   MAX_FEATURE_BUILD_TEXT_LENGTH,
   MAX_FEATURE_BUILD_TITLE_LENGTH,
+  featureBuildRequestIdentity,
   isCreateFeatureBuildInput,
 } from "./feature-build.js";
 
@@ -141,5 +142,40 @@ describe("create feature build input", () => {
   test("rejects an unknown harness and an unknown environment type", () => {
     expect(isCreateFeatureBuildInput({ ...input, agentType: "gemini" })).toBe(false);
     expect(isCreateFeatureBuildInput({ ...input, environmentType: "remote" })).toBe(false);
+  });
+});
+
+describe("featureBuildRequestIdentity", () => {
+  test("is the sorted request without its key, the string the backend hashes", () => {
+    // Pinned: stored request hashes were computed over exactly this string, so
+    // a change here would refuse every retry of an in-flight feature build.
+    expect(
+      featureBuildRequestIdentity({
+        title: "T",
+        projectId: "p",
+        environmentType: "local",
+        agentType: "codex",
+        description: undefined,
+        requestId: "key-1",
+      }),
+    ).toBe('{"agentType":"codex","environmentType":"local","projectId":"p","title":"T"}');
+  });
+
+  test("does not depend on key order", () => {
+    const a = featureBuildRequestIdentity({
+      projectId: "p",
+      title: "T",
+      environmentType: "local",
+      agentType: "codex",
+      steps: { build: { agent: "codex", model: "m" } },
+    });
+    const b = featureBuildRequestIdentity({
+      steps: { build: { model: "m", agent: "codex" } },
+      agentType: "codex",
+      environmentType: "local",
+      title: "T",
+      projectId: "p",
+    });
+    expect(a).toBe(b);
   });
 });

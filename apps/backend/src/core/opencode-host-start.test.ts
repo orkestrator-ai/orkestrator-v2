@@ -265,12 +265,12 @@ describe("OpenCodeHostStartGate", () => {
 /**
  * `exit` can fire before a dying OpenCode's last stderr chunk is read (flake
  * 0723, to-do 1172). These order the events by hand on a fake child whose
- * health never answers.
+ * health is either held pending or completed explicitly after exit.
  */
 describe("waitForLocalServerStartup on an OpenCode exit", () => {
   const LOCKED = "Error: Unexpected error\n\ndatabase is locked\n";
 
-  function fakeChild() {
+  function fakeChild(options: Parameters<typeof waitForLocalServerStartup>[4] = {}) {
     const child = Object.assign(new EventEmitter(), { stderr: new EventEmitter() });
     const starting = waitForLocalServerStartup(
       child as unknown as ChildProcessWithoutNullStreams,
@@ -280,28 +280,73 @@ describe("waitForLocalServerStartup on an OpenCode exit", () => {
       {
         health: { checkHealth: async () => false, delay: () => new Promise<void>(() => undefined) },
         stdioCloseBoundMs: 20,
+        ...options,
       },
     ).catch((error: unknown) => error);
     return { child, starting };
   }
 
   test("reads stderr that arrives after exit and before close", async () => {
-    const { child, starting } = fakeChild();
-    child.emit("exit", 1, null);
-    child.stderr.emit("data", Buffer.from(LOCKED));
-    child.emit("close", 1, null);
+    // A distant bound makes a timer-only implementation lose the next-turn race.
+    const { child, starting } = fakeChild({ stdioCloseBoundMs: 60_000 });
+    try {
+      child.emit("exit", 1, null);
+      child.stderr.emit("data", Buffer.from(LOCKED));
+      child.emit("close", 1, null);
 
-    const failure = await starting;
-    expect(isOpenCodeDatabaseLockedError(failure)).toBe(true);
-    expect((failure as Error).message).toContain("(code 1, signal null)");
+      const failure = await Promise.race([
+        starting,
+        new Promise<"still pending">((resolve) => setImmediate(() => resolve("still pending"))),
+      ]);
+      expect(isOpenCodeDatabaseLockedError(failure)).toBe(true);
+      expect((failure as Error).message).toContain("(code 1, signal null)");
+    } finally {
+      // Also clear the distant timer if the close handler regresses.
+      if (child.listenerCount("error")) child.emit("error", new Error("test cleanup"));
+    }
   });
+
+  for (const outcome of ["success", "failure"] as const) {
+    test(`ignores health ${outcome} after exit until stderr closes`, async () => {
+      let resolveHealth!: (healthy: boolean) => void;
+      let rejectHealth!: (error: Error) => void;
+      const health = new Promise<boolean>((resolve, reject) => {
+        resolveHealth = resolve;
+        rejectHealth = reject;
+      });
+      const { child, starting } = fakeChild({
+        health: { checkHealth: () => health },
+        stdioCloseBoundMs: 60_000,
+      });
+      let settled = false;
+      void starting.then(() => {
+        settled = true;
+      });
+      try {
+        child.emit("exit", 1, null);
+        if (outcome === "success") resolveHealth(true);
+        else rejectHealth(new Error("late health failure"));
+        // Drain the health promise chain before delivering the final stderr.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        child.stderr.emit("data", Buffer.from(LOCKED));
+        child.emit("close", 1, null);
+        const failure = await starting;
+        expect(isOpenCodeDatabaseLockedError(failure)).toBe(true);
+        expect((failure as Error).message).toContain("(code 1, signal null)");
+      } finally {
+        if (child.listenerCount("error")) child.emit("error", new Error("test cleanup"));
+      }
+    });
+  }
 
   test("decides after the bound when a held pipe never closes", async () => {
     const { child, starting } = fakeChild();
     child.emit("exit", 1, null);
     child.stderr.emit("data", Buffer.from(LOCKED));
 
-    expect(isOpenCodeDatabaseLockedError(await starting)).toBe(true);
+    const failure = await starting;
+    expect(isOpenCodeDatabaseLockedError(failure)).toBe(true);
   });
 
   test("an exit without the lock message stays a plain failure", async () => {

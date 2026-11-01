@@ -141,6 +141,12 @@ A lost response is retried with the same ids and returns the original
 receipt. Renderer unmount, reload or restart leaves the capture in the spool;
 the panel resumes it on mount.
 
+A requested Save is remembered by that renderer (`capture-intents.ts`) until the
+backend commits it. It deliberately does not live in the backend: the image is
+only in this desktop's spool until the upload, so neither the backend nor another
+client could finish the save, and web and iOS clients cannot capture at all.
+Losing the record costs only the automatic retry; the capture stays pending.
+
 ## Backend storage
 
 Metadata lives in the backend database (`orkestrator.sqlite`, see

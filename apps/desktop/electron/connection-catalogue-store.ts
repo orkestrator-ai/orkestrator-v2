@@ -12,6 +12,9 @@ import {
   parseDeviceCatalogue,
   type DeviceCatalogue,
 } from "@orkestrator/protocol/device-catalogue";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("connections");
 
 /**
  * Where this device keeps its machine-and-route catalogue.
@@ -69,7 +72,7 @@ export class NativeDeviceCatalogueStore implements ConnectionCatalogueStore {
     // than silently starting empty, which would look like forgotten machines.
     const backup = await this.readCatalogue(this.backupFile);
     if (backup.kind === "ok") {
-      console.warn("[Connections] Device catalogue was unreadable; restored the backup copy.");
+      log.warn("catalogue.restored-from-backup");
       return backup.catalogue;
     }
     throw new Error(
@@ -202,7 +205,7 @@ export async function loadOrMigrateCatalogue(
   try {
     legacy = await legacyCatalogue.loadLegacy();
   } catch {
-    console.warn("[Connections] Could not read the previous connection list for migration.");
+    log.warn("catalogue.legacy-read-failed");
   }
   if (!legacy) return loaded ?? emptyDeviceCatalogue();
   await (

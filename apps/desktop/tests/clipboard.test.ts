@@ -4,7 +4,7 @@ import { createClipboardTextWriter } from "../electron/clipboard";
 describe("createClipboardTextWriter", () => {
   test("writes the text and returns synchronously", async () => {
     const writeText = mock(async (_text: string) => undefined);
-    const logError = mock((_message: string, _error: unknown) => undefined);
+    const logError = mock((_error: unknown) => undefined);
     const write = createClipboardTextWriter({ writeText }, logError);
 
     expect(write("copied")).toBeUndefined();
@@ -19,13 +19,13 @@ describe("createClipboardTextWriter", () => {
     const writeText = mock(async (_text: string) => {
       throw failure;
     });
-    const logError = mock((_message: string, _error: unknown) => undefined);
+    const logError = mock((_error: unknown) => undefined);
     const write = createClipboardTextWriter({ writeText }, logError);
 
     write("copied");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(logError).toHaveBeenCalledWith("[Clipboard] Failed to write text:", failure);
+    expect(logError).toHaveBeenCalledWith(failure);
   });
 
   test("logs a synchronous throw from the clipboard module", () => {
@@ -33,10 +33,10 @@ describe("createClipboardTextWriter", () => {
     const writeText = mock((_text: string): Promise<void> => {
       throw failure;
     });
-    const logError = mock((_message: string, _error: unknown) => undefined);
+    const logError = mock((_error: unknown) => undefined);
     const write = createClipboardTextWriter({ writeText }, logError);
 
     expect(() => write("copied")).not.toThrow();
-    expect(logError).toHaveBeenCalledWith("[Clipboard] Failed to write text:", failure);
+    expect(logError).toHaveBeenCalledWith(failure);
   });
 });

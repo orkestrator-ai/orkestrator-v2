@@ -1,3 +1,5 @@
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
+import { afterAll } from "bun:test";
 import { describe, expect, mock, test } from "bun:test";
 import {
   installRendererRecovery,
@@ -12,6 +14,7 @@ function harness() {
   const reload = mock(() => undefined);
   const pending: (() => void)[] = [];
   const log = mock((_message: string) => undefined);
+  configureLogger({ sink: ({ line }) => log(line) });
   installRendererRecovery(
     {
       on: ((_name: string, callback: typeof handler) => {
@@ -20,7 +23,7 @@ function harness() {
       reload,
       isDestroyed: () => state.destroyed,
     },
-    { log, now: () => state.time, schedule: (callback) => void pending.push(callback) },
+    { now: () => state.time, schedule: (callback) => void pending.push(callback) },
   );
   return {
     reload,
@@ -93,3 +96,5 @@ describe("renderer recovery", () => {
     expect(reload).toHaveBeenCalledTimes(RENDERER_RECOVERY_MAX_RELOADS + 1);
   });
 });
+
+afterAll(resetLogger);

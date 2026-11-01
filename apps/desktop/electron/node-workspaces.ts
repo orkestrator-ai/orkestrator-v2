@@ -1,4 +1,7 @@
 import { checkBackendRoute } from "@orkestrator/protocol/node/node-link/backend-hello";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("workspaces");
 
 /**
  * Desktop panels for other nodes' workspaces.
@@ -243,9 +246,7 @@ export class NodeWorkspaceScopes {
       entry.lastEpoch = entry.epoch?.() ?? 0;
       entry.renewedAt = Date.now();
       entry.relayed = false;
-      console.info(
-        `[Workspaces] ${binding.params.node ?? binding.nodeId} moved to its direct route.`,
-      );
+      log.info("route.moved-direct", { node: binding.params.node ?? binding.nodeId });
       await closeWorkspace(attempt.invoke, oldId);
     } finally {
       try {

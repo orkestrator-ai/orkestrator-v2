@@ -1,19 +1,21 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { installRendererDiagnostics } from "../electron/renderer-diagnostics";
+
+afterAll(resetLogger);
 
 function harness() {
   const handlers = new Map<string, (...args: any[]) => void>();
+  // The real logger, so these assert the exact lines the persistent log receives.
   const log = mock((_message: string) => {});
+  configureLogger({ sink: ({ line }) => log(line) });
   const mainFrame = { name: "main" };
-  installRendererDiagnostics(
-    {
-      mainFrame,
-      on: (name: string, callback: (...args: any[]) => void) => {
-        handlers.set(name, callback);
-      },
-    } as never,
-    log,
-  );
+  installRendererDiagnostics({
+    mainFrame,
+    on: (name: string, callback: (...args: any[]) => void) => {
+      handlers.set(name, callback);
+    },
+  } as never);
   return {
     log,
     mainFrame,
@@ -26,7 +28,7 @@ describe("renderer startup diagnostics", () => {
     const { emit, log } = harness();
     emit("will-prevent-unload", {});
     emit("will-prevent-unload", {});
-    expect(log.mock.calls).toEqual([["[Dialog] renderer beforeunload cancelled an unload"]]);
+    expect(log.mock.calls).toEqual([["[desktop.dialog] renderer-beforeunload-cancelled"]]);
   });
 
   test("records preload failures without persisting private error data", () => {

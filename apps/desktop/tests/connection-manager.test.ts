@@ -241,8 +241,7 @@ describe("Electron connection manager", () => {
   });
 
   describe("startup safe-storage wait", () => {
-    const waitNotice =
-      "[Connections] Waiting for the macOS keychain (safe storage) before opening the first window; answer the keychain prompt to continue";
+    const waitNotice = "[connections] secure-storage.waiting store=macos-keychain";
 
     function captureWarnings(): { warnings: unknown[][]; restore: () => void } {
       const originalWarn = console.warn;

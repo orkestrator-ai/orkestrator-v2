@@ -10,7 +10,7 @@ export interface CreateBrowserPreviewMainAdaptersOptions {
   emitToRenderers: (event: string, payload: unknown) => void;
   openExternal: (url: string) => Promise<void>;
   writeClipboardText: (text: string) => void;
-  logError: (message: string, error: unknown) => void;
+  logError: (error: unknown) => void;
 }
 
 export type BrowserPreviewMainAdapters = Pick<
@@ -34,7 +34,7 @@ export function createBrowserPreviewMainAdapters({
       emitToRenderers(BROWSER_PREVIEW_CAPTURE_EVENT, event),
     openExternal: (url: string) => {
       void openExternal(url).catch((error: unknown) => {
-        logError("[BrowserPreview] Failed to open link externally:", error);
+        logError(error);
       });
     },
     writeClipboardText,

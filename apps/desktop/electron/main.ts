@@ -184,10 +184,21 @@ import {
   type CommandHandoverDeps,
 } from "./command-handover.js";
 import { ArtifactHostManager } from "./artifact-host-manager.js";
+import type { ArtifactHostDiagnostics } from "./artifact-host-session.js";
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
 import { DesktopWindowContexts, emitToContents } from "./desktop-window-contexts.js";
 import { installSocketTypeOfServiceGuard } from "./socket-tos-guard.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logger-environment";
+import { createUpdaterLibraryLogger } from "./updater-log.js";
+
+configureLoggerFromEnvironment(process.env);
+const desktopLog = createLogger("desktop");
+const previewLog = createLogger("preview");
+const updaterLog = createLogger("updater");
+const toolchainLog = createLogger("toolchain");
+const artifactHostLog = createLogger("artifact-host");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -196,8 +207,8 @@ const isDev = process.env.ELECTRON_DEV === "1";
 installSocketTypeOfServiceGuard();
 // Menu items copy synchronously; Electron 44's writeText returns a Promise whose
 // rejection would otherwise be unhandled and terminate the main process.
-const writeClipboardText = createClipboardTextWriter(clipboard, (message, error) =>
-  console.error(message, error),
+const writeClipboardText = createClipboardTextWriter(clipboard, (error) =>
+  desktopLog.error("clipboard.write-failed", { error: formatLogError(error) }),
 );
 const runtimeProfile = runtimeProfileFromEnvironment();
 const runtimeFlavor = runtimeProfile?.flavor ?? (isDev ? "development" : "production");
@@ -280,7 +291,7 @@ const previewExternalHandoff = new PreviewExternalHandoff((url) => shell.openExt
 /** Workspace realms, by their own renderer's ID. */
 const realmContexts = new RealmContexts<DesktopWindowContext>(
   (id) => sshPrompts?.cancelFor(id),
-  (error) => console.warn("[Previews] Failed to close preview transport:", error),
+  (error) => previewLog.warn("transport.close-failed", { error: formatLogError(error) }),
 );
 const desktopWindows = new DesktopWindowContexts<DesktopWindowContext>({
   realms: realmContexts,
@@ -300,7 +311,7 @@ const desktopWindows = new DesktopWindowContexts<DesktopWindowContext>({
   setConnectionTitle: (context) => setConnectionTitle(context.window, context.scope),
   publishConnectionLists: () => publishConnectionLists(),
   menuChanged: () => createMenu(),
-  logger: console,
+  logger: previewLog,
 });
 const windowContexts = desktopWindows.windows;
 const installRealmRequestAuth = createRealmRequestAuthInstaller(
@@ -378,10 +389,14 @@ const nativeDialogs = createNativeDialogs<BrowserWindow>({
 nativeDialogs.install();
 installUncaughtExceptionDialog(process, nativeDialogs);
 startEventLoopStallMonitor({
-  formatStall: ({ lagMs, endedAt, intervalMs, folded }) =>
-    `[Desktop] Main thread stalled for ${lagMs} ms, ending ${endedAt}: a ${intervalMs} ms timer ` +
-    `fired late, so windows, IPC and the backend's stdout reader waited` +
-    `${nativeDialogs.describeStall(lagMs)}${folded}`,
+  report: ({ lagMs, endedAt, intervalMs, folded }) =>
+    desktopLog.warn("main-thread.stalled", {
+      lagMs,
+      endedAt,
+      intervalMs,
+      openDialog: nativeDialogs.describeStall(lagMs).replace(/^; /, "") || undefined,
+      folded: folded.replace(/^; /, "") || undefined,
+    }),
 });
 const showNonBlockingError = (title: string, detail: string): void => {
   void showRestartPrompt({
@@ -405,8 +420,18 @@ const toolchainProgress = createToolchainProgressController({
     }),
   reportProgress: (window, progress) => reportToolchainProgress(window as BrowserWindow, progress),
   onUnexpectedClose: () => app.quit(),
-  logError: (error) => console.error("[Toolchains] Failed to show bootstrap progress:", error),
+  logError: (error) =>
+    toolchainLog.warn("bootstrap-progress.show-failed", { error: formatLogError(error) }),
 });
+
+/** Counts by reason, each as its own scalar field. */
+function artifactHostDiagnosticFields(diagnostics: ArtifactHostDiagnostics) {
+  return Object.fromEntries(
+    (["blocked", "rejected"] as const).flatMap((kind) =>
+      Object.entries(diagnostics[kind]).map(([reason, count]) => [`${kind}.${reason}`, count]),
+    ),
+  ) as Record<string, number>;
+}
 
 function emitToWindow(window: BrowserWindow, event: string, payload: unknown): void {
   if (!window.isDestroyed()) window.webContents.send("orkestrator:event", event, payload);
@@ -549,7 +574,7 @@ function browserPreviewCaptureStore(): BrowserPreviewCaptureStore {
     },
   });
   store.ready.catch(() => {
-    console.warn("[BrowserPreview] Pending capture spool could not be loaded");
+    previewLog.warn("capture-spool.load-failed");
   });
   store.startExpirySweep();
   browserPreviewCaptures = store;
@@ -572,7 +597,6 @@ function previewRetention(): PreviewPartitionRetention {
           transport: context.previewTransport,
         })),
       ),
-    logger: console,
   });
   return previewPartitionRetention;
 }
@@ -581,7 +605,7 @@ function previewRetention(): PreviewPartitionRetention {
 function rememberPreviewNode(nodeId: string, commandConnectionId: string): void {
   void previewRetention()
     .rememberNode(nodePartitionKey(nodeId), connectionPartitionKey(commandConnectionId))
-    .catch(() => console.warn("[Previews] Failed to record a preview node."));
+    .catch(() => previewLog.warn("node.record-failed"));
 }
 
 /** A realm's native views follow it in its window; see `realmChildViewClass`. */
@@ -616,7 +640,6 @@ function createWindowBrowserPreviews(
     clientKey: createHash("sha256").update(scope).digest("hex").slice(0, 24),
     portHints: previewPortHints,
     onStateChange: (serviceKey) => manager?.refreshService(serviceKey),
-    logger: console,
   });
   // A window on a command node also reconciles the nodes reached through it.
   const retentionSource = realm
@@ -651,7 +674,8 @@ function createWindowBrowserPreviews(
     emitToRenderers: emitToOwner,
     openExternal: (url) => shell.openExternal(url),
     writeClipboardText,
-    logError: (message, error) => console.error(message, error),
+    logError: (error) =>
+      previewLog.error("link.open-external-failed", { error: formatLogError(error) }),
   });
   const runtime = initializeBrowserPreviews({
     fromPartition: (partitionName) => session.fromPartition(partitionName),
@@ -727,7 +751,8 @@ function createWindowArtifactHosts(
       }
     },
     // Content-free reason counters only; never URLs or page data.
-    reportDiagnostics: (diagnostics) => console.info("[ArtifactHost] host ended", diagnostics),
+    reportDiagnostics: (diagnostics) =>
+      artifactHostLog.info("host.ended", artifactHostDiagnosticFields(diagnostics)),
   });
   owner.on("did-navigate", () => artifactHosts.closeAll("window-closed"));
   return artifactHosts;
@@ -751,6 +776,7 @@ async function startAutoUpdate(): Promise<void> {
   if (!autoUpdateSupported()) return;
   try {
     const { default: electronUpdater } = await import("electron-updater");
+    electronUpdater.autoUpdater.logger = createUpdaterLibraryLogger();
     const { VersionOrderedGitHubProvider } = await import("./github-update-provider.js");
     electronUpdater.autoUpdater.setFeedURL({
       provider: "custom",
@@ -771,7 +797,7 @@ async function startAutoUpdate(): Promise<void> {
     createMenu();
     startHostUpdates(autoUpdate);
   } catch (error) {
-    console.error("[Updater] Auto-update is unavailable:", error);
+    updaterLog.error("unavailable", { error: formatLogError(error) });
   }
 }
 
@@ -804,7 +830,7 @@ function startHostUpdates(engine: AutoUpdateController): void {
     },
   });
   void hostUpdates.start().catch((error: unknown) => {
-    console.error("[Updater] Remote updates are unavailable:", error);
+    updaterLog.error("remote.unavailable", { error: formatLogError(error) });
   });
 }
 
@@ -815,7 +841,7 @@ function createMenu(): void {
     windows: menuWindowList(),
     newWindow: () => {
       void createWindow().catch((error) =>
-        console.error("[Desktop] Failed to create a new window:", error),
+        desktopLog.error("window.create-failed", { error: formatLogError(error) }),
       );
     },
     // A tab belongs to the workspace that has focus, which may be a realm.
@@ -1247,7 +1273,7 @@ function registerIpc(): void {
             (other) => other.previewConnectionId === connectionId,
           ),
         })
-        .catch(() => console.warn("[Previews] Failed to record forgotten connection cleanup."));
+        .catch(() => previewLog.warn("connection-cleanup.record-failed"));
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
@@ -1386,7 +1412,7 @@ async function startApplication(): Promise<void> {
   // our own before parking on a dialog the remote client cannot see.
   const remoteRelaunch = isAgentTest ? null : readRemoteRelaunchMarker(dataDir);
   if (remoteRelaunch) {
-    console.info(`[Updater] Relaunched to install ${remoteRelaunch.version} for a remote request`);
+    updaterLog.info("remote.relaunched", { version: remoteRelaunch.version });
   }
   const toolchainBinDir = await preparePinnedToolchains({
     dataDir,
@@ -1398,7 +1424,7 @@ async function startApplication(): Promise<void> {
     onProgress: (progress) => toolchainProgress.report(progress),
     showMessageBox: (options) => nativeDialogs.showMessageBox("toolchain-setup", options),
     quit: () => app.quit(),
-    logError: (error) => console.error("[Toolchains] Failed to prepare pinned tools:", error),
+    logError: (error) => toolchainLog.error("prepare.failed", { error: formatLogError(error) }),
     artifacts,
     // Nobody is watching an agent-driven `dev:test` run, so a modal asking
     // whether to retry would hang the launcher instead of failing it: the
@@ -1462,12 +1488,12 @@ async function startApplication(): Promise<void> {
         // Shortly after a remote-requested update, relaunch instead of a modal
         // nobody may answer, so the remote client gets its backend back.
         if (recoverRemoteBackendFailure(dataDir, relaunchingApp)) {
-          console.error(
-            `[Desktop] Local backend exited after an update; applying unattended recovery: ${error.message}`,
-          );
+          desktopLog.error("backend.exited-recovering", {
+            error: formatLogError(error, { stack: false }),
+          });
           return;
         }
-        console.error(`[Desktop] Local backend exited unexpectedly: ${error.message}`);
+        desktopLog.error("backend.exited", { error: formatLogError(error, { stack: false }) });
         showNonBlockingError(
           `${productName} backend stopped`,
           `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,
@@ -1483,7 +1509,7 @@ async function startApplication(): Promise<void> {
     const saved = await catalogueStore.load().catch(() => null);
     if (isAgentTest || !saved || saved.backends.length === 0) throw error;
     localStartError = error instanceof Error ? error : new Error(String(error));
-    console.error("[Desktop] Local backend failed to start; continuing with remote machines.");
+    desktopLog.error("backend.start-failed", { error: formatLogError(error) });
   }
   sshPrompts = new SshPromptBroker(() => {
     const context = focusedContext();
@@ -1530,16 +1556,17 @@ async function startApplication(): Promise<void> {
     })
       .then((result) => {
         if (result !== "already-imported") {
-          console.info(
-            `[Desktop] Saved machines attached to the local command node: ${result.imported} imported, ${result.skipped} skipped, ${result.needsCredential} need a token`,
-          );
+          desktopLog.info("saved-machines.attached", {
+            imported: result.imported,
+            skipped: result.skipped,
+            needsCredential: result.needsCredential,
+          });
         }
       })
       .catch((error: unknown) => {
-        console.warn(
-          "[Desktop] Saved machines were not imported into the local command node yet:",
-          error instanceof Error ? error.name : "unknown",
-        );
+        desktopLog.warn("saved-machines.attach-failed", {
+          errorName: error instanceof Error ? error.name : "unknown",
+        });
       });
   }
   app.on("will-quit", () => {
@@ -1594,7 +1621,8 @@ if (isPrimaryInstance) {
     handleActivate: () => quitReopen.deferReopenWhileQuitting() || !startupComplete,
     getWindowCount: () => BrowserWindow.getAllWindows().length,
     createWindow,
-    onCreateError: (error) => console.error("[Desktop] Failed to recreate the main window:", error),
+    onCreateError: (error) =>
+      desktopLog.error("window.recreate-failed", { error: formatLogError(error) }),
   });
   // Registered first: a launch during quit relaunches instead of reaching
   // windows that are closing or bound to the stopped Local backend.
@@ -1607,7 +1635,7 @@ if (isPrimaryInstance) {
     () => {
       if (quitReopen.isQuitting() || !windowRequestGate.request()) return;
       void createWindow().catch((error) =>
-        console.error("[Desktop] Failed to create a window for a second launch:", error),
+        desktopLog.error("window.second-launch-failed", { error: formatLogError(error) }),
       );
     },
   );
@@ -1631,9 +1659,10 @@ if (isPrimaryInstance) {
       });
     });
 } else {
-  console.error(
-    `[Desktop] Another ${productName} instance is already using ${app.getPath("userData")}. Quit it and try again.`,
-  );
+  desktopLog.warn("instance.already-running", {
+    product: productName,
+    dataDir: app.getPath("userData"),
+  });
 }
 
 const backendShutdown = registerBackendShutdown(app, backendProcess);

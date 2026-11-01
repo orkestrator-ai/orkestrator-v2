@@ -1,5 +1,9 @@
 import type { WebContents } from "electron";
-import { isDesktopStartupMessage } from "@orkestrator/protocol/debug-logging";
+import { desktopStartupEventOf } from "@orkestrator/protocol/debug-logging";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const startupLog = createLogger("desktop.startup");
+const dialogLog = createLogger("desktop.dialog");
 
 function preloadFailureKind(error: Error): string {
   // Never persist raw messages, stacks, paths, URLs or arbitrary error names.
@@ -12,27 +16,28 @@ function preloadFailureKind(error: Error): string {
   return "unknown";
 }
 
-export function installRendererDiagnostics(
-  contents: Pick<WebContents, "mainFrame" | "on">,
-  log: (message: string) => void = (message) => console.info(message),
-): void {
+export function installRendererDiagnostics(contents: Pick<WebContents, "mainFrame" | "on">): void {
   // A broken renderer must not flood the persistent log. Reset on a reload so
   // the recovery attempt has its own trace; keep both count and strings bounded.
   const seen = new Set<string>();
-  const record = (message: string) => {
-    if (seen.has(message) || seen.size >= 32) return;
-    seen.add(message);
-    log(message);
+  const record = (key: string, write: () => void) => {
+    if (seen.has(key) || seen.size >= 32) return;
+    seen.add(key);
+    write();
   };
   contents.on("did-start-navigation", (_event, _url, _inPlace, isMainFrame) => {
     if (isMainFrame) seen.clear();
   });
   contents.on("preload-error", (_event, _path, error) => {
-    record(`[DesktopStartup] preload-failed reason=${preloadFailureKind(error)}`);
+    const reason = preloadFailureKind(error);
+    record(`preload-failed:${reason}`, () => startupLog.info("preload-failed", { reason }));
   });
   contents.on("did-fail-load", (_event, code, _description, _url, isMainFrame) => {
-    if (isMainFrame)
-      record(`[DesktopStartup] page-load-failed code=${Number.isSafeInteger(code) ? code : 0}`);
+    if (!isMainFrame) return;
+    const safeCode = Number.isSafeInteger(code) ? code : 0;
+    record(`page-load-failed:${safeCode}`, () =>
+      startupLog.info("page-load-failed", { code: safeCode }),
+    );
   });
   contents.on("render-process-gone", (_event, details) => {
     const reason = [
@@ -46,12 +51,14 @@ export function installRendererDiagnostics(
     ].includes(details.reason)
       ? details.reason
       : "unknown";
-    record(`[DesktopStartup] renderer-gone reason=${reason}`);
+    record(`renderer-gone:${reason}`, () => startupLog.info("renderer-gone", { reason }));
   });
   contents.on("will-prevent-unload", () => {
-    record("[Dialog] renderer beforeunload cancelled an unload");
+    record("beforeunload", () => dialogLog.info("renderer-beforeunload-cancelled"));
   });
   contents.on("console-message", ({ frame, message }) => {
-    if (frame === contents.mainFrame && isDesktopStartupMessage(message)) record(message);
+    if (frame !== contents.mainFrame) return;
+    const event = desktopStartupEventOf(message);
+    if (event) record(event, () => startupLog.info(event));
   });
 }

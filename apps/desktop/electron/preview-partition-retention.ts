@@ -6,6 +6,9 @@ import { isOpaquePreviewId } from "@orkestrator/protocol/preview-services";
 
 import { connectionPartitionKey } from "./desktop-window-lifecycle.js";
 import { previewServicePartitionSuffix } from "./preview-transport-manager.js";
+import { createLogger, type Logger, type LogEventOf } from "@orkestrator/protocol/logger";
+
+const log = createLogger("preview");
 
 const SERVICE_PARTITION = /^orkestrator-preview-svc-\d{1,3}-([0-9a-f]{16})-([0-9a-f]{16})$/;
 const SHARED_PARTITION = /^orkestrator-browser-previews-\d{1,3}-([0-9a-f]{16})$/;
@@ -38,7 +41,7 @@ export interface PreviewPartitionRetentionOptions {
   /** `persist:` partition names a live window or transport still holds. */
   inUse(): Iterable<string>;
   fs?: PreviewPartitionFs;
-  logger?: Pick<Console, "warn">;
+  logger?: Pick<Logger<LogEventOf<"preview">>, "warn">;
   retryMs?: number;
 }
 
@@ -185,7 +188,7 @@ export class PreviewPartitionRetention {
           failed.push(name);
         }
       }
-      if (failed.length) this.warn("[Previews] Failed to remove cleared preview partitions.");
+      if (failed.length) this.warn("partitions.remove-failed");
       // A failed directory removal does not prove its site data was cleared.
       // Only keep prior positive clears here; forgotten intent retries the rest.
       await this.writePending(failed.filter((name) => clearedBefore.has(name)));
@@ -476,7 +479,7 @@ export class PreviewPartitionRetention {
     try {
       await this.fs.writeFile(`${this.options.pendingFile}.nodes`, `${JSON.stringify(nodes)}\n`);
     } catch {
-      this.warn("[Previews] Failed to record preview nodes.");
+      this.warn("partitions.record-nodes-failed");
     }
   }
 
@@ -531,7 +534,7 @@ export class PreviewPartitionRetention {
         this.retryOffset += MAX_CLEARED_PER_PASS;
         this.scheduleForgotten();
       }).catch(() => {
-        this.warn("[Previews] Failed to retry forgotten preview cleanup.");
+        this.warn("partitions.retry-forgotten-failed");
         this.scheduleForgotten();
       });
     }, this.options.retryMs ?? 1_000);
@@ -555,7 +558,7 @@ export class PreviewPartitionRetention {
         await session.clearCache?.();
         cleared.push(name);
       } catch {
-        this.warn("[Previews] Failed to clear a preview partition.");
+        this.warn("partition.clear-failed");
       }
     }
     if (cleared.length) {
@@ -590,7 +593,7 @@ export class PreviewPartitionRetention {
       await this.fs.writeFile(this.options.pendingFile, `${JSON.stringify(names)}\n`);
     } catch {
       // The partitions are already cleared; only their empty directories stay.
-      this.warn("[Previews] Failed to record cleared preview partitions.");
+      this.warn("partitions.record-cleared-failed");
     }
   }
 
@@ -600,7 +603,7 @@ export class PreviewPartitionRetention {
     return run;
   }
 
-  private warn(message: string): void {
-    (this.options.logger ?? console).warn(message);
+  private warn(event: LogEventOf<"preview">): void {
+    (this.options.logger ?? log).warn(event);
   }
 }

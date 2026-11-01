@@ -25,6 +25,45 @@ import {
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 import { TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS } from "@orkestrator/protocol/terminal-input-batcher";
 import { TerminalInputSequencer } from "@orkestrator/protocol/terminal-input-sequencer";
+import {
+  createLogger,
+  emitLogRecord,
+  formatLogError,
+  parseLogRecordLine,
+  writeProcessOutputLine,
+} from "@orkestrator/protocol/logger";
+
+const clientLog = createLogger("backend.client");
+const desktopLog = createLogger("desktop");
+
+/**
+ * Relays one line of the backend's stdio into this process's log. A logger entry
+ * crosses as a JSON record carrying its own level and is re-emitted at that
+ * level. Anything else (an unmigrated console call, a crash dump) is captured as
+ * it always was: stdout as LOG, stderr as ERROR.
+ */
+function relayBackendLine(stream: "stdout" | "stderr", line: string): void {
+  const record = parseLogRecordLine(line);
+  if (record) emitLogRecord(record);
+  else writeProcessOutputLine(stream, `[Backend] ${line}`);
+}
+
+/** The readiness line, or null for any other stdout line. */
+function parseReadyMessage(line: string): ReadyMessage | null {
+  if (!line.startsWith("{")) return null;
+  try {
+    const message = JSON.parse(line) as Partial<ReadyMessage> | null;
+    return message?.type === "orkestrator-backend-ready" &&
+      typeof message.url === "string" &&
+      typeof message.authFile === "string" &&
+      typeof message.bindAddress === "string" &&
+      typeof message.port === "number"
+      ? (message as ReadyMessage)
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 export const HOSTED_WEB_CLIENT_ORIGINS = [
   "https://orkestrator.dev",
@@ -620,7 +659,7 @@ export class BackendHttpClient {
             else if (message.kind === "resync")
               onEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
             else if (message.kind === "malformed") {
-              console.warn("[BackendClient] Dropped malformed event stream frame");
+              clientLog.warn("event-stream.malformed-frame");
             }
           },
           undefined,
@@ -630,7 +669,7 @@ export class BackendHttpClient {
         );
       } catch (error) {
         if (signal.aborted) return;
-        console.error("[BackendClient] Event stream disconnected:", error);
+        clientLog.warn("event-stream.disconnected", { error: formatLogError(error) });
       } finally {
         clearInterval(watchdog);
         signal.removeEventListener("abort", abortAttempt);
@@ -844,16 +883,10 @@ export class BackendProcess {
         isolatedCredentialRoot,
         sourceDir: hostDockerConfigDir(process.env),
       }).catch((error: unknown) => {
-        console.warn(
-          "[Desktop] Could not seed the isolated Docker context; falling back to the default context:",
-          error,
-        );
+        desktopLog.warn("backend.docker-context-seed-failed", { error: formatLogError(error) });
       });
       await removeAgentTestHostKeychainLink(isolatedCredentialRoot).catch((error: unknown) => {
-        console.warn(
-          "[Desktop] Could not remove a legacy host Keychain link from the isolated profile:",
-          error,
-        );
+        desktopLog.warn("backend.keychain-link-remove-failed", { error: formatLogError(error) });
       });
     }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -862,10 +895,10 @@ export class BackendProcess {
     // even after childFailure clears the process state on exit.
     this.childClosed = new Promise((resolve) => child.once("close", () => resolve()));
     // Line-oriented: production logging tees `console`, so a chunk boundary
-    // must not become a log-entry boundary or double-prefix a single diagnostic.
+    // must not become a log-entry boundary or split a single record.
     if (child.stderr) {
       createInterface({ input: child.stderr }).on("line", (line) => {
-        console.error(`[Backend] ${line}`);
+        relayBackendLine("stderr", line);
       });
     }
 
@@ -914,20 +947,9 @@ export class BackendProcess {
           resolve(message);
         };
         lines.on("line", (line) => {
-          try {
-            const message = JSON.parse(line) as Partial<ReadyMessage>;
-            if (
-              message.type !== "orkestrator-backend-ready" ||
-              typeof message.url !== "string" ||
-              typeof message.authFile !== "string" ||
-              typeof message.bindAddress !== "string" ||
-              typeof message.port !== "number"
-            )
-              return;
-            finish(message as ReadyMessage);
-          } catch {
-            console.log(`[Backend] ${line}`);
-          }
+          const message = parseReadyMessage(line);
+          if (message) finish(message);
+          else relayBackendLine("stdout", line);
         });
       });
       const auth = JSON.parse(await readFile(ready.authFile, "utf8")) as { token?: unknown };

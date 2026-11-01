@@ -229,10 +229,9 @@ describe("desktop window contexts", () => {
     h.warn.mockImplementation((...args: unknown[]) => logged.resolve(args));
     h.windows.register(window.value)();
     expect(h.windows.windows.has(1)).toBe(false);
-    expect(await logged.promise).toEqual([
-      "[Previews] Failed to close preview transport:",
-      failure,
-    ]);
+    const [event, fields] = await logged.promise;
+    expect(event).toBe("transport.close-failed");
+    expect((fields as { error: { message: string } }).error.message).toBe(failure.message);
   });
 
   test("a connection's events reach only the renderers on it, and portals of its realms", () => {

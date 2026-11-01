@@ -126,16 +126,16 @@ export async function writeClipboardImage(
  */
 export function createClipboardTextWriter(
   clipboardApi: Pick<ClipboardLike, "writeText">,
-  logError: (message: string, error: unknown) => void,
+  logError: (error: unknown) => void,
 ): (text: string) => void {
   return (text) => {
     let pending: Promise<void>;
     try {
       pending = Promise.resolve(clipboardApi.writeText(text));
     } catch (error) {
-      logError("[Clipboard] Failed to write text:", error);
+      logError(error);
       return;
     }
-    pending.catch((error: unknown) => logError("[Clipboard] Failed to write text:", error));
+    pending.catch((error: unknown) => logError(error));
   };
 }

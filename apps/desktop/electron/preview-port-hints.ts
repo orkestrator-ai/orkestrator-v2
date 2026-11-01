@@ -3,6 +3,9 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { PreviewPortHints } from "./preview-transport-manager.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("preview");
 
 const MAX_HINTS = 256;
 
@@ -41,10 +44,7 @@ export function createPreviewPortHints(file: string): PreviewPortHints {
       )
       .then(() => rename(temporary, file))
       .catch((error: unknown) => {
-        console.warn(
-          "[Previews] Failed to persist preview port hints:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("port-hints.persist-failed", { error: formatLogError(error, { stack: false }) });
       });
   };
   return {

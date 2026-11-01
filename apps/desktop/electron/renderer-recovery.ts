@@ -1,4 +1,7 @@
 import type { WebContents } from "electron";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("desktop");
 
 /**
  * Reloads a window whose renderer process went away.
@@ -21,12 +24,10 @@ export const RENDERER_RECOVERY_WINDOW_MS = 60_000;
 export function installRendererRecovery(
   contents: Pick<WebContents, "on" | "reload" | "isDestroyed">,
   options: {
-    log?: (message: string) => void;
     now?: () => number;
     schedule?: (callback: () => void, delayMs: number) => void;
   } = {},
 ): void {
-  const log = options.log ?? ((message) => console.error(message));
   const now = options.now ?? Date.now;
   const schedule = options.schedule ?? ((callback, delayMs) => void setTimeout(callback, delayMs));
   const reloads: number[] = [];
@@ -37,22 +38,22 @@ export function installRendererRecovery(
     const at = now();
     while (reloads.length > 0 && at - reloads[0]! > RENDERER_RECOVERY_WINDOW_MS) reloads.shift();
     if (reloads.length >= RENDERER_RECOVERY_MAX_RELOADS) {
-      log(
-        `[Desktop] Renderer gone (${details.reason}) ${reloads.length + 1} times within ${RENDERER_RECOVERY_WINDOW_MS / 1000}s; not reloading again`,
-      );
+      log.error("renderer.gone-giving-up", {
+        reason: details.reason,
+        count: reloads.length + 1,
+        windowSeconds: RENDERER_RECOVERY_WINDOW_MS / 1000,
+      });
       return;
     }
     reloads.push(at);
     pending = true;
-    log(
-      `[Desktop] Renderer gone (${details.reason}, exit ${details.exitCode}); reloading the window`,
-    );
+    log.error("renderer.gone-reloading", { reason: details.reason, exitCode: details.exitCode });
     schedule(() => {
       try {
         if (!contents.isDestroyed()) contents.reload();
       } catch (error) {
         // The frame can be disposed between the event and this callback.
-        log(`[Desktop] Could not reload the renderer: ${String(error)}`);
+        log.error("renderer.reload-failed", { error: formatLogError(error, { stack: false }) });
       } finally {
         pending = false;
       }

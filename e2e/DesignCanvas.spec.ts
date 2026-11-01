@@ -30,9 +30,22 @@ async function pageLoad<T>(load: () => Promise<T>): Promise<T> {
   try {
     return await load();
   } finally {
-    test.info().setTimeout(test.info().timeout + (Date.now() - started));
+    const info = test.info();
+    if (info.timeout > 0) info.setTimeout(info.timeout + (Date.now() - started));
   }
 }
+
+test("pageLoad preserves unlimited timeouts", async ({ page }, testInfo) => {
+  testInfo.setTimeout(0);
+  const result = await pageLoad(async () => {
+    await page.goto("about:blank");
+    // Ensure a nonzero load duration so adding it to zero would impose a deadline.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return "loaded";
+  });
+  expect(result).toBe("loaded");
+  expect(testInfo.timeout).toBe(0);
+});
 
 test("canvas edits, script isolation, missed events, conflict and reload", async ({
   page,

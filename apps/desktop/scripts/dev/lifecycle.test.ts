@@ -1,11 +1,12 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
+import * as profileIo from "./profile-io.js";
 import { atomicWriteJson, initializeProfile } from "./profile-io.js";
 import { parseDevArguments } from "./arguments.js";
 import {
@@ -123,81 +124,144 @@ describe("Electron readiness", () => {
     const { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: _, ...notOptedIn } = env;
     expect(electronLaunchForRuntime("agent-test", "linux", notOptedIn).switches).toEqual([]);
   });
-  test("keeps the one-shot ready frame emitted during post-spawn status persistence", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
-    const roots = {
-      developmentRoot: path.join(root, "dev"),
-      productionDataDir: path.join(root, "production"),
-      homeDir: root,
-    };
-    const args = parseDevArguments(["--profile", "ready-race"]);
-    const profile = resolveRuntimeProfile({
-      repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
-      requestedId: args.profile,
-      roots,
-    });
-    const child = () =>
-      Object.assign(new EventEmitter(), {
-        pid: 1_000_000_000,
-        exitCode: 0,
-        signalCode: null,
-        stdout: new EventEmitter(),
-        stderr: new EventEmitter(),
-      }) as unknown as ChildProcess;
-    const vite = child();
-    const electron = child();
-    const frame = JSON.stringify({
-      ...complete,
-      type: "orkestrator-electron-ready",
-      profile: profile.id,
-    });
-    let postSpawnWritePending = false;
-    let reachedReady = false;
-    const signals = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
-    const watchdog = setTimeout(() => electron.emit("exit", 1, null), 2000);
-    try {
-      await startDevelopment(args, "development", {
+  test.each(["development", "agent-test"] as const)(
+    "wires Electron spawn settings and keeps readiness during status persistence (%s)",
+    async (flavor) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
+      const roots = {
+        developmentRoot: path.join(root, "dev"),
+        productionDataDir: path.join(root, "production"),
+        homeDir: root,
+      };
+      const args = parseDevArguments(["--profile", "ready-race"]);
+      const profile = resolveRuntimeProfile({
+        repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
+        requestedId: args.profile,
+        flavor,
         roots,
-        prune: async () => [],
-        typecheck: () => ({ status: 0 }),
-        bundle: async () =>
-          ({ success: true, outputs: [], logs: [] }) as unknown as Bun.BuildOutput,
-        spawn: ((command: string) =>
-          command === "bun" ? vite : electron) as typeof import("node:child_process").spawn,
-        waitForUrl: async () => {},
-        writeStatus: async (file, value) => {
-          const status = value as { status: string; pids: { electron?: number } };
-          if (status.status === "starting" && status.pids.electron) {
-            postSpawnWritePending = true;
-            // Deliver the entire frame while the asynchronous write is pending.
-            await new Promise<void>((resolve) =>
-              setImmediate(() => {
-                electron.stdout!.emit("data", Buffer.from(`${frame}\n`));
-                resolve();
-              }),
-            );
-          }
-          if (status.status === "ready") {
-            reachedReady = true;
-            clearTimeout(watchdog);
-          }
-          await atomicWriteJson(file, value);
-          if (status.status === "ready") setImmediate(() => electron.emit("exit", 0, null));
-        },
       });
-      expect(postSpawnWritePending).toBe(true);
-      expect(reachedReady).toBe(true);
-      expect(await readFile(path.join(profile.logDir, "electron.log"), "utf8")).toContain(frame);
-    } finally {
-      clearTimeout(watchdog);
-      for (const signal of ["SIGINT", "SIGTERM"] as const) {
-        for (const listener of process.listeners(signal)) {
-          if (!signals[signal].includes(listener)) process.removeListener(signal, listener);
+      const child = () =>
+        Object.assign(new EventEmitter(), {
+          pid: 1_000_000_000,
+          exitCode: 0,
+          signalCode: null,
+          stdout: new EventEmitter(),
+          stderr: new EventEmitter(),
+        }) as unknown as ChildProcess;
+      const vite = child();
+      const electron = child();
+      const frame = JSON.stringify({
+        ...complete,
+        type: "orkestrator-electron-ready",
+        profile: profile.id,
+      });
+      let postSpawnWritePending = false;
+      let reachedReady = false;
+      const signals = {
+        SIGINT: process.listeners("SIGINT"),
+        SIGTERM: process.listeners("SIGTERM"),
+      };
+      const watchdog = setTimeout(() => electron.emit("exit", 1, null), 2000);
+      const launchEnv = {
+        DISPLAY: ":test-display",
+        WAYLAND_DISPLAY: "test-wayland",
+        ELECTRON_RUN_AS_NODE: "1",
+        ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1",
+      };
+      const previousEnv = Object.fromEntries(
+        Object.keys(launchEnv).map((key) => [key, process.env[key]]),
+      );
+      const cache = spyOn(profileIo, "seedInstalledModelCatalogCaches").mockResolvedValue([]);
+      const toolchains = spyOn(profileIo, "seedInstalledAgentToolchains").mockResolvedValue({
+        seeded: [],
+        failed: [],
+      });
+      const credentials = spyOn(profileIo, "seedAgentTestProviderCredentials").mockResolvedValue(
+        [],
+      );
+      Object.assign(process.env, launchEnv);
+      let electronArgs: readonly string[] | undefined;
+      let electronOptions: SpawnOptions | undefined;
+      try {
+        await startDevelopment(args, flavor, {
+          roots,
+          prune: async () => [],
+          typecheck: () => ({ status: 0 }),
+          bundle: async () =>
+            ({ success: true, outputs: [], logs: [] }) as unknown as Bun.BuildOutput,
+          turbo: () => ({
+            status: 0,
+            stdout: JSON.stringify({
+              tasks: [
+                "acp-bridge",
+                "claude-bridge",
+                "codex-bridge",
+                "cursor-bridge",
+                "pi-bridge",
+              ].map((name) => ({ taskId: `${name}#build`, hash: "test-hash" })),
+            }),
+          }),
+          spawn: ((command: string, args: readonly string[], options: SpawnOptions) => {
+            if (command === "bun") return vite;
+            electronArgs = args;
+            electronOptions = options;
+            return electron;
+          }) as typeof import("node:child_process").spawn,
+          waitForUrl: async () => {},
+          writeStatus: async (file, value) => {
+            const status = value as { status: string; pids: { electron?: number } };
+            if (status.status === "starting" && status.pids.electron) {
+              postSpawnWritePending = true;
+              // Deliver the entire frame while the asynchronous write is pending.
+              await new Promise<void>((resolve) =>
+                setImmediate(() => {
+                  electron.stdout!.emit("data", Buffer.from(`${frame}\n`));
+                  resolve();
+                }),
+              );
+            }
+            if (status.status === "ready") {
+              reachedReady = true;
+              clearTimeout(watchdog);
+            }
+            await atomicWriteJson(file, value);
+            if (status.status === "ready") setImmediate(() => electron.emit("exit", 0, null));
+          },
+        });
+        const headless = flavor === "agent-test" && process.platform === "linux";
+        expect(electronArgs).toEqual([
+          ...(headless ? ["--ozone-platform=headless", "--disable-gpu"] : []),
+          "apps/desktop/dist/electron/main.js",
+        ]);
+        expect(electronOptions?.env).not.toBe(process.env);
+        expect(electronOptions?.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
+        expect(electronOptions?.env?.DISPLAY).toBe(headless ? undefined : launchEnv.DISPLAY);
+        expect(electronOptions?.env?.WAYLAND_DISPLAY).toBe(
+          headless ? undefined : launchEnv.WAYLAND_DISPLAY,
+        );
+        expect(electronOptions?.env?.ELECTRON_DEV).toBe("1");
+        for (const [key, value] of Object.entries(launchEnv)) expect(process.env[key]).toBe(value);
+        expect(postSpawnWritePending).toBe(true);
+        expect(reachedReady).toBe(true);
+        expect(await readFile(path.join(profile.logDir, "electron.log"), "utf8")).toContain(frame);
+      } finally {
+        cache.mockRestore();
+        toolchains.mockRestore();
+        credentials.mockRestore();
+        for (const [key, value] of Object.entries(previousEnv)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
         }
+        clearTimeout(watchdog);
+        for (const signal of ["SIGINT", "SIGTERM"] as const) {
+          for (const listener of process.listeners(signal)) {
+            if (!signals[signal].includes(listener)) process.removeListener(signal, listener);
+          }
+        }
+        await rm(root, { recursive: true, force: true });
       }
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });
 
 describe("startup failure output", () => {

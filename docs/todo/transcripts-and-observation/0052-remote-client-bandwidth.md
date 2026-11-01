@@ -99,7 +99,7 @@ The live half stays open because it needs a Serve handler on a tailnet node, and
 | Reconnect | `Last-Event-ID` and `since`: replay, no duplicate, new gzip stream | Cursor reaches upstream, new gzip stream |
 | Disconnect | Idle and mid-burst: compressor released, no failure | Upstream closed, compressor released |
 | Non-gzip clients (none, `identity`, `gzip;q=0`, `br`) | Identity, flushed, no compressor | Identity, no compressor |
-| `Content-Encoding` and `Vary` | `gzip` once, `Vary: Accept-Encoding`, `no-transform` | Same; a `no-transform` or already coded upstream is untouched |
+| `Content-Encoding` and `Vary` | `gzip` once, `Vary: Accept-Encoding`, `no-transform` | `gzip` once, `Vary: Accept-Encoding`; upstream cache-control is preserved, not augmented with `no-transform`. A `no-transform` or already coded upstream is untouched |
 | `off`, `body`, control listener | Identity, no `Vary` | n/a |
 
 Negative controls show the checks can fail: a hop that holds bytes and an encoder that does not sync-flush are both caught. Seven deliberate breaks were also caught on 2026-11-01: no sync flush in each writer, no `gateway.keepalive` at connect, comment-only ticks, `Vary` only when gzipping, and each of the two bugs below restored.
@@ -605,6 +605,16 @@ manual-refresh behaviour.
 - This work authorises no production configuration change on its own.
 
 ## Assumptions and decisions
+
+### Tasks 1 and 3: review repairs (2026-11-01)
+
+The probe uses a bounded header wait and owns pending and active streams until
+cleanup. Real socket and wall-clock qualification lives in the slow integration
+test file; arrival analysis and option parsing remain in the default tier.
+The evidence table describes preserved upstream cache-control rather than claiming
+the proxy adds no-transform. These choices keep production compression policy
+unchanged while making failed measurements terminate and the evidence precise.
+
 
 Decisions made on 2026-10-27 for this round, with the options weighed.
 

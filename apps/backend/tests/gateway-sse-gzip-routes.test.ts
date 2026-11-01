@@ -45,7 +45,9 @@ type CompressionGauges = {
 
 function compressionGauges(gateway: OrkestratorGateway): CompressionGauges {
   return (
-    gateway as unknown as { metrics: { snapshot(): { compression: CompressionGauges } } }
+    gateway as unknown as {
+      metrics: { snapshot(): { compression: CompressionGauges } };
+    }
   ).metrics.snapshot().compression;
 }
 
@@ -102,6 +104,7 @@ async function startHttp1Proxy(
           else response.write(chunk);
         });
         upstreamResponse.on("end", () => response.end());
+        upstreamResponse.on("error", () => response.destroy());
       },
     );
     upstream.on("error", () => response.destroy());
@@ -149,12 +152,13 @@ async function startHttp2Proxy(targetOrigin: string): Promise<TestProxy> {
           Object.entries(upstreamResponse.headers).filter(([name]) => !HOP_BY_HOP.has(name)),
         );
         response.writeHead(upstreamResponse.statusCode ?? 502, forwarded as OutgoingHttpHeaders);
-        response.flushHeaders();
+        // HTTP/2 writeHead sends headers immediately.
         upstreamResponse.on("data", (chunk: Buffer) => {
           upstreamBytes += chunk.byteLength;
           response.write(chunk);
         });
         upstreamResponse.on("end", () => response.end());
+        upstreamResponse.on("error", () => response.destroy());
       },
     );
     upstream.on("error", () => response.destroy());
@@ -332,7 +336,10 @@ describe.each(ROUTES)("gzip /events %s", (_name, openRoute) => {
   });
 
   test("an idle stream flushes each keepalive comment and then delivers the next event", async () => {
-    const { gateway, info } = await startGateway({ compression: "on", keepaliveMs: 20 });
+    const { gateway, info } = await startGateway({
+      compression: "on",
+      keepaliveMs: 20,
+    });
     const route = await openRoute(gatewayOrigin(info));
     const stream = await openStream(route, EVENTS_PATH, info.token);
     for (let seen = 1; seen <= 3; seen += 1) {
@@ -359,7 +366,10 @@ describe.each(ROUTES)("gzip /events %s", (_name, openRoute) => {
   });
 
   test("gateway.keepalive replaces the comment on every tick and each one is flushed", async () => {
-    const { gateway, info } = await startGateway({ compression: "on", keepaliveMs: 20 });
+    const { gateway, info } = await startGateway({
+      compression: "on",
+      keepaliveMs: 20,
+    });
     const route = await openRoute(gatewayOrigin(info));
     const stream = await openStream(route, `${EVENTS_PATH}?keepaliveEvents=1`, info.token);
     const frame = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
@@ -414,7 +424,10 @@ describe.each(ROUTES)("gzip /events %s", (_name, openRoute) => {
     // Its own gzip member, its own lease, and the keepalive it asked for.
     expect(second.raw().subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
     expect(second.text()).toContain(`event: ${GATEWAY_KEEPALIVE_EVENT}`);
-    expect(compressionGauges(gateway)).toMatchObject({ streamingActive: 1, streamingStarted: 2 });
+    expect(compressionGauges(gateway)).toMatchObject({
+      streamingActive: 1,
+      streamingStarted: 2,
+    });
 
     emitEnvironment(gateway, "replay-live");
     await expectFlushedFrame(second, "replay-live");
@@ -429,7 +442,10 @@ describe.each(ROUTES)("gzip /events %s", (_name, openRoute) => {
     expect(compressionGauges(gateway).streamingActive).toBe(1);
     stream.close();
     await waitUntil(() => eventClients(gateway).size === 0, "Client was not unregistered");
-    expect(compressionGauges(gateway)).toMatchObject({ streamingActive: 0, streamingFailures: 0 });
+    expect(compressionGauges(gateway)).toMatchObject({
+      streamingActive: 0,
+      streamingFailures: 0,
+    });
     if (route.proxy) expect(route.proxy.upstreamClosed()).toBe(1);
     // A later event has nowhere to go and must not fault.
     emitEnvironment(gateway, "after-hangup");
@@ -446,7 +462,10 @@ describe.each(ROUTES)("gzip /events %s", (_name, openRoute) => {
       if (index === 100) stream.close();
     }
     await waitUntil(() => eventClients(gateway).size === 0, "Client was not unregistered");
-    expect(compressionGauges(gateway)).toMatchObject({ streamingActive: 0, streamingFailures: 0 });
+    expect(compressionGauges(gateway)).toMatchObject({
+      streamingActive: 0,
+      streamingFailures: 0,
+    });
   });
 
   test.each([
@@ -455,7 +474,10 @@ describe.each(ROUTES)("gzip /events %s", (_name, openRoute) => {
     ["gzip refused", "gzip;q=0"],
     ["another coding", "br"],
   ])("a client with %s streams identity, flushed, and takes no compressor", async (_, value) => {
-    const { gateway, info } = await startGateway({ compression: "on", keepaliveMs: 20 });
+    const { gateway, info } = await startGateway({
+      compression: "on",
+      keepaliveMs: 20,
+    });
     const route = await openRoute(gatewayOrigin(info));
     const stream = await openStream(
       route,
@@ -478,7 +500,10 @@ describe.each(ROUTES)("gzip /events %s", (_name, openRoute) => {
     // Still a choice made on the request header, so caches must key on it.
     expect(stream.headers.vary).toBe("Accept-Encoding");
     expect(stream.raw().toString("utf8")).toBe(stream.text());
-    expect(compressionGauges(gateway)).toMatchObject({ streamingStarted: 0, streamingDeclined: 0 });
+    expect(compressionGauges(gateway)).toMatchObject({
+      streamingStarted: 0,
+      streamingDeclined: 0,
+    });
   });
 });
 
@@ -515,7 +540,11 @@ describe("modes that never gzip an event stream", () => {
     expect(compressionGauges(gateway).streamingStarted).toBe(0);
 
     const browser = await openStream(
-      { origin: info.browserUrl!.replace(/\/$/, ""), http2: false, proxy: null },
+      {
+        origin: info.browserUrl!.replace(/\/$/, ""),
+        http2: false,
+        proxy: null,
+      },
       EVENTS_PATH,
       info.token,
     );
@@ -570,7 +599,9 @@ describe.each(ROUTES)("gzip proxied event stream %s", (_name, openRoute) => {
       upstream.write(`data: proxied-${index}\n\n`);
       await expectFlushedFrame(stream, `proxied-${index}`);
     }
-    upstream.write(`data: ${incompressible(200 * 1024)}\n\n`);
+    const large = incompressible(200 * 1024);
+    upstream.write(`data: ${large}\n\n`);
+    await expectFlushedFrame(stream, large);
     upstream.write("data: after-large\n\n");
     await expectFlushedFrame(stream, "after-large");
 
@@ -606,21 +637,48 @@ describe.each(ROUTES)("gzip proxied event stream %s", (_name, openRoute) => {
   });
 
   test.each([
-    ["gzip", "gzip"],
-    ["identity", "identity"],
-  ])("a quiet upstream's headers reach a %s client before any frame", async (_, encoding) => {
+    ["on", "gzip"],
+    ["on", "identity"],
+    ["body", "gzip"],
+    ["off", "gzip"],
+  ] as const)(
+    "a quiet upstream in %s sends headers to a %s client",
+    async (compression, encoding) => {
+      const upstream = await startSseUpstream();
+      const { info } = await startGateway({ compression });
+      const route = await openRoute(gatewayOrigin(info));
+      // Resolves on the response headers. Nothing has been written upstream yet.
+      const stream = await openStream(route, upstream.path, info.token, {
+        "accept-encoding": encoding!,
+      });
+      expect(stream.status).toBe(200);
+      expect(stream.raw().byteLength).toBe(0);
+      expect(stream.headers["content-encoding"]).toBe(
+        compression === "on" && encoding === "gzip" ? "gzip" : undefined,
+      );
+      upstream.write("data: first\n\n");
+      await waitUntil(() => stream.text().includes("first"), "First frame after headers was held");
+    },
+  );
+
+  test("an upstream abort cannot produce a valid gzip ending", async () => {
     const upstream = await startSseUpstream();
-    const { info } = await startGateway({ compression: "on" });
+    const { gateway, info } = await startGateway({ compression: "on" });
     const route = await openRoute(gatewayOrigin(info));
-    // Resolves on the response headers. Nothing has been written upstream yet.
-    const stream = await openStream(route, upstream.path, info.token, {
-      "accept-encoding": encoding!,
-    });
-    expect(stream.status).toBe(200);
-    expect(stream.raw().byteLength).toBe(0);
-    expect(stream.headers["content-encoding"]).toBe(encoding === "gzip" ? "gzip" : undefined);
-    upstream.write("data: first\n\n");
-    await waitUntil(() => stream.text().includes("first"), "First frame after headers was held");
+    const stream = await openStream(route, upstream.path, info.token);
+    await waitUntil(() => upstream.responses.length === 1, "Upstream did not open");
+    upstream.write("data: before-abort\n\n");
+    await expectFlushedFrame(stream, "before-abort");
+    upstream.responses[0]!.destroy();
+    await waitUntil(() => stream.aborted() || stream.ended(), "Abort did not reach client");
+    // Some HTTP/2 hops signal END_STREAM on a reset. Either way the gzip body
+    // must fail decoding rather than acquire a valid trailer.
+    await waitUntil(
+      () => stream.aborted() || stream.decodeError() !== null,
+      "Truncated gzip was accepted",
+    );
+    expect(() => gunzipSync(stream.raw())).toThrow();
+    await waitUntil(() => compressionGauges(gateway).streamingActive === 0, "Leaked compressor");
   });
 
   test("an upstream that ends cleanly leaves a complete gzip body", async () => {
@@ -669,7 +727,10 @@ describe.each(ROUTES)("gzip proxied event stream %s", (_name, openRoute) => {
     upstream.write("id: 8\ndata: resumed\n\n", 1);
     await expectFlushedFrame(second, "resumed");
     expect(second.raw().subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
-    expect(compressionGauges(gateway)).toMatchObject({ streamingActive: 1, streamingStarted: 2 });
+    expect(compressionGauges(gateway)).toMatchObject({
+      streamingActive: 1,
+      streamingStarted: 2,
+    });
   });
 
   test("a client that hangs up closes the upstream and gives back the compressor", async () => {
@@ -714,11 +775,16 @@ describe.each(ROUTES)("gzip proxied event stream %s", (_name, openRoute) => {
     }
     expect(stream.headers["content-encoding"]).toBeUndefined();
     expect(stream.headers.vary).toBe("Accept-Encoding");
-    expect(compressionGauges(gateway)).toMatchObject({ streamingStarted: 0, streamingDeclined: 0 });
+    expect(compressionGauges(gateway)).toMatchObject({
+      streamingStarted: 0,
+      streamingDeclined: 0,
+    });
   });
 
   test("an upstream that forbids transformation is forwarded untouched", async () => {
-    const upstream = await startSseUpstream({ "cache-control": "no-store, no-transform" });
+    const upstream = await startSseUpstream({
+      "cache-control": "no-store, no-transform",
+    });
     const { gateway, info } = await startGateway({ compression: "on" });
     const route = await openRoute(gatewayOrigin(info));
     const stream = await openStream(route, upstream.path, info.token);

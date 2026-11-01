@@ -72,6 +72,8 @@ export type SseProbeStream = {
 export type SseProbeOptions = {
   headers?: Record<string, string>;
   http2?: boolean;
+  headerTimeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 /** Resolves once the response headers arrive, without waiting for a first frame. */
@@ -90,11 +92,25 @@ export function openSseProbeStream(
 
   return new Promise((resolve, reject) => {
     let close = () => {};
+    const fail = (error: Error) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      close();
+      reject(error);
+    };
+    const abort = () => fail(new Error("SSE request cancelled"));
+    const timer = setTimeout(
+      () => fail(new Error("Timed out waiting for SSE response headers")),
+      options.headerTimeoutMs ?? 10_000,
+    );
+    options.signal?.addEventListener("abort", abort, { once: true });
     const onResponse = (
       status: number,
       headers: IncomingHttpHeaders,
       body: NodeJS.ReadableStream,
     ) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
       const decoder = headers["content-encoding"] === "gzip" ? createGunzip() : null;
       const decodedChunk = (chunk: Buffer) => {
         decoded += chunk.toString("utf8");
@@ -139,7 +155,7 @@ export function openSseProbeStream(
       const session = http2Connect(target.origin);
       session.on("error", (error) => {
         aborted = true;
-        reject(error);
+        fail(error);
       });
       const stream = session.request({
         ":method": "GET",
@@ -152,11 +168,12 @@ export function openSseProbeStream(
       };
       stream.on("error", (error) => {
         aborted = true;
-        reject(error);
+        fail(error);
       });
       stream.on("response", (headers) =>
         onResponse(Number(headers[":status"]), headers as IncomingHttpHeaders, stream),
       );
+      if (options.signal?.aborted) abort();
       stream.end();
       return;
     }
@@ -179,8 +196,9 @@ export function openSseProbeStream(
     close = () => request.destroy();
     request.on("error", (error) => {
       aborted = true;
-      reject(error);
+      fail(error);
     });
+    if (options.signal?.aborted) abort();
     request.end();
   });
 }
@@ -337,6 +355,9 @@ export type ProbeMeasureOptions = ProbeSchedule & {
   keepaliveEvents: boolean;
   /** Drop the stream after this many ticks and resume from its cursor. 0 never does. */
   reconnectAfter: number;
+  headerTimeoutMs?: number;
+  /** Optional separate SSE hop for protocol qualification. */
+  eventOrigin?: string;
 };
 
 export type ProbeResult = ArrivalAnalysis & {
@@ -377,140 +398,162 @@ export async function measureRoute(options: ProbeMeasureOptions): Promise<ProbeR
   const origin = options.url.replace(/\/+$/, "");
   const authorization = { authorization: `Bearer ${options.token}` };
   const metrics = async (): Promise<RouteMetrics> => {
-    const response = await fetch(`${origin}/__orkestrator/metrics`, { headers: authorization });
+    const response = await fetch(`${origin}/__orkestrator/metrics`, {
+      headers: authorization,
+    });
     if (!response.ok) throw new Error(`Metrics request failed with ${response.status}`);
     return (await response.json()) as RouteMetrics;
   };
-  const before = await metrics();
+  const controller = new AbortController();
+  const active = new Set<SseProbeStream>();
+  try {
+    const before = await metrics();
 
-  const expectedTicks = options.frames + 1;
-  const arrivals: TickArrival[] = [];
-  let keepalives = 0;
-  let clientRawBytes = 0;
-  let reconnects = 0;
-  let lastEventId: string | null = null;
-  const search = options.keepaliveEvents ? "?keepaliveEvents=1" : "";
-  const open = async (cursor: string | null) => {
-    const stream = await openSseProbeStream(`${origin}/__orkestrator/events${search}`, {
-      http2: options.http2,
-      headers: {
-        ...authorization,
-        ...(options.acceptEncoding === null ? {} : { "accept-encoding": options.acceptEncoding }),
-        ...(cursor === null ? {} : { "last-event-id": cursor }),
-      },
-    });
-    if (stream.status !== 200) {
-      stream.close();
-      throw new Error(`The event stream answered ${stream.status}`);
-    }
-    return stream;
-  };
-  const readFrames = (stream: SseProbeStream, onTick: () => void) => {
-    let parsed = 0;
-    stream.onDecoded(() => {
-      const arrivedAtMs = Date.now();
-      const text = stream.text();
-      let end = text.indexOf("\n\n", parsed);
-      while (end !== -1) {
-        const frame = text.slice(parsed, end);
-        parsed = end + 2;
-        end = text.indexOf("\n\n", parsed);
-        if (frame.startsWith(": keepalive") || frame.includes("event: gateway.keepalive")) {
-          keepalives += 1;
-          continue;
-        }
-        if (!frame.includes(PROBE_EVENT)) continue;
-        lastEventId = /^id: (.+)$/m.exec(frame)?.[1] ?? lastEventId;
-        const tick = parseTick(frame);
-        if (tick) arrivals.push({ ...tick, arrivedAtMs });
-        onTick();
+    const expectedTicks = options.frames + 1;
+    const arrivals: TickArrival[] = [];
+    let keepalives = 0;
+    let clientRawBytes = 0;
+    let reconnects = 0;
+    let lastEventId: string | null = null;
+    const search = options.keepaliveEvents ? "?keepaliveEvents=1" : "";
+    const open = async (cursor: string | null) => {
+      const stream = await openSseProbeStream(
+        `${options.eventOrigin ?? origin}/__orkestrator/events${search}`,
+        {
+          http2: options.http2,
+          headerTimeoutMs: options.headerTimeoutMs,
+          signal: controller.signal,
+          headers: {
+            ...authorization,
+            ...(options.acceptEncoding === null
+              ? {}
+              : { "accept-encoding": options.acceptEncoding }),
+            ...(cursor === null ? {} : { "last-event-id": cursor }),
+          },
+        },
+      );
+      active.add(stream);
+      if (stream.status !== 200) {
+        stream.close();
+        throw new Error(`The event stream answered ${stream.status}`);
       }
+      return stream;
+    };
+    const readFrames = (stream: SseProbeStream, onTick: () => void) => {
+      let parsed = 0;
+      stream.onDecoded(() => {
+        const arrivedAtMs = Date.now();
+        const text = stream.text();
+        let end = text.indexOf("\n\n", parsed);
+        while (end !== -1) {
+          const frame = text.slice(parsed, end);
+          parsed = end + 2;
+          end = text.indexOf("\n\n", parsed);
+          if (frame.startsWith(": keepalive") || frame.includes("event: gateway.keepalive")) {
+            keepalives += 1;
+            continue;
+          }
+          if (!frame.includes(PROBE_EVENT)) continue;
+          lastEventId = /^id: (.+)$/m.exec(frame)?.[1] ?? lastEventId;
+          const tick = parseTick(frame);
+          if (tick) arrivals.push({ ...tick, arrivedAtMs });
+          onTick();
+        }
+      });
+    };
+
+    let stream = await open(null);
+    const first = stream;
+    const headers = first.headers;
+    let reconnecting: Promise<void> | null = null;
+    let reconnectError: unknown;
+    const resume = async () => {
+      stream = await open(lastEventId);
+      readFrames(stream, () => {});
+    };
+    const reconnectIfDue = () => {
+      if (options.reconnectAfter === 0 || reconnects > 0) return;
+      if (arrivals.length < options.reconnectAfter) return;
+      reconnects += 1;
+      clientRawBytes += stream.raw().byteLength;
+      stream.close();
+      reconnecting = resume().catch((error: unknown) => {
+        reconnectError = error;
+      });
+    };
+    readFrames(first, reconnectIfDue);
+
+    const started = await fetch(`${origin}/__orkestrator/invoke`, {
+      method: "POST",
+      headers: { ...authorization, "content-type": "application/json" },
+      body: JSON.stringify({
+        command: PROBE_START_COMMAND,
+        args: {
+          frames: options.frames,
+          intervalMs: options.intervalMs,
+          idleMs: options.idleMs,
+        } satisfies ProbeSchedule,
+      }),
     });
-  };
+    if (!started.ok) throw new Error(`The probe gateway refused to start with ${started.status}`);
 
-  let stream = await open(null);
-  const first = stream;
-  const headers = first.headers;
-  let reconnecting: Promise<void> | null = null;
-  const resume = async () => {
-    stream = await open(lastEventId);
-    readFrames(stream, () => {});
-  };
-  const reconnectIfDue = () => {
-    if (options.reconnectAfter === 0 || reconnects > 0) return;
-    if (arrivals.length < options.reconnectAfter) return;
-    reconnects += 1;
+    const deadline =
+      Date.now() + options.frames * options.intervalMs + options.idleMs + 10 * options.intervalMs;
+    while (Date.now() < deadline && new Set(arrivals.map(({ seq }) => seq)).size < expectedTicks) {
+      if (reconnectError) throw reconnectError;
+      await sleep(Math.min(50, options.intervalMs));
+    }
+    await sleep(BYTE_COUNT_SETTLE_MS);
+    await reconnecting;
+    if (reconnectError) throw reconnectError;
     clientRawBytes += stream.raw().byteLength;
+    const after = await metrics();
     stream.close();
-    reconnecting = resume();
-  };
-  readFrames(first, reconnectIfDue);
 
-  const started = await fetch(`${origin}/__orkestrator/invoke`, {
-    method: "POST",
-    headers: { ...authorization, "content-type": "application/json" },
-    body: JSON.stringify({
-      command: PROBE_START_COMMAND,
-      args: {
-        frames: options.frames,
-        intervalMs: options.intervalMs,
-        idleMs: options.idleMs,
-      } satisfies ProbeSchedule,
-    }),
-  });
-  if (!started.ok) throw new Error(`The probe gateway refused to start with ${started.status}`);
+    // The gateway notices the hang-up on its own schedule, and a route adds a hop.
+    let closedMetrics = await metrics();
+    const releaseDeadline = Date.now() + 2_000;
+    while (
+      closedMetrics.compression.streamingActive > before.compression.streamingActive &&
+      Date.now() < releaseDeadline
+    ) {
+      await sleep(50);
+      closedMetrics = await metrics();
+    }
 
-  const deadline =
-    Date.now() + options.frames * options.intervalMs + options.idleMs + 10 * options.intervalMs;
-  while (Date.now() < deadline && new Set(arrivals.map(({ seq }) => seq)).size < expectedTicks) {
-    await sleep(Math.min(50, options.intervalMs));
+    const analysis = analyzeArrivals(arrivals, expectedTicks, options.intervalMs);
+    const serverEncodedBytes = after.stream.encodedBodyBytes - before.stream.encodedBodyBytes;
+    const bytesMatch = reconnects > 0 ? null : clientRawBytes === serverEncodedBytes;
+    return {
+      ...analysis,
+      schema: PROBE_SCHEMA,
+      label: options.label,
+      http2: options.http2,
+      requestedEncoding: options.acceptEncoding,
+      status: first.status,
+      contentEncoding: headerText(headers["content-encoding"]),
+      vary: headerText(headers.vary),
+      cacheControl: headerText(headers["cache-control"]),
+      frames: options.frames,
+      intervalMs: options.intervalMs,
+      idleMs: options.idleMs,
+      keepalives,
+      reconnects,
+      clientRawBytes,
+      serverEncodedBytes,
+      bytesMatch,
+      streamingActiveAfterClose: closedMetrics.compression.streamingActive,
+      incremental:
+        analysis.missing === 0 &&
+        analysis.duplicates === 0 &&
+        analysis.outOfOrder === 0 &&
+        analysis.heldTicks === 0 &&
+        bytesMatch !== false,
+    };
+  } finally {
+    controller.abort();
+    for (const stream of active) stream.close();
   }
-  await sleep(BYTE_COUNT_SETTLE_MS);
-  await reconnecting;
-  clientRawBytes += stream.raw().byteLength;
-  const after = await metrics();
-  stream.close();
-
-  // The gateway notices the hang-up on its own schedule, and a route adds a hop.
-  let closedMetrics = await metrics();
-  const releaseDeadline = Date.now() + 2_000;
-  while (
-    closedMetrics.compression.streamingActive > before.compression.streamingActive &&
-    Date.now() < releaseDeadline
-  ) {
-    await sleep(50);
-    closedMetrics = await metrics();
-  }
-
-  const analysis = analyzeArrivals(arrivals, expectedTicks, options.intervalMs);
-  const serverEncodedBytes = after.stream.encodedBodyBytes - before.stream.encodedBodyBytes;
-  const bytesMatch = reconnects > 0 ? null : clientRawBytes === serverEncodedBytes;
-  return {
-    ...analysis,
-    schema: PROBE_SCHEMA,
-    label: options.label,
-    http2: options.http2,
-    requestedEncoding: options.acceptEncoding,
-    status: first.status,
-    contentEncoding: headerText(headers["content-encoding"]),
-    vary: headerText(headers.vary),
-    cacheControl: headerText(headers["cache-control"]),
-    frames: options.frames,
-    intervalMs: options.intervalMs,
-    idleMs: options.idleMs,
-    keepalives,
-    reconnects,
-    clientRawBytes,
-    serverEncodedBytes,
-    bytesMatch,
-    streamingActiveAfterClose: closedMetrics.compression.streamingActive,
-    incremental:
-      analysis.missing === 0 &&
-      analysis.duplicates === 0 &&
-      analysis.outOfOrder === 0 &&
-      analysis.heldTicks === 0 &&
-      bytesMatch !== false,
-  };
 }
 
 function headerText(value: string | string[] | undefined): string | null {
@@ -522,7 +565,9 @@ function parseTick(frame: string): Pick<TickArrival, "seq" | "sentAtMs"> | null 
   const data = /^data: (.+)$/m.exec(frame)?.[1];
   if (!data) return null;
   try {
-    const parsed = JSON.parse(data) as { payload?: { seq?: unknown; sentAtMs?: unknown } };
+    const parsed = JSON.parse(data) as {
+      payload?: { seq?: unknown; sentAtMs?: unknown };
+    };
     const { seq, sentAtMs } = parsed.payload ?? {};
     return typeof seq === "number" && typeof sentAtMs === "number" ? { seq, sentAtMs } : null;
   } catch {
@@ -603,7 +648,7 @@ export function parseMeasureOptions(argv: readonly string[]): ParsedMeasureOptio
   };
 }
 
-async function main(argv: readonly string[]): Promise<number> {
+export async function main(argv: readonly string[]): Promise<number> {
   const [mode, ...rest] = argv;
   if (mode === "serve") {
     const server = await startProbeServer(parseServeOptions(rest));

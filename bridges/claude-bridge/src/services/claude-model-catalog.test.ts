@@ -1,3 +1,7 @@
+import { mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import config from "../routes/config.js";
 import { describe, expect, jest, mock, test } from "bun:test";
 import {
   createSession,
@@ -204,6 +208,72 @@ describe("the model catalogue without a running CLI", () => {
     }
   });
 
+  test("a forced route read bypasses remembered models", async () => {
+    probesAnswerFor(SIGNED_IN);
+    await modelIds();
+    queryControlOverrides.supportedModels = async () => [MODEL("fresh")];
+    const response = await config.request("/models?forceRefresh=true");
+    expect((await response.json()).models[0].id).toBe("fresh");
+    expect(probesSoFar()).toBe(2);
+  });
+
+  test("PATH executable replacement and settings edits invalidate the answer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "catalog-identity-"));
+    const previous = {
+      PATH: process.env.PATH,
+      CLAUDE_CLI_PATH: process.env.CLAUDE_CLI_PATH,
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    };
+    try {
+      const executable = join(root, "claude");
+      await writeFile(executable, "#!/bin/sh\n");
+      await chmod(executable, 0o755);
+      process.env.PATH = root;
+      process.env.CLAUDE_CLI_PATH = "claude";
+      process.env.CLAUDE_CONFIG_DIR = root;
+      probesAnswerFor(SIGNED_IN);
+      await modelIds();
+      await modelIds();
+      expect(probesSoFar()).toBe(1);
+      await writeFile(executable, "#!/bin/sh\nexit 0\n");
+      await modelIds();
+      expect(probesSoFar()).toBe(2);
+      await writeFile(join(root, "settings.json"), '{"availableModels":["haiku"]}');
+      await modelIds();
+      expect(probesSoFar()).toBe(3);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a rejected model read after timeout stays handled and closes the query", async () => {
+    let reject!: (error: Error) => void;
+    const close = mock(async () => ({ done: true, value: undefined }));
+    queryControlOverrides.return = close;
+    queryControlOverrides.supportedModels = () =>
+      new Promise((_, fail) => {
+        reject = fail;
+      });
+    jest.useFakeTimers();
+    try {
+      const read = getAvailableModelCatalog();
+      await waitForTimerArmed();
+      jest.advanceTimersByTime(CLAUDE_MODEL_PROBE_TIMEOUT_MS);
+      expect((await read).source).toBe("fallback");
+      expect(close).toHaveBeenCalledTimes(1);
+      reject(new Error("closed after timeout"));
+      await Promise.resolve();
+    } finally {
+      jest.useRealTimers();
+    }
+    delete queryControlOverrides.supportedModels;
+    expect((await getAvailableModelCatalog()).source).toBe("sdk");
+  });
+
   test("the answer expires, as a backstop for a change nothing reported", async () => {
     probesAnswerFor(SIGNED_IN);
     await modelIds();
@@ -233,6 +303,21 @@ describe("the model catalogue with a running CLI", () => {
     await warmSession("live over cache");
     expect(await modelIds()).toEqual(["claude-live"]);
     expect(initializationResult).toHaveBeenCalled();
+  });
+
+  test("refresh fences an old live answer even after runtime release", async () => {
+    queryControlOverrides.initializationResult = async () => ({
+      models: [MODEL("old")],
+      account: SIGNED_IN,
+    });
+    const session = await warmSession("refresh old runtime");
+    expect(await modelIds()).toEqual(["old"]);
+    probesAnswerFor(SIGNED_IN);
+    queryControlOverrides.supportedModels = async () => [MODEL("new")];
+    await refreshClaudeCatalogs();
+    expect(await modelIds()).toEqual(["new"]);
+    session.claudeRuntime!.state = "ended";
+    expect(await modelIds()).toEqual(["new"]);
   });
 
   test("its answer serves the reads after it is released", async () => {

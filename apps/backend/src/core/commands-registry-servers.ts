@@ -314,7 +314,7 @@ export function registerServerCommands(
     const existingRefresh = claudeModelCatalogRefreshes.get(id);
     if (existingRefresh) return existingRefresh;
 
-    const refresh = refreshClaudeModelCatalog(id, context)
+    const refresh = refreshClaudeModelCatalog(id, context, undefined, forceRefresh === true)
       .then((snapshot) => {
         validatedClaudeModelCatalogs.add(id);
         return snapshot;

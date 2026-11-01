@@ -12,6 +12,8 @@
 
 import type { AccountInfo, ModelInfo as SdkModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { CLAUDE_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/claude-model-catalog";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { stat } from "node:fs/promises";
 import type { ModelInfo } from "../types/index.js";
 import {
@@ -20,7 +22,11 @@ import {
   normalizeClaudeAccount,
 } from "./claude-sign-in.js";
 import { controlOnlyQuery } from "./control-only-query.js";
-import { liveInitializationResult, readFromLiveClaude } from "./live-claude-control.js";
+import {
+  liveClaudeControls,
+  liveInitializationResult,
+  readFromLiveClaude,
+} from "./live-claude-control.js";
 import { debugLog } from "./logger.js";
 import { claudeExecutableOptions } from "./session-manager-core.js";
 
@@ -51,12 +57,15 @@ interface RememberedModels {
 }
 
 let remembered: RememberedModels | undefined;
+let liveAnswers = new WeakMap<object, { cli: string; expiresAt: number }>();
+let invalidLiveAnswers = new WeakSet<object>();
 /** Bumped by an invalidation, so an older probe cannot repopulate the cache. */
 let generation = 0;
 let probe: { generation: number; read: Promise<ClaudeModelCatalog> } | undefined;
 
 /** Drop what is remembered: an explicit catalogue refresh. */
 export function invalidateClaudeModelCatalog(): void {
+  for (const control of liveClaudeControls()) invalidLiveAnswers.add(control);
   remembered = undefined;
   generation += 1;
 }
@@ -64,6 +73,8 @@ export function invalidateClaudeModelCatalog(): void {
 export function resetClaudeModelCatalogForTesting(): void {
   invalidateClaudeModelCatalog();
   probe = undefined;
+  liveAnswers = new WeakMap();
+  invalidLiveAnswers = new WeakSet();
 }
 
 function catalogModels(models: readonly SdkModelInfo[]): ModelInfo[] {
@@ -87,11 +98,25 @@ function catalogModels(models: readonly SdkModelInfo[]): ModelInfo[] {
  * bridge, so the directory is only ever a safeguard.
  */
 async function claudeCliIdentity(): Promise<string> {
-  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() ?? "";
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
   const executable = process.env.CLAUDE_CLI_PATH?.trim();
-  if (!executable) return JSON.stringify([configDir]);
-  const file = await stat(executable).catch(() => undefined);
-  return JSON.stringify([configDir, executable, file?.size, file?.mtimeMs]);
+  const resolved = executable
+    ? Bun.which(executable, { PATH: process.env.PATH }) || executable
+    : undefined;
+  const cwd = process.env.CWD || process.cwd();
+  const paths = [
+    resolved,
+    join(configDir, "settings.json"),
+    join(cwd, ".claude/settings.json"),
+    join(cwd, ".claude/settings.local.json"),
+  ];
+  const files = await Promise.all(
+    paths.map(async (path) => {
+      const file = path ? await stat(path).catch(() => undefined) : undefined;
+      return [path, file?.size, file?.mtimeMs, file?.ctimeMs];
+    }),
+  );
+  return JSON.stringify([configDir, cwd, files]);
 }
 
 /** The account an initialize answer describes, when it says. */
@@ -109,17 +134,19 @@ async function rememberModels(
   models: readonly SdkModelInfo[],
   account: unknown,
   at = generation,
+  cli?: string,
+  expiresAt?: number,
 ): Promise<void> {
   if (!account || typeof account !== "object" || models.length === 0) return;
   const status = normalizeClaudeAccount(account as AccountInfo);
   if (status.state !== "signed-in") return;
-  const cli = await claudeCliIdentity();
+  const identity = cli ?? (await claudeCliIdentity());
   if (at !== generation) return;
   remembered = {
-    cli,
+    cli: identity,
     account: claudeAccountKey(status),
     models,
-    expiresAt: Date.now() + CLAUDE_MODEL_CACHE_TTL_MS,
+    expiresAt: expiresAt ?? Date.now() + CLAUDE_MODEL_CACHE_TTL_MS,
   };
 }
 
@@ -138,18 +165,25 @@ async function rememberedModels(): Promise<readonly SdkModelInfo[] | undefined> 
  * from a CLI launched under another account than the bridge last saw, such as
  * before a sign-in. An answer that does not say is taken as it always was.
  */
-function liveModels(): Promise<{ models: SdkModelInfo[]; account: unknown } | undefined> {
+async function liveModels() {
   const observed = claudeObservedAccountKey();
-  return readFromLiveClaude((control) =>
-    liveInitializationResult(control)?.then((result) => {
-      if (!Array.isArray(result?.models) || result.models.length === 0) return undefined;
-      const account = accountKeyOf(result.account);
-      if (observed !== undefined && account !== undefined && account !== observed) {
-        return undefined;
-      }
-      return { models: result.models as SdkModelInfo[], account: result.account };
-    }),
-  );
+  const at = generation;
+  const cli = await claudeCliIdentity();
+  return readFromLiveClaude(async (control) => {
+    if (invalidLiveAnswers.has(control)) return undefined;
+    let identity = liveAnswers.get(control);
+    if (!identity) {
+      identity = { cli, expiresAt: Date.now() + CLAUDE_MODEL_CACHE_TTL_MS };
+      liveAnswers.set(control, identity);
+    }
+    if (identity.cli !== cli || identity.expiresAt <= Date.now()) return undefined;
+    const result = await liveInitializationResult(control);
+    if (at !== generation || invalidLiveAnswers.has(control)) return undefined;
+    if (!Array.isArray(result?.models) || result.models.length === 0) return undefined;
+    const account = accountKeyOf(result.account);
+    if (observed !== undefined && account !== undefined && account !== observed) return undefined;
+    return { models: result.models as SdkModelInfo[], account: result.account, at, ...identity };
+  });
 }
 
 function fallbackCatalog(): ClaudeModelCatalog {
@@ -179,13 +213,15 @@ async function probeModels(at: number): Promise<ClaudeModelCatalog> {
     });
     const control = q;
     // Both come from the one initialize answer, so the account costs nothing.
+    const answer = Promise.all([
+      control.supportedModels(),
+      typeof control.accountInfo === "function"
+        ? control.accountInfo().catch(() => undefined)
+        : undefined,
+    ]);
+    answer.catch(() => undefined);
     const [models, account] = await Promise.race([
-      Promise.all([
-        control.supportedModels(),
-        typeof control.accountInfo === "function"
-          ? control.accountInfo().catch(() => undefined)
-          : undefined,
-      ]),
+      answer,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () => reject(new Error("The model probe did not answer in time")),
@@ -222,12 +258,12 @@ function sharedProbe(): Promise<ClaudeModelCatalog> {
 }
 
 export async function getAvailableModelCatalog(): Promise<ClaudeModelCatalog> {
-  const live = await liveModels();
+  const live = liveClaudeControls().length ? await liveModels() : undefined;
   if (live) {
     debugLog("[session-manager] Supported models read from a running CLI", {
       count: live.models.length,
     });
-    await rememberModels(live.models, live.account);
+    await rememberModels(live.models, live.account, live.at, live.cli, live.expiresAt);
     return { source: "sdk", models: catalogModels(live.models) };
   }
   const known = await rememberedModels();

@@ -30,6 +30,34 @@ const root = await mkdtemp(join(tmpdir(), "claude-first-turn-"));
 const home = join(root, "home");
 const configDir = join(home, ".claude");
 
+const bridgeChildren = new Set<ChildProcess>();
+let cleaning: Promise<void> | undefined;
+function cleanup(): Promise<void> {
+  return (cleaning ??= (async () => {
+    await Promise.all(
+      [...bridgeChildren].map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) return resolve();
+            const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+            child.once("exit", () => {
+              clearTimeout(timer);
+              resolve();
+            });
+            child.kill("SIGTERM");
+          }),
+      ),
+    );
+    endpoint.stop(true);
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  })());
+}
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    void cleanup().finally(() => process.exit(signal === "SIGTERM" ? 143 : 130));
+  });
+}
+
 let modelCalls = 0;
 const requests: string[] = [];
 let onModelCall: (() => void) | undefined;
@@ -285,6 +313,7 @@ async function startBridge(cwd: string) {
   const child: ChildProcess = spawn(process.execPath, [join(import.meta.dir, "../index.ts")], {
     env: {
       ...env,
+      ORKESTRATOR_PARENT_PID: String(process.pid),
       PORT: String(port),
       HOSTNAME: "127.0.0.1",
       CWD: cwd,
@@ -292,6 +321,8 @@ async function startBridge(cwd: string) {
     },
     stdio: "ignore",
   });
+  bridgeChildren.add(child);
+  child.once("exit", () => bridgeChildren.delete(child));
   const call = (path: string, init?: RequestInit) =>
     fetch(`http://127.0.0.1:${port}${path}`, {
       ...init,
@@ -430,6 +461,5 @@ try {
   };
   console.log(`${RESULT_SENTINEL}${JSON.stringify(report, null, 2)}`);
 } finally {
-  endpoint.stop(true);
-  await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  await cleanup();
 }

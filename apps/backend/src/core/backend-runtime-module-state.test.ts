@@ -9,6 +9,7 @@ import {
 } from "./container-readiness.js";
 import { withCoordinatorReceipt } from "./coordinator-action-scope.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { GraphSystemActionMemory } from "./graph-system-action.js";
 import type { Environment, Project } from "./models.js";
 import {
   ensureProjectHomeEnvironment,
@@ -234,5 +235,35 @@ describe("two BackendRuntimes in one process (todo 1070)", () => {
     ).toBe(other);
     pullRequest.resolve(mine);
     expect(await running).toBe(mine);
+  });
+
+  test("graph effect locks and final-read failures belong to one backend's system executor", async () => {
+    // The backend builds one GraphNodeSystemExecutor, which holds one memory.
+    const first = new GraphSystemActionMemory();
+    const second = new GraphSystemActionMemory();
+    const effect = held<string>();
+    const order: string[] = [];
+
+    const running = first.withEffectLock("run-1\0push", () => effect.promise);
+    const queued = first.withEffectLock("run-1\0push", async () => {
+      order.push("first backend, queued");
+      return "queued";
+    });
+    expect(
+      await second.withEffectLock("run-1\0push", async () => {
+        order.push("second backend");
+        return "other";
+      }),
+    ).toBe("other");
+    expect(order).toEqual(["second backend"]);
+    effect.resolve("done");
+    expect(await running).toBe("done");
+    expect(await queued).toBe("queued");
+
+    expect(first.recordReadFailure("run-1\0checks")).toBe(1);
+    expect(first.recordReadFailure("run-1\0checks")).toBe(2);
+    expect(second.recordReadFailure("run-1\0checks")).toBe(1);
+    first.forgetReadFailures("run-1\0checks");
+    expect(first.recordReadFailure("run-1\0checks")).toBe(1);
   });
 });

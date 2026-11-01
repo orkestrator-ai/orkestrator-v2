@@ -716,18 +716,21 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
-  test("submits on plain Enter but not modified Enter in the prompt", async () => {
-    const onCreate = mock(async () => {});
-    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
-    const prompt = screen.getByLabelText(/Initial Prompt/i);
-
-    for (const modifier of ["shiftKey", "metaKey", "ctrlKey", "altKey"] as const) {
+  test("submits only on Cmd/Ctrl+Enter in the prompt", async () => {
+    for (const modifier of ["metaKey", "ctrlKey"] as const) {
+      const onCreate = mock(async () => {});
+      const view = render(
+        <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+      );
+      const prompt = screen.getByLabelText(/Initial Prompt/i);
+      for (const keys of [{}, { shiftKey: true }, { altKey: true }]) {
+        fireEvent.keyDown(prompt, { key: "Enter", ...keys });
+      }
+      expect(onCreate).not.toHaveBeenCalled();
       fireEvent.keyDown(prompt, { key: "Enter", [modifier]: true });
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      view.unmount();
     }
-    expect(onCreate).not.toHaveBeenCalled();
-
-    fireEvent.keyDown(prompt, { key: "Enter" });
-    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
   });
 
   test("disables form actions and controls while environment creation is loading", () => {
@@ -756,6 +759,7 @@ describe("resolveAgentDefaults", () => {
     expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).disabled).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", metaKey: true });
     expect(onCreate).not.toHaveBeenCalled();
   });
 
@@ -3340,6 +3344,7 @@ describe("resolveAgentDefaults", () => {
     }) as HTMLButtonElement;
     expect(create.disabled).toBe(true);
     fireEvent.click(create);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", ctrlKey: true });
     expect(onCreate).not.toHaveBeenCalled();
 
     await act(async () => pendingBuffer.resolve(new TextEncoder().encode("pending").buffer));
@@ -3428,6 +3433,7 @@ describe("resolveAgentDefaults", () => {
     const hostPort = screen.getByPlaceholderText("Host");
     fireEvent.change(containerPort, { target: { value: "0" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", metaKey: true });
     expect(onCreate).not.toHaveBeenCalled();
 
     fireEvent.change(containerPort, { target: { value: "8080" } });

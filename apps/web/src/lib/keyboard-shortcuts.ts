@@ -276,6 +276,13 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
         keywords: ["start", "scripts", "dev server"],
       },
       {
+        id: "create-environment-submit",
+        description: "Create the environment from the new environment dialog",
+        mac: ["⌘", "↵"],
+        other: ["Ctrl", "Enter"],
+        keywords: ["new environment", "submit"],
+      },
+      {
         id: "configure-scripts",
         description: "Create or configure a run script",
         mac: ["⌘", "⇧", "G"],

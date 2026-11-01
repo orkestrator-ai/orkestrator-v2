@@ -260,6 +260,110 @@ test("desktop lays the picker's model and reasoning columns out side by side", a
   await expectNoHorizontalOverflow(page);
 });
 
+async function showSection(page: Page, name: string) {
+  const tab = page.getByRole("tab", { name, exact: true });
+  if (await tab.isVisible()) await tab.click();
+}
+
+async function trackCreations(page: Page) {
+  await page.evaluate(() => {
+    let count = 0;
+    Object.defineProperty(window, "lastCreateEnvironmentOptions", {
+      configurable: true,
+      set: () => {
+        count++;
+      },
+      get: () => count,
+    });
+  });
+}
+
+async function creationCount(page: Page) {
+  return page.evaluate(() => window.lastCreateEnvironmentOptions);
+}
+
+test("native Enter inserts a newline and never implicitly submits name or ports", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/");
+  await trackCreations(page);
+  await showSection(page, "Prompt");
+  const prompt = page.getByLabel("Initial Prompt (optional)");
+  await prompt.fill("first line");
+  await prompt.press("End");
+  await prompt.press("Enter");
+  await prompt.press("x");
+  await expect(prompt).toHaveValue("first line\nx");
+  await page.screenshot({
+    path: `output/visual-previews/shortcut-newline-${testInfo.project.name}.png`,
+  });
+  await showSection(page, "Setup");
+  await page.getByLabel("Environment Name (optional)").press("Enter");
+  await showSection(page, "Ports");
+  if (!(await page.getByPlaceholder("Host", { exact: true }).isVisible())) {
+    await page.getByRole("button", { name: /Port Configuration/ }).click();
+  }
+  await page.getByPlaceholder("Container", { exact: true }).press("Enter");
+  await page.getByPlaceholder("Host", { exact: true }).press("Enter");
+  expect(await creationCount(page)).toBe(0);
+  await expect(page.getByRole("dialog")).toBeVisible();
+});
+
+for (const chord of ["Meta+Enter", "Control+Enter"]) {
+  test(`${chord} submits exactly once from fields, controls and portaled search`, async ({
+    page,
+  }) => {
+    for (const target of [
+      "prompt",
+      "name",
+      "port",
+      "checkbox",
+      "protocol",
+      "cancel",
+      "create",
+      "search",
+    ]) {
+      await page.goto("/");
+      await trackCreations(page);
+      let control: Locator;
+      if (target === "prompt") {
+        await showSection(page, "Prompt");
+        control = page.getByLabel("Initial Prompt (optional)");
+      } else if (target === "name") {
+        await showSection(page, "Setup");
+        control = page.getByLabel("Environment Name (optional)");
+      } else if (target === "port" || target === "protocol") {
+        await showSection(page, "Ports");
+        if (!(await page.getByPlaceholder("Host", { exact: true }).isVisible())) {
+          await page.getByRole("button", { name: /Port Configuration/ }).click();
+        }
+        control =
+          target === "port"
+            ? page.getByPlaceholder("Host", { exact: true })
+            : page.getByRole("combobox", { name: "Protocol" });
+      } else if (target === "checkbox" || target === "search") {
+        await showSection(page, "Agent");
+        if (target === "search") {
+          await page.locator("#agent-model").click();
+          control = page.getByPlaceholder("Search models...");
+        } else {
+          control = page.getByRole("checkbox", { name: "Launch Agent" });
+        }
+      } else {
+        control = page.getByRole("button", {
+          name: target === "cancel" ? "Cancel" : "Create Environment",
+          exact: true,
+        });
+      }
+      await control.focus();
+      await control.press(chord);
+      await expect.poll(() => creationCount(page), { message: `${chord} on ${target}` }).toBe(1);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+    }
+  });
+}
+
 /** Drops generated PNGs onto the dialog, as a file manager drag would. */
 async function dropImages(page: Page, images: { name: string; color: string }[]) {
   await page.getByRole("dialog").evaluate(async (dialog, images) => {

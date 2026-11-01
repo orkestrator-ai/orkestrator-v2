@@ -1051,12 +1051,17 @@ export class StorageService {
   dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
-      dispatched: false;
-      mailRefused?: true;
-      /** Recorded under the session's persisted notice field; `null` clears it. */
-      incompleteTurnNotice?: IncompleteTurnNotice | null;
-    }>,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<
+      | void
+      | {
+          dispatched: false;
+          mailRefused?: true;
+          /** Recorded under the session's persisted notice field; `null` clears it. */
+          incompleteTurnNotice?: IncompleteTurnNotice | null;
+        }
+      /** The provider accepted the turn in this mode. */
+      | { dispatched: true; mode: "plan" | "build" | undefined }
+    >,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
     admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
   ): Promise<{

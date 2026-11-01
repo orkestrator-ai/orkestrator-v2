@@ -715,6 +715,11 @@ export interface PersistedNativeAgentSession {
   /** Exact backend-authored frame that may be hidden on the first matching user echo. */
   initialPromptPresentation?: TrustedUserPromptPresentation;
   dispatchedRequestIds?: string[];
+  /**
+   * The mode the newest accepted turn was sent in. A prompt can state its own
+   * mode without changing `controls`, so a continuation of that turn reads it here.
+   */
+  lastDispatchedTurn?: { requestId: string; mode?: "plan" | "build" };
   /** Retained only while the provider outcome is ambiguous. */
   pendingDispatch?: PersistedNativeAgentPendingDispatch;
   /** Retained until an ambiguous steer is authoritatively reconciled or discarded. */

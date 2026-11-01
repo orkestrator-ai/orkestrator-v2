@@ -22,6 +22,7 @@ function sessionWith(
     origin: "interactive-native",
     interactionPolicy: {},
     dispatchedRequestIds: ["request-1"],
+    lastDispatchedTurn: { requestId: "request-1" },
     ...overrides,
   } as unknown as PersistedNativeAgentSession;
 }
@@ -44,7 +45,12 @@ function harness(
     outcome: options.outcome ?? { outcome: "failed", error: LIMIT },
     verdict: options.verdict ?? ("resend" as UsageLimitStopVerdict),
   };
-  const dispatches: Array<{ prompt: string; requestId: string; decision: unknown }> = [];
+  const dispatches: Array<{
+    prompt: string;
+    requestId: string;
+    mode?: string;
+    decision: unknown;
+  }> = [];
   const handleLimitStop = mock(async (_input: { resends: number }) => state.verdict);
   const requestOutcome = mock(async () => state.outcome);
   const noteTurnEnded = mock(() => undefined);
@@ -67,7 +73,12 @@ function harness(
       options.dispatch ??
       (async (input, prepare) => {
         const decision = await prepare(options.locked ?? state.session, {} as never);
-        dispatches.push({ prompt: input.prompt, requestId: input.requestId, decision });
+        dispatches.push({
+          prompt: input.prompt,
+          requestId: input.requestId,
+          ...(input.mode ? { mode: input.mode } : {}),
+          decision,
+        });
       }),
   });
   return {
@@ -85,6 +96,64 @@ function harness(
 }
 
 describe("a native tab the weekly limit stopped", () => {
+  test("resends in the mode its turn ran in, whatever the session's controls say", async () => {
+    const h = harness({
+      session: sessionWith({
+        controls: { mode: "build" },
+        lastDispatchedTurn: { requestId: "request-1", mode: "plan" },
+      }),
+    });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.dispatches).toHaveLength(1);
+    expect(h.dispatches[0]?.mode).toBe("plan");
+  });
+
+  test("tabs stopped together send one at a time, so the second finds the new bridge", async () => {
+    const order: string[] = [];
+    let releaseFirst = () => {};
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const h = harness({
+      dispatch: async (input) => {
+        order.push(`start ${input.requestId}`);
+        if (input.requestId.endsWith("request-1")) await first;
+        order.push(`end ${input.requestId}`);
+      },
+    });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    const otherTab = sessionWith({
+      key: "env-1\0claude\0tab-2",
+      dispatchedRequestIds: ["request-2"],
+      lastDispatchedTurn: { requestId: "request-2" },
+    });
+    const pending = h.resend.pendingTasks();
+    await Promise.resolve();
+    h.state.session = otherTab;
+    h.resend.noteActivity(otherTab, "idle", "working");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(["start usage-limit-resend:1:request-1"]);
+    releaseFirst();
+    await Promise.allSettled([...pending, ...h.resend.pendingTasks()]);
+    expect(order).toEqual([
+      "start usage-limit-resend:1:request-1",
+      "end usage-limit-resend:1:request-1",
+      "start usage-limit-resend:1:request-2",
+      "end usage-limit-resend:1:request-2",
+    ]);
+  });
+
+  test("a turn with no record of its mode stays stopped rather than guess", async () => {
+    const h = harness({
+      session: sessionWith({ lastDispatchedTurn: { requestId: "an-older-request" } }),
+    });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.dispatches).toEqual([]);
+    expect(h.handleLimitStop).not.toHaveBeenCalled();
+  });
+
   test("says when the turn was first seen running, not when it stopped", async () => {
     const h = harness();
     h.resend.noteActivity(h.state.session, "working", "idle");
@@ -128,7 +197,10 @@ describe("a native tab the weekly limit stopped", () => {
     h.resend.noteActivity(h.state.session, "idle", "working");
     await h.settle();
     h.state.outcome = { outcome: "failed", error: LIMIT };
-    h.state.session = sessionWith({ dispatchedRequestIds: ["request-1", "request-2"] });
+    h.state.session = sessionWith({
+      dispatchedRequestIds: ["request-1", "request-2"],
+      lastDispatchedTurn: { requestId: "request-2" },
+    });
     h.resend.noteActivity(h.state.session, "idle", "idle");
     await h.settle();
     expect(h.dispatches.map((entry) => entry.requestId)).toEqual([
@@ -219,7 +291,10 @@ describe("a native tab the weekly limit stopped", () => {
 
   test("a chain of refusals counts up to the budget", async () => {
     const h = harness({
-      session: sessionWith({ dispatchedRequestIds: ["usage-limit-resend:2:request-1"] }),
+      session: sessionWith({
+        dispatchedRequestIds: ["usage-limit-resend:2:request-1"],
+        lastDispatchedTurn: { requestId: "usage-limit-resend:2:request-1" },
+      }),
     });
     h.resend.noteActivity(h.state.session, "idle", "working");
     await h.settle();

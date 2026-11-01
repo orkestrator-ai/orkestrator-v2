@@ -670,7 +670,10 @@ a reset. A tick per account says whether that account takes part. The backend
 does all of it (`agent-accounts-auto-switch.ts`; the rule is pure, in
 `@orkestrator/protocol/agent-account-auto-switch`), so it needs no client and no
 coordinator. It never writes a credential: a switch only records which existing
-login is active. The live checks still owed are in
+login is active. `mise run verify:accounts:resend-live` runs the resend on real
+bridges and the pinned CLIs against scripted provider servers
+([below](#proving-the-resend-without-a-billed-turn)). The live checks still owed
+are in
 [1250-automatic-account-switching-live-checks.md](../todo/agent-engines/1250-automatic-account-switching-live-checks.md).
 
 ### Which limit counts
@@ -782,8 +785,10 @@ turns holding that bridge, and a workflow drops its cached provider so that its
 next dispatch reconnects, which is what moves the bridge. Activity observation
 (`hasObservedLiveWork`) only sees native turns, so a workflow also counts the turns
 its own polls last saw running on the provider its reviewers share
-(`trackRunningTurns`). Owners that share a bridge but not a provider, such as a
-native tab beside a Multi Review, still cannot see each other's turns (see
+(`trackRunningTurns`). A bridge reports a failed turn by throwing, so that poll is
+what ends a turn's count; otherwise a stopped turn held back its own resend for two
+minutes. Workflow providers on one bridge read each other's counts. A native tab
+beside a Multi Review still cannot see the review's turns (see
 [1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-bridge-shared-by-owners-that-cannot-see-each-other)).
 
 - **Native tabs** (`native-agent-usage-limit-resend.ts`) work from the activity
@@ -797,6 +802,14 @@ native tab beside a Multi Review, still cannot see each other's turns (see
   for at most 45 minutes. A stop from before a backend restart stays stopped:
   a first observation is not an edge, which is also what keeps an old stop from
   resuming when an account resets.
+- **A native resend's mode** is the one its turn ran in
+  (`PersistedNativeAgentSession.lastDispatchedTurn`), not the session's controls. A
+  prompt can state its own mode without changing them, so reading the controls sent
+  a planning turn back as Build, and on Claude with `bypassPermissions`. A turn with
+  no record stays stopped rather than guess.
+- **Tabs stopped together** send one at a time per bridge, because the first send
+  replaces the bridge and the second would otherwise go over the connection it closed
+  and read as a failed send.
 - **Workflows** ask `provider.usageLimitStop` where they would fail a turn, at the
   same place as the restart continuation: reviewers and graph agent nodes in
   `AgentBranchRunner`, Multi Review's steps, build stages and build consolidation.
@@ -808,10 +821,42 @@ native tab beside a Multi Review, still cannot see each other's turns (see
   for any other reason stays stopped, whichever limit it was. A failed send is left
   as it stopped; there is no retry.
 
+A workflow's continuation keeps its turn's mode without any of this, because each
+owner resends with its stage's own options: a read-only reviewer stays `dontAsk`.
+
 A goal's turn is resent like any other, and the goal itself stays paused until the
 user resumes it. A public CLI run still settles `failed` on the stopped request,
 because its completion is request-specific. Coordinator conversations, feature
 planning, the goal verifier and graph describe sessions are not resent.
+
+### Proving the resend without a billed turn
+
+`mise run verify:accounts:resend-live` (`apps/backend/tests/account-switch-resend-live.test.ts`,
+slow tier) runs a real `OrkestratorBackend`, the bridges' built `dist` and the pinned
+Claude and Codex CLIs in a throwaway HOME, with fixture logins for two accounts. Only
+the provider's servers are scripted: a local model endpoint, reached through
+`ANTHROPIC_BASE_URL` and Codex's `openai_base_url`, and the two usage endpoints,
+answered by a replaced `fetch` that refuses any other host. It never reads a real
+login, and its model endpoint answers everything, so no turn is billed.
+
+| Scenario | What it shows on each pinned CLI |
+| --- | --- |
+| Native tab | The refusal's process exits, a new bridge starts on the other login, and that login's request carries the stopped prompt once, from the shared transcript, then the continuation |
+| Planning turn | A plan prompt in a Build session is resent in plan mode |
+| Two tabs stopped together | Each continues once, over one replacement |
+| A 5-hour refusal | Nothing moves and one call is all there is |
+| Every account out | One resend, refused, then nothing |
+| Multi Review preparation, build stage, graph agent node | The same continuation through each owner's own resend |
+| Two reviewers on one bridge | Each continues once, over one replacement, still `dontAsk` |
+
+The reviewer panel is a graph of only that node, because reaching a real Multi Review's
+panel takes a preparation result and a validation run first. `AgentBranchRunner` runs
+both. It says nothing about what a provider really sends or when: the refusal is
+fixture HTTP, though the words are the CLI's own. The pinned Claude CLI, given a 429
+with `anthropic-ratelimit-unified-status: rejected`, ends the turn with "You've hit
+your weekly limit · resets …" or "You've hit your 5-hour limit · resets …", and
+without the `representative-claim` header it retries instead. Real refusals remain in
+[1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md).
 
 ### Manual switches pin
 

@@ -87,12 +87,17 @@ export class NativeAgentDeliveries {
   async dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
-      dispatched: false;
-      mailRefused?: true;
-      /** Recorded under the session's persisted notice field; `null` clears it. */
-      incompleteTurnNotice?: IncompleteTurnNotice | null;
-    }>,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<
+      | void
+      | {
+          dispatched: false;
+          mailRefused?: true;
+          /** Recorded under the session's persisted notice field; `null` clears it. */
+          incompleteTurnNotice?: IncompleteTurnNotice | null;
+        }
+      /** The provider accepted the turn in this mode. */
+      | { dispatched: true; mode: "plan" | "build" | undefined }
+    >,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
     /** Runs after deduplication/conflict checks, under the delivery lease, before journaling. */
     admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
@@ -247,6 +252,9 @@ export class NativeAgentDeliveries {
         pendingDispatch: undefined,
         retiredDispatch: undefined,
         dispatchedRequestIds: [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
+        lastDispatchedTurn: outcome?.dispatched
+          ? { requestId, ...(outcome.mode ? { mode: outcome.mode } : {}) }
+          : undefined,
         updatedAt: nowIso(),
       };
       sessions[key] = updated;

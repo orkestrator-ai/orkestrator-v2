@@ -95,6 +95,8 @@ export class NativeAgentUsageLimitResend {
   private readonly seenRequests = new Map<string, string>();
   /** When each session's newest request was first seen, in any state. */
   private readonly turnsSeen = new Map<string, { requestId: string; at: number }>();
+  /** The last resend sent on each bridge. */
+  private readonly bridgeSends = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: NativeAgentUsageLimitResendDependencies) {}
 
@@ -125,6 +127,7 @@ export class NativeAgentUsageLimitResend {
     this.candidates.clear();
     this.seenRequests.clear();
     this.turnsSeen.clear();
+    this.bridgeSends.clear();
   }
 
   noteActivity(
@@ -226,6 +229,11 @@ export class NativeAgentUsageLimitResend {
     ) {
       return "done";
     }
+    // A resend runs in the mode its turn ran in. A prompt can state its own mode
+    // without changing the session's controls, and a planning turn must not come
+    // back as Build. A turn with no such record stays stopped rather than guess.
+    const stoppedTurn = durable.lastDispatchedTurn;
+    if (stoppedTurn?.requestId !== requestId) return "done";
     const environment = await this.deps.storage.getEnvironment(session.environmentId);
     if (!environment || environment.deletionRequestedAt) return "done";
 
@@ -252,45 +260,70 @@ export class NativeAgentUsageLimitResend {
     if (verdict === "wait") return "retry";
 
     let disposition: "done" | "retry" = "done";
-    await this.deps.dispatchPrompt(
-      {
-        environmentId: session.environmentId,
-        agent: session.agent,
-        logicalSessionKey: session.logicalSessionKey,
-        origin: session.origin,
-        interactionPolicy: session.interactionPolicy,
-        prompt: usageLimitResendPrompt(),
-        requestId: usageLimitResendRequestId(requestId),
-      },
-      // Inside the session's mutation fence, so a prompt or Stop the user sent
-      // meanwhile has already landed in what these read.
-      async (locked) => {
-        if (
-          this.deps.isStopped() ||
-          locked.providerSessionId !== candidate.providerSessionId ||
-          locked.dispatchedRequestIds?.at(-1) !== requestId ||
-          locked.interruptedRequestIds?.includes(requestId)
-        ) {
-          return { dispatch: false };
-        }
-        if (locked.pendingDispatch || locked.pendingSteer) {
-          disposition = "retry";
-          return { dispatch: false };
-        }
-        const observed = this.deps.observedActivity(locked.key);
-        if (observed?.providerSessionId === locked.providerSessionId && observed.state !== "idle") {
-          return { dispatch: false };
-        }
-        const queue = await this.deps.storage.getPromptQueue(
-          `${locked.agent}\0${locked.logicalSessionKey}`,
-        );
-        if (queue && !queue.dispatchError && (queue.inFlight || queue.outstandingClaim)) {
-          disposition = "retry";
-          return { dispatch: false };
-        }
-        return { dispatch: true };
-      },
+    await this.oneSendPerBridge(session, () =>
+      this.deps.dispatchPrompt(
+        {
+          environmentId: session.environmentId,
+          agent: session.agent,
+          logicalSessionKey: session.logicalSessionKey,
+          origin: session.origin,
+          interactionPolicy: session.interactionPolicy,
+          prompt: usageLimitResendPrompt(),
+          requestId: usageLimitResendRequestId(requestId),
+          ...(stoppedTurn.mode ? { mode: stoppedTurn.mode } : {}),
+        },
+        // Inside the session's mutation fence, so a prompt or Stop the user sent
+        // meanwhile has already landed in what these read.
+        async (locked) => {
+          if (
+            this.deps.isStopped() ||
+            locked.providerSessionId !== candidate.providerSessionId ||
+            locked.dispatchedRequestIds?.at(-1) !== requestId ||
+            locked.interruptedRequestIds?.includes(requestId)
+          ) {
+            return { dispatch: false };
+          }
+          if (locked.pendingDispatch || locked.pendingSteer) {
+            disposition = "retry";
+            return { dispatch: false };
+          }
+          const observed = this.deps.observedActivity(locked.key);
+          if (
+            observed?.providerSessionId === locked.providerSessionId &&
+            observed.state !== "idle"
+          ) {
+            return { dispatch: false };
+          }
+          const queue = await this.deps.storage.getPromptQueue(
+            `${locked.agent}\0${locked.logicalSessionKey}`,
+          );
+          if (queue && !queue.dispatchError && (queue.inFlight || queue.outstandingClaim)) {
+            disposition = "retry";
+            return { dispatch: false };
+          }
+          return { dispatch: true };
+        },
+      ),
     );
     return disposition;
+  }
+
+  /**
+   * The first send after a move replaces the bridge. Tabs stopped together would
+   * otherwise send over the connection it just closed, and read as a failed send.
+   */
+  private async oneSendPerBridge<T>(
+    session: PersistedNativeAgentSession,
+    send: () => Promise<T>,
+  ): Promise<T> {
+    const key = `${session.agent}:${session.environmentId}`;
+    const previous = this.bridgeSends.get(key) ?? Promise.resolve();
+    const current = previous.then(send, send);
+    this.bridgeSends.set(key, current);
+    try {
+      return await current;
+    } finally {
+      if (this.bridgeSends.get(key) === current) this.bridgeSends.delete(key);
+    }
   }
 }

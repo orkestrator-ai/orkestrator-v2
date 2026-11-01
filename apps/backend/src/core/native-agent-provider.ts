@@ -1,6 +1,10 @@
 /** Shared provider factory used by interactive native-agent sessions. */
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
-import type { BridgeConnection, NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
+import {
+  ProviderSessionFailedError,
+  type BridgeConnection,
+  type NativeAgentRuntimeProvider,
+} from "./agent-provider-contract.js";
 import { HttpBridgeProvider } from "./http-bridge-provider.js";
 import type { HttpBridgeProviderDependencies } from "./http-bridge-transport.js";
 import type { AppConfig } from "./models.js";
@@ -100,6 +104,16 @@ export function trackRunningTurns(provider: NativeAgentRuntimeProvider): () => b
     if (status === "running" || status === "blocked") seen.set(sessionId, Date.now());
     else seen.delete(sessionId);
   };
+  // A bridge reports a failed turn by throwing rather than answering "error", and
+  // that poll is the one that says the turn is over.
+  const reading = async <T>(sessionId: string, read: () => Promise<T>): Promise<T> => {
+    try {
+      return await read();
+    } catch (error) {
+      if (error instanceof ProviderSessionFailedError) seen.delete(sessionId);
+      throw error;
+    }
+  };
   const send = provider.send?.bind(provider);
   provider.send = async (sessionId, ...args) => {
     note(sessionId, "running");
@@ -107,14 +121,14 @@ export function trackRunningTurns(provider: NativeAgentRuntimeProvider): () => b
   };
   const status = provider.status.bind(provider);
   provider.status = async (sessionId) => {
-    const current = await status(sessionId);
+    const current = await reading(sessionId, () => status(sessionId));
     note(sessionId, current);
     return current;
   };
   const observeSession = provider.observeSession?.bind(provider);
   if (observeSession) {
     provider.observeSession = async (sessionId) => {
-      const observation = await observeSession(sessionId);
+      const observation = await reading(sessionId, () => observeSession(sessionId));
       note(sessionId, observation.status);
       return observation;
     };

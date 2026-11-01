@@ -3581,6 +3581,7 @@ export class NativeAgentService {
             } finally {
               releaseDispatchFence();
             }
+            return { dispatched: true as const, mode: input.mode ?? durable.controls?.mode };
           },
           persistAmbiguousDispatch && (session.origin === "interactive-native" || mailInject)
             ? this.persistedPendingDispatch({ ...input, command: commandPlan.persistedIntent })

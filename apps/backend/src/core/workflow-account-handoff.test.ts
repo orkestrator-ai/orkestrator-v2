@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { createNativeAgentProvider, type BridgeConnection } from "./native-agent-provider.js";
+import {
+  createNativeAgentProvider,
+  ProviderSessionFailedError,
+  trackRunningTurns,
+  type BridgeConnection,
+  type NativeAgentRuntimeProvider,
+} from "./native-agent-provider.js";
 
 // Exercise the HTTP provider dispatch boundary shared by pipeline, review and
 // graph owners, including replacement auth and preserving another live owner.
@@ -40,4 +46,33 @@ test("cached workflow dispatch refreshes idle bridge and preserves sibling work"
     first.dispose?.();
     second.dispose?.();
   }
+});
+
+// A bridge reports a failed turn by throwing, so a real stopped turn never reads
+// "error" here. Left marked as running, it held its own resend back for two minutes.
+test("a turn whose poll throws its failure no longer counts as running", async () => {
+  const provider = {
+    send: async () => undefined,
+    status: async () => {
+      throw new ProviderSessionFailedError("claude", "You've hit your weekly limit");
+    },
+  } as unknown as NativeAgentRuntimeProvider;
+  const running = trackRunningTurns(provider);
+  await provider.send!("session", "work", { requestId: "one" });
+  expect(running()).toBe(true);
+  await expect(provider.status("session")).rejects.toBeInstanceOf(ProviderSessionFailedError);
+  expect(running()).toBe(false);
+});
+
+test("a poll that fails for another reason keeps the turn counted", async () => {
+  const provider = {
+    send: async () => undefined,
+    status: async () => {
+      throw new Error("The bridge did not answer");
+    },
+  } as unknown as NativeAgentRuntimeProvider;
+  const running = trackRunningTurns(provider);
+  await provider.send!("session", "work", { requestId: "one" });
+  await expect(provider.status("session")).rejects.toThrow("did not answer");
+  expect(running()).toBe(true);
 });

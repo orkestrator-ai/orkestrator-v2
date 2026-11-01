@@ -76,10 +76,11 @@ HOME) is untouched.
 
 ### Task 1: set in the two cases, not in `beforeEach`
 
-Only these two cases set `ORKESTRATOR_BRIDGE_EXECUTION_POLICY` to
-`coordinator-read-only`, the only policy that hosts the skill tool, so no other
-case reads skills. Each sets a directory that does not exist (an empty project)
-and clears the seam in its existing `finally`.
+Several cases set `ORKESTRATOR_BRIDGE_EXECUTION_POLICY` to
+`coordinator-read-only` and can discover skills from the checkout. The two cases
+addressed here assert the hosted tool inventory or the user skill fixture, so
+they need an isolated project directory. Each sets a directory that does not
+exist (an empty project) and clears the seam in its existing `finally`.
 
 ### Needs verification: other bridges
 

@@ -955,6 +955,7 @@ export class BuildPipelineLifecycle {
         return;
       }
       candidate.reviewRetryRequested = true;
+      pruneKeyInformationAfterRewind(candidate, candidate.iteration, false, false);
       discardSessionReviewReports(candidate);
       delete candidate.reviewPackage;
       delete candidate.structuredReview;
@@ -1424,6 +1425,7 @@ export class BuildPipelineLifecycle {
         iteration,
         restart.kind === "session" &&
           (restart.phase === "pr" || restart.phase === "resolve-conflicts"),
+        selectedOrder > 2,
       );
       if (
         supersededSessions > 0 ||

@@ -173,16 +173,33 @@ export function recordVerdictInKeyInformation(
 /**
  * After a restart rewinds the pipeline to `iteration`, drops what later rounds
  * recorded, and that round's verification unless the restart is past it (the
- * PR stages run after a passing verification).
+ * PR stages run after a passing verification). Issues in the restarted round
+ * survive only when its accepted review is retained. Narrative fields are
+ * cleared because they have no restorable per-attempt provenance.
  */
 export function pruneKeyInformationAfterRewind(
   pipeline: BuildPipeline,
   iteration: number,
   keepRoundVerification: boolean,
+  keepRoundIssues = true,
 ): void {
   const info = pipeline.keyInformation;
   if (!info) return;
-  info.issues = info.issues.filter((entry) => entry.round <= iteration);
+  info.issues = info.issues.filter(
+    (entry) => entry.round < iteration || (entry.round === iteration && keepRoundIssues),
+  );
+  // Narrative sections have no per-attempt provenance or restorable snapshots.
+  // Clear them conservatively rather than presenting superseded work as current.
+  info.framing = "problem";
+  delete info.statement;
+  delete info.context;
+  delete info.solution;
+  info.workDone = [];
+  info.decisions = [];
+  info.notDone = [];
+  info.tests = [];
+  info.updates = [];
+  info.updatedAt = new Date().toISOString();
   info.verifications = info.verifications.filter(
     (entry) => entry.round < iteration || (entry.round === iteration && keepRoundVerification),
   );
@@ -232,7 +249,11 @@ export function createBuildPipelineKeyInformationHost(deps: {
       try {
         const updated = await Promise.race([
           deps.mutate(pipeline.id, (candidate) => {
-            if (abandoned) return;
+            if (abandoned) throw new Error("The key information lock wait expired.");
+            // The timeout bounds lock acquisition, not persistence. Once admitted,
+            // await the write's actual result so a committed update cannot be
+            // reported as abandoned. Promise.race observes late rejections too.
+            clearTimeout(timer);
             applyAgentKeyInformationUpdate(candidate, patch);
           }),
           timeout,

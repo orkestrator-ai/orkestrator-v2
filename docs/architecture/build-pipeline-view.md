@@ -319,7 +319,8 @@ pipeline record. An update names the sections it replaces; `issues` and
 `verification` replace the current round's entries only. The backend records
 it as the running stage and round, under the pipeline lock, and refuses one
 that waits more than 30 seconds behind a supervisor pass (never applying it
-later). The Build, Fix, Address and Verify prompts end with stage-specific
+later). Once admitted under the lock, the tool awaits the persistence result;
+the wait timeout cannot report a committed write as failed. The Build, Fix, Address and Verify prompts end with stage-specific
 guidance on what to record (`keyInformationInstruction`); Review and the PR
 stages do not keep it.
 
@@ -329,7 +330,12 @@ open (a repeated review replaces them only while none has been worked on), and
 a Verify verdict sets its round's `passed`, keeping Verify's own summary and
 checks or deriving them from the criterion results. A restart that rewinds to
 an earlier round drops what later rounds recorded and the verification of the
-round it reruns. Every field is bounded
+round it reruns. Restarting at or before Review, or explicitly retrying Review,
+also discards that round's superseded issues; restarting Address or a later
+stage preserves the round's issues and resolutions. On any rewind or review
+retry, narrative sections and update history are cleared conservatively:
+they have no per-attempt snapshots to restore, so stages rebuild the brief
+instead of showing superseded work as current. Every field is bounded
 (`KEY_INFORMATION_LIMITS`, about 200 KB at worst) and checked by
 `isBuildPipeline`.
 

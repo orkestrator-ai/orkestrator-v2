@@ -1,12 +1,14 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
+import { BuildPipelineContext } from "./build-pipeline-context.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import {
+  applyAgentKeyInformationUpdate,
   createBuildPipelineKeyInformationHost,
   keyInformationAuthor,
   pipelineRecordForEnvironment,
@@ -152,6 +154,88 @@ describe("the key information host", () => {
     await Bun.sleep(80);
     expect(store.get("pipeline-1")!.keyInformation).toBeUndefined();
   });
+  test("the real mutation lock refuses expired waiters but awaits an admitted save", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "key-information-lock-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const subject = pipeline({ environmentId: "" });
+    await storage.saveBuildPipeline(subject.id, subject.projectId, "", 1, subject);
+    const context = new BuildPipelineContext(storage, async () => undefined as never, {
+      autoAdvance: false,
+    });
+    const host = createBuildPipelineKeyInformationHost({
+      listPipelines: () => storage.listBuildPipelinesForEnvironment(subject.projectId, ""),
+      mutate: (id, mutation) => context.mutate(id, mutation),
+      timeoutMs: 5,
+    });
+    const scope = { ...SCOPE, environmentId: "" };
+    let release!: () => void;
+    let entered!: () => void;
+    const acquired = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holding = context.mutate(subject.id, async () => {
+      entered();
+      await gate;
+    });
+    try {
+      await acquired;
+      await expect(host.update(scope, { context: "expired" })).rejects.toThrow("busy");
+      release();
+      await holding;
+      // A subsequent mutation also waits for the abandoned waiter to settle.
+      await context.mutate(subject.id, () => undefined);
+      expect((await host.read(scope))?.keyInformation).toBeNull();
+      const save = storage.saveBuildPipeline.bind(storage);
+      const delayed = spyOn(storage, "saveBuildPipeline").mockImplementation(async (...args) => {
+        await Bun.sleep(30);
+        return save(...args);
+      });
+      try {
+        expect((await host.update(scope, { context: "committed" })).keyInformation?.context).toBe(
+          "committed",
+        );
+      } finally {
+        delayed.mockRestore();
+      }
+    } finally {
+      release();
+      await holding;
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("once admitted, awaits persistence instead of reporting a false timeout", async () => {
+    const subject = pipeline();
+    const host = createBuildPipelineKeyInformationHost({
+      listPipelines: async () => [record(subject)],
+      mutate: async (_id, mutation) => {
+        await mutation(subject);
+        await Bun.sleep(40);
+        return subject;
+      },
+      timeoutMs: 5,
+    });
+    expect((await host.update(SCOPE, { context: "saved" })).keyInformation?.context).toBe("saved");
+  });
+
+  test("observes a mutation rejection after the lock timeout", async () => {
+    const subject = pipeline();
+    const host = createBuildPipelineKeyInformationHost({
+      listPipelines: async () => [record(subject)],
+      mutate: async () => {
+        await Bun.sleep(40);
+        throw new Error("late lock failure");
+      },
+      timeoutMs: 5,
+    });
+    await expect(host.update(SCOPE, { context: "late" })).rejects.toThrow("busy");
+    await Bun.sleep(60);
+    expect(subject.keyInformation).toBeUndefined();
+  });
 });
 
 describe("what the supervisor records", () => {
@@ -195,6 +279,30 @@ describe("what the supervisor records", () => {
     pruneKeyInformationAfterRewind(subject, 0, false);
     expect(subject.keyInformation?.issues.map((issue) => issue.round)).toEqual([0]);
     expect(subject.keyInformation?.verifications).toEqual([]);
+  });
+  test("clears superseded narrative and update history on rewind", () => {
+    const subject = pipeline({ iteration: 1 });
+    applyAgentKeyInformationUpdate(subject, {
+      statement: "Later objective",
+      context: "Later context",
+      solution: "Later solution",
+      workDone: ["Later work"],
+      notDone: ["Later omission"],
+      decisions: [{ decision: "Later choice", options: [], chosen: "A" }],
+      tests: [{ name: "Later test", result: "passed" }],
+    });
+    pruneKeyInformationAfterRewind(subject, 0, false);
+    expect(subject.keyInformation).toMatchObject({
+      framing: "problem",
+      workDone: [],
+      notDone: [],
+      decisions: [],
+      tests: [],
+      updates: [],
+    });
+    expect(subject.keyInformation?.statement).toBeUndefined();
+    expect(subject.keyInformation?.context).toBeUndefined();
+    expect(subject.keyInformation?.solution).toBeUndefined();
   });
 });
 

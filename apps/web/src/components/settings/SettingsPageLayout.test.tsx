@@ -102,7 +102,7 @@ describe("SettingsPageLayout", () => {
 
   test("leaves the header out when a page has no title", () => {
     render(<SettingsPageLayout>Body</SettingsPageLayout>);
-    expect(screen.queryByRole("heading")).toBeNull();
+    expect(screen.queryByRole("heading") === null).toBe(true);
   });
 });
 

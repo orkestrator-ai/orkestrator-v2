@@ -697,8 +697,8 @@ describe("CL-05: machine identity visual rules", () => {
     const plain = firstEnvironment(machine);
     const { rerender } = render(<RemoteEnvironmentItem machine={machine} environment={plain} />);
     const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
-    expect(row.querySelector("svg.lucide-pipe")).toBeNull();
-    expect(within(row).queryByTestId("environment-auto-merge-icon")).toBeNull();
+    expect(row.querySelector("svg.lucide-pipe") === null).toBe(true);
+    expect(within(row).queryByTestId("environment-auto-merge-icon") === null).toBe(true);
 
     rerender(
       <RemoteEnvironmentItem

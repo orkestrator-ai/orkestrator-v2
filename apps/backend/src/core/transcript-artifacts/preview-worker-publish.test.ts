@@ -207,14 +207,16 @@ test.skipIf(process.env.ORKESTRATOR_TEST_LIVE_WORKER_PUBLISH !== "1")(
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       return result.stdout.toString().trim();
     };
+    // Only macOS needs the disposable daemon's port (see below). On Linux a
+    // second ephemeral publish can be handed the same host port as the first,
+    // and the bind then fails with "address already in use".
     const id = docker([
       "run",
       "--detach",
       "--rm",
       "--publish",
-      "5000",
-      "--publish",
-      "127.0.0.1::2375",
+      "127.0.0.1::5000",
+      ...(process.platform === "darwin" ? ["--publish", "127.0.0.1::2375"] : []),
       "registry:3",
     ]);
     cleanups.push(() => {

@@ -1958,7 +1958,7 @@ describe("ACP bridge", () => {
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
         response.json(),
       ),
-    ).toEqual({ activity: "idle" });
+    ).toEqual({ activity: "idle", turnFailed: true });
 
     await stopChild(first.child);
     const restarted = await spawnBridge({ stateDirectory });

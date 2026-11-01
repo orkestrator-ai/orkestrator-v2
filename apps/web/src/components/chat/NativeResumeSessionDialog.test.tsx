@@ -120,7 +120,7 @@ describe("NativeResumeSessionDialog", () => {
     test("stay hidden until asked for, and then sit below every live row", async () => {
       renderDialog(rows, { onArchive: mock(async () => undefined) });
       await waitFor(() => expect(screen.getByText("Live one")).toBeTruthy());
-      expect(screen.queryByText("Kept one")).toBeNull();
+      expect(screen.queryByText("Kept one") === null).toBe(true);
 
       await act(async () => {
         fireEvent.click(screen.getByLabelText("Show archived (1)"));
@@ -143,8 +143,8 @@ describe("NativeResumeSessionDialog", () => {
     test("a platform that cannot archive never shows them or the toggle", async () => {
       renderDialog(rows);
       await waitFor(() => expect(screen.getByText("Live one")).toBeTruthy());
-      expect(screen.queryByText("Kept one")).toBeNull();
-      expect(screen.queryByLabelText("Show archived (1)")).toBeNull();
+      expect(screen.queryByText("Kept one") === null).toBe(true);
+      expect(screen.queryByLabelText("Show archived (1)") === null).toBe(true);
     });
 
     test("choosing one restores it before resuming", async () => {
@@ -196,7 +196,7 @@ describe("NativeResumeSessionDialog", () => {
       });
       expect(onArchive.mock.calls.at(-1)).toEqual(["kept", false]);
       expect(onResume).not.toHaveBeenCalled();
-      expect(screen.queryByLabelText("Show archived (1)")).toBeNull();
+      expect(screen.queryByLabelText("Show archived (1)") === null).toBe(true);
       expect(screen.getByText("Kept one")).toBeTruthy();
     });
   });

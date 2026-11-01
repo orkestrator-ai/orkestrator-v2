@@ -253,10 +253,10 @@ describe("EnvironmentItem auto-merge", () => {
 
   test("shows no merge icon when auto-merge is off or unknown", () => {
     renderItem(environmentFixture({ name: "feature-work", autoMerge: false }));
-    expect(screen.queryByRole("img", { name: "Auto-merge on" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "Auto-merge on" }) === null).toBe(true);
     cleanup();
     renderItem(environmentFixture({ name: "feature-work" }));
-    expect(screen.queryByRole("img", { name: "Auto-merge on" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "Auto-merge on" }) === null).toBe(true);
   });
 });
 
@@ -268,15 +268,15 @@ describe("EnvironmentItem merged pull request", () => {
     const name = screen.getByText("feature-work");
     expect(name.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // The merged icon replaces the auto-merge icon rather than doubling it.
-    expect(screen.queryByRole("img", { name: "Auto-merge on" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "Auto-merge on" }) === null).toBe(true);
   });
 
   test("shows no merged icon while the PR is open or closed", () => {
     renderItem(environmentFixture({ name: "feature-work", prState: "open" }));
-    expect(screen.queryByRole("img", { name: "Merged" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "Merged" }) === null).toBe(true);
     cleanup();
     renderItem(environmentFixture({ name: "feature-work", prState: "closed" }));
-    expect(screen.queryByRole("img", { name: "Merged" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "Merged" }) === null).toBe(true);
   });
 });
 

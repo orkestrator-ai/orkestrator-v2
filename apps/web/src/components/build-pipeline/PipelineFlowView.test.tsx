@@ -306,7 +306,7 @@ describe("pipeline inspector controls", () => {
 
   test("an ordinary reviewer failure raises no start notice", () => {
     renderPipelineTab(reviewing());
-    expect(screen.queryByTestId("reviewer-start-failures")).toBeNull();
+    expect(screen.queryByTestId("reviewer-start-failures") === null).toBe(true);
   });
 
   for (const dedicated of [true, false]) {

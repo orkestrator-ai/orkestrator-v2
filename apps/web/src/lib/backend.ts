@@ -6,6 +6,7 @@ export * from "./backend/system";
 export * from "./backend/host-maintenance";
 export * from "./backend/files-sessions";
 export * from "./backend/workflows";
+export * from "./backend/launches";
 export * from "./backend/kanban";
 export * from "./backend/agent-mail";
 export * from "./backend/coordinator";

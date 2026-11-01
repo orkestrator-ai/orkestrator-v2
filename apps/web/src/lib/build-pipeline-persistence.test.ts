@@ -929,8 +929,8 @@ describe("structured review normalization on hydrate", () => {
       overallRisk: "low",
       reasoning: "r",
     },
-    // The legacy shape the parser is asked to upgrade: no notRun field, which
-    // the current contract requires and the backfill derives.
+    // The legacy shape: no notRun field, which the current contract requires.
+    // The backend's storage migration upgrades stored records, so none reaches here.
     testResults: { total: 3, passed: 2, failed: 0, failures: [] },
     strengths: [],
     issues: [],
@@ -940,18 +940,13 @@ describe("structured review normalization on hydrate", () => {
     reviewSummary: "r",
   };
 
-  test("upgrades a legacy structured review so the snapshot still validates", async () => {
+  test("does not repair a legacy report itself: upgrading stored records is the backend's", async () => {
     const stored = {
       ...snapshot(),
       structuredReview: legacyReport,
     } as unknown as BuildPipeline;
 
-    const hydrated = await hydrateBuildPipeline("pipeline-1", async () => record(stored, 4));
-
-    // Without normalization the guard rejects the legacy report and the whole
-    // pipeline silently disappears from the UI with no error anywhere.
-    expect(hydrated).not.toBeNull();
-    expect(hydrated?.structuredReview?.testResults.notRun).toBe(1);
+    expect(await hydrateBuildPipeline("pipeline-1", async () => record(stored, 4))).toBeNull();
   });
 
   test("passes through a snapshot that carries no review at all", async () => {

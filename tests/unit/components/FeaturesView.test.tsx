@@ -12,6 +12,7 @@ import {
   stripFeaturePlannerStateBlocks,
   stripStoryRefinementStateBlocks,
 } from "@/lib/feature-planner";
+import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -33,6 +34,11 @@ const realBackendSnapshot = { ...realBackend };
 const defaultConfigSnapshot = structuredClone(useConfigStore.getState().config);
 
 const startBuildMock = mock(async () => undefined);
+// Most Build tests below drive the renderer sequence an older backend needs.
+const unknownFeaturePlanBuild = async (_input: unknown): Promise<unknown> => {
+  throw new Error("Unknown backend command: start_feature_plan_build");
+};
+const startFeaturePlanBuildMock = mock(unknownFeaturePlanBuild);
 const addTaskMock = mock(
   async (_projectId: string, _title: string, _description: string) => "task-1",
 );
@@ -218,6 +224,7 @@ mock.module("@/hooks/useEnvironments", () => ({
 }));
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
+  startFeaturePlanBuild: startFeaturePlanBuildMock,
   getEnvironment: getEnvironmentMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
   getLocalCodexServerStatus: getLocalCodexServerStatusMock,
@@ -1698,6 +1705,78 @@ describe("NativeStyleChatPanel", () => {
 });
 
 describe("FeaturesView build action", () => {
+  beforeEach(() => {
+    startFeaturePlanBuildMock.mockReset();
+    startFeaturePlanBuildMock.mockImplementation(unknownFeaturePlanBuild);
+  });
+
+  describe("through the backend's one-request launch", () => {
+    const started = {
+      featureId: "feature-1",
+      taskId: "task-backend",
+      reused: false,
+      pipeline: buildPipelineFixture({
+        id: "pipeline-backend",
+        projectId: "project-1",
+        taskId: "task-backend",
+        environmentId: "",
+      }),
+    };
+
+    test("sends only the plan and adopts the pipeline the backend started", async () => {
+      startFeaturePlanBuildMock.mockImplementation(async () => started);
+      seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
+
+      render(<FeaturesView projectId="project-1" />);
+      fireEvent.click(screen.getByRole("button", { name: "Build" }));
+
+      await waitFor(() =>
+        expect(startFeaturePlanBuildMock).toHaveBeenCalledWith({ featureId: "feature-1" }),
+      );
+      await waitFor(() =>
+        expect(useBuildPipelineStore.getState().pipelines.get("pipeline-backend")).toBeTruthy(),
+      );
+      // Nothing of the renderer sequence runs: no ticket, claim, start or link.
+      expect(addTaskMock).not.toHaveBeenCalled();
+      expect(claimFeatureBuildMock).not.toHaveBeenCalled();
+      expect(startBuildMock).not.toHaveBeenCalled();
+      expect(updateFeatureMock).not.toHaveBeenCalled();
+    });
+
+    test("reports a refusal and writes nothing back", async () => {
+      startFeaturePlanBuildMock.mockImplementation(async () => {
+        throw new Error("environment failed");
+      });
+      seedStores(featureWithStories());
+
+      render(<FeaturesView projectId="project-1" />);
+      fireEvent.click(screen.getByRole("button", { name: "Build" }));
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Failed to start feature build", {
+          description: "environment failed",
+        }),
+      );
+      expect(addTaskMock).not.toHaveBeenCalled();
+      expect(updateFeatureMock).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Build" }).hasAttribute("disabled")).toBe(false);
+    });
+
+    test("names another client's active build without the generic prefix", async () => {
+      startFeaturePlanBuildMock.mockImplementation(async () => {
+        throw new Error("This feature already has an active build");
+      });
+      seedStores(featureWithStories());
+
+      render(<FeaturesView projectId="project-1" />);
+      fireEvent.click(screen.getByRole("button", { name: "Build" }));
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("This feature already has an active build"),
+      );
+    });
+  });
+
   test("renders the Build button in the tab header when the feature has stories", () => {
     seedStores(featureWithStories());
 

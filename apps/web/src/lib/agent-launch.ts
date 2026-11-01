@@ -7,12 +7,17 @@
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
+  DEFAULT_REASONING_ID,
   nativeAgentCapabilities,
-  resolveReasoningId,
   type AgentModel,
 } from "@orkestrator/protocol/native-agent";
+import {
+  resolveLaunchEffort,
+  resolveLaunchFastMode,
+  resolveLaunchModel,
+  type LaunchCatalogEntry,
+} from "@orkestrator/protocol/launch-selection";
 export { resolveCatalogModelId, sessionDefaultModel } from "@orkestrator/protocol/model-id";
-import { resolveCatalogModelId, sessionDefaultModel } from "@orkestrator/protocol/model-id";
 
 export type LaunchAgent = AgentPlatform;
 
@@ -56,43 +61,53 @@ export const LAUNCH_AGENT_OPTIONS: Array<{ value: LaunchAgent; label: string }> 
   { value: "pi", label: "Pi" },
 ];
 
+/** The launcher catalogue rows in the shape the shared resolver reads. */
+export function launchCatalogEntries(
+  catalog: AgentModelCatalog,
+  agent: LaunchAgent,
+): LaunchCatalogEntry[] {
+  return modelsForAgent(catalog, agent).map((model) => ({
+    id: model.id,
+    ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
+    efforts: model.reasoningEfforts,
+    ...(model.supportsSpeed ? { supportsSpeed: true } : {}),
+    ...(model.connected === false ? { connected: false } : {}),
+    ...(model.sessionDefault ? { sessionDefault: true } : {}),
+  }));
+}
+
 /**
- * The preferred connected model when offered, otherwise the connected one a
- * tab with no model would start on (`sessionDefault`, Pi's saved default),
- * otherwise the first connected one.
- *
- * A configured default can name a model the running agent no longer exposes;
- * passing it through would send the run to an unavailable model. Cached rows
- * explicitly marked disconnected are never implicit launcher selections.
+ * The model a launcher opens on: the protocol's shared launch resolver
+ * (`resolveLaunchSelection`), the same rules the backend applies to a launch
+ * that leaves its model out. A configured default the agent no longer exposes,
+ * or a cached row marked disconnected, is never an implicit selection.
  */
 export function firstModelFor(
   agent: LaunchAgent,
   catalog: AgentModelCatalog,
   preferredModels?: Partial<Record<LaunchAgent, string>>,
 ): string {
-  const models = modelsForAgent(catalog, agent).filter((model) => model.connected !== false);
-  return (
-    resolveCatalogModelId(agent, models, preferredModels?.[agent]) ??
-    sessionDefaultModel(models)?.id ??
-    "default"
-  );
+  return resolveLaunchModel(agent, launchCatalogEntries(catalog, agent), preferredModels?.[agent]);
 }
 
+/**
+ * The effort a launcher opens on for `modelId`: the saved preference when the
+ * shared resolver keeps it, else `default` (launch dialogs always offer
+ * Default as a selectable setting).
+ */
 export function defaultEffortFor(
   agent: LaunchAgent,
   modelId: string,
   catalog: AgentModelCatalog,
   preferredEfforts?: Partial<Record<LaunchAgent, string>>,
 ): string {
-  const models = modelsForAgent(catalog, agent);
-  const resolvedModelId = resolveCatalogModelId(agent, models, modelId);
-  const options = models.find((model) => model.id === resolvedModelId)?.reasoningEfforts ?? [];
-  const preferred = preferredEfforts?.[agent];
-  // Launch dialogs always offer Default as a selectable setting, so the shared
-  // fallback prefers it over high unless a still-supported preference hits.
   return (
-    resolveReasoningId(options.length > 0 ? ["default", ...options] : ["default"], preferred) ??
-    "default"
+    resolveLaunchEffort(
+      agent,
+      launchCatalogEntries(catalog, agent),
+      modelId,
+      preferredEfforts?.[agent],
+    ) ?? DEFAULT_REASONING_ID
   );
 }
 
@@ -159,7 +174,7 @@ export function modelSupportsSpeed(
 }
 
 /**
- * Initial Fast/Normal value for a launch picker.
+ * Initial Fast/Normal value for a launch picker, from the shared resolver.
  *
  * Absence means either the selected model has no speed axis or no settings tier
  * chooses an override. Pickers render that unset state as Normal, but launches
@@ -172,6 +187,10 @@ export function defaultFastModeFor(
   catalog: AgentModelCatalog,
   preferredFastModes?: Partial<Record<LaunchAgent, boolean>>,
 ): boolean | undefined {
-  if (!modelSupportsSpeed(platform, catalog, modelId)) return undefined;
-  return preferredFastModes?.[platform];
+  return resolveLaunchFastMode(
+    platform,
+    launchCatalogEntries(catalog, platform),
+    modelId,
+    preferredFastModes?.[platform],
+  );
 }

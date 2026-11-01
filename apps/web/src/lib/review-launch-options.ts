@@ -39,6 +39,13 @@ function claudeReviewModelOption(model: ClaudeModel): ReviewModelOption {
 const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] =
   FALLBACK_CLAUDE_MODELS.map(claudeReviewModelOption);
 
+/** Pi's own session default: where a Pi tab with no model starts. */
+const PI_DEFAULT_MODEL: ReviewModelOption = {
+  id: "default",
+  name: "Pi default",
+  reasoningEfforts: [],
+};
+
 const OPENCODE_DEFAULT_MODEL: ReviewModelOption = {
   id: "default",
   name: "Default",
@@ -123,6 +130,7 @@ export function buildReviewModelCatalog(
       ),
       ...(model.supportsSpeed ? { supportsSpeed: true as const } : {}),
       ...(model.sessionDefault ? { sessionDefault: true as const } : {}),
+      ...(model.connected === false ? { connected: false as const } : {}),
     }));
   const cursor = toLaunchOptions(cachedAcpCatalog.cursorModels);
   const grok = toLaunchOptions(cachedAcpCatalog.grokModels);
@@ -139,7 +147,12 @@ export function buildReviewModelCatalog(
       grok.length > 0
         ? grok
         : [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
-    pi: pi.length > 0 ? pi : [{ id: "default", name: "Pi default", reasoningEfforts: [] }],
+    // A Pi catalogue that marks no connected row as where a session starts
+    // leaves a defaulted launch to Pi's own session default (the shared launch
+    // resolver's rule), so that choice is offered as a row of its own.
+    pi: pi.some((model) => model.sessionDefault && model.connected !== false)
+      ? pi
+      : [PI_DEFAULT_MODEL, ...pi],
     opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
   };
 }

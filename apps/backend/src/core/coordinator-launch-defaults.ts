@@ -17,21 +17,17 @@
  * - Preparation/consolidation and Fix use their own action default when it
  *   names an enabled platform, else Review.
  * - Each row layers its action's model, effort and speed over that platform's
- *   resolved settings, then picks the preferred catalogue model, else the
- *   connected model a tab with no model would start on (the one the catalogue
- *   marks `sessionDefault`, such as Pi's saved default), else the first
- *   connected one, keeping the effort and speed only when that model offers them.
- *   A Pi catalogue that marks no connected row leaves the model `default`, so
- *   the session starts where a Pi tab would rather than on the first row.
+ *   resolved settings, then resolves them against the catalogue with the
+ *   protocol's shared launch resolver (`@orkestrator/protocol/launch-selection`),
+ *   the one the renderer's launch dialogs use too.
  *
  * Build pipelines use the shared `buildPipelineConfiguredDefaults`, the same
  * resolver the Build button uses.
  */
 import {
-  reportsSessionDefault,
-  resolveCatalogModelId,
-  sessionDefaultModel,
-} from "@orkestrator/protocol/model-id";
+  launchCatalogFromAgentModels,
+  resolveLaunchSelection,
+} from "@orkestrator/protocol/launch-selection";
 import {
   resolveActionDefault,
   type ActionDefaultKey,
@@ -98,41 +94,15 @@ function concreteRow(
   preference: ResolvedActionDefault,
   catalog: readonly AgentModel[],
 ): MultiReviewModelSelection {
-  const offered = catalog.filter(
-    (model) => model.platform === preference.agent && model.connected !== false,
-  );
-  const preferredId = resolveCatalogModelId(preference.agent, offered, preference.model);
-  const preferred = offered.find((model) => model.id === preferredId);
-  // With no catalogue for this platform there is nothing to correct a saved
-  // model against, so it is kept rather than replaced by a placeholder. With
-  // nothing saved, the row runs where a tab with no model would: the first
-  // catalogue entry can be one the login refuses (Pi on a ChatGPT login).
-  // A Pi catalogue with no connected marked row is a cache written before the
-  // mark existed, a disconnected default, or a login with no saved default;
-  // only the session can tell which, so the row is left to it (`default`).
-  const leftToSession =
-    !preferred &&
-    offered.length > 0 &&
-    reportsSessionDefault(preference.agent) &&
-    !offered.some((model) => model.sessionDefault === true);
-  const selected = preferred ?? (leftToSession ? undefined : sessionDefaultModel(offered));
-  const unavailable =
-    !leftToSession && catalog.some((model) => model.platform === preference.agent) && !selected;
-  const model =
-    selected?.id ?? (unavailable || leftToSession ? "default" : preference.model) ?? "default";
-  const effort = preference.reasoningEffort;
-  const keepsEffort =
-    effort !== undefined &&
-    effort !== "default" &&
-    ((!selected && !unavailable) || (selected?.reasoning ?? []).some(({ id }) => id === effort));
-  const keepsSpeed =
-    typeof preference.fastMode === "boolean" &&
-    ((!selected && !unavailable) || selected?.supportsSpeed === true);
+  // The protocol's shared launch resolver: the same rules every renderer
+  // launcher applies, documented in `launch-selection.ts`.
   return {
     agent: preference.agent,
-    model,
-    ...(keepsEffort ? { reasoningEffort: effort } : {}),
-    ...(keepsSpeed ? { fastMode: preference.fastMode } : {}),
+    ...resolveLaunchSelection(
+      preference.agent,
+      preference,
+      launchCatalogFromAgentModels(preference.agent, catalog),
+    ),
   };
 }
 
@@ -222,10 +192,12 @@ function withSavedSelection(step: unknown, saved: BuildStepConfig | undefined): 
 /**
  * A build request with every omitted choice filled from the Build button's defaults.
  *
- * Explicit steps are layered over the saved ones and explicit reviewers replace
- * them, exactly as `useBuildPipeline` does for the renderer. The build agent
- * defaults the way the launcher's does. Environment-tier settings are not
- * read: the launcher resolves before any worker exists.
+ * The one implementation every launcher shares: the renderer's Build buttons
+ * (`launch_build_pipeline`), the feature-plan build, the coordinator and the
+ * public `build.launch`. Explicit steps are layered over the saved ones and
+ * explicit reviewers replace them; the review step is always the first
+ * reviewer. Environment-tier settings are not read: a launch resolves before
+ * any worker exists.
  *
  * A step or preparation named without an agent carries only instructions and
  * keeps the saved selection: the build step the pipeline agent, a reviewer its

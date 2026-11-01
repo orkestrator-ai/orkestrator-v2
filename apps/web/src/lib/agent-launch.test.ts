@@ -105,17 +105,21 @@ describe("firstModelFor", () => {
     expect(firstModelFor("pi", pi, { pi: "gone/x" })).toBe("openai/gpt-6.1-sol");
     // A saved choice still wins.
     expect(firstModelFor("pi", pi, { pi: "openai/gpt-4" })).toBe("openai/gpt-4");
-    // A disconnected mark is never an implicit pick.
+    // A disconnected mark is never an implicit pick, and an unmarked Pi
+    // catalogue leaves the model to Pi's own session default rather than
+    // pinning its first row (the shared launch resolver's rule).
     const disconnected = {
       ...pi,
       pi: pi.pi!.map((model) => (model.sessionDefault ? { ...model, connected: false } : model)),
     };
-    expect(firstModelFor("pi", disconnected)).toBe("openai/gpt-4");
+    expect(firstModelFor("pi", disconnected)).toBe("default");
   });
 
-  test("returns the default placeholder when the agent has no models", () => {
+  test("keeps a saved model when the agent has no catalogue to check it against", () => {
     expect(firstModelFor("opencode", catalog)).toBe("default");
-    expect(firstModelFor("opencode", catalog, { opencode: "provider/model-a" })).toBe("default");
+    expect(firstModelFor("opencode", catalog, { opencode: "provider/model-a" })).toBe(
+      "provider/model-a",
+    );
     expect(firstModelFor("opencode", catalog, { opencode: "" })).toBe("default");
   });
 });

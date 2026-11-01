@@ -13,6 +13,7 @@ import {
   isBuildStepInstructions,
   MAX_BUILD_STEP_INSTRUCTIONS_BYTES,
 } from "@orkestrator/protocol/build-pipeline-stage-instructions";
+import { kanbanTaskBuildTicket } from "@orkestrator/protocol/build-pipeline-tickets";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import { PUBLIC_BUILD_STEPS } from "@orkestrator/protocol/public-api-inputs-build";
 import type {
@@ -313,29 +314,24 @@ async function requestedStart(
       }
     }),
   );
+  // The snapshot, source link and naming prompt every stage uses, mapped by the
+  // same protocol function the Build button uses.
+  const build = kanbanTaskBuildTicket(
+    { ...ticket, projectId: input.projectId },
+    images.filter((image) => image !== null),
+  );
   return {
-    taskId: ticket.id,
+    taskId: build.id,
     projectId: input.projectId,
     environmentType,
     ...(input.agent ? { agentType: input.agent } : {}),
     ...(input.steps ? { steps: input.steps } : {}),
     ...(input.reviewers ? { reviewers: input.reviewers } : {}),
     ...(input.reviewPreparation ? { reviewPreparation: input.reviewPreparation } : {}),
-    taskTitle: ticket.title,
-    // The snapshot every stage prompt quotes, taken as the Build button takes it.
-    taskSnapshot: {
-      title: ticket.title,
-      description: ticket.description,
-      acceptanceCriteria: ticket.acceptanceCriteria,
-      comments: ticket.comments.map((comment) => ({ text: comment.text })),
-      images: images.filter((image) => image !== null),
-    },
-    // Linking the source moves the ticket through its lifecycle and attaches
-    // the environment to it.
-    source: { type: "kanban", taskId: ticket.id },
-    namingPrompt: [ticket.title, ticket.description, ticket.acceptanceCriteria]
-      .filter(Boolean)
-      .join("\n\n"),
+    taskTitle: build.title,
+    taskSnapshot: build.taskSnapshot,
+    source: build.source,
+    namingPrompt: build.namingPrompt,
     ...(input.environmentId ? { existingEnvironmentId: input.environmentId } : {}),
     ...(input.baseBranch
       ? { delegationBaseBranch: input.baseBranch, delegationBaseCommit: input.baseCommit }

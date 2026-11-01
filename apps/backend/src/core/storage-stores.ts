@@ -5,7 +5,10 @@ import { NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS } from "./native-agent-display-
 import { changeLedgerMigration } from "./change-tracking/ledger-schema.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
-import { recordShapeUpgradeMigration } from "./storage-record-upgrades.js";
+import {
+  buildPipelineReviewReportUpgradeMigration,
+  recordShapeUpgradeMigration,
+} from "./storage-record-upgrades.js";
 import {
   RETIRED_LEGACY_STORES,
   queueLoopedReviewSessions,
@@ -241,6 +244,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   recordShapeUpgradeMigration,
   changeLedgerMigration,
   retireLoopedReviewsMigration,
+  buildPipelineReviewReportUpgradeMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {

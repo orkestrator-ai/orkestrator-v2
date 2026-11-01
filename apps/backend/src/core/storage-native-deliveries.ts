@@ -292,6 +292,10 @@ export class NativeAgentDeliveries {
       }
       sessions[key] = {
         ...session,
+        lastDispatchedTurn: {
+          requestId,
+          mode: session.pendingDispatch.mode ?? session.controls?.mode,
+        },
         pendingDispatch: undefined,
         retiredDispatch: undefined,
         dispatchedRequestIds: session.dispatchedRequestIds?.includes(requestId)
@@ -520,6 +524,12 @@ export class NativeAgentDeliveries {
       pendingSteer: undefined,
       ...(settlement === "applied"
         ? {
+            lastDispatchedTurn: {
+              requestId,
+              mode: session.lastDispatchedTurn
+                ? session.lastDispatchedTurn.mode
+                : session.controls?.mode,
+            },
             dispatchedRequestIds: [
               ...(session.dispatchedRequestIds ?? []).filter((id) => id !== requestId).slice(-999),
               requestId,

@@ -94,6 +94,7 @@ export class GraphAgentProviders {
         ? await this.options.create(environment, agent)
         : createBuildPipelineProvider(await this.requireConnection(environment, agent), {
             ...this.options.dependencies,
+            bridgeEnvironmentId: environment.id,
             refreshConnection: () => this.requireConnection(environment, agent),
           });
       const managed = managedProvider(provider);

@@ -79,6 +79,8 @@ function applySignInGuidance(
 export type ProviderDependencies = HttpBridgeProviderDependencies &
   OpenCodeProviderDependencies & {
     workflowResults?: WorkflowResultReader;
+    /** Stable bridge identity shared by all workflow owners, even after URL replacement. */
+    bridgeEnvironmentId?: string;
     /** Resolve the bridge before a new workflow turn; local startup preserves busy bridges. */
     refreshConnection?: () => Promise<BridgeConnection>;
     /** Platform-specific dependencies are derived from this; explicit ones win. */
@@ -143,7 +145,20 @@ export function trackRunningTurns(provider: NativeAgentRuntimeProvider): () => b
   };
 }
 
-const bridgeTurnObservers = new Map<string, Set<() => boolean>>();
+const workflowBridges = new Map<
+  string,
+  {
+    observers: Set<() => boolean>;
+    connection: BridgeConnection;
+    refreshing?: Promise<void>;
+  }
+>();
+
+export function workflowBridgeRunning(environmentId: string, agent: string): boolean {
+  return [...(workflowBridges.get(`${agent}:${environmentId}`)?.observers ?? [])].some((running) =>
+    running(),
+  );
+}
 
 export function createNativeAgentProvider(
   connection: BridgeConnection,
@@ -167,24 +182,43 @@ export function createNativeAgentProvider(
     isAgentAccountPlatform(platform) &&
     (dependencies.usageLimitStops || dependencies.refreshConnection);
   const siblingTurnRunning = tracksTurns ? trackRunningTurns(provider) : () => false;
-  const bridgeKey = `${connection.agent}:${connection.baseUrl}`;
-  const bridgeRunning = () =>
-    [...(bridgeTurnObservers.get(bridgeKey) ?? [])].some((running) => running());
+  const bridgeKey = `${connection.agent}:${dependencies.bridgeEnvironmentId ?? dependencies.environment?.environmentId ?? connection.baseUrl}`;
+  const shared = workflowBridges.get(bridgeKey) ?? {
+    observers: new Set<() => boolean>(),
+    connection: { ...connection },
+  };
+  const observers = shared.observers;
+  const bridgeRunning = () => [...observers].some((running) => running());
+  const adoptConnection = () => {
+    // Share transport identity, preserving each owner's model and execution defaults.
+    connection.baseUrl = shared.connection.baseUrl;
+    connection.authToken = shared.connection.authToken;
+    connection.accountId = shared.connection.accountId;
+  };
   if (tracksTurns) {
-    const key = bridgeKey;
-    const observers = bridgeTurnObservers.get(key) ?? new Set<() => boolean>();
+    workflowBridges.set(bridgeKey, shared);
+    adoptConnection();
     observers.add(siblingTurnRunning);
-    bridgeTurnObservers.set(key, observers);
     const dispose = provider.dispose?.bind(provider);
     provider.dispose = () => {
       observers.delete(siblingTurnRunning);
-      if (!observers.size) bridgeTurnObservers.delete(key);
+      if (!observers.size) workflowBridges.delete(bridgeKey);
       dispose?.();
     };
     if (dependencies.refreshConnection) {
       const refresh = async () => {
-        if ([...observers].some((running) => running())) return;
-        Object.assign(connection, await dependencies.refreshConnection!());
+        if (shared.refreshing) await shared.refreshing;
+        if (!bridgeRunning()) {
+          shared.refreshing = (async () => {
+            shared.connection = await dependencies.refreshConnection!();
+          })();
+          try {
+            await shared.refreshing;
+          } finally {
+            shared.refreshing = undefined;
+          }
+        }
+        adoptConnection();
       };
       const create = provider.createSession.bind(provider);
       provider.createSession = async (...args) => {

@@ -228,13 +228,20 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
           })
         : await invoke<JsonRecord>("get_project_usage_limits", { projectId: scope.projectId });
       const limited = Array.isArray(limits.limitedTabs) ? limits.limitedTabs.length : 0;
+      const snapshot = limited
+        ? await machineAccounts(await machineFor(invoke, nodeId))
+        : undefined;
+      const automatic =
+        snapshot &&
+        Object.values(snapshot.autoSwitch ?? {}).some((state) => state.mode === "automatic");
       return toolResult({
         ...limits,
         ...context.onNodeResult(target),
         ...(limited
           ? {
-              nextStep:
-                "Compare accounts with list_provider_accounts, switch with switch_provider_account, then send each limited tab a short prompt (send_prompt_to_tab, for example 'continue') so it runs again on the new account.",
+              nextStep: automatic
+                ? "Automatic recovery is active: the backend handles confirmed weekly-limit stops and resends them when the bridge is idle. Wait for its outcome; no coordinator action is needed."
+                : "Compare accounts with list_provider_accounts, switch with switch_provider_account, then send each limited tab a short prompt (send_prompt_to_tab, for example 'continue') so it runs again on the new account.",
             }
           : {}),
       });
@@ -307,7 +314,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
     {
       title: "Change automatic account switching",
       description:
-        "Turn automatic account switching on or off for a provider, or change whether one account is included. When on, the backend keeps the machine on the included signed-in account whose general weekly limit resets soonest, moves on at 98% of that limit or when a fresh reading confirms a limit error used it up, and resends the work the weekly limit stopped. The ticks apply on every machine this one controls, matched by email; an account with no email has its tick on its own machine only and stays out until ticked. With enabled true it also ends this machine's pin, or the pin on nodeId, left by a manual switch, and no other machine's. A machine with a command node takes the shared ticks from it and refuses to change them, but can still end its own pin and change the tick of an account with no email. list_provider_accounts shows the state. Only when the user asked for it.",
+        "Turn automatic account switching on or off for a provider, or change whether one account is included. When on, the backend keeps the machine on the included signed-in account whose general weekly limit resets soonest, moves on at 98% of that limit or when a fresh reading confirms a limit error used it up, and resends the work the weekly limit stopped. The ticks apply on every machine this one controls, matched by email; an account with no email has its tick on its own machine only and stays out until ticked. With enabled true it also ends this machine's pin, or the pin on nodeId, left by a manual switch, and no other machine's. A machine with a command node takes the shared ticks from it and refuses to change them, but can still end its own pin and change the tick of an account with no email. list_provider_accounts shows the state. The coordinator is authorized to change email-matched ticks and end pins only when the user explicitly asked; these changes can move subscriptions and trigger automatic recovery. No-email accounts must be included by the user in Settings.",
       inputSchema: z.object({
         platform: z.enum(AGENT_ACCOUNT_PLATFORMS),
         enabled: z.boolean().optional().describe("The provider's main tick."),
@@ -338,6 +345,15 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
         throw new Error("accountId and included go together.");
       }
       const machine = await machineFor(invoke, nodeId);
+      if (accountId !== undefined && included === true) {
+        const account = (await machineAccounts(machine)).accounts.find(
+          (entry) => entry.platform === platform && entry.id === accountId,
+        );
+        if (account && !account.identity.email)
+          throw new Error(
+            "Include no-email accounts in Settings; coordinator tools cannot authorize their billing identity.",
+          );
+      }
       if (enabled !== undefined) {
         // Already as asked, this only ends a pin. A leaf can do that, but not set the
         // tick its command node holds.

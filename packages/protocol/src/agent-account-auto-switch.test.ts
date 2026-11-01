@@ -397,3 +397,14 @@ describe("peer answers", () => {
     expect(isAgentAccountAutoSwitchedEvent({ ...event, platform: "grok" })).toBe(false);
   });
 });
+
+test("signed-out active accounts yield to signed-in accounts, and signed-out destinations are excluded", () => {
+  const a = account("a", { freshness: "none" }, { account: { id: "a", signedIn: false } });
+  const b = account("b", { usedPercent: 20 });
+  expect(decideAutoSwitch([a, b], "a")).toEqual({
+    action: "switch",
+    accountId: "b",
+    reason: "signed-out",
+  });
+  expect(decideAutoSwitch([a, b], "b")).toEqual({ action: "stay" });
+});

@@ -76,3 +76,71 @@ test("a poll that fails for another reason keeps the turn counted", async () => 
   await expect(provider.status("session")).rejects.toThrow("did not answer");
   expect(running()).toBe(true);
 });
+
+test("cached siblings and new providers adopt the replacement while its turn is running", async () => {
+  const { workflowBridgeRunning } = await import("./native-agent-provider.js");
+  const { NativeAgentLaunchActivityReconciler } =
+    await import("./native-agent-launch-activity-reconciler.js");
+  let refreshes = 0;
+  const urls: string[] = [];
+  const dependencies = {
+    bridgeEnvironmentId: "handoff-env",
+    refreshConnection: async (): Promise<BridgeConnection> => {
+      refreshes++;
+      return { agent: "claude", baseUrl: "http://replacement", authToken: "b" };
+    },
+    fetch: (async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith("/prompt")) {
+        urls.push(String(url));
+        expect(new Headers(init?.headers).get("X-Orkestrator-Claude-Token")).toBe("b");
+      }
+      return Response.json({ status: "idle", sessionId: "session" });
+    }) as typeof fetch,
+  };
+  const original: BridgeConnection = {
+    agent: "claude",
+    baseUrl: "http://original",
+    authToken: "a",
+  };
+  const first = createNativeAgentProvider({ ...original }, dependencies);
+  const secondConnection = { ...original, model: "owner-model", effort: "high" };
+  const second = createNativeAgentProvider(secondConnection, dependencies);
+  let third: NativeAgentRuntimeProvider | undefined;
+  try {
+    await first.prepareDispatch!("one");
+    await first.send("one", "work", { requestId: "one" });
+    expect(workflowBridgeRunning("handoff-env", "claude")).toBe(true);
+    // This is the busy check used both by native resend and process replacement.
+    expect(
+      await NativeAgentLaunchActivityReconciler.prototype.hasObservedLiveWork.call(
+        {
+          providerRegistry: { cached: () => undefined },
+          storage: { listNativeAgentSessions: async () => [] },
+        } as never,
+        "handoff-env",
+        "claude",
+      ),
+    ).toBe(true);
+    await second.prepareDispatch!("two");
+    await second.send("two", "work", { requestId: "two" });
+    third = createNativeAgentProvider(
+      { agent: "claude", baseUrl: "http://replacement", authToken: "b" },
+      dependencies,
+    );
+    await third.prepareDispatch!("three");
+    expect(refreshes).toBe(1);
+    expect(secondConnection.model).toBe("owner-model");
+    expect(secondConnection.effort).toBe("high");
+    expect(urls).toEqual([
+      "http://replacement/session/one/prompt",
+      "http://replacement/session/two/prompt",
+    ]);
+    await first.status("one");
+    await second.status("two");
+    expect(workflowBridgeRunning("handoff-env", "claude")).toBe(false);
+  } finally {
+    first.dispose?.();
+    second.dispose?.();
+    third?.dispose?.();
+  }
+});

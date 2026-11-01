@@ -304,19 +304,20 @@ async function switchActiveAccount(
           return { store, result: undefined };
         }
         const machine = store.autoSwitch?.[platform];
-        const autoSwitch = options.pin
-          ? { ...machine, pin: { accountId, pinnedAt: nowIso } }
-          : automatic
-            ? {
-                ...machine,
-                lastSwitch: {
-                  fromAccountId: current,
-                  toAccountId: accountId,
-                  reason: automatic.reason,
-                  at: nowIso,
-                },
-              }
-            : machine;
+        const autoSwitch =
+          options.pin || (!automatic && machine?.pin)
+            ? { ...machine, pin: { accountId, pinnedAt: nowIso } }
+            : automatic
+              ? {
+                  ...machine,
+                  lastSwitch: {
+                    fromAccountId: current,
+                    toAccountId: accountId,
+                    reason: automatic.reason,
+                    at: nowIso,
+                  },
+                }
+              : machine;
         const withAutoSwitch: AgentAccountStore = autoSwitch
           ? { ...store, autoSwitch: { ...store.autoSwitch, [platform]: autoSwitch } }
           : store;

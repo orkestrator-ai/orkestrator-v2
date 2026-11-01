@@ -113,7 +113,13 @@ export function isAutoSwitchAccountIncluded(
  */
 export type AgentAccountAutoSwitchMode = "off" | "automatic" | "pinned";
 
-export const AUTO_SWITCH_REASONS = ["threshold", "limit", "soonest-reset", "not-included"] as const;
+export const AUTO_SWITCH_REASONS = [
+  "threshold",
+  "limit",
+  "soonest-reset",
+  "not-included",
+  "signed-out",
+] as const;
 export type AutoSwitchReason = (typeof AUTO_SWITCH_REASONS)[number];
 
 export interface AgentAccountAutoSwitchLastSwitch {
@@ -330,16 +336,20 @@ export function decideAutoSwitch(
   activeAccountId: string,
 ): AutoSwitchDecision {
   const current = accounts.find(({ account }) => account.id === activeAccountId);
-  if (current?.included && current.reading.freshness === "none") return { action: "stay" };
+  if (current?.included && current.account.signedIn && current.reading.freshness === "none")
+    return { action: "stay" };
   const best = rankAutoSwitchAccounts(accounts, activeAccountId)[0];
   if (!best || best.account.id === activeAccountId) return { action: "stay" };
   const active = accounts.find(({ account }) => account.id === activeAccountId);
-  const reason: AutoSwitchReason = !active?.included
-    ? "not-included"
-    : active.reading.freshness === "fresh" &&
-        (active.reading.usedPercent ?? 0) >= AUTO_SWITCH_THRESHOLD_PERCENT
-      ? "threshold"
-      : "soonest-reset";
+  const reason: AutoSwitchReason =
+    active && !active.account.signedIn
+      ? "signed-out"
+      : !active?.included
+        ? "not-included"
+        : active.reading.freshness === "fresh" &&
+            (active.reading.usedPercent ?? 0) >= AUTO_SWITCH_THRESHOLD_PERCENT
+          ? "threshold"
+          : "soonest-reset";
   return { action: "switch", accountId: best.account.id, reason };
 }
 
@@ -424,6 +434,7 @@ export function autoSwitchNoticeText(input: {
     threshold: "its general weekly limit reached 98%",
     limit: "a turn stopped and a fresh reading confirmed its general weekly limit is used up",
     "soonest-reset": "another included account's weekly limit resets sooner",
+    "signed-out": "the current account is signed out",
     "not-included": "its tick is off, so it is no longer included",
   }[input.reason];
   return {

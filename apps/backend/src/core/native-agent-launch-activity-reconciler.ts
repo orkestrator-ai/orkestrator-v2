@@ -1,3 +1,4 @@
+import { workflowBridgeRunning } from "./native-agent-provider.js";
 import type {
   BuildPipelineAgent,
   AgentActivityState,
@@ -587,6 +588,7 @@ export class NativeAgentLaunchActivityReconciler {
   async hasObservedLiveWork(environmentId: string, agent: BuildPipelineAgent): Promise<boolean> {
     const provider = this.providerRegistry.cached(providerCacheKey(environmentId, agent));
     if (provider && this.providerRegistry.hasDispatchInFlight(provider)) return true;
+    if (workflowBridgeRunning(environmentId, agent)) return true;
     const sessions = await this.storage.listNativeAgentSessions();
     return sessions.some((session) => {
       if (session.environmentId !== environmentId || session.agent !== agent) return false;

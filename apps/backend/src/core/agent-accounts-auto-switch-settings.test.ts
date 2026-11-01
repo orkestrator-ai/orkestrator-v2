@@ -161,6 +161,15 @@ describe("a manual switch", () => {
     expect(resumed.pinnedAccountId).toBeUndefined();
   });
 
+  test("a manual switch with ticks off updates a retained pin", async () => {
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    await setActiveAgentAccount(context, "codex", B);
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: false });
+    await setActiveAgentAccount(context, "codex", A);
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    expect(await state()).toMatchObject({ mode: "pinned", pinnedAccountId: A });
+  });
+
   test("the other provider's tick is not touched", async () => {
     await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
     await setAgentAccountAutoSwitch(context, "claude", { enabled: true });

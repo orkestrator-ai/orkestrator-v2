@@ -1074,3 +1074,10 @@ names another version.
   `codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } }`
   (`responseStreamDisconnected` with 401 on the retries), not `unauthorized`,
   and sends no `modelProvider/authRecovery*`, so no `auth` notice is raised.
+
+Coordinator authority: `set_account_auto_switch` may change email-matched inclusion ticks,
+enable automatic switching, or end a machine pin when the user explicitly requests it.
+These controls delegate subscription selection and bounded weekly-limit recovery to
+the backend. They do not use the single-account switch approval request. No-email
+accounts require the user to include them in Settings; coordinator tools refuse to
+include them. Excluding such an account remains available.

@@ -796,22 +796,18 @@ describe("automatic switching", () => {
       included: false,
       nodeId: LEAF,
     });
-    await call("main", "set_account_auto_switch", {
+    const refused = await call("main", "set_account_auto_switch", {
       platform: "claude",
       accountId: "keyed",
       included: true,
       nodeId: LEAF,
     });
+    expect(refused.isError).toBe(true);
     expect(tickCalls).toEqual([
       {
         machine: SELF,
         command: "set_agent_account_auto_switch",
         args: { platform: "claude", email: "m@example.com", included: false },
-      },
-      {
-        machine: LEAF,
-        command: "set_agent_account_auto_switch",
-        args: { platform: "claude", accountId: "keyed", included: true },
       },
     ]);
   });
@@ -851,6 +847,20 @@ describe("automatic switching", () => {
 });
 
 describe("usage-limit reader", () => {
+  test.each(["automatic", "pinned", "off"] as const)(
+    "usage guidance respects %s mode",
+    async (mode) => {
+      autoSwitch[SELF] = { mode, includedAccountIds: ["default"] };
+      const result = await call("main", "get_usage_limits", {});
+      const guidance = (result.structuredContent as { nextStep: string }).nextStep;
+      if (mode === "automatic") {
+        expect(guidance).toContain("backend handles");
+        expect(guidance).not.toContain("switch_provider_account");
+        expect(guidance).not.toContain("send_prompt_to_tab");
+      } else expect(guidance).toContain("switch_provider_account");
+    },
+  );
+
   test("names the tabs whose last turn hit a usage limit and the exhausted active account", async () => {
     const limits = await call("main", "get_usage_limits", {});
     expect(limits.isError).not.toBe(true);

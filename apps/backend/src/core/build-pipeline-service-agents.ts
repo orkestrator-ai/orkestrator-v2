@@ -147,6 +147,7 @@ export class BuildPipelineAgents {
       {
         ...this.ctx.options.providerDependencies,
         workflowResults: this.ctx.options.workflowResults,
+        bridgeEnvironmentId: environment.id,
         refreshConnection: () => this.bridgeConnection(agent, environment),
         // Task-snapshot images arrive as base64. Both bridges require a workspace
         // path, so they have to be written into the environment before they can be

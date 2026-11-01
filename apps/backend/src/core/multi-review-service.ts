@@ -5199,6 +5199,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             return createBuildPipelineProvider(connection, {
               ...this.options.providerDependencies,
               workflowResults: this.options.workflowResults,
+              bridgeEnvironmentId: environment.id,
               refreshConnection: () => this.bridgeConnection(selection.agent, environment),
             });
           })();

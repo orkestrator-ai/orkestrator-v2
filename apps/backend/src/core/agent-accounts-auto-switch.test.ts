@@ -178,6 +178,20 @@ describe("between turns", () => {
     expect(h.reads.every((read) => !read.force)).toBe(true);
   });
 
+  test("signed-out active accounts move; signed-out destinations are skipped", async () => {
+    const h = harness({
+      active: "a",
+      signedOut: ["a", "c"],
+      accounts: {
+        a: usage({ used: 20, resetsInHours: 100 }),
+        b: usage({ used: 50, resetsInHours: 3 }),
+        c: usage({ used: 0, resetsInHours: 1 }),
+      },
+    });
+    await h.switcher.evaluate("claude");
+    expect(h.state.active).toBe("b");
+  });
+
   test("moves at 98% of the general weekly limit", async () => {
     const h = harness({
       active: "a",

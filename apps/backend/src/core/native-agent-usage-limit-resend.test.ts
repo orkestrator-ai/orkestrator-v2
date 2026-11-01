@@ -412,3 +412,124 @@ test("native continuation reaches the replacement HTTP bridge with its new token
     provider.dispose?.();
   }
 });
+
+test.each(["steer", "recovered"] as const)(
+  "%s dispatch retains its turn mode for one weekly-limit resend",
+  async (kind) => {
+    const { StorageService } = await import("./storage.js");
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const directory = await mkdtemp(join(tmpdir(), "resend-record-"));
+    const storage = new StorageService(directory);
+    await storage.init();
+    try {
+      const input = {
+        key: "session-key",
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "tab",
+        origin: "interactive-native" as const,
+      };
+      await storage.addEnvironment({
+        id: "env-1",
+        projectId: "project-1",
+        name: "test",
+        branch: "main",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        setupPhase: "ready",
+      });
+      await storage.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      await storage.dispatchNativeAgentPromptOnce(input.key, "original", async () => ({
+        dispatched: true,
+        mode: "plan",
+      }));
+      if (kind === "steer") {
+        await storage.dispatchNativeAgentSteerOnce(
+          input.key,
+          {
+            requestId: "latest",
+            text: "steer",
+            inputDigest: new Bun.CryptoHasher("sha256").update("steer").digest("hex"),
+            expectedRunId: "run",
+            state: "prepared",
+            createdAt: new Date().toISOString(),
+          },
+          async () => ({ outcome: "applied" }),
+        );
+      } else {
+        await storage
+          .dispatchNativeAgentPromptOnce(
+            input.key,
+            "latest",
+            async () => {
+              throw new Error("lost reply");
+            },
+            {
+              requestId: "latest",
+              prompt: "work",
+              mode: "plan",
+              createdAt: new Date().toISOString(),
+            },
+          )
+          .catch(() => undefined);
+        expect(await storage.confirmNativeAgentDispatch(input.key, "latest")).toBe(true);
+      }
+      const session = (await storage.getNativeAgentSession(input.key))!;
+      expect(session.lastDispatchedTurn).toEqual({ requestId: "latest", mode: "plan" });
+      const h = harness({ session });
+      h.resend.noteActivity(session, "idle", "working");
+      await h.settle();
+      expect(h.dispatches).toHaveLength(1);
+      expect(h.dispatches[0]?.mode).toBe("plan");
+    } finally {
+      storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("native recovery waits for a workflow on the shared bridge, then continues once", async () => {
+  const { workflowBridgeRunning } = await import("./native-agent-provider.js");
+  const workflow = createNativeAgentProvider(
+    { agent: "claude", baseUrl: "http://shared-workflow", authToken: "a" },
+    {
+      bridgeEnvironmentId: "env-1",
+      refreshConnection: async () => ({
+        agent: "claude",
+        baseUrl: "http://shared-workflow",
+        authToken: "a",
+      }),
+      fetch: (async () => Response.json({ status: "idle" })) as unknown as typeof fetch,
+    },
+  );
+  const h = harness();
+  h.handleLimitStop.mockImplementation(async () =>
+    workflowBridgeRunning("env-1", "claude") ? "wait" : "resend",
+  );
+  try {
+    await workflow.send("review", "work", { requestId: "review" });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.dispatches).toHaveLength(0);
+    expect(h.resend.hasCandidate(h.state.session.key)).toBe(true);
+    await workflow.status("review");
+    h.advance(15_000);
+    h.resend.noteActivity(h.state.session, "idle", "idle");
+    await h.settle();
+    expect(h.dispatches).toHaveLength(1);
+    h.resend.noteActivity(h.state.session, "idle", "idle");
+    await h.settle();
+    expect(h.dispatches).toHaveLength(1);
+  } finally {
+    workflow.dispose?.();
+  }
+});

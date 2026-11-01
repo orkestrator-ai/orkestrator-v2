@@ -1,6 +1,11 @@
 // Claude Bridge Server
 // Wraps the Claude Agent SDK and exposes HTTP/SSE endpoints for Orkestrator AI
 
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import {
+  applyBridgeLogPolicy,
+  readBridgeLogPolicyBody,
+} from "@orkestrator/protocol/node/bridge-log-policy";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -186,6 +191,12 @@ app.post("/global/auth/logout", (c) =>
 app.post("/global/refresh-catalog", async (c) => {
   await refreshClaudeCatalogs();
   return c.json({ ok: true });
+});
+
+// The live logging settings. Metadata only; see `applyBridgeLogPolicy`.
+app.post(BRIDGE_LOG_POLICY_ROUTE, async (c) => {
+  const answer = applyBridgeLogPolicy(await readBridgeLogPolicyBody(c.req.raw));
+  return c.json(answer.body, answer.status);
 });
 
 // Mount routes

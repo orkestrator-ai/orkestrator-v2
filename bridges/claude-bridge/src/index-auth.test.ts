@@ -1,3 +1,5 @@
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import { resetBridgeLogPolicyForTests } from "@orkestrator/protocol/node/bridge-log-policy";
 import { describe, expect, test } from "bun:test";
 import { TransformStream } from "node:stream/web";
 import type { AddressInfo } from "node:net";
@@ -86,6 +88,24 @@ describe("bridge authentication and origin policy", () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  test("protects the logging settings route", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
+    try {
+      const request = (headers: Record<string, string>) =>
+        app.request(BRIDGE_LOG_POLICY_ROUTE, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ seq: 1, level: "info", areaLevels: {} }),
+        });
+      expect((await request({})).status).toBe(401);
+      expect((await request({ Authorization: "Bearer wrong" })).status).toBe(401);
+      expect((await request({ Authorization: `Bearer ${AUTH_TOKEN}` })).status).toBe(200);
+    } finally {
+      __testing.setBridgeAuthForTesting();
+      resetBridgeLogPolicyForTests();
+    }
   });
 
   test("protects data routes while leaving only the minimal process health public", async () => {

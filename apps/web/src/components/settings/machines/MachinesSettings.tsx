@@ -81,182 +81,187 @@ export function MachinesSettings() {
   };
 
   return (
-    <SettingsPageLayout
-      width="wide"
-      data-testid="machines-settings"
-      title="Machines"
-      description="Every machine runs its own backend and keeps its own work. The machine you are connected to reaches the others, so they show in one place."
-      actions={
-        <Button type="button" onClick={() => setAdding(true)} className="w-fit gap-2">
-          <Plus className="h-4 w-4" />
-          Add machine
-        </Button>
-      }
-    >
-      {leaf && status ? (
-        <div
-          data-testid="leaf-mode-notice"
-          className="flex gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100"
-        >
-          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          <p className="flex-1">
-            This machine is controlled by{" "}
-            {status.controllers.map((controller) => controller.displayName).join(", ")}, so its own
-            control of other machines is paused
-            {status.suspendedSubordinateCount > 0
-              ? ` (${status.suspendedSubordinateCount} kept, not controlled)`
-              : ""}
-            . Coordination happens there.
-          </p>
-          {api?.handOverCommand && connections && selfEntry ? (
+    // The query container spans the whole settings pane, so the agent accounts
+    // table can grow past the page's width to fit its columns.
+    <div className="@container">
+      <SettingsPageLayout
+        width="wide"
+        data-testid="machines-settings"
+        title="Machines"
+        description="Every machine runs its own backend and keeps its own work. The machine you are connected to reaches the others, so they show in one place."
+        actions={
+          <Button type="button" onClick={() => setAdding(true)} className="w-fit gap-2">
+            <Plus className="h-4 w-4" />
+            Add machine
+          </Button>
+        }
+      >
+        {leaf && status ? (
+          <div
+            data-testid="leaf-mode-notice"
+            className="flex gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100"
+          >
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <p className="flex-1">
+              This machine is controlled by{" "}
+              {status.controllers.map((controller) => controller.displayName).join(", ")}, so its
+              own control of other machines is paused
+              {status.suspendedSubordinateCount > 0
+                ? ` (${status.suspendedSubordinateCount} kept, not controlled)`
+                : ""}
+              . Coordination happens there.
+            </p>
+            {api?.handOverCommand && connections && selfEntry ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                onClick={() =>
+                  requestCommandHandover({
+                    name: selfEntry.name,
+                    connectionId: connections.activeConnectionId,
+                  })
+                }
+              >
+                Make it the command node
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {nodesError && loaded ? (
+          <div className={cn(SETTINGS_CARD_CLASS, "px-4 py-3 text-xs text-zinc-400")}>
+            Machine discovery is unavailable ({nodesError}). You can still manage this machine’s
+            updates.
             <Button
               type="button"
-              size="sm"
               variant="outline"
-              className="shrink-0"
-              onClick={() =>
-                requestCommandHandover({
-                  name: selfEntry.name,
-                  connectionId: connections.activeConnectionId,
-                })
-              }
+              size="sm"
+              className="mt-3"
+              onClick={() => void refresh()}
             >
-              Make it the command node
+              Retry machine discovery
             </Button>
-          ) : null}
-        </div>
-      ) : null}
+          </div>
+        ) : null}
 
-      {nodesError && loaded ? (
-        <div className={cn(SETTINGS_CARD_CLASS, "px-4 py-3 text-xs text-zinc-400")}>
-          Machine discovery is unavailable ({nodesError}). You can still manage this machine’s
-          updates.
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-3"
-            onClick={() => void refresh()}
-          >
-            Retry machine discovery
-          </Button>
-        </div>
-      ) : null}
+        {connectionsError ? (
+          <div className="rounded-lg border border-red-500/25 bg-red-500/[0.07] p-4" role="alert">
+            <p className="text-sm text-red-300">{connectionsError}</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => void refresh()}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Try again
+            </Button>
+          </div>
+        ) : null}
 
-      {connectionsError ? (
-        <div className="rounded-lg border border-red-500/25 bg-red-500/[0.07] p-4" role="alert">
-          <p className="text-sm text-red-300">{connectionsError}</p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-3"
-            onClick={() => void refresh()}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Try again
-          </Button>
-        </div>
-      ) : null}
-
-      {!loaded ? (
-        <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading machines…
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
-          <table className="w-full table-fixed text-sm" data-testid="machine-list">
-            <thead className="border-b border-zinc-800 bg-zinc-900/55 text-left text-xs text-zinc-500">
-              <tr>
-                <th className="px-4 py-2.5 font-medium">Machine</th>
-                <th className="hidden w-28 px-4 py-2.5 font-medium md:table-cell">Orkestrator</th>
-                <th className="w-[8.5rem] px-3 py-2.5 text-right font-medium sm:w-[15rem] sm:px-4">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/80">
-              {entries.map((entry) => (
-                <MachineRow
-                  key={entry.key}
-                  entry={entry}
-                  api={api}
-                  summary={summaries[entry.key]}
-                  openingWindow={openingWindow === entry.key}
-                  onSettings={() => setSettingsKey(entry.key)}
-                  onUpdates={() => setUpdatesKey(entry.key)}
-                  onOpenWindow={() => void openWindow(entry)}
-                  leaf={leaf}
-                />
-              ))}
-              {entries.length === 0 ? (
+        {!loaded ? (
+          <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading machines…
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
+            <table className="w-full table-fixed text-sm" data-testid="machine-list">
+              <thead className="border-b border-zinc-800 bg-zinc-900/55 text-left text-xs text-zinc-500">
                 <tr>
-                  <td colSpan={3} className="px-4 py-8 text-center text-sm text-zinc-500">
-                    No machines yet.
-                  </td>
+                  <th className="px-4 py-2.5 font-medium">Machine</th>
+                  <th className="hidden w-28 px-4 py-2.5 font-medium md:table-cell">Orkestrator</th>
+                  <th className="w-[8.5rem] px-3 py-2.5 text-right font-medium sm:w-[15rem] sm:px-4">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody className="divide-y divide-zinc-800/80">
+                {entries.map((entry) => (
+                  <MachineRow
+                    key={entry.key}
+                    entry={entry}
+                    api={api}
+                    summary={summaries[entry.key]}
+                    openingWindow={openingWindow === entry.key}
+                    onSettings={() => setSettingsKey(entry.key)}
+                    onUpdates={() => setUpdatesKey(entry.key)}
+                    onOpenWindow={() => void openWindow(entry)}
+                    leaf={leaf}
+                  />
+                ))}
+                {entries.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-8 text-center text-sm text-zinc-500">
+                      No machines yet.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-      {leaf ? (
-        // A leaf's own window: its machines are its command node's to manage,
-        // so only its own logins are listed here.
-        <MachineAgentAccountsSection key="leaf-self" selfOnly />
-      ) : (
-        <MachineAgentAccountsSection
-          key={(nodes?.nodes ?? [])
-            .filter((node) => node.enabled && !node.detachPending)
-            .map((node) => node.nodeId)
-            .sort()
-            .join(",")}
-        />
-      )}
+        {leaf ? (
+          // A leaf's own window: its machines are its command node's to manage,
+          // so only its own logins are listed here.
+          <MachineAgentAccountsSection key="leaf-self" selfOnly wide />
+        ) : (
+          <MachineAgentAccountsSection
+            key={(nodes?.nodes ?? [])
+              .filter((node) => node.enabled && !node.detachPending)
+              .map((node) => node.nodeId)
+              .sort()
+              .join(",")}
+            wide
+          />
+        )}
 
-      {nodes && nodes.pendingDetaches.length > 0 ? (
-        <PendingDetaches entries={nodes.pendingDetaches} onChanged={changed} />
-      ) : null}
+        {nodes && nodes.pendingDetaches.length > 0 ? (
+          <PendingDetaches entries={nodes.pendingDetaches} onChanged={changed} />
+        ) : null}
 
-      {api && connections ? <ClientOptions list={connections} /> : null}
+        {api && connections ? <ClientOptions list={connections} /> : null}
 
-      <AddMachineDialog
-        open={adding}
-        onOpenChange={setAdding}
-        status={status}
-        api={api}
-        knownAddresses={knownAddresses}
-        onAdded={changed}
-      />
-      {settingsMachine ? (
-        <MachineSettingsDialog
-          key={settingsMachine.key}
-          machine={settingsMachine}
-          open
-          onOpenChange={(open) => !open && setSettingsKey(null)}
-          api={api}
+        <AddMachineDialog
+          open={adding}
+          onOpenChange={setAdding}
           status={status}
-          snapshot={summaries[settingsMachine.key]?.snapshot ?? null}
-          onChanged={changed}
+          api={api}
+          knownAddresses={knownAddresses}
+          onAdded={changed}
         />
-      ) : null}
-      {updatesMachine ? (
-        <MachineUpdatesDialog
-          key={updatesMachine.key}
-          machine={updatesMachine}
-          open
-          onOpenChange={(open) => {
-            if (open) return;
-            setUpdatesKey(null);
-            setWantsCurrentUpdates(false);
-          }}
-          initial={summaries[updatesMachine.key]?.snapshot ?? null}
-          onSnapshot={record}
-        />
-      ) : null}
-    </SettingsPageLayout>
+        {settingsMachine ? (
+          <MachineSettingsDialog
+            key={settingsMachine.key}
+            machine={settingsMachine}
+            open
+            onOpenChange={(open) => !open && setSettingsKey(null)}
+            api={api}
+            status={status}
+            snapshot={summaries[settingsMachine.key]?.snapshot ?? null}
+            onChanged={changed}
+          />
+        ) : null}
+        {updatesMachine ? (
+          <MachineUpdatesDialog
+            key={updatesMachine.key}
+            machine={updatesMachine}
+            open
+            onOpenChange={(open) => {
+              if (open) return;
+              setUpdatesKey(null);
+              setWantsCurrentUpdates(false);
+            }}
+            initial={summaries[updatesMachine.key]?.snapshot ?? null}
+            onSnapshot={record}
+          />
+        ) : null}
+      </SettingsPageLayout>
+    </div>
   );
 }
 

@@ -1,8 +1,8 @@
 /**
  * One-time migration of the per-browser intent store this client used before
  * the backend owned each document's intent queue (`design_intents`). Entries
- * are read once, imported into the backend, and removed; nothing else reads
- * localStorage for design intents.
+ * are imported into the backend and removed only after acknowledgment;
+ * capacity-skipped entries remain for retry. No new intents are saved here.
  */
 const STORAGE_KEY = "orkestrator.design.intents.v1";
 /** The legacy store's own bound; anything larger was never written by it. */
@@ -42,12 +42,25 @@ export function readLegacyDrafts(canvasKey: string): { keys: string[]; intents: 
   return { keys, intents };
 }
 
-/** Removes migrated keys; the store itself goes once it is empty. */
-export function clearLegacyDrafts(keys: string[]): void {
+/** Removes acknowledged entries, keeping capacity-skipped entries for retry. */
+export function clearLegacyDrafts(keys: string[], acknowledged?: unknown[]): void {
   const target = storage();
   if (!target || !keys.length) return;
   const all = readAll();
-  for (const key of keys) delete all[key];
+  const removed = acknowledged && new Set(acknowledged.map((entry) => JSON.stringify(entry)));
+  for (const key of keys) {
+    const entries = all[key];
+    if (removed && Array.isArray(entries)) {
+      // Another legacy client may have saved more while import was in flight.
+      // Remove only the exact entries the backend has acknowledged.
+      const remaining = entries.filter((entry) => !removed.has(JSON.stringify(entry)));
+      if (remaining.length) {
+        all[key] = remaining;
+        continue;
+      }
+    }
+    delete all[key];
+  }
   try {
     if (Object.keys(all).length) target.setItem(STORAGE_KEY, JSON.stringify(all));
     else target.removeItem(STORAGE_KEY);

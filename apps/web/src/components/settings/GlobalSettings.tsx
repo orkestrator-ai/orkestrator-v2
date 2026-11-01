@@ -816,6 +816,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       const changes = globalConfigPatchFromCoreFields(
         localCoreFields,
         storedCoreFields(syncedGlobalRef.current),
+        syncedGlobalRef.current,
       );
 
       const githubCredentialSourceChanged =
@@ -832,14 +833,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         unset: changes.unset,
         machine,
       });
-      if (coreSignatureRef.current !== signature) {
-        // An edit landed while this write was in flight. Mark the returned store
-        // state as already accounted for so the sync effect does not reset the
-        // form to this write's values and discard the newer edit; the debounce
-        // will persist it next, diffed against this write's result.
-        syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
-        syncedGlobalRef.current = newConfig.global;
-      }
+      // Always advance the raw baseline, even when the resolved form values did
+      // not change. Also preserve edits made while this save was in flight.
+      syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
+      syncedGlobalRef.current = newConfig.global;
       setConfig(newConfig);
       if (useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true)) {
         // The Claude plan read goes unavailable when host credentials are off,

@@ -20,6 +20,7 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "browser-gateway.spec.ts",
+    "backend-owned-state.spec.ts",
     "agent-accounts.spec.ts",
     "permission-rules.spec.ts",
     "design-canvas.spec.ts",

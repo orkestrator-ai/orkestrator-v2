@@ -1717,6 +1717,7 @@ export async function stopEnvironmentOnce(
   const { storage } = context;
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  if (environment.containerId) await assertDockerContainerOwned(environment.containerId, context);
   await stopEnvironmentReviewValidation(environmentId, context);
   await stopEnvironmentExecWorkers(environmentId, context);
   // Discovery runs inside the environment, so its cached result stops being
@@ -1733,7 +1734,6 @@ export async function stopEnvironmentOnce(
   context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
   if (environment.containerId) {
     const containerId = environment.containerId;
-    await assertDockerContainerOwned(containerId, context);
     await context.nativeAgents?.runtimeStopRequested(environment.id);
     const outcome = await runContainerOperation(
       context,

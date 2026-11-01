@@ -1242,7 +1242,6 @@ export function registerTerminalCommands(
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
     const precondition = parseFileWritePrecondition(expected);
     const fullPath = workspaceFilePath(target);
-    const directory = path.posix.dirname(fullPath);
     const data = asString(base64Data, "base64Data");
     assertBase64PayloadWithinLimit(data);
     if (isAnnotationEvidencePath(target)) {
@@ -1258,7 +1257,6 @@ export function registerTerminalCommands(
       return fullPath;
     }
     const write = async () => {
-      await dockerExec(id, `mkdir -p ${quoteShell(directory)}`);
       const child = spawnCommand("docker", [
         "exec",
         "-i",

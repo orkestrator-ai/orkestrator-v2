@@ -716,6 +716,35 @@ describe("design canvas controller regressions", () => {
     release();
   });
 
+  test("capacity-skipped legacy drafts stay local and import once after capacity is freed", async () => {
+    seedRestored([{ id: "i-capacity", phase: "draft", token: undefined }]);
+    const handle = backend.handle.bind(backend);
+    let full = true;
+    const importing = spyOn(backend, "handle").mockImplementation(async (command, args) => {
+      if (command === "design_intent_import" && full) {
+        return { ok: true, value: { imported: 0, skipped: 1, retained: [0] } };
+      }
+      const result = await handle(command, args);
+      return result;
+    });
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    try {
+      await controller.refresh();
+      expect(window.localStorage.getItem(DRAFTS_KEY)).toContain("i-capacity");
+      expect(backend.intents).toHaveLength(0);
+      full = false;
+      await controller.refresh();
+      expect(window.localStorage.getItem(DRAFTS_KEY)).toBeNull();
+      expect(backend.intents.map((entry) => entry.id)).toEqual(["i-capacity"]);
+      await controller.refresh();
+      expect(backend.intents).toHaveLength(1);
+    } finally {
+      release();
+      importing.mockRestore();
+    }
+  });
+
   test("a backend without an intent queue still runs and rebases edits, keeping nothing in localStorage", async () => {
     backend.intentsEnabled = false;
     const controller = designController("env-1", canvasId);

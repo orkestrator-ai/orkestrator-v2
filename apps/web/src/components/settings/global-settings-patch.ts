@@ -122,6 +122,7 @@ export interface GlobalConfigPatch {
 export function globalConfigPatchFromCoreFields(
   local: CoreFieldsSnapshot,
   baseline: CoreFieldsSnapshot,
+  stored?: GlobalConfig,
 ): GlobalConfigPatch {
   const patch: Record<string, unknown> = {};
   const unset: (keyof GlobalConfig)[] = [];
@@ -131,7 +132,10 @@ export function globalConfigPatchFromCoreFields(
   for (const [key, isAbsent] of Object.entries(ABSENT_WHEN) as Array<
     [keyof CoreFieldsSnapshot & keyof GlobalConfig, (value: unknown) => boolean]
   >) {
-    if (deepEqualJson(local[key], baseline[key])) continue;
+    if (deepEqualJson(local[key], baseline[key])) {
+      if (stored && Object.hasOwn(stored, key) && isAbsent(local[key])) unset.push(key);
+      continue;
+    }
     if (isAbsent(local[key])) unset.push(key);
     else patch[key] = local[key];
   }

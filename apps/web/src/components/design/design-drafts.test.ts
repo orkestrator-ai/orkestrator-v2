@@ -51,6 +51,34 @@ describe("legacy draft migration", () => {
     expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 
+  test("partial imports preserve capacity-skipped drafts and unresolved tokens", () => {
+    const draft = intent("draft");
+    const unresolved = intent("unresolved", {
+      phase: "admitted",
+      token: "op_held",
+      outcome: "unknown",
+    });
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        "b|env|canvas|a": [intent("imported"), draft],
+        "b|env|canvas|b": [unresolved],
+        "b|env|other": [intent("other")],
+      }),
+    );
+    clearLegacyDrafts(readLegacyDrafts("b|env|canvas").keys, [intent("imported")]);
+    expect(readLegacyDrafts("b|env|canvas").intents).toEqual([draft, unresolved]);
+    expect(readLegacyDrafts("b|env|other").intents).toEqual([intent("other")]);
+  });
+
+  test("acknowledging an import preserves entries saved while it was in flight", () => {
+    window.localStorage.setItem(KEY, JSON.stringify({ key: [intent("old")] }));
+    const legacy = readLegacyDrafts("key");
+    window.localStorage.setItem(KEY, JSON.stringify({ key: [intent("old"), intent("new")] }));
+    clearLegacyDrafts(legacy.keys, legacy.intents);
+    expect(readLegacyDrafts("key").intents).toEqual([intent("new")]);
+  });
+
   test("corrupt storage reads as empty", () => {
     window.localStorage.setItem(KEY, "{not-json");
     expect(readLegacyDrafts("key")).toEqual({ keys: [], intents: [] });

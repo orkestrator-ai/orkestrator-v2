@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   DESIGN_INTENT_LIMITS,
@@ -93,6 +93,76 @@ describe("design intents: the backend-owned edit queue", () => {
     expect((await byId(canvasId, draft.id))?.outcome).toBe("committed");
     clock += DESIGN_INTENT_LIMITS.settledRetentionMs;
     expect(await list(canvasId)).toEqual([]);
+  });
+
+  test("large successful replacements stay readable and an oversized legacy queue recovers", async () => {
+    const { canvasId, frameId } = await setup();
+    const successes: DesignStoredIntent[] = [];
+    for (let index = 0; index < 10; index++) {
+      const draft = move(canvasId, frameId, index + 1, index);
+      draft.descriptor.input = {
+        kind: "replace_frame_html",
+        frameId,
+        html: `<h1>${index}</h1><!--${"x".repeat(250 * 1024)}-->`,
+      };
+      const result = await runIntent(service(), "env-1", canvasId, draft, 5000);
+      expect(result.status?.state).toBe("committed");
+      successes.push(result.intent!);
+      expect(
+        Buffer.byteLength(await readFile(service().store.intentsFile(canvasId))),
+      ).toBeLessThanOrEqual(DESIGN_INTENT_LIMITS.bytes + 256 * 1024);
+      await list(canvasId);
+    }
+    // Reproduce a file written by the old active-only bound, preserving a draft.
+    const pending = move(canvasId, frameId, 11, 33);
+    await writeFile(
+      service().store.intentsFile(canvasId),
+      JSON.stringify([
+        ...successes,
+        { ...pending, phase: "draft", clientId: "client-a", updatedAt: clock },
+      ]),
+    );
+    await harness.restart(options());
+    expect((await list(canvasId)).some((entry) => entry.id === pending.id)).toBe(true);
+    expect(
+      (
+        await resumeIntent(service(), "env-1", canvasId, pending.id, "client-b", {
+          frameRevision: 11,
+        })
+      ).intent,
+    ).toMatchObject({ id: pending.id, phase: "draft", clientId: "client-b" });
+    expect(
+      (await runIntent(service(), "env-1", canvasId, move(canvasId, frameId, 11, 44), 5000)).status
+        ?.state,
+    ).toBe("committed");
+    expect((await discardIntent(service(), "env-1", canvasId, pending.id)).discarded).toBe(true);
+    await list(canvasId);
+  });
+
+  test("capacity-skipped legacy drafts are acknowledged only after space becomes available", async () => {
+    const { canvasId, frameId } = await setup();
+    const drafts = Array.from({ length: DESIGN_INTENT_LIMITS.perClient }, (_, i) =>
+      move(canvasId, frameId, 1, i),
+    );
+    await saveIntentDrafts(service(), "env-1", canvasId, "client-a", drafts);
+    const legacy = { ...move(canvasId, frameId, 1, 99), phase: "draft" };
+    expect(await importIntents(service(), "env-1", canvasId, "client-a", [legacy])).toEqual({
+      imported: 0,
+      skipped: 1,
+      retained: [0],
+    });
+    await discardIntent(service(), "env-1", canvasId, drafts[0]!.id);
+    expect(await importIntents(service(), "env-1", canvasId, "client-a", [legacy])).toEqual({
+      imported: 1,
+      skipped: 0,
+      retained: [],
+    });
+    expect(await importIntents(service(), "env-1", canvasId, "client-a", [legacy])).toEqual({
+      imported: 0,
+      skipped: 1,
+      retained: [],
+    });
+    expect((await list(canvasId)).filter((intent) => intent.id === legacy.id)).toHaveLength(1);
   });
 
   test("a client's queued edit is rebased over its own commit, never over another writer's", async () => {
@@ -273,7 +343,7 @@ describe("design intents: the backend-owned edit queue", () => {
       { ...base, id: "i-done", phase: "settled", outcome: "committed", token: committed.token },
       { id: "broken" },
     ]);
-    expect(result).toEqual({ imported: 2, skipped: 2 });
+    expect(result).toEqual({ imported: 2, skipped: 2, retained: [] });
     const intents = await list(canvasId);
     expect(intents.find((intent) => intent.id === "i-draft")).toMatchObject({
       phase: "draft",

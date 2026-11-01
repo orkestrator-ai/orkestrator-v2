@@ -654,6 +654,7 @@ exit 0
 
         const log = await fs.readFile(all, "utf8");
         expect(log.match(/inspect -f/g)).toHaveLength(3);
+        expect(log).not.toContain("exec ");
         expect(log).not.toContain("stop foreign-container");
         expect(log).not.toContain("rm -f foreign-container");
       },
@@ -933,7 +934,9 @@ exit 0
           commands.get("stop_environment")?.({ environmentId: environment.id }, context),
         ).rejects.toThrow("ContainerLifecycleError:daemon-unavailable");
 
-        expect(await fs.readFile(all, "utf8")).not.toContain("stop unreachable-container");
+        const log = await fs.readFile(all, "utf8");
+        expect(log).not.toContain("exec ");
+        expect(log).not.toContain("stop unreachable-container");
       },
     );
     expect(updates).toHaveLength(0);

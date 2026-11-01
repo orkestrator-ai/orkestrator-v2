@@ -115,6 +115,19 @@ async function authenticatedInvoke(page: Page, status: Status) {
   };
 }
 
+// This host-specific notice can arrive after login, on top of any surface.
+// Dismiss it through its public Close control so local-worktree flows run even
+// on machines whose firewall blocks Docker's host connection.
+test.beforeEach(async ({ page }) => {
+  const notice = page.getByRole("dialog", {
+    name: "Docker containers can't reach Orkestrator",
+    exact: true,
+  });
+  await page.addLocatorHandler(notice, async () => {
+    await notice.getByRole("button", { name: "Close", exact: true }).first().click();
+  });
+});
+
 test.describe("host path browsing", () => {
   let onboardingFile: string;
   let seededOnboarding = false;

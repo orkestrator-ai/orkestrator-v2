@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -41,6 +41,7 @@ async function withResends(
     storage: StorageService;
     dispatch: ReturnType<typeof mock<(input: DispatchNativeAgentPromptInput) => Promise<void>>>;
     setRows: (rows: unknown[]) => void;
+    setMessageReader: (reader: () => Promise<unknown[]>) => void;
     session: () => Promise<PersistedNativeAgentSession>;
     settle: () => Promise<void>;
   }) => Promise<void>,
@@ -84,8 +85,9 @@ async function withResends(
   );
   await storage.dispatchNativeAgentPromptOnce(KEY, "request-1", async () => undefined);
   let rows: unknown[] = refusedRows;
+  let messageReader = async () => rows;
   const provider = {
-    messages: async () => rows,
+    messages: () => messageReader(),
   } as unknown as NativeAgentRuntimeProvider;
   const dispatch = mock(async (_input: DispatchNativeAgentPromptInput) => undefined);
   const tracked: Promise<void>[] = [];
@@ -105,6 +107,9 @@ async function withResends(
       dispatch: dispatch as never,
       setRows: (next) => {
         rows = next;
+      },
+      setMessageReader: (reader) => {
+        messageReader = reader;
       },
       session,
       settle: async () => {
@@ -287,6 +292,61 @@ describe("sending it again after a sign-in", () => {
       // A second sign-in finds nothing, so one refusal is sent at most once.
       await expect(resends.resendHeldPrompts()).resolves.toBe(0);
       expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("overlapping resend scans take the held prompt exactly once", async () => {
+    await withResends(async ({ resends, storage, dispatch, session, settle, setMessageReader }) => {
+      await hold(resends, session, settle);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let probes = 0;
+      setMessageReader(async () => {
+        if (++probes === 2) entered.resolve();
+        await release.promise;
+        return refusedRows;
+      });
+      const take = spyOn(storage, "takeNativeAgentSignInResend");
+      try {
+        const scans = Promise.all([resends.resendHeldPrompts(), resends.resendHeldPrompts()]);
+        await entered.promise;
+        release.resolve();
+        expect((await scans).sort()).toEqual([0, 1]);
+        expect(take).toHaveBeenCalledTimes(2);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect((await session()).signInResend).toBeUndefined();
+      } finally {
+        release.resolve();
+        take.mockRestore();
+      }
+    });
+  });
+
+  test("a newer dispatch during refusal probing prevents taking or sending the old hold", async () => {
+    await withResends(async ({ resends, storage, dispatch, session, settle, setMessageReader }) => {
+      await hold(resends, session, settle);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      setMessageReader(async () => {
+        entered.resolve();
+        await release.promise;
+        return refusedRows;
+      });
+      const take = spyOn(storage, "takeNativeAgentSignInResend");
+      try {
+        const scan = resends.resendHeldPrompts();
+        await entered.promise;
+        await storage.dispatchNativeAgentPromptOnce(KEY, "request-new", async () => undefined);
+        release.resolve();
+        expect(await scan).toBe(0);
+        expect(take).toHaveBeenCalledTimes(1);
+        expect(await take.mock.results[0]!.value).toBeNull();
+        expect(dispatch).not.toHaveBeenCalled();
+        expect((await session()).signInResend).toBeUndefined();
+      } finally {
+        release.resolve();
+        take.mockRestore();
+      }
     });
   });
 

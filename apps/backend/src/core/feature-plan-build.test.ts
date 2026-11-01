@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -160,6 +160,36 @@ describe("startFeaturePlanBuild", () => {
       expect((await storage.kanban.getKanbanTasks("project-1")).length).toBe(1);
     });
   });
+
+  test.each([false, true])(
+    "compensates a rejected claim (persisted: %s), then retries without an orphan",
+    async (persisted) => {
+      await withStorage(async (storage) => {
+        const plan = await plannedFeature(storage);
+        const supervisor = fakeSupervisor(storage);
+        const context = { storage, buildPipelines: supervisor.service };
+        const claim = storage.kanban.claimFeaturePlanBuild.bind(storage.kanban);
+        const failing = spyOn(storage.kanban, "claimFeaturePlanBuild").mockImplementationOnce(
+          async (...args) => {
+            if (persisted) await claim(...args);
+            throw new Error("claim failed");
+          },
+        );
+        try {
+          await expect(startFeaturePlanBuild({ featureId: plan.id }, context)).rejects.toThrow(
+            "claim failed",
+          );
+        } finally {
+          failing.mockRestore();
+        }
+        expect(await storage.kanban.getKanbanTasks("project-1")).toEqual([]);
+        expect(supervisor.started).toHaveLength(0);
+        await startFeaturePlanBuild({ featureId: plan.id }, context);
+        expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(1);
+        expect(supervisor.started).toHaveLength(1);
+      });
+    },
+  );
 
   test("releases its claim and deletes its ticket when the pipeline never starts", async () => {
     await withStorage(async (storage) => {

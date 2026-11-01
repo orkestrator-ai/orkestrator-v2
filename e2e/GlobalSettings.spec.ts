@@ -18,7 +18,7 @@ test("Claude background limit persists across reload and clears when reset to de
       ),
     )
     .toBe(24);
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await expect(limit).toHaveText("1 day");
 
   await limit.click();
@@ -35,7 +35,12 @@ test("Claude background limit persists across reload and clears when reset to de
       }),
     )
     .toEqual({ payloadHasLimit: false, storedHasLimit: false });
-  await page.reload();
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("global-settings-last-unset") ?? "[]"),
+    ),
+  ).toContain("claudeBackgroundCommandLimitHours");
+  await page.reload({ waitUntil: "domcontentloaded" });
   await expect(limit).toHaveText("2 hours (default)");
 });
 
@@ -72,7 +77,7 @@ test("Session titles discloses where a first message goes and persists its choic
   await policy.click();
   await page.getByRole("option", { name: "The session's own login only" }).click();
   await expect.poll(stored).toBe("own-platform");
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await expect(policy).toHaveText("The session's own login only");
 
   await policy.click();

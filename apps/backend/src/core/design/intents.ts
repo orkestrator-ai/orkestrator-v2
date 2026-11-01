@@ -88,6 +88,11 @@ const legacySchema = z.object({
 });
 
 const RESUME_WAIT_MS = 30_000;
+const MAX_QUEUE_BYTES = DESIGN_INTENT_LIMITS.bytes + 256 * 1024;
+// Older writers bounded only active entries. Recover those queues without an
+// unbounded read: each retained success could once occupy the active budget.
+const MAX_LEGACY_QUEUE_BYTES =
+  DESIGN_INTENT_LIMITS.bytes * (DESIGN_INTENT_LIMITS.settledSuccesses + 1) + 256 * 1024;
 
 /** Intent ids this process is running now; reconciliation leaves them alone. */
 const runningByService = new WeakMap<DesignService, Set<string>>();
@@ -120,10 +125,7 @@ export async function readIntents(
   canvasId: string,
 ): Promise<DesignStoredIntent[]> {
   try {
-    const bytes = await readBounded(
-      service.store.intentsFile(canvasId),
-      DESIGN_INTENT_LIMITS.bytes + 256 * 1024,
-    );
+    const bytes = await readBounded(service.store.intentsFile(canvasId), MAX_LEGACY_QUEUE_BYTES);
     return storedSchema.parse(
       JSON.parse(bytes.toString("utf8")),
     ) as unknown as DesignStoredIntent[];
@@ -146,7 +148,12 @@ async function writeIntents(
     await unlink(file).catch(() => undefined);
     return;
   }
-  await writeAtomically(file, Buffer.from(JSON.stringify(intents)), service.store.faults);
+  const bytes = Buffer.from(JSON.stringify(intents));
+  if (bytes.length > MAX_QUEUE_BYTES)
+    throw new DesignError("capacity", "Too much pending edit data for this design", {
+      retryAfterMs: 1000,
+    });
+  await writeAtomically(file, bytes, service.store.faults);
 }
 
 /** Successes stay briefly so a client that lost a response can still learn them. */
@@ -157,10 +164,20 @@ function pruneSuccesses(intents: DesignStoredIntent[], now: number): DesignStore
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, DESIGN_INTENT_LIMITS.settledSuccesses);
   const kept = new Set(successes);
-  return intents.filter((intent) => !isSuccess(intent) || kept.has(intent));
+  let next = intents.filter((intent) => !isSuccess(intent) || kept.has(intent));
+  // Receipts remain authoritative after removing these presentation entries.
+  // Prune oldest successes first, including when timestamps tie.
+  const oldest = [...successes].sort((a, b) => a.updatedAt - b.updatedAt);
+  while (oldest.length && Buffer.byteLength(JSON.stringify(next)) > MAX_QUEUE_BYTES) {
+    const removed = oldest.shift()!;
+    next = next.filter((intent) => intent !== removed);
+  }
+  return next;
 }
 
 function assertBounds(intents: DesignStoredIntent[], clientId: string) {
+  const bounded = pruneSuccesses(intents, Number.NEGATIVE_INFINITY);
+  intents.splice(0, intents.length, ...bounded);
   const active = intents.filter((intent) => !isSuccess(intent));
   if (
     active.length > DESIGN_INTENT_LIMITS.perCanvas ||
@@ -206,9 +223,11 @@ async function mutate<T>(
   return service.lane(canvasId, async () => {
     const { record } = await service.loadFor(canvasId, environmentId, { allowDeleted: true });
     const before = await readIntents(service, canvasId);
-    const { intents, value } = await work(before, record);
-    if (intents && JSON.stringify(intents) !== JSON.stringify(before)) {
-      await writeIntents(service, canvasId, intents);
+    const pruned = pruneSuccesses(before, service.now().getTime());
+    const { intents, value } = await work(pruned, record);
+    const next = pruneSuccesses(intents ?? pruned, service.now().getTime());
+    if (JSON.stringify(next) !== JSON.stringify(before)) {
+      await writeIntents(service, canvasId, next);
       service.publish({
         canvasId,
         revision: record.document.revision,
@@ -390,14 +409,15 @@ export async function importIntents(
   canvasId: string,
   rawClientId: unknown,
   rawEntries: unknown,
-): Promise<{ imported: number; skipped: number }> {
+): Promise<{ imported: number; skipped: number; retained: number[] }> {
   const fallbackClient = opaqueId.parse(rawClientId);
   const entries = z.array(z.unknown()).max(64).parse(rawEntries);
   return mutate(service, environmentId, canvasId, async (intents) => {
     const now = service.now().getTime();
     const next = [...intents];
     let imported = 0;
-    for (const raw of entries) {
+    const retained: number[] = [];
+    for (const [index, raw] of entries.entries()) {
       const parsed = legacySchema.safeParse(raw);
       if (!parsed.success || next.some((intent) => intent.id === parsed.data.id)) continue;
       const entry = parsed.data;
@@ -432,14 +452,16 @@ export async function importIntents(
             : { phase: "draft" as const }),
       });
       try {
-        assertBounds([...next, intent], clientId);
+        const bounded = [...next, intent];
+        assertBounds(bounded, clientId);
+        next.splice(0, next.length, ...bounded);
       } catch {
+        retained.push(index);
         continue;
       }
-      next.push(intent);
       imported++;
     }
-    return { intents: next, value: { imported, skipped: entries.length - imported } };
+    return { intents: next, value: { imported, skipped: entries.length - imported, retained } };
   });
 }
 

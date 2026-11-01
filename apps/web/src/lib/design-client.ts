@@ -215,12 +215,15 @@ export const designApi = {
     }),
   /** One-time import of this browser's legacy localStorage intents. */
   importIntents: (environmentId: string, canvasId: string, clientId: string, intents: unknown[]) =>
-    designCommand<{ imported: number; skipped: number }>("design_intent_import", {
-      environmentId,
-      canvasId,
-      clientId,
-      intents,
-    }),
+    designCommand<{ imported: number; skipped: number; retained?: number[] }>(
+      "design_intent_import",
+      {
+        environmentId,
+        canvasId,
+        clientId,
+        intents,
+      },
+    ),
   runIntent: (
     environmentId: string,
     canvasId: string,

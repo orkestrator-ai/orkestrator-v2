@@ -3,6 +3,7 @@
  * save names the SHA-256 of the content it loaded, and the write happens only
  * while the file still has those bytes.
  */
+import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import {
   FILE_WRITE_CONFLICT_MESSAGE,
@@ -57,7 +58,7 @@ export function containerFileWriteScript(
       `actual=$(sha256sum -- ${target} | cut -d' ' -f1) || exit 1; ` +
       `if [ "$actual" != ${quoteShell(expected.sha256)} ]; then exit ${CONTAINER_WRITE_CONFLICT_EXIT}; fi; `
     : "";
-  return `${check}base64 -d > ${target}`;
+  return `${check}mkdir -p -- ${quoteShell(dirname(fullPath))} && base64 -d > ${target}`;
 }
 
 const writeQueues = new Map<string, Promise<unknown>>();

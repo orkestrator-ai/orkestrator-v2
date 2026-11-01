@@ -194,7 +194,7 @@ export async function stopEnvironmentExecWorkers(
   context: CommandContext,
   options: { requireStopped?: boolean } = {},
 ): Promise<void> {
-  await stopGoalCheckWorkers(environmentId, context);
+  await stopGoalCheckWorkers(environmentId, context, options);
   // Partial storage adapters (compatibility fixtures) have no operation store.
   if (typeof context.storage.publicOperations?.listActivePublicOperations !== "function") return;
   const environment = await context.storage.getEnvironment(environmentId);
@@ -241,7 +241,11 @@ export async function stopEnvironmentExecWorkers(
 }
 
 /** Durable worker identities survive a backend restart and a cleared goal. */
-async function stopGoalCheckWorkers(environmentId: string, context: CommandContext): Promise<void> {
+async function stopGoalCheckWorkers(
+  environmentId: string,
+  context: CommandContext,
+  options: { requireStopped?: boolean },
+): Promise<void> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (
     !environment ||
@@ -260,11 +264,24 @@ async function stopGoalCheckWorkers(environmentId: string, context: CommandConte
     });
     if (!entries.some((name) => /^goal-check-[a-f0-9]{64}$/.test(name))) return;
   }
-  const operations = (await control(environment, context, {
-    action: "list-goal-checks",
-    directory,
-    environmentId,
-  })) as string[];
+  let operations: string[];
+  try {
+    const listed = await control(environment, context, {
+      action: "list-goal-checks",
+      directory,
+      environmentId,
+    });
+    if (
+      !Array.isArray(listed) ||
+      !listed.every((id) => typeof id === "string" && /^goal-check-[a-f0-9]{64}$/.test(id))
+    )
+      throw new Error("Invalid goal check worker list");
+    operations = listed;
+  } catch (error) {
+    if (options.requireStopped) throw new Error("Goal check workers could not be verified stopped");
+    console.warn(`[public-api] Could not list goal check workers: ${boundedMessage(error)}`);
+    return;
+  }
   for (const operationId of operations) {
     const workerDirectory = execDirectory(environment, operationId, context);
     const state = (await control(environment, context, {

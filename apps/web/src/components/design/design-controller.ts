@@ -626,19 +626,31 @@ export class DesignCanvasController {
     if (merged.changed) this.pump();
   }
 
-  /** Imports this browser's pre-backend localStorage intents once, then forgets them. */
+  /** Imports legacy browser intents, retaining entries the backend could not accept. */
   private async migrateLegacyDrafts() {
     this.migrated = true;
     const legacy = readLegacyDrafts(this.key);
     if (!legacy.intents.length) return;
     try {
-      await designApi.importIntents(
+      const result = await designApi.importIntents(
         this.environmentId,
         this.canvasId,
         designClientId(),
         legacy.intents,
       );
-      clearLegacyDrafts(legacy.keys);
+      // Older backends acknowledge only counts. Keep all entries when any were
+      // skipped there: repeating the import is safe and avoids losing edits.
+      const retained = result.retained
+        ? result.retained.map((index) => legacy.intents[index])
+        : result.skipped
+          ? legacy.intents
+          : [];
+      const kept = new Set(retained);
+      clearLegacyDrafts(
+        legacy.keys,
+        legacy.intents.filter((entry) => !kept.has(entry)),
+      );
+      if (retained.length) this.migrated = false;
     } catch (error) {
       // Unreachable: try again on the next sync. A refusal keeps the entries.
       if (!(error instanceof DesignClientError)) this.migrated = false;

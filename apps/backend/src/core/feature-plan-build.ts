@@ -153,29 +153,26 @@ export async function startFeaturePlanBuild(
         staleClaim = true;
       }
     }
-    if (!task) {
-      if (plan.status === "building" && !staleClaim) throw new FeaturePlanBuildConflictError();
-      if (plan.stories.length === 0) throw new Error("The feature has no stories to build");
-      const details = formatFeatureStoriesForBuild(plan);
-      task = await context.storage.kanban.addKanbanTask(
-        plan.projectId,
-        details.title,
-        details.description,
-      );
-      createdTask = true;
-      const claim = await context.storage.kanban.claimFeaturePlanBuild(featureId, task.id);
-      if (!claim.claimed) {
-        await context.storage.kanban.deleteKanbanTask(task.id);
-        throw new FeaturePlanBuildConflictError();
-      }
-    }
-    // A resume that finds its pipeline already started is the only reuse: one it
-    // starts here is a new build, whichever launch made the ticket.
-    const alreadyStarted =
-      !createdTask &&
-      (await pipelineHoldsTask(context, plan.projectId, task.id).catch(() => false));
-
     try {
+      if (!task) {
+        if (plan.status === "building" && !staleClaim) throw new FeaturePlanBuildConflictError();
+        if (plan.stories.length === 0) throw new Error("The feature has no stories to build");
+        const details = formatFeatureStoriesForBuild(plan);
+        task = await context.storage.kanban.addKanbanTask(
+          plan.projectId,
+          details.title,
+          details.description,
+        );
+        createdTask = true;
+        const claim = await context.storage.kanban.claimFeaturePlanBuild(featureId, task.id);
+        if (!claim.claimed) throw new FeaturePlanBuildConflictError();
+      }
+      // A resume that finds its pipeline already started is the only reuse: one it
+      // starts here is a new build, whichever launch made the ticket.
+      const alreadyStarted =
+        !createdTask &&
+        (await pipelineHoldsTask(context, plan.projectId, task.id).catch(() => false));
+
       const ticket = kanbanTaskBuildTicket(task);
       const existingEnvironmentId = await reusableEnvironmentId(context, plan);
       const pipeline = await launchBuildPipeline(
@@ -204,12 +201,15 @@ export async function startFeaturePlanBuild(
     } catch (error) {
       // A resumed claim stays: its ticket is already on the board, and letting
       // go of it would make the next Build create a second one.
-      if (!createdTask) throw error;
+      if (!createdTask || !task) throw error;
       const released = await context.storage.kanban
         .releaseFeaturePlanBuildClaim(featureId, task.id, "stories")
         .catch(() => ({ released: false }));
+      // A claim can reject before it is acquired (or after its write). Only
+      // delete once neither a plan claim nor a pipeline references our ticket.
+      const current = await context.storage.kanban.getFeaturePlan(featureId).catch(() => undefined);
       if (
-        released.released &&
+        (released.released || (current !== undefined && current?.buildTaskId !== task.id)) &&
         !(await pipelineHoldsTask(context, plan.projectId, task.id).catch(() => true))
       ) {
         await context.storage.kanban.deleteKanbanTask(task.id).catch(() => undefined);

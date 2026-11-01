@@ -930,7 +930,7 @@ describe("structured review normalization on hydrate", () => {
       reasoning: "r",
     },
     // The legacy shape: no notRun field, which the current contract requires.
-    // The backend's storage migration upgrades stored records, so none reaches here.
+    // An older remote backend has not run the storage migration.
     testResults: { total: 3, passed: 2, failed: 0, failures: [] },
     strengths: [],
     issues: [],
@@ -940,13 +940,32 @@ describe("structured review normalization on hydrate", () => {
     reviewSummary: "r",
   };
 
-  test("does not repair a legacy report itself: upgrading stored records is the backend's", async () => {
+  test("backfills a historical report served by an older backend", async () => {
     const stored = {
       ...snapshot(),
       structuredReview: legacyReport,
     } as unknown as BuildPipeline;
 
-    expect(await hydrateBuildPipeline("pipeline-1", async () => record(stored, 4))).toBeNull();
+    const hydrated = await hydrateBuildPipeline("pipeline-1", async () => record(stored, 4));
+    expect(hydrated?.structuredReview?.testResults).toMatchObject({
+      total: 3,
+      passed: 2,
+      failed: 0,
+      notRun: 1,
+    });
+    expect(stored.structuredReview?.testResults).not.toHaveProperty("notRun");
+  });
+
+  test("rejects inconsistent historical counts after backfilling", async () => {
+    const stored = {
+      ...snapshot(),
+      structuredReview: {
+        ...legacyReport,
+        testResults: { total: 1, passed: 2, failed: 0, failures: [] },
+      },
+    } as unknown as BuildPipeline;
+    const hydrated = await hydrateBuildPipeline("pipeline-1", async () => record(stored, 4));
+    expect(hydrated).toBeNull();
   });
 
   test("passes through a snapshot that carries no review at all", async () => {

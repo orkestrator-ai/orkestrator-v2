@@ -37,6 +37,7 @@ function installGlobalSettingsFixture() {
           }
           const config = { ...current, global };
           localStorage.setItem("global-settings-last-write", JSON.stringify(global));
+          localStorage.setItem("global-settings-last-unset", JSON.stringify(args!.unset ?? []));
           localStorage.setItem("global-settings-config", JSON.stringify(config));
           return config as T;
         }

@@ -13,6 +13,16 @@ describe("globalConfigPatchFromCoreFields", () => {
     expect(globalConfigPatchFromCoreFields(baseline, baseline)).toEqual({ patch: {}, unset: [] });
   });
 
+  test("defaults unset raw stored keys even when the normalized baseline equals the form", () => {
+    const stored = {
+      ...useConfigStore.getState().config.global,
+      claudeBackgroundCommandLimitHours: 24,
+    };
+    const changes = globalConfigPatchFromCoreFields(baseline, baseline, stored);
+    expect(changes.patch).toEqual({});
+    expect(changes.unset).toContain("claudeBackgroundCommandLimitHours");
+  });
+
   test("sends only the changed fields", () => {
     const changes = globalConfigPatchFromCoreFields(
       { ...baseline, terminalScrollback: 1234, allowedDomains: ["a.test"] },

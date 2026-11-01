@@ -47,8 +47,11 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
  * half-written revision.
  */
 
-/** Version 2 adds Cursor's `~/.cursor/mcp.json`. */
-export const PORTABLE_INPUT_SPEC_VERSION = 2;
+/**
+ * Version 2 adds Cursor's `~/.cursor/mcp.json`; version 3 adds Claude's
+ * `skills` and Grok's `commands`; version 4 withholds credentials in those trees.
+ */
+export const PORTABLE_INPUT_SPEC_VERSION = 4;
 
 export type InputLimits = {
   fileBytes: number;
@@ -80,7 +83,12 @@ export interface InputSource {
   /** Host directory the allowlist is read from. */
   root: string | null;
   files?: readonly string[];
-  directories?: readonly { path: string; mode: DirectoryMode; exclude?: readonly string[] }[];
+  directories?: readonly {
+    path: string;
+    mode: DirectoryMode;
+    exclude?: readonly string[];
+    withholdCredentials?: boolean;
+  }[];
   /**
    * Files of `files` staged only through a filter, which returns what a
    * container may see of them, or undefined to withhold the file.
@@ -235,6 +243,9 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           filteredFiles: { "settings.json": claudeContainerPluginSettings },
           directories: [
             { path: "commands", mode: "entries" },
+            // One unit per skill directory, like Grok's and Pi's skills. A
+            // skill linked in from `~/.agents/skills` is a symlink and skipped.
+            { path: "skills", mode: "entries", withholdCredentials: true },
             { path: "agents", mode: "entries" },
             { path: "ide", mode: "entries" },
             { path: "plugins", mode: "entries" },
@@ -355,6 +366,8 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           directories: [
             { path: "hooks", mode: "entries" },
             { path: "skills", mode: "entries" },
+            // Legacy flat commands (`*.md`), which Grok lists as user skills.
+            { path: "commands", mode: "entries", withholdCredentials: true },
           ],
           accessOnlyLogin: { file: "auth.json", restrict: restrictGrokAuthSnapshot },
         },
@@ -433,7 +446,8 @@ export type SkipReason =
   | "unreadable"
   | "changed-while-reading"
   /** A login withheld because a copy could not use it without refreshing. */
-  | "login-withheld";
+  | "login-withheld"
+  | "credential-withheld";
 
 export interface ProviderInputSummary {
   provider: ProviderInputSpec["provider"];
@@ -479,6 +493,26 @@ class Skip extends Error {
   }
 }
 
+/** Conservative guard for newly portable extension resources. Never logs file names or bytes. */
+function extensionCredentialGuard(relative: string): (contents: Buffer) => void {
+  return (contents) => {
+    const sensitivePath = relative
+      .split("/")
+      .some((part) =>
+        /^(?:\.env(?:\..*)?|\.(?:ssh|aws|azure|gcloud)|(?:credentials?|secrets?|tokens?)(?:\..*)?|auth\.json|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|key|p12|pfx|keystore))$/i.test(
+          part,
+        ),
+      );
+    const text = contents.toString("utf8");
+    const privateKey = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/.test(text);
+    const credentialValue =
+      /(?:^|[\s"'{};,])[\w-]{0,128}(?:api[_-]?key|token|password|secret|private[_-]?key|access[_-]?key)[\w-]{0,128}["']?\s*[:=]\s*["']?[^\s"'#,}]+/im.test(
+        text,
+      );
+    if (sensitivePath || privateKey || credentialValue) throw new Skip("credential-withheld");
+  };
+}
+
 /** Throws unless every component below `root` up to `relative` is a real directory. */
 async function assertNoSymlinkAncestry(root: string, relative: string): Promise<void> {
   const rootStat = await lstat(root);
@@ -499,12 +533,14 @@ async function copyRegularFile(
   destination: string,
   limit: number,
   filter: ((text: string) => string | undefined) | undefined,
+  guard?: (contents: Buffer) => void,
 ): Promise<number | undefined>;
 async function copyRegularFile(
   source: string,
   destination: string,
   limit: number,
   filter?: (text: string) => string | undefined,
+  guard?: (contents: Buffer) => void,
 ): Promise<number | undefined> {
   const before = await lstat(source);
   if (before.isSymbolicLink()) throw new Skip("symlink");
@@ -533,6 +569,7 @@ async function copyRegularFile(
       chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
     }
     const contents = Buffer.concat(chunks);
+    guard?.(contents);
     const filtered = filter ? filter(contents.toString("utf8")) : contents;
     if (filtered === undefined) return undefined;
     // Raw filtered-file bytes never reach a staged path, even if reading or
@@ -653,6 +690,7 @@ class ProviderCopier {
     relative: string,
     destinationRoot: string,
     exclude: readonly string[],
+    withholdCredentials = false,
   ): Promise<void> {
     const source = path.join(root, relative);
     const stat = await lstat(source).catch(() => null);
@@ -664,8 +702,10 @@ class ProviderCopier {
         source,
         path.join(destinationRoot, relative),
         this.limits.fileBytes,
+        undefined,
+        withholdCredentials ? extensionCredentialGuard(relative) : undefined,
       );
-      this.record(1, bytes);
+      this.record(1, bytes!);
       return;
     }
     if (!stat.isDirectory()) throw new Skip("not-regular");
@@ -689,11 +729,16 @@ class ProviderCopier {
           continue;
         }
         try {
-          copiedBytes += await copyRegularFile(
-            path.join(source, entry.relative),
-            target,
-            this.limits.fileBytes,
-          );
+          copiedBytes +=
+            (await copyRegularFile(
+              path.join(source, entry.relative),
+              target,
+              this.limits.fileBytes,
+              undefined,
+              withholdCredentials
+                ? extensionCredentialGuard(`${relative}/${entry.relative}`)
+                : undefined,
+            )) ?? 0;
           copied += 1;
           if (copiedBytes > this.limits.directoryBytes) throw new Skip("too-large");
         } catch (error) {
@@ -711,7 +756,12 @@ class ProviderCopier {
 
   async directory(
     root: string,
-    spec: { path: string; mode: DirectoryMode; exclude?: readonly string[] },
+    spec: {
+      path: string;
+      mode: DirectoryMode;
+      exclude?: readonly string[];
+      withholdCredentials?: boolean;
+    },
     destinationRoot: string,
   ): Promise<void> {
     const relative = spec.path === "." ? "" : spec.path;
@@ -719,7 +769,13 @@ class ProviderCopier {
       if (relative) await assertNoSymlinkAncestry(root, `${relative}/x`);
       else await assertNoSymlinkAncestry(root, "x");
       if (spec.mode === "tree") {
-        await this.unit(root, relative || ".", destinationRoot, spec.exclude ?? []);
+        await this.unit(
+          root,
+          relative || ".",
+          destinationRoot,
+          spec.exclude ?? [],
+          spec.withholdCredentials,
+        );
         return;
       }
       const directory = path.join(root, relative);
@@ -733,7 +789,13 @@ class ProviderCopier {
       if (names.length > this.limits.directoryEntries) throw new Skip("too-many-entries");
       for (const name of names) {
         try {
-          await this.unit(root, relative ? `${relative}/${name}` : name, destinationRoot, []);
+          await this.unit(
+            root,
+            relative ? `${relative}/${name}` : name,
+            destinationRoot,
+            [],
+            spec.withholdCredentials,
+          );
         } catch (error) {
           if (error instanceof Skip) this.skip(error.reason);
           else this.skip("unreadable");

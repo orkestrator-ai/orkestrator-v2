@@ -578,8 +578,8 @@ copy_agent_directory() {
     fi
 }
 
-# User-authored extension directories (Claude's commands/agents/ide/plugins,
-# Grok's hooks/skills) copy per-entry rather than all-or-nothing.
+# User-authored extension directories (Claude's commands/skills/agents/ide/plugins,
+# Grok's hooks/skills/commands) copy per-entry rather than all-or-nothing.
 # A dotfiles manager symlinking one file into ~/.claude/commands is ordinary;
 # the strict directory helper above would reject the whole directory over that
 # single link and silently drop every custom command. This walker copies each
@@ -739,6 +739,7 @@ if [ -d /claude-config ]; then
     # ordinary, and the rest of the directory must still land in the container.
     for dir in \
         commands \
+        skills \
         agents \
         ide \
         plugins
@@ -1111,7 +1112,8 @@ if [ -d /grok-home ]; then
 
     for dir in \
         hooks \
-        skills
+        skills \
+        commands
     do
         copy_agent_directory_entries /grok-home "$HOME/.grok" "$dir" Grok
     done

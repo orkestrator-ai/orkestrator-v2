@@ -71,6 +71,7 @@ import {
 } from "./messages/normalization.js";
 import type { NormalizedMessage } from "./messages/types.js";
 
+import { CODEX_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/codex-model-catalog";
 import {
   ModelCatalogCache,
   REASONING_DESCRIPTIONS,
@@ -497,66 +498,19 @@ function createParentExitHandler(
   };
 }
 
-const FALLBACK_MODELS: BridgeModel[] = [
-  {
-    id: "gpt-5.4",
-    name: "gpt-5.4",
-    description: "Latest frontier agentic coding model.",
-    reasoningEfforts: ["low", "medium", "high", "xhigh"],
-    reasoningOptions: [
-      {
-        effort: "low",
-        label: REASONING_LABELS.low,
-        description: REASONING_DESCRIPTIONS.low,
-      },
-      {
-        effort: "medium",
-        label: REASONING_LABELS.medium,
-        description: REASONING_DESCRIPTIONS.medium,
-      },
-      {
-        effort: "high",
-        label: REASONING_LABELS.high,
-        description: REASONING_DESCRIPTIONS.high,
-      },
-      {
-        effort: "xhigh",
-        label: REASONING_LABELS.xhigh,
-        description: REASONING_DESCRIPTIONS.xhigh,
-      },
-    ],
-    defaultReasoningEffort: "high",
-  },
-  {
-    id: "gpt-5.4-mini",
-    name: "GPT-5.4-Mini",
-    description: "Smaller frontier agentic coding model.",
-    reasoningEfforts: ["low", "medium", "high", "xhigh"],
-    reasoningOptions: [
-      {
-        effort: "low",
-        label: REASONING_LABELS.low,
-        description: REASONING_DESCRIPTIONS.low,
-      },
-      {
-        effort: "medium",
-        label: REASONING_LABELS.medium,
-        description: REASONING_DESCRIPTIONS.medium,
-      },
-      {
-        effort: "high",
-        label: REASONING_LABELS.high,
-        description: REASONING_DESCRIPTIONS.high,
-      },
-      {
-        effort: "xhigh",
-        label: REASONING_LABELS.xhigh,
-        description: REASONING_DESCRIPTIONS.xhigh,
-      },
-    ],
-    defaultReasoningEffort: "high",
-  },
-];
+/** The shared shipped catalogue (`@orkestrator/protocol/codex-model-catalog`). */
+const FALLBACK_MODELS: BridgeModel[] = CODEX_FALLBACK_MODEL_CATALOG.map((model) => ({
+  id: model.id,
+  name: model.name,
+  description: model.description,
+  reasoningEfforts: [...model.reasoningEfforts],
+  reasoningOptions: model.reasoningEfforts.map((effort) => ({
+    effort,
+    label: REASONING_LABELS[effort],
+    description: REASONING_DESCRIPTIONS[effort],
+  })),
+  defaultReasoningEffort: model.defaultReasoningEffort,
+}));
 
 /**
  * Publishes an event to every live subscriber and retains it for replay.

@@ -1,3 +1,4 @@
+import { displayedEnvironmentActivity } from "@orkestrator/protocol/environment-activity-order";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
@@ -20,8 +21,9 @@ export function useEnvironmentDisplayActivity(environment: Environment | undefin
     environment ? state.activeBuildEnvironmentIds.has(environment.id) : false,
   );
   // Pipeline sessions need not project agent activity onto their environment.
+  // The sidebar's activity sort applies the same derivation to every row.
   return {
-    displayedActivityState: activeBuild ? ("working" as const) : activity,
+    displayedActivityState: displayedEnvironmentActivity(activity, activeBuild),
     isRunning:
       environment?.environmentType === "local" ||
       (dockerAvailable && environment?.status === "running"),

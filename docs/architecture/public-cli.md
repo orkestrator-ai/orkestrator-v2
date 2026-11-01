@@ -290,6 +290,9 @@ answered.
   one node. Attention applies `--limit` per node; the combined page may contain
   more items than that limit. Human attention lines name their owning node,
   and partial-read warnings are retained in both human and JSON output.
+- **`environment list --sort priority|newest|oldest`** orders the returned page
+  on the client with the app's activity comparator. It orders one page only and
+  never reaches the backend.
 - **Codes.** `node-not-found` (3): no such node here. `node-unavailable` (4):
   registered but disabled or not connected; nothing was sent.
   `node-unsupported` (8): the leaf's Orkestrator is too old to take public

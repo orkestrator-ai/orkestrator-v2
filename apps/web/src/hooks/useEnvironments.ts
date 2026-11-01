@@ -8,7 +8,6 @@ import {
   createSessionKey,
   useBuildPipelineStore,
   useClaudeOptionsStore,
-  useConfigStore,
   useEnvironmentStore,
   formatErrorContext,
   useErrorDialogStore,
@@ -701,17 +700,16 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         rendererDebugLog("[useEnvironments] Received environment-renamed event:", event.payload);
         const { environment_id, new_name, new_branch } = event.payload;
 
-        // If the branch changed, clear stale PR state so monitoring starts
-        // fresh for the new branch. Without this, a merged/closed PR from
-        // the old branch would be preserved indefinitely.
+        // The backend clears prUrl/prState/hasMergeConflicts in the same
+        // write that advances the branch, so this only mirrors that into the
+        // local store. Never clear it on the backend from here: every
+        // connected client receives this event, and a late clear could wipe a
+        // PR the monitor has just found for the new branch.
         const currentEnv = useEnvironmentStore.getState().getEnvironmentById(environment_id);
         if (currentEnv && currentEnv.branch !== new_branch && currentEnv.prUrl) {
           rendererDebugLog(
             `[useEnvironments] Branch changed (${currentEnv.branch} -> ${new_branch}), clearing stale PR state`,
           );
-          backend.clearEnvironmentPr(environment_id).catch((err) => {
-            console.warn("[useEnvironments] Failed to clear PR state after branch rename:", err);
-          });
           setPRInStore(environment_id, null, null, null);
         }
 
@@ -821,10 +819,9 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
           buildPipelineId,
           ...(worktreeBaseDir ? [worktreeBaseDir] : []),
         );
+        // The backend records lastEnvironmentType in the same command and
+        // announces a config change, which store-resource-sync refetches.
         addEnvironmentToStore(environment);
-        useConfigStore
-          .getState()
-          .setRepositoryLastEnvironmentType(pid, environment.environmentType);
         toast.success("Environment created");
         return environment;
       } catch (err) {
@@ -855,10 +852,9 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       setError(null);
       try {
         const environment = await backend.forkEnvironment(environmentId, environmentType);
+        // The backend records lastEnvironmentType in the same command and
+        // announces a config change, which store-resource-sync refetches.
         addEnvironmentToStore(environment);
-        useConfigStore
-          .getState()
-          .setRepositoryLastEnvironmentType(environment.projectId, environment.environmentType);
         toast.success(
           environmentType === "local" ? "Local environment forked" : "Container environment forked",
         );

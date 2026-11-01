@@ -1,4 +1,5 @@
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import {
   encodePublicSessionId,
@@ -40,12 +41,7 @@ export function publicProjectSummary(
 }
 
 export function isEnvironmentReady(environment: Environment): boolean {
-  return (
-    environment.status === "running" &&
-    (environment.setupPhase === "ready" ||
-      environment.setupScriptsComplete === true ||
-      environment.setupOverride === true)
-  );
+  return isEnvironmentReadyForAgents(environment);
 }
 
 export function publicEnvironmentSummary(environment: Environment): PublicEnvironmentSummary {

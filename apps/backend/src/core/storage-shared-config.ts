@@ -11,36 +11,19 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { isEmptyAgentSettings, type AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
-import {
-  DEFAULT_TERMINAL_HISTORY_ENABLED,
-  DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
-  DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-  DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
-  normalizeTerminalHistoryRetention,
-} from "@orkestrator/protocol/terminal-history";
+import { normalizeTerminalHistoryRetention } from "@orkestrator/protocol/terminal-history";
 import {
   DEFAULT_AGENT_MESSAGING_SETTINGS,
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
-import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
-import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
+import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-defaults";
 import { sanitizeReviewLensPresets } from "@orkestrator/protocol/review-lens";
-import {
-  DEFAULT_DEBUG_LOG_RETENTION_DAYS,
-  normalizeDebugLogRetentionDays,
-} from "@orkestrator/protocol/debug-logging";
+import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
 import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
+import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
+import { normalizeCoordinatorProviderTierDefaultVersion } from "@orkestrator/protocol/coordinator";
 import {
-  DEFAULT_NOTIFICATION_SOUND_SETTINGS,
-  normalizeNotificationSoundSettings,
-} from "@orkestrator/protocol/notification-sounds";
-import {
-  COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
-  normalizeCoordinatorProviderTierDefaultVersion,
-} from "@orkestrator/protocol/coordinator";
-import {
-  DEFAULT_OPENCODE_MODEL_PROVIDERS,
   migrateOpenCodeModelProviders,
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
@@ -65,7 +48,6 @@ import {
   storedOpenCodeModelIds,
 } from "./storage-opencode-models.js";
 import {
-  DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
   MAX_CODEX_CONCURRENT_THREADS,
   resolveCodexMaxConcurrentThreads,
@@ -429,60 +411,9 @@ function migrateRepositories(
   return changed ? (next as AppConfig["repositories"]) : repositories;
 }
 
+/** A new install's config; built in protocol so every client shows the same defaults. */
 export function defaultConfig(): AppConfig {
-  return {
-    schemaVersion: 2,
-    version: "1.0.0",
-    global: {
-      containerResources: { cpuCores: 2, memoryGb: 4 },
-      envFilePatterns: [".env", ".env.local"],
-      useHostGitHubCredentials: true,
-      useHostClaudeCredentials: true,
-      allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
-      enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
-      coordinatorProviderTierDefaultVersion: COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
-      favoriteModels: [],
-      agentMessaging: { ...DEFAULT_AGENT_MESSAGING_SETTINGS },
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: {
-          claude: {
-            mode: DEFAULT_CLAUDE_MODE,
-            model: "claude-sonnet-5-5",
-            claudeNativeBackend: "sdk",
-          },
-          // New installs only. An existing config.json already holds a concrete
-          // effort, and nothing records whether the user chose it or merely
-          // inherited the previous "medium" default, so migrating would
-          // overwrite deliberate choices. Existing installs keep their stored
-          // value until the user changes it in settings.
-          codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
-          // No model: unset is OpenCode's own default among the connected,
-          // allowlisted providers, which no fixed id can match for every login.
-          opencode: { mode: "terminal" },
-          grok: { mode: "terminal" },
-        },
-      },
-      openCodeModelProviders: [...DEFAULT_OPENCODE_MODEL_PROVIDERS],
-      codexMaxConcurrentThreads: DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
-      terminalAppearance: {
-        fontFamily: "FiraCode Nerd Font",
-        fontSize: 14,
-        backgroundColor: "#0e1014",
-      },
-      terminalScrollback: 1000,
-      terminalHistoryEnabled: DEFAULT_TERMINAL_HISTORY_ENABLED,
-      terminalHistoryRetentionMb: DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
-      terminalHistoryGlobalRetentionMb: DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
-      terminalHistoryRetentionDays: DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-      experimentalCodexRawEventLogging: true,
-      debugLogging: false,
-      debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
-      webClientEnabled: true,
-      notificationSounds: { ...DEFAULT_NOTIFICATION_SOUND_SETTINGS },
-    },
-    repositories: {},
-  };
+  return createDefaultAppConfig();
 }
 
 export function defaultRepositoryConfig(): RepositoryConfig {

@@ -1,4 +1,5 @@
 import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { assertContainerNotDraining } from "./container-readiness.js";
@@ -233,14 +234,7 @@ export function registerTerminalCommands(
     if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
       throw new Error("Environment is being deleted");
     }
-    if (
-      environment.status !== "running" ||
-      !(
-        environment.setupPhase === "ready" ||
-        environment.setupScriptsComplete === true ||
-        environment.setupOverride === true
-      )
-    ) {
+    if (!isEnvironmentReadyForAgents(environment)) {
       throw new Error("Environment is not running with setup complete");
     }
     if (

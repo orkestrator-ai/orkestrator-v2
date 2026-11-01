@@ -4470,12 +4470,16 @@ describe("TerminalContainer", () => {
   });
 
   test("does not consume legacy renderer launch state when the container stops", async () => {
-    useClaudeOptionsStore.getState().setPendingNativeLaunch("env-hidden", {
-      containerId: "container-hidden",
-      environmentId: "env-hidden",
-      initialPrompt: "Do not launch after stop",
-      targetPaneId: "default",
-      agentType: "codex",
+    useClaudeOptionsStore.setState({
+      pendingNativeLaunches: {
+        "env-hidden": {
+          containerId: "container-hidden",
+          environmentId: "env-hidden",
+          initialPrompt: "Do not launch after stop",
+          targetPaneId: "default",
+          agentType: "codex",
+        },
+      },
     });
 
     render(

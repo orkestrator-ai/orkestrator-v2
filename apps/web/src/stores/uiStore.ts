@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { projectFolderKey } from "@orkestrator/protocol/project-folders";
+import type { ActivitySortOrder } from "@orkestrator/protocol/environment-activity-order";
 import { windowStorageKey } from "@/lib/desktop-storage-key";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -32,9 +33,9 @@ export type EnvironmentSortMode = "project" | "activity";
 /**
  * How "By activity" orders environments: `priority` puts unread work, then
  * waiting, then working before idle, newest first within each; `newest` and
- * `oldest` order by activity time alone.
+ * `oldest` order by activity time alone. Defined with the shared comparator.
  */
-export type ActivitySortOrder = "priority" | "newest" | "oldest";
+export type { ActivitySortOrder } from "@orkestrator/protocol/environment-activity-order";
 
 /**
  * A project opens on its coordinator, except on a leaf node: coordination

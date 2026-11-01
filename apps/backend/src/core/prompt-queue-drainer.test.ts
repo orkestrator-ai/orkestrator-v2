@@ -36,6 +36,7 @@ async function harness(
     environmentName?: string;
     setupScriptsComplete?: boolean;
     setupPhase?: "pending" | "running" | "ready" | "failed";
+    setupOverride?: boolean;
     status?: "running" | "stopped";
     containerId?: string | null;
     maxDispatchAttempts?: number;
@@ -61,6 +62,7 @@ async function harness(
     worktreePath: "/tmp/tmux",
     setupScriptsComplete: options.setupScriptsComplete ?? true,
     ...(options.setupPhase === undefined ? {} : { setupPhase: options.setupPhase }),
+    ...(options.setupOverride === undefined ? {} : { setupOverride: options.setupOverride }),
   });
 
   const context: Harness = {
@@ -410,6 +412,26 @@ describe("PromptQueueDrainer", () => {
     const context = await harness({
       setupScriptsComplete: false,
       setupPhase: "ready",
+    });
+    try {
+      await enqueue(context.storage, [{ id: "m-1", text: "Queued", attachments: [] }]);
+
+      await context.drainer.drainAll();
+
+      expect(context.submits()).toHaveLength(1);
+      expect((await context.queue())?.messages).toHaveLength(0);
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("drains once the user has overridden a failed setup", async () => {
+    // The launch commands accept an overridden environment; the drain agrees
+    // even for a record whose phase did not move to ready with the override.
+    const context = await harness({
+      setupScriptsComplete: false,
+      setupPhase: "failed",
+      setupOverride: true,
     });
     try {
       await enqueue(context.storage, [{ id: "m-1", text: "Queued", attachments: [] }]);

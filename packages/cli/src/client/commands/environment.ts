@@ -7,8 +7,14 @@ import type {
   PublicEnvironmentSummary,
   PublicPage,
 } from "@orkestrator/protocol/public-api-resources";
+import { ACTIVITY_SORT_ORDERS } from "@orkestrator/protocol/environment-activity-order";
 import { CliError } from "../errors.js";
-import { environmentLines, environmentRows, receiptLines } from "../format.js";
+import {
+  environmentLines,
+  environmentRows,
+  receiptLines,
+  sortEnvironmentsByActivity,
+} from "../format.js";
 import { readBinaryFile, readPrompt } from "../inputs.js";
 import type {
   CommandContext,
@@ -125,19 +131,36 @@ export const environmentCommands: CommandSpec[] = [
         valueName: "CURSOR",
         description: "Continue from a previous page.",
       },
+      {
+        name: "sort",
+        kind: "string",
+        valueName: "ORDER",
+        description:
+          "Order this page by activity, as the app's sidebar does: priority, newest or oldest.",
+      },
     ],
+    // --sort orders the page on the client; the backend never sees it.
+    inputFields: { sort: null },
     idOutput: "environment IDs, one per line",
     async run(context, parsed) {
+      const sort =
+        parsed.options.sort === undefined
+          ? undefined
+          : oneOf(parsed.options.sort, ACTIVITY_SORT_ORDERS, "--sort");
       const session = await context.session();
       const input: Record<string, unknown> = {};
       for (const key of ["project", "status", "limit", "cursor"] as const) {
         if (parsed.options[key] !== undefined)
           input[key === "project" ? "projectId" : key] = parsed.options[key];
       }
-      const page = await session.read<PublicPage<PublicEnvironmentSummary>>(
+      const received = await session.read<PublicPage<PublicEnvironmentSummary>>(
         "environment.list",
         input,
       );
+      // Presentation only: the backend's page and cursor are unchanged.
+      const page = sort
+        ? { ...received, items: sortEnvironmentsByActivity(received.items, sort) }
+        : received;
       return {
         action: "environment.list",
         result: page,

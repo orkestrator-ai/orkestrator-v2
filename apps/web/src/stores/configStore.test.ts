@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, expectTypeOf, test } from "bun:test";
 import { useConfigStore } from "./configStore";
 import { defaultConfig } from "../../../backend/src/core/storage";
 import type { GlobalConfig } from "../types";
+import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 
 // `getInitialState()` returns the store's DEFAULT_CONFIG regardless of any
 // mutations other tests may have applied, so these assertions are isolation-safe.
@@ -38,17 +39,16 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
   });
 
   // Guards the drift the settings UI depends on: GlobalSettings falls back to
-  // these renderer defaults, while the backend persists defaultConfig(). If the
-  // two disagree, a user's first-run defaults differ from what gets saved.
-  test("agrees with the backend defaultConfig() model selection", () => {
-    const backendGlobal = defaultConfig().global;
-    // The whole agent block has to match, not just the models: it is now one
-    // object, so a divergence anywhere in it is the same first-run mismatch.
-    expect(initialGlobal.agentSettings).toEqual(backendGlobal.agentSettings);
-    expect(initialGlobal.codexMaxConcurrentThreads).toBe(backendGlobal.codexMaxConcurrentThreads);
-    expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
-    expect(initialGlobal.reviewInstruction).toBe(backendGlobal.reviewInstruction);
-    expect(initialGlobal.useHostGitHubCredentials).toBe(backendGlobal.useHostGitHubCredentials);
+  // these renderer defaults, while the backend persists defaultConfig(). Both
+  // now come from one protocol builder; compare the whole config so a future
+  // second copy on either side fails here rather than in a user's first run.
+  test("is exactly the backend's new-install defaultConfig()", () => {
+    expect(useConfigStore.getInitialState().config).toEqual(defaultConfig());
+  });
+
+  test("uses the protocol's agent messaging defaults", () => {
+    expect(initialGlobal.agentMessaging).toEqual({ ...DEFAULT_AGENT_MESSAGING_SETTINGS });
+    expect(initialGlobal.agentMessaging?.wakePeers).toBe(false);
   });
 });
 

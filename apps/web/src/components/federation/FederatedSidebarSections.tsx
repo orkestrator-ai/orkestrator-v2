@@ -61,6 +61,7 @@ import {
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
 import type { ActivitySortOrder } from "@/stores/uiStore";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { useFederation } from "./FederationProvider";
@@ -578,13 +579,16 @@ export function FederatedActivityList({
   machines,
   order = "priority",
   renderBoundRow,
+  boundActivity,
 }: {
   machines: readonly MachineView[];
   order?: ActivitySortOrder;
   /** A whole activity row of this window's own machine. */
   renderBoundRow: (environmentId: string) => ReactNode;
+  /** The activity those rows display, so they sort on what they show. */
+  boundActivity?: (environmentId: string) => AgentActivityState | undefined;
 }) {
-  const rows = activityRows(machines, order);
+  const rows = activityRows(machines, order, boundActivity);
   return (
     <div className="px-1 pt-2" data-testid="federated-activity-list">
       {rows.length === 0 ? (

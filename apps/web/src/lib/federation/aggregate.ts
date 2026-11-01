@@ -11,7 +11,11 @@
 
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import type { ActivitySortOrder } from "@/stores/uiStore";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import {
+  compareEnvironmentsByActivity,
+  type ActivitySortOrder,
+} from "@orkestrator/protocol/environment-activity-order";
 import type { FederatedEnvironment, FederatedProject, SummaryFreshness } from "./summaries";
 
 export interface MachineView {
@@ -54,20 +58,20 @@ export function filterMachines(
   return machines.filter((machine) => machine.connectionId === filter);
 }
 
-const ACTIVITY_PRIORITY: Record<FederatedEnvironment["activity"], number> = {
-  waiting: 0,
-  working: 1,
-  idle: 2,
-};
-
 /**
- * Every environment across the selected machines. "priority" puts attention
- * first and newest first within it; "newest" and "oldest" go by activity time
- * alone. Machine and environment IDs break ties the same way in every order.
+ * Every environment across the selected machines, in the shared activity order
+ * (`compareEnvironmentsByActivity`). Machine and environment IDs break ties the
+ * same way in every order.
+ *
+ * `boundActivity` is the activity the bound machine's own rows display: those
+ * render as this window's `EnvironmentItem`, which can show runtime observations
+ * and active builds its summary does not carry. Other machines' rows display
+ * their summary's activity, so that is what they sort on.
  */
 export function activityRows(
   machines: readonly MachineView[],
   order: ActivitySortOrder = "priority",
+  boundActivity?: (environmentId: string) => AgentActivityState | undefined,
 ): ActivityRow[] {
   const rows: ActivityRow[] = [];
   for (const machine of machines) {
@@ -79,28 +83,21 @@ export function activityRows(
       }
     }
   }
-  const attention = (a: ActivityRow, b: ActivityRow) =>
-    order === "priority"
-      ? Number(b.environment.hasUnreadWork) - Number(a.environment.hasUnreadWork) ||
-        ACTIVITY_PRIORITY[a.environment.activity] - ACTIVITY_PRIORITY[b.environment.activity]
-      : 0;
-  const recency = (a: ActivityRow, b: ActivityRow) => {
-    // Snapshot writes (including lease refreshes) are not user activity.
-    // Keep the priority timestamp policy separate from chronological orders.
-    const timestamp = (environment: FederatedEnvironment) =>
-      order === "priority"
-        ? (environment.activityUpdatedAt ?? environment.lastActivityAt)
-        : environment.lastActivityAt;
-    const newestFirst = compareTimestampsDesc(timestamp(a.environment), timestamp(b.environment));
-    return order === "oldest" ? -newestFirst : newestFirst;
+  const sortFields = (row: ActivityRow) => {
+    const shown = row.machine.bound
+      ? boundActivity?.(row.environment.ref.environmentId)
+      : undefined;
+    return shown ? { ...row.environment, activity: shown } : row.environment;
   };
-  return rows.sort(
-    (a, b) =>
-      attention(a, b) ||
-      recency(a, b) ||
-      compareText(a.machine.backendId, b.machine.backendId) ||
-      compareText(a.environment.ref.environmentId, b.environment.ref.environmentId),
-  );
+  return rows
+    .map((row) => ({ row, fields: sortFields(row) }))
+    .sort(
+      (a, b) =>
+        compareEnvironmentsByActivity(a.fields, b.fields, order) ||
+        compareText(a.row.machine.backendId, b.row.machine.backendId) ||
+        compareText(a.row.environment.ref.environmentId, b.row.environment.ref.environmentId),
+    )
+    .map(({ row }) => row);
 }
 
 export interface ConnectivitySummary {
@@ -153,15 +150,4 @@ export function duplicateMachineColors(
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function compareTimestampsDesc(a: string | undefined, b: string | undefined): number {
-  const left = a ? Date.parse(a) : Number.NaN;
-  const right = b ? Date.parse(b) : Number.NaN;
-  const leftValid = Number.isFinite(left);
-  const rightValid = Number.isFinite(right);
-  if (leftValid && rightValid) return right - left;
-  if (leftValid) return -1;
-  if (rightValid) return 1;
-  return 0;
 }

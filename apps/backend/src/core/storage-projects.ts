@@ -1,4 +1,5 @@
 import { MAX_LIFECYCLE_RECORD_BYTES } from "@orkestrator/protocol/container-lifecycle";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
 import * as shared from "./storage-shared.js";
 import {
@@ -1283,12 +1284,7 @@ export class ProjectsRepository {
           environment.hasMergeConflicts !== true ||
           environment.deletionRequestedAt ||
           environment.lifecycleOperation ||
-          environment.status !== "running" ||
-          !(
-            environment.setupPhase === "ready" ||
-            environment.setupScriptsComplete ||
-            environment.setupOverride
-          ))
+          !isEnvironmentReadyForAgents(environment))
       )
         return { environment, armedAt: null };
       if (claim?.autoMergePrUrl && !environment.autoMergeResolveRequestId)

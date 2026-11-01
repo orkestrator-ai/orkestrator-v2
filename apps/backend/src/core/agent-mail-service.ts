@@ -6,6 +6,7 @@ import {
   renderAgentMailCarrier,
   type AgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
 import type { NativeAgentService } from "./native-agent-service.js";
@@ -535,11 +536,7 @@ export class AgentMailService {
           }
           continue;
         }
-        if (
-          environment.setupPhase !== "ready" &&
-          environment.setupScriptsComplete !== true &&
-          environment.setupOverride !== true
-        ) {
+        if (!isEnvironmentSetupSettled(environment)) {
           await this.recordPresence(mailbox.mailboxId, "environment_unready");
           this.noteSkip(message, mailbox, "environment_unready");
           continue;

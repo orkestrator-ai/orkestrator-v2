@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
@@ -119,14 +120,7 @@ async function launchNativeAgentJobInternal(
   if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
     throw new Error("Environment is being deleted");
   }
-  if (
-    environment.status !== "running" ||
-    !(
-      environment.setupPhase === "ready" ||
-      environment.setupScriptsComplete === true ||
-      environment.setupOverride === true
-    )
-  ) {
+  if (!isEnvironmentReadyForAgents(environment)) {
     throw new Error("Environment is not running with setup complete");
   }
 
@@ -248,10 +242,7 @@ async function launchNativeAgentJobInternal(
       current.prRecheckAfterAgentCompletionArmedAt === armedAt &&
       !current.lifecycleOperation &&
       !current.deletionRequestedAt &&
-      current.status === "running" &&
-      (current.setupPhase === "ready" ||
-        current.setupScriptsComplete === true ||
-        current.setupOverride === true)
+      isEnvironmentReadyForAgents(current)
     );
   };
   let dispatchStarted = false;

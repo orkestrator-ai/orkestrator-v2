@@ -40,3 +40,7 @@ Not flakes; recorded so they are not mistaken for this case's list. In run 1, `v
 | `native: paging before prose in a byte-bounded view holds the original tool position` | `e2e/TranscriptPaging.spec.ts` | passed at one worker on both |
 
 Base also failed `a waiting group that fits its cap follows appended calls` at one worker, which passed on the branch. The mobile project was not rerun in full, so its load-era failures outside the fixtures this branch changed are unconfirmed either way.
+
+## Fourth aggregate run
+
+At commit `c49c053e3`, load average about 8, the only failure was `each child keeps one card, its transcript and status across a fresh backend and a cold restart` (case 0310). The owning file then passed eight times in a row alone and six out of six run concurrently. That does not explain why it failed in two of four aggregate runs, so whether this branch changed its rate is unproven.

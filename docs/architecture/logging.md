@@ -397,6 +397,9 @@ Its metadata and names are redacted too; common fixtures enforce parity.
 `scripts/recurring-live-ab.ts` counts `Unhandled promise rejection (continuing)` by its
 exact text, so that prefix does not change.
 
+The [R5 addendum](../reports/2026-10-29-logging-and-database-efficiency.md#addendum-log-output-shortened-by-r5)
+lists every site these backstops shortened and the evidence each loses.
+
 ## Output
 
 Text is the default: one line per entry, in the old `[tag] message` shape.

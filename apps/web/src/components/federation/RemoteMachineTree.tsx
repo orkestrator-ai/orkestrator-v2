@@ -1,6 +1,6 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { projectLandingBoardTab, type RealmGrouping } from "@/lib/federation/workspace-realm";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   DndContext,
@@ -18,68 +18,19 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  ChevronRight,
-  Container,
-  Copy,
-  FolderInput,
-  FolderMinus,
-  GitMerge,
-  GripVertical,
-  Laptop,
-  LayoutGrid,
-  Link2,
-  Loader2,
-  MoreVertical,
-  PanelRight,
-  Play,
-  Plus,
-  RotateCw,
-  Settings2,
-  Square,
-  Trash2,
-} from "lucide-react";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { GithubIcon } from "@/components/icons/GithubIcon";
-import { PipeIcon } from "@/components/icons/PipeIcon";
 import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { EnvironmentRow } from "@/components/environments/EnvironmentRow";
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  EnvironmentChangeBadge,
-  EnvironmentChangeSummary,
-  EnvironmentMenuItems,
-  type EnvironmentMenuItem,
-} from "@/components/environments/EnvironmentItem";
+  nodeEnvironmentRowFacts,
+  nodeEnvironmentTooltipDetails,
+} from "@/components/environments/environment-row-facts";
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
-import { EnvironmentStatusMarker } from "@/components/environments/EnvironmentStatusMarker";
-import { EnvironmentTooltipBody } from "@/components/environments/EnvironmentTooltipBody";
-import {
-  EnvironmentNameShimmer,
-  EnvironmentNameSignalMarker,
-} from "@/components/environments/EnvironmentNameShimmer";
-import { environmentNameSignal } from "@/lib/environment-name-signal";
-import { nodeEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
-import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
-import { UnreadBellIcon } from "@/components/environments/UnreadBellIcon";
+import { useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
 import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import { useNodeEnvironmentChangeProjection } from "@/lib/federation/node-change-projections";
@@ -116,23 +67,20 @@ import {
   useRemoteEnvironmentShown,
   useRemoteProjectHomeShown,
 } from "@/stores/remoteWorkspaceStore";
-import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
+import { SortableEnvironmentRowFrame } from "@/components/sidebar/EnvironmentRowFrame";
+import { ProjectGroupHeader } from "@/components/sidebar/ProjectGroupHeader";
+import {
+  ProjectHomeActivityButton,
+  projectHomeStatus,
+} from "@/components/sidebar/ProjectHomeActivity";
 import { useFederation } from "./FederationProvider";
-import { MachineDot, MachineHomeIcon, ProjectIconImage, machineStatusText } from "./MachineDot";
+import { MachineHomeIcon, ProjectIconImage } from "./MachineDot";
 import {
   newFederatedEnvironment,
   useFederatedEnvironmentActions,
 } from "./useFederatedEnvironmentActions";
 
 const NO_ENVIRONMENTS: readonly FederatedEnvironment[] = [];
-/** Matches `EnvironmentItem`: below this width rows get an explicit actions button. */
-const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
-
-const ACTIVITY_TEXT: Record<FederatedEnvironment["activity"], string> = {
-  working: "Working",
-  waiting: "Awaiting input",
-  idle: "Idle",
-};
 
 /**
  * Opens a public web page on this client. No node is involved, so this skips
@@ -463,11 +411,34 @@ export function RemoteProjectGroup({
     state.revealedProject?.key === project.key ? state.revealedProject.revision : null,
   );
   const revealed = revealRevision !== null;
+  const everyEnvironment =
+    machine.environmentsByProject.get(project.ref.projectId) ?? NO_ENVIRONMENTS;
   // Shown with its home or nothing else, as this window's own project rows are.
-  const homeId = machine.environmentsByProject
-    .get(project.ref.projectId)
-    ?.find((environment) => environment.isProjectHome)?.ref.environmentId;
-  const shown = useRemoteProjectHomeShown(machine.connectionId, project.ref.projectId, homeId);
+  const home = everyEnvironment.find(
+    (environment) => environment.isProjectHome && !environment.deleting,
+  );
+  const shown = useRemoteProjectHomeShown(
+    machine.connectionId,
+    project.ref.projectId,
+    home?.ref.environmentId,
+  );
+  const live = machine.transport === "connected";
+  const homeStatus =
+    home && live
+      ? projectHomeStatus({
+          deleting: home.deleting,
+          buildActive: home.buildActive === true,
+          activity: home.activity,
+          hasUnreadWork: home.hasUnreadWork,
+        })
+      : null;
+  // Mail is counted per environment on the machine; the project sums them,
+  // home included, as this window's project header sums its mailboxes.
+  const unreadMail = everyEnvironment.reduce(
+    (total, environment) => total + (environment.agentMailUnread ?? 0),
+    0,
+  );
+  const failedMail = everyEnvironment.some((environment) => environment.agentMailFailed);
   const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (revealRevision === null) return;
@@ -490,22 +461,6 @@ export function RemoteProjectGroup({
       dialog,
       title: project.name,
     });
-  const chevron = (
-    <CollapsibleTrigger
-      className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-      aria-label={
-        isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
-      }
-    >
-      <ChevronRight
-        aria-hidden="true"
-        className={cn(
-          "h-4 w-4 text-muted-foreground transition-transform duration-200",
-          !isCollapsed && "rotate-90",
-        )}
-      />
-    </CollapsibleTrigger>
-  );
 
   return (
     <div
@@ -518,130 +473,78 @@ export function RemoteProjectGroup({
       data-selected={shown || undefined}
     >
       <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
-        <div
-          ref={rowRef}
-          className={cn(
-            "relative mx-1 flex items-center group/project rounded-lg border border-transparent transition-colors",
-            shown || revealed
-              ? "bg-linear-to-r from-selected to-selected-edge text-selected-foreground"
-              : "hover:bg-hover",
-          )}
-        >
-          <ContextMenu>
-            <ContextMenuTrigger className="contents">
-              <button
-                {...(sortable ? attributes : {})}
-                {...(sortable ? listeners : {})}
-                type="button"
-                className={cn(
-                  "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
-                  sortable && "cursor-grab active:cursor-grabbing",
-                )}
-                onClick={() => openProject()}
-                aria-current={shown ? "page" : revealed ? "true" : undefined}
-                title={`Open ${project.name} on ${machine.name}`}
-              >
-                {showMachine ? (
-                  <MachineHomeIcon
-                    colorToken={machine.colorToken}
-                    machineName={machine.name}
-                    projectIcon={project.icon}
-                  />
-                ) : project.icon ? (
-                  <ProjectIconImage src={project.icon} />
-                ) : null}
-                <span className={cn("truncate font-medium", labelClassName)}>{label}</span>
-                {environments.length > 0 && (
-                  <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
-                    {environments.length}
-                  </span>
-                )}
-              </button>
-            </ContextMenuTrigger>
-            <ContextMenuContent>
-              <ContextMenuItem onClick={() => openProject(true)}>
-                <LayoutGrid className="h-4 w-4 mr-2" />
-                Open Board
-              </ContextMenuItem>
-              {githubRepositoryUrl && (
-                <ContextMenuItem onClick={() => openWebPage(githubRepositoryUrl)}>
-                  <GithubIcon className="h-4 w-4 mr-2" />
-                  Open Repo on GitHub
-                </ContextMenuItem>
-              )}
-              <ContextMenuSeparator />
-              <ContextMenuItem
-                disabled={!writable}
-                onClick={() => openProjectDialog("repository-settings")}
-              >
-                <Settings2 className="h-4 w-4 mr-2" />
-                Repository Settings
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem
-                disabled={!writable}
-                onClick={() => newFederatedEnvironment(machine, project)}
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                New Environment
-              </ContextMenuItem>
-              <ContextMenuItem
-                disabled={!writable}
-                onClick={() =>
-                  useProjectCopyStore.getState().open({
-                    source: { nodeId: machine.backendId, projectId: project.ref.projectId },
+        <ProjectGroupHeader
+          projectName={project.name}
+          label={label}
+          labelClassName={labelClassName}
+          icon={
+            showMachine ? (
+              <MachineHomeIcon
+                colorToken={machine.colorToken}
+                machineName={machine.name}
+                projectIcon={project.icon}
+              />
+            ) : project.icon ? (
+              <ProjectIconImage src={project.icon} />
+            ) : null
+          }
+          card={{
+            ...(project.repositoryHint ? { repository: project.repositoryHint } : {}),
+            ...(project.pathName ? { path: project.pathName } : {}),
+            environmentCount: environments.length,
+            runningCount: environments.filter((environment) => environment.status === "running")
+              .length,
+            openHint: `Click to open on ${machine.name}`,
+          }}
+          unreadMail={unreadMail}
+          failedMail={failedMail}
+          highlighted={shown || revealed}
+          ariaCurrent={shown ? "page" : revealed ? "true" : undefined}
+          sortable={sortable}
+          dragAttributes={attributes}
+          dragListeners={listeners}
+          rowRef={rowRef}
+          isCollapsed={isCollapsed}
+          onOpen={() => openProject()}
+          writable={writable}
+          menu={{
+            openBoard: () => openProject(true),
+            ...(githubRepositoryUrl ? { openGithub: () => openWebPage(githubRepositoryUrl) } : {}),
+            openSettings: () => openProjectDialog("repository-settings"),
+            newEnvironment: () => newFederatedEnvironment(machine, project),
+            copyToMachine: () =>
+              useProjectCopyStore.getState().open({
+                source: { nodeId: machine.backendId, projectId: project.ref.projectId },
+              }),
+            ...(onAddToFolder ? { addToFolder: onAddToFolder } : {}),
+            ...(onRemoveFromFolder ? { removeFromFolder: onRemoveFromFolder } : {}),
+            deleteProject: () => openProjectDialog("delete-project"),
+          }}
+          homeActivity={
+            home && homeStatus ? (
+              <ProjectHomeActivityButton
+                status={homeStatus}
+                projectName={project.name}
+                compact
+                onOpen={() =>
+                  openMachineWorkspace({
+                    connectionId: machine.connectionId,
+                    projectId: project.ref.projectId,
+                    environmentId: home.ref.environmentId,
+                    boardTab: "home",
+                    title: project.name,
                   })
                 }
-              >
-                <Copy className="h-4 w-4 mr-2" />
-                Copy to Machine…
-              </ContextMenuItem>
-              {onAddToFolder && (
-                <>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem onClick={onAddToFolder}>
-                    <FolderInput className="h-4 w-4 mr-2" />
-                    Add to Folder
-                  </ContextMenuItem>
-                  {onRemoveFromFolder && (
-                    <ContextMenuItem onClick={onRemoveFromFolder}>
-                      <FolderMinus className="h-4 w-4 mr-2" />
-                      Remove from Folder
-                    </ContextMenuItem>
-                  )}
-                </>
-              )}
-              <ContextMenuSeparator />
-              <ContextMenuItem
-                variant="destructive"
-                disabled={!writable}
-                onClick={() => openProjectDialog("delete-project")}
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete Project
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-muted-foreground opacity-100 transition-opacity hover:text-foreground md:opacity-0 md:group-hover/project:opacity-100 md:focus-visible:opacity-100"
-            disabled={!writable}
-            onClick={(event) => {
-              event.stopPropagation();
-              event.currentTarget.blur();
-              newFederatedEnvironment(machine, project);
-            }}
-            aria-label={`New environment in ${project.name} on ${machine.name}`}
-            title={
-              writable ? `New environment on ${machine.name}` : `${machine.name} is unavailable`
-            }
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-          {chevron}
-        </div>
+              />
+            ) : null
+          }
+          newEnvironment={{
+            label: `New environment in ${project.name} on ${machine.name}`,
+            title: writable
+              ? `New environment on ${machine.name}`
+              : `${machine.name} is unavailable`,
+          }}
+        />
         <CollapsibleContent>
           {environments.length > 0 && (
             <SortableContext
@@ -665,9 +568,8 @@ export function RemoteProjectGroup({
 }
 
 /**
- * An environment of another machine in a project, drawn like
- * `SortableEnvironmentItem` around `EnvironmentItem`. Its drag id is its
- * node-qualified key.
+ * An environment of another machine in a project, in the frame this window's
+ * rows use. Its drag id is its node-qualified key.
  */
 function RemoteSortableEnvironmentItem({
   machine,
@@ -678,56 +580,30 @@ function RemoteSortableEnvironmentItem({
   environment: FederatedEnvironment;
   sortable: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: environment.key,
-    disabled: !sortable,
-  });
-  const live = machine.transport === "connected";
   const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
-
   return (
-    <div
-      ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn(isDragging && "opacity-50 z-50")}
-      data-testid="federated-environment-row"
-      data-machine={machine.connectionId}
-      data-selected={shown || undefined}
+    <SortableEnvironmentRowFrame
+      sortableId={environment.key}
+      // Read-only while the owner is unavailable.
+      sortable={sortable}
+      selected={shown}
+      offline={machine.transport !== "connected"}
+      name={environment.name}
+      data={{
+        "data-testid": "federated-environment-row",
+        "data-machine": machine.connectionId,
+        "data-selected": shown || undefined,
+      }}
     >
-      <div
-        className={cn(
-          "group/sortable mx-1 flex items-center rounded-lg border border-transparent transition-colors",
-          shown ? SELECTED_ENVIRONMENT_ROW_CLASS : "hover:bg-environment-hover",
-          !live && "opacity-60",
-        )}
-      >
-        {sortable ? (
-          <button
-            {...attributes}
-            {...listeners}
-            aria-label={`Reorder ${environment.name}`}
-            className="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing group-hover/sortable:opacity-100"
-          >
-            <GripVertical className="h-3 w-3" />
-          </button>
-        ) : (
-          // Read-only while the owner is unavailable; keeps the icons aligned.
-          <span aria-hidden="true" className="h-6 w-4 shrink-0" />
-        )}
-        <div className="flex-1 min-w-0">
-          <RemoteEnvironmentItem machine={machine} environment={environment} />
-        </div>
-      </div>
-    </div>
+      <RemoteEnvironmentItem machine={machine} environment={environment} />
+    </SortableEnvironmentRowFrame>
   );
 }
 
 /**
- * The row content of another machine's environment, laid out like
- * `EnvironmentItem`: an activity ring around a machine-coloured circle (local)
- * or square (container), followed by the name and optional subtitle. During
- * transitions and actions, a spinner leads and a machine dot stays by the name.
- * Selecting it moves the window to the owner's workspace.
+ * The row content of another machine's environment: the same `EnvironmentRow`
+ * this window's rows draw, fed from the machine's node summary. Selecting it
+ * moves the window to the owner's workspace.
  */
 export function RemoteEnvironmentItem({
   machine,
@@ -738,287 +614,46 @@ export function RemoteEnvironmentItem({
   environment: FederatedEnvironment;
   subtitle?: string;
 }) {
-  const {
-    busy,
-    writable,
-    open,
-    copyLink,
-    openSettings,
-    start,
-    stop,
-    restart,
-    fork,
-    requestDelete,
-    deleteDialog,
-  } = useFederatedEnvironmentActions(machine, environment);
+  const actions = useFederatedEnvironmentActions(machine, environment);
   const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
-  const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   // The same `environment-net` projection the machine's own rows show, read
   // through the command node and kept current by the machine's relayed events.
   const changeProjection = useNodeEnvironmentChangeProjection(environment.ref);
   // The hover card reads the full record and agent summary from the machine
   // only while it is open; until then it shows what the summary carries.
-  const tooltipAnchorRef = useRef<HTMLDivElement>(null);
   const tooltip = useHoverTooltip();
   const details = useNodeEnvironment(environment.ref, tooltip.open);
-
   const live = machine.transport === "connected";
-  const statusText = machineStatusText({
-    transport: machine.transport,
-    freshness: machine.freshness,
-    loadedAt: machine.loadedAt,
-  });
-  const activityText = live
-    ? ACTIVITY_TEXT[environment.activity]
-    : `Connection lost; last observed ${ACTIVITY_TEXT[environment.activity].toLowerCase()}`;
-  const isLocalEnvironment = environment.environmentType === "local";
-  // Local environments are always considered "running", as on their own machine.
-  const isRunning = isLocalEnvironment || environment.status === "running";
-  const isTransitioning =
-    !isLocalEnvironment && (environment.status === "creating" || environment.status === "stopping");
-  // Decided here from the machine's relayed PR reading and monitor health
-  // (pr-merge-readiness) and its live activity.
-  const nameSignal = environment.deleting
-    ? null
-    : environmentNameSignal({
-        waitingOnUser: isRunning && live && environment.activity === "waiting",
-        prMergeState: nodeEnvironmentPrMergeState(environment, machine),
-      });
-  const nameSignalDescriptionId = useId();
-
-  const menuItems: EnvironmentMenuItem[] = [
-    {
-      key: "open",
-      label: "Open workspace",
-      icon: <PanelRight className="h-4 w-4 mr-2" />,
-      onSelect: open,
-    },
-    {
-      key: "copy-link",
-      label: "Copy link",
-      icon: <Link2 className="h-4 w-4 mr-2" />,
-      onSelect: copyLink,
-    },
-    {
-      key: "settings",
-      label: "Settings",
-      icon: <Settings2 className="h-4 w-4 mr-2" />,
-      onSelect: openSettings,
-      disabled: !writable,
-    },
-    { key: "fork-separator", separator: true },
-    {
-      key: "fork-local",
-      label: "Fork local",
-      icon: <Laptop className="h-4 w-4 mr-2" />,
-      onSelect: () => fork("local"),
-      disabled: !writable || busy || environment.deleting,
-    },
-    {
-      key: "fork-container",
-      label: "Fork container",
-      icon: <Container className="h-4 w-4 mr-2" />,
-      onSelect: () => fork("containerized"),
-      disabled: !writable || busy || environment.deleting,
-    },
-    ...(!isLocalEnvironment
-      ? ([
-          { key: "container-actions", separator: true },
-          {
-            key: "power",
-            label: isRunning ? "Stop" : "Start",
-            icon: isRunning ? (
-              <Square className="h-4 w-4 mr-2" />
-            ) : (
-              <Play className="h-4 w-4 mr-2" />
-            ),
-            onSelect: isRunning ? stop : start,
-            disabled: !writable || busy || isTransitioning,
-          },
-          {
-            key: "restart",
-            label: "Restart",
-            icon: <RotateCw className="h-4 w-4 mr-2" />,
-            onSelect: restart,
-            disabled: !writable || busy || !isRunning || isTransitioning,
-          },
-        ] satisfies EnvironmentMenuItem[])
-      : []),
-    { key: "delete-separator", separator: true },
-    {
-      key: "delete",
-      label: "Delete…",
-      icon: <Trash2 className="h-4 w-4 mr-2" />,
-      onSelect: requestDelete,
-      disabled: !writable || busy || environment.deleting,
-      variant: "destructive",
-    },
-  ];
+  const facts = nodeEnvironmentRowFacts(machine, environment, actions);
 
   return (
-    <>
-      <ContextMenu>
-        <ContextMenuTrigger className="contents">
-          <div
-            ref={tooltipAnchorRef}
-            className={cn(
-              "group flex w-full items-center gap-2 py-1 pr-2 text-[13px] transition-colors",
-              isMobile && "select-none",
-              environment.deleting && "opacity-60",
-            )}
-          >
-            <button
-              type="button"
-              onClick={open}
-              onMouseEnter={tooltip.show}
-              onMouseLeave={tooltip.hide}
-              onFocus={tooltip.show}
-              onBlur={tooltip.hide}
-              aria-label={`${environment.name}, on ${machine.name}, ${activityText}`}
-              aria-describedby={nameSignal ? nameSignalDescriptionId : undefined}
-              aria-current={shown ? "true" : undefined}
-              className={cn(
-                "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
-                shown ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
-              )}
-            >
-              {environment.deleting ? (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
-              ) : isTransitioning || busy ? (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-              ) : (
-                <EnvironmentStatusMarker
-                  local={isLocalEnvironment}
-                  state={isRunning && live ? environment.activity : "inactive"}
-                  machine={{
-                    name: machine.name,
-                    colorToken: machine.colorToken,
-                    status: statusText,
-                  }}
-                />
-              )}
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <EnvironmentNameShimmer
-                    signal={nameSignal}
-                    className="truncate font-medium leading-4"
-                  >
-                    {environment.buildPipeline
-                      ? environment.name.replace(/^Build:\s*/, "")
-                      : environment.name}
-                  </EnvironmentNameShimmer>
-                  {environment.buildPipeline && (
-                    <PipeIcon className="h-3 w-3 shrink-0 translate-y-px text-white" />
-                  )}
-                  {environment.autoMerge && (
-                    <GitMerge
-                      className="h-3 w-3 shrink-0 translate-y-px text-white"
-                      role="img"
-                      aria-label="Auto-merge on"
-                      data-testid="environment-auto-merge-icon"
-                    />
-                  )}
-                  <EnvironmentNameSignalMarker
-                    signal={nameSignal}
-                    descriptionId={nameSignalDescriptionId}
-                  />
-                  {(environment.deleting || isTransitioning || busy) && (
-                    <MachineDot
-                      machineName={machine.name}
-                      colorToken={machine.colorToken}
-                      status={statusText}
-                      shape={isLocalEnvironment ? "circle" : "square"}
-                    />
-                  )}
-                  {environment.hasUnreadWork && (
-                    <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
-                  )}
-                </span>
-                {subtitle && (
-                  <span className="truncate text-[11px] font-normal leading-4 text-zinc-500">
-                    {subtitle}
-                  </span>
-                )}
-              </span>
-              {changeProjection && (
-                // Last known while the machine is away.
-                <span className={cn("contents", !live && "[&>*]:opacity-60")}>
-                  <EnvironmentChangeBadge projection={changeProjection} />
-                </span>
-              )}
-            </button>
-            {isMobile && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="-my-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-700/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    aria-label={`Actions for ${environment.name} on ${machine.name}`}
-                    onPointerDown={(event) => event.stopPropagation()}
-                  >
-                    <MoreVertical className="h-4 w-4" aria-hidden="true" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <EnvironmentMenuItems
-                    items={menuItems}
-                    Item={DropdownMenuItem}
-                    Separator={DropdownMenuSeparator}
-                  />
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
-        </ContextMenuTrigger>
-        <HoverTooltipContent
-          anchorRef={tooltipAnchorRef}
-          open={tooltip.open}
-          side="bottom"
-          align="start"
-          sideOffset={4}
-          onMouseEnter={tooltip.show}
-          onMouseLeave={tooltip.hide}
-        >
-          <EnvironmentTooltipBody
-            name={environment.name}
-            nameSignal={nameSignal}
-            machine={{
-              name: machine.name,
-              colorToken: machine.colorToken,
-              ...(live ? {} : { status: statusText }),
-            }}
-            details={
-              details ?? {
-                projectHome: environment.isProjectHome,
-                ...(environment.branch ? { branch: environment.branch } : {}),
-                ...(environment.environmentType
-                  ? { environmentType: environment.environmentType }
-                  : {}),
-              }
-            }
-            agentSummary={
-              live ? (
-                <EnvironmentAgentSummary
-                  environmentId={environment.ref.environmentId}
-                  open={tooltip.open}
-                  source={nodeAgentSummarySource(environment.ref.backendId)}
-                />
-              ) : null
-            }
-            changes={
-              changeProjection ? <EnvironmentChangeSummary projection={changeProjection} /> : null
-            }
+    <EnvironmentRow
+      facts={facts}
+      selected={shown}
+      subtitle={subtitle}
+      onActivate={actions.open}
+      actions={{
+        open: actions.open,
+        copyLink: actions.copyLink,
+        openSettings: actions.openSettings,
+        fork: actions.fork,
+        start: actions.start,
+        stop: actions.stop,
+        restart: actions.restart,
+        confirmDelete: actions.remove,
+      }}
+      changes={changeProjection ? { kind: "projection", projection: changeProjection } : null}
+      tooltip={tooltip}
+      tooltipDetails={details ?? nodeEnvironmentTooltipDetails(environment)}
+      agentSummary={
+        live ? (
+          <EnvironmentAgentSummary
+            environmentId={environment.ref.environmentId}
+            open={tooltip.open}
+            source={nodeAgentSummarySource(environment.ref.backendId)}
           />
-        </HoverTooltipContent>
-        <ContextMenuContent>
-          <EnvironmentMenuItems
-            items={menuItems}
-            Item={ContextMenuItem}
-            Separator={ContextMenuSeparator}
-          />
-        </ContextMenuContent>
-      </ContextMenu>
-      {deleteDialog}
-    </>
+        ) : null
+      }
+    />
   );
 }

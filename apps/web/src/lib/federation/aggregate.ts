@@ -12,6 +12,7 @@
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { ActivitySortOrder } from "@/stores/uiStore";
+import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import type { FederatedEnvironment, FederatedProject, SummaryFreshness } from "./summaries";
 
 export interface MachineView {
@@ -54,53 +55,43 @@ export function filterMachines(
   return machines.filter((machine) => machine.connectionId === filter);
 }
 
-const ACTIVITY_PRIORITY: Record<FederatedEnvironment["activity"], number> = {
-  waiting: 0,
-  working: 1,
-  idle: 2,
-};
-
 /**
- * Every environment across the selected machines. "priority" puts attention
- * first and newest first within it; "newest" and "oldest" go by activity time
- * alone. Machine and environment IDs break ties the same way in every order.
+ * Every environment across the selected machines, in the activity order this
+ * window's own list uses (`compareActivity`). Ties fall to machine ID, then
+ * the machine's project order, environment order and ID.
  */
 export function activityRows(
   machines: readonly MachineView[],
   order: ActivitySortOrder = "priority",
 ): ActivityRow[] {
-  const rows: ActivityRow[] = [];
+  const rows: Array<ActivityRow & { key: ActivitySortKey }> = [];
   for (const machine of machines) {
     const projects = new Map(machine.projects.map((project) => [project.ref.projectId, project]));
     for (const [projectId, environments] of machine.environmentsByProject) {
+      const project = projects.get(projectId) ?? null;
       for (const environment of environments) {
         if (environment.isProjectHome) continue;
-        rows.push({ machine, project: projects.get(projectId) ?? null, environment });
+        rows.push({
+          machine,
+          project,
+          environment,
+          key: {
+            hasUnreadWork: environment.hasUnreadWork,
+            activity: environment.activity,
+            activityUpdatedAt: environment.activityUpdatedAt,
+            lastActivityAt: environment.lastActivityAt,
+            machineId: machine.backendId,
+            projectOrder: project?.order,
+            order: environment.order,
+            id: environment.ref.environmentId,
+          },
+        });
       }
     }
   }
-  const attention = (a: ActivityRow, b: ActivityRow) =>
-    order === "priority"
-      ? Number(b.environment.hasUnreadWork) - Number(a.environment.hasUnreadWork) ||
-        ACTIVITY_PRIORITY[a.environment.activity] - ACTIVITY_PRIORITY[b.environment.activity]
-      : 0;
-  const recency = (a: ActivityRow, b: ActivityRow) => {
-    // Snapshot writes (including lease refreshes) are not user activity.
-    // Keep the priority timestamp policy separate from chronological orders.
-    const timestamp = (environment: FederatedEnvironment) =>
-      order === "priority"
-        ? (environment.activityUpdatedAt ?? environment.lastActivityAt)
-        : environment.lastActivityAt;
-    const newestFirst = compareTimestampsDesc(timestamp(a.environment), timestamp(b.environment));
-    return order === "oldest" ? -newestFirst : newestFirst;
-  };
-  return rows.sort(
-    (a, b) =>
-      attention(a, b) ||
-      recency(a, b) ||
-      compareText(a.machine.backendId, b.machine.backendId) ||
-      compareText(a.environment.ref.environmentId, b.environment.ref.environmentId),
-  );
+  return rows
+    .sort((a, b) => compareActivity(a.key, b.key, order))
+    .map(({ machine, project, environment }) => ({ machine, project, environment }));
 }
 
 export interface ConnectivitySummary {
@@ -149,19 +140,4 @@ export function duplicateMachineColors(
   }
   for (const [color, ids] of Array.from(byColor)) if (ids.length < 2) byColor.delete(color);
   return byColor;
-}
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function compareTimestampsDesc(a: string | undefined, b: string | undefined): number {
-  const left = a ? Date.parse(a) : Number.NaN;
-  const right = b ? Date.parse(b) : Number.NaN;
-  const leftValid = Number.isFinite(left);
-  const rightValid = Number.isFinite(right);
-  if (leftValid && rightValid) return right - left;
-  if (leftValid) return -1;
-  if (rightValid) return 1;
-  return 0;
 }

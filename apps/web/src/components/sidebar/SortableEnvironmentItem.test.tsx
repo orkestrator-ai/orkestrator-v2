@@ -50,7 +50,8 @@ test("project home reserves the drag handle width so it aligns with other enviro
 test("regular environments render the drag handle instead of a spacer", () => {
   renderItem(environment("worker"));
   expect(screen.queryByTestId("project-home-handle-spacer") === null).toBe(true);
-  expect(screen.getByRole("button", { name: "" }).getAttribute("aria-roledescription")).toBe(
-    "sortable",
-  );
+  // Labelled like another machine's grip, which shares the frame.
+  expect(
+    screen.getByRole("button", { name: "Reorder worker" }).getAttribute("aria-roledescription"),
+  ).toBe("sortable");
 });

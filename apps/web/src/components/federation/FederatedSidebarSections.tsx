@@ -59,9 +59,17 @@ import {
   sidebarCollisionDetection,
 } from "@/lib/sidebar-collision";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
-import { useRemoteEnvironmentShown } from "@/stores/remoteWorkspaceStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { ActivitySortOrder } from "@/stores/uiStore";
-import { SELECTED_ENVIRONMENT_ROW_CLASS } from "@/components/sidebar/SortableEnvironmentItem";
+import {
+  ActivityEnvironmentList,
+  type ActivityCreateTarget,
+} from "@/components/sidebar/ActivityEnvironmentList";
+import {
+  ProjectHomeActivityButton,
+  projectHomeStatus,
+} from "@/components/sidebar/ProjectHomeActivity";
+import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { useFederation } from "./FederationProvider";
 import { CommandNodeHomeIcon, machineStatusText } from "./MachineDot";
@@ -73,6 +81,7 @@ import {
   useRemoteEnvironments,
 } from "./RemoteMachineTree";
 import { UnknownOutcomesNotice } from "./UnknownOutcomesNotice";
+import { newFederatedEnvironment } from "./useFederatedEnvironmentActions";
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -571,67 +580,183 @@ export function MergedProjectList({
 }
 
 /**
- * "By activity" across machines: every shown environment in the chosen order,
- * each row laid out as this window's own activity rows are.
+ * "By activity" across machines: the same list this window shows on its own,
+ * over every shown machine's environments in the shared activity order. This
+ * window's rows and homes are drawn by its own components; other machines'
+ * by theirs, from their summaries.
  */
 export function FederatedActivityList({
   machines,
   order = "priority",
   renderBoundRow,
+  renderBoundHome = () => null,
+  boundSelectedId = null,
+  onCreateBound,
+  boundWaitingCount = 0,
 }: {
   machines: readonly MachineView[];
   order?: ActivitySortOrder;
-  /** A whole activity row of this window's own machine. */
+  /** A row of this window's own machine. */
   renderBoundRow: (environmentId: string) => ReactNode;
+  /** The activity button of one of this window's project homes (nothing while quiet). */
+  renderBoundHome?: (environmentId: string) => ReactNode;
+  /** The environment this window shows, when it is one of its own. */
+  boundSelectedId?: string | null;
+  /** Opens this window's New Environment dialog for one of its projects. */
+  onCreateBound?: (projectId: string) => void;
+  /** This window's waiting count, from its runtime activity. */
+  boundWaitingCount?: number;
 }) {
+  const active = useRemoteWorkspaceStore((state) => state.active);
   const rows = activityRows(machines, order);
+  const mixed = machines.length > 1;
+  const createTargets: ActivityCreateTarget[] = machines.flatMap((machine) =>
+    isMachineWritable(machine)
+      ? machine.projects.map((project) => ({
+          key: project.key,
+          name: mixed ? `${project.name} · ${machine.name}` : project.name,
+          ...(mixed ? { machine: { name: machine.name, colorToken: machine.colorToken } } : {}),
+          onSelect: () =>
+            machine.bound
+              ? onCreateBound?.(project.ref.projectId)
+              : newFederatedEnvironment(machine, project),
+        }))
+      : [],
+  );
+  const homes = activityHomes(machines, order);
+  const remoteWaiting = machines
+    .filter((machine) => !machine.bound)
+    .flatMap((machine) => [...machine.environmentsByProject.values()].flat())
+    .filter(
+      (environment) =>
+        !environment.deleting &&
+        (environment.hasUnreadWork ||
+          (environment.isProjectHome && environment.activity === "waiting")),
+    ).length;
   return (
-    <div className="px-1 pt-2" data-testid="federated-activity-list">
-      {rows.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">No environments yet</p>
-      ) : (
-        rows.map((row) =>
-          row.machine.bound ? (
-            <div key={row.environment.key}>{renderBoundRow(row.environment.ref.environmentId)}</div>
-          ) : (
-            <RemoteActivityRow
-              key={row.environment.key}
-              machine={row.machine}
-              environment={row.environment}
-              subtitle={row.project?.name ?? "Unknown project"}
-            />
-          ),
-        )
+    <ActivityEnvironmentList
+      testId="federated-activity-list"
+      createTargets={createTargets}
+      totalCount={rows.length}
+      waitingCount={boundWaitingCount + remoteWaiting}
+      homes={homes.map(({ machine, environment, project }) =>
+        machine.bound ? (
+          <div key={environment.key}>{renderBoundHome(environment.ref.environmentId)}</div>
+        ) : (
+          <RemoteActivityHome
+            key={environment.key}
+            machine={machine}
+            environment={environment}
+            projectName={project?.name ?? "Unknown project"}
+          />
+        ),
       )}
-    </div>
+      rows={rows.map((row) => {
+        const environmentId = row.environment.ref.environmentId;
+        return row.machine.bound
+          ? {
+              key: row.environment.key,
+              environmentId,
+              selected: boundSelectedId === environmentId,
+              content: renderBoundRow(environmentId),
+            }
+          : {
+              key: row.environment.key,
+              environmentId,
+              selected:
+                active?.nodeId === row.machine.connectionId &&
+                active.environmentId === environmentId,
+              offline: row.machine.transport !== "connected",
+              data: {
+                "data-testid": "federated-environment-row",
+                "data-machine": row.machine.connectionId,
+                "data-selected":
+                  (active?.nodeId === row.machine.connectionId &&
+                    active.environmentId === environmentId) ||
+                  undefined,
+              },
+              content: (
+                <RemoteEnvironmentItem
+                  machine={row.machine}
+                  environment={row.environment}
+                  subtitle={row.project?.name ?? "Unknown project"}
+                />
+              ),
+            };
+      })}
+    />
   );
 }
 
-/** Another machine's environment in the activity list. */
-function RemoteActivityRow({
+/** Every shown machine's project homes, in the shared activity order. */
+function activityHomes(machines: readonly MachineView[], order: ActivitySortOrder) {
+  return machines
+    .flatMap((machine) =>
+      machine.projects.flatMap((project) =>
+        (machine.environmentsByProject.get(project.ref.projectId) ?? [])
+          .filter((environment) => environment.isProjectHome && !environment.deleting)
+          .map((environment) => ({ machine, project, environment })),
+      ),
+    )
+    .sort((a, b) =>
+      compareActivity(
+        activitySortKey(a.machine, a.environment, a.project.order),
+        activitySortKey(b.machine, b.environment, b.project.order),
+        order,
+      ),
+    );
+}
+
+function activitySortKey(
+  machine: MachineView,
+  environment: FederatedEnvironment,
+  projectOrder: number,
+): ActivitySortKey {
+  return {
+    hasUnreadWork: environment.hasUnreadWork,
+    activity: environment.activity,
+    activityUpdatedAt: environment.activityUpdatedAt,
+    lastActivityAt: environment.lastActivityAt,
+    machineId: machine.backendId,
+    projectOrder,
+    order: environment.order,
+    id: environment.ref.environmentId,
+  };
+}
+
+/** Another machine's project home in the activity list, by the rule this window's homes follow. */
+function RemoteActivityHome({
   machine,
   environment,
-  subtitle,
+  projectName,
 }: {
   machine: MachineView;
   environment: FederatedEnvironment;
-  subtitle: string;
+  projectName: string;
 }) {
-  const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
+  const status =
+    machine.transport === "connected"
+      ? projectHomeStatus({
+          deleting: environment.deleting,
+          buildActive: environment.buildActive === true,
+          activity: environment.activity,
+          hasUnreadWork: environment.hasUnreadWork,
+        })
+      : null;
+  if (!status) return null;
   return (
-    <div
-      className={cn(
-        "mx-1 flex items-center rounded-lg border border-transparent transition-colors",
-        shown ? SELECTED_ENVIRONMENT_ROW_CLASS : "hover:bg-environment-hover",
-        machine.transport !== "connected" && "opacity-60",
-      )}
-      data-testid="federated-environment-row"
-      data-machine={machine.connectionId}
-      data-selected={shown || undefined}
-    >
-      <div className="min-w-0 flex-1 pl-2">
-        <RemoteEnvironmentItem machine={machine} environment={environment} subtitle={subtitle} />
-      </div>
-    </div>
+    <ProjectHomeActivityButton
+      status={status}
+      projectName={projectName}
+      onOpen={() =>
+        openMachineWorkspace({
+          connectionId: machine.connectionId,
+          projectId: environment.projectId,
+          environmentId: environment.ref.environmentId,
+          boardTab: "home",
+          title: projectName,
+        })
+      }
+    />
   );
 }

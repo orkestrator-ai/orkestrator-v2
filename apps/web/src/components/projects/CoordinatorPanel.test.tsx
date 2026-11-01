@@ -16,11 +16,16 @@ import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
-import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
-  selectDeclinedUpstreamMerge,
-  useCoordinatorUpstreamDeclineStore,
-} from "@/stores/coordinatorUpstreamDeclineStore";
+  selectCoordinatorPaneLayout,
+  useCoordinatorPaneLayoutStore,
+} from "@/stores/coordinatorPaneLayoutStore";
+import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
+import {
+  LEGACY_UPSTREAM_DECLINE_KEY,
+  resetUpstreamCheckForTests,
+} from "@/lib/coordinator-upstream-check";
+import { clearLegacyPersistedState, readLegacyPersistedState } from "@/lib/legacy-local-state";
 import {
   collectCoordinatorLeaves,
   focusedCoordinatorConversationId,
@@ -167,6 +172,19 @@ const getCoordinatorView = mock(
 const assignAgent = mock(async () => ensuredSnapshot);
 
 const firstUpstreamTip = "b".repeat(40);
+const checkUpstream = mock(async (): Promise<unknown> => null);
+const declineUpstream = mock(async (): Promise<unknown> => undefined);
+
+function storedDecline(): unknown {
+  const declines = readLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY)?.declines;
+  return Array.isArray(declines)
+    ? declines.find((entry) => entry.projectId === "project-1")
+    : undefined;
+}
+
+function storedLayout() {
+  return selectCoordinatorPaneLayout("project-1")(useCoordinatorPaneLayoutStore.getState())!;
+}
 const runCommand = mock(async () => undefined);
 const launchEnvironmentId = coordinatorRuntimeId("coordinator-1", "conversation-1");
 const launchSessionKey = createSessionKey(launchEnvironmentId, "coordinator-tab");
@@ -260,6 +278,8 @@ mock.module("@/lib/backend", () => ({
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,
+  checkCoordinatorUpstreamMerge: checkUpstream,
+  declineCoordinatorUpstreamMerge: declineUpstream,
   switchProjectGitBranch: switchBranch,
   prepareProjectGitBranchSwitch: prepareSwitch,
   syncProjectGit: syncGit,
@@ -390,8 +410,12 @@ describe("CoordinatorPanel", () => {
     useUIStore.setState({ projectBoardTab: "coordinator" });
     useNativeAgentProjectionStore.getState().reset();
     useNativeNoticeDismissalStore.getState().clear();
-    useCoordinatorPaneLayoutStore.setState({ layouts: [] });
-    useCoordinatorUpstreamDeclineStore.setState({ declines: [] });
+    useCoordinatorPaneLayoutStore.getState().reset();
+    clearLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY);
+    resetUpstreamCheckForTests();
+    resetClientStateCapabilitiesForTests();
+    checkUpstream.mockReset();
+    declineUpstream.mockReset();
     runCommand.mockClear();
   });
 
@@ -672,9 +696,59 @@ describe("CoordinatorPanel", () => {
     pressEscape();
     await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
     expect(syncGit).not.toHaveBeenCalled();
-    expect(
-      selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
-    ).toMatchObject({ upstream: "origin/main", upstreamCommit: firstUpstreamTip });
+    await waitFor(() =>
+      expect(storedDecline()).toMatchObject({
+        upstream: "origin/main",
+        upstreamCommit: firstUpstreamTip,
+      }),
+    );
+  });
+
+  describe("against a backend that decides the merge question", () => {
+    beforeEach(() => {
+      resetClientStateCapabilitiesForTests({
+        coordinatorPaneLayouts: false,
+        coordinatorUpstreamMerge: true,
+        noticeDismissals: false,
+        environmentAttention: false,
+      });
+    });
+
+    test("shows the question only when the backend says to, and records the decline there", async () => {
+      prepareUnassignedLaunch();
+      const status = behindGit({ behind: 2 });
+      checkUpstream.mockImplementation(async () => ({ offer: true, status }));
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fetchGit.mockClear();
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      expect(await screen.findByText("Merge 2 upstream commits?")).toBeTruthy();
+      expect(fetchGit).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Don\u2019t merge" }));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(declineUpstream).toHaveBeenCalledWith("project-1", {
+          upstream: "origin/main",
+          upstreamCommit: firstUpstreamTip,
+        }),
+      );
+      expect(storedDecline()).toBeUndefined();
+    });
+
+    test("sends without asking when the backend declines to offer", async () => {
+      prepareUnassignedLaunch();
+      checkUpstream.mockImplementation(async () => ({
+        offer: false,
+        reason: "turn-running",
+        status: null,
+      }));
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+      expect(mergeDialog() === null).toBe(true);
+      expect(checkUpstream).toHaveBeenCalledWith("project-1");
+    });
   });
 
   test("Don't merge is the same answer as Escape", async () => {
@@ -754,9 +828,7 @@ describe("CoordinatorPanel", () => {
       "Inspect my draft after syncing",
     );
     // A failure is not a decline: the next Enter asks again, and merging sends.
-    expect(
-      selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
-    ).toBeUndefined();
+    expect(storedDecline()).toBeUndefined();
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.click(await screen.findByRole("button", { name: "Merge and send" }));
     await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
@@ -903,9 +975,7 @@ describe("CoordinatorPanel", () => {
         if (stage === "fetch") await act(async () => finishFetch(behindGit()));
         expect(dispatchIntent).not.toHaveBeenCalled();
         expect(syncGit).not.toHaveBeenCalled();
-        expect(
-          selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
-        ).toBeUndefined();
+        expect(storedDecline()).toBeUndefined();
         expect(useNativeComposeStore.getState().drafts.get(launchSessionKey)?.text).toBe(
           "Keep across remount",
         );
@@ -944,9 +1014,7 @@ describe("CoordinatorPanel", () => {
         await expect(pending).resolves.toBe(false);
         if (stage === "fetch") await act(async () => finishFetch(behindGit()));
         expect(syncGit).not.toHaveBeenCalled();
-        expect(
-          selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
-        ).toBeUndefined();
+        expect(storedDecline()).toBeUndefined();
       },
     );
 
@@ -988,9 +1056,7 @@ describe("CoordinatorPanel", () => {
         expect(syncGit).not.toHaveBeenCalled();
         expect(dispatchIntent).not.toHaveBeenCalled();
         expect(mergeDialog() === null).toBe(true);
-        expect(
-          selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
-        ).toBeUndefined();
+        expect(storedDecline()).toBeUndefined();
       },
     );
 
@@ -1094,9 +1160,7 @@ describe("CoordinatorPanel", () => {
       );
       fireEvent.click(await screen.findByRole("button", { name: "Merge and send" }));
       await waitFor(() => expect(sentPrompts()).toEqual(["Continue after busy refusal"]));
-      expect(
-        selectDeclinedUpstreamMerge("project-1")(useCoordinatorUpstreamDeclineStore.getState()),
-      ).toBeUndefined();
+      expect(storedDecline()).toBeUndefined();
     });
 
     test("Enter merges, then sends", async () => {
@@ -1993,9 +2057,7 @@ describe("CoordinatorPanel", () => {
         "true",
       ),
     );
-    expect(
-      focusedCoordinatorConversationId(useCoordinatorPaneLayoutStore.getState().layouts[0]!.layout),
-    ).toBe("conversation-1");
+    expect(focusedCoordinatorConversationId(storedLayout())).toBe("conversation-1");
     expect(select).toHaveBeenCalledTimes(2);
   });
 
@@ -2048,11 +2110,7 @@ describe("CoordinatorPanel", () => {
           ),
         );
         await waitFor(() => expect(select).toHaveBeenCalledWith("project-1", "side-2"));
-        expect(
-          focusedCoordinatorConversationId(
-            useCoordinatorPaneLayoutStore.getState().layouts[0]!.layout,
-          ),
-        ).toBe("side-2");
+        expect(focusedCoordinatorConversationId(storedLayout())).toBe("side-2");
       } finally {
         treeSpy.mockRestore();
       }
@@ -2105,14 +2163,8 @@ describe("CoordinatorPanel", () => {
       });
     });
     await waitFor(() => expect(select).toHaveBeenLastCalledWith("project-1", "side-3"));
-    await waitFor(() =>
-      expect(
-        focusedCoordinatorConversationId(
-          useCoordinatorPaneLayoutStore.getState().layouts[0]!.layout,
-        ),
-      ).toBe("side-3"),
-    );
-    const stored = useCoordinatorPaneLayoutStore.getState().layouts[0]!.layout;
+    await waitFor(() => expect(focusedCoordinatorConversationId(storedLayout())).toBe("side-3"));
+    const stored = storedLayout();
     expect(stored.activePaneId).toBe(right!.id);
     expect(collectCoordinatorLeaves(stored.root)[1]!.conversationIds).toEqual(["side-1", "side-3"]);
     expect(focusedCoordinatorConversationId(stored)).toBe("side-3");

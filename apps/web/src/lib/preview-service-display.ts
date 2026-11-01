@@ -1,11 +1,13 @@
 import type { BrowserPreviewTransportState } from "@orkestrator/protocol/browser-preview";
 import {
   normalizePreviewPath,
+  previewServiceReadiness,
   requiresListenerOwner,
   type PreviewCapabilities,
   type PreviewEndpointSnapshot,
   type PreviewErrorCategory,
   type PreviewServiceDefinition,
+  type PreviewServiceReadinessTone,
   type PreviewServiceSnapshot,
 } from "@orkestrator/protocol/preview-services";
 
@@ -85,34 +87,9 @@ export function serviceTargetLabel(
   return `${TARGET_LABEL[definition.targetKind]}:${definition.applicationPort}`;
 }
 
-export type ServiceReadinessTone = "ready" | "starting" | "problem" | "unknown";
-
-export function serviceReadiness(snapshot: PreviewServiceSnapshot): {
-  label: string;
-  tone: ServiceReadinessTone;
-} {
-  const { endpoint, definition } = snapshot;
-  if (!definition.enabled) return { label: "disabled", tone: "problem" };
-  if (endpoint.state === "unresolved" || endpoint.state === "resolving")
-    return { label: "checking", tone: "unknown" };
-  if (endpoint.state === "revoked") return { label: "reconnecting", tone: "starting" };
-  if (endpoint.state === "unavailable") {
-    const category = endpoint.failure?.category;
-    if (category === "environment-stopped") return { label: "stopped", tone: "problem" };
-    if (category === "target-unmapped") return { label: "not published", tone: "problem" };
-    if (category === "target-unverified" && endpoint.listener === "other-environment")
-      return { label: "another environment's server", tone: "problem" };
-    if (category === "target-unverified" && requiresListenerOwner(definition))
-      return { label: "waiting for server", tone: "starting" };
-    return { label: "unavailable", tone: "problem" };
-  }
-  const { tcp, http } = endpoint.readiness;
-  if (tcp.state === "failed") return { label: "not listening", tone: "starting" };
-  if (tcp.state === "pending") return { label: "checking", tone: "unknown" };
-  if (http.state === "ok") return { label: `ready · ${http.statusClass ?? "http"}`, tone: "ready" };
-  if (tcp.state === "ok") return { label: "ready", tone: "ready" };
-  return { label: "available", tone: "unknown" };
-}
+/** Readiness labels live in the protocol so every client reports a service the same way. */
+export type ServiceReadinessTone = PreviewServiceReadinessTone;
+export const serviceReadiness = previewServiceReadiness;
 
 /**
  * How the backend tied the service to its environment, for route details.

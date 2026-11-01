@@ -42,7 +42,6 @@ import {
   withoutSuppressedComposerControls,
   type AgentModelRef,
   type NativeAgentModelSubstitution,
-  type NativeAgentNotice,
 } from "@orkestrator/protocol/native-agent";
 import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
@@ -190,7 +189,15 @@ import {
 } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
-import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
+import {
+  useNativeNoticeDismissalStore,
+  useNoticeDismissalsReady,
+} from "@/stores/nativeNoticeDismissalStore";
+import {
+  nativeNoticeDismissalId,
+  nativeNoticeToastId,
+  nativeNoticeToastType,
+} from "./native-notice-identity";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { FileCandidate } from "@/types";
 import {
@@ -264,33 +271,6 @@ const RESEND_AFTER_SIGN_IN_TIMEOUT_MS = 30_000;
 const CODEX_SIGNED_OUT_REREAD_MS = 10_000;
 const HELD_SUBMIT_CONVERSATION_CHANGED =
   "The conversation changed, so nothing was sent. Your message is still in the composer.";
-
-function nativeNoticeDismissalId(notice: NativeAgentNotice): string {
-  const severity = notice.kind === "advisory" ? notice.severity : notice.kind;
-  return `${notice.kind}\u0000${severity}\u0000${notice.occurrenceId ?? notice.message}`;
-}
-
-function nativeNoticeToastId(sessionIdentity: string, noticeId: string): string {
-  return `native-agent-notice:${sessionIdentity}:${noticeId}`;
-}
-
-function nativeNoticeToastType(
-  notice: NativeAgentNotice,
-): "error" | "info" | "loading" | "warning" {
-  if (notice.kind === "recovery") return "loading";
-  if (notice.kind === "error" || (notice.kind === "advisory" && notice.severity === "error")) {
-    return "error";
-  }
-  if (
-    notice.kind === "warning" ||
-    notice.kind === "auth" ||
-    notice.kind === "incomplete-turn" ||
-    (notice.kind === "advisory" && notice.severity === "warning")
-  ) {
-    return "warning";
-  }
-  return "info";
-}
 
 export async function enqueueNativeAsyncQuestionResponse(input: {
   platform: string;
@@ -574,6 +554,7 @@ export function SharedNativeAgentController({
   );
   const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
   const reconcileNoticeDismissals = useNativeNoticeDismissalStore((state) => state.reconcile);
+  const noticeDismissalsReady = useNoticeDismissalsReady();
   const [releasedDispatchNotices, setReleasedDispatchNotices] = useState<
     Array<{ sessionIdentity: string; noticeId: string }>
   >([]);
@@ -595,9 +576,16 @@ export function SharedNativeAgentController({
     // An absent projection means rehydration is still in flight, not that every
     // condition recovered. Only an authoritative snapshot may retire a
     // dismissal and allow a later recurrence to surface again.
-    if (!projection || projection.runtimeHealthAuthoritative === false) return;
+    if (!noticeDismissalsReady || !projection || projection.runtimeHealthAuthoritative === false)
+      return;
     reconcileNoticeDismissals(noticeSessionIdentity, activeNoticeIds);
-  }, [activeNoticeIds, noticeSessionIdentity, projection, reconcileNoticeDismissals]);
+  }, [
+    activeNoticeIds,
+    noticeDismissalsReady,
+    noticeSessionIdentity,
+    projection,
+    reconcileNoticeDismissals,
+  ]);
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
   const clearDraft = useNativeComposeStore((state) => state.clearDraft);
   const recordSentPrompt = useNativeComposeStore((state) => state.recordSentPrompt);
@@ -3181,7 +3169,7 @@ export function SharedNativeAgentController({
     submit,
   ]);
   useEffect(() => {
-    const notices = (isActive ? (projection?.notices ?? []) : []).filter(
+    const notices = (isActive && noticeDismissalsReady ? (projection?.notices ?? []) : []).filter(
       (notice) =>
         !dismissedNoticeIds.includes(nativeNoticeDismissalId(notice)) &&
         // Shown in the composer instead, by the release above.
@@ -3231,6 +3219,7 @@ export function SharedNativeAgentController({
     dismissNotice,
     dismissedNoticeIds,
     isActive,
+    noticeDismissalsReady,
     noticeSessionIdentity,
     projection?.notices,
     retiredDispatchNoticeId,

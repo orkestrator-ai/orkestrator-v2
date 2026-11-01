@@ -7,6 +7,7 @@ import {
   PREVIEW_SERVICES_CHANGED_EVENT,
   previewError,
   previewFailure,
+  resolvePreviewEntryService,
   stablePreviewJson,
   validatePreviewServiceInput,
   type PreviewEndpointSnapshot,
@@ -371,7 +372,19 @@ export class PreviewServiceRegistry {
     const tombstones = this.tombstones.filter(
       (tombstone) => !environmentId || tombstone.environmentId === environmentId,
     );
-    const snapshot: PreviewRegistrySnapshot = { ...base, notModified: false, services, tombstones };
+    const snapshot: PreviewRegistrySnapshot = {
+      ...base,
+      notModified: false,
+      services,
+      tombstones,
+      // Only an environment-scoped snapshot names one environment's entry.
+      ...(environmentId
+        ? {
+            entryServiceId:
+              resolvePreviewEntryService(services, environmentId)?.definition.serviceId ?? null,
+          }
+        : {}),
+    };
     if (Buffer.byteLength(JSON.stringify(snapshot)) > this.limits.snapshotMaxBytes) {
       throw previewFailure("capacity-exceeded", {
         retryable: false,

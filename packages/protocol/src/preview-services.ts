@@ -187,6 +187,55 @@ export function requiresListenerOwner(
   );
 }
 
+/**
+ * The service an environment's browser button opens: the enabled entry
+ * service, or the only service when the environment has exactly one. The
+ * backend keeps at most one entry per environment; this is the one rule both
+ * the backend's snapshot and older-backend clients apply.
+ */
+export function resolvePreviewEntryService<
+  T extends { definition: Pick<PreviewServiceDefinition, "entry" | "enabled" | "environmentId"> },
+>(services: readonly T[], environmentId?: string): T | null {
+  const scoped =
+    environmentId === undefined
+      ? services
+      : services.filter((service) => service.definition.environmentId === environmentId);
+  return (
+    scoped.find((service) => service.definition.entry && service.definition.enabled) ??
+    (scoped.length === 1 ? scoped[0]! : null)
+  );
+}
+
+export type PreviewServiceReadinessTone = "ready" | "starting" | "problem" | "unknown";
+
+/** A short status label for a service, from its definition and endpoint state. */
+export function previewServiceReadiness(snapshot: PreviewServiceSnapshot): {
+  label: string;
+  tone: PreviewServiceReadinessTone;
+} {
+  const { endpoint, definition } = snapshot;
+  if (!definition.enabled) return { label: "disabled", tone: "problem" };
+  if (endpoint.state === "unresolved" || endpoint.state === "resolving")
+    return { label: "checking", tone: "unknown" };
+  if (endpoint.state === "revoked") return { label: "reconnecting", tone: "starting" };
+  if (endpoint.state === "unavailable") {
+    const category = endpoint.failure?.category;
+    if (category === "environment-stopped") return { label: "stopped", tone: "problem" };
+    if (category === "target-unmapped") return { label: "not published", tone: "problem" };
+    if (category === "target-unverified" && endpoint.listener === "other-environment")
+      return { label: "another environment's server", tone: "problem" };
+    if (category === "target-unverified" && requiresListenerOwner(definition))
+      return { label: "waiting for server", tone: "starting" };
+    return { label: "unavailable", tone: "problem" };
+  }
+  const { tcp, http } = endpoint.readiness;
+  if (tcp.state === "failed") return { label: "not listening", tone: "starting" };
+  if (tcp.state === "pending") return { label: "checking", tone: "unknown" };
+  if (http.state === "ok") return { label: `ready · ${http.statusClass ?? "http"}`, tone: "ready" };
+  if (tcp.state === "ok") return { label: "ready", tone: "ready" };
+  return { label: "available", tone: "unknown" };
+}
+
 /** Mutable configuration accepted by register/update. */
 export interface PreviewServiceInput {
   environmentId: string;
@@ -305,6 +354,12 @@ export interface PreviewRegistrySnapshot {
   tombstones: PreviewServiceTombstone[];
   /** Oldest revision the tombstone window covers. Older cursors must refetch. */
   tombstoneFloor: number;
+  /**
+   * The environment's entry service (see {@link resolvePreviewEntryService}),
+   * present on environment-scoped full snapshots only. Absent from backends
+   * that predate it; clients then resolve it from `services` themselves.
+   */
+  entryServiceId?: string | null;
 }
 
 export interface PreviewServicesChangedEvent {

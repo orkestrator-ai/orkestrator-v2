@@ -18,6 +18,7 @@ import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
 import { isPrMergeability } from "@orkestrator/protocol/pr-merge-readiness";
 import { parseEnvironmentDiffBaseOverride } from "@orkestrator/protocol/diff-stats";
+import { isEnvironmentAttentionReason } from "@orkestrator/protocol/environment-attention";
 import type { AgentActivityCompletionOutcome, EnvironmentUnreadReason } from "./models.js";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
@@ -406,6 +407,8 @@ export class ProjectsRepository {
     }
     // Its template trust records and capability ceiling (item 109) go with it.
     this.repos.graphTemplates.deleteGraphProjectSettings(projectId);
+    // Its coordinator tab groups and upstream-merge decline.
+    this.repos.clientState.deleteProjectClientState(projectId);
     this.context.changes.announce("project", projectId, undefined, undefined, true);
   }
 
@@ -1537,6 +1540,7 @@ export class ProjectsRepository {
           ),
         ).toISOString();
       }
+      const unreadBefore = environment.hasUnreadWork === true;
       if (failedEnd) {
         environment.hasUnreadWork = true;
         environment.unreadReason = "agent_failed";
@@ -1560,6 +1564,9 @@ export class ProjectsRepository {
       // the broadcast; genuine state transitions still announce below.
       if (agentActivityStructureFingerprint(environment) !== structureBefore) {
         this.context.changes.announce("environment", environmentId, environment.projectId);
+      }
+      if (!unreadBefore && environment.hasUnreadWork === true) {
+        this.notifyAttention(environment);
       }
       return environment;
     });
@@ -1675,11 +1682,13 @@ export class ProjectsRepository {
         return environment;
       }
 
+      const unreadBefore = environment.hasUnreadWork === true;
       environment.lastActivityAt = normalizedActivityAt;
       environment.hasUnreadWork = true;
       environment.unreadReason = "terminal_finished";
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
+      if (!unreadBefore) this.notifyAttention(environment);
       return environment;
     });
   }
@@ -1735,10 +1744,12 @@ export class ProjectsRepository {
           ? Math.max(acceptedTime, previousCompletionTime + 1)
           : acceptedTime,
       ).toISOString();
+      const unreadBefore = environment.hasUnreadWork === true;
       environment.hasUnreadWork = true;
       environment.unreadReason = reason;
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
+      if (!unreadBefore) this.notifyAttention(environment);
       return environment;
     });
   }
@@ -1789,11 +1800,30 @@ export class ProjectsRepository {
           ? previousTime + 1
           : occurredTime;
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
+      const unreadBefore = environment.hasUnreadWork === true;
       environment.hasUnreadWork = true;
       environment.unreadReason = "agent_question";
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
+      if (!unreadBefore) this.notifyAttention(environment);
       return { environment, recorded: true };
+    });
+  }
+
+  /**
+   * Raises the attention event for an environment whose unread badge this
+   * backend just lit (an edge, never a re-light of a badge already shown).
+   * Only agent and terminal reasons count; a client marking it unread does not.
+   */
+  private notifyAttention(environment: Environment): void {
+    const reason = environment.unreadReason;
+    if (!isEnvironmentAttentionReason(reason)) return;
+    this.context.changes.notifyEnvironmentAttention({
+      attentionId: shared.randomUUID(),
+      environmentId: environment.id,
+      projectId: environment.projectId,
+      reason,
+      occurredAt: environment.lastActivityAt ?? shared.nowIso(),
     });
   }
 

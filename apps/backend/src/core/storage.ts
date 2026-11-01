@@ -6,12 +6,14 @@ export type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 export type { GraphRunsStorage } from "./storage-graph-runs.js";
 export type { GraphEffectsStorage } from "./storage-graph-effects.js";
 export type { GraphDescribeStorage } from "./storage-graph-describe.js";
+export type { ClientStateStorage } from "./storage-client-state.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
+import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
 import {
@@ -28,6 +30,7 @@ import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphEffectsStorage } from "./storage-graph-effects.js";
 import type { GraphDescribeStorage } from "./storage-graph-describe.js";
+import type { ClientStateStorage } from "./storage-client-state.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -148,6 +151,7 @@ export class StorageService {
   readonly graphRuns: GraphRunsStorage;
   readonly graphEffects: GraphEffectsStorage;
   readonly graphDescribe: GraphDescribeStorage;
+  readonly clientState: ClientStateStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -163,6 +167,7 @@ export class StorageService {
     this.graphRuns = this.repos.graphRuns;
     this.graphEffects = this.repos.graphEffects;
     this.graphDescribe = this.repos.graphDescribe;
+    this.clientState = this.repos.clientState;
   }
 
   async init(): Promise<void> {
@@ -199,6 +204,13 @@ export class StorageService {
   /** Subscribe backend services without replacing the gateway's broadcast sink. */
   addResourceChangeListener(listener: ResourceChangeListener): () => void {
     return this.context.changes.addResourceChangeListener(listener);
+  }
+
+  /** Observe the attention edges environment writes raise (the "agent stopped" signal). */
+  addEnvironmentAttentionListener(
+    listener: (event: EnvironmentAttentionEvent) => void,
+  ): () => void {
+    return this.context.changes.addEnvironmentAttentionListener(listener);
   }
 
   /** Publish a provider-authoritative projection after its cache is committed. */

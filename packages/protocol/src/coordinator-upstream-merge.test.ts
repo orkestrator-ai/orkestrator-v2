@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { ProjectGitStatus } from "@orkestrator/protocol/coordinator";
-import { behindFastForwardBlocker, shouldOfferUpstreamMerge } from "./coordinator-upstream-merge";
+import type { ProjectGitStatus } from "./coordinator.js";
+import {
+  behindFastForwardBlocker,
+  decideUpstreamMergeOffer,
+  parseCoordinatorUpstreamMergeCheck,
+  shouldOfferUpstreamMerge,
+} from "./coordinator-upstream-merge.js";
 
 const tip = "b".repeat(40);
 const behind: ProjectGitStatus = {
@@ -89,5 +94,34 @@ describe("shouldOfferUpstreamMerge", () => {
     expect(shouldOfferUpstreamMerge(legacy, { upstream: "origin/main", upstreamCommit: tip })).toBe(
       true,
     );
+  });
+});
+
+describe("decideUpstreamMergeOffer", () => {
+  test("names why it does not ask", () => {
+    expect(decideUpstreamMergeOffer(behind, null)).toEqual({ offer: true, status: behind });
+    expect(decideUpstreamMergeOffer(null, null)).toMatchObject({ reason: "no-status" });
+    expect(decideUpstreamMergeOffer({ ...behind, behind: 0 }, null)).toMatchObject({
+      reason: "not-behind",
+    });
+    expect(decideUpstreamMergeOffer({ ...behind, ahead: 1 }, null)).toMatchObject({
+      reason: "blocked",
+    });
+    expect(
+      decideUpstreamMergeOffer(behind, { upstream: "origin/main", upstreamCommit: tip }),
+    ).toMatchObject({ offer: false, reason: "declined" });
+  });
+
+  test("answers parse back, and malformed ones are refused", () => {
+    expect(parseCoordinatorUpstreamMergeCheck({ offer: true, status: behind })).toEqual({
+      offer: true,
+      status: behind,
+    });
+    expect(
+      parseCoordinatorUpstreamMergeCheck({ offer: false, reason: "turn-running", status: null }),
+    ).toEqual({ offer: false, reason: "turn-running", status: null });
+    expect(parseCoordinatorUpstreamMergeCheck({ offer: true })).toBeNull();
+    expect(parseCoordinatorUpstreamMergeCheck({ offer: false, reason: "other" })).toBeNull();
+    expect(parseCoordinatorUpstreamMergeCheck(undefined)).toBeNull();
   });
 });

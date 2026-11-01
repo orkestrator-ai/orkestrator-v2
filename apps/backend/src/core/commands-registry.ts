@@ -7,6 +7,7 @@ import {
   registerGraphRunRewindCommands,
 } from "./commands-registry-graph-runs.js";
 import { registerGraphDescribeCommands } from "./commands-registry-graph-describe.js";
+import { registerClientStateCommands } from "./commands-registry-client-state.js";
 import { registerTranscriptMediaCommands } from "./commands-registry-transcript-media.js";
 import { registerGraphMockCommands } from "./commands-registry-graph-mock.js";
 import { registerDesignCommands } from "./commands-registry-design.js";
@@ -380,6 +381,7 @@ export function createCommandRegistry(
   registerGraphLaunchCommands(register);
   registerGraphRunRewindCommands(register);
   registerGraphDescribeCommands(register);
+  registerClientStateCommands(register);
   registerGraphMockCommands(register);
   registerTeardownCommands(register, dependencies);
   // Last: the public contract composes the commands registered above.

@@ -69,6 +69,9 @@ describe("PreviewServiceRegistry", () => {
     );
     expect(restarted.backendEpoch).not.toBe(registry.backendEpoch);
     expect(restarted.backendInstanceId).toBe(registry.backendInstanceId);
+    // The environment's entry service is resolved by the backend, for every client.
+    expect(restarted.snapshot({ environmentId: "a" }).entryServiceId).toBe(first[0]!.serviceId);
+    expect(restarted.snapshot().entryServiceId).toBeUndefined();
   });
 
   test("never marks persisted services ready before re-validating after restart", async () => {

@@ -76,10 +76,22 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
         if (!nodeId) throw new Error("This window is not connected to a command node.");
         const result = await approveSetupCommandsOnNodes(nodeId, approval.projectId, approval.hash);
         setNodeResults(result.nodes);
+        return;
       }
       await approveSetupRuntime(environmentId, approval.hash, kind !== "once");
     } catch (operationError) {
       setError(operationError instanceof Error ? operationError.message : "Setup approval failed");
+      // Never retry a rejected hash automatically. Show the current commands
+      // and require another explicit decision, even if the failure was transient.
+      if (kind !== "skip") {
+        setApproval(null);
+        setNodeResults(null);
+        try {
+          setApproval(await backend.getEnvironmentSetupApproval(environmentId));
+        } catch (reason) {
+          setLoadError(reason instanceof Error ? reason.message : "Could not read setup commands");
+        }
+      }
     } finally {
       setOperation(null);
     }
@@ -196,6 +208,12 @@ export function SetupApprovalPanel({ environmentId }: { environmentId: string })
           Skip setup
         </Button>
       )}
+      {nodeResults ? (
+        <p className="max-w-md text-center text-xs">
+          Review the results below. Machines still needing approval must be handled there. Choose
+          Run once or Approve for this project to start setup here.
+        </p>
+      ) : null}
       {nodeResults ? (
         <ul aria-label="Approval on each machine" className="text-xs">
           {nodeResults.map((result) => (

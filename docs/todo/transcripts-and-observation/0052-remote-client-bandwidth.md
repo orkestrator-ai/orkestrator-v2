@@ -1,22 +1,24 @@
 # Remote client bandwidth
 
-Checked against `main` at `863b5782` (2026-10-27).
+Checked against `main` at `0658de64` (2026-11-01) for tasks 1, 3, 6 and 9; the
+other tasks were last checked at `863b5782` (2026-10-27).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 3 and 9 updated
+2026-11-01.
 
 ### Tasks
 
-1. **Confirm the remote route**: decide which supported route the matrix targets, and whether Tailscale Serve buffers or re-encodes SSE. Status: open.
-2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` through that route: `body`, `on` and the opt-in terminal WebSocket, at normal and constrained bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (waits on task 1).
-3. **`on`-mode streaming check**: prove that SSE gzip streams incrementally, directly and through the proxy, across reconnect, keepalives, idle, disconnect, non-gzip clients, and `Vary` and `Content-Encoding`. Status: open.
+1. **Confirm the remote route**: decide which supported route the matrix targets, and whether Tailscale Serve buffers or re-encodes SSE. Status: partly done (route decided; source reading says Serve does neither; the live run needs a tailnet change, steps below).
+2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` through that route: `body`, `on` and the opt-in terminal WebSocket, at normal and constrained bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (its first step is task 1's live run).
+3. **`on`-mode streaming check**: prove that SSE gzip streams incrementally, directly and through the proxy, across reconnect, keepalives, idle, disconnect, non-gzip clients, and `Vary` and `Content-Encoding`. Status: partly done (proved directly, through test proxies and in real browsers; two proxied-stream bugs fixed; the one confirming run through real Serve is task 1's live run).
 4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: partly done (most cases have tests; not mapped to the criteria).
 5. **One default change**: compression mode or terminal transport, decided from task 2's data. Status: blocked (on task 2).
-6. **Data-saving preference**: a client-local preference feeding `read-coordinator.ts`, a trial active cadence, wider quiet backoff and the approval budget. Status: open (whether it is still worth adding is undecided).
+6. **Data-saving preference**: a client-local preference feeding `read-coordinator.ts`, a trial active cadence, wider quiet backoff and the approval budget. Status: built, and left as it is (see task 6's recommendation); its real-browser byte measurement is owed with task 2.
 7. **Hidden terminal subscriptions**: reduce or detach hidden terminal presentation subscriptions where exact recovery exists. Status: deferred (waits on task 2).
 8. **WebSocket `permessage-deflate`**: prototype only if task 2 shows large terminal WebSocket payloads. Status: deferred (waits on task 2).
-9. **`remote-gateway.md` drift**: the doc omits `off`, the streaming gzip ceiling, the always-`off` control listener and the opt-in terminal WebSocket. Status: open.
+9. **`remote-gateway.md` drift**: the doc omits `off`, the streaming gzip ceiling, the always-`off` control listener and the opt-in terminal WebSocket. Status: done.
 
 ### 1. Confirm the remote route
 
@@ -24,18 +26,28 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** `docs/architecture/remote-gateway.md` supports the Tailscale listener directly and through Serve (`--tailscale-serve`, `:116`), and the hosted client uses Serve. The live outage workload in 0051 and the 0031 batch need the same two-machine setup.
 
-**Investigation.** Nothing has been recorded since `2459b05c`. The gateway's own proxied path (`createSseGzipCompressor`, `apps/backend/src/gateway-proxy.ts:62`) is Orkestrator's federation proxy, not Serve. The two are easy to confuse in the matrix and should be labelled apart.
+**Investigation.** The gateway's own proxied path (`createSseGzipCompressor`, `apps/backend/src/gateway-proxy.ts`) is Orkestrator's federation proxy, not Serve. The two are easy to confuse in the matrix and should be labelled apart.
+
+Read on 2026-11-01 from Tailscale's source at v1.102.4 (the version on this machine; `ipn/ipnlocal/serve.go`) and Go's `net/http`. Nothing here was measured on a tailnet.
+
+- Serve's handler is a plain `httputil.ReverseProxy` with only `Rewrite` and `Transport` set. Go's `flushInterval` returns "immediately" for `text/event-stream`, so Serve should not hold a frame, whatever the `FlushInterval`.
+- `serve.go` never touches `Accept-Encoding`, `Content-Encoding` or gzip, so Serve should not re-encode a body. Tailscale's own Serve documentation says nothing about either point.
+- The Serve listener's `http.Server` sets no `WriteTimeout`, `ReadTimeout` or `IdleTimeout`, so nothing there should end a quiet stream.
+- `fixLocationHeaderResponseWriter`, which hides `Flush`, wraps directory serving only, not the proxy branch.
+- **A real difference:** the transport leaves `DisableCompression` off. A request with **no** `Accept-Encoding` gets `gzip` added by Go and is decoded again on the way back. So through Serve, such a client takes a streaming gzip context and still receives identity, with no `Content-Encoding`. Browsers always send the header and an explicit `identity` is left alone, so this only touches non-browser clients. A matrix run must send a browser's header: `curl` without `--compressed` measures something else.
+
+The live half stays open because it needs a Serve handler on a tailnet node, and this work must not change this machine's Tailscale setup. Steps are under "Live run through Tailscale Serve".
 
 **Decisions.**
 
-- **Which route is the reference?**
+- **Which route is the reference?** Decided 2026-11-01: Serve, with the direct listener as the control.
   - **Tailscale Serve, with the direct tailnet listener as the control (recommended).**
     - Pros: Serve is what the hosted client and most remote browsers use; the control isolates Serve's effect.
     - Cons: two runs per cell; Serve behaviour can change with Tailscale versions, so record the version.
   - **The direct tailnet listener only.**
     - Pros: one variable fewer; Orkestrator's own encoding is measured cleanly.
     - Cons: misses buffering or re-encoding on the path most users take.
-- **How to detect Serve buffering?**
+- **How to detect Serve buffering?** Decided 2026-11-01: timestamped frames, in `apps/backend/scripts/sse-route-probe.ts`. It needs no clock alignment, because delay is measured against the fastest tick of the run, which cancels the clocks' offset. It also compares the bytes the client read with the bytes the gateway encoded, which is what catches re-encoding.
   - **Timestamp SSE frames at the backend and at the client for a slow, steady synthetic stream (recommended).**
     - Pros: content-free; directly shows held frames; reusable in task 3.
     - Cons: needs clock alignment across two machines, or round-trip measurement from one.
@@ -74,11 +86,34 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Both writers flush synchronously, by design. The check covers direct `/events` and proxied streams.
 
-**Investigation.** Deterministic tests already cover parts of this: `apps/backend/tests/gateway-support-extra.test.ts:674` ("bounds streaming compression contexts and records byte outcomes") and `:543` (identity under pool saturation). No test or record observes a real remote client receiving a gzip SSE frame promptly.
+**Investigation.** Before this work, `gateway-streaming-compression.test.ts` covered most of the direct cases. It did not cover `gateway.keepalive` under gzip (added in #1499), any hop between gateway and client, or a proxied stream beyond flushing, and no real client had been observed.
+
+`apps/backend/tests/gateway-sse-gzip-routes.test.ts` now covers each case below for direct `/events` and for proxied streams, each one directly, through an HTTP/1.1 test proxy and through an HTTP/2 test proxy (Serve's browser hop). Every frame is proved in lockstep: the next is not written until this one has decoded, whole, and the wire bytes end on a sync flush, so the proof rests on no timing assumption.
+
+| Case | Direct `/events` | Proxied stream |
+| --- | --- | --- |
+| Incremental, including a frame larger than the compressor's chunk | Yes | Yes |
+| Terminal-only stream | Yes | n/a |
+| Keepalive comments and idle | Yes | Yes |
+| `gateway.keepalive` at connect and on each tick | Yes | Forwarded and flushed |
+| Reconnect | `Last-Event-ID` and `since`: replay, no duplicate, new gzip stream | Cursor reaches upstream, new gzip stream |
+| Disconnect | Idle and mid-burst: compressor released, no failure | Upstream closed, compressor released |
+| Non-gzip clients (none, `identity`, `gzip;q=0`, `br`) | Identity, flushed, no compressor | Identity, no compressor |
+| `Content-Encoding` and `Vary` | `gzip` once, `Vary: Accept-Encoding`, `no-transform` | Same; a `no-transform` or already coded upstream is untouched |
+| `off`, `body`, control listener | Identity, no `Vary` | n/a |
+
+Negative controls show the checks can fail: a hop that holds bytes and an encoder that does not sync-flush are both caught. Seven deliberate breaks were also caught on 2026-11-01: no sync flush in each writer, no `gateway.keepalive` at connect, comment-only ticks, `Vary` only when gzipping, and each of the two bugs below restored.
+
+`e2e/SseGzipStreaming.spec.ts` runs a browser's own decoder in lockstep against a real gateway, through both `EventSource` (including `gateway.keepalive`) and a fetch reader. It passed on Chromium, Firefox and WebKit on 2026-11-01, over loopback HTTP/1.1. The compressor count shows that `EventSource` negotiates gzip too.
+
+Direct streams were already right. The checks found two bugs in proxied streams, both fixed with regression tests:
+
+- **A proxied gzip stream that ended cleanly had no gzip trailer.** `createSseGzipCompressor` set `finishFlush: Z_SYNC_FLUSH`, so a strict decoder failed the whole response at the end. Bun's `fetch` threw `ZlibError` and lost the body.
+- **A quiet proxied stream held back its response headers until the first frame,** in both gzip and identity. A client could not tell an open stream from a dead link. Proxied event streams now flush their headers at once.
 
 **Decisions.**
 
-- **Where to prove it?**
+- **Where to prove it?** Decided 2026-11-01: as recommended. The test is in; the live run is task 1's.
   - **A deterministic gateway test that reads a gzip SSE response frame by frame and asserts each event decodes before the next is written, then one confirming live run through task 1's route (recommended).**
     - Pros: guards against regressions in CI; the live run catches proxy effects.
     - Cons: the test needs a streaming decompressor harness.
@@ -130,6 +165,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 **Problem.** Remote and metered clients cannot reduce their own demand, and any reduction today would have to change shared cadences.
 
 **Context.** Code items 2 to 4 and the first and third open questions. The preference must affect only the requesting client, never a shared backend's cadence. Approvals and completions must stay inside a chosen budget (recurring-work's 2 s and 3 s p95 are suggested).
+
+**Recommendation, 2026-11-01.** Stop treating this as undecided. The investigation below is out of date: the preference is already in the tree (`uiStore.dataSaving`, `DataSavingSetting.tsx`, `lib/data-saving-policy.ts`; see "Current state" and decisions D2 to D4). Keep it, off by default, on recurring-work's budgets, and do not widen it or add another setting until task 2 and the real-browser measurement show what it saves. This work's evidence covers only that it exists and has a request budget, not its bytes. Nothing was changed for this task.
 
 **Investigation.** There is no data-saving preference anywhere in `apps/web/src` (no `dataSaving` or similar identifier). The candidate homes exist: the `persist` store in `apps/web/src/stores/uiStore.ts:134` and `apps/web/src/components/settings/machines/ClientOptions.tsx`. The candidate reads are unchanged: active 500 ms and idle 1,500 ms (`apps/web/src/lib/native-session-read-policy.ts:14`, `:15`), Files panel 5 s (`apps/web/src/hooks/useFilesPanel.ts:25`) and reviewer tab 4 s (`apps/web/src/components/review/MultiReviewReviewerTab.tsx:60`). Because idle backoff now covers all six providers (task 2), the idle saving this preference was meant to add mostly exists already. What is left is active cadence and the non-agent reads.
 
@@ -195,11 +232,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** Listed under Related as living-doc drift.
 
-**Investigation.** Still stale: `docs/architecture/remote-gateway.md:119` says "`body` (default) or `on`". It omits `off`, the 8-context streaming ceiling, the always-`off` control listener, and `orkestrator-terminal-transport`.
+**Investigation.** Done, and mostly before this check. On 2026-11-01 `docs/architecture/remote-gateway.md` already had all four points, each checked against the code: `off` (`GATEWAY_COMPRESSION_MODES`; `allowCompression` and `canTransform` both refuse it), the ceiling of 8 with identity fallback counted as declined (`tryStartStreamingCompression`), the always-`off` control listener (`compressionModeForListener`), and the opt-in terminal WebSocket (`terminalTransport`, `orkestrator-terminal-transport`, limits of 64, 256 and 4,096, no message compression, 50 ms ACKs). One small drift remained and was fixed: it said only direct streams send `Vary`, when proxied streams do too. It now also covers `gateway.keepalive` flushing, untouched proxied upstreams and what is known about Serve.
 
 **Decisions.**
 
-- **When to fix it?**
+- **When to fix it?** Decided: now, as recommended.
   - **Now, as a docs-only change (recommended).**
     - Pros: accurate today; needs only `mise run format:check`.
     - Cons: may need another touch if task 5 changes a default.
@@ -219,9 +256,14 @@ requesting client's background reads, an in-process baseline harness with a
 first matrix (normal and constrained links, several healthy clients and one
 slow client), and tests for incremental `on`-mode streaming, encoding
 negotiation, replay, keepalives and compressor release. No default changed.
-What is left needs the real remote route: the same matrix through the
-Tailscale listener and Tailscale Serve, the data-saving byte measurement in a
-real browser, and the browser QA in the acceptance criteria.
+
+Done on 2026-11-01: the reference route is decided, gzip SSE is proved
+incremental directly, through test proxies and in real browsers, two proxied
+stream bugs are fixed, and `sse-route-probe.ts` is ready for the live run.
+
+What is left needs the real remote route: the probe through Tailscale Serve,
+the same matrix through the Tailscale listener and Serve, the data-saving byte
+measurement in a real browser, and the browser QA in the acceptance criteria.
 
 ## Current state
 
@@ -247,6 +289,11 @@ real browser, and the browser QA in the acceptance criteria.
   replay after a compressed reconnect, decodable keepalives over a long idle
   stream, a disconnect mid-burst, and compressor release on credential
   rotation and gateway stop.
+- `apps/backend/tests/gateway-sse-gzip-routes.test.ts` runs the wider set in
+  task 3 on three routes, and `e2e/SseGzipStreaming.spec.ts` does it in a real
+  browser.
+- `apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
+  changes a gzip stream. It has no Tailscale dependency.
 - Gateway metrics separate serialised/source bytes from encoded SSE bytes, and
   report streaming gzip totals, terminal WebSocket payload bytes, framed bytes,
   ACKs, queue peaks, desyncs and lifecycle counts.
@@ -395,16 +442,81 @@ Each Files panel read is a list and (on All files) a tree request. These are
 request counts; bytes per request need a real client (see "Needs
 verification").
 
+## Live run through Tailscale Serve
+
+This is the open half of tasks 1 and 3. Not run: it adds a Serve handler to a
+tailnet node, and this work must not change this machine's Tailscale setup. It
+uses a synthetic gateway only, so no real data, token or provider is involved.
+It takes about ten minutes.
+
+Use a node that is not serving production, and a second tailnet device as the
+client. Tailscale Serve needs HTTPS enabled for the tailnet; if `tailscale serve`
+asks for that, it is an administrator's decision. In the commands, `PROBE` is
+`mise exec -- bun apps/backend/scripts/sse-route-probe.ts`, run from a checkout
+of this branch or later.
+
+On the server node:
+
+1. Record `tailscale version`, and check that `tailscale serve status` shows
+   nothing on port 8443. Stop if it does.
+2. Start the gateway Serve will proxy, in its own terminal. Serve only proxies
+   to the local machine, so this one stays on loopback:
+   `PROBE serve --port 34990`
+3. Start the control, in another terminal, on the tailnet address:
+   `PROBE serve --bind "$(tailscale ip -4)" --port 34991`
+4. Each prints a `url` and a `tokenFile`. If a port was taken, the gateway moved
+   on to another, so use the port in `url` below. Copy both token files to the
+   client, for example to `serve.token` and `direct.token`, and keep them private.
+5. Publish the first gateway:
+   `tailscale serve --bg --yes --https=8443 http://127.0.0.1:34990`
+
+On the client, with `SERVE=https://<node>.<tailnet>.ts.net:8443` and
+`DIRECT=http://<tailscale-ip>:34991`. Each run takes about 90 seconds and exits 0
+when `incremental` is true:
+
+```bash
+PROBE measure --url "$SERVE"  --token-file serve.token  --label serve-gzip-h2 --http2 --out serve-gzip-h2.json
+PROBE measure --url "$SERVE"  --token-file serve.token  --label serve-gzip-h1 --out serve-gzip-h1.json
+PROBE measure --url "$DIRECT" --token-file direct.token --label direct-gzip   --out direct-gzip.json
+PROBE measure --url "$SERVE"  --token-file serve.token  --label serve-identity --accept-encoding identity --out serve-identity.json
+PROBE measure --url "$SERVE"  --token-file serve.token  --label serve-reconnect --reconnect-after 10 --out serve-reconnect.json
+```
+
+Then clean up on the server node. Do not use `tailscale serve reset`, which
+removes every handler on the node:
+
+1. `tailscale serve --yes --https=8443 off`
+2. Check `tailscale serve status`, then press Ctrl+C in both `serve` terminals.
+
+Reading the results:
+
+- **Serve does not hold frames** if `serve-gzip-h2` and `serve-gzip-h1` have
+  `heldTicks: 0` and `missing: 0`, and their delay is close to `direct-gzip`'s.
+  A run over a bad link can show held ticks on the control too, which is the
+  link rather than Serve.
+- **Serve does not re-encode** if they have `contentEncoding: "gzip"` and
+  `bytesMatch: true`.
+- **Idle survives** if the last tick arrives (`missing: 0`) after the 60 s gap,
+  with `keepalives` of at least 2.
+- `serve-reconnect` should show `reconnects: 1`, `missing: 0`, `duplicates: 0`
+  and `streamingActiveAfterClose: 0`. A tick missed during the gap can count as
+  held, because it really was late.
+
+Record the Tailscale version and the five results under "Measurements", then
+update tasks 1 and 3. If Serve holds or changes frames, the matrix must label
+that route as measuring Serve, and turning `on` into a default has a new
+question to answer.
+
 ## Outstanding work
 
 ### Qualification
 
+- Run "Live run through Tailscale Serve" above, first.
 - Run the matrix above through the supported remote route at normal and
   constrained bandwidth: the harness's in-process gateway cannot sit behind
   Tailscale. Either point the same client side at a real gateway on another
   machine (an isolated profile with synthetic terminals), or put a
-  disposable gateway behind `tailscale serve`. Record the Phase 2 fields, and
-  confirm whether Serve buffers or re-encodes SSE.
+  disposable gateway behind `tailscale serve`. Record the Phase 2 fields.
 - Measure encoded bytes of negotiated transcript part patches and of several
   remote clients on one session (only decoded bytes were measured). The
   harness's agent-event workload is synthetic, not real part patches.
@@ -589,13 +701,65 @@ Decisions made on 2026-10-27 for this round, with the options weighed.
   - Pros: exact wire bytes, no real data or ports. Cons: not the remote route;
     CPU includes the clients.
 
+Decisions made on 2026-11-01 for tasks 1, 3 and 9.
+
+- **D8. Reference route for the matrix.**
+  - Options: (a) Tailscale Serve with the direct tailnet listener as the
+    control; (b) the direct listener only.
+  - Choice: (a), as the task recommended.
+  - Why: Serve is what the hosted client uses, and reading its source gave no
+    reason to avoid it. Nothing there buffers or re-encodes SSE.
+  - Pros: measures what users take; the control isolates Serve. Cons: two runs
+    per cell, and the version has to be recorded.
+- **D9. Leave Serve's live half open.**
+  - Options: (a) add a handler on this machine for a quick run; (b) write the
+    steps and leave it open; (c) close it on source reading alone.
+  - Choice: (b).
+  - Why: (a) is ruled out, since this machine's Tailscale setup must not change
+    and it runs production. (c) would claim a measurement nobody took. Source
+    reading is good evidence for what to expect, not for what happens over a
+    real link and a real HTTP/2 client.
+  - Pros: an honest status; the run takes about ten minutes. Cons: task 2 cannot
+    start until someone runs it.
+- **D10. Test proxies stand in for Serve in the regression test.**
+  - Options: (a) test proxies written in the test; (b) Go's real reverse proxy;
+    (c) no hop.
+  - Choice: (a), on HTTP/1.1 and HTTP/2.
+  - Why: (b) needs a Go toolchain the repository does not have, and (c) would not
+    meet the ticket. Each proxy only forwards bytes, so it guards the gateway's
+    side of the bargain: headers and flushed bytes that a pass-through hop can
+    carry. It says nothing about Serve itself, which is why the live run stays.
+  - Pros: fast, deterministic, in the default suite. Cons: not Go's proxy.
+- **D11. A dedicated probe rather than extending the bandwidth harness.**
+  - Options: (a) a new `sse-route-probe.ts`; (b) add a remote target to
+    `remote-bandwidth-baseline.ts`; (c) `curl` steps.
+  - Choice: (a).
+  - Why: the harness runs its gateway in process and its case runner assumes
+    that, and (c) cannot compare bytes or time ticks. Task 2 will need (b) too,
+    so the probe's client may be reused then.
+  - Pros: small and needs no shell timing. Cons: one more script.
+- **D12. Fix both proxied-stream bugs here.**
+  - Options: fix them with regression tests, or record them and move on.
+  - Choice: fix. Both are small, and the ticket asks for it.
+  - Pros: a proxied stream now ends validly, and a quiet one opens at once. Cons:
+    the headers fix also changes identity event streams in `body` mode, which is
+    the rollback mode. Only the timing of the headers changes, not their content.
+- **D13. Keep the older compression test file.**
+  - Options: merge `gateway-streaming-compression.test.ts` into the new file, or
+    keep both.
+  - Choice: keep both. The older file owns credential rotation and gateway stop,
+    and some cases overlap.
+  - Pros: no churn in tests that pass. Cons: some overlap.
+
 ## Needs verification
 
-- The remote route. `../../architecture/remote-gateway.md` supports the
-  Tailscale listener directly and through Tailscale Serve (HTTPS, used by the
-  hosted client). Confirm whether Serve buffers or re-encodes SSE before
-  treating it as the proxied case. Not run: this machine runs the live
-  Orkestrator and no disposable tailnet node was available.
+- The remote route. Serve is decided as the reference, and its source says it
+  neither buffers nor re-encodes SSE. Not yet measured: see "Live run through
+  Tailscale Serve". The probe's HTTP/2 path has run only against the HTTP/2 test
+  proxy's cleartext form, never against Serve's TLS.
+- A browser through a real proxy. The browser check ran over loopback HTTP/1.1,
+  and the HTTP/2 hop was checked with the probe's client. Task 2's matrix should
+  include a browser through Serve.
 - Phase 1 exit criteria. Now covered: compressor leases released on close,
   codec failure, mid-burst disconnect, gateway stop and credential rotation
   (`gateway-streaming-compression.test.ts`, `gateway-events.test.ts`);

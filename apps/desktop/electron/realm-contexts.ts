@@ -21,7 +21,7 @@ export function refreshWorkspaceRealm<
   // Native previews must be recreated too: existing documents still request
   // their old gateway origin. The renderer persists canonical loopback URLs
   // and resolves them against the current gateway when it mounts again.
-  rebindWindowPreviews(context, context.previewConnectionId, createPreviews, console, true);
+  rebindWindowPreviews(context, context.previewConnectionId, createPreviews, undefined, true);
   context.contents.reload();
 }
 

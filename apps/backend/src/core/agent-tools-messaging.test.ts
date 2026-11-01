@@ -19,4 +19,15 @@ describe("mail delivery hints", () => {
       "queued, delivers when idle",
     );
   });
+  test("does not claim a recipient with no agent will pull", () => {
+    for (const policy of ["off", "idle"]) {
+      const hint = deliveryHint("stored", "recipient-cannot-inject", policy, false);
+      expect(hint).toContain("not delivered");
+      expect(hint).not.toContain("recipient pulls");
+    }
+    // A terminal tab cannot be injected into, but its agent can pull.
+    expect(deliveryHint("stored", "recipient-cannot-inject", "off", true)).toBe(
+      "stored, recipient pulls",
+    );
+  });
 });

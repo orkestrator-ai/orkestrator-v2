@@ -102,7 +102,8 @@ export type EnvironmentUnreadReason =
   | "agent_waiting"
   | "agent_question"
   | "terminal_finished"
-  | "marked_unread";
+  | "marked_unread"
+  | "setup_approval";
 
 export interface Environment {
   id: string;
@@ -234,6 +235,12 @@ export interface Environment {
   setupPhase?: "pending" | "running" | "ready" | "failed";
   /** Persisted user acknowledgement that setup may be bypassed. */
   setupOverride?: boolean;
+  /**
+   * Setup was held for approval, not run: this local environment's setup
+   * commands differ from what its machine trusts. Comes with `setupPhase:
+   * "failed"`; the setup panel offers to review and approve them.
+   */
+  setupApprovalRequired?: boolean;
   setupSessionId?: string;
   setupStartedAt?: string;
   setupCompletedAt?: string;

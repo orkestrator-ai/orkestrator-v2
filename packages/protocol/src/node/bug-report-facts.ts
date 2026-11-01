@@ -20,7 +20,7 @@ async function recentLogFiles(logsDir: string): Promise<BugReportMachineFacts["r
   const names = await readdir(logsDir).catch(() => [] as string[]);
   const files = await Promise.all(
     names
-      .filter((name) => name.endsWith(".log"))
+      .filter((name) => name.endsWith(".log") || name.endsWith(".jsonl"))
       .map(async (name) => {
         const info = await stat(path.join(logsDir, name)).catch(() => null);
         return info?.isFile() ? { name, bytes: info.size, modifiedMs: info.mtimeMs } : null;

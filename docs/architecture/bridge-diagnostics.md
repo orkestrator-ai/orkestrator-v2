@@ -14,14 +14,17 @@ Standalone bridges accept the same variable. An unset common variable allows
 `PI_BRIDGE_DEBUG`, or `ACP_BRIDGE_DEBUG` as a compatibility fallback. Only `1`
 enables logging; an explicit common `0` overrides every legacy flag.
 
-Search for `[bridge-diagnostics]`. The JSON `bridge` field identifies `claude`,
+Search for `[bridge-diagnostics]`. These lines have not moved onto the
+[shared logger](logging.md) yet, so they keep this format; they reach the desktop
+log through the relay as unmigrated backend output. The JSON `bridge` field identifies `claude`,
 `codex`, `cursor`, `pi`, or `acp` (Grok). Local output uses the existing application
 log sink and its rotation and retention. Docker output goes to the existing
 `/tmp/<provider>-bridge.log` files (`/tmp/grok-acp-bridge.log` for Grok).
 
 ## Desktop startup failures
 
-The application log also records `[DesktopStartup]` events. `checking` followed
+The application log also records `[DesktopStartup]` events, written by the shared
+logger's `desktop.startup` area and unchanged in text. `checking` followed
 by `ready` means the renderer reached the desktop IPC bridge and, for Local,
 completed a backend configuration read before mounting the workspace. A late
 preload or rejected read is retried serially within a ten-second deadline; a
@@ -54,7 +57,8 @@ metadata enter the desktop log. Raw renderer console output, subframe messages,
 error messages, stacks, URLs, paths and backend responses are not forwarded.
 Duplicate events are suppressed per main-frame navigation, with a maximum of 32
 records per navigation. Existing Save Logs for Debugging and retention settings
-apply.
+apply. In the JSON log format (`ORKESTRATOR_LOG_FORMAT=json`) the same events are
+records with `"area":"desktop.startup"` and the event name, such as `ready`.
 
 ## Shared implementation
 

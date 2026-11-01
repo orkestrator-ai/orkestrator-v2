@@ -190,3 +190,41 @@ export function withUnattendedOverloadRetry(
   if (sessionPolicy?.id !== "pipeline") return environment;
   return { ...UNATTENDED_OVERLOAD_RETRY_ENV, ...environment };
 }
+
+/**
+ * Configuration that stops the checkout's own Git config from naming a
+ * program for an admitted read: `core.fsmonitor` runs on every `git status`
+ * and `git diff`, and a hook path covers the hooks an index refresh can fire.
+ * The same keys `SAFE_GIT_CONFIG` sets for the backend's change capture.
+ */
+export const READ_ONLY_GIT_CONFIG = Object.freeze([
+  ["core.fsmonitor", "false"],
+  ["core.hooksPath", "/dev/null"],
+] as const);
+
+/**
+ * Adds {@link READ_ONLY_GIT_CONFIG} for a read-only turn (the turn's policy,
+ * not the session's) as `GIT_CONFIG_COUNT` entries, which outrank repository
+ * and global config and reach every command the CLI runs. Entries already in
+ * the environment (a withheld credential's helper resets) are kept, and
+ * optional locks are off so `git status` does not rewrite the index of a
+ * checkout the turn may not write. Driver commands a repository's attributes
+ * name (`diff.<driver>.command`, filters) cannot be listed here; the command
+ * sandbox Git requires is what holds those.
+ */
+export function withReadOnlyGitConfig(
+  turnPolicy: Pick<NativeAgentExecutionPolicy, "id"> | undefined,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (turnPolicy?.id !== "coordinator-read-only") return environment;
+  const next: NodeJS.ProcessEnv = { ...environment, GIT_OPTIONAL_LOCKS: "0" };
+  const inherited = Number.parseInt(next.GIT_CONFIG_COUNT ?? "", 10);
+  let count = Number.isSafeInteger(inherited) && inherited > 0 ? inherited : 0;
+  for (const [key, value] of READ_ONLY_GIT_CONFIG) {
+    next[`GIT_CONFIG_KEY_${count}`] = key;
+    next[`GIT_CONFIG_VALUE_${count}`] = value;
+    count += 1;
+  }
+  next.GIT_CONFIG_COUNT = String(count);
+  return next;
+}

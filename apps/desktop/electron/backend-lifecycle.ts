@@ -1,5 +1,8 @@
 import { registerWillQuitHold } from "./application-logging.js";
 import type { BackendHttpClient, BackendProcess } from "./backend-process.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("desktop");
 
 type WebClientBackend = Pick<
   BackendHttpClient,
@@ -48,7 +51,7 @@ export function registerBackendShutdown(
   let stopped: Promise<void> | null = null;
   app.on("before-quit", () => {
     if (!stopped) {
-      console.info("[Desktop] Quitting; stopping the Local backend");
+      log.info("quit.stopping-backend");
       stopped = backendProcess.stop();
     }
   });

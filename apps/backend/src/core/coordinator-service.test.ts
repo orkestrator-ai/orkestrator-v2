@@ -139,6 +139,83 @@ describe("project coordinator", () => {
     { timeout: 30_000 },
   );
 
+  test("held worker setup mails only its local settled coordinator association", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const { workspace } = await service.ensure(project.id);
+    const environment = createEnvironment(project.id, { name: "worker" });
+    environment.setupCompletedAt = "2026-11-01T00:00:00Z";
+    const association = {
+      id: "held-worker",
+      projectId: project.id,
+      coordinatorId: workspace.id,
+      conversationId: workspace.conversations[0]!.id,
+      kind: "environment" as const,
+      resourceId: environment.id,
+      requestId: "worker-request",
+      createdAt: new Date().toISOString(),
+    };
+    const send = spyOn(storage, "sendAgentMail").mockResolvedValue({} as never);
+    try {
+      await service.noteWorkerSetupApproval(environment);
+      expect(send).not.toHaveBeenCalled();
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(association);
+      await storage.coordinators.saveCoordinatorWorkflowAssociation({
+        ...association,
+        id: "remote-worker",
+        requestId: "remote-request",
+        nodeId: "bk_remote",
+      });
+      await service.noteWorkerSetupApproval(environment);
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceId: environment.id, source: "workflow" }),
+        expect.objectContaining({
+          requestId: `setup-approval-held-worker-${environment.setupCompletedAt}`,
+          toEnvironmentId: coordinatorRuntimeId(workspace.id, workspace.conversations[0]!.id),
+          toTabId: workspace.conversations[0]!.tabId,
+          body: expect.stringContaining("approve or skip"),
+        }),
+      );
+      send.mockRejectedValue(new AgentMailError("idempotency-conflict", "conflict"));
+      await service.noteWorkerSetupApproval(environment);
+      send.mockRejectedValue(new Error("storage unavailable"));
+      await expect(service.noteWorkerSetupApproval(environment)).rejects.toThrow(
+        "storage unavailable",
+      );
+    } finally {
+      send.mockRestore();
+    }
+  });
+
+  test.each([".env", ".env.local"])(
+    "committed dangling %s links are never followed by seed copying",
+    async (file) => {
+      const target = path.join(root, "must-not-be-written");
+      await fs.symlink(target, path.join(checkout, file));
+      await runCommand("git", ["add", "-f", file], { cwd: checkout });
+      await runCommand("git", ["commit", "-m", "dangling link"], { cwd: checkout });
+      await fs.unlink(path.join(checkout, file));
+      await fs.writeFile(path.join(checkout, file), "private seed");
+      const created = await createLocalWorktree(
+        checkout,
+        "Project",
+        "linked-env",
+        (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim(),
+        [],
+        path.join(root, "trees"),
+      );
+      expect((await fs.lstat(path.join(created.path, file))).isSymbolicLink()).toBe(true);
+      expect(await fs.readlink(path.join(created.path, file))).toBe(target);
+      expect(await fs.lstat(target).catch(() => null)).toBeNull();
+    },
+  );
+
   test("concurrent ensure converges without sending work and a closed last tab stays closed", async () => {
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),

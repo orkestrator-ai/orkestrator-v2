@@ -239,7 +239,7 @@ async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "
       tail = (tail + text).slice(-4_000);
       const lines = (partial + text).split("\n");
       partial = lines.pop()!.slice(-1_000);
-      const matched = lines.filter((line) => line.includes("[Previews]"));
+      const matched = lines.filter((line) => line.includes("[preview]"));
       if (matched.length > 0) previewLines = [...previewLines, ...matched].slice(-20);
     };
   };

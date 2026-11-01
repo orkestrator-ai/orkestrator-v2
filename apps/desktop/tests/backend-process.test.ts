@@ -951,6 +951,105 @@ sleep 5
   );
 
   test(
+    "carries logger levels across the relay and keeps capturing everything else",
+    async () => {
+      // The real path a migrated backend site takes: logger, bounded console,
+      // stdio, relay. Only the argument parsing of the fake `bun` is skipped.
+      globalThis.fetch = Bun.fetch;
+      const resourceRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-backend-relay-"));
+      directories.push(resourceRoot);
+      const authFile = path.join(resourceRoot, "auth.json");
+      await writeFile(authFile, JSON.stringify({ token: "fake-backend-token-1234567890" }));
+      await mkdir(path.join(resourceRoot, "bin"), { recursive: true });
+      const repoRoot = path.resolve(import.meta.dir, "../../..");
+      const script = path.join(resourceRoot, "fake-backend.ts");
+      await writeFile(
+        script,
+        `import { installBoundedConsole } from ${JSON.stringify(path.join(repoRoot, "apps/backend/src/bounded-console.ts"))};
+import { createLogger, formatLogError } from ${JSON.stringify(path.join(repoRoot, "packages/protocol/src/logger.ts"))};
+import { DESKTOP_SUPERVISED_ENV } from ${JSON.stringify(path.join(repoRoot, "packages/protocol/src/node/application-logging.ts"))};
+import { configureLoggerFromEnvironment } from ${JSON.stringify(path.join(repoRoot, "packages/protocol/src/node/logger-environment.ts"))};
+installBoundedConsole();
+configureLoggerFromEnvironment(process.env, {
+  relayToSupervisor: process.env[DESKTOP_SUPERVISED_ENV] === "1",
+});
+console.log(JSON.stringify({ type: "orkestrator-backend-ready", url: "http://127.0.0.1:1/", authFile: ${JSON.stringify(authFile)}, bindAddress: "127.0.0.1", port: 1 }));
+const log = createLogger("updater");
+log.error("check.failed", { error: formatLogError(new Error("offline"), { stack: false }) });
+log.warn("check.failed", { attempt: 1 });
+log.info("downloaded", { version: "1.2.3" });
+log.debug("downloaded", { version: "hidden" });
+console.warn("unmigrated warning");
+console.log("unmigrated output");
+console.log(JSON.stringify({ unrelated: "json object" }));
+console.log('{"orklog":1,"ts":"t","level":"warn","area":"updater","event":"not-listed"}');
+await new Promise((resolve) => setTimeout(resolve, 5000));
+`,
+      );
+      const fakeBun = path.join(resourceRoot, "bin", "bun");
+      await writeFile(
+        fakeBun,
+        `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}\n`,
+      );
+      await chmod(fakeBun, 0o755);
+
+      const captured: Record<"log" | "info" | "warn" | "error" | "debug", string[]> = {
+        log: [],
+        info: [],
+        warn: [],
+        error: [],
+        debug: [],
+      };
+      const real = {
+        log: console.log,
+        info: console.info,
+        warn: console.warn,
+        error: console.error,
+        debug: console.debug,
+      };
+      for (const method of Object.keys(captured) as Array<keyof typeof captured>) {
+        console[method] = ((...args: unknown[]) => {
+          captured[method].push(args.map(String).join(" "));
+        }) as never;
+      }
+      try {
+        const backendProcess = new BackendProcess();
+        processes.push(backendProcess);
+        await backendProcess.start({
+          isDev: false,
+          appVersion: "9.9.9-relay",
+          appRoot: resourceRoot,
+          resourceRoot,
+          dataDir: resourceRoot,
+          gatewayPort: 0,
+          onEvent: () => undefined,
+        });
+        await waitForCapturedLine(captured.log, '"not-listed"');
+        await waitForCapturedLine(captured.error, "unmigrated warning");
+
+        expect(captured.error).toContain(
+          "[updater] check.failed error.name=Error error.message=offline",
+        );
+        expect(captured.warn).toContain("[updater] check.failed attempt=1");
+        expect(captured.info).toContain("[updater] downloaded version=1.2.3");
+        expect(captured.debug).toEqual([]);
+        // Output no logger produced is captured as it always was, including a
+        // JSON object, which the relay used to drop.
+        expect(captured.error).toContain("[Backend] unmigrated warning");
+        expect(captured.log).toContain("[Backend] unmigrated output");
+        expect(captured.log).toContain('[Backend] {"unrelated":"json object"}');
+        // An event this build does not list stays ordinary output, not a record.
+        expect(captured.warn.join()).not.toContain("not-listed");
+        // The readiness line carries a credential path and is never relayed.
+        expect(captured.log.join()).not.toContain("orkestrator-backend-ready");
+      } finally {
+        Object.assign(console, real);
+      }
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
     "forwards backend stdio through console as complete lines",
     async () => {
       // Production logging tees `console`, so stderr/stdout have to reach it as
@@ -1313,8 +1412,9 @@ sleep 5
         "http://127.0.0.1:34121/__orkestrator/events?since=desktop1%3A1",
       ]);
       expect(firstCancelled).toBe(true);
-      expect(warning).toHaveBeenCalledTimes(1);
-      expect(error).toHaveBeenCalledTimes(1);
+      // One malformed frame, then one disconnect it recovers from.
+      expect(warning).toHaveBeenCalledTimes(2);
+      expect(error).not.toHaveBeenCalled();
     } finally {
       client.stopListening();
       console.error = previousError;

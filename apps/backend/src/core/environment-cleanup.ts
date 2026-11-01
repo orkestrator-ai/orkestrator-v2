@@ -1,5 +1,6 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { createLogger } from "@orkestrator/protocol/logger";
 
 import type { CommandContext } from "./commands-context.js";
 import { validateGitRefName } from "./commands-agent-support.js";
@@ -46,6 +47,11 @@ export type CleanupStepOptions = {
    */
   containerOwnershipVerified?: boolean;
 };
+
+// Kept branches are state notices, not faults. Keep retry deduplication bounded
+// and local to each storage owner without consuming shared fault keys.
+const keptBranches = new WeakMap<EnvironmentCleanupContext["storage"], Set<string>>();
+const MAX_KEPT_BRANCH_NOTICES = 512;
 
 const GIT_TIMEOUT_MS = 30_000;
 const DOCKER_TIMEOUT_MS = 60_000;
@@ -478,11 +484,7 @@ async function cleanupStateDirectories(
   }
 }
 
-/**
- * Process-wide on purpose: it only de-duplicates a log line, so two backends
- * in one process share at most one fewer warning (docs/architecture/backend-runtime.md).
- */
-const loggedKeptBranches = new Set<string>();
+const log = createLogger("environment");
 
 /**
  * Runs one step and records the outcome in the ledger. Never throws: a failed
@@ -518,11 +520,14 @@ export async function runEnvironmentCleanupStep(
     } else if (step === "worktree") await cleanupWorktree(entry, context, run);
     else if (step === "branch") {
       const outcome = await cleanupEnvironmentBranch(entry, run);
-      if (outcome === "kept" && !loggedKeptBranches.has(entry.environmentId)) {
-        loggedKeptBranches.add(entry.environmentId);
-        console.info(
-          `[backend] Kept the local branch of deleted environment ${entry.environmentId}: it may hold unmerged work`,
-        );
+      if (outcome === "kept") {
+        let seen = keptBranches.get(context.storage);
+        if (!seen) keptBranches.set(context.storage, (seen = new Set()));
+        if (!seen.has(entry.environmentId)) {
+          if (seen.size >= MAX_KEPT_BRANCH_NOTICES) seen.delete(seen.values().next().value!);
+          seen.add(entry.environmentId);
+          log.info("cleanup.branch-kept", { scope: entry.environmentId });
+        }
       }
     } else await cleanupStateDirectories(entry, context);
   } catch (error) {

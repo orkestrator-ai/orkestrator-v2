@@ -15,6 +15,7 @@ import { GraphRunsRepository } from "./storage-graph-runs.js";
 import { GraphEffectsRepository } from "./storage-graph-effects.js";
 import { GraphDescribeRepository } from "./storage-graph-describe.js";
 import { ClientStateRepository } from "./storage-client-state.js";
+import { SetupApprovalsRepository } from "./storage-setup-approvals.js";
 import { StorageFiles } from "./storage-files.js";
 import { KanbanRepository } from "./storage-kanban.js";
 import { NativeAgentDeliveries } from "./storage-native-deliveries.js";
@@ -73,6 +74,7 @@ export class StorageRepositories {
   readonly graphEffects: GraphEffectsRepository;
   readonly graphDescribe: GraphDescribeRepository;
   readonly clientState: ClientStateRepository;
+  readonly setupApprovals: SetupApprovalsRepository;
 
   constructor(context: StorageContext) {
     const files = new StorageFiles(context.dataDir);
@@ -106,5 +108,6 @@ export class StorageRepositories {
     this.graphEffects = new GraphEffectsRepository(context, this);
     this.graphDescribe = new GraphDescribeRepository(context);
     this.clientState = new ClientStateRepository(context);
+    this.setupApprovals = new SetupApprovalsRepository(context);
   }
 }

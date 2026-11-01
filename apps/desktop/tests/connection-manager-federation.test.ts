@@ -947,6 +947,61 @@ test("a window points at a leaf workspace and back to its command node", async (
   }
 });
 
+test("a workspace scope is on this device only when its node is the local backend", async () => {
+  const gateways = installGateways({
+    "https://local.test": { installationId: "bk_local" },
+    "https://leaf.example": { installationId: "bk_leaf" },
+  });
+  const local = localBackend();
+  local.hello = async () =>
+    (
+      await fetch("https://local.test/__orkestrator/hello", {
+        headers: { authorization: `Bearer ${token}` },
+      })
+    ).json() as never;
+  const connections = manager(new MemoryStore(catalogue([])), { localBackend: local });
+  try {
+    await connections.initialize();
+    await connections.bind("own", "local");
+    await connections.bind("other", "local");
+    connections.retargetScopeToWorkspace("own", {
+      workspaceId: "own",
+      nodeId: "bk_local",
+      baseUrl: "https://local.test",
+      token,
+    });
+    connections.retargetScopeToWorkspace("other", {
+      workspaceId: "other",
+      nodeId: "bk_leaf",
+      baseUrl: "https://leaf.example",
+      token,
+    });
+    expect(connections.getGatewayBaseUrl("own")).toBe("https://local.test");
+    expect(connections.isScopeOnThisDevice("own")).toBe(true);
+    expect(connections.isScopeOnThisDevice("other")).toBe(false);
+    expect(gateways.requests.length).toBeGreaterThan(0);
+  } finally {
+    connections.dispose();
+  }
+});
+
+test("no scope is on this device before the local backend has proved its identity", async () => {
+  installGateways({ "https://leaf.example": { installationId: "bk_leaf" } });
+  const connections = manager(new MemoryStore(catalogue([])));
+  try {
+    await connections.initialize();
+    await connections.bind("panel", "local");
+    connections.retargetScopeToWorkspace("panel", {
+      workspaceId: "panel",
+      baseUrl: "https://leaf.example",
+      token,
+    });
+    expect(connections.isScopeOnThisDevice("panel")).toBe(false);
+  } finally {
+    connections.dispose();
+  }
+});
+
 test("workspace retargeting preserves machine identity and confines relay credentials", async () => {
   const gateways = installGateways({ "https://b.example": { installationId: "bk_b" } });
   const connections = manager(new MemoryStore(catalogue([])));

@@ -1,12 +1,14 @@
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   AGENT_MAIL_USER_PARTICIPANT,
+  agentMailAwaitingAgent,
   agentMailboxId,
   agentMailAddressLabel,
   formatAgentMailAddressLabel,
   isAgentMailBudgetHeld,
   type AgentMailMessageSummary,
   type AgentMailParticipant,
+  type MailboxCapabilities,
 } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -19,8 +21,12 @@ export function agentMailStatus(
     AgentMailMessageSummary,
     "placement" | "placementReason" | "ackedAt" | "discardedAt"
   >,
+  recipient?: Pick<MailboxCapabilities, "canPull">,
 ): { label: string; tone: AgentMailStatusTone } {
   if (message.discardedAt) return { label: "discarded", tone: "muted" };
+  if (recipient && agentMailAwaitingAgent(message, recipient)) {
+    return { label: "waiting for agent", tone: "warning" };
+  }
   if (isAgentMailBudgetHeld(message)) {
     return {
       label:

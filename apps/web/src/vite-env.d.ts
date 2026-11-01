@@ -7,6 +7,11 @@ interface Window {
     enabled: boolean;
     /** True when gateway metadata was supplied by the Electron preload. */
     desktop?: boolean;
+    /**
+     * Electron only: the gateway leads back to this computer's own backend, as
+     * when a command node on another machine shows this computer as a leaf.
+     */
+    backendOnThisDevice?: boolean;
     /** Backend origin used when the renderer was loaded from a separate host. */
     baseUrl?: string;
     /**

@@ -173,7 +173,11 @@ the worker stays attached rather than becoming a peer.
 coordinator, starting one if it was closed (see
 [`coordinator.md`](coordinator.md#one-main-coordinator-and-side-agents)). The
 address of a closed conversation is redirected there as a new message (no
-reply threading into a conversation that no longer exists). `toTabId` may be
+reply threading into a conversation that no longer exists). An agent's mail
+from the same project to an open main that has never run assigns it the default
+agent first, and earlier mail filed for it becomes deliverable; user, external
+and cross-project mail and workflow notices start nothing. With no qualified
+agent the message is `stored` and waits. `toTabId` may be
 omitted for a coordinator address, and for an environment: it resolves to the
 tab a coordinator is waiting on, the environment's only agent tab, or its
 `startup-agent`, and otherwise fails listing the tab ids. Idempotency keys on
@@ -268,6 +272,24 @@ Mail that is only stored records why in `placementReason`: `inject-policy-off`,
 `untrusted-sender`, or `hop-limit`. `get_message_status` returns it to the
 sender.
 
+`recipient-cannot-inject` covers two different recipients. A terminal tab's
+agent can still pull the mail. A tab with no agent yet, such as a coordinator
+conversation that has not started, cannot (`canPull: false`), so nothing can
+read it until an agent is assigned (`agentMailAwaitingAgent`). For that second
+case the sender's `deliveryHint` says it was not delivered, the banner and tiles
+say it is waiting for an agent, and it counts toward `attentionCount` until the
+person has seen it. Routine system notices do not add attention merely because
+no agent is assigned. The banner describes stored mail as being in the inbox;
+it does not promise that agent startup delivers untrusted or non-waking mail.
+When no qualified platform is available, it directs the person to Settings.
+
+Mailbox synchronization retries eligible `recipient-cannot-inject` mail once the
+recipient gains injection capability, even when its metadata already matches.
+The recovery uses the same trust, incarnation and wake filters as promotion, so
+an assignment committed before a reconciliation failure or process restart
+cannot strand the backlog. This also covers environment native tabs gaining a
+platform. Policy-held mail with other reasons stays stored.
+
 **Releasing one message.** Retry, Resume and **Deliver now** call
 `retry_agent_mail_inject`, which stamps `userReleasedAt`. The drain delivers a
 released message once even when the mailbox policy is off, so the banner no
@@ -315,8 +337,8 @@ See
 [`coordinator.md`](coordinator.md#course-corrections-with-delivernow).
 
 **Logs.** The backend logs one `[agent-mail] placed` line per send, one
-`[agent-mail] waiting` line each time the drain's reason for passing over a
-pending message changes, and one `[agent-mail] dispatched` line per batch.
+`[agent-mail] delivery.waiting` line each time the drain's reason for passing
+over a pending message changes, and one `[agent-mail] dispatched` line per batch.
 They carry ids, route, placement and reason, never subjects or bodies.
 
 A worker that chats while the coordinator is waiting has its mail stored
@@ -448,8 +470,8 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 | Transcript, delivered mail | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
 | Transcript, sent and read mail | `MailToolPart` (`apps/web/src/components/chat/`) | `send_message`, `reply_message`, `read_message` and a coordinator's `get_message` calls render as mail tiles, not tool rows, and stay out of the collapsed tool group (`agentMailToolCall`, `apps/web/src/lib/chat/agent-mail-tool-call.ts`). A sent tile shows the recipient and its live delivery state from the recipient's mailbox; a read tile is where pull-only mail enters the transcript. Every tile with both participants known opens their conversation |
 | Messages panel | `AgentMailPanel` (`apps/web/src/components/agent-mail/`) | A right-hand sheet. The list is one row per pair that has exchanged mail (`list_agent_mail_conversations`), those needing the person first; a conversation is both directions between two participants, oldest first (`get_agent_mail_conversation`), with retry, resume, deliver-now and discard on the messages that need them. The person composes only in their own conversation with a tab. Opening a conversation marks it seen (`mark_agent_mail_conversation_seen`) |
-| Title-bar button | `AgentMailButton` | Opens the panel. Its badge counts `attentionCount`: failed and budget-held deliveries and unseen external or cross-project mail (`agentMailNeedsAttention`), not the agents' own traffic |
-| Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / deliver now / discard, and View opens the tab's conversations |
+| Title-bar button | `AgentMailButton` | Opens the panel. Its badge counts `attentionCount`: failed and budget-held deliveries, unseen external or cross-project mail, and unseen non-system mail waiting for an agent (`agentMailNeedsAttention`), not the agents' own traffic |
+| Per-tab banner | `AgentMailBanner` | Environment tabs and coordinator conversations. Pending, failed, pull-only, waiting for an agent, budget or hourly-limit held; retry / resume / deliver now / discard, and View opens the tab's conversations |
 | Tab menu, Agent info | `DraggableTab`, `AgentInfoButton` | One "Messages…" entry when `canPull`: the panel focused on the tab, with its delivery policy and mutes |
 | Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `coordinatorStatusWakes` (`off` / `settled` / `stages`), `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
 | Per-mailbox policy | `mute_agent_mail` | `inject`: inherit / off / idle; inbound and outbound mute |

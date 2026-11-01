@@ -506,6 +506,14 @@ command node.
   node's administrative commands (gateway token, web-client access, control
   MCP token, node registry); those stay in the command node's
   Settings → Nodes.
+- **A realm can be this computer.** When the command node is another machine
+  and this computer is one of its leaves, a realm of this computer's own
+  environments still reaches its backend through a gateway. The desktop's main
+  process compares the realm's node with its local backend's installation ID
+  and says so in `orkestratorGateway.backendOnThisDevice`. What launches a
+  window on the backend's host (Open in VS Code or Cursor) follows
+  `isBackendOnAnotherDevice()`; what depends on the route itself (loopback
+  proxying, preview handoffs) keeps following `isRemoteGatewayConnection()`.
 
 ## Agent chat and the coordinator
 
@@ -652,6 +660,9 @@ remain and use the same paths.
   its git remote), they are copied from the command node's project root as
   part of environment setup, using the same per-project file selection.
 - If both have a selected file, **the leaf's copy wins**.
+- Setup commands a branch changes need approval on the machine that runs
+  them; the approval panel can record it on every machine with the project
+  ([setup-approval.md](setup-approval.md#several-machines)).
 - File contents are never written to logs, receipts or transcripts.
 
 ### Comparing and updating project files across leaves

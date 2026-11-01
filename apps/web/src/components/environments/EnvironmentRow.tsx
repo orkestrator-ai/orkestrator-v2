@@ -1,4 +1,5 @@
 import { useId, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { toast } from "sonner";
 import {
   Container,
   Copy,
@@ -42,6 +43,7 @@ import {
   formatLineCount,
   projectionTitle,
 } from "@/lib/changes/labels";
+import { writeText } from "@/lib/native/clipboard";
 import { cn } from "@/lib/utils";
 import type { FreshnessNotice } from "@/lib/view-freshness";
 import type { EnvironmentType } from "@/types";
@@ -270,6 +272,13 @@ export interface EnvironmentRowActions {
   confirmDelete: () => void;
 }
 
+function copyEnvironmentId(environmentId: string) {
+  writeText(environmentId).then(
+    () => toast.success("Copied environment ID", { description: environmentId }),
+    () => toast.error("Failed to copy environment ID"),
+  );
+}
+
 /** The row's action list, the same for every row; disabled states come from the model. */
 export function environmentRowMenuItems(
   model: EnvironmentRowModel,
@@ -304,6 +313,12 @@ export function environmentRowMenuItems(
       icon: <Settings2 className={icon} />,
       onSelect: actions.openSettings,
       disabled: model.menu.settingsDisabled,
+    },
+    {
+      key: "copy-environment-id",
+      label: "Copy Environment ID",
+      icon: <Copy className={icon} />,
+      onSelect: () => copyEnvironmentId(model.environmentId),
     },
     ...(actions.copyAddress
       ? [

@@ -14,7 +14,6 @@ import {
   MessagesSquare,
   RefreshCw,
   RotateCcw,
-  X,
 } from "lucide-react";
 import {
   coordinatorRuntimeId,
@@ -27,6 +26,7 @@ import {
   AGENT_PLATFORMS,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import { AgentMailBanner } from "@/components/agent-mail/AgentMailBanner";
 import { AgentNativeTab } from "@/components/native-agent";
 import { TAB_ICON_CLASS } from "@/components/pane-layout/TabShell";
 import { CoordinatorPaneTree, SortableCoordinatorTab } from "./CoordinatorPaneTree";
@@ -61,10 +61,6 @@ import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
-import {
-  useNativeNoticeDismissalStore,
-  useNoticeDismissalsReady,
-} from "@/stores/nativeNoticeDismissalStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useStore } from "zustand";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -632,29 +628,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   );
   const switchBlocked = Boolean(blocked && !discardableDirty);
   const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitch?.ref);
-  const newestContextEvent = snapshot?.workspace.repositoryContextEvents?.at(-1);
-  const contextNoticeSessionIdentity = snapshot
-    ? `coordinator\u0000${projectId}\u0000${snapshot.workspace.id}\u0000${selected?.id ?? "none"}`
-    : undefined;
-  const contextNoticeOccurrenceId = newestContextEvent
-    ? `repository-context\u0000${newestContextEvent.revision}`
-    : undefined;
-  const contextNoticeDismissed = useNativeNoticeDismissalStore((state) =>
-    contextNoticeSessionIdentity && contextNoticeOccurrenceId
-      ? (state.sessions
-          .find((session) => session.sessionIdentity === contextNoticeSessionIdentity)
-          ?.occurrenceIds.includes(contextNoticeOccurrenceId) ?? false)
-      : false,
-  );
-  const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
-  const noticeDismissalsReady = useNoticeDismissalsReady();
-  const latestContextEvent =
-    noticeDismissalsReady &&
-    newestContextEvent &&
-    (selected?.repositoryContextRevisionAcknowledged ?? 0) < newestContextEvent.revision &&
-    !contextNoticeDismissed
-      ? newestContextEvent
-      : undefined;
 
   /*
    * Held until the turn is observed, not until the tab has rendered once.
@@ -821,45 +794,54 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     // Scoped to the conversation that produced it, so another group cannot
     // replay one conversation's first prompt into its own.
     const launch = pendingLaunch?.conversationId === conversation.id ? pendingLaunch : null;
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     return (
-      <AgentNativeTab
-        key={conversation.id}
-        tabId={conversation.tabId}
-        data={{
-          platform: conversation.agent,
-          environmentId: coordinatorRuntimeId(snapshot.workspace.id, conversation.id),
-          isLocal: true,
-          sessionId: conversation.providerSessionId,
-        }}
-        isActive
-        ownsGlobalShortcuts={paneFocused}
-        executionPolicy="coordinator-read-only"
-        coordinatorProjectId={projectId}
-        coordinatorWorkspacePath={snapshot.projectPath}
-        availablePlatforms={availablePlatforms}
-        platformNotes={platformNotes}
-        unassignedPlaceholder="Ask the coordinator to inspect or plan…"
-        emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
-        onAssignPlatform={
-          conversation.agent
-            ? undefined
-            : (platform, prompt, options) =>
-                startConversation(conversation, platform, options, prompt)
-        }
-        beforeSend={
-          conversation.role === "side" ? undefined : () => confirmUpstreamMerge(conversation)
-        }
-        {...(launch
-          ? {
-              initialPrompt: launch.prompt,
-              initialAgentModel: launch.modelId,
-              initialReasoningEffort: launch.reasoningId,
-              initialConversationMode: launch.mode,
-              initialFastMode: launch.fastMode,
-              initialExecutionProfileId: launch.executionProfileId,
+      <div key={conversation.id} className="flex h-full min-h-0 flex-col">
+        <AgentMailBanner
+          environmentId={environmentId}
+          tabId={conversation.tabId}
+          agentAvailable={availablePlatforms.length > 0}
+        />
+        <div className="relative min-h-0 flex-1">
+          <AgentNativeTab
+            tabId={conversation.tabId}
+            data={{
+              platform: conversation.agent,
+              environmentId,
+              isLocal: true,
+              sessionId: conversation.providerSessionId,
+            }}
+            isActive
+            ownsGlobalShortcuts={paneFocused}
+            executionPolicy="coordinator-read-only"
+            coordinatorProjectId={projectId}
+            coordinatorWorkspacePath={snapshot.projectPath}
+            availablePlatforms={availablePlatforms}
+            platformNotes={platformNotes}
+            unassignedPlaceholder="Ask the coordinator to inspect or plan…"
+            emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
+            onAssignPlatform={
+              conversation.agent
+                ? undefined
+                : (platform, prompt, options) =>
+                    startConversation(conversation, platform, options, prompt)
             }
-          : {})}
-      />
+            beforeSend={
+              conversation.role === "side" ? undefined : () => confirmUpstreamMerge(conversation)
+            }
+            {...(launch
+              ? {
+                  initialPrompt: launch.prompt,
+                  initialAgentModel: launch.modelId,
+                  initialReasoningEffort: launch.reasoningId,
+                  initialConversationMode: launch.mode,
+                  initialFastMode: launch.fastMode,
+                  initialExecutionProfileId: launch.executionProfileId,
+                }
+              : {})}
+          />
+        </div>
+      </div>
     );
   };
   const branchSwitchDisabled = operation !== null || switchBlocked || coordinatorTurnActive;
@@ -1057,33 +1039,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           environments.find((item) => item.id === entry.environmentId)?.name ?? entry.environmentId
         }
       />
-
-      {latestContextEvent ? (
-        <div
-          role="status"
-          className="flex shrink-0 items-center gap-3 border-b border-blue-400/20 bg-blue-400/5 px-3 py-1.5 text-xs text-blue-200"
-        >
-          <span className="min-w-0 flex-1">
-            Repository context changed to {latestContextEvent.branch ?? "detached HEAD"} at{" "}
-            <code>{latestContextEvent.headCommit?.slice(0, 12) ?? "an unborn commit"}</code>{" "}
-            (context r{latestContextEvent.revision}). Earlier analysis may be stale; the next turn
-            receives the new context.
-          </span>
-          <button
-            type="button"
-            aria-label="Dismiss repository context notice"
-            title="Dismiss notice"
-            className="shrink-0 cursor-pointer rounded-sm opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
-            onClick={() => {
-              if (contextNoticeSessionIdentity && contextNoticeOccurrenceId) {
-                dismissNotice(contextNoticeSessionIdentity, contextNoticeOccurrenceId);
-              }
-            }}
-          >
-            <X aria-hidden="true" className="size-3.5" />
-          </button>
-        </div>
-      ) : null}
 
       <div className="relative min-h-0 flex-1">
         {layout ? (

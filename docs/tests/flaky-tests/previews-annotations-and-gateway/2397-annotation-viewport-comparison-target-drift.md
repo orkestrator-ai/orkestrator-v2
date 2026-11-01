@@ -1,6 +1,6 @@
 # Annotation viewport comparison adds a target difference
 
-- **ID:** 2396
+- **ID:** 2397
 - **Status:** open
 - **Date observed:** 2026-11-01
 - **Test:** `result captures label stability and comparison differences, and Show on page reports an expired sign-in redirect`

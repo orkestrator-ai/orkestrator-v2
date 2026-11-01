@@ -92,7 +92,7 @@ export function MailToolPart({
         ...(call.subject ? { subject: call.subject } : {}),
         warning: "Sent by this agent through Orkestrator.",
         body: call.body ?? "",
-        ...(state ? { status: agentMailStatus(state) } : {}),
+        ...(state ? { status: agentMailStatus(state, descriptor?.capabilities) } : {}),
         ...(participants ? { participants } : {}),
       }
     : {

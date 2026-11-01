@@ -1,6 +1,6 @@
 # Service preview paste target gains a stray character
 
-- **ID:** 2393
+- **ID:** 2398
 - **Status:** open
 - **Date observed:** 2026-11-01
 - **Test:** `Edit-menu copy and paste reach a service view, and page clipboard

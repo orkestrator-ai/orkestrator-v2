@@ -34,6 +34,9 @@ import {
   type ExternalForwardUpstream,
 } from "./preview-external-forward.js";
 import { openPreviewTunnel } from "./preview-tunnel-client.js";
+import { createLogger, type Logger, type LogEventOf } from "@orkestrator/protocol/logger";
+
+const log = createLogger("preview");
 
 /** Minimal Electron Session surface used for service partitions (injectable in tests). */
 export interface PreviewServiceSession {
@@ -93,7 +96,7 @@ export interface PreviewTransportManagerOptions {
   externalForwardTimers?: ExternalForwardTimers;
   poolMax?: number;
   onStateChange?: (serviceKey: string) => void;
-  logger?: Pick<Console, "warn">;
+  logger?: Pick<Logger<LogEventOf<"preview">>, "warn">;
   /** Resolve a host name to its addresses (injectable in tests). */
   lookupHost?: (hostname: string) => Promise<string[]>;
 }
@@ -980,7 +983,7 @@ export class PreviewTransportManager {
       .catch(() => {
         // Backend errors can contain credentials or request content. Keep this
         // diagnostic static; the backend lease bounds a failed release.
-        (this.options.logger ?? console).warn("[Previews] Failed to release preview attachment.");
+        (this.options.logger ?? log).warn("attachment.release-failed");
       });
   }
 

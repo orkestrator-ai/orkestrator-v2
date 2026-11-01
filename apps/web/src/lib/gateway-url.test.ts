@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   getGatewayBaseUrl,
+  isBackendOnAnotherDevice,
   isGatewayBrowserPreviewSupported,
   isRemoteGatewayConnection,
   resolveGatewayApiUrl,
@@ -50,6 +51,36 @@ describe("isRemoteGatewayConnection", () => {
       baseUrl: "https://workstation.tailnet.ts.net/",
     };
     expect(isRemoteGatewayConnection()).toBe(false);
+  });
+});
+
+describe("isBackendOnAnotherDevice", () => {
+  test("is false without a gateway and for loopback browser gateways", () => {
+    expect(isBackendOnAnotherDevice()).toBe(false);
+
+    window.orkestratorGateway = { enabled: true, baseUrl: "http://127.0.0.1:5173/" };
+    expect(isBackendOnAnotherDevice()).toBe(false);
+  });
+
+  test("is true for a desktop gateway to another machine", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    expect(isBackendOnAnotherDevice()).toBe(true);
+  });
+
+  test("is false for a desktop gateway that leads back to this computer", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      backendOnThisDevice: true,
+      baseUrl: "https://laptop.tailnet.ts.net/",
+    };
+    expect(isBackendOnAnotherDevice()).toBe(false);
+    // The commands still travel through a gateway, so proxy decisions keep it.
+    expect(isRemoteGatewayConnection()).toBe(true);
   });
 });
 

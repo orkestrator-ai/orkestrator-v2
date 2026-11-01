@@ -3,12 +3,15 @@ import { AlertTriangle, Inbox, RotateCcw, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
+import { cn } from "@/lib/utils";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { deliverNowNotice, openAgentMailForTab } from "./agent-mail-ui";
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
+  agentMailAwaitingAgent,
   isAgentMailBudgetHeld,
 } from "@orkestrator/protocol/agent-mail";
+import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
 
 let summaryHydration: Promise<void> | null = null;
 
@@ -24,9 +27,11 @@ function ensureSummaryHydrated(refresh: () => Promise<void>): void {
 export function AgentMailBanner({
   environmentId,
   tabId,
+  agentAvailable = true,
 }: {
   environmentId: string;
   tabId: string;
+  agentAvailable?: boolean;
 }) {
   const mailboxId = `${environmentId}\0${tabId}`;
   const entry = useAgentMailStore((state) => state.summary.get(mailboxId));
@@ -54,18 +59,31 @@ export function AgentMailBanner({
   const failed = messages.find((message) => message.placement === "inject_failed");
   const paused = messages.find(isAgentMailBudgetHeld);
   const pending = messages.find((message) => message.placement === "pending-inject");
-  const pullOnly = messages.find(
+  const delegationHeld = messages.find(
     (message) =>
-      message.placement === "stored" &&
-      !message.ackedAt &&
-      !message.discardedAt &&
-      mailbox?.descriptor.injectPolicy === "off",
+      message.placement === "inject-held" &&
+      message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON,
   );
+  const capabilities = mailbox?.descriptor.capabilities;
+  const awaitingAgent = capabilities
+    ? messages.filter((message) => agentMailAwaitingAgent(message, capabilities))
+    : [];
+  const pullOnly =
+    awaitingAgent.length === 0
+      ? messages.find(
+          (message) =>
+            message.placement === "stored" &&
+            !message.ackedAt &&
+            !message.discardedAt &&
+            mailbox?.descriptor.injectPolicy === "off",
+        )
+      : undefined;
   if (
     !failed &&
     !paused &&
     !pending &&
     !pullOnly &&
+    awaitingAgent.length === 0 &&
     entry.pendingInjectCount === 0 &&
     entry.failedInjectCount === 0
   )
@@ -128,6 +146,9 @@ export function AgentMailBanner({
     text = "Message too large for mid-turn delivery · delivers in full when the turn ends";
   else if (pending?.placementReason === "steer-refused")
     text = "Couldn't deliver into the running turn · delivers when the turn ends";
+  else if (delegationHeld) text = "Worker report waiting · delivers when the worker turn ends";
+  else if (awaitingAgent.length > 0)
+    text = `${awaitingAgent.length} message${awaitingAgent.length === 1 ? "" : "s"} in inbox · ${agentAvailable ? "waiting for an agent" : "enable a qualified agent in Settings"}`;
   else if (descriptor?.presence === "draft")
     text = "Delivery waiting: you have unsent text in the composer";
   else if (pullOnly) {
@@ -138,12 +159,20 @@ export function AgentMailBanner({
 
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-400/25 bg-amber-400/[0.07] px-3 py-1.5 text-xs">
-      {failed || paused ? (
+      {failed || paused || awaitingAgent.length > 0 ? (
         <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
       ) : (
         <Inbox className="h-3.5 w-3.5 text-cyan-300" />
       )}
-      <span className="min-w-0 flex-1 truncate">{text}</span>
+      {/* Wraps when it tells the person what to do: that part must not be cut off. */}
+      <span
+        className={cn(
+          "min-w-0 flex-1",
+          awaitingAgent.length === 0 && !delegationHeld && "truncate",
+        )}
+      >
+        {text}
+      </span>
       {actionError && (
         <span role="alert" className="max-w-48 truncate text-red-300">
           {actionError}

@@ -152,3 +152,18 @@ mise run test:logged -- --name transcript-review-failures-isolated -- bun test -
 
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.
+
+## Agent mail review validation — 2026-11-01
+
+- **Original command:** `mise run test:logged -- --name repair-root-tests -- mise run test`.
+  The default runner reserved workspace/root/bridges/protocol slots 5/1/2/1;
+  web used two isolated workers and backend used three. Component browser and
+  isolated-profile browser checks also ran on this host.
+- **Aggregate:** exit 1 after 907.5 s. Web reported 11,276 passed, ten skipped
+  and twelve failed across 11,298 tests in 746 files.
+- **Evidence:** `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8VTwNj/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** The sigil-filter case expected one projection read and received two (2074.19 ms).
+- **Complete unchanged owner:** `mise run test:logged -- --name repair-command-owner -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` passed, exit 0, in 10.1 s. Passing raw output was removed by the bounded logger.
+- **Assessment:** recurrence of the existing intermittent failure; no owning
+  implementation, assertion, timeout or skip changed. Shared-host contention
+  remains a hypothesis, and the aggregate remains non-green.

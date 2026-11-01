@@ -21,6 +21,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import type { StorageService } from "./storage.js";
+import type { Environment } from "./models.js";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { resolveProjectGitRoot } from "./project-git-service.js";
 import {
@@ -238,6 +239,10 @@ export class CoordinatorService {
    * is none open. Closing the main tab is how a user changes its provider; the
    * next mail that needs a coordinator starts a fresh one rather than being
    * lost. Work the closed conversation still owed a report to moves with it.
+   *
+   * An open main that has never run gets the default agent the same way: with
+   * no agent it could neither read this mail nor be woken for it. With no
+   * qualified agent it stays unassigned and the mail waits for the user.
    */
   async ensureMainConversation(
     projectId: string,
@@ -246,7 +251,29 @@ export class CoordinatorService {
       const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace was not found");
       const open = coordinatorMainConversation(existing);
-      if (open) return { workspace: existing, main: open, created: false };
+      if (open?.agent) return { workspace: existing, main: open };
+      if (open) {
+        const agent = await this.preferredAgent(projectId).catch(() => undefined);
+        if (!agent) return { workspace: existing, main: open };
+        const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
+          projectId,
+          (current) => {
+            if (!current) throw new Error("Coordinator workspace disappeared");
+            return {
+              ...current,
+              conversations: current.conversations.map((item) =>
+                item.id === open.id && !item.agent ? { ...item, agent } : item,
+              ),
+              updatedAt: new Date().toISOString(),
+            };
+          },
+        );
+        if (!workspace) throw new Error("Coordinator workspace disappeared");
+        return {
+          workspace,
+          main: coordinatorMainConversation(workspace) ?? open,
+        };
+      }
       if (
         existing.conversations.filter((item) => !item.closedAt).length >=
         MAX_OPEN_COORDINATOR_CONVERSATIONS
@@ -273,7 +300,7 @@ export class CoordinatorService {
       );
       if (!workspace) throw new Error("Coordinator workspace disappeared");
       const main = coordinatorMainConversation(workspace) ?? created;
-      return { workspace, main, created: true };
+      return { workspace, main };
     });
     await this.adoptLiveWork(result.workspace, result.main);
     await this.reconcileMainMail(result.workspace, result.main);
@@ -1399,6 +1426,57 @@ export class CoordinatorService {
             state: "waiting",
             tone: "attention",
           },
+        },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
+        throw error;
+      });
+  }
+
+  /**
+   * Tell the coordinator that launched a worker that its setup was held for
+   * the user's approval (`setup-approval.ts`), so it reports a blocked worker
+   * instead of waiting for one that will never become ready on its own. A
+   * coordinator cannot approve setup itself; it can only tell the user.
+   * Idempotent per environment and held setup.
+   */
+  async noteWorkerSetupApproval(environment: Environment): Promise<void> {
+    const associations = (
+      await this.storage.coordinators.listCoordinatorWorkflowAssociations(environment.projectId)
+    ).filter(
+      (association) =>
+        association.kind === "environment" &&
+        association.resourceId === environment.id &&
+        !association.nodeId &&
+        !association.pending,
+    );
+    const owner = associations.at(-1);
+    if (!owner) return;
+    const workspace = await this.storage.coordinators.getCoordinatorWorkspaceById(
+      owner.coordinatorId,
+    );
+    const main = workspace ? coordinatorMainConversation(workspace) : undefined;
+    if (!workspace || !main) return;
+    const label = environment.name ?? environment.id;
+    await this.storage
+      .sendAgentMail(
+        {
+          kind: "system",
+          projectId: environment.projectId,
+          source: "workflow",
+          resourceId: environment.id,
+        },
+        {
+          requestId: `setup-approval-${owner.id}-${environment.setupCompletedAt ?? "held"}`,
+          toEnvironmentId: coordinatorRuntimeId(workspace.id, main.id),
+          toTabId: main.tabId,
+          subject: `Worker ${label} needs setup approval`,
+          body: [
+            `Setup did not run in worker environment ${label} (${environment.id}): its branch changes the project's setup commands, and this machine has not approved them.`,
+            "",
+            "Tell the user: they review the commands in the environment's setup tab and approve or skip them there. You cannot approve them. The worker is not ready until they do.",
+          ].join("\n"),
         },
       )
       .catch((error: unknown) => {

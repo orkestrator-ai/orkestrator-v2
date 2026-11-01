@@ -2006,10 +2006,7 @@ export function SharedNativeAgentController({
         rawCommand || preparedPrompt
           ? basePrompt
           : buildPromptWithTranscriptAnnotations(basePrompt, draft.annotations);
-      if (!userPrompt.trim()) {
-        reportSendError("The message is empty, so nothing was sent.");
-        return false;
-      }
+      if (!userPrompt.trim()) return false;
       if (
         !rawCommand &&
         !literal &&

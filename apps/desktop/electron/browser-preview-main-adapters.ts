@@ -10,7 +10,7 @@ export interface CreateBrowserPreviewMainAdaptersOptions {
   emitToRenderers: (event: string, payload: unknown) => void;
   openExternal: (url: string) => Promise<void>;
   writeClipboardText: (text: string) => void;
-  logError: (message: string, error: unknown) => void;
+  logError: (error: unknown) => void;
 }
 
 export type BrowserPreviewMainAdapters = Pick<
@@ -37,7 +37,7 @@ export function createBrowserPreviewMainAdapters({
         await openExternal(url);
       } catch {
         const failure = new Error("Could not open your browser.");
-        logError("[BrowserPreview] Failed to open link externally:", failure);
+        logError(failure);
         throw failure;
       }
     },

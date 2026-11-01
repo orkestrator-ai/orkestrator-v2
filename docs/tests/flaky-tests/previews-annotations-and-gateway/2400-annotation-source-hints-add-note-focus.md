@@ -1,6 +1,6 @@
 # Annotation source-hints capture loses Add note focus
 
-- **ID:** 2395
+- **ID:** 2400
 - **Status:** open
 - **Date observed:** 2026-11-01
 - **Test:** `development source hints survive native spool and renderer capability gating into verified stored evidence`

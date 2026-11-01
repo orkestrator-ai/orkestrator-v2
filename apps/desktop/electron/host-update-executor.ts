@@ -10,6 +10,12 @@ import {
   type HostUpdaterReport,
 } from "@orkestrator/protocol/host-maintenance";
 import type { AutoUpdateController, UpdateCheckReport } from "./auto-update.js";
+import {
+  createLogger,
+  formatLogError,
+  type Logger,
+  type LogEventOf,
+} from "@orkestrator/protocol/logger";
 
 /** The Local backend's host updater channel (loopback control listener only). */
 export type HostUpdaterChannel = {
@@ -84,13 +90,13 @@ export function createHostUpdateExecutor(options: {
   restartDelayMs?: number;
   idlePollMs?: number;
   reportRetryMs?: number;
-  log?: Pick<Console, "info" | "warn">;
+  log?: Pick<Logger<LogEventOf<"updater">>, "info" | "warn">;
 }): HostUpdateExecutor {
   const { channel, engine } = options;
   const now = options.now ?? Date.now;
   const restartDelayMs = options.restartDelayMs ?? HOST_UPDATE_RESTART_DELAY_MS;
   const idlePollMs = options.idlePollMs ?? IDLE_POLL_MS;
-  const log = options.log ?? console;
+  const log = options.log ?? createLogger("updater");
   let started = false;
   let handledCheckId: string | null = null;
   let pendingCheckId: string | null = null;
@@ -107,7 +113,7 @@ export function createHostUpdateExecutor(options: {
 
   function send(report: HostUpdaterReport): Promise<HostMaintenanceSnapshot | null> {
     return channel.report(report).catch((error: unknown) => {
-      log.warn("[Updater] Could not report to the backend:", message(error));
+      log.warn("remote.report-failed", { error: formatLogError(error, { stack: false }) });
       return null;
     });
   }
@@ -247,15 +253,17 @@ export function createHostUpdateExecutor(options: {
         signal,
       );
       if (acknowledged?.job?.id !== job.id || acknowledged.job.state !== "restarting") {
-        log.warn("[Updater] The backend did not record the restart; not installing");
+        log.warn("remote.restart-not-recorded");
         if (!signal.aborted)
           await fail("The backend could not acknowledge the restart; retry the update");
         return;
       }
       await options
         .beforeInstall?.({ jobId: job.id, version: staged.version })
-        .catch((error: unknown) => log.warn("[Updater] Preparing the relaunch failed:", error));
-      log.info(`[Updater] Installing ${staged.version} for a remote request`);
+        .catch((error: unknown) =>
+          log.warn("remote.relaunch-prepare-failed", { error: formatLogError(error) }),
+        );
+      log.info("remote.installing", { version: staged.version });
       if (!(await engine.installStaged(staged.version))) {
         await fail("The staged update is no longer available");
       }
@@ -280,7 +288,7 @@ export function createHostUpdateExecutor(options: {
     if (request && request.id !== handledCheckId) {
       handledCheckId = request.id;
       void runCheck(request.id).catch((error: unknown) =>
-        log.warn("[Updater] Remote check failed:", message(error)),
+        log.warn("remote.check-failed", { error: formatLogError(error, { stack: false }) }),
       );
     }
     const job = snapshot.job;
@@ -315,7 +323,7 @@ export function createHostUpdateExecutor(options: {
         else recoveryDelay = options.reportRetryMs ?? 1_000;
         reconcile(await channel.snapshot());
       } catch (error) {
-        log.warn("[Updater] Could not read update requests:", message(error));
+        log.warn("remote.read-failed", { error: formatLogError(error, { stack: false }) });
         scheduleRecovery();
       }
     })().finally(() => {

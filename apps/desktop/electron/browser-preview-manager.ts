@@ -58,6 +58,9 @@ import {
   type PreviewSessionImportHandle,
   type SessionCookieWriteResult,
 } from "./preview-session-import.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const dialogLog = createLogger("desktop.dialog");
 
 type WebContentsViewConstructor = new (
   options?: WebContentsViewConstructorOptions,
@@ -1132,7 +1135,7 @@ export class BrowserPreviewManager {
     // A page's beforeunload never opens a dialog in Electron: unhandled, it
     // silently cancels the navigation, which an agent would only see as a hang.
     contents.on("will-prevent-unload", (event) => {
-      console.info("[Dialog] browser-preview ignored a page's beforeunload");
+      dialogLog.info("preview-beforeunload-ignored");
       event.preventDefault();
     });
     contents.on("will-navigate", (event) => {

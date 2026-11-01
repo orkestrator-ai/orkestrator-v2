@@ -256,6 +256,8 @@ export type AgentActivityCompletionOutcome = "failed" | "none";
  * - `agent_question`: an agent asked a question that needs an answer.
  * - `terminal_finished`: a terminal-hosted agent finished.
  * - `marked_unread`: a client marked the environment unread.
+ * - `setup_approval`: a local environment's setup commands differ from what
+ *   this machine trusts and wait for the user to approve them.
  */
 export type EnvironmentUnreadReason =
   | "agent_finished"
@@ -264,7 +266,8 @@ export type EnvironmentUnreadReason =
   | "agent_waiting"
   | "agent_question"
   | "terminal_finished"
-  | "marked_unread";
+  | "marked_unread"
+  | "setup_approval";
 
 export interface Environment {
   /** Monotonic fence for mail-triggered starts across explicit stop transitions. */
@@ -455,6 +458,14 @@ export interface Environment {
   setupPhase?: EnvironmentSetupPhase;
   /** Persisted acknowledgement that lets the user proceed after a setup failure. */
   setupOverride?: boolean;
+  /**
+   * Setup was held, not run: a local environment's `setupLocal` commands
+   * differ from the default branch's and from every hash approved for the
+   * project on this machine (`setup-approval.ts`). Recorded with
+   * `setupPhase: "failed"`, so every reader that waits on setup stops; the
+   * user approves the commands or skips setup.
+   */
+  setupApprovalRequired?: boolean;
   setupSessionId?: string;
   setupStartedAt?: string;
   setupCompletedAt?: string;

@@ -1,6 +1,6 @@
 # Service preview spec times out waiting for the window title
 
-- **ID:** 2394
+- **ID:** 2399
 - **Status:** open
 - **Date observed:** 2026-11-01
 - **Test:** the `beforeAll` of `e2e/agent-testing/service-preview-electron.spec.ts`,

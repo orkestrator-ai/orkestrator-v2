@@ -43,7 +43,7 @@ import * as backend from "@/lib/backend";
 import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
-import { isGatewayBrowserPreviewSupported, isRemoteGatewayConnection } from "@/lib/gateway-url";
+import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { getReviewAgent, type ReviewLaunchSelection } from "@/components/review/ReviewLaunchDialog";
 import { type MultiReviewLaunchSelection } from "@/components/review/MultiReviewLaunchDialog";
@@ -186,6 +186,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     environmentName: string;
     isMerged: boolean;
   } | null>(null);
+  const cleanupTargetRef = useRef(cleanupTarget);
+  cleanupTargetRef.current = cleanupTarget;
   const [deletingEnvironmentId, setDeletingEnvironmentId] = useState<string | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
@@ -557,10 +559,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   });
   const canLaunchResolve =
     canLaunchBackendJob || Boolean(selectedEnvironmentId && hasOpenResolveTab);
-  const editorUnavailableOnRemoteConnection = isRemoteGatewayConnection();
+  const editorOnAnotherDevice = isBackendOnAnotherDevice();
   // For containers, we need containerId; for local environments, we need worktreePath
   const canOpenEditor =
-    !editorUnavailableOnRemoteConnection &&
+    !editorOnAnotherDevice &&
     isRunning &&
     ((isLocalEnvironment && !!selectedEnvironment?.worktreePath) ||
       (!isLocalEnvironment && !!selectedEnvironment?.containerId));
@@ -581,10 +583,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // The object test only narrows the type: no environment means no
   // cleanupAfterMergeError, so `!error` already covers that case. Depending on
   // the whole environment would re-open a dismissed dialog on any field change.
+  // Deletion completion must not re-open the same persisted error either; only
+  // selection/error changes should trigger this effect, guarded while deleting.
   /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     const error = selectedEnvironment?.cleanupAfterMergeError;
-    if (!selectedEnvironment || !error) return;
+    if (!selectedEnvironment || !error || deletingEnvironmentId === selectedEnvironment.id) return;
     setCleanupTarget({
       environmentId: selectedEnvironment.id,
       environmentName: selectedEnvironment.name,
@@ -601,7 +605,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   // Handler for opening in editor
   const handleOpenInEditor = useCallback(async () => {
-    if (editorUnavailableOnRemoteConnection) return;
+    if (editorOnAnotherDevice) return;
 
     // Extract values for type safety
     const worktreePath = selectedEnvironment?.worktreePath;
@@ -630,7 +634,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   }, [
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
-    editorUnavailableOnRemoteConnection,
+    editorOnAnotherDevice,
     isLocalEnvironment,
     config.global.preferredEditor,
   ]);
@@ -1429,7 +1433,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     canCreateTab,
     canLaunchBackendJob,
     canLaunchResolve,
-    editorUnavailableOnRemoteConnection,
+    editorOnAnotherDevice,
     canOpenEditor,
     handleOpenInEditor,
     canCopyEnvironmentUrl,
@@ -2014,7 +2018,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [selectProject, selectedEnvironment?.projectId, selectedProjectId, setProjectCollapsed],
   );
 
-  // Handler for cleaning up (deleting) an environment after PR is merged/closed
+  // Handler for cleaning up (deleting) an environment after PR is merged/closed.
+  // The dialog closes as soon as the deletion starts so it never blocks the
+  // rest of the app while a container or worktree is torn down; the project
+  // takes focus and deleteEnvironment reports a failure as a toast.
   const handleCleanup = useCallback(async () => {
     const operationEnvironmentId = cleanupTarget?.environmentId ?? selectedEnvironmentId;
     if (!operationEnvironmentId || deletingEnvironmentId === operationEnvironmentId) return;
@@ -2022,14 +2029,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     activateProjectForCleanup(operationEnvironmentId);
     setDeletingEnvironmentId(operationEnvironmentId);
     setCleanupError(null);
+    setCleanupDialogOpen(false);
+    setCleanupTarget(null);
     try {
       await deleteEnvironment(operationEnvironmentId);
-      setCleanupDialogOpen(false);
-      setCleanupTarget(null);
+      // The user may have reopened cleanup while teardown was running. Close
+      // that obsolete dialog, but preserve one opened for another environment.
+      if (cleanupTargetRef.current?.environmentId === operationEnvironmentId) {
+        setCleanupDialogOpen(false);
+        setCleanupTarget(null);
+        setCleanupError(null);
+      }
     } catch (err) {
       console.error("[ActionBar] Failed to delete environment:", err);
-      const message = err instanceof Error ? err.message : "An unexpected error occurred";
-      setCleanupError(message);
     } finally {
       setDeletingEnvironmentId((current) => (current === operationEnvironmentId ? null : current));
     }
@@ -2237,7 +2249,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     canCreateTab,
     canLaunchBackendJob,
     canLaunchResolve,
-    editorUnavailableOnRemoteConnection,
+    editorOnAnotherDevice,
     canOpenEditor,
     environmentPortAddress,
     environmentBrowserUrl,

@@ -221,10 +221,9 @@ describe("update download and lifecycle", () => {
       message: "Could not download or prepare the update",
       detail: "signature verification failed",
     });
-    expect(log.warn).toHaveBeenCalledWith(
-      "[Updater] Update download or staging failed:",
-      expect.any(Error),
-    );
+    expect(log.warn).toHaveBeenCalledWith("download.failed", {
+      error: expect.objectContaining({ name: "Error" }),
+    });
     spyOn(updater, "checkForUpdates").mockResolvedValueOnce({ isUpdateAvailable: false });
     await controller.checkNow();
     expect(updater.checkForUpdates).toHaveBeenCalledTimes(2);
@@ -251,10 +250,9 @@ describe("update download and lifecycle", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(unhandled).not.toHaveBeenCalled();
       expect(showMessageBox).not.toHaveBeenCalled();
-      expect(log.warn).toHaveBeenCalledWith(
-        "[Updater] Update download or staging failed:",
-        expect.any(Error),
-      );
+      expect(log.warn).toHaveBeenCalledWith("download.failed", {
+        error: expect.objectContaining({ name: "Error" }),
+      });
     } finally {
       controller.stop();
       process.off("unhandledRejection", unhandled);

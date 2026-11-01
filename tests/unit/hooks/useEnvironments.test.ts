@@ -703,6 +703,21 @@ describe("useEnvironments", () => {
       await expect(result.current.deleteEnvironment("env-1")).rejects.toThrow("Failed to delete");
     });
 
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledWith("Failed to delete environment", {
+      description: expect.stringContaining("Failed to delete"),
+      action: { label: "Details", onClick: expect.any(Function) },
+    });
+    const toastOptions = mockToastError.mock.calls[0]![1] as {
+      description: string;
+      action: { onClick: () => void };
+    };
+    expect(toastOptions.description).toContain("test-env");
+    act(() => {
+      toastOptions.action!.onClick();
+    });
+    expect(useErrorDialogStore.getState().error?.title).toBe("Failed to delete environment");
+    expect(useErrorDialogStore.getState().error?.message).toBe("Failed to delete");
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toBeDefined();
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");

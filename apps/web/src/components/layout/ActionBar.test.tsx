@@ -6788,7 +6788,7 @@ describe("ActionBar editor actions", () => {
         fireEvent.mouseEnter(containerEditorButton.parentElement!);
         await fireTooltipTimer(open);
         await waitFor(() => {
-          expect(screen.getByText("Unavailable for remote connections")).toBeTruthy();
+          expect(screen.getByText("Environment is on another computer")).toBeTruthy();
           expect(screen.queryByText("⌘O") === null).toBe(true);
         });
 
@@ -6825,9 +6825,48 @@ describe("ActionBar editor actions", () => {
 
       await waitFor(() => {
         expect(screen.getByText("⌘O")).toBeTruthy();
-        expect(screen.queryByText("Unavailable for remote connections") === null).toBe(true);
+        expect(screen.queryByText("Environment is on another computer") === null).toBe(true);
       });
     });
+  });
+
+  test("opens the editor when a command node's gateway leads back to this computer", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      backendOnThisDevice: true,
+      baseUrl: "https://laptop.tailnet.ts.net/",
+    };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/tmp/this-computer-worktree",
+    };
+    try {
+      await withTooltipClocks(async ({ open }) => {
+        render(<ActionBar />);
+        const editorButton = screen.getByRole("button", { name: "Open in VS Code" });
+        expect((editorButton as HTMLButtonElement).disabled).toBe(false);
+
+        fireEvent.mouseEnter(editorButton.parentElement!);
+        await fireTooltipTimer(open);
+        await waitFor(() => {
+          expect(screen.getByText("⌘O")).toBeTruthy();
+          expect(screen.queryByText("Environment is on another computer") === null).toBe(true);
+        });
+
+        fireEvent.click(editorButton);
+        await waitFor(() =>
+          expect(openLocalInEditorMock).toHaveBeenCalledWith(
+            "/tmp/this-computer-worktree",
+            "vscode",
+          ),
+        );
+      });
+    } finally {
+      delete window.orkestratorGateway;
+    }
   });
 });
 
@@ -7116,31 +7155,46 @@ describe("ActionBar successful cleanup and merge actions", () => {
     await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
   });
 
-  test("keeps the cleanup dialog open with the latest error after repeated failures", async () => {
+  test("closes the cleanup dialog when deletion fails and allows a retry", async () => {
     deleteEnvironmentMock
       .mockRejectedValueOnce(new Error("first failure"))
       .mockRejectedValueOnce(new Error("second failure"));
-    render(<ActionBar />);
+    const { rerender } = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
-    await waitFor(() =>
-      expect(findErrorAlert("Failed to delete environment:").textContent).toContain(
-        "first failure",
-      ),
-    );
+    expect(screen.queryByRole("button", { name: "Delete Environment" }) === null).toBe(true);
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+    // The failure is reported by deleteEnvironment's toast; the modal stays
+    // closed so it does not block the rest of the app.
+    expect(selectProjectMock).toHaveBeenCalledWith("project-1");
+    currentSelectedEnvironmentId = selectedEnvironment.id;
+    rerender(<ActionBar />);
     await waitFor(() =>
-      expect(findErrorAlert("Failed to delete environment:").textContent).toContain(
-        "second failure",
+      expect((screen.getByRole("button", { name: "Clean Up" }) as HTMLButtonElement).disabled).toBe(
+        false,
       ),
     );
-    expect(screen.getByRole("button", { name: "Delete Environment" })).toBeTruthy();
-    expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
+    expect(
+      screen.queryByText(
+        (_content, element) =>
+          element?.textContent?.startsWith("Failed to delete environment:") ?? false,
+      ) === null,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Delete Environment" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: "Delete Environment" }) === null).toBe(true);
   });
 
-  test("disables cleanup controls and suppresses duplicates while deletion is pending", async () => {
+  test("closes the cleanup dialog immediately and suppresses duplicates while deletion is pending", async () => {
     let resolveDelete!: () => void;
     deleteEnvironmentMock.mockImplementationOnce(
       () =>
@@ -7148,23 +7202,64 @@ describe("ActionBar successful cleanup and merge actions", () => {
           resolveDelete = resolve;
         }),
     );
-    render(<ActionBar />);
+    const { rerender } = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
 
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Clean Up Environment") === null).toBe(true);
+    expect(selectProjectMock).toHaveBeenCalledWith("project-1");
+
+    // Returning to the environment and reopening the dialog shows the pending
+    // state and cannot start a second deletion.
+    currentSelectedEnvironmentId = selectedEnvironment.id;
+    rerender(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     const deletingButton = await screen.findByRole("button", { name: "Deleting..." });
     expect((deletingButton as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
     fireEvent.click(deletingButton);
     expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1);
 
     resolveDelete();
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Deleting..." }) === null).toBe(true),
+    await waitFor(() => expect(screen.queryByText("Clean Up Environment") === null).toBe(true));
+    expect(screen.queryByRole("button", { name: "Delete Environment" }) === null).toBe(true);
+  });
+
+  test("preserves another environment's cleanup dialog when deletion succeeds", async () => {
+    let resolveDelete!: () => void;
+    deleteEnvironmentMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve;
+        }),
     );
+    const { rerender } = render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1));
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "second-env",
+      prState: "merged",
+    };
+    currentSelectedEnvironmentId = "env-2";
+    rerender(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    await act(async () => {
+      resolveDelete();
+    });
+
+    expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
+      'environment "second-env"',
+    );
+    expect(
+      (screen.getByRole("button", { name: "Delete Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenLastCalledWith("env-2"));
   });
 
   test("rehydrates a persisted backend cleanup failure", async () => {
@@ -7175,13 +7270,34 @@ describe("ActionBar successful cleanup and merge actions", () => {
       deletionRequestedAt: "2026-01-02T00:00:01.000Z",
       lifecycleOperation: "deleting",
     };
-    render(<ActionBar />);
+    let resolveDelete!: () => void;
+    deleteEnvironmentMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve;
+        }),
+    );
+    const { rerender } = render(<ActionBar />);
 
     const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
     expect(errorAlert.textContent).toContain("persisted cleanup failure");
     expect(
       (screen.getByRole("button", { name: "Delete Environment" }) as HTMLButtonElement).disabled,
     ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Clean Up Environment") === null).toBe(true);
+
+    // Render the project selection, then return to the failed environment while
+    // its retry is still running. The persisted error must not block the UI.
+    rerender(<ActionBar />);
+    currentSelectedEnvironmentId = selectedEnvironment.id;
+    rerender(<ActionBar />);
+    expect(screen.queryByText("Clean Up Environment") === null).toBe(true);
+    await act(async () => {
+      resolveDelete();
+    });
+    expect(screen.queryByText("Clean Up Environment") === null).toBe(true);
   });
 });
 
@@ -8188,12 +8304,16 @@ describe("ActionBar merge completion", () => {
 
 describe("ActionBar error dialogs", () => {
   test("keeps cleanup errors constrained and scrollable", async () => {
-    deleteEnvironmentMock.mockRejectedValueOnce(new Error(longError("delete failed")));
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    mergeEnvironmentPrMock.mockResolvedValueOnce({
+      outcome: "merged",
+      cleanupOutcome: "failed",
+      cleanupError: longError("delete failed"),
+    });
 
     const { rerender } = render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+    confirmMergeAndCleanup();
 
     const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
     const dialogContent = screen.getByTestId("alert-dialog-content");
@@ -8208,6 +8328,7 @@ describe("ActionBar error dialogs", () => {
     expect(errorAlert.className).toContain("[overflow-wrap:anywhere]");
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    currentEnvironment = selectedEnvironment;
     currentSelectedEnvironmentId = selectedEnvironment.id;
     rerender(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
@@ -8217,19 +8338,6 @@ describe("ActionBar error dialogs", () => {
           element?.textContent?.startsWith("Failed to delete environment:") ?? false,
       ) === null,
     ).toBe(true);
-  });
-
-  test("uses generic cleanup guidance for non-Error rejections", async () => {
-    deleteEnvironmentMock.mockRejectedValueOnce({ reason: "backend disconnected" });
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
-
-    const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
-    expect(errorAlert.textContent).toContain(
-      "Failed to delete environment: An unexpected error occurred",
-    );
   });
 
   test("keeps merge errors constrained and scrollable", async () => {

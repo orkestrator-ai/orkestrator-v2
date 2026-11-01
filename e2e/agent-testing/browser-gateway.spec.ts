@@ -1443,6 +1443,68 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
     const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
     expect(active.worktreePath).toBeTruthy();
     const setupLog = path.join(active.worktreePath!, ".turbo", "turbo-setup.log");
+    expect(active).toMatchObject({ setupApprovalRequired: true, setupPhase: "failed" });
+    expect(await fs.stat(setupLog).catch(() => null)).toBeNull();
+    const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+      environmentId: environment.id,
+    });
+    await invoke("save_pane_layout", {
+      environmentId: environment.id,
+      expectedRevision: layout?.revision ?? 0,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane-setup",
+        root: {
+          kind: "leaf",
+          id: "pane-setup",
+          activeTabId: "tab-setup",
+          tabs: [
+            {
+              id: "tab-setup",
+              type: "agent-native",
+              nativeAgentData: { environmentId: environment.id, platform: "codex", isLocal: true },
+            },
+          ],
+        },
+      },
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(status.browserUrl!);
+    const openHeld = async () => {
+      const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
+      const entry = page.getByText(environment.name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      if (await expand.isVisible()) await expand.click();
+      await entry.click();
+    };
+    await openHeld();
+    const panel = page.getByTestId("setup-approval-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText(marker);
+    await fs.mkdir(path.join(repositoryRoot, "output/visual-previews"), { recursive: true });
+    await page.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/setup-held-desktop.png"),
+    });
+    await page.setViewportSize({ width: 640, height: 900 });
+    await page.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/setup-held-narrow.png"),
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.reload();
+    await openHeld();
+    await expect(panel).toBeVisible();
+    expect(await fs.stat(setupLog).catch(() => null)).toBeNull();
+    const approval = await invoke<{ hash: string; approvalRequired: boolean }>(
+      "get_environment_setup_approval",
+      { environmentId: environment.id },
+    );
+    expect(approval.approvalRequired).toBe(true);
+    await invoke("approve_environment_setup", {
+      environmentId: environment.id,
+      hash: approval.hash,
+      remember: false,
+    });
     await expect
       .poll(async () => (await fs.stat(setupLog).catch(() => null))?.size ?? 0, {
         timeout: 30_000,
@@ -1599,7 +1661,7 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.goto(status.browserUrl!);
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: "Agent messages", exact: true }).click();
+    await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
     await page.getByTestId("agent-mail-conversation-row").first().click();
     const panel = page.getByTestId("agent-mail-panel");
     await panel.getByRole("button", { name: "Deliver now", exact: true }).click();
@@ -1635,7 +1697,7 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.reload();
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: "Agent messages", exact: true }).click();
+    await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
     await page.getByTestId("agent-mail-conversation-row").first().click();
     await expect(panel.getByText(/^(delivered|handled)$/)).toBeVisible();
     await expect(panel.getByRole("button", { name: "Deliver now", exact: true })).toHaveCount(0);
@@ -1729,6 +1791,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
 
     await page.goto(status.browserUrl!);
     await ensureProjectExpanded(page, fixture!.name);
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
     await expect(page.getByText(sender.name, { exact: true }).first()).toBeVisible();
     await invoke("send_agent_mail", {
@@ -1739,23 +1802,29 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       body: "This message arrived while the recipient environment was inactive.",
     });
 
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
+    ).toBeVisible();
 
     await page.reload();
     await ensureProjectExpanded(page, fixture!.name);
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
+    ).toBeVisible();
     // A committed send whose response is lost must retain its draft and retry
     // key across both list navigation and closing the panel.
     const openConversation = async () => {
-      await page.getByRole("button", { name: "Agent messages", exact: true }).click();
+      await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
       await page.getByTestId("agent-mail-conversation-row").first().click();
     };
     await openConversation();
@@ -1786,7 +1855,9 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await panel.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByText("Message was not sent", { exact: true })).toBeVisible();
     await panel.getByRole("button", { name: "Close", exact: true }).click();
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await page.setViewportSize({ width: 390, height: 844 });
     await openConversation();
@@ -1832,7 +1903,9 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       injectOverride: "inherit",
     });
     await page.setViewportSize({ width: 1440, height: 960 });
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await page.reload();
     expect((await mailbox()).descriptor).toMatchObject({

@@ -6,6 +6,7 @@ import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
+import { mockWriteText } from "../../mocks/clipboard";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { expectDomAbsent } from "../../bounded-test-diagnostics";
 
@@ -842,6 +843,38 @@ describe("EnvironmentItem copy address", () => {
   });
 });
 
+describe("EnvironmentItem copy environment ID", () => {
+  beforeEach(() => {
+    mockWriteText.mockReset();
+    mockWriteText.mockResolvedValue(undefined);
+  });
+
+  test("context menu copies the environment's ID", async () => {
+    const env = makeEnvironment({ id: "env-copy-me" });
+    const { container } = renderItem(env);
+
+    fireEvent.click(findMenuItem(container, "Copy Environment ID")!);
+
+    expect(mockWriteText).toHaveBeenCalledWith("env-copy-me");
+    await waitFor(() => {
+      expect(toastSuccessMock).toHaveBeenCalledWith("Copied environment ID", {
+        description: "env-copy-me",
+      });
+    });
+  });
+
+  test("shows an error toast when copying the ID fails", async () => {
+    mockWriteText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    const { container } = renderItem(makeEnvironment());
+
+    fireEvent.click(findMenuItem(container, "Copy Environment ID")!);
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy environment ID");
+    });
+  });
+});
+
 describe("EnvironmentItem copy initial prompt", () => {
   let writeTextMock: ReturnType<typeof mock>;
 
@@ -1196,6 +1229,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
     expect(actionsMenuLabels(menu)).toEqual([
       "Settings",
+      "Copy Environment ID",
       "Copy Address",
       "Copy Initial Prompt",
       "Fork local",
@@ -1217,7 +1251,13 @@ describe("EnvironmentItem mobile actions menu", () => {
     await openActionsMenu();
     const menu = await findActionsMenu();
 
-    expect(actionsMenuLabels(menu)).toEqual(["Settings", "Fork local", "Fork container", "Delete"]);
+    expect(actionsMenuLabels(menu)).toEqual([
+      "Settings",
+      "Copy Environment ID",
+      "Fork local",
+      "Fork container",
+      "Delete",
+    ]);
     expect(actionsMenuLabels(menu)).toEqual(contextMenuLabels(container));
 
     await closeActionsMenu(menu);
@@ -1233,6 +1273,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
     expect(actionsMenuLabels(menu)).toEqual([
       "Settings",
+      "Copy Environment ID",
       "Fork local",
       "Fork container",
       "Start",
@@ -1413,6 +1454,7 @@ describe("EnvironmentItem on a desktop viewport", () => {
 
     expect(contextMenuLabels(container)).toEqual([
       "Settings",
+      "Copy Environment ID",
       "Copy Address",
       "Fork local",
       "Fork container",

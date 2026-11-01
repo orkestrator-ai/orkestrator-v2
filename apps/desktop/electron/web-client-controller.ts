@@ -1,5 +1,11 @@
 import type { GatewayStartInfo } from "@orkestrator/backend/gateway";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
+import {
+  createLogger,
+  formatLogError,
+  type Logger,
+  type LogEventOf,
+} from "@orkestrator/protocol/logger";
 
 export type WebClientGateway = {
   start(): Promise<GatewayStartInfo | null>;
@@ -17,7 +23,7 @@ export class WebClientController {
   constructor(
     private readonly gateway: WebClientGateway,
     private readonly env: NodeJS.ProcessEnv = process.env,
-    private readonly logger: Pick<Console, "error"> = console,
+    private readonly logger: Pick<Logger<LogEventOf<"gateway">>, "error"> = createLogger("gateway"),
   ) {
     this.transition = Promise.resolve();
   }
@@ -59,7 +65,7 @@ export class WebClientController {
         this.startInfo = null;
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
-        this.logger.error("[RemoteGateway] Failed to stop cleanly:", error);
+        this.logger.error("remote.stop-failed", { error: formatLogError(error) });
       }
       return this.getStatus();
     }
@@ -77,7 +83,7 @@ export class WebClientController {
     } catch (error) {
       this.startInfo = null;
       this.error = error instanceof Error ? error.message : String(error);
-      this.logger.error("[RemoteGateway] Failed to start:", error);
+      this.logger.error("remote.start-failed", { error: formatLogError(error) });
     }
     return this.getStatus();
   }

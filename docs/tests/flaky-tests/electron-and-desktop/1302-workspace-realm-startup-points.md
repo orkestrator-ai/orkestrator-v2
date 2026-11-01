@@ -32,3 +32,17 @@
   `output/agent-testing/session-import-review-isolated-realm/electron/`; the
   isolated compressed log is
   `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.EpGx5r/realm-owner.log.gz`.
+- **Recurrence on `origin/main` (2026-11-01):** the leaf-project symptom, `locator.click: Timeout 20000ms exceeded` on `getByRole('button', { name: /^leaf-app\s*\d*$/ })` at `e2e/agent-testing/workspace-realm-electron.spec.ts:326`, failed three times out of three: in `ORKESTRATOR_AGENT_TEST_RUN_ID=logger-slice1 mise run test:logged -- --name agent-electron -- mise run test:agent:electron` on branch `shared-logger-foundation-and-electron-r1-slice-1-2a438948d729` (based on `066fcb497`; 44 passed, 2 failed, 3 skipped, 8.7 min), alone on that branch, and alone in a clean detached `origin/main` worktree at `066fcb497` (`bun install --frozen-lockfile`, then `bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts workspace-realm-electron.spec.ts`). In this session it did not behave as a flake: nothing suggests the leaf project ever rendered, so it may have become a consistent failure on this host.
+
+- **Main-merge validation recurrence (2026-11-01):** merging `4626c4d7a`
+  into session-import branch `159157dcc` repeated the leaf-project click timeout
+  at `workspace-realm-electron.spec.ts:326`. The one-worker command
+  `ORKESTRATOR_AGENT_TEST_PROFILE=merge-main-session-import-b99be208 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-session-import-b99be208 mise run test:logged -- --name merge-agent-electron -- mise run test:agent:electron`
+  finished with 43 passed, 2 failed, 3 skipped and 4 not run (439.0 s); all
+  21 service-preview tests passed. The unchanged realm owner then failed the
+  same click in isolation with
+  `ORKESTRATOR_AGENT_TEST_PROFILE=merge-main-session-import-b99be208 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-session-import-realm-owner mise run test:logged -- --name merge-realm-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts workspace-realm-electron.spec.ts`
+  (1 failed, 28.9 s). This adds no isolated pass or new flake classification.
+  Evidence: `output/agent-testing/merge-main-session-import-realm-owner/electron/`;
+  compressed log:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.vuZwvC/merge-realm-owner.log.gz`.

@@ -100,9 +100,12 @@ export function deliveryHint(
   placement: string,
   placementReason: string | undefined,
   injectPolicy: string,
+  recipientCanPull = true,
 ): string {
   if (placement === "bounced" || placement === "undeliverable")
     return `bounced: ${placementReason ?? placement}`;
+  if (placement === "stored" && !recipientCanPull)
+    return "stored, not delivered: the recipient has no agent yet and cannot read this until one starts";
   if (placement === "inject-held") {
     if (placementReason === COORDINATOR_DELEGATION_HOLD_REASON)
       return "queued, delivers when the worker turn ends";
@@ -261,6 +264,7 @@ export function registerAgentMessagingTools(
             message.placement,
             message.placementReason,
             recipient.descriptor.injectPolicy,
+            recipient.descriptor.capabilities.canPull,
           ),
         });
       } catch (error) {

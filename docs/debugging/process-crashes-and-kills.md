@@ -9,7 +9,7 @@ Arch host running the AppImage build. Most steps apply to any Linux host.
 
 | Symptom | Process that died | Where it is recorded |
 | --- | --- | --- |
-| "Orkestrator AI backend stopped … signal SIGKILL" | Local backend (`resources/bin/bun … backend/main.js`) | App log: `[Desktop] Local backend exited unexpectedly: …` |
+| "Orkestrator AI backend stopped … signal SIGKILL" | Local backend (`resources/bin/bun … backend/main.js`) | App log: `[desktop] backend.exited error.message="Backend service exited (code …, signal …)"` |
 | Window white, backend still reachable from another machine | Main window renderer (`orkestrator-v2 --type=renderer`) | App log: `[DesktopStartup] renderer-gone reason=…`, then `Render frame was disposed before WebFrameMain could be accessed` repeated |
 | App gone, core dump `SIGTRAP` at startup | A relaunched main process | `coredumpctl`; core memory contains `Invalid file descriptor to ICU data` |
 | Core dump `SIGBUS`, `--type=utility` network service, on quit | Chromium child outliving the main process | `coredumpctl`; journal shows `tmp-.mount_orkest….mount: Deactivated` the same second |
@@ -52,8 +52,8 @@ How to read the result:
   A process-group or cgroup kill takes Electron down too. If Electron
   survived, the signal was aimed at one PID.
 
-Builds with the 2026-10-26 fixes also log `[Desktop] Quitting; stopping the
-Local backend`, `[Backend] Received SIGTERM; shutting down` and
+Builds with the 2026-10-26 fixes also log `[desktop] quit.stopping-backend`,
+`[Backend] Received SIGTERM; shutting down` and
 `[Backend] Shutdown finished; exiting with 0` on a normal quit. If those lines
 are missing before an exit, the app did not quit by itself.
 

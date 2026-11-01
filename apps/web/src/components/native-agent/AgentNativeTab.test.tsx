@@ -2339,6 +2339,20 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByRole("button", { name: "Sign in from a terminal" }) === null).toBe(true);
   });
 
+  test("Enter in an empty composer does nothing", async () => {
+    render(<AgentNativeTab tabId="tab-empty-send" data={identity("codex")} isActive />);
+    await screen.findByTitle("Send");
+    const input = screen.getByRole("textbox");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.input(input, { target: { textContent: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => {});
+
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/message is empty/) === null).toBe(true);
+  });
+
   test("asks an older bridge's auth status for the route and its hint", async () => {
     getNativeAgentAuthStatusMock.mockImplementation(async () => ({
       state: "needs-auth",

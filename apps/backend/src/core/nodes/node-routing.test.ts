@@ -62,3 +62,12 @@ test("worker turn controls are node-link only on the leaf and never leave the co
   ])
     expect(isNodeExcludedCommand(command)).toBe(true);
 });
+
+test("setup approval: the fan-out stays on the command node, each node's record is node-link only", () => {
+  expect(isNodeExcludedCommand("approve_setup_commands_on_nodes")).toBe(true);
+  expect(isWorkspaceExcludedCommand("approve_setup_commands_on_nodes")).toBe(true);
+  expect(isNodeExcludedCommand("approve_project_setup_commands")).toBe(false);
+  expect(isWorkspaceExcludedCommand("approve_project_setup_commands")).toBe(true);
+  // The user approving in a leaf's realm acts on that leaf through their grant.
+  expect(isWorkspaceExcludedCommand("approve_environment_setup")).toBe(false);
+});

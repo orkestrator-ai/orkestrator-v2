@@ -1,3 +1,6 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("desktop");
 /**
  * An error dialog that offers to restart the application, without blocking.
  *
@@ -30,6 +33,6 @@ export function showRestartPrompt(options: {
       if (response === RESTART) options.restart();
     })
     .catch((error: unknown) => {
-      console.error(`[Desktop] Could not show "${options.title}":`, error);
+      log.error("restart-prompt.failed", { title: options.title, error: formatLogError(error) });
     });
 }

@@ -6,6 +6,7 @@ import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
 } from "@orkestrator/protocol/coordinator-web-research";
+import { createLogger } from "@orkestrator/protocol/logger";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -160,6 +161,8 @@ import {
 export const LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS = 2 * 60_000;
 /** A gap this long starts a new run of failed health checks. */
 export const LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS = 30_000;
+
+const log = createLogger("local-server");
 
 /** Deletion drains briefly: the container is removed right after. */
 const DELETION_DRAIN_GRACE_SECONDS = 5;
@@ -519,6 +522,7 @@ export async function peekLocalAgentBridgeState(
   if (healthy) {
     const key = `${kind}:${environmentId}`;
     localServers.clearUnresponsive(key, child);
+    log.recovered("bridge.not-answering", key);
     return { status: "running", port, authToken };
   }
   return child.exitCode === null && child.signalCode === null
@@ -826,6 +830,7 @@ async function startLocalServerAttempt(
       const health = await confirmRunningServerHealth(port, healthHeaders, isAlive);
       if (health.healthy) {
         localServers.clearUnresponsive(key);
+        log.recovered("bridge.not-answering", key);
         const reconcileConnection =
           kind === "opencode" && env?.worktreePath
             ? openCodeReconcileConnection(environmentId, env, context)
@@ -866,10 +871,14 @@ async function startLocalServerAttempt(
           // Replacing the bridge would kill a running turn or its background
           // work (a test suite, a dev server). A loaded host stalls a healthy
           // bridge far more often than a bridge wedges, so wait it out.
-          console.warn(
-            `[local-server] ${key} (pid ${existing.pid}) is not answering health checks ` +
-              `(${Math.round(unresponsiveForMs / 1000)}s) but has work in progress; not restarting it yet`,
-          );
+          log.throttled("warn", "bridge.not-answering", {
+            scope: key,
+            kind: "work-in-progress",
+            fields: () => ({
+              pid: existing.pid,
+              unresponsiveSeconds: Math.round(unresponsiveForMs / 1000),
+            }),
+          });
           throw retryableBridgeStartupError(
             "The agent bridge is busy and not responding yet. Retrying shortly.",
             2_000,
@@ -1315,6 +1324,7 @@ async function startLocalServerAttempt(
     } finally {
       releaseOpenCodeHostStart();
     }
+    log.recovered("bridge.not-answering", key);
     if (kind === "opencode" && authToken && agentToolConnection) {
       localServers.openCodeAgentTools.recordLaunchConnection(
         `local:${environmentId}`,

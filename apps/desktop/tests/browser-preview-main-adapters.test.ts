@@ -59,7 +59,6 @@ describe("browser preview main adapters", () => {
     );
     await flushPromises();
     expect(logError).toHaveBeenCalledWith(
-      "[BrowserPreview] Failed to open link externally:",
       expect.objectContaining({ message: "Could not open your browser." }),
     );
   });

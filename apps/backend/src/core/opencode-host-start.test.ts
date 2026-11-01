@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +8,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { withShortLivedBridge } from "./host-model-catalog-refresh.js";
-import { startLocalServerUnlocked } from "./commands-servers.js";
+import { startLocalServerUnlocked, waitForLocalServerStartup } from "./commands-servers.js";
 import { isOpenCodeDatabaseLockedError, OpenCodeHostStartGate } from "./opencode-host-start.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 
@@ -257,5 +259,59 @@ describe("OpenCodeHostStartGate", () => {
     releaseSecond();
     const releaseThird = await gate.acquire();
     releaseThird();
+  });
+});
+
+/**
+ * `exit` can fire before a dying OpenCode's last stderr chunk is read (flake
+ * 0723, to-do 1172). These order the events by hand on a fake child whose
+ * health never answers.
+ */
+describe("waitForLocalServerStartup on an OpenCode exit", () => {
+  const LOCKED = "Error: Unexpected error\n\ndatabase is locked\n";
+
+  function fakeChild() {
+    const child = Object.assign(new EventEmitter(), { stderr: new EventEmitter() });
+    const starting = waitForLocalServerStartup(
+      child as unknown as ChildProcessWithoutNullStreams,
+      1,
+      "opencode",
+      undefined,
+      {
+        health: { checkHealth: async () => false, delay: () => new Promise<void>(() => undefined) },
+        stdioCloseBoundMs: 20,
+      },
+    ).catch((error: unknown) => error);
+    return { child, starting };
+  }
+
+  test("reads stderr that arrives after exit and before close", async () => {
+    const { child, starting } = fakeChild();
+    child.emit("exit", 1, null);
+    child.stderr.emit("data", Buffer.from(LOCKED));
+    child.emit("close", 1, null);
+
+    const failure = await starting;
+    expect(isOpenCodeDatabaseLockedError(failure)).toBe(true);
+    expect((failure as Error).message).toContain("(code 1, signal null)");
+  });
+
+  test("decides after the bound when a held pipe never closes", async () => {
+    const { child, starting } = fakeChild();
+    child.emit("exit", 1, null);
+    child.stderr.emit("data", Buffer.from(LOCKED));
+
+    expect(isOpenCodeDatabaseLockedError(await starting)).toBe(true);
+  });
+
+  test("an exit without the lock message stays a plain failure", async () => {
+    const { child, starting } = fakeChild();
+    child.emit("exit", 1, null);
+    child.stderr.emit("data", Buffer.from("Error: something else\n"));
+    child.emit("close", 1, null);
+
+    const failure = await starting;
+    expect(isOpenCodeDatabaseLockedError(failure)).toBe(false);
+    expect((failure as Error).message).toContain("exited before becoming healthy");
   });
 });

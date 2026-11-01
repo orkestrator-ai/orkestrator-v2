@@ -479,12 +479,27 @@ test("a leaf's workspace opens in the window's central region without moving or 
       fixture.allowDirect = true;
       fixture.advance();
     });
-    await electronApp.evaluate(async ({ webContents }) => {
-      const realm = webContents
-        .getAllWebContents()
-        .find((contents) => contents.getURL().includes("realm=workspace"))!;
-      await realm.executeJavaScript(`window.orkestrator.invoke("get_backend_profile")`);
-    });
+    // Advancing the route invalidates its previous verification. The first
+    // read can initiate the upgrade while failing against that stale route.
+    await expect
+      .poll(
+        async () => {
+          try {
+            await electronApp.evaluate(async ({ webContents }) => {
+              const realm = webContents
+                .getAllWebContents()
+                .find((contents) => contents.getURL().includes("realm=workspace"))!;
+              await realm.executeJavaScript(`window.orkestrator.invoke("get_backend_profile")`);
+            });
+            return true;
+          } catch (error) {
+            if (String(error).includes("The connection is awaiting a verified route")) return false;
+            throw error;
+          }
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(true);
     await expect
       .poll(async () => (await realmState())?.target?.path, { timeout: 30_000 })
       .toBe("direct");

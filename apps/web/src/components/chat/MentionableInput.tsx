@@ -424,7 +424,17 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
       lastValueRef.current = value;
       lastMentionsRef.current = mentions;
 
-      const cursorPos = pendingCursor ?? (isFirstRender ? value.length : getCursorOffset(input));
+      const selection = window.getSelection();
+      const hasEditorSelection =
+        selection !== null && selection.rangeCount > 0 && input.contains(selection.anchorNode);
+      const savedCursor =
+        !hasEditorSelection && deferredCaretRef.current !== null
+          ? deferredCaretRef.current
+          : getCursorOffset(input);
+      const cursorPos = Math.min(
+        value.length,
+        pendingCursor ?? (isFirstRender ? value.length : savedCursor),
+      );
       lastCursorPositionRef.current = cursorPos;
 
       // Only rewrite the DOM when the content actually changed; rewriting on a

@@ -166,6 +166,32 @@ function installBackend(backend: Backend, native = true) {
     setBounds: mock(async () => null),
     reload: mock(async () => null),
     resetServiceSiteData: mock(async () => undefined),
+    startSessionImport: mock(async (tabId: string): Promise<BrowserPreviewState> => ({
+      tabId,
+      url: "http://127.0.0.1:41000/",
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      error: null,
+      sessionImport: { state: "waiting" },
+    })),
+    dismissSessionNotice: mock(async (tabId: string): Promise<BrowserPreviewState> => ({
+      tabId,
+      url: "http://127.0.0.1:41000/",
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      error: null,
+      sessionImport: { state: "idle" },
+    })),
+    openServiceSignIn: mock(async (tabId: string): Promise<BrowserPreviewState> => ({
+      tabId,
+      url: "http://127.0.0.1:41000/",
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      error: null,
+    })),
   };
   window.orkestrator = {
     invoke: invokeMock,
@@ -431,6 +457,184 @@ describe("service browser tabs", () => {
       },
     };
   }
+
+  describe("a typed path while the view still shows the page being left", () => {
+    /** A view on /next (navigation 3) whose user has just typed /sign-in. */
+    async function typeAgainstView() {
+      const backend = installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      });
+      seedTab(serviceUri("/start"));
+      renderTab();
+      await waitFor(() => expect(backend.browserPreview.attach).toHaveBeenCalled());
+      backend.emitState(viewState("/next", 3));
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/next")));
+      const address = screen.getByLabelText("Browser address") as HTMLInputElement;
+      fireEvent.change(address, { target: { value: "/sign-in" } });
+      fireEvent.submit(address.closest("form")!);
+      await waitFor(() =>
+        expect(backend.browserPreview.attach.mock.calls.at(-1)![0]).toMatchObject({
+          service: { path: "/sign-in" },
+          navigationBasis: 3,
+        }),
+      );
+      return { ...backend, address };
+    }
+
+    /** Long enough for a re-attach, which waits for an animation frame, to be sent. */
+    const settle = () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+
+    function expectStillOnTypedPath({
+      browserPreview,
+      address,
+    }: Awaited<ReturnType<typeof typeAgainstView>>) {
+      expect(address.value).toBe("http://localhost:3000/sign-in");
+      expect(tabUrl()).toBe(serviceUri("/sign-in"));
+      // Re-attaching /next with the same basis is what cancelled the new load.
+      expect(browserPreview.attach.mock.calls.at(-1)![0].service?.path).toBe("/sign-in");
+    }
+
+    test("main's state for the starting load does not undo it", async () => {
+      const typed = await typeAgainstView();
+      typed.emitState({ ...viewState("/next", 3), loading: true });
+      await settle();
+      expectStillOnTypedPath(typed);
+
+      typed.emitState(viewState("/sign-in", 4));
+      await settle();
+      expectStillOnTypedPath(typed);
+
+      // Once it has committed, the view's own navigations are followed again.
+      typed.emitState(viewState("/after", 5));
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/after")));
+    });
+
+    test("a failed load keeps the address so its error stays next to it", async () => {
+      const typed = await typeAgainstView();
+      typed.emitState({ ...viewState("/next", 3), error: "ERR_CONNECTION_REFUSED" });
+      await settle();
+      expectStillOnTypedPath(typed);
+    });
+
+    test("a redirect commits as a navigation and is followed", async () => {
+      const typed = await typeAgainstView();
+      typed.emitState({ ...viewState("/next", 3), loading: true });
+      typed.emitState(viewState("/redirected", 4));
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/redirected")));
+      await waitFor(() => expect(typed.address.value).toBe("http://localhost:3000/redirected"));
+    });
+  });
+
+  describe("a sign-in that cannot run inside the preview", () => {
+    async function renderWithState(state: Partial<BrowserPreviewState>) {
+      const backend = installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      });
+      seedTab(serviceUri("/sign-in"));
+      renderTab();
+      await waitFor(() => expect(backend.browserPreview.attach).toHaveBeenCalled());
+      backend.emitState({ ...viewState("/sign-in", 3), ...state });
+      return backend;
+    }
+    const blocked = {
+      sessionImport: { state: "idle" as const },
+      blockedNavigation: { host: "accounts.google.com" },
+    };
+
+    test("says nothing until the page is refused, and nothing on a client that cannot offer it", async () => {
+      await renderWithState({ sessionImport: { state: "idle" } });
+      expect(screen.queryByRole("status")).toBeNull();
+      cleanup();
+      await renderWithState({ blockedNavigation: { host: "accounts.google.com" } });
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    test("names the refused site and opens the page in the browser at its own port", async () => {
+      const { browserPreview } = await renderWithState(blocked);
+      expect(screen.getByRole("status").textContent).toContain(
+        "accounts.google.com can't open inside a preview.",
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Open in browser" }));
+      await waitFor(() => expect(browserPreview.openServiceSignIn).toHaveBeenCalled());
+      expect(browserPreview.openServiceSignIn.mock.calls[0]).toEqual([
+        "browser-1",
+        fixturePreviewService().endpoint.hostPort,
+      ] as never);
+    });
+
+    test("copying needs a confirmation that says how far it reaches", async () => {
+      const { browserPreview } = await renderWithState(blocked);
+      fireEvent.click(screen.getByRole("button", { name: "Bring sign-in back" }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog.textContent).toContain("every cookie");
+      expect(dialog.textContent).toContain("your other local apps");
+      expect(browserPreview.startSessionImport).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy sign-in" }));
+      await waitFor(() =>
+        expect(browserPreview.startSessionImport).toHaveBeenCalledWith("browser-1"),
+      );
+    });
+
+    test("cancelling the confirmation copies nothing", async () => {
+      const { browserPreview } = await renderWithState(blocked);
+      fireEvent.click(screen.getByRole("button", { name: "Bring sign-in back" }));
+      await screen.findByRole("alertdialog");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(browserPreview.startSessionImport).not.toHaveBeenCalled();
+    });
+
+    test("a waiting import can be cancelled", async () => {
+      const { browserPreview } = await renderWithState({ sessionImport: { state: "waiting" } });
+      expect(screen.getByRole("status").textContent).toContain("Waiting for your browser.");
+      expect(screen.queryByRole("button", { name: "Bring sign-in back" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() =>
+        expect(browserPreview.dismissSessionNotice).toHaveBeenCalledWith("browser-1"),
+      );
+      await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    });
+
+    test.each([
+      ["empty", "has no sign-in for localhost"],
+      ["expired", "one-time page expired"],
+      ["failed", "Could not copy your sign-in"],
+    ] as const)("%s offers another try", async (state, text) => {
+      await renderWithState({ sessionImport: { state } });
+      expect(screen.getByRole("status").textContent).toContain(text);
+      screen.getByRole("button", { name: "Bring sign-in back" });
+    });
+
+    test("a copied sign-in reports its count, and what could not be used", async () => {
+      await renderWithState({ sessionImport: { state: "imported", cookies: 2, skipped: 1 } });
+      expect(screen.getByRole("status").textContent).toContain("Copied 2 cookies; 1 could not");
+      expect(screen.queryByRole("button", { name: "Bring sign-in back" })).toBeNull();
+    });
+
+    test("a service the browser cannot reach cannot start the sign-in there", async () => {
+      const backend = installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [
+          {
+            ...fixturePreviewService(),
+            endpoint: { ...fixturePreviewService().endpoint, hostPort: null },
+          },
+        ],
+      });
+      seedTab(serviceUri("/sign-in"));
+      renderTab();
+      await waitFor(() => expect(backend.browserPreview.attach).toHaveBeenCalled());
+      backend.emitState({ ...viewState("/sign-in", 3), ...blocked });
+      expect(screen.queryByRole("button", { name: "Open in browser" })).toBeNull();
+      screen.getByRole("button", { name: "Bring sign-in back" });
+    });
+  });
 
   test("a newer cross-client request for an earlier path wins while its old acknowledgement stays stale", async () => {
     const { browserPreview, emitState } = installBackend({

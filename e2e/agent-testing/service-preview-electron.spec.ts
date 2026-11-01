@@ -1201,6 +1201,130 @@ test("a crashed service renderer reports the failure and recovers on reload", as
   expect(view?.visible).toBe(true);
 });
 
+test("a path typed into the address bar loads instead of bouncing back to the page being left", async () => {
+  const address = s().window.getByRole("textbox", { name: "Browser address" }).first();
+  const go = async (typed: string, expectedPath: string) => {
+    await address.fill(typed);
+    await address.press("Enter");
+    await waitForService("a", expectedPath);
+    // As in the history test: long enough to catch any bounce.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await waitForService("a", expectedPath);
+    await expect(address).toHaveValue(`http://localhost:${fixtureOf("a").port}${expectedPath}`);
+  };
+  await go("/", "/");
+  // A fragment reached in page, as a landing page's anchor links do.
+  await inService("a", `location.hash = "section"; true`);
+  await expect(address).toHaveValue(`http://localhost:${fixtureOf("a").port}/#section`);
+  await go("/app/next", "/app/next");
+});
+
+test("a sign-in refused inside the preview comes back from a real browser", async ({ browser }) => {
+  const page = s().window;
+  const port = fixtureOf("a").port;
+  // Capture shell.openExternal so qualification never opens the user's browser.
+  await s().app.evaluate(({ shell }) => {
+    const state = globalThis as any;
+    state.__savedSessionOpenExternal = shell.openExternal;
+    state.__sessionExternalUrls = [];
+    shell.openExternal = async (url: string) => {
+      state.__sessionExternalUrls.push(url);
+    };
+  });
+  const openedUrls = () =>
+    s().app.evaluate(() => [...((globalThis as any).__sessionExternalUrls as string[])]);
+  const notice = () => page.getByRole("status", { name: "Sign-in notice" });
+  const externalContext = await browser.newContext();
+  try {
+    await inService(
+      "a",
+      `location.href = "https://accounts.google.invalid/auth?client_id=private"; true`,
+    );
+    await expect(notice()).toContainText("accounts.google.invalid can't open inside a preview.");
+    await expect(notice()).not.toContainText("private");
+    // The view stayed where it was.
+    await waitForService("a", "/app/next");
+
+    // Unmounted and back: the notice comes from main, not the mounted tab.
+    await uiTab("b").click();
+    await expectVisibility("b", [true]);
+    await expect(notice()).toHaveCount(0);
+    await uiTab("a").click();
+    await expectVisibility("a", [true]);
+    await expect(notice()).toContainText("accounts.google.invalid");
+
+    await notice().getByRole("button", { name: "Open in browser" }).click();
+    await expect
+      .poll(openedUrls)
+      .toEqual([expect.stringMatching(new RegExp(`^http://localhost:\\d+/app/next$`))]);
+
+    await notice().getByRole("button", { name: "Bring sign-in back" }).click();
+    // The confirmation covers the page, so the native view hides for it.
+    await expect(page.getByRole("alertdialog")).toContainText("every cookie");
+    await expectVisibility("a", [false]);
+    await page.getByRole("button", { name: "Copy sign-in" }).click();
+    await expect(notice()).toContainText("Waiting for your browser.");
+    await expectVisibility("a", [true]);
+    await expect.poll(async () => (await openedUrls()).length).toBe(2);
+    const link = (await openedUrls())[1]!;
+    expect(link).toMatch(/^http:\/\/localhost:\d+\/session-import\//);
+
+    // A real browser: its localhost cookies were set for another port entirely.
+    await externalContext.addCookies([
+      {
+        name: "signed_in",
+        value: "from-browser.sig%3D",
+        domain: "localhost",
+        path: "/",
+        httpOnly: true,
+      },
+      { name: "orkestrator_gateway_auth", value: "gateway", domain: "localhost", path: "/" },
+    ]);
+    const external = await externalContext.newPage();
+    await external.goto(link);
+    await expect(external.getByRole("heading")).toHaveText("Sign-in copied");
+    expect(await external.content()).not.toContain("from-browser");
+
+    await expect(notice()).toContainText("Sign-in copied");
+    await expect(notice()).toContainText("1 could not be used");
+    await waitForService("a", "/app/next");
+    const echoed = () =>
+      inService<{ cookie: string | null }>("a", `fetch("/cookies/echo").then((r) => r.json())`);
+    // Through the real ingress and tunnel to the application, value untouched.
+    expect((await echoed()).cookie).toContain("signed_in=from-browser.sig%3D");
+    expect((await echoed()).cookie).not.toContain("orkestrator_gateway_auth");
+    // A copied cookie is HttpOnly whatever it was, so page script cannot read it.
+    expect(await inService<string>("a", "document.cookie")).not.toContain("signed_in");
+    // The sibling service's partition never saw it.
+    const sibling = await inService<{ cookie: string | null }>(
+      "b",
+      `fetch("/cookies/echo").then((r) => r.json())`,
+    );
+    expect(sibling.cookie ?? "").not.toContain("signed_in");
+
+    // The link has ended.
+    await expect(external.goto(link)).rejects.toThrow();
+
+    // A renderer reload rehydrates the outcome from main.
+    await page.reload();
+    await waitForApi(page);
+    await uiStore("selectProjectAndEnvironment", s().projectId, s().environmentId);
+    await closeStartupDialogs();
+    await expect(notice()).toContainText("Sign-in copied");
+    await notice().getByRole("button", { name: "Dismiss" }).click();
+    await expect(notice()).toHaveCount(0);
+  } finally {
+    await externalContext.close();
+    await s().app.evaluate(({ shell }) => {
+      const state = globalThis as any;
+      shell.openExternal = state.__savedSessionOpenExternal;
+    });
+    // Leave the partition as later tests expect it.
+    await preview("resetServiceSiteData", serviceTarget("a", "/app/next")).catch(() => undefined);
+    await waitForService("a", "/app/next");
+  }
+});
+
 test("repeated open, hide and close keeps resource counts stable and releases everything", async () => {
   const testInfo = test.info();
   testInfo.setTimeout(180_000);
@@ -2090,6 +2214,17 @@ test("a legacy URL tab keeps a link and Back through routine re-attaches", async
       back: { path: "/", trace: ["/"] },
       link: { path: "/app/next", trace: ["/app/next"] },
     });
+
+    // An address typed here loads; the view's report of the page it is leaving
+    // must not cancel it.
+    await resetTrace();
+    await address.fill(`${legacyOrigin}/`);
+    await address.press("Enter");
+    await expect.poll(legacyPath).toBe("/");
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(await legacyPath()).toBe("/");
+    await expect(address).toHaveValue(`${legacyOrigin}/`);
+    expect(await trace()).toEqual(["/"]);
   } finally {
     await uiStore("selectProject", null).catch(() => undefined);
     await preview("destroy", LEGACY_TAB).catch(() => undefined);

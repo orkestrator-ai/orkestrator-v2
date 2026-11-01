@@ -244,6 +244,12 @@ The client never names a host, port, or container.
   asked for. Legacy URL tabs follow the same rule since 2026-10-25: their
   states carry `navigation` and their attaches `navigationBasis`
   (`attachUrl` in `browser-preview-manager.ts`).
+- The rule has a renderer half. A state whose count equals the basis of the
+  path the tab chose still reports the page being left: main sends one as a
+  load starts, before anything commits. The tab keeps its chosen path until the
+  count moves, because adopting the old one re-attaches it against the same
+  basis and cancels the load. A load that fails therefore leaves the address it
+  was asked for next to its error.
 
 HTTPS upstream services are not carried by the desktop tunnel. They need the
 private origin.
@@ -462,6 +468,54 @@ pooled per service; nothing is replayed after a reconnect.
 | Service partition cookies and storage | Electron session | **Reset site data** for that service only; cleared once its service is gone from the backend's list or its connection is forgotten, directory removed on the next start (shared legacy partitions of live connections: see [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md)) |
 | Browser preview session cookie | Browser holds the value; backend owns validity | Server-side idle and absolute expiry, revocation |
 
+### Copying a browser sign-in
+
+Google refuses OAuth requests from an embedded browser
+([policy](https://developers.google.com/identity/protocols/oauth2/policies)),
+and a preview view is one, so a sign-in provider is never loaded inside it.
+Instead the user signs in with their own browser and copies that session into
+the preview. No provider or application setup is needed
+(`apps/desktop/electron/preview-session-import.ts`).
+
+1. A main-frame navigation or redirect out of the service is refused as before,
+   and the view's state now names the refused host (`blockedNavigation`, the
+   host only, never the URL) until the page navigates again. The tab shows it,
+   where a page used to appear to hang.
+2. **Open in browser** opens the tab's page at `http://localhost:<host port>`,
+   the address the provider's registered callback returns to.
+3. **Bring sign-in back** (also **Bring sign-in from browser…** in the preview
+   options menu), after a confirmation, opens a one-time page in the user's
+   default browser. Cookies ignore ports, so that page receives everything the
+   browser holds for `localhost`, HttpOnly session cookies included.
+4. Main stores the cookies in that service's partition and reloads the service's
+   views. The outcome is `sessionImport` in the view's state, so a tab unmounted
+   meanwhile reads it on return.
+
+The boundaries:
+
+- **Local connections only.** `sessionImport` is absent on a remote connection,
+  so this machine's `localhost` cookies never reach another machine.
+- **Everything on `localhost` is copied, except Orkestrator's reserved cookies.**
+  A browser cannot say which application set a cookie, so the previewed
+  application receives the user's other local applications' cookies, as it would
+  if the user ran it in that browser. The confirmation says so. **Reset site
+  data** removes them.
+- **The page is its own credential.** A listener bound to both loopback families
+  for one import answers one random path, for a top-level navigation addressed to
+  `localhost` that no site started (`Sec-Fetch-Site: none`). Anything else is
+  refused without using up the link. It closes after use, after two minutes, on
+  cancel, and when its tab closes.
+- **A copy, not a link.** Each cookie becomes HttpOnly and host-only on
+  `127.0.0.1`, with a one-week lifetime, because a `Cookie` header carries no
+  attributes. A cookie that needs HTTPS (a `__Host-` name) cannot be stored and
+  is counted as skipped. The two sessions are the same session on the server, so
+  signing out in either may end both. Values never reach a page, a log or a state
+  event; only counts do.
+
+The user's default browser is the one consulted, whichever one they signed in
+with. Services the browser cannot reach directly (a container service with no
+published port) cannot start the sign-in from the tab.
+
 ## Operator controls
 
 **Settings → Previews** (`get_preview_settings`/`update_preview_settings`),
@@ -602,7 +656,10 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   `https://s-….<domain>` and register its callback URL with the OAuth provider.
   Use that configured origin when generating redirect URIs on writes or
   fetches too. The desktop ingress port can change between sessions, so use
-  the published service origin for OAuth flows. Hidden-iframe silent renewal
+  the published service origin for OAuth flows. In a desktop tab on a local
+  connection, sign in with your browser and copy the session instead (see
+  [Copying a browser sign-in](#copying-a-browser-sign-in)); no origin is needed.
+  Hidden-iframe silent renewal
   that redirects through an external identity provider and back is unsupported:
   even when this service embeds the iframe, the return can carry
   `Sec-Fetch-Site: cross-site` and `Sec-Fetch-Dest: iframe`, so it receives

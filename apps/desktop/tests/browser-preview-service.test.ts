@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { request as httpRequest } from "node:http";
 import { describe, expect, mock, test } from "bun:test";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
@@ -70,7 +71,7 @@ function harness() {
   const held = new Map<string, Set<string>>();
   // While `holdAcquires` is set, acquisitions wait until the test releases them.
   const gates: Array<{ serviceId: string; open: () => void }> = [];
-  const control = { holdAcquires: false, partitionSuffix: "" };
+  const control = { holdAcquires: false, partitionSuffix: "", local: true };
   const transport: BrowserPreviewServiceTransport = {
     acquire: mock(async (target: BrowserPreviewServiceTarget, holder: string) => {
       const key = `bk_backend_1:${target.serviceId}`;
@@ -112,6 +113,11 @@ function harness() {
     transportState: () => ({ mode: "desktop-tunnel", state: "ready" }),
     sessionFor: (partition) => ({ partition }) as never,
     resetSiteData: mock(async () => undefined),
+    sessionImportAvailable: () => control.local,
+    importSessionCookies: mock(async (_target, cookies) => ({
+      imported: cookies.length,
+      skipped: 0,
+    })),
   };
   const emitState = mock(() => undefined);
   const emitOpenLink = mock(() => undefined);
@@ -605,5 +611,200 @@ describe("service previews in BrowserPreviewManager", () => {
     finishLoad();
     await expect(attached).rejects.toThrow("backend-unavailable");
     expect((views[0] as unknown as { visible: boolean }).visible).toBe(false);
+  });
+});
+
+describe("copying a browser sign-in into a service preview", () => {
+  const visit = (url: string, cookie?: string) =>
+    new Promise<number>((resolve, reject) => {
+      const parsed = new URL(url);
+      const request = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: Number(parsed.port),
+          path: parsed.pathname,
+          agent: false,
+          headers: { host: parsed.host, ...(cookie ? { cookie } : {}) },
+        },
+        (response) => {
+          response.resume();
+          response.on("end", () => resolve(response.statusCode ?? 0));
+        },
+      );
+      request.on("error", reject);
+      request.end();
+    });
+
+  async function attached(serviceId = "svc_aaaaaaaa", tabId = "tab", path = "/sign-in") {
+    const fixture = harness();
+    await fixture.manager.attach({
+      tabId,
+      service: service(serviceId, path),
+      bounds,
+      visible: true,
+    });
+    await settle();
+    return fixture;
+  }
+
+  const blockNavigation = (contents: FakeContents, url: string) => {
+    const event = { url, preventDefault: mock(() => undefined) };
+    contents.emit("will-navigate", event);
+    return event;
+  };
+
+  const openedLink = (fixture: Awaited<ReturnType<typeof attached>>) =>
+    (fixture.openExternal.mock.calls as unknown as string[][]).at(-1)![0]!;
+
+  test("names the refused site by host only, until the page navigates again", async () => {
+    const { manager, views } = await attached();
+    const contents = views[0]!.webContents;
+    expect(manager.dismissSessionNotice("tab").blockedNavigation).toBeUndefined();
+
+    const event = blockNavigation(
+      contents,
+      "https://accounts.google.com/o/oauth2/v2/auth?client_id=private&state=private",
+    );
+    expect(event.preventDefault).toHaveBeenCalled();
+    const state = manager.setBounds("tab", bounds);
+    expect(state.blockedNavigation).toEqual({ host: "accounts.google.com" });
+    expect(JSON.stringify(state)).not.toContain("private");
+
+    contents.emit("did-navigate", {}, "http://127.0.0.1:41001/next", 200);
+    expect(manager.setBounds("tab", bounds).blockedNavigation).toBeUndefined();
+  });
+
+  test("a refused redirect is named too; other schemes and subframes are not", async () => {
+    const { manager, views } = await attached();
+    const contents = views[0]!.webContents;
+    contents.emit("will-redirect", {
+      url: "https://sso.example/login",
+      isMainFrame: false,
+      preventDefault: () => undefined,
+    });
+    blockNavigation(contents, "mailto:someone@example.com");
+    expect(manager.setBounds("tab", bounds).blockedNavigation).toBeUndefined();
+    contents.emit("will-redirect", {
+      url: "https://sso.example/login",
+      isMainFrame: true,
+      preventDefault: () => undefined,
+    });
+    expect(manager.setBounds("tab", bounds).blockedNavigation).toEqual({ host: "sso.example" });
+  });
+
+  test("a navigation within the service is not reported", async () => {
+    const { manager, views } = await attached();
+    blockNavigation(views[0]!.webContents, "http://127.0.0.1:41001/next");
+    expect(manager.setBounds("tab", bounds).blockedNavigation).toBeUndefined();
+  });
+
+  test("is never offered on a remote connection, and cannot be started there", async () => {
+    const fixture = await attached();
+    fixture.control.local = false;
+    blockNavigation(fixture.views[0]!.webContents, "https://accounts.google.com/");
+    const state = fixture.manager.setBounds("tab", bounds);
+    expect(state.sessionImport).toBeUndefined();
+    expect(state.blockedNavigation).toBeUndefined();
+    await expect(fixture.manager.startSessionImport("tab")).rejects.toThrow("cannot copy");
+    expect(() => fixture.manager.openServiceSignIn("tab", 3000)).toThrow("cannot open");
+    expect(fixture.openExternal).not.toHaveBeenCalled();
+  });
+
+  test("a legacy URL tab is not offered it", async () => {
+    const { manager } = harness();
+    const state = await manager.attach({
+      tabId: "legacy",
+      url: "http://localhost:3000/",
+      bounds,
+      visible: true,
+    });
+    expect(state.sessionImport).toBeUndefined();
+    await expect(manager.startSessionImport("legacy")).rejects.toThrow("cannot copy");
+  });
+
+  test("copies, reloads every view of the service and no other, and keeps the outcome", async () => {
+    const fixture = await attached();
+    const { manager, views, transport } = fixture;
+    await manager.attach({
+      tabId: "same-service",
+      service: service("svc_aaaaaaaa", "/other"),
+      bounds,
+      visible: true,
+    });
+    await manager.attach({
+      tabId: "sibling",
+      service: service("svc_bbbbbbbb"),
+      bounds,
+      visible: true,
+    });
+    await settle();
+    blockNavigation(views[0]!.webContents, "https://accounts.google.com/");
+
+    const waiting = await manager.startSessionImport("tab");
+    expect(waiting.sessionImport).toEqual({ state: "waiting" });
+    expect(await visit(openedLink(fixture), "session=abc")).toBe(200);
+
+    expect(transport.importSessionCookies).toHaveBeenCalledWith(
+      expect.objectContaining({ backendInstanceId: "bk_backend_1", serviceId: "svc_aaaaaaaa" }),
+      [{ name: "session", value: "abc" }],
+    );
+    expect(views[0]!.webContents.reload).toHaveBeenCalledTimes(1);
+    expect(views[1]!.webContents.reload).toHaveBeenCalledTimes(1);
+    expect(views[2]!.webContents.reload).not.toHaveBeenCalled();
+    // A tab that was unmounted while the browser opened reads this on return.
+    const state = manager.setBounds("tab", bounds);
+    expect(state.sessionImport).toEqual({ state: "imported", cookies: 1, skipped: 0 });
+    expect(state.blockedNavigation).toBeUndefined();
+    expect(JSON.stringify(state)).not.toContain("abc");
+  });
+
+  test("a browser with no cookies reloads nothing", async () => {
+    const fixture = await attached();
+    await fixture.manager.startSessionImport("tab");
+    await visit(openedLink(fixture));
+    expect(fixture.views[0]!.webContents.reload).not.toHaveBeenCalled();
+    expect(fixture.manager.setBounds("tab", bounds).sessionImport).toEqual({ state: "empty" });
+  });
+
+  test("dismissing cancels the waiting page and clears the notices", async () => {
+    const fixture = await attached();
+    const { manager, views, transport } = fixture;
+    blockNavigation(views[0]!.webContents, "https://accounts.google.com/");
+    await manager.startSessionImport("tab");
+    const link = openedLink(fixture);
+
+    const state = manager.dismissSessionNotice("tab");
+    expect(state.sessionImport).toEqual({ state: "idle" });
+    expect(state.blockedNavigation).toBeUndefined();
+    await expect(visit(link, "session=abc")).rejects.toThrow();
+    expect(transport.importSessionCookies).not.toHaveBeenCalled();
+  });
+
+  test("starting again ends the earlier page", async () => {
+    const fixture = await attached();
+    await fixture.manager.startSessionImport("tab");
+    const earlier = openedLink(fixture);
+    await fixture.manager.startSessionImport("tab");
+    await expect(visit(earlier, "session=abc")).rejects.toThrow();
+    expect(await visit(openedLink(fixture), "session=abc")).toBe(200);
+    expect(fixture.transport.importSessionCookies).toHaveBeenCalledTimes(1);
+  });
+
+  test("closing the tab ends the page", async () => {
+    const fixture = await attached();
+    await fixture.manager.startSessionImport("tab");
+    const link = openedLink(fixture);
+    fixture.manager.destroy("tab");
+    await expect(visit(link, "session=abc")).rejects.toThrow();
+    expect(fixture.transport.importSessionCookies).not.toHaveBeenCalled();
+  });
+
+  test("opens the page the tab is on at the application's own address", async () => {
+    const fixture = await attached("svc_aaaaaaaa", "tab", "/sign-in?returnTo=%2Fstart");
+    fixture.manager.openServiceSignIn("tab", 3000);
+    expect(openedLink(fixture)).toBe("http://localhost:3000/sign-in?returnTo=%2Fstart");
+    for (const port of [0, 70_000, 1.5, Number.NaN]) {
+      expect(() => fixture.manager.openServiceSignIn("tab", port)).toThrow("Invalid service port");
+    }
   });
 });

@@ -577,6 +577,15 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       openServiceExternally(target: BrowserPreviewServiceTarget): Promise<void> {
         return ipcRenderer.invoke("orkestrator:browser-preview:open-external", target);
       },
+      startSessionImport(tabId: string): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:session-import-start", tabId);
+      },
+      dismissSessionNotice(tabId: string): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:session-import-dismiss", tabId);
+      },
+      openServiceSignIn(tabId: string, port: number): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:open-sign-in", tabId, port);
+      },
     },
 
     artifactHost: createArtifactHostApi(ipcRenderer),

@@ -642,6 +642,9 @@ function createWindowBrowserPreviews(
     target: (serviceKey) => previewTransport.target(serviceKey),
     transportState: (serviceKey) => previewTransport.transportState(serviceKey),
     resetSiteData: (target) => previewTransport.resetSiteData(target),
+    sessionImportAvailable: () => previewTransport.sessionImportAvailable(),
+    importSessionCookies: (target, cookies) =>
+      previewTransport.importSessionCookies(target, cookies),
     sessionFor: (partitionName) =>
       configurePreviewServiceSession(session.fromPartition(partitionName), () => manager),
   };

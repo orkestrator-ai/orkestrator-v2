@@ -29,6 +29,7 @@ import type {
   BrowserPreviewResponsiveSetResult,
   BrowserPreviewSelectionStatus,
   BrowserPreviewServiceTarget,
+  BrowserPreviewSessionImport,
   BrowserPreviewShowOnPageInput,
   BrowserPreviewShowOnPageResult,
   BrowserPreviewStartCaptureInput,
@@ -51,6 +52,12 @@ import {
 import { captureResponsiveSet } from "./browser-preview-capture-responsive.js";
 import { captureTabId } from "./browser-preview-capture-validation.js";
 import { appShortcutForInput } from "./keyboard-shortcuts-menu.js";
+import {
+  startPreviewSessionImport,
+  type ImportedCookie,
+  type PreviewSessionImportHandle,
+  type SessionCookieWriteResult,
+} from "./preview-session-import.js";
 
 type WebContentsViewConstructor = new (
   options?: WebContentsViewConstructorOptions,
@@ -80,6 +87,12 @@ interface ManagedPreview {
    * start), reported to the renderer as `service.navigation`.
    */
   navigation: number;
+  /** Host of the last refused main-frame navigation out of a service, until the page moves. */
+  blockedHost: string | null;
+  sessionImport: BrowserPreviewSessionImport;
+  sessionImportHandle: PreviewSessionImportHandle | null;
+  /** Advances on every start and dismissal, so a superseded import cannot report. */
+  sessionImportRun: number;
 }
 
 /**
@@ -102,6 +115,11 @@ export interface BrowserPreviewServiceTransport {
   resetSiteData(
     target: Pick<BrowserPreviewServiceTarget, "backendInstanceId" | "serviceId">,
   ): Promise<void>;
+  sessionImportAvailable?(): boolean;
+  importSessionCookies?(
+    target: Pick<BrowserPreviewServiceTarget, "backendInstanceId" | "serviceId">,
+    cookies: ImportedCookie[],
+  ): Promise<SessionCookieWriteResult>;
 }
 
 export interface BrowserPreviewManagerOptions {
@@ -524,6 +542,116 @@ export class BrowserPreviewManager {
     }
   }
 
+  /**
+   * Open the one-time page that copies the browser's `localhost` sign-in into
+   * this tab's service, then reload the service's views so they use it. Only
+   * the outcome is kept, in the preview's state.
+   */
+  async startSessionImport(tabId: string): Promise<BrowserPreviewState> {
+    const preview = this.get(tabId);
+    const transport = this.options.transport;
+    const target = preview.service && transport?.target(preview.service.key);
+    const write = transport?.importSessionCookies?.bind(transport);
+    if (!preview.service || !target || !write || !transport?.sessionImportAvailable?.()) {
+      throw previewFailure("unsupported", {
+        message: "This preview cannot copy a sign-in from your browser.",
+      });
+    }
+    this.stopSessionImport(preview);
+    const run = preview.sessionImportRun;
+    const serviceKey = preview.service.key;
+    const current = () => this.previews.get(tabId) === preview && preview.sessionImportRun === run;
+    preview.sessionImport = { state: "waiting" };
+    this.emit(tabId, preview);
+    try {
+      const handle = await startPreviewSessionImport({
+        openExternal: (url) => this.options.openExternal(url),
+        write: (cookies) => write(target, cookies),
+        onSettled: (result) => {
+          if (!current()) return;
+          preview.sessionImportHandle = null;
+          if (result.kind === "imported") {
+            preview.sessionImport = {
+              state: "imported",
+              cookies: result.imported,
+              skipped: result.skipped,
+            };
+            preview.blockedHost = null;
+            for (const other of this.previews.values()) {
+              if (other.service?.key === serviceKey) other.view.webContents.reload();
+            }
+          } else {
+            preview.sessionImport = { state: result.kind };
+          }
+          this.emit(tabId, preview);
+        },
+      });
+      if (current()) preview.sessionImportHandle = handle;
+      else handle.cancel();
+    } catch {
+      // Listener and browser-launch errors can name local paths; the state is enough.
+      if (current()) {
+        preview.sessionImport = { state: "failed" };
+        this.emit(tabId, preview);
+      }
+    }
+    return this.snapshot(tabId, preview);
+  }
+
+  /** Cancel an import still waiting and clear the blocked-site and outcome notices. */
+  dismissSessionNotice(tabId: string): BrowserPreviewState {
+    const preview = this.get(tabId);
+    this.stopSessionImport(preview);
+    preview.sessionImport = { state: "idle" };
+    preview.blockedHost = null;
+    this.emit(tabId, preview);
+    return this.snapshot(tabId, preview);
+  }
+
+  /**
+   * Open this tab's page at the application's own `localhost` address, where a
+   * sign-in provider's registered callback returns. The renderer names the port
+   * because only the service snapshot knows a container's published one.
+   */
+  openServiceSignIn(tabId: string, port: number): BrowserPreviewState {
+    const preview = this.get(tabId);
+    const transport = this.options.transport;
+    if (!preview.service || !transport?.sessionImportAvailable?.()) {
+      throw previewFailure("unsupported", {
+        message: "This preview cannot open a sign-in in your browser.",
+      });
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw previewFailure("invalid-request", { message: "Invalid service port." });
+    }
+    const contents = preview.view.webContents;
+    const path = transport.describe(contents.getURL() || preview.requestedUrl)?.path ?? "/";
+    this.options.openExternal(`http://localhost:${port}${path}`);
+    return this.snapshot(tabId, preview);
+  }
+
+  private stopSessionImport(preview: ManagedPreview): void {
+    preview.sessionImportRun += 1;
+    preview.sessionImportHandle?.cancel();
+    preview.sessionImportHandle = null;
+  }
+
+  /** Report a refused navigation out of a service: without this, a page just appears to hang. */
+  private noteBlockedNavigation(tabId: string, preview: ManagedPreview, url: string): void {
+    if (!preview.service) return;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return;
+    // The host only: a sign-in URL's query carries client ids and state.
+    if (preview.blockedHost === parsed.host) return;
+    preview.blockedHost = parsed.host;
+    this.emit(tabId, preview);
+  }
+
   openServiceExternally(target: BrowserPreviewServiceTarget): Promise<void> {
     if (!this.options.openServiceExternally) {
       return Promise.reject(
@@ -754,6 +882,7 @@ export class BrowserPreviewManager {
     if (!preview) return;
     this.captures.onRemoved(tabId);
     this.pins.onRemoved(tabId);
+    this.stopSessionImport(preview);
     this.previews.delete(tabId);
     this.clipboardUserActivations.delete(preview.view.webContents);
     if (preview.service)
@@ -805,6 +934,10 @@ export class BrowserPreviewManager {
       error: null,
       documentGeneration: 0,
       navigation: 0,
+      blockedHost: null,
+      sessionImport: { state: "idle" },
+      sessionImportHandle: null,
+      sessionImportRun: 0,
       ...(service ? { service: service.service } : {}),
     };
     this.previews.set(tabId, preview);
@@ -939,12 +1072,16 @@ export class BrowserPreviewManager {
     });
     contents.on("will-navigate", (event) => {
       this.clipboardUserActivations.delete(contents);
-      if (!this.withinScope(event.url, preview.navigationScope)) event.preventDefault();
+      if (!this.withinScope(event.url, preview.navigationScope)) {
+        event.preventDefault();
+        this.noteBlockedNavigation(tabId, preview, event.url);
+      }
     });
     contents.on("will-redirect", (event) => {
       if (event.isMainFrame) this.clipboardUserActivations.delete(contents);
       if (event.isMainFrame && !this.withinScope(event.url, preview.navigationScope)) {
         event.preventDefault();
+        this.noteBlockedNavigation(tabId, preview, event.url);
       }
     });
     // Electron passes either a details event or positional (url, isInPlace, isMainFrame).
@@ -968,6 +1105,7 @@ export class BrowserPreviewManager {
       this.clipboardUserActivations.delete(contents);
       this.advanceDocument(tabId, preview);
       preview.navigation += 1;
+      preview.blockedHost = null;
       if (this.withinScope(url, preview.navigationScope)) preview.requestedUrl = url;
       this.emit(tabId, preview);
     });
@@ -975,6 +1113,7 @@ export class BrowserPreviewManager {
       if (isMainFrame) {
         this.advanceDocument(tabId, preview);
         preview.navigation += 1;
+        preview.blockedHost = null;
         const url = contents.getURL();
         if (this.withinScope(url, preview.navigationScope)) preview.requestedUrl = url;
         this.emit(tabId, preview);
@@ -1080,6 +1219,14 @@ export class BrowserPreviewManager {
                 }
               : {}),
             transport: transport.transportState(preview.service.key),
+            ...(transport.sessionImportAvailable?.()
+              ? {
+                  sessionImport: preview.sessionImport,
+                  ...(preview.blockedHost
+                    ? { blockedNavigation: { host: preview.blockedHost } }
+                    : {}),
+                }
+              : {}),
           }
         : { navigation: preview.navigation }),
     };

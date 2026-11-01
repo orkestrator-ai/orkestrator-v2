@@ -1684,6 +1684,54 @@ describe("BrowserTab", () => {
     );
   });
 
+  test("a typed address survives the states main sends before the view commits it", async () => {
+    let navigation = 3;
+    const native = installNativePreview({
+      attach: mock(async (input: { url: string }) => previewState({ url: input.url, navigation })),
+    });
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const lastAttach = () =>
+      native.browserPreview.attach.mock.calls.at(-1)?.[0] as
+        { url: string; navigationBasis?: number } | undefined;
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    native.emitState(previewState({ url: "http://localhost:3000/", navigation: 3 }));
+
+    const address = screen.getByLabelText("Browser address") as HTMLInputElement;
+    fireEvent.change(address, { target: { value: "localhost:3000/sign-in" } });
+    fireEvent.submit(address.closest("form")!);
+    await waitFor(() =>
+      expect(lastAttach()).toEqual(
+        expect.objectContaining({ url: "http://localhost:3000/sign-in", navigationBasis: 3 }),
+      ),
+    );
+
+    // Main reports the load starting while the view still shows the old page.
+    // Re-attaching that page with the same basis is what cancelled the new load.
+    native.emitState(previewState({ url: "http://localhost:3000/", loading: true, navigation: 3 }));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(address.value).toBe("http://localhost:3000/sign-in");
+    expect(lastAttach()?.url).toBe("http://localhost:3000/sign-in");
+
+    // The commit, redirected here, is followed.
+    navigation = 4;
+    native.emitState(previewState({ url: "http://localhost:3000/redirected", navigation: 4 }));
+    await waitFor(() => expect(address.value).toBe("http://localhost:3000/redirected"));
+    await waitFor(() =>
+      expect(lastAttach()).toEqual(
+        expect.objectContaining({ url: "http://localhost:3000/redirected", navigationBasis: 4 }),
+      ),
+    );
+  });
+
   test("advances the native cursor once per Back click even while an RPC is in flight", async () => {
     const history = ["http://localhost:3000/", "http://localhost:4000/", "http://localhost:5000/"];
     const pending: Array<ReturnType<typeof deferred<BrowserPreviewState>>> = [];

@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHarness, git, type Harness } from "./service-test-support.js";
-import { gitScopeResourceKey } from "./git-scopes.js";
+import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
+import { createGitFetchScheduler } from "../diff-stats-tracking.js";
+import { getLocalGitStatusDetailed } from "../commands-files.js";
+import { committedHead, gitScopeResourceKey } from "./git-scopes.js";
 
 const harnesses: Harness[] = [];
 afterEach(() => {
@@ -14,6 +17,30 @@ async function measured(h: Harness, key: string) {
   const measurement = h.service.projections.selectedMeasurement(key);
   if (!measurement) throw new Error(`no measurement for ${key}`);
   return measurement;
+}
+
+/** The environment's own measurement (`environment-net`) against `base`, as a scan reports it. */
+async function scanned(h: Harness, base: string) {
+  const detailed = await getLocalGitStatusDetailed(h.repo, base, true, createGitFetchScheduler());
+  const now = new Date().toISOString();
+  h.service.onDiffScanEvent({
+    kind: "scanned",
+    target: { environmentId: "env-1", comparisonRef: base, kind: "local", worktreePath: h.repo },
+    result: {
+      stats: {
+        additions: detailed.changes.reduce((sum, row) => sum + row.additions, 0),
+        deletions: detailed.changes.reduce((sum, row) => sum + row.deletions, 0),
+        filesChanged: detailed.changes.length,
+        truncated: detailed.truncated,
+      },
+      changes: detailed.changes,
+      baseOid: detailed.baseOid,
+    },
+    changed: true,
+    at: now,
+    startedAt: now,
+  });
+  await h.service.environments.idle();
 }
 
 describe("Git source-control scopes", () => {
@@ -72,6 +99,34 @@ describe("Git source-control scopes", () => {
     const first = await measured(h, gitScopeResourceKey("commit", "env-1", root));
     expect(first.totals.additions.value).toBe(2);
     expect(first.baselineVersion).toContain("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+  });
+
+  test("committed-net is the environment's base to HEAD, without the working tree", async () => {
+    const h = createHarness();
+    harnesses.push(h);
+    const base = git(h.repo, "rev-parse", "HEAD").trim();
+    const key = gitScopeResourceKey("committed-net", "env-1");
+    // No environment measurement yet: no base to compare against.
+    await h.service.ensureResource(key);
+    const before = h.service.getView({ resourceKey: key });
+    if (before.kind !== "projection") throw new Error("projection expected");
+    expect(before.projection.state).toBe("unavailable");
+    expect(before.projection.reasonKeys).toContain("changes.reason.baseline-unavailable");
+
+    writeFileSync(join(h.repo, "a.txt"), "one\ncommitted\n");
+    git(h.repo, "commit", "-qam", "worker commit");
+    const head = git(h.repo, "rev-parse", "HEAD").trim();
+    writeFileSync(join(h.repo, "a.txt"), "one\ncommitted\nuncommitted\n");
+    writeFileSync(join(h.repo, "new.txt"), "untracked\n");
+    await scanned(h, base);
+    expect(
+      h.service.projections.selectedMeasurement(environmentChangeResourceKey("env-1"))?.totals
+        .changedFiles,
+    ).toBe(2);
+    const committed = await measured(h, key);
+    expect(committed.totals).toMatchObject({ changedFiles: 1, additions: { value: 1 } });
+    expect(committedHead(committed.baselineVersion)).toBe(head);
+    expect(committed.baselineVersion).toEndWith(`@${base}`);
   });
 
   test("an unknown commit is unavailable, never an empty success", async () => {

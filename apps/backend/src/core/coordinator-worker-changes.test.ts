@@ -5,6 +5,8 @@ import {
 } from "@orkestrator/protocol/change-resources";
 import { gitScopeResourceKey } from "./change-tracking/git-scopes.js";
 import {
+  committedChangeResourceKey,
+  olderNodeIgnoredDiffScope,
   parseWorkerChangesOptions,
   readWorkerChanges,
   renderDiffBody,
@@ -109,8 +111,11 @@ function changes(resources: Record<string, ChangeFileRow[]>, diffLines = 3) {
 const environmentKey = environmentChangeResourceKey("env-1");
 const uncommittedKey = gitScopeResourceKey("uncommitted-net", "env-1");
 
-test("the uncommitted key is change tracking's own", () => {
+const committedKey = gitScopeResourceKey("committed-net", "env-1");
+
+test("the uncommitted and committed keys are change tracking's own", () => {
   expect(uncommittedChangeResourceKey("env-1")).toBe(uncommittedKey);
+  expect(committedChangeResourceKey("env-1")).toBe(committedKey);
 });
 
 describe("get_worker_changes reader", () => {
@@ -240,7 +245,84 @@ describe("get_worker_changes reader", () => {
     expect((result.commits as { items: unknown[] }).items).toHaveLength(2);
   });
 
+  test("diffScope splits the diff at HEAD and shares the byte budget; no diffScope is unchanged", async () => {
+    const resources = {
+      [environmentKey]: [row("src/a.ts", 0), row("src/b.ts", 1)],
+      [committedKey]: [row("src/a.ts", 0), row("src/b.ts", 1)],
+      [uncommittedKey]: [row("src/b.ts", 0)],
+    };
+    const read = async (input: Record<string, unknown>) => {
+      const { run, calls } = changes(resources);
+      const result = await readWorkerChanges(
+        run,
+        environment,
+        parseWorkerChangesOptions(input),
+        null,
+      );
+      const resolved = calls
+        .filter((call) => call.command === "changes_resolve_live_detail")
+        .map((call) => call.args.resourceKey);
+      return { result, resolved };
+    };
+
+    const legacy = await read({});
+    expect(Object.keys(legacy.result)).toContain("diffs");
+    expect(legacy.result).not.toHaveProperty("committedDiffs");
+    expect(legacy.resolved).toEqual([environmentKey, environmentKey]);
+    expect(legacy.result.sinceBase).toMatchObject({
+      files: [
+        { path: "src/a.ts", committed: true, uncommitted: false },
+        { path: "src/b.ts", committed: true, uncommitted: true },
+      ],
+    });
+    expect(legacy.result.committed).toMatchObject({ available: true, files: [{}, {}] });
+
+    const split = await read({ diffScope: "split", maxDiffBytes: 4_096 });
+    expect(split.result).not.toHaveProperty("diffs");
+    expect(split.resolved.sort()).toEqual([committedKey, committedKey, uncommittedKey].sort());
+    const committed = split.result.committedDiffs as { files: unknown[]; bytes: number };
+    const uncommitted = split.result.uncommittedDiffs as { files: unknown[]; bytes: number };
+    expect([committed.files.length, uncommitted.files.length]).toEqual([2, 1]);
+    expect(committed.bytes + uncommitted.bytes).toBeLessThanOrEqual(4_096);
+    expect(committed.bytes).toBeLessThanOrEqual(2_048);
+
+    const one = await read({ diffScope: "uncommitted" });
+    expect(one.result).not.toHaveProperty("committedDiffs");
+    expect(one.resolved).toEqual([uncommittedKey]);
+
+    // A worker whose committed measurement cannot be read says so in its half.
+    const { run } = changes({ [environmentKey]: [], [uncommittedKey]: [] });
+    const missing = await readWorkerChanges(
+      run,
+      environment,
+      parseWorkerChangesOptions({ diffScope: "committed" }),
+      null,
+    );
+    expect(missing.committed).toMatchObject({ available: false });
+    expect(missing.committedDiffs).toMatchObject({
+      files: [],
+      unavailable: "changes.error.not-found",
+    });
+    expect(missing.sinceBase).not.toHaveProperty("files.0.committed");
+  });
+
+  test("an older node's answer without the asked-for diffs is flagged", () => {
+    const split = parseWorkerChangesOptions({ diffScope: "split" });
+    expect(olderNodeIgnoredDiffScope(split, { diffs: { files: [] } })).toBe(true);
+    expect(olderNodeIgnoredDiffScope(split, { committedDiffs: {}, uncommittedDiffs: {} })).toBe(
+      false,
+    );
+    expect(olderNodeIgnoredDiffScope(parseWorkerChangesOptions({}), { diffs: {} })).toBe(false);
+    expect(
+      olderNodeIgnoredDiffScope(
+        parseWorkerChangesOptions({ diffScope: "committed", includeDiff: false }),
+        {},
+      ),
+    ).toBe(false);
+  });
+
   test("options refuse paths outside the worker and out-of-range bounds", () => {
+    expect(() => parseWorkerChangesOptions({ diffScope: "staged" })).toThrow("diffScope");
     expect(() => parseWorkerChangesOptions({ paths: ["../x"] })).toThrow("inside the worker");
     expect(() => parseWorkerChangesOptions({ file: "/etc/passwd" })).toThrow("inside the worker");
     expect(() => parseWorkerChangesOptions({ file: "a", paths: ["b"] })).toThrow("not both");

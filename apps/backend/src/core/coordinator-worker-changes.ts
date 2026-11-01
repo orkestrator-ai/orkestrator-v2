@@ -18,7 +18,11 @@ import { diffBaseGitForEnvironment, type DiffBaseGit } from "./diff-base-overrid
 import { isImmutableCommitRef } from "./commands-files.js";
 import type { Environment } from "./models.js";
 import { requireProjectWorker, surfaceRecord } from "./worker-surface-runs.js";
-import { WORKER_CHANGES_LIMITS } from "./coordinator-worker-changes-limits.js";
+import {
+  WORKER_CHANGES_LIMITS,
+  WORKER_DIFF_SCOPES,
+  type WorkerDiffScope,
+} from "./coordinator-worker-changes-limits.js";
 
 /**
  * `get_worker_changes` (coordinator gap item 4): what a worker environment
@@ -30,10 +34,14 @@ import { WORKER_CHANGES_LIMITS } from "./coordinator-worker-changes-limits.js";
  * - `sinceBase`: the `environment-net` measurement, the worker's base commit
  *   to its working tree (committed and uncommitted together), with each
  *   file's status and line counts;
+ * - `committed`: the `committed-net` measurement, that base commit to `HEAD`;
  * - `uncommitted`: the `uncommitted-net` measurement, `HEAD` to the working
  *   tree, untracked files included;
  * - `diffs`: backend-rendered hunks of `sinceBase` files, through
- *   `changes_resolve_live_detail` and `changes_get_diff` (the Diff tab);
+ *   `changes_resolve_live_detail` and `changes_get_diff` (the Diff tab), or
+ *   with `diffScope`, `committedDiffs` and `uncommittedDiffs`: the same
+ *   rendering over the two Git scopes, so a file changed both ways shows
+ *   which lines are committed;
  * - `commits`: `git log <base>..HEAD` through the checkout's Git runner the
  *   Changes panel's base picker uses (`diffBaseGitForEnvironment`).
  *
@@ -55,6 +63,16 @@ export function uncommittedChangeResourceKey(environmentId: string): string {
   });
 }
 
+/** The Git scope resource base commit → `HEAD`, split from `environment-net` at `HEAD`. */
+export function committedChangeResourceKey(environmentId: string): string {
+  return changeResourceKey({
+    scope: "committed-net",
+    ownerKind: "environment",
+    ownerId: environmentId,
+    selector: "live",
+  });
+}
+
 /** The tool's own read options, forwarded unchanged to the worker's node. */
 const WORKER_CHANGES_INPUT_FIELDS = [
   "paths",
@@ -65,6 +83,7 @@ const WORKER_CHANGES_INPUT_FIELDS = [
   "includeDiff",
   "maxDiffFiles",
   "maxDiffBytes",
+  "diffScope",
 ] as const;
 
 export interface WorkerChangesOptions {
@@ -74,6 +93,7 @@ export interface WorkerChangesOptions {
   maxFiles: number;
   maxCommits: number;
   includeDiff: boolean;
+  diffScope: WorkerDiffScope;
   maxDiffFiles: number;
   maxFileDiffBytes: number;
   maxTotalDiffBytes: number;
@@ -104,6 +124,12 @@ function relativePath(value: unknown, name: string): string {
   return value.trim().replace(/^\.\//, "").replace(/\/+$/, "");
 }
 
+function diffScopeFrom(value: unknown): WorkerDiffScope {
+  if (value === undefined) return "sinceBase";
+  if ((WORKER_DIFF_SCOPES as readonly unknown[]).includes(value)) return value as WorkerDiffScope;
+  throw new Error(`Expected diffScope to be one of ${WORKER_DIFF_SCOPES.join(", ")}`);
+}
+
 export function parseWorkerChangesOptions(input: JsonRecord): WorkerChangesOptions {
   const L = WORKER_CHANGES_LIMITS;
   let paths: string[] | undefined;
@@ -129,6 +155,7 @@ export function parseWorkerChangesOptions(input: JsonRecord): WorkerChangesOptio
     maxFiles: boundedInteger(input.maxFiles, "maxFiles", 1, L.maxFiles, L.defaultFiles),
     maxCommits: boundedInteger(input.maxCommits, "maxCommits", 0, L.maxCommits, L.defaultCommits),
     includeDiff: input.includeDiff !== false,
+    diffScope: diffScopeFrom(input.diffScope),
     maxDiffFiles: file
       ? 1
       : boundedInteger(input.maxDiffFiles, "maxDiffFiles", 0, L.maxDiffFiles, L.defaultDiffFiles),
@@ -156,7 +183,17 @@ function matches(row: ChangeFileRow, options: WorkerChangesOptions): boolean {
   );
 }
 
-function fileSummary(row: ChangeFileRow, uncommitted?: ReadonlySet<string>): JsonRecord {
+/** Paths of the two Git scopes, for flagging a sinceBase file. */
+interface ChangeFlags {
+  uncommitted?: ReadonlySet<string>;
+  committed?: ReadonlySet<string>;
+}
+
+function inSet(row: ChangeFileRow, paths: ReadonlySet<string>): boolean {
+  return paths.has(rowPath(row)) || (row.oldPathDisplay !== null && paths.has(row.oldPathDisplay));
+}
+
+function fileSummary(row: ChangeFileRow, flags: ChangeFlags = {}): JsonRecord {
   return {
     path: rowPath(row),
     ...(row.oldPathDisplay && row.oldPathDisplay !== row.newPathDisplay && row.newPathDisplay
@@ -172,13 +209,8 @@ function fileSummary(row: ChangeFileRow, uncommitted?: ReadonlySet<string>): Jso
             row.additions.quality === "complete" ? row.deletions.quality : row.additions.quality,
         }
       : {}),
-    ...(uncommitted
-      ? {
-          uncommitted:
-            uncommitted.has(rowPath(row)) ||
-            (row.oldPathDisplay !== null && uncommitted.has(row.oldPathDisplay)),
-        }
-      : {}),
+    ...(flags.uncommitted ? { uncommitted: inSet(row, flags.uncommitted) } : {}),
+    ...(flags.committed ? { committed: inSet(row, flags.committed) } : {}),
   };
 }
 
@@ -269,7 +301,7 @@ function measurementSummary(
   measurement: Measurement,
   description: string,
   options: WorkerChangesOptions,
-  uncommitted?: ReadonlySet<string>,
+  flags?: ChangeFlags,
   pageable = true,
 ): JsonRecord {
   const { projection } = measurement;
@@ -293,7 +325,7 @@ function measurementSummary(
     ...(measurement.matched !== null && (options.paths || options.file)
       ? { matchingFiles: measurement.matched }
       : {}),
-    files: shown.map((row) => fileSummary(row, uncommitted)),
+    files: shown.map((row) => fileSummary(row, flags)),
     truncated: more,
     ...(more && pageable ? { nextOffset: options.offset + shown.length } : {}),
     ...(measurement.scanCapped ? { scanCapped: true } : {}),
@@ -344,6 +376,7 @@ async function renderDiffs(
   revision: number,
   rows: ChangeFileRow[],
   options: WorkerChangesOptions,
+  description: string,
 ): Promise<JsonRecord> {
   const files: JsonRecord[] = [];
   let total = 0;
@@ -395,8 +428,7 @@ async function renderDiffs(
     });
   }
   return {
-    description:
-      "Unified diff of each listed sinceBase file, base commit to working tree (committed and uncommitted changes together).",
+    description,
     files,
     bytes: total,
     truncated: truncated || omitted > 0,
@@ -456,21 +488,76 @@ export async function readWorkerChanges(
 ): Promise<JsonRecord> {
   const environmentKey = environmentChangeResourceKey(environment.id);
   const uncommittedKey = uncommittedChangeResourceKey(environment.id);
-  // First materialize the Git scope: its initial measurement can advance the
-  // environment projection revision. Read sinceBase after that so its live
+  const committedKey = committedChangeResourceKey(environment.id);
+  // First materialize the Git scopes: their initial measurement can advance
+  // the environment projection revision. Read sinceBase after them so its live
   // detail identities still belong to the revision returned to this caller.
   const uncommitted = await readMeasurement(run, uncommittedKey, options, true);
+  const committed = await readMeasurement(run, committedKey, options, true);
   const sinceBase = await readMeasurement(run, environmentKey, options);
-  const uncommittedPaths = new Set(uncommitted.rows.map(rowPath));
+  const flags: ChangeFlags = {
+    uncommitted: new Set(uncommitted.rows.map(rowPath)),
+    ...(committed.projection ? { committed: new Set(committed.rows.map(rowPath)) } : {}),
+  };
   const base =
     environment.diffBaseOverride?.commit ??
     environment.createdFromCommit ??
     environment.delegationBaseCommit;
-  const diffRows = sinceBase.rows.slice(0, options.maxFiles);
-  const [commits, diffs] = await Promise.all([
+  const diffs = options.includeDiff && options.maxDiffFiles > 0 ? options.diffScope : null;
+  // A split answer shares one byte budget between its two halves.
+  const half =
+    diffs === "split"
+      ? {
+          ...options,
+          maxTotalDiffBytes: Math.floor(options.maxTotalDiffBytes / 2),
+          maxFileDiffBytes: Math.min(
+            options.maxFileDiffBytes,
+            Math.floor(options.maxTotalDiffBytes / 2),
+          ),
+        }
+      : options;
+  const scopeDiffs = (measurement: Measurement, resourceKey: string, description: string) =>
+    measurement.projection
+      ? renderDiffs(
+          run,
+          resourceKey,
+          measurement.projection.revision,
+          measurement.rows.slice(0, options.maxFiles),
+          half,
+          description,
+        )
+      : Promise.resolve({
+          description,
+          files: [],
+          bytes: 0,
+          truncated: false,
+          unavailable: measurement.unavailable ?? null,
+        });
+  const [commits, sinceBaseDiffs, committedDiffs, uncommittedDiffs] = await Promise.all([
     readCommits(git, base, options.maxCommits),
-    options.includeDiff && sinceBase.projection && options.maxDiffFiles > 0
-      ? renderDiffs(run, environmentKey, sinceBase.projection.revision, diffRows, options)
+    diffs === "sinceBase" && sinceBase.projection
+      ? renderDiffs(
+          run,
+          environmentKey,
+          sinceBase.projection.revision,
+          sinceBase.rows.slice(0, options.maxFiles),
+          options,
+          "Unified diff of each listed sinceBase file, base commit to working tree (committed and uncommitted changes together).",
+        )
+      : Promise.resolve(null),
+    diffs === "committed" || diffs === "split"
+      ? scopeDiffs(
+          committed,
+          committedKey,
+          "Unified diff of each listed committed file, base commit to HEAD: only what the worker's commits changed.",
+        )
+      : Promise.resolve(null),
+    diffs === "uncommitted" || diffs === "split"
+      ? scopeDiffs(
+          uncommitted,
+          uncommittedKey,
+          "Unified diff of each listed uncommitted file, HEAD to the working tree: only what the worker has not committed.",
+        )
       : Promise.resolve(null),
   ]);
   // Not paged by offset (that pages sinceBase); narrowed by paths or file.
@@ -481,17 +568,27 @@ export async function readWorkerChanges(
     undefined,
     false,
   );
+  const committedSummary = measurementSummary(
+    committed,
+    "The worker's base commit to HEAD: what its commits changed, without uncommitted changes.",
+    { ...options, offset: 0 },
+    undefined,
+    false,
+  );
   const sinceBaseSummary = measurementSummary(
     sinceBase,
-    "The worker's base commit to its working tree: committed and uncommitted changes together. uncommitted: true marks a file that also has uncommitted changes.",
+    "The worker's base commit to its working tree: committed and uncommitted changes together. uncommitted: true marks a file that also has uncommitted changes, committed: true one its commits changed.",
     options,
-    uncommittedPaths,
+    flags,
   );
   const truncated =
     sinceBaseSummary.truncated === true ||
+    committedSummary.truncated === true ||
     uncommittedSummary.truncated === true ||
     commits.truncated === true ||
-    diffs?.truncated === true;
+    sinceBaseDiffs?.truncated === true ||
+    committedDiffs?.truncated === true ||
+    uncommittedDiffs?.truncated === true;
   return {
     environmentId: environment.id,
     name: environment.name,
@@ -505,19 +602,34 @@ export async function readWorkerChanges(
     },
     commits,
     sinceBase: sinceBaseSummary,
+    committed: committedSummary,
     uncommitted: uncommittedSummary,
-    ...(diffs ? { diffs } : {}),
+    ...(sinceBaseDiffs ? { diffs: sinceBaseDiffs } : {}),
+    ...(committedDiffs ? { committedDiffs } : {}),
+    ...(uncommittedDiffs ? { uncommittedDiffs } : {}),
     truncated,
     ...(truncated
       ? {
           narrow:
-            "Some output was cut. Page files with offset (sinceBase.nextOffset), narrow with paths (files or directories), read one file's whole diff with file, or raise maxFiles, maxDiffFiles, maxDiffBytes or maxCommits up to their limits.",
+            "Some output was cut. Page files with offset (sinceBase.nextOffset), narrow with paths (files or directories), read one file's whole diff with file, ask for one diffScope instead of split, or raise maxFiles, maxDiffFiles, maxDiffBytes or maxCommits up to their limits.",
         }
       : {}),
-    ...(sinceBase.projection?.state === "loading" || uncommitted.projection?.state === "loading"
+    ...(sinceBase.projection?.state === "loading" ||
+    committed.projection?.state === "loading" ||
+    uncommitted.projection?.state === "loading"
       ? { pending: "Change tracking is still measuring this worker; read again shortly." }
       : {}),
   };
+}
+
+/** An older node parses no `diffScope` and answers with the combined diff only. */
+export function olderNodeIgnoredDiffScope(
+  options: WorkerChangesOptions,
+  answer: JsonRecord,
+): boolean {
+  if (options.diffScope === "sinceBase" || !options.includeDiff || options.maxDiffFiles === 0)
+    return false;
+  return !("committedDiffs" in answer) && !("uncommittedDiffs" in answer);
 }
 
 function gitFor(environment: Environment): DiffBaseGit | null {
@@ -551,20 +663,27 @@ export function registerCoordinatorWorkerChanges(
     if (nodeId && (await context.nodes?.status())?.nodeId !== nodeId) {
       const remote = await coordinatorNodeTarget(context, caller.projectId, nodeId);
       await remote.environment(environmentId);
-      return {
-        // A read changes nothing, so a lost answer is simply asked again.
-        ...(await withRetryAdvice("Call get_worker_changes again; it only reads.", () =>
-          remote.call<JsonRecord>("get_controller_worker_changes", {
-            projectId: remote.projectId,
-            environmentId,
-            // The caller's own fields: that node parses and bounds them again.
-            options: Object.fromEntries(
-              WORKER_CHANGES_INPUT_FIELDS.flatMap((field) =>
-                input[field] === undefined ? [] : [[field, input[field]]],
-              ),
+      // A read changes nothing, so a lost answer is simply asked again.
+      const answer = await withRetryAdvice("Call get_worker_changes again; it only reads.", () =>
+        remote.call<JsonRecord>("get_controller_worker_changes", {
+          projectId: remote.projectId,
+          environmentId,
+          // The caller's own fields: that node parses and bounds them again.
+          options: Object.fromEntries(
+            WORKER_CHANGES_INPUT_FIELDS.flatMap((field) =>
+              input[field] === undefined ? [] : [[field, input[field]]],
             ),
-          }),
-        )),
+          ),
+        }),
+      );
+      return {
+        ...answer,
+        ...(olderNodeIgnoredDiffScope(options, answer)
+          ? {
+              diffScopeUnsupported:
+                "That node's backend predates diffScope, so this answer has only the combined sinceBase diff; sinceBase files marked uncommitted: true also have uncommitted changes.",
+            }
+          : {}),
         nodeId: remote.nodeId,
       };
     }

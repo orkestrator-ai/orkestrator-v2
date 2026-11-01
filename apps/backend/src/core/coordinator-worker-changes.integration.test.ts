@@ -8,18 +8,25 @@ import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 
-test("controller changes read real baseline, commits, uncommitted files and diffs and reject project home", async () => {
+/** A real worker checkout measured by change tracking, and the controller read over it. */
+async function withWorker(
+  edit: (repo: string) => void,
+  run: (
+    read: (
+      options?: Record<string, unknown>,
+      environmentId?: string,
+    ) => Promise<Record<string, unknown>>,
+    base: string,
+    addHome: () => Promise<string>,
+  ) => Promise<void>,
+) {
   const h = createHarness();
   const storage = new StorageService(path.join(h.dataDir, "storage"));
   try {
     await storage.init();
     const project = await storage.addProject(createProject("remote", h.repo));
     const base = git(h.repo, "rev-parse", "HEAD").trim();
-    writeFileSync(path.join(h.repo, "committed.txt"), "committed change\n");
-    git(h.repo, "add", ".");
-    git(h.repo, "commit", "-qm", "worker commit");
-    writeFileSync(path.join(h.repo, "a.txt"), "one\nuncommitted change\n");
-    writeFileSync(path.join(h.repo, "untracked.txt"), "untracked change\n");
+    edit(h.repo);
     const environment = createEnvironment(project.id, { environmentType: "local" });
     Object.assign(environment, {
       id: "env-1",
@@ -61,36 +68,117 @@ test("controller changes read real baseline, commits, uncommitted files and diff
       runtime: { changeTracking: h.service, diffStats: { service: { isTracked: () => true } } },
     } as unknown as CommandContext;
     const handler = createCommandRegistry().get("get_controller_worker_changes")!;
-    const args = { projectId: project.id, environmentId: environment.id };
-    const result = (await handler(args, context)) as Record<string, unknown>;
-    expect(result.base).toMatchObject({ commit: base });
-    expect(result.commits).toMatchObject({
-      items: [expect.objectContaining({ subject: "worker commit" })],
-    });
-    expect(result.sinceBase).toMatchObject({
-      available: true,
-      files: expect.arrayContaining([
-        expect.objectContaining({ path: "committed.txt", uncommitted: false }),
-        expect.objectContaining({ path: "a.txt", uncommitted: true }),
-        expect.objectContaining({ path: "untracked.txt", uncommitted: true }),
-      ]),
-    });
-    expect(result.uncommitted).toMatchObject({
-      available: true,
-      files: expect.arrayContaining([
-        expect.objectContaining({ path: "a.txt" }),
-        expect.objectContaining({ path: "untracked.txt" }),
-      ]),
-    });
-    expect(JSON.stringify(result.diffs)).toContain("+uncommitted change");
-    const home = createEnvironment(project.id, { environmentType: "local" });
-    home.projectHome = true;
-    await storage.addEnvironment(home);
-    await expect(handler({ ...args, environmentId: home.id }, context)).rejects.toThrow(
-      "project checkout",
+    await run(
+      async (options, environmentId = environment.id) =>
+        (await handler(
+          { projectId: project.id, environmentId, ...(options ? { options } : {}) },
+          context,
+        )) as Record<string, unknown>,
+      base,
+      async () => {
+        const home = createEnvironment(project.id, { environmentType: "local" });
+        home.projectHome = true;
+        await storage.addEnvironment(home);
+        return home.id;
+      },
     );
   } finally {
     storage.close();
     h.cleanup();
   }
+}
+
+test("a file changed in a commit and again uncommitted shows each side's lines apart", async () => {
+  await withWorker(
+    (repo) => {
+      writeFileSync(path.join(repo, "a.txt"), "one\ncommitted line\n");
+      writeFileSync(path.join(repo, "committed.txt"), "committed only\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-qm", "worker commit");
+      writeFileSync(path.join(repo, "a.txt"), "one\ncommitted line\nuncommitted line\n");
+    },
+    async (read) => {
+      const split = await read({ diffScope: "split" });
+      expect(split).not.toHaveProperty("diffs");
+      expect(split.committed).toMatchObject({
+        available: true,
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "a.txt" }),
+          expect.objectContaining({ path: "committed.txt" }),
+        ]),
+      });
+      expect(split.sinceBase).toMatchObject({
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "a.txt", committed: true, uncommitted: true }),
+          expect.objectContaining({ path: "committed.txt", committed: true, uncommitted: false }),
+        ]),
+      });
+      const diffOf = (block: unknown, file: string) =>
+        String(
+          (
+            (block as { files: Array<{ path: string; diff: string | null }> }).files.find(
+              (entry) => entry.path === file,
+            ) ?? { diff: null }
+          ).diff,
+        );
+      const committedA = diffOf(split.committedDiffs, "a.txt");
+      expect(committedA).toContain("+committed line");
+      expect(committedA).not.toContain("uncommitted line");
+      const uncommittedA = diffOf(split.uncommittedDiffs, "a.txt");
+      expect(uncommittedA).toContain("+uncommitted line");
+      expect(uncommittedA).not.toContain("+committed line");
+      expect(diffOf(split.committedDiffs, "committed.txt")).toContain("+committed only");
+      expect(diffOf(split.uncommittedDiffs, "committed.txt")).toBe("null");
+
+      // Older callers: no diffScope is the combined base-to-working-tree diff.
+      const combined = await read();
+      expect(combined).not.toHaveProperty("committedDiffs");
+      expect(combined).not.toHaveProperty("uncommittedDiffs");
+      const combinedA = diffOf(combined.diffs, "a.txt");
+      expect(combinedA).toContain("+committed line");
+      expect(combinedA).toContain("+uncommitted line");
+
+      const committedOnly = await read({ diffScope: "committed", paths: ["a.txt"] });
+      expect(committedOnly).not.toHaveProperty("uncommittedDiffs");
+      expect((committedOnly.committedDiffs as { files: unknown[] }).files).toEqual([
+        expect.objectContaining({ path: "a.txt" }),
+      ]);
+    },
+  );
+});
+
+test("controller changes read real baseline, commits, uncommitted files and diffs and reject project home", async () => {
+  await withWorker(
+    (repo) => {
+      writeFileSync(path.join(repo, "committed.txt"), "committed change\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-qm", "worker commit");
+      writeFileSync(path.join(repo, "a.txt"), "one\nuncommitted change\n");
+      writeFileSync(path.join(repo, "untracked.txt"), "untracked change\n");
+    },
+    async (read, base, addHome) => {
+      const result = await read();
+      expect(result.base).toMatchObject({ commit: base });
+      expect(result.commits).toMatchObject({
+        items: [expect.objectContaining({ subject: "worker commit" })],
+      });
+      expect(result.sinceBase).toMatchObject({
+        available: true,
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "committed.txt", uncommitted: false }),
+          expect.objectContaining({ path: "a.txt", uncommitted: true }),
+          expect.objectContaining({ path: "untracked.txt", uncommitted: true }),
+        ]),
+      });
+      expect(result.uncommitted).toMatchObject({
+        available: true,
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "a.txt" }),
+          expect.objectContaining({ path: "untracked.txt" }),
+        ]),
+      });
+      expect(JSON.stringify(result.diffs)).toContain("+uncommitted change");
+      await expect(read(undefined, await addHome())).rejects.toThrow("project checkout");
+    },
+  );
 });

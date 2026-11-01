@@ -14,6 +14,7 @@ import type { ChangeLedger } from "./change-ledger.js";
 const SCOPE_LABELS: Record<ChangeMeasurement["scope"], string> = {
   "environment-net": "environment changes",
   "uncommitted-net": "uncommitted changes",
+  "committed-net": "committed changes since the base",
   staged: "staged changes",
   unstaged: "unstaged changes",
   "turn-net": "this turn's changes",

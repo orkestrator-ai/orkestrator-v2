@@ -1630,21 +1630,25 @@ the commits since the base (a bounded log of `<base>..HEAD` through the
 checkout's Git runner the base picker uses, local or `docker exec`),
 `sinceBase` (the `environment-net` measurement: base to working tree,
 committed and uncommitted together, each file with status and line counts and
-`uncommitted: true` when it also has uncommitted changes), `uncommitted` (the
-`uncommitted-net` measurement, `HEAD` to working tree with untracked files),
-and `diffs`: backend-rendered hunks of the listed `sinceBase` files as unified
-text (`changes_resolve_live_detail` and `changes_get_diff`, the Diff tab's
-path). Every part is bounded: 100 files by default (at most 500), 5,000 rows
+`uncommitted: true` when it also has uncommitted changes, `committed: true`
+when its commits changed it), `committed` (the `committed-net` measurement,
+base to `HEAD`), `uncommitted` (the `uncommitted-net` measurement, `HEAD` to
+working tree with untracked files), and `diffs`: backend-rendered hunks of the
+listed `sinceBase` files as unified text (`changes_resolve_live_detail` and
+`changes_get_diff`, the Diff tab's path). `diffScope` picks other diffs over
+the same path: `committed` (`committedDiffs`, base to `HEAD`), `uncommitted`
+(`uncommittedDiffs`, `HEAD` to working tree) or `split` (both, halving the
+byte budget), so a file changed both ways shows which lines are committed. Every part is bounded: 100 files by default (at most 500), 5,000 rows
 scanned per measurement, 50 commits (at most 200), diffs of 20 files (at most
 50), 16 KiB per file and 64 KiB in total (at most 256 KiB). A cut part says
 `truncated`, and the result names the arguments that page or narrow it:
 `offset` (`sinceBase.nextOffset`), `paths` (files or directories) and `file`,
 which renders one file's whole diff up to the total budget. A stopped
 container worker answers what change tracking last measured, with its commits
-unavailable and each diff `null` with the reason; a measurement still being taken says `pending`. The diff is base to
-working tree, so a file marked `uncommitted` shows both kinds of change
-together: change tracking keeps no bodies for a commits-only or
-uncommitted-only comparison. With `nodeId` the node owning the worker reads it
+unavailable and each diff `null` with the reason; a measurement still being taken says `pending`. Without `diffScope`
+the diff is base to working tree, as before, so older callers are unchanged; an
+older node that ignores `diffScope` answers with that diff and the result says
+`diffScopeUnsupported`. With `nodeId` the node owning the worker reads it
 (`get_controller_worker_changes`) and applies its own bounds.
 
 **Forking a worker.** `fork_worker` runs what the sidebar's Fork runs

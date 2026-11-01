@@ -45,6 +45,7 @@ import type {
   TranscriptReadWindow,
 } from "./build-pipeline-transcript-store.js";
 import type {
+  AgentActivityCompletionOutcome,
   EnvironmentUnreadReason,
   IncompleteTurnNotice,
   NativeAgentJobCompletionAction,
@@ -470,7 +471,10 @@ export class StorageService {
     source: AgentActivitySource = "frontend",
     observerId?: string,
     stale = false,
-    options: { completionAttention?: boolean } = {},
+    options: {
+      completionAttention?: boolean;
+      completionOutcome?: AgentActivityCompletionOutcome;
+    } = {},
   ): Promise<Environment> {
     return this.repos.projects.setEnvironmentAgentActivity(
       environmentId,

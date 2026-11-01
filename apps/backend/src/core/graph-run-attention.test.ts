@@ -12,6 +12,7 @@ import {
   GraphRunAttention,
   graphAttentionErrorReason,
   graphRunAttentionKey,
+  graphRunCompletionOutcome,
   graphRunEnvironmentActivity,
   type GraphRunWaitOpened,
 } from "./graph-run-attention.js";
@@ -146,6 +147,125 @@ describe("graph run attention", () => {
     expect(environment.agentActivitySources?.["graph-run"]?.state).toBe("waiting");
     expect(environment.hasUnreadWork).toBe(false);
     expect(opened).toEqual([]);
+  });
+});
+
+describe("what a graph run's end rings", () => {
+  async function runningRun() {
+    const { storage } = await store();
+    const attention = new GraphRunAttention(storage, { timers: NO_TIMERS });
+    const run = await storage.graphRuns.createGraphRun(
+      humanRun("e1", "p1", { status: "running", activations: [] }),
+    );
+    await attention.observeRun(run.id);
+    expect((await storage.getEnvironment("e1"))!.agentActivityState).toBe("working");
+    return { storage, attention, run };
+  }
+
+  test.each([
+    ["failed", true, "agent_failed"],
+    ["complete", true, "agent_finished"],
+    ["cancelled", false, undefined],
+    ["paused", false, undefined],
+  ] as const)("a %s run", async (status, unread, reason) => {
+    const { storage, attention, run } = await runningRun();
+    await storage.graphRuns.saveGraphRun(
+      {
+        ...run,
+        status,
+        ...(status === "paused" ? {} : { finishedAt: new Date().toISOString() }),
+      },
+      run.revision,
+    );
+    await attention.observeRun(run.id);
+    const environment = (await storage.getEnvironment("e1"))!;
+    expect(environment.agentActivityState).toBe("idle");
+    expect(environment.hasUnreadWork ?? false).toBe(unread);
+    expect(environment.unreadReason).toBe(reason);
+  });
+
+  test("restart reconciles a failure that occurred while the backend was away", async () => {
+    const { storage, root } = await store();
+    const run = await storage.graphRuns.createGraphRun(
+      humanRun("e1", "p1", { status: "running", activations: [] }),
+    );
+    await new GraphRunAttention(storage, { timers: NO_TIMERS }).observeRun(run.id);
+    await storage.graphRuns.saveGraphRun(
+      { ...run, status: "failed", finishedAt: new Date().toISOString() },
+      run.revision,
+    );
+    const restarted = (await store(root)).storage;
+    const attention = new GraphRunAttention(restarted, { timers: NO_TIMERS });
+    await attention.start();
+    attention.stop();
+    expect(await restarted.getEnvironment("e1")).toMatchObject({
+      agentActivityState: "idle",
+      hasUnreadWork: true,
+      unreadReason: "agent_failed",
+    });
+  });
+
+  test("a failure rings while a sibling source keeps the environment working", async () => {
+    const { storage, attention, run } = await runningRun();
+    await storage.setEnvironmentAgentActivity(
+      "e1",
+      "working",
+      new Date().toISOString(),
+      "native-agent",
+    );
+    await storage.graphRuns.saveGraphRun(
+      { ...run, status: "failed", finishedAt: new Date().toISOString() },
+      run.revision,
+    );
+    await attention.observeRun(run.id);
+    const environment = (await storage.getEnvironment("e1"))!;
+    expect(environment.agentActivityState).toBe("working");
+    expect(environment.unreadReason).toBe("agent_failed");
+
+    // The sibling's end cannot say what ended, so the failure stays what it reads.
+    await storage.setEnvironmentAgentActivity(
+      "e1",
+      "idle",
+      new Date().toISOString(),
+      "native-agent",
+    );
+    expect((await storage.getEnvironment("e1"))!.unreadReason).toBe("agent_failed");
+  });
+
+  test("a cancelled run does not swallow a sibling's wait for input", async () => {
+    const { storage, attention, run } = await runningRun();
+    await storage.setEnvironmentAgentActivity(
+      "e1",
+      "waiting",
+      new Date().toISOString(),
+      "native-agent",
+    );
+    await storage.graphRuns.saveGraphRun(
+      { ...run, status: "cancelled", finishedAt: new Date().toISOString() },
+      run.revision,
+    );
+    await attention.observeRun(run.id);
+    expect(await storage.getEnvironment("e1")).toMatchObject({
+      agentActivityState: "waiting",
+      hasUnreadWork: true,
+      unreadReason: "agent_waiting",
+    });
+  });
+
+  test("only runs that ended since the source started working decide", () => {
+    const ended = (status: "failed" | "complete" | "cancelled", finishedAt: string) =>
+      humanRun("e1", "p1", { status, finishedAt });
+    expect(graphRunCompletionOutcome([ended("failed", T1), ended("complete", T2)], T2)).toBe(
+      undefined,
+    );
+    expect(graphRunCompletionOutcome([ended("failed", T2), ended("complete", T2)], T1)).toBe(
+      "failed",
+    );
+    expect(graphRunCompletionOutcome([ended("cancelled", T2), ended("complete", T2)], T1)).toBe(
+      undefined,
+    );
+    expect(graphRunCompletionOutcome([ended("cancelled", T2)], T1)).toBe("none");
+    expect(graphRunCompletionOutcome([], T1)).toBe("none");
   });
 });
 

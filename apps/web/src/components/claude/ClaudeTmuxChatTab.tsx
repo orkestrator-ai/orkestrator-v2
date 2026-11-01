@@ -604,7 +604,7 @@ export function ClaudeTmuxChatTab({
           // tool-call turns (no final text) still clear the spinner.
           if (ev.event_kind === "UserPromptSubmit") {
             setTabBusy(storeKey, true);
-          } else if (ev.event_kind === "Stop") {
+          } else if (ev.event_kind === "Stop" || ev.event_kind === "StopFailure") {
             setTabBusy(storeKey, false);
           }
           if (ev.event_kind === "PreToolUse") {
@@ -633,7 +633,11 @@ export function ClaudeTmuxChatTab({
             }
           } else if (ev.event_kind === "Elicitation") {
             addPendingElicitation(storeKey, payloadToElicitation(ev.event_id, ev.payload, timing));
-          } else if (ev.event_kind === "Notification" || ev.event_kind === "Stop") {
+          } else if (
+            ev.event_kind === "Notification" ||
+            ev.event_kind === "Stop" ||
+            ev.event_kind === "StopFailure"
+          ) {
             const payload =
               ev.payload && typeof ev.payload === "object"
                 ? (ev.payload as Record<string, unknown>)
@@ -644,9 +648,11 @@ export function ClaudeTmuxChatTab({
               message:
                 typeof payload?.message === "string"
                   ? payload.message
-                  : ev.event_kind === "Stop"
-                    ? "Claude finished responding"
-                    : "Claude sent a notification",
+                  : ev.event_kind === "StopFailure"
+                    ? "Claude's turn failed with an error"
+                    : ev.event_kind === "Stop"
+                      ? "Claude finished responding"
+                      : "Claude sent a notification",
               receivedAt: new Date(ev.requested_at ?? Date.now()).toISOString(),
             });
           }

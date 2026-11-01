@@ -236,6 +236,13 @@ export interface StartupAgentSessionSnapshot {
 }
 
 /**
+ * How a source's work ended, when it knows: `failed` rings `agent_failed`, and
+ * `none` means nothing completed, so going idle rings nothing. Absent, the
+ * source's working-to-idle edge says the work finished.
+ */
+export type AgentActivityCompletionOutcome = "failed" | "none";
+
+/**
  * Content-free cause of an environment's unread badge.
  *
  * - `agent_finished`: an agent turn ended.

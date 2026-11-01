@@ -8,6 +8,11 @@
  * environment or settings tier records an account. See
  * docs/architecture/agent-accounts.md.
  */
+import {
+  parseAgentAccountAutoSwitchStates,
+  type AgentAccountAutoSwitchStates,
+} from "./agent-account-auto-switch.js";
+
 export const AGENT_ACCOUNT_PLATFORMS = ["claude", "codex"] as const;
 export type AgentAccountPlatform = (typeof AGENT_ACCOUNT_PLATFORMS)[number];
 
@@ -54,6 +59,8 @@ export interface AgentAccountSummary {
 export interface AgentAccountsSnapshot {
   accounts: AgentAccountSummary[];
   active: Record<AgentAccountPlatform, string>;
+  /** Automatic switching on this machine. Absent from a machine that predates it. */
+  autoSwitch?: AgentAccountAutoSwitchStates;
 }
 
 /**
@@ -308,5 +315,6 @@ export function parseAgentAccountsSnapshot(value: unknown): AgentAccountsSnapsho
       ...(typeof row.createdAt === "string" ? { createdAt: row.createdAt.slice(0, 80) } : {}),
     });
   }
-  return { accounts, active: { claude, codex } };
+  const autoSwitch = parseAgentAccountAutoSwitchStates(value.autoSwitch);
+  return { accounts, active: { claude, codex }, ...(autoSwitch ? { autoSwitch } : {}) };
 }

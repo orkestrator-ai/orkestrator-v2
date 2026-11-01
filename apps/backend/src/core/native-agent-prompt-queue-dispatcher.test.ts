@@ -361,3 +361,33 @@ describe("NativeAgentPromptQueueDispatcher legacy claim scans", () => {
     },
   );
 });
+
+test("queue holds while limit recovery is pending, then releases the head", async () => {
+  await withPersistedQueue(async (storage, { dispatcher, host }) => {
+    await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+      id: "head",
+      text: "queued",
+    });
+    let pending = true;
+    host.usageLimitResendPending = () => pending;
+    host.provider = async () =>
+      ({ status: async () => "error" }) as unknown as NativeAgentRuntimeProvider;
+    await dispatcher.drainPromptQueueForSession(identity);
+    expect(host.dispatchPrompt).not.toHaveBeenCalled();
+    expect((await storage.getPromptQueue(queueKey))?.inFlight).toBeUndefined();
+    pending = false;
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 6000);
+    try {
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).not.toHaveBeenCalled();
+      expect(dispatcher.forTesting().queueAttempts.get(queueKey)).toBe(1);
+      host.provider = async () =>
+        ({ status: async () => "idle" }) as unknown as NativeAgentRuntimeProvider;
+      clock.mockReturnValue(Date.now() + 60000);
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});

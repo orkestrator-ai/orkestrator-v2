@@ -9,7 +9,10 @@ Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/web/src/components/settings/account-machine.tsx`,
 `apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx`,
 `apps/web/src/components/layout/AgentInfoAccountSection.tsx`,
-`apps/backend/src/core/agent-sign-ins.ts`;
+`apps/backend/src/core/agent-sign-ins.ts`,
+`apps/backend/src/core/agent-accounts-auto-switch.ts`,
+`apps/backend/src/core/native-agent-usage-limit-resend.ts`,
+`packages/protocol/src/agent-account-auto-switch.ts`;
 `apps/backend/src/core/opencode-provider-login.ts`,
 `packages/protocol/src/opencode-provider-auth.ts`,
 `apps/web/src/components/settings/OpenCodeProvidersSection.tsx`.
@@ -521,7 +524,9 @@ account's reading is saved when it is read and when the user switches away from
 it. Whenever a fresh read fails, including the lapsed-token case above, the last
 reading is served instead with `stale: true`, its original `fetchedAt` and the
 failure as `message`. Any window whose reset time has passed is shown empty.
-Removing an account deletes its entry.
+Removing an account deletes its entry. A reading also says whether the account can
+spend past its plan, when the provider says so (`paidOverage`; see
+[Paid overage](#paid-overage)).
 
 A 429 from a usage endpoint is not retried until its `Retry-After` has passed
 (clamped to 1–30 minutes; 5 minutes if absent), even by a forced refresh. The
@@ -660,10 +665,260 @@ when the user said so in advance.
   recorded turn error (`classifyUsageLimitError`: Claude's "hit your limit",
   Codex's `usageLimitExceeded`, Grok's `USAGE_EXHAUSTED`, OpenCode's "limit
   reached" retry) and adds the plan-usage cache's windows at 100 % that have
-  not reset. A tab stays listed until a later turn completes; after a switch
-  it needs a new prompt to run again.
+  not reset. A tab stays listed until a later turn completes; after a
+  coordinator's switch it needs a new prompt to run again.
+- `set_account_auto_switch` changes the ticks of
+  [automatic switching](#automatic-switching), which resends what the weekly limit
+  stopped by itself and tells the coordinator each time.
 
 Grok, Pi, OpenCode and Cursor have no accounts to switch; the tools say so.
+
+## Automatic switching
+
+Off by default. One main tick per provider, Claude and Codex, keeps the machine
+on the signed-in account whose general weekly limit resets soonest, moves on when
+that limit runs out, and resends the work it stopped, so allowance is not lost to
+a reset. A tick per account says whether that account takes part. The backend
+does all of it (`agent-accounts-auto-switch.ts`; the rule is pure, in
+`@orkestrator/protocol/agent-account-auto-switch`), so it needs no client and no
+coordinator. It never writes a credential: a switch only records which existing
+login is active. `mise run verify:accounts:resend-live` runs the resend on real
+bridges and the pinned CLIs against scripted provider servers
+([below](#proving-the-resend-without-a-billed-turn)). The live checks still owed
+are in
+[1250-automatic-account-switching-live-checks.md](../todo/agent-engines/1250-automatic-account-switching-live-checks.md).
+
+### Which limit counts
+
+Only the **general weekly limit** (`generalWeeklyWindow`).
+
+- **Claude:** window `seven_day`. `seven_day_<model>`, `seven_day_oauth_apps` and
+  `five_hour` never count.
+- **Codex:** whichever of `primary` and `secondary` is 10,080 minutes long. The
+  slot itself says nothing, because the usage endpoint can report the week in
+  either. Evidence, against the pinned 0.166.0: the app-server protocol's
+  `rateLimitsByLimitId` is "keyed by metered `limit_id` (for example, `codex`)"
+  (`GetAccountRateLimitsResponse.ts`), and the binary's usage payload has
+  `RateLimitStatusDetails` for `rate_limit` beside `AdditionalRateLimitDetails`
+  (`limit_name`, `metered_feature`, `rate_limit`) for everything else. The reader
+  takes `rate_limits_by_limit_id.codex` or `rate_limit` and never
+  `additional_rate_limits`, so those two slots are only ever the general limit.
+  A session's `account/rateLimits/updated` names its bucket too, and the bridge
+  now ignores any `limitId` other than `codex`
+  (`app-server/event-reducer.ts`), which would otherwise have folded a metered
+  feature's week into the account's. No real account has confirmed this live.
+
+A limit error's text cannot say which limit it was
+(`classifyUsageLimitError`), so a Fable, other model-specific, apps or 5-hour limit
+is told apart by reading usage, never by its words. Claude's refusal arrives as a
+result with `is_error` and its words only in `result`; the bridge now carries
+those words as the turn's error when they name a usage limit, where it used to
+substitute a fixed sentence the classifier could not match
+(`session-manager-prompt-handlers/result.ts`). Other API errors keep the fixed
+sentence, because `result` can hold the model's own text. A container running an
+older bridge still sends the fixed sentence, and so stays stopped.
+
+### When it moves
+
+Among the included, signed-in accounts with room, the soonest reset comes first;
+an account with no known reset ranks after every account with one
+(`rankAutoSwitchAccounts`). A tie stays on the active account, so readings cannot
+make the machine flap. Three things can move it:
+
+- **Between turns.** A turn ending anywhere on the machine, at most once a minute,
+  and a ten-minute timer for work no turn-end edge reports, read each included
+  account's usage (cached for two minutes, as for Settings) and move to the top of
+  the order. That is a move when the active limit reaches 98% used, and also when
+  another included account simply resets sooner, or the active account's own tick
+  is off. A running turn finishes on the old account, as with any switch. A native
+  tab's next turn moves over. Workflow providers resolve the local bridge before
+  creating a session or preparing each new turn, so an idle bridge moves over
+  even when the provider is cached. A busy bridge stays on its running account (see
+  [1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-workflows-next-turn-after-a-between-turns-move)).
+- **A limit error mid-turn.** The turn's error has to read as a usage limit, and
+  then a forced read of the account the turn ran on has to show the general weekly
+  limit at 100%. Anything less and the turn stays stopped, with nothing moved
+  (`handleLimitStop`). Stops seen within two minutes share one confirmation. The
+  session can already read the new account, when another stop's resend replaced a
+  bridge they shared. Such a stop counts only if the turn was running before the
+  last move, is not itself a resend, is seen within five minutes of the move, and a
+  fresh reading of the account left shows its weekly limit used up. A turn sent after
+  the move ran on the new account, so whatever stopped it, it stays stopped.
+- **A tick changing**, here or from the command node.
+
+With every included account out, nothing moves: work stops at the limit and
+nothing resumes by itself, including when an account later resets. Grok, Pi,
+OpenCode and Cursor have no accounts and are never involved. An isolated container
+keeps its own login, so a stop inside one is not this machine's to act on.
+
+### Stale and unknown readings
+
+Only a fresh reading can say the active account has run out. A stale reading (a
+failed read answered with the last one, `stale: true`) or a missing one never
+moves the machine and never confirms a limit error. A limit error whose reading is
+stale waits (`wait`) up to 10 minutes for one that is not, for example through a
+429's wait, and then stays stopped.
+
+For choosing where to go, an idle Claude account's reading is usually stale,
+because its token has lapsed. A weekly limit does not fall before its reset, so a
+stale reading at or past 98% with its reset still ahead keeps that account out
+until the reset. With no reset to go on it says too little to rule the account
+out, and it ranks last. A reset in the past is never a known reset: the window has
+started over (`stalePlanUsageSnapshot`, `weeklyLimitReading`), so it reads empty
+with its next reset unknown, and ranks last.
+
+### Paid overage
+
+Detectable, so the rule avoids it, within what a reading can show:
+
+- Claude reports `extra_usage.is_enabled` in the same usage payload Claude Code's
+  `/usage` reads. Codex reports `credits` (`has_credits`, `unlimited`),
+  `rate_limit.limit_reached`, and on app-server `ordinaryUsageAllowed`.
+  `plan-usage.ts` reads these into `PlanUsageSnapshot.paidOverage`.
+- An account the provider says is past its included allowance, or one with paid
+  usage on and any limit at 100%, is never a destination (`wouldPay`). An account
+  past 98% of its weekly limit is out anyway.
+- It cannot see an account with **no reading at all**, which ranks last and can
+  still be chosen when nothing else has room. A fresh reading then arrives as soon
+  as it is active, and it is moved off at the next check, but the resent turn may
+  already have started. The same turn is also how a paid account running past its
+  limit is noticed: its turn does not fail, so only the between-turns check moves
+  it. No real account has confirmed these fields.
+- A login with no email is often a pay-per-use API key, one more reason it starts
+  unticked (below).
+
+### Resending what the limit stopped
+
+The stopped prompt stays in the conversation, so a resend is one labelled
+continuation in the same session rather than the prompt again: it cannot run the
+prompt twice, and a turn that got partway continues rather than restarts. A bridge
+keeps its account until idle, so a resend waits (bounded, 30 minutes) for other
+turns holding that bridge, and a workflow drops its cached provider so that its
+next dispatch reconnects, which is what moves the bridge. Activity observation
+(`hasObservedLiveWork`) only sees native turns, so a workflow also counts the turns
+its own polls last saw running on the provider its reviewers share
+(`trackRunningTurns`). A bridge reports a failed turn by throwing, so that poll is
+what ends a turn's count; otherwise a stopped turn held back its own resend for two
+minutes. Workflow providers on one bridge read each other's counts. A native tab
+beside a Multi Review still cannot see the review's turns (see
+[1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-bridge-shared-by-owners-that-cannot-see-each-other)).
+
+- **Native tabs** (`native-agent-usage-limit-resend.ts`) work from the activity
+  sweep's turn-end edges. The request id is derived from the stopped request
+  (`usage-limit-resend:<n>:<root>`), so a repeated observation or a restart finds
+  the dispatch journal entry rather than a second turn. Only a `failed` outcome
+  qualifies: `interrupted` (the user stopped it), `superseded` (a later prompt),
+  `unknown` and `pending` are never guessed at, and everything is checked again
+  inside the session's mutation fence, so a prompt or Stop landing meanwhile wins.
+  A queued prompt waits behind the resend instead of being parked on the old error,
+  for at most 45 minutes. A stop from before a backend restart stays stopped:
+  a first observation is not an edge, which is also what keeps an old stop from
+  resuming when an account resets.
+- **A native resend's mode** is the one its turn ran in
+  (`PersistedNativeAgentSession.lastDispatchedTurn`), not the session's controls. A
+  prompt can state its own mode without changing them, so reading the controls sent
+  a planning turn back as Build, and on Claude with `bypassPermissions`. A turn with
+  no record stays stopped rather than guess.
+- **Tabs stopped together** send one at a time per bridge, because the first send
+  replaces the bridge and the second would otherwise go over the connection it closed
+  and read as a failed send.
+- **Workflows** ask `provider.usageLimitStop` where they would fail a turn, at the
+  same place as the restart continuation: reviewers and graph agent nodes in
+  `AgentBranchRunner`, Multi Review's steps, build stages and build consolidation.
+  A result the turn already submitted is accepted rather than run again. Otherwise
+  the same session continues under a new request id (`usageLimitResends`, durable
+  on the record), and `wait` looks again on the next pass.
+- **The bound.** At most `MAX_USAGE_LIMIT_RESENDS` (3) per stopped turn, and each
+  needs a fresh reading to confirm another account used up. An account that refuses
+  for any other reason stays stopped, whichever limit it was. A failed send is left
+  as it stopped; there is no retry.
+
+A workflow's continuation keeps its turn's mode without any of this, because each
+owner resends with its stage's own options: a read-only reviewer stays `dontAsk`.
+
+A goal's turn is resent like any other, and the goal itself stays paused until the
+user resumes it. A public CLI run still settles `failed` on the stopped request,
+because its completion is request-specific. Coordinator conversations, feature
+planning, the goal verifier and graph describe sessions are not resent.
+
+### Proving the resend without a billed turn
+
+`mise run verify:accounts:resend-live` (`apps/backend/tests/account-switch-resend-live.test.ts`,
+slow tier) runs a real `OrkestratorBackend`, the bridges' built `dist` and the pinned
+Claude and Codex CLIs in a throwaway HOME, with fixture logins for two accounts. Only
+the provider's servers are scripted: a local model endpoint, reached through
+`ANTHROPIC_BASE_URL` and Codex's `openai_base_url`, and the two usage endpoints,
+answered by a replaced `fetch` that refuses any other host. It never reads a real
+login, and its model endpoint answers everything, so no turn is billed.
+
+| Scenario | What it shows on each pinned CLI |
+| --- | --- |
+| Native tab | The refusal's process exits, a new bridge starts on the other login, and that login's request carries the stopped prompt once, from the shared transcript, then the continuation |
+| Planning turn | A plan prompt in a Build session is resent in plan mode |
+| Two tabs stopped together | Each continues once, over one replacement |
+| A 5-hour refusal | Nothing moves and one call is all there is |
+| Every account out | One resend, refused, then nothing |
+| Multi Review preparation, build stage, graph agent node | The same continuation through each owner's own resend |
+| Two reviewers on one bridge | Each continues once, over one replacement, still `dontAsk` |
+
+The reviewer panel is a graph of only that node, because reaching a real Multi Review's
+panel takes a preparation result and a validation run first. `AgentBranchRunner` runs
+both. It says nothing about what a provider really sends or when: the refusal is
+fixture HTTP, though the words are the CLI's own. The pinned Claude CLI, given a 429
+with `anthropic-ratelimit-unified-status: rejected`, ends the turn with "You've hit
+your weekly limit · resets …" or "You've hit your 5-hour limit · resets …", and
+without the `representative-claim` header it retries instead. Real refusals remain in
+[1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md).
+
+### Manual switches pin
+
+`set_active_agent_account` is every switch from outside this feature: Settings, the
+agent panel, the Machines overview and a coordinator. While the tick is on it pins
+the account in the same write as the switch (`autoSwitch.<platform>.pin` in
+`agent-accounts.json`), and automatic switching stays off on that machine until the
+user ticks it again. The tick is shared and the pin is one machine's, so ticking it
+ends the pin only on the machine being shown (`resume_agent_account_auto_switch`),
+and another machine's pin stays until the user ticks it there. The feature's own switch
+(`applyAutomaticAccountSwitch`) never pins, and gives way when a pin or another
+active account got in first. The state is on `AgentAccountsSnapshot.autoSwitch` as
+`off`, `automatic` or `pinned`, with `lastSwitch`, and shows in the account settings,
+the Machines overview and the agent panel.
+
+### Machines
+
+The main tick and the per-account ticks are the inherited setting
+`agentAccountAutoSwitch` ([command-nodes.md](command-nodes.md#settings)): emails and
+flags only, no account id and no credential. Each machine applies them to the
+accounts it has. A whole-config save never writes them
+(`updateAgentAccountAutoSwitchSettings` is the one writer), so a settings form or a
+coordinator cannot undo the other. Pins stay on their machine, as does each
+machine's own decision to move: nothing here makes machines use the same account.
+A leaf refuses a change to the ticks its command node holds rather than saving a copy
+that stays overridden, so a client sends them to the command node.
+
+- **An account with no email** cannot be matched across machines. It starts unticked,
+  its tick is kept in that machine's `agent-accounts.json`, and it never travels.
+- **An older leaf** drops the key (`pickInheritedGlobalSettings` keeps only keys it
+  knows) and keeps working without the feature. Settings shows it no ticks, and
+  nothing sends it a command it lacks.
+- **An older command node** sends no ticks, and a snapshot's omitted keys read as
+  product defaults, so a newer leaf is off while attached to it, with its own value
+  kept underneath.
+
+### Coordinators
+
+`list_provider_accounts` shows each provider's state and each account's
+`autoSwitchIncluded`, and `set_account_auto_switch` changes the ticks, without an
+approval because it is a setting rather than a switch. On a leaf the tool says the
+shared ticks belong to the command node, which it cannot reach from there, and can
+still end that leaf's pin and change the tick of an account with no email. A
+coordinator's own `switch_provider_account` still needs an approval, and pins like
+any other. Each automatic
+switch sends every main coordinator on the machine a workflow notice through the
+mail store, and a leaf's switch also reaches its command node's main coordinators
+(`AGENT_ACCOUNT_AUTO_SWITCHED_EVENT`). A link that is down when it happens loses
+that notice, and `lastSwitch` still records the move. A notice never delays a
+switch, and nothing here starts a coordinator.
 
 ## Machines
 
@@ -726,9 +981,10 @@ itself. Where each surface acts:
     machines use it and how many lack it, with a switch for every machine
     that has it but uses another. By machine, a cell off it shows **Use
     preferred** where the machine has that login and **No preferred login**
-    where it does not. Nothing switches by itself: a leaf adding or removing
-    a login, or a machine coming back online, never changes which account it
-    uses. A preference change made in another client shows on the next full
+    where it does not. The preferred login switches nothing by itself: a leaf
+    adding or removing a login, or a machine coming back online, never changes
+    which account it uses. [Automatic switching](#automatic-switching) is a separate,
+    explicit opt-in, and it follows reset times rather than this preference. A preference change made in another client shows on the next full
     read (opening the page or the refresh button), not live. A machine's own
     settings dialog does not flag its row. Older command nodes reject the
     command, so the star reports an error there.
@@ -830,3 +1086,10 @@ names another version.
   `codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } }`
   (`responseStreamDisconnected` with 401 on the retries), not `unauthorized`,
   and sends no `modelProvider/authRecovery*`, so no `auth` notice is raised.
+
+Coordinator authority: `set_account_auto_switch` may change email-matched inclusion ticks,
+enable automatic switching, or end a machine pin when the user explicitly requests it.
+These controls delegate subscription selection and bounded weekly-limit recovery to
+the backend. They do not use the single-account switch approval request. No-email
+accounts require the user to include them in Settings; coordinator tools refuse to
+include them. Excluding such an account remains available.

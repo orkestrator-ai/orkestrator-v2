@@ -333,15 +333,17 @@ function stateSnapshot(
   };
 }
 
-function renderSession() {
-  return renderHook(() =>
-    useNativeAgentSession<TestMessage>({
-      platform: "codex",
-      environmentId: "env-1",
-      tabId: "tab-1",
-      isActive: true,
-      enabled: true,
-    }),
+function renderSession(isActive = true) {
+  return renderHook(
+    ({ isActive }) =>
+      useNativeAgentSession<TestMessage>({
+        platform: "codex",
+        environmentId: "env-1",
+        tabId: "tab-1",
+        isActive,
+        enabled: true,
+      }),
+    { initialProps: { isActive } },
   );
 }
 
@@ -3229,16 +3231,16 @@ describe("a held row too large to travel as a revision keeps changing", () => {
       ...(reconciliation ? { historyReconciliationToken: reconciliation } : {}),
       ...extras,
     });
-  const startWithPagedHistory = async () => {
+  const startWithPagedHistory = async (historyRows = older) => {
     transcriptUpdates = [() => tailAt("t0")];
     stateUpdates = [() => stateSnapshot("state-1")];
-    messagePages = [() => ({ ...historyPage(older), historyEpoch: "epoch-1" })];
+    messagePages = [() => ({ ...historyPage(historyRows), historyEpoch: "epoch-1" })];
     const session = renderSession();
     await waitFor(() => expect(session.result.current.sessionStateAvailability).toBe("current"));
     await act(async () => {
       await session.result.current.loadEarlierMessages();
     });
-    expect(session.result.current.projection?.messages).toHaveLength(3);
+    expect(session.result.current.projection?.messages).toHaveLength(historyRows.length + 1);
     messagePageCalls = [];
     return session;
   };
@@ -3345,6 +3347,323 @@ describe("a held row too large to travel as a revision keeps changing", () => {
     await waitFor(() => expect(messagePageCalls).toHaveLength(1));
     expect(session.result.current.projection?.messages).toHaveLength(3);
     expect(session.result.current.projection?.messages[0]?.text).toBe("seven running agents");
+  });
+
+  const debt = () =>
+    useNativeAgentProjectionStore.getState().progressiveCaches.get(identity.logicalSessionKey)
+      ?.heldHistoryReconcileOwed;
+  const page = (rows: TestMessage[], nextCursor?: string) => ({
+    ...historyPage(rows, { nextCursor }),
+    historyEpoch: "epoch-1",
+    truncated: false,
+  });
+  const changeToken = async (
+    session: ReturnType<typeof renderSession>,
+    token = "digest-1",
+    extras = {},
+  ) => {
+    transcriptUpdates = [() => tailAt(`t-${token}`, token, extras)];
+    await act(async () => {
+      await session.result.current.refresh();
+    });
+  };
+  const retryNow = async (session: ReturnType<typeof renderSession>, token = "digest-1") => {
+    const realNow = Date.now;
+    Date.now = () => realNow() + HELD_HISTORY_RECONCILE_INTERVAL_MS + 1;
+    try {
+      await changeToken(session, token);
+      await waitFor(() => expect(debt()).toBe(false));
+    } finally {
+      Date.now = realNow;
+    }
+  };
+
+  test.each([false, true])(
+    "an in-flight page respects a newer poll (token moved: %s)",
+    async (moved) => {
+      const session = await startWithPagedHistory();
+      const deferred = Promise.withResolvers<NativeAgentMessagePage<TestMessage>>();
+      messagePages = [() => deferred.promise];
+      await changeToken(session);
+      await waitFor(() => expect(messagePageCalls).toHaveLength(1));
+      await changeToken(session, moved ? "digest-2" : "digest-1", {
+        revisedMessages: [message("launch", "newest delivered revision")],
+      });
+      await act(async () => {
+        deferred.resolve(page([message("launch", "older page"), older[1]!]));
+      });
+      expect(session.result.current.projection?.messages[0]?.text).toBe(
+        "newest delivered revision",
+      );
+      await act(async () => {
+        await session.result.current.refresh();
+      });
+      expect(session.result.current.projection?.messages[0]?.text).toBe(
+        "newest delivered revision",
+      );
+      expect(debt()).toBe(moved);
+      if (moved) {
+        messagePages = [() => page([message("launch", "final revision"), older[1]!])];
+        await retryNow(session, "digest-2");
+        expect(session.result.current.projection?.messages[0]?.text).toBe("final revision");
+      }
+    },
+  );
+
+  test("byte-limited pages advance beyond 22 pages and settle the oldest row", async () => {
+    // Three oversized newest rows and 3,990 small rows fit both client
+    // ceilings but need 23 pages when each oversized row travels alone.
+    const rows = Array.from({ length: 3993 }, (_, index) =>
+      message(`held-${index}`, index >= 3990 ? "x".repeat(1100 * 1024) : "x".repeat(1024)),
+    );
+    transcriptUpdates = [() => tailAt("t0")];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const initialChunks = [rows.slice(3992), rows.slice(3991, 3992), rows.slice(3990, 3991)];
+    for (let end = 3990; end > 0; end -= 200)
+      initialChunks.push(rows.slice(Math.max(0, end - 200), end));
+    messagePages = initialChunks.map(
+      (chunk, index) => () =>
+        page(chunk, index < initialChunks.length - 1 ? `initial-${index + 1}` : undefined),
+    );
+    const session = renderSession();
+    await waitFor(() => expect(session.result.current.sessionStateAvailability).toBe("current"));
+    for (const _chunk of initialChunks) {
+      await act(async () => {
+        await session.result.current.loadEarlierMessages();
+      });
+    }
+    expect(session.result.current.projection?.messages).toHaveLength(3994);
+    const refreshed = [...rows];
+    refreshed[0] = message("held-0", "oldest refreshed");
+    const chunks = [
+      refreshed.slice(3992),
+      refreshed.slice(3991, 3992),
+      refreshed.slice(3990, 3991),
+    ];
+    for (let end = 3990; end > 0; end -= 200)
+      chunks.push(refreshed.slice(Math.max(0, end - 200), end));
+    expect(chunks).toHaveLength(23);
+    messagePageCalls = [];
+    messagePages = chunks.map(
+      (chunk, index) => () =>
+        page(chunk, index < chunks.length - 1 ? `walk-${index + 1}` : undefined),
+    );
+    await changeToken(session);
+    await waitFor(() => expect(debt()).toBe(false));
+    expect(messagePageCalls.map(({ before }) => before)).toEqual([
+      "before-tail",
+      ...Array.from({ length: 22 }, (_, i) => `walk-${i + 1}`),
+    ]);
+    expect(session.result.current.projection?.messages[0]?.text).toBe("oldest refreshed");
+    await retryNow(session);
+    expect(messagePageCalls).toHaveLength(23);
+  });
+
+  test.each(["mismatch", "cycle", "truncated"] as const)(
+    "handles a %s page without losing held rows",
+    async (kind) => {
+      const heldRows =
+        kind === "truncated" ? [message("launch", "full", parts(5)), older[1]!] : older;
+      const session = await startWithPagedHistory(heldRows);
+      messagePages = [
+        () => ({
+          ...page([message("launch", "incomplete", parts(1)), older[1]!]),
+          ...(kind === "mismatch" ? { historyEpoch: "rotated" } : {}),
+          ...(kind === "cycle" ? { messages: [], nextCursor: "before-tail" } : {}),
+          ...(kind === "truncated" ? { truncated: true } : {}),
+        }),
+      ];
+      await changeToken(session);
+      await waitFor(() => expect(messagePageCalls).toHaveLength(1));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(session.result.current.projection?.messages).toEqual([...heldRows, ...tail]);
+      expect(debt()).toBe(kind !== "truncated");
+      if (kind !== "truncated") {
+        messagePages = [() => page([message("launch", "recovered"), older[1]!])];
+        await retryNow(session);
+        expect(session.result.current.projection?.messages[0]?.text).toBe("recovered");
+      }
+    },
+  );
+
+  test.each(["session", "shared"] as const)(
+    "growing replacements enforce the %s byte ceiling and retain a usable recovery cursor",
+    async (budget) => {
+      const heldRows = budget === "session" ? [...older, message("third-held-row")] : older;
+      const session = await startWithPagedHistory(heldRows);
+      if (budget === "shared") {
+        const store = useNativeAgentProjectionStore.getState();
+        for (let i = 0; i < 4; i++) {
+          const other = [message(`other-${i}`, "x".repeat(7500 * 1024))];
+          store.setProjection(`other-${i}`, projection(other), {
+            liveProjection: projection([]),
+            historyComplete: true,
+            historyMessages: other,
+            historyBytes: new TextEncoder().encode(JSON.stringify(other)).length,
+          });
+        }
+      }
+      const grown = heldRows.map((row) =>
+        message(row.id, "x".repeat((budget === "session" ? 3000 : 1600) * 1024)),
+      );
+      messagePages = grown
+        .toReversed()
+        .map(
+          (row, index) => () =>
+            page([row], index < grown.length - 1 ? `growth-${index + 1}` : undefined),
+        );
+      await changeToken(session);
+      await waitFor(() => expect(debt()).toBe(false));
+      const state = useNativeAgentProjectionStore.getState();
+      expect(state.syncCaches.get(identity.logicalSessionKey)?.historyBytes).toBeLessThanOrEqual(
+        8 * 1024 * 1024,
+      );
+      expect(state.historyBytesTotal).toBeLessThanOrEqual(32 * 1024 * 1024);
+      expect(session.result.current.projection?.messages).toEqual(tail);
+      expect(state.syncCaches.get(identity.logicalSessionKey)?.historyCursor).toBe("before-tail");
+      await act(async () => {
+        await session.result.current.refresh();
+      });
+      expect(session.result.current.projection?.messages).toEqual(tail);
+      messagePageCalls = [];
+      messagePages = [() => page(heldRows)];
+      await act(async () => {
+        await session.result.current.loadEarlierMessages();
+      });
+      expect(messagePageCalls).toEqual([{ before: "before-tail" }]);
+      expect(session.result.current.projection?.messages).toEqual([...heldRows, ...tail]);
+    },
+  );
+
+  test("a failed walk retries and settles after remount", async () => {
+    const session = await startWithPagedHistory();
+    messagePages = [
+      () => {
+        throw new Error("offline");
+      },
+    ];
+    await changeToken(session);
+    await waitFor(() => expect(messagePageCalls).toHaveLength(1));
+    session.unmount();
+    messagePages = [() => page([message("launch", "reconnected"), older[1]!])];
+    transcriptUpdates = [() => tailAt("t2", "digest-1")];
+    const remount = renderSession();
+    await waitFor(() => expect(debt()).toBe(false));
+    expect(remount.result.current.projection?.messages[0]?.text).toBe("reconnected");
+  });
+
+  test("an owed remount waits for its snapshot before classifying held rows", async () => {
+    const session = await startWithPagedHistory();
+    messagePages = [
+      () => {
+        throw new Error("offline");
+      },
+    ];
+    await changeToken(session);
+    await waitFor(() => expect(messagePageCalls).toHaveLength(1));
+    session.unmount();
+    const deferred = Promise.withResolvers<NativeAgentTranscriptUpdate<TestMessage>>();
+    transcriptUpdates = [() => deferred.promise];
+    messagePageCalls = [];
+    messagePages = [() => page([message("launch", "reconnected"), older[1]!])];
+    const remount = renderSession();
+    await waitFor(() => expect(remount.result.current.sessionStateAvailability).toBe("current"));
+    // Flush the mount's zero-delay reconciliation timer while the transcript
+    // snapshot is still in flight. It must not settle debt using cached rows.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(messagePageCalls).toEqual([]);
+    expect(debt()).toBe(true);
+    await act(async () => {
+      deferred.resolve(tailAt("t2", "digest-1"));
+    });
+    await waitFor(() => expect(debt()).toBe(false));
+    expect(remount.result.current.projection?.messages[0]?.text).toBe("reconnected");
+  });
+
+  test.each(["deactivate", "unmount"] as const)(
+    "late pages install nothing after %s",
+    async (stop) => {
+      const session = await startWithPagedHistory();
+      const deferred = Promise.withResolvers<NativeAgentMessagePage<TestMessage>>();
+      messagePages = [() => deferred.promise];
+      await changeToken(session);
+      await waitFor(() => expect(messagePageCalls).toHaveLength(1));
+      if (stop === "unmount") session.unmount();
+      else session.rerender({ isActive: false });
+      const held = useNativeAgentProjectionStore
+        .getState()
+        .projections.get(identity.logicalSessionKey);
+      await act(async () => {
+        deferred.resolve(page([message("launch", "late"), older[1]!]));
+      });
+      expect(
+        useNativeAgentProjectionStore.getState().projections.get(identity.logicalSessionKey),
+      ).toBe(held);
+      expect(debt()).toBe(true);
+    },
+  );
+
+  test("an unchanged first read after remount preserves paging and token-change detection", async () => {
+    transcriptUpdates = [() => tailAt("t0", "digest-0")];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const session = renderSession();
+    await waitFor(() => expect(session.result.current.sessionStateAvailability).toBe("current"));
+    expect(debt()).toBe(false);
+    session.unmount();
+    transcriptCalls = [];
+    const remount = renderSession();
+    await waitFor(() => expect(remount.result.current.sessionStateAvailability).toBe("current"));
+    expect(transcriptCalls[0]?.knownToken).toBe("t0");
+    messagePages = [() => page(older)];
+    await act(async () => {
+      await remount.result.current.loadEarlierMessages({ automatic: true });
+    });
+    expect(messagePageCalls).toEqual([{ before: "before-tail" }]);
+    expect(remount.result.current.projection?.messages).toEqual([...older, ...tail]);
+    messagePages = [() => page([message("launch", "changed while away"), older[1]!])];
+    await changeToken(remount);
+    await waitFor(() => expect(debt()).toBe(false));
+    expect(messagePageCalls).toEqual([{ before: "before-tail" }, { before: "before-tail" }]);
+    expect(remount.result.current.projection?.messages[0]?.text).toBe("changed while away");
+    expect(getNativeAgentProjectionUpdateMock).not.toHaveBeenCalled();
+  });
+
+  test("load-earlier landing during a walk keeps prepended rows and refreshes held copies", async () => {
+    const session = await startWithPagedHistory();
+    // Seed an earlier continuation so the user can page while the walk runs.
+    transcriptUpdates = [() => tailAt("t0")];
+    messagePages = [() => page(older, "before-older")];
+    session.unmount();
+    useNativeAgentProjectionStore.getState().reset();
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const active = renderSession();
+    await waitFor(() => expect(active.result.current.sessionStateAvailability).toBe("current"));
+    await act(async () => {
+      await active.result.current.loadEarlierMessages();
+    });
+    const deferred = Promise.withResolvers<NativeAgentMessagePage<TestMessage>>();
+    messagePages = [() => deferred.promise, () => page([message("prepended")])];
+    messagePageCalls = [];
+    await changeToken(active);
+    await waitFor(() => expect(messagePageCalls).toHaveLength(1));
+    await act(async () => {
+      await active.result.current.loadEarlierMessages();
+    });
+    await act(async () => {
+      deferred.resolve(page([message("launch", "refreshed"), older[1]!]));
+    });
+    expect(active.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "prepended",
+      "launch",
+      "before-launch",
+      "seven-workers",
+    ]);
+    expect(active.result.current.projection?.messages[1]?.text).toBe("refreshed");
+    expect(debt()).toBe(false);
   });
 
   test("a rewritten history still drops the rows at once", async () => {

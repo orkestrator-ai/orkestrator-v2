@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   NativeAgentDiscoveryView,
   NativeAgentSessionProjection,
+  NativeAgentTranscriptView,
   NativeAgentViewIdentity,
 } from "@orkestrator/protocol/native-agent";
 import { encodedArrayBytes, encodedValueBytes } from "@/lib/native-history-accounting";
@@ -61,6 +62,11 @@ export interface NativeAgentProgressiveCacheEntry {
    * describes the messages the cache is holding, not the mount that read them.
    */
   transcriptHistoryEpoch?: string;
+  /** Direct paging and reconciliation survive an unchanged first remount read. */
+  transcriptHistoryMetadata?: Pick<
+    NativeAgentTranscriptView,
+    "historyCursor" | "historyPaging" | "historyComplete" | "historyReconciliationToken"
+  >;
   /** Rows before the live tail still await a re-read; a remount owes it too. */
   heldHistoryReconcileOwed?: boolean;
   stateToken?: string;
@@ -126,6 +132,7 @@ function dropProgressiveTranscriptToken(
     ...entry,
     transcriptToken: undefined,
     transcriptHistoryEpoch: undefined,
+    transcriptHistoryMetadata: undefined,
   });
 }
 

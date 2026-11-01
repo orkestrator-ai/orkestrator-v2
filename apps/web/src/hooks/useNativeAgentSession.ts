@@ -650,6 +650,7 @@ function restoreTranscriptViewFromProjection<TMessage>(
   projection: NativeAgentSessionProjection<TMessage> | null | undefined,
   historyEpoch: string | undefined,
   availability: NativeAgentProgressiveCacheEntry["transcriptAvailability"],
+  metadata?: NativeAgentProgressiveCacheEntry["transcriptHistoryMetadata"],
 ): NativeAgentTranscriptView<TMessage> | null {
   if (!identity || !projection || !historyEpoch) return null;
   if (!hasUsableTranscriptBody(projection, availability)) return null;
@@ -661,6 +662,7 @@ function restoreTranscriptViewFromProjection<TMessage>(
     ...(projection.title ? { title: projection.title } : {}),
     historyEpoch,
     historyComplete: projection.messageWindow?.canLoadEarlier !== true,
+    ...metadata,
   };
 }
 
@@ -946,6 +948,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     matchingSharedProjection,
     matchingProgressiveCache?.transcriptHistoryEpoch,
     matchingProgressiveCache?.transcriptAvailability ?? "unavailable",
+    matchingProgressiveCache?.transcriptHistoryMetadata,
   );
   const progressiveTranscriptTokenRef = useRef(
     matchingTranscriptView ? matchingProgressiveCache?.transcriptToken : undefined,
@@ -1337,14 +1340,16 @@ export function useNativeAgentSession<TMessage = unknown>({
        * snapshot already answered that question. Offering it here would put
        * an inert action back on screen after every poll.
        */
-      const budget = historyRequestBudget();
       const messageWindow = historyMessageWindow({
         messageCount: messages.length,
         ...(settledCursor ? { cursor: settledCursor } : {}),
         ...(boundaryCursor ? { boundaryCursor } : {}),
         complete: retainedComplete,
         ...(historyUnpageableRef.current ? { unpageable: true } : {}),
-        budgetAvailable: budget.messages > 0 && budget.bytes > 0,
+        budgetAvailable:
+          messages.length < CLIENT_HISTORY_MAX_MESSAGES &&
+          historyBytes < CLIENT_HISTORY_MAX_BYTES &&
+          historyBytes + otherHistoryBytes < CLIENT_HISTORY_TOTAL_MAX_BYTES,
         ...(live.messageWindow ? { serverWindow: live.messageWindow } : {}),
       });
       return {
@@ -1364,7 +1369,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         evictionGeneration,
       };
     },
-    [historyRequestBudget, sessionKey],
+    [sessionKey],
   );
 
   /** Installs a plan. Callers must have fenced the read that produced it. */
@@ -1890,6 +1895,12 @@ export function useNativeAgentSession<TMessage = unknown>({
         identity: value.identity,
         transcriptToken: token,
         transcriptHistoryEpoch: value.historyEpoch,
+        transcriptHistoryMetadata: {
+          historyCursor: value.historyCursor,
+          historyPaging: value.historyPaging,
+          historyComplete: value.historyComplete,
+          historyReconciliationToken: value.historyReconciliationToken,
+        },
         heldHistoryReconcileOwed,
         transcriptAvailability: availability,
         transcriptRefreshing: false,
@@ -2839,11 +2850,12 @@ export function useNativeAgentSession<TMessage = unknown>({
         projectionRef.current,
         progressive.transcriptHistoryEpoch,
         progressive.transcriptAvailability,
+        progressive.transcriptHistoryMetadata,
       );
       lastTranscriptViewRef.current = restoredView;
       heldHistoryReconcileOwedRef.current = progressive.heldHistoryReconcileOwed === true;
-      // A restored view names no cursor, and an `unchanged` answer would never
-      // bring one: a re-read that is still owed needs a snapshot.
+      // Old cache entries may lack the direct cursor. Owed reads still request
+      // a snapshot so recovery also works across cache schema changes.
       progressiveTranscriptTokenRef.current =
         restoredView && !heldHistoryReconcileOwedRef.current
           ? progressive.transcriptToken
@@ -3619,8 +3631,8 @@ export function useNativeAgentSession<TMessage = unknown>({
    * changed, without taking anything off screen.
    *
    * Walks back from the tail's own cursor until every held row was seen. A poll
-   * landing meanwhile is not a conflict: the walk only replaces rows outside the
-   * live tail, against whatever is held when it finishes. The debt is settled
+   * landing meanwhile keeps authority over any held copy it revises. The walk
+   * replaces only unchanged held copies outside the live tail. The debt is settled
    * only if the token did not move during the walk; otherwise, and after a
    * failed read, the rows stay as they are and the next interval tries again.
    */
@@ -3628,12 +3640,16 @@ export function useNativeAgentSession<TMessage = unknown>({
     const view = lastTranscriptViewRef.current;
     const held = projectionRef.current?.messages;
     if (heldHistoryReconcileRunRef.current || !view?.historyCursor || !held) return;
-    if (view.historyPaging !== "direct") return;
+    if (view.historyPaging !== "direct" || progressiveTranscriptTokenRef.current === undefined)
+      return;
+    // An owed remount requests a fresh snapshot before walking. Its temporary
+    // delta base includes held rows, so it cannot yet identify the live tail.
     const run = {};
     heldHistoryReconcileRunRef.current = run;
     heldHistoryReconcileStartedAtRef.current = Date.now();
     const operationEpoch = projectionOperationEpochRef.current;
     const stillCurrent = () =>
+      backgroundRefreshEnabledRef.current &&
       heldHistoryReconcileRunRef.current === run &&
       operationEpoch === projectionOperationEpochRef.current &&
       lastTranscriptViewRef.current !== null &&
@@ -3641,11 +3657,19 @@ export function useNativeAgentSession<TMessage = unknown>({
       lastTranscriptViewRef.current.historyEpoch === view.historyEpoch;
     const rowId = (message: TMessage): unknown => (message as { id?: unknown })?.id;
     const liveIds = new Set(view.messages.map(rowId));
+    const heldAtStart = new Map(held.map((message) => [rowId(message), message]));
     const unseen = new Set(held.map(rowId).filter((id) => !liveIds.has(id)));
     const fresh = new Map<string, TMessage>();
+    const visited = new Set<string>();
+    let freshBytes = 0;
+    let overflow = false;
     try {
       let before: string | undefined = view.historyCursor;
-      for (let pages = 0; before && unseen.size > 0 && pages < MAX_DUPLICATE_PAGE_SKIPS; pages++) {
+      // A byte-limited page may contain only one row. The held contiguous
+      // prefix bounds the walk by rows, rather than assuming 200 per page.
+      for (let pages = 0; before && unseen.size > 0 && pages <= held.length; pages++) {
+        if (visited.has(before)) break;
+        visited.add(before);
         const page: NativeAgentMessagePage<TMessage> = await getNativeAgentMessagePage<TMessage>({
           ...identity,
           syncVersion: 1,
@@ -3656,24 +3680,54 @@ export function useNativeAgentSession<TMessage = unknown>({
         if (!stillCurrent() || page.historyEpoch !== view.historyEpoch) return;
         for (const message of page.messages) {
           const id = rowId(message);
-          if (typeof id === "string" && unseen.delete(id)) fresh.set(id, message);
+          if (typeof id !== "string" || !unseen.delete(id)) continue;
+          // A truncated page cannot prove which leading parts were removed.
+          // Preserve the held copy instead of replacing it with a content tail.
+          if (page.truncated) continue;
+          freshBytes += encodedValueBytes(message) + 1;
+          if (freshBytes > CLIENT_HISTORY_MAX_BYTES) {
+            overflow = true;
+            break;
+          }
+          fresh.set(id, message);
         }
-        before = page.nextCursor === before ? undefined : page.nextCursor;
+        before = page.nextCursor;
+        if (overflow) break;
       }
       const current = projectionRef.current;
       const latest = lastTranscriptViewRef.current;
-      if (!current || !latest) return;
+      if (!current || !latest || !stillCurrent()) return;
+      const latestLiveIds = new Set(latest.messages.map(rowId));
       const skip = new Set(
-        latest.messages.map(rowId).filter((id): id is string => typeof id === "string"),
+        current.messages
+          .filter(
+            (message) =>
+              latestLiveIds.has(rowId(message)) || heldAtStart.get(rowId(message)) !== message,
+          )
+          .map(rowId)
+          .filter((id): id is string => typeof id === "string"),
       );
-      const messages = withRevisedMessages(current.messages, fresh, skip);
-      historyMessagesRef.current = withRevisedMessages(historyMessagesRef.current, fresh, skip);
-      if (messages !== current.messages) {
-        const next = { ...current, messages, revision: current.revision + 1 };
-        applyProjection(next, heldHistorySyncCache(next));
-      }
+      // A delivered revision or a page installed during this walk owns its
+      // newer copy, even if the reconciliation token stayed unchanged.
+      const retained = overflow ? [] : withRevisedMessages(historyMessagesRef.current, fresh, skip);
+      const plan = planSyncMaterialization({
+        live: {
+          ...current,
+          messages: current.messages.filter((message) => latestLiveIds.has(rowId(message))),
+          messageWindow: syncLiveProjectionRef.current?.messageWindow,
+        },
+        token: syncTokenRef.current,
+        historyEpoch: historyEpochRef.current,
+        historyComplete: historyCompleteRef.current,
+        retained: {
+          messages: retained,
+          cursor: overflow ? historyBoundaryCursorRef.current : historyCursorRef.current,
+          complete: historyCompleteRef.current,
+        },
+      });
+      commitSyncMaterialization(plan);
       const settled =
-        (!before || unseen.size === 0) &&
+        (plan.historyMessages.length === 0 || !before || unseen.size === 0) &&
         latest.historyReconciliationToken === view.historyReconciliationToken;
       if (settled) {
         heldHistoryReconcileOwedRef.current = false;
@@ -3689,7 +3743,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         }
       }
     }
-  }, [applyProjection, heldHistorySyncCache, identity, updateProgressiveCache]);
+  }, [commitSyncMaterialization, identity, planSyncMaterialization, updateProgressiveCache]);
 
   useEffect(() => {
     if (!enabled || !isActive || !heldHistoryReconcileOwedRef.current) return;

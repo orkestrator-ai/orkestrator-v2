@@ -447,6 +447,7 @@ test("native: history pages in without a click, opening with a page and paging n
 test("native: a held row that keeps changing past the revision budget does not flicker", async ({
   page,
 }) => {
+  await page.clock.install();
   await page.goto("/transcript-paging?auto=1&mixed=1&stops=300&paged=20&churn=1");
   const list = page.locator("[data-transcript-scroller]");
   await expect(list).toBeVisible();
@@ -479,8 +480,10 @@ test("native: a held row that keeps changing past the revision budget does not f
     };
     requestAnimationFrame(sample);
   });
-  // Polls land every 1.5 s when idle, and each one moves the token here.
-  await page.waitForTimeout(9_000);
+  // The first changed token starts a reread immediately. Subsequent polls
+  // must retain the rows until the 30-second interval permits another read.
+  await page.clock.runFor(9_000);
+  await expect.poll(async () => (await fixture()).requests.length - before).toBe(1);
   const probe = await page.evaluate(
     () =>
       (
@@ -492,8 +495,7 @@ test("native: a held row that keeps changing past the revision budget does not f
   expect(probe.frames).toBeGreaterThan(0);
   expect(probe.fewestRows).toBe(121);
   expect(probe.loadingFrames).toBe(0);
-  // Six token changes cost at most the one re-read the interval allows.
-  expect((await fixture()).requests.length - before).toBeLessThanOrEqual(1);
+  expect((await fixture()).requests.length - before).toBe(1);
 });
 
 test("native: the automatic opening page keeps following subsequent live rows", async ({

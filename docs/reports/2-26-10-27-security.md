@@ -95,7 +95,7 @@ The material risks are concentrated in four themes:
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Verified |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
 | M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Verified |
-| M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Verified |
+| M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
 | M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Verified |
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
 | M7 | Medium | Electron | OS sandbox disabled for every window that loads the preload | Reported |
@@ -325,7 +325,16 @@ that secrets never reach clients.
 
 ### M4. The Claude coordinator git allowlist admits options that select another repository
 
-**Status:** Verified
+**Status:** Fixed. Since 2026-10-28 (`7e3ceb7ce`) Git is refused outright unless
+the command sandbox is `required`, so the unsandboxed case below no longer
+arises. Options before the subcommand are now an exact-match allowlist
+(`GIT_GLOBAL_OPTIONS`: `-P`, `--no-pager`, `--no-optional-locks`,
+`--literal-pathspecs`), and every read-only turn's CLI runs with
+`core.fsmonitor=false` and `core.hooksPath=/dev/null` through `GIT_CONFIG_COUNT`
+plus `GIT_OPTIONAL_LOCKS=0` (`withReadOnlyGitConfig`). Driver programs named
+through `.gitattributes` (`diff.<driver>.command`, filters) cannot be listed
+that way and stay with the sandbox; `diff.external` was not blanked, because an
+empty value replaces `git diff`'s patch output with nothing. The original finding follows.
 
 **Where:** `bridges/claude-bridge/src/services/read-only-policy.ts:219-226, 574-606`.
 The subcommand is the first token after `git` that does not start with `-`.

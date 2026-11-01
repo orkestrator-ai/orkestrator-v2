@@ -14,6 +14,9 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 const execFile = promisify(execFileCallback);
 
@@ -119,10 +122,10 @@ export async function refreshRuntimeEnvironment(run: typeof execFile = execFile)
     const updated = applyRuntimeEnvironmentOutput(stdout);
     if (updated.length > 0) {
       // Names only. These values contain private paths and credentials.
-      console.error("[codex-bridge] Refreshed runtime environment:", updated.join(", "));
+      log.info("runtime-env.refreshed", { names: updated.join(", ") });
     }
   } catch (error) {
-    console.error("[codex-bridge] Failed to refresh runtime environment:", error);
+    log.warn("runtime-env.refresh-failed", { error: formatLogError(error) });
   }
 }
 

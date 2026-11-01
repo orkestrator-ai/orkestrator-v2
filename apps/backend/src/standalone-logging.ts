@@ -12,7 +12,7 @@ import type { BackendOptions } from "./options.js";
  * Under Electron the desktop process captures this backend's stdout and stderr
  * into its own log, but a backend started directly (`bun dist/main.js`, as a
  * headless or Tailscale-served host) writes only to its terminal. That is where
- * bridge restarts and every `[claude:<env>]` bridge line go, so without a file
+ * bridge restarts and every local bridge's output go, so without a file
  * an agent that vanished mid-turn left no trace once the scrollback was gone.
  *
  * Follows the same Debug logging setting and retention as the desktop log, and

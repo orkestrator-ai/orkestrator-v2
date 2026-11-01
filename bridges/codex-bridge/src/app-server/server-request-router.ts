@@ -52,6 +52,9 @@ import {
   type InteractionRequest,
   type InteractionResolution,
 } from "./interactions.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /** Every method in the pinned `ServerRequest` union. */
 export type ServerRequestMethod =
@@ -438,9 +441,10 @@ export class ServerRequestRouter {
         // typically a back-pressured stdin on a dying child. Sending a second
         // response down the same stuck pipe cannot help and would risk answering
         // twice, so record it for metrics and let the process exit clean up.
-        console.error(
-          `[codex-bridge] Response to ${record.method} has not flushed within ${this.responseTimeoutMs}ms`,
-        );
+        log.error("server-request.flush-timeout", {
+          method: record.method,
+          timeoutMs: this.responseTimeoutMs,
+        });
         return;
       }
 
@@ -693,7 +697,7 @@ export class ServerRequestRouter {
       accepted = this.options.presentApproval?.(approval) === true;
     } catch (error) {
       deadline.settle();
-      console.error("[codex-bridge] presentApproval threw; falling back to auto-decline:", error);
+      log.error("approval.present-failed", { error: formatLogError(error) });
       return false;
     }
     if (!accepted) {
@@ -745,7 +749,7 @@ export class ServerRequestRouter {
     try {
       this.options.onApprovalResolved?.(parked.request, decision, resolution);
     } catch (error) {
-      console.error("[codex-bridge] onApprovalResolved threw:", error);
+      log.error("approval.resolved-callback-failed", { error: formatLogError(error) });
     }
 
     if (options.skipSend) {
@@ -772,7 +776,7 @@ export class ServerRequestRouter {
     try {
       this.options.onApprovalResolved?.(parked.request, "withdrawn", "withdrawn");
     } catch (error) {
-      console.error("[codex-bridge] onApprovalResolved threw:", error);
+      log.error("approval.resolved-callback-failed", { error: formatLogError(error) });
     }
     this.pending.delete(parked.key);
     this.sendStarted.delete(parked.key);
@@ -832,7 +836,7 @@ export class ServerRequestRouter {
       accepted = this.options.presentInteraction?.(interaction) === true;
     } catch (error) {
       deadline?.settle();
-      console.error("[codex-bridge] presentInteraction threw; cancelling:", error);
+      log.error("interaction.present-failed", { error: formatLogError(error) });
       return false;
     }
     if (!accepted) {
@@ -878,7 +882,7 @@ export class ServerRequestRouter {
     try {
       this.options.onInteractionResolved?.(parked.request, answer, resolution);
     } catch (error) {
-      console.error("[codex-bridge] onInteractionResolved threw:", error);
+      log.error("interaction.resolved-callback-failed", { error: formatLogError(error) });
     }
 
     if (options.skipSend) {
@@ -944,10 +948,10 @@ export class ServerRequestRouter {
     } catch (error) {
       // The generation may have died mid-response; app-server has forgotten the
       // request either way.
-      console.error(
-        `[codex-bridge] Failed to answer server request ${record.method}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.error("server-request.answer-failed", {
+        method: record.method,
+        error: formatLogError(error, { stack: false }),
+      });
     } finally {
       this.pending.delete(key);
       this.sendStarted.delete(key);
@@ -962,7 +966,7 @@ export class ServerRequestRouter {
 
   private violation(method: string, detail: string): void {
     this.options.onInvariantViolation?.(method, detail);
-    console.error(`[codex-bridge] app-server invariant violation (${method}): ${detail}`);
+    log.error("app-server.invariant-violation", { method, detail });
   }
 
   private explain(record: ServerRequestRecord, message: string): void {

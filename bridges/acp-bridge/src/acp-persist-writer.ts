@@ -21,6 +21,9 @@ import {
 import type { PersistedState, PromptJournalEntry } from "./acp-context.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.acp");
 
 /**
  * Writing the bounded state file, and the coalescing scheduler the rest of
@@ -273,9 +276,7 @@ export function schedulePersist(): void {
   );
   setPersistenceTail(
     operation.catch((error) => {
-      console.warn(
-        `[acp-bridge] Failed to persist bounded state: ${error instanceof Error ? error.message : "unknown error"}`,
-      );
+      log.warn("state.persist-failed", { error: formatLogError(error, { stack: false }) });
     }),
   );
 }

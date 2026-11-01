@@ -1,3 +1,4 @@
+import { BRIDGE_LOG_RELAY_ENV } from "@orkestrator/protocol/node/logger-environment";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -99,7 +100,7 @@ import {
   resolveCursorHostCredentialMaterial,
 } from "./host-agent-credentials.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
-import { createBridgeOutputForwarder } from "./bridge-output-redaction.js";
+import { createBridgeOutputForwarder, relayBridgeOutput } from "./bridge-output-redaction.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -955,6 +956,8 @@ async function startLocalServerAttempt(
     // watch for that and drain itself instead of orphaning its children.
     ORKESTRATOR_PARENT_PID: String(process.pid),
     ORKESTRATOR_BRIDGE_DEBUG: bridgeConfig.global.debugLogging === true ? "1" : "0",
+    // forwardBridgeOutput below reads this process's stdio and carries each level.
+    [BRIDGE_LOG_RELAY_ENV]: "1",
     ...(agentToolConnection
       ? {
           [ORKESTRATOR_AGENT_MCP_URL_ENV]: agentToolConnection.url,
@@ -1279,7 +1282,7 @@ async function startLocalServerAttempt(
     loginless: launchedLoginless,
   });
   if (coordinatorId) coordinatorResearchLaunches.set(child, researchSignature);
-  forwardBridgeOutput(child, `[${kind}:${environmentId}]`);
+  forwardBridgeOutput(child, `${kind}:${environmentId}`);
   child.once("exit", () => {
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
@@ -1961,15 +1964,17 @@ export async function allocateLocalPort(): Promise<number> {
 }
 
 /**
- * Forward a local bridge's output to the console, which Debug logging writes
- * to disk, scrubbed of credential-shaped text and reassembled into whole lines.
+ * Forward a local bridge's output to this process's log, which Debug logging
+ * writes to disk, scrubbed of credential-shaped text and reassembled into whole
+ * lines. A logger record is re-emitted at its own level, naming the bridge in
+ * `source`; anything else (a crash, a runtime panic) stays captured as output.
  */
 export function forwardBridgeOutput(
   child: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
-  prefix: string,
+  source: string,
 ): void {
-  const stdout = createBridgeOutputForwarder((text) => console.debug(`${prefix} ${text}`));
-  const stderr = createBridgeOutputForwarder((text) => console.error(`${prefix} ${text}`));
+  const stdout = createBridgeOutputForwarder((text) => relayBridgeOutput("stdout", source, text));
+  const stderr = createBridgeOutputForwarder((text) => relayBridgeOutput("stderr", source, text));
   child.stdout.on("data", stdout.push);
   child.stderr.on("data", stderr.push);
   child.stdout.once("end", stdout.flush);

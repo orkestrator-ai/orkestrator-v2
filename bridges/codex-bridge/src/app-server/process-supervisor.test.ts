@@ -396,7 +396,7 @@ describe("startup", () => {
 
   test("suppresses stderr payloads that may contain prompts or file contents", async () => {
     const h = harness();
-    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    const error = spyOn(console, "info").mockImplementation(() => undefined);
     try {
       await h.supervisor.ensureReady();
       h.children[0]!.stderr.emitData(
@@ -423,7 +423,7 @@ describe("startup", () => {
 
   test("reports suppressed stderr line and byte counts when the child dies", async () => {
     const h = harness();
-    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    const error = spyOn(console, "info").mockImplementation(() => undefined);
     try {
       await h.supervisor.ensureReady();
       h.children[0]!.stderr.emitData('{"level":"warn"}\nplain text\n');
@@ -433,7 +433,9 @@ describe("startup", () => {
       h.children[0]!.exit(1);
 
       const output = error.mock.calls.flat().map(String).join("\n");
-      expect(output).toMatch(/suppressed 3 stderr line\(s\) \(\d+ bytes of payload\)/);
+      expect(output).toMatch(
+        /app-server\.stderr-suppressed generation=\d+ lines=3 payloadBytes=\d+/,
+      );
     } finally {
       error.mockRestore();
     }
@@ -441,7 +443,7 @@ describe("startup", () => {
 
   test("logs metadata for a bounded number of stderr lines, then only counts", async () => {
     const h = harness();
-    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    const error = spyOn(console, "info").mockImplementation(() => undefined);
     try {
       await h.supervisor.ensureReady();
       error.mockClear();
@@ -454,7 +456,7 @@ describe("startup", () => {
       error.mockClear();
       h.children[0]!.exit(0);
       const output = error.mock.calls.flat().map(String).join("\n");
-      expect(output).toContain(`suppressed ${budget + 10} stderr line(s)`);
+      expect(output).toContain(`lines=${budget + 10} `);
     } finally {
       error.mockRestore();
     }
@@ -898,16 +900,16 @@ describe("unexpected exit", () => {
 
   test("logs how an unexpected exit happened, but not an intentional restart", async () => {
     const h = harness();
-    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    const error = spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       await h.supervisor.ensureReady();
       await h.supervisor.restartNow("test reason");
-      expect(error.mock.calls.flat().map(String).join("\n")).not.toContain("exited unexpectedly");
+      expect(error.mock.calls.flat().map(String).join("\n")).not.toContain("app-server.exited");
 
       h.children[1]!.exit(null, "SIGKILL");
       const output = error.mock.calls.flat().map(String).join("\n");
       expect(output).toMatch(
-        /\[codex-bridge\]\[app-server:2\] exited unexpectedly \(code=null, signal=SIGKILL, pid=\S+, uptimeMs=\d+\)/,
+        /\[bridge\.codex\] app-server\.exited generation=2 code=null signal=SIGKILL pid=\S+ uptimeMs=\d+/,
       );
     } finally {
       error.mockRestore();

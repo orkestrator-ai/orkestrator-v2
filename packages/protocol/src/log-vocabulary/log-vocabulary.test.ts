@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DESKTOP_STARTUP_EVENTS } from "../debug-logging.js";
+import { MAX_BRIDGE_DIAGNOSTIC_BYTES } from "./bridge.js";
 import type { LogAreaSpec } from "./define.js";
 import { LOG_VOCABULARY } from "./index.js";
 
@@ -65,6 +66,12 @@ describe("log vocabulary", () => {
     for (const spec of Object.values(areas)) {
       for (const event of Object.keys(spec.events)) expect(event).not.toMatch(/[{}$<>%]/);
     }
+  });
+
+  test("only a bridge diagnostic snapshot may exceed the string bound", () => {
+    const wider = Object.entries(areas).filter(([, spec]) => spec.maxStringChars !== undefined);
+    expect(wider.map(([area]) => area)).toEqual(["bridge.diagnostics"]);
+    expect(areas["bridge.diagnostics"]!.maxStringChars).toBe(MAX_BRIDGE_DIAGNOSTIC_BYTES);
   });
 
   test("the renderer's allowlisted startup markers are all listed", () => {

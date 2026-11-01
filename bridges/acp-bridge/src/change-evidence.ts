@@ -61,6 +61,9 @@ import {
   isBackgroundLaunch,
   type AcpRuntimeDescriptor,
 } from "./acp-tool-classification.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.acp");
 
 /** Diff blocks read from one update; a frame carries at most 256 updates. */
 const MAX_DIFF_BLOCKS_PER_CALL = 100;
@@ -520,11 +523,9 @@ export function recordAcpToolEvidence(
     if (isTerminal(phase)) settleRecord(state, part, record);
   } catch (error) {
     // Evidence is an audit side channel; it must never fail the read loop.
-    console.warn(
-      `[acp-bridge] Failed to record change evidence: ${
-        error instanceof Error ? error.name : "unknown error"
-      }`,
-    );
+    log.warn("evidence.record-failed", {
+      errorClass: error instanceof Error ? error.name : "unknown",
+    });
   }
 }
 
@@ -587,11 +588,9 @@ export function recordAcpShellObservation(
       },
     );
   } catch (error) {
-    console.warn(
-      `[acp-bridge] Failed to record a shell observation: ${
-        error instanceof Error ? error.name : "unknown error"
-      }`,
-    );
+    log.warn("evidence.shell-record-failed", {
+      errorClass: error instanceof Error ? error.name : "unknown",
+    });
   }
 }
 
@@ -641,10 +640,8 @@ export function endAcpTurnEvidence(
       writers,
     );
   } catch (error) {
-    console.warn(
-      `[acp-bridge] Failed to record turn change evidence: ${
-        error instanceof Error ? error.name : "unknown error"
-      }`,
-    );
+    log.warn("evidence.turn-record-failed", {
+      errorClass: error instanceof Error ? error.name : "unknown",
+    });
   }
 }

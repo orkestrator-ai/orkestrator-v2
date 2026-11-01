@@ -1,4 +1,10 @@
 import { createHash } from "node:crypto";
+import { MAX_BRIDGE_DIAGNOSTIC_BYTES } from "../log-vocabulary/bridge.js";
+import { createLogger, type LogEventOf } from "../logger.js";
+
+export { MAX_BRIDGE_DIAGNOSTIC_BYTES };
+
+const log = createLogger("bridge.diagnostics");
 
 const INTERVAL_MS = 60_000;
 const MAX_PENDING_TOOLS = 128;
@@ -160,22 +166,42 @@ export function safeDiagnosticMetrics(
   return result;
 }
 
+/** One snapshot: nested JSON is not a logger field, so `payload` carries it as one string. */
+export interface BridgeDiagnosticEntry {
+  bridge: BridgeName;
+  event: LogEventOf<"bridge.diagnostics">;
+  payload: string;
+}
+export type BridgeDiagnosticWrite = (entry: BridgeDiagnosticEntry) => void;
+
+export function writeBridgeDiagnostic({ bridge, event, payload }: BridgeDiagnosticEntry): void {
+  log.info(event, { bridge, payload });
+}
+
+/** Read per call, so a level replaced at runtime applies to scopes already open. */
+export function bridgeDiagnosticsActive(): boolean {
+  return log.isEnabled("info");
+}
+
 /** Bound every serialized diagnostic; sink errors never affect execution. */
-const MAX_ENTRY_BYTES = 8192;
 function writeDiagnostic(
   bridge: BridgeName,
+  event: BridgeDiagnosticEntry["event"],
   payload: Record<string, unknown>,
-  write: (line: string) => void,
+  write: BridgeDiagnosticWrite,
 ): void {
   try {
-    let json = JSON.stringify({ bridge, ...payload });
-    if (Buffer.byteLength(json) > MAX_ENTRY_BYTES)
-      json = JSON.stringify({
-        bridge,
-        event: "snapshot-overflow",
-        omittedBytes: Buffer.byteLength(json),
-      });
-    write(`[bridge-diagnostics] ${json}`);
+    const json = JSON.stringify({ bridge, event, ...payload });
+    const bytes = Buffer.byteLength(json);
+    if (bytes <= MAX_BRIDGE_DIAGNOSTIC_BYTES) {
+      write({ bridge, event, payload: json });
+      return;
+    }
+    write({
+      bridge,
+      event: "snapshot-overflow",
+      payload: JSON.stringify({ bridge, event: "snapshot-overflow", omittedBytes: bytes }),
+    });
   } catch {
     /* Diagnostic failures cannot affect execution. */
   }
@@ -221,7 +247,7 @@ export class BridgeRunDiagnostics {
     private readonly bridge: BridgeName,
     private readonly state: DiagnosticState,
     private readonly now: () => number = Date.now,
-    private readonly write: (line: string) => void = (line) => console.info(line),
+    private readonly write: BridgeDiagnosticWrite = writeBridgeDiagnostic,
     private readonly intervalMs = INTERVAL_MS,
     private readonly metrics: () => Record<string, unknown> = () => ({}),
   ) {
@@ -331,6 +357,7 @@ export class BridgeRunDiagnostics {
     const tickDelayMs =
       event === "heartbeat" ? Math.max(0, now - this.lastTick - this.intervalMs) : 0;
     if (event === "heartbeat") this.lastTick = now;
+    if (!bridgeDiagnosticsActive()) return;
     const pendingTools = Array.from(this.pending.entries())
       .slice(0, MAX_REPORTED_TOOLS)
       .map(([id, tool]) => ({
@@ -343,8 +370,8 @@ export class BridgeRunDiagnostics {
     try {
       writeDiagnostic(
         this.bridge,
+        event,
         {
-          event,
           session: identity(this.state.id),
           run: this.run,
           phase: this.phase,
@@ -403,7 +430,7 @@ export function createBufferedDebugLogger(
   bridge: BridgeName,
   allowedEvents: ReadonlySet<string>,
   enabled = bridgeDebugEnabled(bridge),
-  write: (line: string) => void = (line) => console.info(line),
+  write: BridgeDiagnosticWrite = writeBridgeDiagnostic,
 ) {
   const entries = new Map<
     string,
@@ -416,8 +443,8 @@ export function createBufferedDebugLogger(
     try {
       writeDiagnostic(
         bridge,
+        "debug-events",
         {
-          event: "debug-events",
           dropped,
           events: Array.from(entries.entries()).map(([event, value]) => ({ event, ...value })),
         },
@@ -433,7 +460,7 @@ export function createBufferedDebugLogger(
   timer?.unref();
   return {
     record(event: unknown, ...args: unknown[]) {
-      if (!enabled || closed) return;
+      if (!enabled || closed || !bridgeDiagnosticsActive()) return;
       if (typeof event !== "string" || event.length > 160 || !allowedEvents.has(event)) {
         dropped++;
         return;

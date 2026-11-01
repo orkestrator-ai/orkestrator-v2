@@ -2703,10 +2703,9 @@ describe("session lifecycle", () => {
 
     expect(
       errors.some(
-        ([message, error]) =>
-          message === "[codex-bridge] Failed to publish message update:" &&
-          error instanceof Error &&
-          error.message === "render rejected",
+        ([line]) =>
+          String(line).startsWith("[bridge.codex] message.publish-failed") &&
+          String(line).includes("render rejected"),
       ),
     ).toBe(true);
   });
@@ -2737,9 +2736,9 @@ describe("session lifecycle", () => {
 
     expect(
       errors.some(
-        ([message, error]) =>
-          message === "[codex-bridge] Failed to finalize turn turn-1:" &&
-          error === "journal unavailable",
+        ([line]) =>
+          String(line).startsWith("[bridge.codex] turn.finalize-failed turnId=turn-1") &&
+          String(line).includes("journal unavailable"),
       ),
     ).toBe(true);
     expect(runtime.pendingFinalizations.size).toBe(0);
@@ -3185,10 +3184,9 @@ describe("crash recovery", () => {
 
     expect(
       errors.some(
-        ([message, error]) =>
-          message === "[codex-bridge] Generation recovery failed:" &&
-          error instanceof Error &&
-          error.message === "recovery invariant failed",
+        ([line]) =>
+          String(line).startsWith("[bridge.codex] generation.recovery-failed") &&
+          String(line).includes("recovery invariant failed"),
       ),
     ).toBe(true);
   });

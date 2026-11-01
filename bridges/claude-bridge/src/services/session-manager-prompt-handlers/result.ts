@@ -25,6 +25,9 @@ import type { TurnState } from "../session-manager-prompt-turn.js";
 import { reconcileClaudeUsage } from "../session-manager-usage.js";
 import { markTranscriptChanged } from "../transcript-revision.js";
 import { appendTranscriptNotice } from "./transcript-notice.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
   switch (reason) {
@@ -287,10 +290,7 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
     debugLog("[session-manager] Query stopped by the user", { sessionId });
     finishTurnInputIfSettled(turn);
   } else {
-    console.error("[session-manager] Query error:", resultMsg.subtype, {
-      sessionId,
-      isError: resultIsError,
-    });
+    log.error("query.failed", { subtype: resultMsg.subtype, sessionId, isError: resultIsError });
     const startupFailure = resultMsg.startup_failure_reason
       ? claudeStartupFailureMessage(resultMsg.startup_failure_reason)
       : undefined;

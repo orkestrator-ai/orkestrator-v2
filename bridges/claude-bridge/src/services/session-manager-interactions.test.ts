@@ -200,7 +200,7 @@ describe("AskUserQuestion flow", () => {
     await waitFor(() => getPendingQuestions(session.id).length === 1);
     const [pending] = getPendingQuestions(session.id);
     const privateAnswer = "private-answer-that-must-not-be-logged";
-    const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
+    const logSpy = spyOn(console, "info").mockImplementation(() => undefined);
 
     try {
       expect(answerQuestion(pending!.id, { "Private question": privateAnswer })).toBe(true);
@@ -208,12 +208,10 @@ describe("AskUserQuestion flow", () => {
 
       expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateAnswer);
       expect(logSpy.mock.calls).toContainEqual([
-        "[session-manager] Answering question",
-        { requestId: pending!.id, answerCount: 1 },
+        `[bridge.claude] question.answering requestId=${pending!.id} answerCount=1`,
       ]);
       expect(logSpy.mock.calls).toContainEqual([
-        "[session-manager] Received question answers",
-        { questionId: pending!.id, answerCount: 1 },
+        `[bridge.claude] question.answers-received questionId=${pending!.id} answerCount=1`,
       ]);
     } finally {
       logSpy.mockRestore();
@@ -542,7 +540,7 @@ describe("plan approval flow", () => {
     const [approval] = getPendingPlanApprovals(session.id);
 
     const privateFeedback = "needs more detail";
-    const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
+    const logSpy = spyOn(console, "info").mockImplementation(() => undefined);
     let result: { behavior: string; message?: string };
     try {
       expect(respondToPlanApproval(approval!.id, false, privateFeedback)).toBe(true);
@@ -550,20 +548,10 @@ describe("plan approval flow", () => {
 
       expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateFeedback);
       expect(logSpy.mock.calls).toContainEqual([
-        "[session-manager] Responding to plan approval",
-        {
-          requestId: approval!.id,
-          approved: false,
-          hasFeedback: true,
-        },
+        `[bridge.claude] plan-approval.responding requestId=${approval!.id} approved=false hasFeedback=true`,
       ]);
       expect(logSpy.mock.calls).toContainEqual([
-        "[session-manager] Plan approval result",
-        {
-          approvalId: approval!.id,
-          approved: false,
-          hasFeedback: true,
-        },
+        `[bridge.claude] plan-approval.result approvalId=${approval!.id} approved=false hasFeedback=true`,
       ]);
     } finally {
       logSpy.mockRestore();

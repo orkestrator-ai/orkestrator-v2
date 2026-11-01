@@ -12,6 +12,9 @@ import { debugLog } from "./logger.js";
 import { sessions } from "./session-manager-core.js";
 import type { BackgroundTaskSystemMessage } from "./session-manager-messages.js";
 import type { ClaudeRuntime } from "./session-manager-runtime.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 type BackgroundTaskLaunch = {
   id: string;
@@ -163,7 +166,7 @@ export function registerBackgroundTaskCandidate(
   if (!runtime) return;
   const { candidates } = runtime.tasks;
   if (!candidates.has(toolUseId) && candidates.size >= MAX_BACKGROUND_TASK_CANDIDATES) {
-    console.warn("[session-manager] Ignoring an unresolved Bash call past the candidate bound:", {
+    log.warn("task.candidate-bound-reached", {
       sessionId: runtime.session.id,
       bound: MAX_BACKGROUND_TASK_CANDIDATES,
     });
@@ -345,7 +348,7 @@ async function persistShellTaskFields(
     });
   } catch {
     // Content-free: hook payloads must never reach logs.
-    console.warn("[session-manager] Could not persist shell task details");
+    log.warn("task.details-persist-failed");
   }
 }
 
@@ -563,7 +566,7 @@ export function parkSettlingBackgroundTask(
   if (!owner) return;
   const { settling } = owner.tasks;
   if (!settling.has(task.id) && settling.size >= MAX_SETTLING_BACKGROUND_TASKS) {
-    console.warn("[session-manager] Ignoring a settling task past the bound:", {
+    log.warn("task.settling-bound-reached", {
       sessionId: owner.session.id,
       bound: MAX_SETTLING_BACKGROUND_TASKS,
     });
@@ -686,10 +689,7 @@ export async function stopBackgroundTask(
     // The handle outlived its transport (the CLI exited, the query was closed).
     // That is a conflict the user can understand, not a bridge fault, and it
     // must not surface as a 500 on `POST /:id/tasks/:taskId/stop`.
-    console.error(
-      "[session-manager] Background task stop failed on a closed control channel:",
-      error instanceof Error ? error.message : String(error),
-    );
+    log.warn("task.stop-failed", { error: formatLogError(error, { stack: false }) });
     if (
       settleBackgroundTask(
         session,

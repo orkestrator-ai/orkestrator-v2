@@ -50,6 +50,9 @@ import {
   runtimeEnvironmentSnapshot,
 } from "../runtime-env.js";
 import type { EngineGeneration, EngineState } from "../engine/types.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /**
  * Another live bridge holds the workspace pidfile.
@@ -609,9 +612,11 @@ export class AppServerSupervisor {
       suppressedBytes += Buffer.byteLength(line, "utf8");
       if (describedLines >= STDERR_METADATA_LINE_BUDGET) return;
       describedLines += 1;
-      console.error(
-        `[codex-bridge][app-server:${generationId}] stderr ${describeChildStderrLine(line)}`,
-      );
+      // A parse per line, so it runs only when the level is on.
+      log.info("app-server.stderr", () => ({
+        generation: generationId,
+        detail: describeChildStderrLine(line),
+      }));
     };
     child.stderr?.setEncoding?.("utf8");
     child.stderr?.on("data", (chunk: string) => {
@@ -630,9 +635,11 @@ export class AppServerSupervisor {
       if (stderrTail.trim()) describeStderrLine(stderrTail);
       stderrTail = "";
       if (suppressedLines === 0) return;
-      console.error(
-        `[codex-bridge][app-server:${generationId}] suppressed ${suppressedLines} stderr line(s) (${suppressedBytes} bytes of payload)`,
-      );
+      log.info("app-server.stderr-suppressed", {
+        generation: generationId,
+        lines: suppressedLines,
+        payloadBytes: suppressedBytes,
+      });
       suppressedLines = 0;
       suppressedBytes = 0;
     };
@@ -641,9 +648,10 @@ export class AppServerSupervisor {
       this.options.createRecorder ?? ((generation) => createRecorderFromEnv({ generation }))
     )(generationId);
     if (recorder) {
-      console.error(
-        `[codex-bridge][app-server:${generationId}] recording notifications to ${recorder.getStats().fileName}`,
-      );
+      log.warn("app-server.recording", {
+        generation: generationId,
+        fileName: recorder.getStats().fileName,
+      });
     }
 
     const client = new JsonlRpcClient({
@@ -655,7 +663,7 @@ export class AppServerSupervisor {
       onServerRequest: (request) => this.options.onServerRequest(request, generationId),
       onProtocolViolation: (detail) => {
         this.unknownNotifications += 1;
-        console.error(`[codex-bridge][app-server:${generationId}] protocol: ${detail}`);
+        log.warn("app-server.protocol-violation", { generation: generationId, detail });
       },
       ...(recorder ? { recordInboundLine: (line: string) => recorder.record(line) } : {}),
     });
@@ -764,9 +772,13 @@ export class AppServerSupervisor {
     this.current = null;
     // The only durable record of *how* the child died. Without it a SIGKILL from
     // outside, an OOM kill and a Codex exit(1) all read as "stdout ended".
-    console.error(
-      `[codex-bridge][app-server:${generationId}] exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"}, pid=${exited.child.pid ?? "unknown"}, uptimeMs=${Math.max(0, this.now() - exited.startedAt)})`,
-    );
+    log.warn("app-server.exited", {
+      generation: generationId,
+      code,
+      signal,
+      pid: exited.child.pid,
+      uptimeMs: Math.max(0, this.now() - exited.startedAt),
+    });
     this.options.onGenerationExit?.(generationId);
     if (this.stopping) {
       this.setState("stopped");
@@ -1168,7 +1180,7 @@ export class AppServerSupervisor {
     if (outcome === "contended") return true;
 
     if (matches && pid !== null) {
-      console.error(`[codex-bridge] Reaping stale app-server pid ${pid}`);
+      log.info("app-server.stale-reaped", { pid });
       (this.options.signalPidFileProcess ?? signalStaleProcessTree)(pid);
     }
     return true;

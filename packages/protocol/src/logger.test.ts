@@ -378,3 +378,16 @@ describe("console sink", () => {
     expect(replaced).toHaveBeenCalledWith("[updater] check.failed");
   });
 });
+
+describe("per-area string bound", () => {
+  test("the 2 KiB bound holds for other areas; bridge.diagnostics keeps its snapshot", () => {
+    const long = "x".repeat(4096);
+    createLogger("bridge.codex").info("app-server.recording", { fileName: long });
+    createLogger("bridge.diagnostics").info("heartbeat", { payload: long });
+    const [codex, diagnostics] = outputs.flatMap((output) =>
+      output.record ? [output.record] : [],
+    );
+    expect(String(codex?.fields?.fileName).length).toBeLessThanOrEqual(2048);
+    expect(diagnostics?.fields?.payload).toBe(long);
+  });
+});

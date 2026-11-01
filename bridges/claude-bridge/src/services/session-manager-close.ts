@@ -20,6 +20,9 @@ import {
 } from "./session-manager-lifecycle.js";
 import { takeQueryControls } from "./session-manager-background-tasks.js";
 import { clearTurnInFlightMarkForClose } from "./session-manager-turn-interruption.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 export type RetainingCloseOutcome = "closed" | "missing";
 
@@ -143,10 +146,9 @@ async function closeQueryControls(
         // failure; the bridge's control type also admits an async close.
         if (await settlesBy(Promise.resolve(control.close()), deadline)) return;
       } catch (error) {
-        console.error(
-          "[session-manager] Claude query close failed during tab close:",
-          error instanceof Error ? error.name : typeof error,
-        );
+        log.error("query.close-failed", {
+          errorClass: error instanceof Error ? error.name : typeof error,
+        });
       }
       failed.add(control);
     }),

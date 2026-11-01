@@ -29,6 +29,9 @@ import {
 } from "./live-claude-control.js";
 import { debugLog } from "./logger.js";
 import { claudeExecutableOptions } from "./session-manager-core.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 /**
  * A backstop for a change nothing reported, such as a login made in a terminal
@@ -233,7 +236,7 @@ async function probeModels(at: number): Promise<ClaudeModelCatalog> {
     await rememberModels(models, account, at);
     return { source: "sdk", models: catalogModels(models) };
   } catch (error) {
-    console.error("[session-manager] Error fetching supported models:", error);
+    log.warn("models.fetch-failed", { error: formatLogError(error) });
     return fallbackCatalog();
   } finally {
     clearTimeout(timer);

@@ -28,6 +28,9 @@ import {
 } from "./state.js";
 import { newSessionState } from "./session-factory.js";
 import { restoreCommandCatalogue } from "./commands.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.pi");
 
 let tail: Promise<void> = Promise.resolve();
 let scheduled = false;
@@ -147,18 +150,14 @@ function shedToFit(payload: PersistedState, order: Map<string, number>): boolean
     session.transcriptTruncated = true;
     shed += 1;
     if (Buffer.byteLength(JSON.stringify(payload)) <= MAX_STATE_FILE_BYTES) {
-      console.warn(
-        `[pi-bridge] state file over budget; persisted ${shed} session(s) without their transcript`,
-      );
+      log.warn("state.transcripts-shed", { sessions: shed });
       return true;
     }
   }
   // Every transcript is gone and it still does not fit, which means the
   // non-transcript state alone is over budget. Report it rather than failing
   // silently forever.
-  console.warn(
-    `[pi-bridge] state file still over budget after shedding ${shed} transcript(s); skipping write`,
-  );
+  log.warn("state.over-budget", { sessions: shed });
   return false;
 }
 

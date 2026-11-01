@@ -19,7 +19,7 @@ describe("remote gateway", () => {
   test("authenticated metrics include event-loop diagnostics and console write failures", async () => {
     const { info } = await startGateway({ env: {} });
     const target = {
-      log: () => {},
+      report: () => {},
       info: () => {},
       debug: () => {},
       warn: () => {},
@@ -39,7 +39,7 @@ describe("remote gateway", () => {
     const monitor = startEventLoopStallMonitor({
       now: () => now,
       wallClock: () => 0,
-      log: () => {},
+      report: () => {},
       setTimer: (callback) => {
         tick = callback;
         return {};

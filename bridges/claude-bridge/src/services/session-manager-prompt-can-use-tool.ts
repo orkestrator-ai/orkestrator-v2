@@ -35,6 +35,9 @@ import {
 import { abortSession } from "./session-manager-lifecycle.js";
 import { requestClaudeToolApproval } from "./session-manager-parked-interactions.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
   if (typeof content !== "string" || content.trim().length === 0) return {};
@@ -118,10 +121,7 @@ async function askUserQuestion(
 
   try {
     const answers = await Promise.race([answerPromise, timeoutPromise]);
-    console.log("[session-manager] Received question answers", {
-      questionId,
-      answerCount: Object.keys(answers).length,
-    });
+    log.info("question.answers-received", { questionId, answerCount: Object.keys(answers).length });
 
     // Return the answers to the SDK
     return {
@@ -132,7 +132,7 @@ async function askUserQuestion(
       },
     };
   } catch (error) {
-    console.error("[session-manager] Error waiting for answer:", error);
+    log.warn("question.wait-failed", { error: formatLogError(error) });
     const message = error instanceof Error ? error.message : "Question was cancelled";
     if (pendingQuestions.has(questionId)) {
       eventEmitter.emit({
@@ -248,7 +248,7 @@ async function requestPlanApproval(
 
   try {
     const response = await Promise.race([approvalPromise, timeoutPromise]);
-    console.log("[session-manager] Plan approval result", {
+    log.info("plan-approval.result", {
       approvalId,
       approved: response.approved,
       hasFeedback: typeof response.feedback === "string" && response.feedback.length > 0,
@@ -321,7 +321,7 @@ async function requestPlanApproval(
       };
     }
   } catch (error) {
-    console.error("[session-manager] Error waiting for plan approval:", error);
+    log.warn("plan-approval.wait-failed", { error: formatLogError(error) });
     const errorMessage = error instanceof Error ? error.message : "Plan approval was cancelled";
     if (pendingPlanApprovals.has(approvalId)) {
       eventEmitter.emit({

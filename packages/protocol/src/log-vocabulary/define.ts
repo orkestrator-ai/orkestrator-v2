@@ -7,6 +7,12 @@ export interface LogAreaSpec {
    * recipes already search for; a new area never needs one.
    */
   readonly tag?: string;
+  /**
+   * Replaces the 2 KiB bound on one string field. Only for an area whose single
+   * field is already bounded and allowlisted at its source, as a bridge
+   * diagnostic snapshot is; the vocabulary test pins who has one.
+   */
+  readonly maxStringChars?: number;
   /** Static event name to one sentence saying when it is written. */
   readonly events: Readonly<Record<string, string>>;
 }

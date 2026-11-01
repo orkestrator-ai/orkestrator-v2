@@ -1,5 +1,8 @@
 import type { ModelReasoningEffort } from "./codex-item-types.js";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 // The Codex CLI can expose reasoning levels before the SDK's declarations are
 // updated. Keep the bridge catalog aligned with the CLI's authoritative model
@@ -259,10 +262,7 @@ export class ModelCatalogCache {
       }
     } catch (error) {
       // Swallow — background refresh failures shouldn't affect serving.
-      console.warn(
-        "[codex-bridge] Background model refresh failed:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("models.refresh-failed", { error: formatLogError(error, { stack: false }) });
     }
   }
 }

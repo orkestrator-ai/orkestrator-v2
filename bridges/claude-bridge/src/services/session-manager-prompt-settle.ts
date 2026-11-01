@@ -24,6 +24,9 @@ import {
 } from "./session-manager-turn-interruption.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 // The end of a turn: what follows it, how a failure is reported, and the
 // cleanup every turn runs. All synchronous, so nothing runs between the turn
@@ -34,7 +37,7 @@ export interface PromptFollowUp {
   readonly prompt: string;
   readonly options: PromptOptions;
   /** Logged with the follow-up's error, which is not this turn's own. */
-  readonly failureLog: string;
+  readonly failureEvent: "plan.reprompt-feedback-failed" | "plan.reprompt-approved-failed";
 }
 
 /**
@@ -99,7 +102,7 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
     return {
       prompt: feedbackPrompt,
       options: repromptOptions,
-      failureLog: "[session-manager] Failed to re-prompt with plan feedback:",
+      failureEvent: "plan.reprompt-feedback-failed",
     };
   }
 
@@ -148,7 +151,7 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
     return {
       prompt: continuationPrompt,
       options: repromptOptions,
-      failureLog: "[session-manager] Failed to re-prompt after plan approval:",
+      failureEvent: "plan.reprompt-approved-failed",
     };
   }
 
@@ -236,9 +239,7 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     recordInterruptedStructuredOutputIfCurrent(turn);
     return;
   }
-  console.error("[session-manager] Error processing prompt", {
-    errorClass: diagnosticErrorClass(error),
-  });
+  log.error("prompt.failed", { errorClass: diagnosticErrorClass(error) });
 
   if (session.abortController === abortController) {
     // A CLI killed under the turn cut it short; the rollout holds it, so a

@@ -3,22 +3,23 @@ import {
   eventLoopDiagnostics,
   startEventLoopStallMonitor,
   type EventLoopStallMonitor,
-  type EventLoopStallMonitorOptions,
+  type EventLoopStallReport,
 } from "./event-loop-stall-monitor.js";
+import { configureLogger } from "./logger.js";
+import { captureLogs } from "./testing/log-capture.js";
 
 /** A virtual clock and a single pending timer the test fires by hand. */
-function harness(formatStall?: EventLoopStallMonitorOptions["formatStall"]) {
+function harness(options: { useDefaultLogger?: boolean } = {}) {
   let monotonic = 0;
   let wall = Date.parse("2026-10-28T02:22:55.000Z");
   let pending: { callback: () => void; dueAt: number } | null = null;
-  const logs: string[] = [];
+  const logs: EventLoopStallReport[] = [];
   const monitor = startEventLoopStallMonitor({
     intervalMs: 500,
     thresholdMs: 1_000,
     logIntervalMs: 30_000,
     alwaysLogMs: 10_000,
-    log: (message) => logs.push(message),
-    ...(formatStall ? { formatStall } : {}),
+    ...(options.useDefaultLogger ? {} : { report: (stall) => logs.push(stall) }),
     now: () => monotonic,
     wallClock: () => wall,
     setTimer: (callback, ms) => {
@@ -67,18 +68,52 @@ describe("event loop stall monitor", () => {
     });
     expect(snapshot.recentStalls).toEqual([{ at: "2026-10-28T02:22:59.150Z", lagMs: 2_500 }]);
     expect(run.logs).toEqual([
-      "[Backend] Event loop stalled for 2500 ms, ending 2026-10-28T02:22:59.150Z: a 500 ms timer fired late, so every request in that window waited",
+      {
+        lagMs: 2_500,
+        endedAt: "2026-10-28T02:22:59.150Z",
+        intervalMs: 500,
+        folded: "",
+        level: "warn",
+      },
     ]);
     expect(eventLoopDiagnostics()?.stalls).toBe(1);
   });
 
-  test("lets the process word its own stall line", () => {
-    const run = harness(
-      ({ lagMs, endedAt, intervalMs, folded }) => `${lagMs}|${endedAt}|${intervalMs}|${folded}`,
-    );
-    monitor = run.monitor;
-    run.tick(2_500);
-    expect(run.logs).toEqual(["2500|2026-10-28T02:22:58.000Z|500|"]);
+  test("writes a stall through the event-loop area without a report of its own", () => {
+    const capture = captureLogs();
+    try {
+      const run = harness({ useDefaultLogger: true });
+      monitor = run.monitor;
+      run.tick(2_500);
+      expect(capture.records()).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          area: "event-loop",
+          event: "stalled",
+          fields: { lagMs: 2_500, endedAt: "2026-10-28T02:22:58.000Z", intervalMs: 500 },
+        }),
+      ]);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  test("a stall of 10 seconds or more is written at any configured level, and a shorter one is not", () => {
+    const capture = captureLogs();
+    try {
+      configureLogger({ level: "error" });
+      const run = harness({ useDefaultLogger: true });
+      monitor = run.monitor;
+      run.tick(9_999);
+      expect(capture.records()).toEqual([]);
+      for (let index = 0; index < 60; index += 1) run.tick(0);
+      run.tick(10_000);
+      expect(capture.records().map((record) => [record.level, record.fields?.lagMs])).toEqual([
+        ["error", 10_000],
+      ]);
+    } finally {
+      capture.restore();
+    }
   });
 
   test("rate-limits stall lines and folds the suppressed ones into the next report", () => {
@@ -91,8 +126,10 @@ describe("event loop stall monitor", () => {
     for (let index = 0; index < 60; index += 1) run.tick(0);
     run.tick(1_300);
     expect(run.logs).toHaveLength(2);
-    expect(run.logs[1]).toContain("stalled for 1300 ms");
-    expect(run.logs[1]).toContain("2 shorter stall(s) since the last report, longest 1500 ms");
+    expect(run.logs[1]!.lagMs).toBe(1_300);
+    expect(run.logs[1]!.folded).toContain(
+      "2 shorter stall(s) since the last report, longest 1500 ms",
+    );
     expect(run.monitor.snapshot().stalls).toBe(4);
   });
 
@@ -102,7 +139,7 @@ describe("event loop stall monitor", () => {
     run.tick(1_200);
     run.tick(24_322_016);
     expect(run.logs).toHaveLength(2);
-    expect(run.logs[1]).toContain("stalled for 24322016 ms");
+    expect(run.logs[1]).toMatchObject({ lagMs: 24_322_016, level: "error" });
     expect(run.monitor.snapshot().lateTicks["30000"]).toBe(1);
   });
 

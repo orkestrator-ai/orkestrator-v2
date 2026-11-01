@@ -5,6 +5,7 @@ import {
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
 import { watchClientDisconnect } from "./acp-client-disconnect.js";
 import { CredentialError } from "./acp-credentials.js";
 import { applyOriginPolicy, acceptsGzip, json, RESPONSE_ACCEPTS_GZIP, route } from "./acp-http.js";
@@ -21,6 +22,11 @@ import {
 import { flushStreamingPersist } from "./acp-persist-writer.js";
 import { restorePersistedState } from "./acp-persistence.js";
 import { cancelCursorToolMetadataReconcile } from "./acp-tools.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.acp");
+
+configureBridgeLogger();
 
 await restorePersistedState();
 
@@ -44,9 +50,7 @@ export const server = createServer((request, response) => {
     .finally(stopWatchingClient);
 });
 
-server.listen(port, hostname, () =>
-  console.log(`ACP bridge (${provider}) listening on ${hostname}:${port}`),
-);
+server.listen(port, hostname, () => log.info("server.listening", { provider, hostname, port }));
 
 let shutdownPromise: Promise<void> | null = null;
 export function shutdown(): Promise<void> {

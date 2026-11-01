@@ -3,6 +3,9 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { eventEmitter } from "../services/event-emitter.js";
 import type { SSEEvent } from "../types/index.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 /**
  * Serialized frame payload per event object, shared across subscribers.
@@ -314,10 +317,10 @@ export function createEventsRouter(
   events.get("/subscribe", (c) => {
     const origin = c.req.header("origin");
     const userAgent = c.req.header("user-agent");
-    console.debug("[events] SSE subscribe request", { origin, userAgent });
+    log.debug("sse.subscribe-requested", { origin, userAgent });
     return streamSSE(c, async (stream) => {
       const connectedAt = new Date().toISOString();
-      console.debug("[events] SSE connection opened", { connectedAt });
+      log.debug("sse.opened", { connectedAt });
 
       let isOpen = true;
       let resolveConnectionClosed!: () => void;
@@ -329,7 +332,7 @@ export function createEventsRouter(
         resolveRequestAborted = resolve;
       });
       const onRequestAbort = () => {
-        console.debug("[events] SSE connection aborted by client");
+        log.debug("sse.aborted");
         isOpen = false;
         resolveRequestAborted();
       };
@@ -345,7 +348,7 @@ export function createEventsRouter(
       const closeConnection = (reason: string) => {
         if (!isOpen) return;
         isOpen = false;
-        console.error(`[events] Closing SSE subscriber (${reason})`);
+        log.info("sse.closed", { reason });
         resolveConnectionClosed();
       };
 
@@ -406,7 +409,7 @@ export function createEventsRouter(
           }
           void writeFrame(frame).catch((error) => {
             if (!c.req.raw.signal.aborted) {
-              console.error("[events] Error writing SSE:", error);
+              log.warn("sse.write-failed", { error: formatLogError(error) });
               closeConnection("write failed");
             }
           });
@@ -481,7 +484,7 @@ export function createEventsRouter(
             data: JSON.stringify({ timestamp: new Date().toISOString() }),
           }).catch((error) => {
             if (!c.req.raw.signal.aborted) {
-              console.debug("[events] Keepalive failed, closing connection:", error);
+              log.debug("sse.keepalive-failed", { error: formatLogError(error, { stack: false }) });
               closeConnection("keepalive failed");
             }
           });
@@ -492,10 +495,10 @@ export function createEventsRouter(
         await Promise.race([connectionClosed, requestAborted]);
       } catch (error) {
         if (!c.req.raw.signal.aborted) {
-          console.error("[events] SSE handshake failed:", error);
+          log.warn("sse.handshake-failed", { error: formatLogError(error) });
         }
       } finally {
-        console.debug("[events] SSE connection cleanup");
+        log.debug("sse.cleanup");
         isOpen = false;
         c.req.raw.signal.removeEventListener("abort", onRequestAbort);
         if (keepaliveInterval) clearInterval(keepaliveInterval);

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createLogger, getLogFormat } from "../logger.js";
 import { captureLogs, type LogCapture } from "../testing/log-capture.js";
 import {
+  BRIDGE_LOG_RELAY_ENV,
+  configureBridgeLogger,
   configureLoggerFromEnvironment,
   LOG_FORMAT_ENV,
   LOG_LEVEL_ENV,
@@ -83,5 +85,28 @@ describe("configureLoggerFromEnvironment", () => {
       `[logging] config.invalid variable=${LOG_LEVEL_ENV} entries=1`,
       `[logging] config.invalid variable=${LOG_FORMAT_ENV} entries=1`,
     ]);
+  });
+});
+
+describe("configureBridgeLogger", () => {
+  test("a bridge the backend relays writes JSON whatever format was asked for, and does not pass the flag on", () => {
+    const env = { [BRIDGE_LOG_RELAY_ENV]: "1", [LOG_FORMAT_ENV]: "text" } as NodeJS.ProcessEnv;
+    configureBridgeLogger(env);
+    expect(getLogFormat()).toBe("json");
+    expect(env[BRIDGE_LOG_RELAY_ENV]).toBeUndefined();
+  });
+
+  test("any other bridge follows the environment", () => {
+    configureBridgeLogger({});
+    expect(getLogFormat()).toBe("text");
+    configureBridgeLogger({ [LOG_FORMAT_ENV]: "json" });
+    expect(getLogFormat()).toBe("json");
+  });
+
+  test("the level reaches a bridge's areas, including through the bridge parent", () => {
+    configureBridgeLogger({ [LOG_LEVEL_ENV]: "warn,bridge=debug,bridge.pi=error" });
+    expect(createLogger("bridge.codex").isEnabled("debug")).toBe(true);
+    expect(createLogger("bridge.pi").isEnabled("warn")).toBe(false);
+    expect(createLogger("event-loop").isEnabled("info")).toBe(false);
   });
 });

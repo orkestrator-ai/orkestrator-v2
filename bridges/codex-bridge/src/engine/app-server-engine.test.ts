@@ -3753,7 +3753,7 @@ describe("account sign-in", () => {
       h.child().notify("account/login/completed", { loginId: "l1", success: true, error: null });
       await flush(h);
     });
-    expect(output).toContain("Account sign-in check failed");
+    expect(output).toContain("account.sign-in-check-failed");
     expectNothingSecretLogged(output, "Codex sign-in check");
   });
 
@@ -3783,7 +3783,7 @@ describe("account sign-in", () => {
     });
     expect(result).toEqual(SIGNED_IN);
     expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
-    expect(output).toContain("Account connector recovery failed:");
+    expect(output).toContain("account.connector-recovery-failed");
     expect(output).toContain("reload rejected:");
     expectNothingSecretLogged(output, "Codex connector recovery");
   });

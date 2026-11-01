@@ -14,7 +14,7 @@ Arch host running the AppImage build. Most steps apply to any Linux host.
 | App gone, core dump `SIGTRAP` at startup | A relaunched main process | `coredumpctl`; core memory contains `Invalid file descriptor to ICU data` |
 | Core dump `SIGBUS`, `--type=utility` network service, on quit | Chromium child outliving the main process | `coredumpctl`; journal shows `tmp-.mount_orkest….mount: Deactivated` the same second |
 | Core dump of `~/.cache/ms-playwright/…/chrome` | A test's Playwright browser, not the app | `coredumpctl`; its command line has `--user-data-dir=/tmp/playwright_chromiumdev_profile-*` |
-| Everything times out (mail, MCP, controls) but nothing died | Nothing: the backend's or the desktop's event loop was held | App log: `[Backend] Event loop stalled for N ms`, or a gap in the log followed by `[Backend] Dropped N log line(s) … the log reader was not draining output` (the desktop stopped reading); `eventLoop` and `consoleOutput` in `/__orkestrator/metrics`. See todo 0741 |
+| Everything times out (mail, MCP, controls) but nothing died | Nothing: the backend's or the desktop's event loop was held | App log: `[event-loop] stalled lagMs=N` (`[desktop] main-thread.stalled` for the desktop), or a gap in the log followed by `[Backend] Dropped N log line(s) … the log reader was not draining output` (the desktop stopped reading); `eventLoop` and `consoleOutput` in `/__orkestrator/metrics`. See todo 0741 |
 
 Commands:
 

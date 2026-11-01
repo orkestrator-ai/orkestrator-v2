@@ -2,6 +2,8 @@ import {
   BridgeRunDiagnostics,
   bridgeDebugEnabled,
   readBridgeDebugFlag,
+  writeBridgeDiagnostic,
+  type BridgeDiagnosticWrite,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
 import { isObject, type SessionState } from "./state.js";
 import { CursorSdkDiagnostics } from "./sdk-diagnostics.js";
@@ -15,7 +17,7 @@ export class CursorRunDiagnostics extends BridgeRunDiagnostics {
   constructor(
     state: SessionState,
     now?: () => number,
-    write?: (line: string) => void,
+    write?: BridgeDiagnosticWrite,
     intervalMs?: number,
   ) {
     super("cursor", state, now, write, intervalMs);
@@ -90,6 +92,6 @@ export function cursorSetupDebug(stage: string, error: unknown): void {
     0,
     MAX_SETUP_DETAIL_BYTES,
   );
-  const entry = JSON.stringify({ bridge: "cursor", event: "setup-failed", stage, detail });
-  console.info(`[bridge-diagnostics] ${entry}`);
+  const payload = JSON.stringify({ bridge: "cursor", event: "setup-failed", stage, detail });
+  writeBridgeDiagnostic({ bridge: "cursor", event: "setup-failed", payload });
 }

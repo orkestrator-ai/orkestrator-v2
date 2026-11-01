@@ -27,6 +27,9 @@ import {
 import { assertClaudeRuntimeStaticAccepts, openClaudeRuntime } from "./session-manager-runtime.js";
 import { reconcileIdleClaudeRuntime } from "./session-manager-runtime-idle.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 export { MAX_STREAM_CONTENT_BLOCK_INDEX } from "./session-manager-prompt-stream.js";
 
@@ -265,10 +268,7 @@ export async function readTranscriptForPrompt(
   } catch (error) {
     // A turn that cannot read its own history is not a debug-level event: the
     // transcript the user is looking at is incomplete until the retry lands.
-    console.error(
-      "[session-manager] Failed to hydrate transcript before prompt:",
-      error instanceof Error ? error.message : String(error),
-    );
+    log.warn("transcript.hydrate-failed", { error: formatLogError(error, { stack: false }) });
     return TRANSCRIPT_READ_FAILED;
   }
 }

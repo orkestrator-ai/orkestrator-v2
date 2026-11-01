@@ -2,6 +2,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import * as sdk from "@cursor/sdk";
+import {
+  bridgeDiagnosticsActive,
+  MAX_BRIDGE_DIAGNOSTIC_BYTES,
+  writeBridgeDiagnostic,
+  type BridgeDiagnosticWrite,
+} from "@orkestrator/protocol/node/bridge-diagnostics";
 
 const MAX_TRANSPORTS = 16;
 const MAX_EXECUTIONS = 128;
@@ -293,7 +299,7 @@ export class CursorSdkDiagnostics {
   constructor(
     sessionId: string,
     private readonly now: () => number = Date.now,
-    private readonly write: (line: string) => void = (line) => console.info(line),
+    private readonly write: BridgeDiagnosticWrite = writeBridgeDiagnostic,
   ) {
     this.session = hash(sessionId);
     this.coverage = install();
@@ -375,7 +381,7 @@ export class CursorSdkDiagnostics {
   }
 
   report(event: string): void {
-    if (this.closed) return;
+    if (this.closed || !bridgeDiagnosticsActive()) return;
     safely(() => {
       const now = this.now();
       const transports = this.transports.slice(0, 4).map((observation) => {
@@ -438,18 +444,20 @@ export class CursorSdkDiagnostics {
         droppedExecutions: this.droppedExecutions,
       };
       const json = JSON.stringify(payload);
-      this.write(
-        `[bridge-diagnostics] ${
-          Buffer.byteLength(json) <= 8192
-            ? json
-            : JSON.stringify({
-                bridge: "cursor",
-                event: "sdk-snapshot-overflow",
-                session: this.session,
-                run: this.run,
-              })
-        }`,
-      );
+      if (Buffer.byteLength(json) <= MAX_BRIDGE_DIAGNOSTIC_BYTES) {
+        this.write({ bridge: "cursor", event: "sdk-snapshot", payload: json });
+        return;
+      }
+      this.write({
+        bridge: "cursor",
+        event: "sdk-snapshot-overflow",
+        payload: JSON.stringify({
+          bridge: "cursor",
+          event: "sdk-snapshot-overflow",
+          session: this.session,
+          run: this.run,
+        }),
+      });
     });
   }
   close(): void {

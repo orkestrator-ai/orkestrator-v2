@@ -1,5 +1,6 @@
 import { AGENT_MAIL_LOG_AREAS } from "./agent-mail.js";
 import { BACKEND_LOG_AREAS } from "./backend.js";
+import { BRIDGE_LOG_AREAS } from "./bridge.js";
 import { DESKTOP_LOG_AREAS } from "./desktop.js";
 import { ENVIRONMENT_LOG_AREAS } from "./environment.js";
 import { GATEWAY_LOG_AREAS } from "./gateway.js";
@@ -7,6 +8,7 @@ import { LOCAL_SERVER_LOG_AREAS } from "./local-server.js";
 import { LOGGING_LOG_AREAS } from "./logging.js";
 import { NATIVE_AGENT_LOG_AREAS } from "./native-agent.js";
 import { PREVIEW_LOG_AREAS } from "./preview.js";
+import { RUNTIME_LOG_AREAS } from "./runtime.js";
 import { TERMINAL_LOG_AREAS } from "./terminal.js";
 import { TMUX_LOG_AREAS } from "./tmux.js";
 import { UPDATER_LOG_AREAS } from "./updater.js";
@@ -23,6 +25,7 @@ export type { LogAreaSpec, ThrottleLogEvent } from "./define.js";
 export const LOG_VOCABULARY = {
   ...AGENT_MAIL_LOG_AREAS,
   ...BACKEND_LOG_AREAS,
+  ...BRIDGE_LOG_AREAS,
   ...DESKTOP_LOG_AREAS,
   ...ENVIRONMENT_LOG_AREAS,
   ...GATEWAY_LOG_AREAS,
@@ -30,6 +33,7 @@ export const LOG_VOCABULARY = {
   ...LOGGING_LOG_AREAS,
   ...NATIVE_AGENT_LOG_AREAS,
   ...PREVIEW_LOG_AREAS,
+  ...RUNTIME_LOG_AREAS,
   ...TERMINAL_LOG_AREAS,
   ...TMUX_LOG_AREAS,
   ...UPDATER_LOG_AREAS,

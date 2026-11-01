@@ -34,6 +34,9 @@ import {
 } from "./sessions/capacity-retry.js";
 import type { ThreadContext } from "./sessions/thread-registry.js";
 import { unconfirmedTurnId, type TurnAccumulator } from "./sessions/turn-accumulator.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 interface PendingCapacityRetry {
   /** The attempt the continuation will be. */
@@ -212,10 +215,10 @@ export class CodexCapacityRetry {
     }
     entry.stage = "starting";
     const work = this.startContinuation(context, turn, entry).catch((error) => {
-      console.error(
-        `[codex-bridge] Capacity retry of turn ${turn.turnId} failed:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.error("turn.capacity-retry-failed", {
+        turnId: turn.turnId,
+        error: formatLogError(error, { stack: false }),
+      });
       if (this.pending.get(turn) === entry && context.activeTurn === turn && !turn.isTerminal()) {
         this.end(context, turn, "failed", entry.error, CAPACITY_RETRY_START_FAILED_TEXT);
       }
@@ -322,10 +325,10 @@ export class CodexCapacityRetry {
     await this.ctx.journal
       .markAccepted(requestId, { threadId: context.threadId, turnId: started.turnId })
       .catch((error) =>
-        console.warn(
-          `[codex-bridge] Could not journal capacity retry of ${requestId}:`,
-          error instanceof Error ? error.message : error,
-        ),
+        log.warn("turn.capacity-retry-journal-failed", {
+          requestId,
+          error: formatLogError(error, { stack: false }),
+        }),
       );
     if (plan.outputSchema) {
       const ledger = this.ctx.registry.recordStructuredOutputTurn(

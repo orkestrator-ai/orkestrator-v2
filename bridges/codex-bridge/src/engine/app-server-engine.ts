@@ -139,6 +139,9 @@ import {
   type StartThreadOptions,
   type StartTurnOptions,
 } from "./types.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /**
  * Per-tool MCP approval for Orkestrator's mail and transcript-artifact tools
@@ -1154,7 +1157,7 @@ export class AppServerEngine implements CodexEngine {
       try {
         listener(event);
       } catch (error) {
-        console.error("[codex-bridge] app-server engine listener failed:", error);
+        log.error("engine.listener-failed", { error: formatLogError(error) });
       }
     }
   }
@@ -1388,10 +1391,9 @@ export class AppServerEngine implements CodexEngine {
       .catch((error: unknown) => {
         // Unconfirmed either way: leave admission alone. The notice still says
         // what Codex reported.
-        console.warn(
-          "[codex-bridge] Account sign-in check failed:",
-          redactSecrets(error instanceof Error ? error.message : String(error)),
-        );
+        log.warn("account.sign-in-check-failed", {
+          error: formatLogError(error, { stack: false }),
+        });
       });
   }
 
@@ -2447,10 +2449,9 @@ export class AppServerEngine implements CodexEngine {
     // Auth-status reads answer from account/read itself. A connector reload is
     // independent work and must not turn a valid account answer into an error.
     void this.applyAccountRead(response, sequence, generation, false).catch((error: unknown) => {
-      console.warn(
-        "[codex-bridge] Account connector recovery failed:",
-        redactSecrets(error instanceof Error ? error.message : String(error)),
-      );
+      log.warn("account.connector-recovery-failed", {
+        error: formatLogError(error, { stack: false }),
+      });
     });
     const pendingSignIn = normalizePendingSignIn(this.pendingSignIn?.display);
     if (!pendingSignIn && this.pendingSignIn) {
@@ -2791,10 +2792,7 @@ export class AppServerEngine implements CodexEngine {
     } catch (error) {
       // A failed rename must not fail the turn; the bridge's own title index is
       // still authoritative for the UI.
-      console.warn(
-        "[codex-bridge] thread/name/set failed:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("thread.rename-failed", { error: formatLogError(error, { stack: false }) });
       return false;
     }
   }
@@ -2825,10 +2823,7 @@ export class AppServerEngine implements CodexEngine {
       // Policy changes must prove that a loaded thread released its old config.
       // Keep the binding on failure so a retry can still unsubscribe it.
       if (requireConfirmation) throw error;
-      console.warn(
-        "[codex-bridge] thread/unsubscribe failed:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("thread.unsubscribe-failed", { error: formatLogError(error, { stack: false }) });
     }
     this.accountProofTurns.delete(threadId);
     this.rolloutPaths.delete(threadId);

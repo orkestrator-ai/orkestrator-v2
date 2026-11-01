@@ -20,6 +20,9 @@ import {
   runtimeIntervalTimers,
   startParentWatchdog,
 } from "./parent-watchdog.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("bridge.lifecycle");
 
 export type BridgeLifecyclePhase = "idle" | "starting" | "started" | "stopping" | "stopped";
 
@@ -30,7 +33,7 @@ export interface LifecycleSignalTarget {
 }
 
 export interface BridgeLifecycleOptions {
-  /** Prefix identifying the process in the few content-free lines this logs. */
+  /** Names the process in the few content-free entries this logs. */
   label: string;
   /** Load state and bind the server. Runs at most once. */
   open: () => Promise<void>;
@@ -53,8 +56,6 @@ export interface BridgeLifecycleOptions {
   isParentAlive?: (pid: number) => boolean;
   /** `null` installs no signal handlers (tests); defaults to `process`. */
   signals?: LifecycleSignalTarget | null;
-  /** Injected in tests. Receives content-free messages only. */
-  report?: (message: string) => void;
 }
 
 const TERMINATION_SIGNALS = ["SIGTERM", "SIGINT"] as const;
@@ -73,12 +74,10 @@ export class BridgeLifecycle {
   #exit: Promise<void> | null = null;
   readonly #options: BridgeLifecycleOptions;
   readonly #timers: IntervalTimers;
-  readonly #report: (message: string) => void;
 
   constructor(options: BridgeLifecycleOptions) {
     this.#options = options;
     this.#timers = options.timers ?? runtimeIntervalTimers;
-    this.#report = options.report ?? ((message) => console.error(message));
   }
 
   get phase(): BridgeLifecyclePhase {
@@ -141,7 +140,10 @@ export class BridgeLifecycle {
     this.#exit ??= this.shutdown().then(
       () => this.#options.exit(0),
       (error: unknown) => {
-        this.#report(`${this.#options.label} shutdown failed (${errorKind(error)})`);
+        log.error("shutdown.failed", {
+          bridge: this.#options.label,
+          errorClass: errorKind(error),
+        });
         this.#options.exit(1);
       },
     );
@@ -158,7 +160,11 @@ export class BridgeLifecycle {
         try {
           idleSweep.run();
         } catch (error) {
-          this.#report(`${this.#options.label} idle sweep failed (${errorKind(error)})`);
+          // The next tick retries.
+          log.warn("idle-sweep.failed", {
+            bridge: this.#options.label,
+            errorClass: errorKind(error),
+          });
         }
       }, idleSweep.intervalMs);
       this.#disarmers.push(() => this.#timers.clearInterval(handle));

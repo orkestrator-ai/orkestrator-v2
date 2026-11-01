@@ -298,7 +298,7 @@ export async function spawnBridge(
     let listening = false;
     const lines = createInterface({ input: child.stdout });
     lines.on("line", (line) => {
-      if (line.startsWith("ACP bridge (") && line.endsWith(`) listening on 127.0.0.1:${port}`)) {
+      if (line.startsWith("[bridge.acp] server.listening") && line.includes(` port=${port}`)) {
         listening = true;
       }
     });

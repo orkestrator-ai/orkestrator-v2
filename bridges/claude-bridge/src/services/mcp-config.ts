@@ -33,6 +33,9 @@ import type {
   McpServersConfig,
   McpServerInfo,
 } from "../types/mcp.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 /**
  * SDK MCP server config types - matching the SDK's expected format
@@ -259,7 +262,7 @@ function toSdkServers(configs: McpServersConfig): SdkMcpServersConfig {
     if (sdkConfig) {
       servers[name] = sdkConfig;
     } else {
-      console.warn("[mcp-config] Ignoring unsupported MCP server configuration");
+      log.warn("mcp.config-ignored");
     }
   }
 

@@ -16,6 +16,9 @@
  * Cost: one timer callback every `intervalMs` and a few arithmetic updates.
  * Log lines are rate-limited; stalls between lines are folded into the next.
  */
+import { createLogger, type LogLevel } from "./logger.js";
+
+const log = createLogger("event-loop");
 
 export const EVENT_LOOP_SAMPLE_INTERVAL_MS = 500;
 export const EVENT_LOOP_STALL_THRESHOLD_MS = 1_000;
@@ -50,22 +53,27 @@ export interface EventLoopStallMonitorOptions {
   thresholdMs?: number;
   logIntervalMs?: number;
   alwaysLogMs?: number;
-  log?: (message: string) => void;
-  /** Takes each stall instead of `formatStall` and `log`, for a structured logger. */
-  report?: (stall: { lagMs: number; endedAt: string; intervalMs: number; folded: string }) => void;
-  /** The log line for one stall; `folded` is "" or a suffix naming suppressed stalls. */
-  formatStall?: (stall: {
-    lagMs: number;
-    /** Wall-clock end of the stall, as an ISO string. */
-    endedAt: string;
-    intervalMs: number;
-    folded: string;
-  }) => string;
+  /** Takes each stall instead of the `event-loop` logger, for a process's own area. */
+  report?: (stall: EventLoopStallReport) => void;
   /** Monotonic milliseconds. */
   now?: () => number;
   wallClock?: () => number;
   setTimer?: (callback: () => void, ms: number) => { unref?: () => unknown };
   clearTimer?: (timer: { unref?: () => unknown }) => void;
+}
+
+export interface EventLoopStallReport {
+  lagMs: number;
+  /** Wall-clock end of the stall, as an ISO string. */
+  endedAt: string;
+  intervalMs: number;
+  /** "" or a suffix naming suppressed stalls. */
+  folded: string;
+  /**
+   * `error` for a stall of at least `alwaysLogMs`, because no configured level
+   * can filter `error`: such a stall is written whatever the threshold.
+   */
+  level: Extract<LogLevel, "warn" | "error">;
 }
 
 export interface EventLoopStallMonitor {
@@ -80,6 +88,15 @@ export function eventLoopDiagnostics(): EventLoopSnapshot | null {
   return running?.snapshot() ?? null;
 }
 
+function reportStall({ lagMs, endedAt, intervalMs, folded, level }: EventLoopStallReport): void {
+  log[level]("stalled", {
+    lagMs,
+    endedAt,
+    intervalMs,
+    folded: folded.replace(/^; /, "") || undefined,
+  });
+}
+
 export function startEventLoopStallMonitor(
   options: EventLoopStallMonitorOptions = {},
 ): EventLoopStallMonitor {
@@ -87,12 +104,7 @@ export function startEventLoopStallMonitor(
   const thresholdMs = options.thresholdMs ?? EVENT_LOOP_STALL_THRESHOLD_MS;
   const logIntervalMs = options.logIntervalMs ?? EVENT_LOOP_STALL_LOG_INTERVAL_MS;
   const alwaysLogMs = options.alwaysLogMs ?? EVENT_LOOP_STALL_ALWAYS_LOG_MS;
-  const log = options.log ?? ((message: string) => console.warn(message));
-  const formatStall =
-    options.formatStall ??
-    (({ lagMs, endedAt, intervalMs, folded }) =>
-      `[Backend] Event loop stalled for ${lagMs} ms, ending ${endedAt}: ` +
-      `a ${intervalMs} ms timer fired late, so every request in that window waited${folded}`);
+  const report = options.report ?? reportStall;
   const now = options.now ?? (() => performance.now());
   const wallClock = options.wallClock ?? Date.now;
   const setTimer =
@@ -137,9 +149,13 @@ export function startEventLoopStallMonitor(
         : "";
     suppressed = 0;
     suppressedMaxMs = 0;
-    const stall = { lagMs, endedAt: new Date(at).toISOString(), intervalMs, folded };
-    if (options.report) options.report(stall);
-    else log(formatStall(stall));
+    report({
+      lagMs,
+      endedAt: new Date(at).toISOString(),
+      intervalMs,
+      folded,
+      level: lagMs >= alwaysLogMs ? "error" : "warn",
+    });
   };
 
   const schedule = () => {

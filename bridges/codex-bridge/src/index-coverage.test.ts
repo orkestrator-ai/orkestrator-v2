@@ -1,3 +1,4 @@
+import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -266,19 +267,19 @@ describe("codex bridge private boundary coverage", () => {
 
   test("contains runtime environment executor failures", async () => {
     const errors: unknown[][] = [];
-    const originalConsoleError = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
+    const originalConsoleError = console.warn;
+    console.warn = (...args: unknown[]) => errors.push(args);
 
     try {
       await __testing.refreshRuntimeEnvironment(async () => {
         throw new Error("shell unavailable");
       });
     } finally {
-      console.error = originalConsoleError;
+      console.warn = originalConsoleError;
     }
 
     expect(errors).toEqual([
-      ["[codex-bridge] Failed to refresh runtime environment:", expect.any(Error)],
+      [expect.stringContaining("[bridge.codex] runtime-env.refresh-failed")],
     ]);
   });
 
@@ -450,15 +451,13 @@ describe("codex bridge private boundary coverage", () => {
     }
 
     expect(starts).toBe(1);
-    expect(errors).toEqual([
-      ["[codex-bridge] Failed to start the app-server engine:", "cannot initialize"],
-    ]);
+    expect(errors).toEqual([[expect.stringContaining("[bridge.codex] engine.start-failed")]]);
   });
 
   test("reports successful engine startup with the detected version", async () => {
     const errors: unknown[][] = [];
-    const originalConsoleError = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
+    const originalConsoleError = console.info;
+    console.info = (...args: unknown[]) => errors.push(args);
 
     try {
       await __testing.startSelectedEngineForTesting({}, {
@@ -466,10 +465,10 @@ describe("codex bridge private boundary coverage", () => {
         getHealth: () => ({ codexVersion: "0.145.0" }),
       } as never);
     } finally {
-      console.error = originalConsoleError;
+      console.info = originalConsoleError;
     }
 
-    expect(errors).toEqual([["[codex-bridge] app-server engine ready (codex 0.145.0)"]]);
+    expect(errors).toEqual([["[bridge.codex] engine.ready codexVersion=0.145.0"]]);
   });
 
   test("gates process diagnostics, filters health details, and stops heartbeats on shutdown", async () => {
@@ -508,9 +507,9 @@ describe("codex bridge private boundary coverage", () => {
       diagnostics = __testing.createCodexProcessDiagnosticsForTesting(runtime as never);
       diagnostics?.report("heartbeat");
 
-      const heartbeat = lines
-        .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
-        .find((entry) => entry.event === "heartbeat");
+      const heartbeat = bridgeDiagnosticPayloads(lines).find(
+        (entry) => entry.event === "heartbeat",
+      );
       expect(heartbeat).toMatchObject({
         bridge: "codex",
         phase: "attached",
@@ -531,7 +530,7 @@ describe("codex bridge private boundary coverage", () => {
 
       await __testing.stopSelectedEngineForTesting(runtime as never, diagnostics);
       const lineCount = lines.length;
-      expect(lines.at(-1)).toContain('"event":"closed"');
+      expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain('"event":"closed"');
       jest.advanceTimersByTime(120_000);
       expect(lines).toHaveLength(lineCount);
     } finally {
@@ -558,13 +557,13 @@ describe("codex bridge private boundary coverage", () => {
       console.warn = originalWarn;
     }
 
-    expect(warnings).toEqual([["[codex-bridge] Idle sweep failed:", expect.any(Error)]]);
+    expect(warnings).toEqual([[expect.stringContaining("[bridge.codex] idle-sweep.failed")]]);
   });
 
   test("contains rejected SSE keepalive writes", async () => {
     const errors: unknown[][] = [];
-    const originalConsoleError = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
+    const originalConsoleError = console.warn;
+    console.warn = (...args: unknown[]) => errors.push(args);
     const timer = __testing.startSseKeepaliveForTesting(async () => {
       throw new Error("closed stream");
     }, 1);
@@ -575,13 +574,10 @@ describe("codex bridge private boundary coverage", () => {
       }
     } finally {
       clearInterval(timer);
-      console.error = originalConsoleError;
+      console.warn = originalConsoleError;
     }
 
-    expect(errors).toContainEqual([
-      "[codex-bridge] Failed to write SSE keepalive:",
-      expect.any(Error),
-    ]);
+    expect(errors).toContainEqual([expect.stringContaining("[bridge.codex] sse.keepalive-failed")]);
   });
 
   test("writes keepalives with the latest replay cursor and an empty payload", async () => {
@@ -710,7 +706,7 @@ describe("codex bridge private boundary coverage", () => {
     }
 
     expect(warnings).toEqual([
-      ["[codex-bridge] Failed to persist model cache:", expect.any(String)],
+      [expect.stringContaining("[bridge.codex] models.cache-persist-failed")],
     ]);
   });
 
@@ -771,7 +767,7 @@ describe("codex bridge private boundary coverage", () => {
     }
 
     expect(warnings).toEqual([
-      ["[codex-bridge] `codex debug models` failed:", "debug models unavailable"],
+      [expect.stringContaining("[bridge.codex] models.debug-read-failed")],
     ]);
   });
 
@@ -805,8 +801,8 @@ describe("codex bridge private boundary coverage", () => {
     const blockingFile = join(root, "not-a-directory");
     writeFileSync(blockingFile, "blocked", "utf8");
     const errors: unknown[][] = [];
-    const originalConsoleError = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
+    const originalConsoleError = console.warn;
+    console.warn = (...args: unknown[]) => errors.push(args);
 
     try {
       await expect(
@@ -816,13 +812,10 @@ describe("codex bridge private boundary coverage", () => {
         __testing.writeCodexRawLogForTesting("session", {}, blockingFile),
       ).resolves.toBeUndefined();
     } finally {
-      console.error = originalConsoleError;
+      console.warn = originalConsoleError;
     }
 
-    expect(errors).toContainEqual([
-      "[codex-bridge] Failed to write raw Codex log:",
-      expect.any(Error),
-    ]);
+    expect(errors).toContainEqual([expect.stringContaining("[bridge.codex] raw-log.write-failed")]);
   });
 
   test("extracts only valid persisted role-specific message content", () => {
@@ -971,8 +964,8 @@ describe("codex bridge private boundary coverage", () => {
 
   test("contains synchronous and asynchronous SSE subscriber failures", async () => {
     const errors: unknown[][] = [];
-    const originalConsoleError = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
+    const originalConsoleError = console.warn;
+    console.warn = (...args: unknown[]) => errors.push(args);
     const removeSync = __testing.subscribeForTesting(() => {
       throw new Error("sync subscriber failure");
     });
@@ -987,12 +980,12 @@ describe("codex bridge private boundary coverage", () => {
     } finally {
       removeSync();
       removeAsync();
-      console.error = originalConsoleError;
+      console.warn = originalConsoleError;
     }
 
     expect(errors).toEqual([
-      ["[codex-bridge] Failed to notify SSE subscriber:", expect.any(Error)],
-      ["[codex-bridge] Failed to notify SSE subscriber:", expect.any(Error)],
+      [expect.stringContaining("[bridge.codex] sse.subscriber-failed")],
+      [expect.stringContaining("[bridge.codex] sse.subscriber-failed")],
     ]);
   });
 

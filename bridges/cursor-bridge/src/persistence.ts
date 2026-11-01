@@ -35,6 +35,9 @@ import {
   type SessionState,
 } from "./state.js";
 import { newSessionState } from "./session-factory.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.cursor");
 
 export { PersistenceError } from "./persistence-budget.js";
 
@@ -454,13 +457,11 @@ function noteFailure(error: unknown): PersistenceError {
     : { key, failures: 1, noticed: new WeakMap() };
   const errno = (error as { code?: unknown } | undefined)?.code;
   const offenders = new Set(typed.sessionIds);
-  console.warn(
-    `[cursor-bridge] state publication failing (${typed.code}${
-      typeof errno === "string" ? `, ${errno.slice(0, 32)}` : ""
-    }${
-      offenders.size > 0 ? `; ${offenders.size} largest session(s) marked` : ""
-    }); new prompts and steers are refused until it recovers`,
-  );
+  log.warn("state.publication-failing", {
+    code: typed.code,
+    errno: typeof errno === "string" ? errno.slice(0, 32) : undefined,
+    largestSessionsMarked: offenders.size,
+  });
   for (const state of sessions.values()) {
     const offender = offenders.has(state.id);
     // Content-free: which session, never what its saved state holds.
@@ -489,17 +490,13 @@ const LARGEST_SESSION_NOTICE =
 
 function noteSuccess(shed: readonly string[]): void {
   if (failing) {
-    console.warn(
-      `[cursor-bridge] state publication recovered after ${failing.failures} failed write(s)`,
-    );
+    log.info("state.publication-recovered", { failedWrites: failing.failures });
     failing = undefined;
   }
   const newlyShed = shed.filter((id) => !lastShed.has(id));
   lastShed = new Set(shed);
   if (newlyShed.length === 0) return;
-  console.warn(
-    `[cursor-bridge] state file at its size limit; saved ${newlyShed.length} session(s) with a shortened transcript copy`,
-  );
+  log.warn("state.transcripts-shortened", { sessions: newlyShed.length });
   for (const id of newlyShed) {
     sessions.get(id)?.health.recordNotice({
       message:

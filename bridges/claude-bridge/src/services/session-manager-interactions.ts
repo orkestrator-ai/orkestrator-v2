@@ -26,6 +26,9 @@ import {
   sessions,
 } from "./session-manager-core.js";
 import { isPendingInteractionFor } from "./session-manager-lifecycle.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 export { getAvailableModelCatalog, getAvailableModels } from "./claude-model-catalog.js";
 /**
@@ -40,10 +43,7 @@ export function answerQuestion(requestId: string, answers: Record<string, string
     return false;
   }
 
-  console.log("[session-manager] Answering question", {
-    requestId,
-    answerCount: Object.keys(answers).length,
-  });
+  log.info("question.answering", { requestId, answerCount: Object.keys(answers).length });
 
   const resolver = questionResolvers.get(requestId);
   if (resolver) {
@@ -122,7 +122,7 @@ export function respondToPlanApproval(
     return false;
   }
 
-  console.log("[session-manager] Responding to plan approval", {
+  log.info("plan-approval.responding", {
     requestId,
     approved,
     hasFeedback: typeof feedback === "string" && feedback.length > 0,

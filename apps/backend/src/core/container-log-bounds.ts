@@ -1,3 +1,5 @@
+import { LOG_FORMAT_ENV, LOG_LEVEL_ENV } from "@orkestrator/protocol/node/logger-environment";
+
 /**
  * Bounds for diagnostic output read from containers.
  *
@@ -33,6 +35,21 @@ export function boundDiagnosticTail(text: string): string {
     truncated = true;
   }
   return truncated ? `[earlier output truncated]\n${bounded}` : bounded;
+}
+
+/**
+ * Exports a container bridge's logging settings. Nothing reads its stdio there:
+ * lines go straight to its log file with no tee to stamp them, so it writes JSON
+ * lines, which alone keep each entry's time and level. The level is the one this
+ * backend was started with, as a local bridge inherits it. Read when a bridge
+ * launches, so a value here never outlives the launch.
+ */
+export function bridgeLogEnvironmentExports(env: NodeJS.ProcessEnv = process.env): string {
+  const level = env[LOG_LEVEL_ENV];
+  return [
+    `export ${LOG_FORMAT_ENV}=json`,
+    ...(level ? [`export ${LOG_LEVEL_ENV}=${shellQuote(level)}`] : []),
+  ].join("\n");
 }
 
 /** In-image rotating writer (`bounded-logs=1`). */

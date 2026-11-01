@@ -19,6 +19,9 @@ import { settleIdleDetaches, sweepIdleSessions } from "./idle-detach.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
 import { finishRestoredTombstones } from "./session-tombstones.js";
 import { sessions } from "./state.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.cursor");
 
 const IDLE_SWEEP_MS = 60 * 1000;
 
@@ -80,7 +83,7 @@ function lifecycleFor(listenPort: number, options: ServerLifecycleOptions): Brid
       await loadPersistedState();
       // Finish durable closes left by a previous process without delaying startup.
       void finishRestoredTombstones().catch(() => {
-        console.warn("[cursor-bridge] restored closes could not be finished at startup");
+        log.warn("startup.closes-failed");
       });
       await new Promise<void>((resolve) => server.listen(listenPort, hostname, resolve));
     },

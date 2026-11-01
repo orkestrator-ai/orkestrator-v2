@@ -1,6 +1,9 @@
 // Plugins routes
 import { Hono } from "hono";
 import { getPluginInfo } from "../services/plugin-config.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 const plugins = new Hono();
 
@@ -19,7 +22,7 @@ plugins.get("/", async (c) => {
       cwd,
     });
   } catch (error) {
-    console.error("[plugins] Error getting plugins:", error);
+    log.error("plugins.read-failed", { error: formatLogError(error) });
     return c.json({ error: error instanceof Error ? error.message : "Failed to get plugins" }, 500);
   }
 });

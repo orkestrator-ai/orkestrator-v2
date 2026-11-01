@@ -240,17 +240,17 @@ function thresholdRank(area: string): number {
 }
 
 /** The marker counts towards the bound, so a relayed value is not cut a second time. */
-function boundedString(value: string): string {
-  if (value.length <= MAX_FIELD_CHARS) return value;
-  const kept = MAX_FIELD_CHARS - TRUNCATION_MARKER_RESERVE;
+function boundedString(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const kept = maxChars - TRUNCATION_MARKER_RESERVE;
   return `${value.slice(0, kept)}...[truncated ${value.length - kept} chars]`;
 }
 
-function sanitizeValue(name: string, value: unknown): LogWireValue | undefined {
+function sanitizeValue(name: string, value: unknown, maxChars: number): LogWireValue | undefined {
   if (FORBIDDEN_FIELD_NAMES.has(name.toLowerCase().replace(/[-_.]/g, ""))) return "[forbidden]";
   switch (typeof value) {
     case "string":
-      return boundedString(value);
+      return boundedString(value, maxChars);
     case "number":
       return Number.isFinite(value) ? value : String(value);
     case "boolean":
@@ -272,12 +272,13 @@ function sanitizeValue(name: string, value: unknown): LogWireValue | undefined {
 
 function sanitizeFields(
   fields: Readonly<Record<string, unknown>>,
+  maxChars: number,
 ): Readonly<Record<string, LogWireValue>> | undefined {
   const clean: Record<string, LogWireValue> = {};
   let count = 0;
   let dropped = 0;
   for (const name of Object.keys(fields)) {
-    const value = sanitizeValue(name, fields[name]);
+    const value = sanitizeValue(name, fields[name], maxChars);
     if (value === undefined) continue;
     if (count >= MAX_FIELDS || !FIELD_NAME_PATTERN.test(name)) {
       dropped += 1;
@@ -353,7 +354,9 @@ function buildRecord(
   event: string,
   fields: Readonly<Record<string, unknown>> | undefined,
 ): LogRecord {
-  const clean = fields ? sanitizeFields(fields) : undefined;
+  const clean = fields
+    ? sanitizeFields(fields, areaSpec(area)?.maxStringChars ?? MAX_FIELD_CHARS)
+    : undefined;
   return {
     orklog: 1,
     ts: new Date().toISOString(),
@@ -669,7 +672,10 @@ export function parseLogRecordLine(line: string): LogRecord | null {
   if (!spec || (event !== "invalid-event" && !Object.hasOwn(spec.events, event))) return null;
   const clean =
     typeof fields === "object" && fields !== null && !Array.isArray(fields)
-      ? sanitizeFields(reviveWireErrors(fields as Record<string, unknown>))
+      ? sanitizeFields(
+          reviveWireErrors(fields as Record<string, unknown>),
+          spec.maxStringChars ?? MAX_FIELD_CHARS,
+        )
       : undefined;
   return { orklog: 1, ts, level, area, event, ...(clean ? { fields: clean } : {}) };
 }

@@ -234,7 +234,10 @@ describe("useBuildLaunchOptions", () => {
     });
 
     expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["composer-2.5"]);
-    expect(result.current.catalog.pi?.map((model) => model.id)).toEqual(["anthropic/claude-pi"]);
+    expect(result.current.catalog.pi?.map((model) => model.id)).toEqual([
+      "default",
+      "anthropic/claude-pi",
+    ]);
   });
 
   test("ignores a cached catalog snapshot that belongs to another project", async () => {

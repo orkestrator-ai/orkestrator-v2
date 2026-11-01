@@ -192,10 +192,12 @@ function withSavedSelection(step: unknown, saved: BuildStepConfig | undefined): 
 /**
  * A build request with every omitted choice filled from the Build button's defaults.
  *
- * Explicit steps are layered over the saved ones and explicit reviewers replace
- * them, exactly as `useBuildPipeline` does for the renderer. The build agent
- * defaults the way the launcher's does. Environment-tier settings are not
- * read: the launcher resolves before any worker exists.
+ * The one implementation every launcher shares: the renderer's Build buttons
+ * (`launch_build_pipeline`), the feature-plan build, the coordinator and the
+ * public `build.launch`. Explicit steps are layered over the saved ones and
+ * explicit reviewers replace them; the review step is always the first
+ * reviewer. Environment-tier settings are not read: a launch resolves before
+ * any worker exists.
  *
  * A step or preparation named without an agent carries only instructions and
  * keeps the saved selection: the build step the pipeline agent, a reviewer its

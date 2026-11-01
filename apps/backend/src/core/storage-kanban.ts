@@ -726,6 +726,60 @@ export class KanbanRepository {
     );
   }
 
+  /**
+   * Undo a build claim whose pipeline never started.
+   *
+   * Only the claim this launch made is released, and only while no pipeline
+   * has been linked to it: once the supervisor recorded a pipeline the plan
+   * follows that pipeline, failed or not, and a launcher's rollback must not
+   * overwrite the link.
+   */
+  async releaseFeaturePlanBuildClaim(
+    featureId: string,
+    taskId: string,
+    restoreStatus: FeaturePlan["status"],
+  ): Promise<{ released: boolean; feature: FeaturePlan }> {
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+        if (plan.buildTaskId !== taskId || plan.buildPipelineId) {
+          return { released: false, feature: plan };
+        }
+        plan.status = restoreStatus === "building" ? "stories" : restoreStatus;
+        delete plan.buildTaskId;
+        plan.updatedAt = nowIso();
+        return { released: true, feature: plan };
+      },
+      (result) => result.feature.projectId,
+    );
+  }
+
+  /**
+   * Record the pipeline a claimed build started, unless the plan has since
+   * moved to a different build.
+   */
+  async linkFeaturePlanBuild(
+    featureId: string,
+    taskId: string,
+    link: { buildPipelineId: string; environmentId?: string },
+  ): Promise<FeaturePlan> {
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+        if (plan.buildTaskId !== taskId) return plan;
+        if (plan.buildPipelineId && plan.buildPipelineId !== link.buildPipelineId) return plan;
+        plan.status = "building";
+        plan.buildPipelineId = link.buildPipelineId;
+        if (link.environmentId) plan.codexEnvironmentId = link.environmentId;
+        plan.updatedAt = nowIso();
+        return plan;
+      },
+      (plan) => plan.projectId,
+    );
+  }
+
   async appendFeaturePlanMessage(
     featureId: string,
     role: FeaturePlanMessage["role"],
@@ -1057,6 +1111,8 @@ export type KanbanStorage = Pick<
   | "createFeaturePlan"
   | "updateFeaturePlan"
   | "claimFeaturePlanBuild"
+  | "releaseFeaturePlanBuildClaim"
+  | "linkFeaturePlanBuild"
   | "appendFeaturePlanMessage"
   | "appendFeatureStoryMessage"
   | "listAllFeaturePlans"

@@ -4,6 +4,7 @@ import {
   MAX_FEATURE_BUILD_TITLE_LENGTH,
   featureBuildRequestIdentity,
   isCreateFeatureBuildInput,
+  isStartFeaturePlanBuildInput,
 } from "./feature-build.js";
 
 const input = {
@@ -142,6 +143,27 @@ describe("create feature build input", () => {
   test("rejects an unknown harness and an unknown environment type", () => {
     expect(isCreateFeatureBuildInput({ ...input, agentType: "gemini" })).toBe(false);
     expect(isCreateFeatureBuildInput({ ...input, environmentType: "remote" })).toBe(false);
+  });
+});
+
+describe("isStartFeaturePlanBuildInput", () => {
+  test("takes a plan id and optional environment type and agent", () => {
+    expect(isStartFeaturePlanBuildInput({ featureId: "feature-1" })).toBe(true);
+    expect(
+      isStartFeaturePlanBuildInput({
+        featureId: "feature-1",
+        environmentType: "local",
+        agentType: "claude",
+      }),
+    ).toBe(true);
+  });
+
+  test("refuses a blank plan, an unknown value and any other field", () => {
+    expect(isStartFeaturePlanBuildInput({ featureId: "  " })).toBe(false);
+    expect(isStartFeaturePlanBuildInput({})).toBe(false);
+    expect(isStartFeaturePlanBuildInput({ featureId: "f", environmentType: "remote" })).toBe(false);
+    expect(isStartFeaturePlanBuildInput({ featureId: "f", agentType: "gemini" })).toBe(false);
+    expect(isStartFeaturePlanBuildInput({ featureId: "f", steps: {} })).toBe(false);
   });
 });
 

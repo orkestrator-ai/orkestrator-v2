@@ -25,7 +25,17 @@ import {
   type BuildPipelineAgent,
   type BuildStepConfig,
   type BuildStepConfigs,
+  type StartBuildPipelineInput,
 } from "./build-pipeline.js";
+
+/**
+ * `launch_build_pipeline`: a start request whose choices are all optional. The
+ * backend fills whatever is left out from the saved Build defaults, so a client
+ * sends only what the user explicitly chose.
+ */
+export type LaunchBuildPipelineInput = Omit<StartBuildPipelineInput, "agentType"> & {
+  agentType?: BuildPipelineAgent;
+};
 
 export interface BuildPipelineConfiguredDefaults {
   steps: BuildStepConfigs;

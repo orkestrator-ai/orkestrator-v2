@@ -33,7 +33,7 @@ test("summary-only traffic starts a cold leaf monitor again after restart and re
   const runner = spyOn(shell, "runCommand").mockImplementation(async (_name, args) => ({
     stdout: args!.includes(".permissions")
       ? '{"push":true}'
-      : args!.includes("statusCheckRollup")
+      : args!.includes("statusCheckRollup,headRefOid")
         ? JSON.stringify({
             statusCheckRollup: [
               {

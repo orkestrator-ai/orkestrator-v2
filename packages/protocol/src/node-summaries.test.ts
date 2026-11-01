@@ -156,6 +156,7 @@ test("a node's build pipeline and auto-merge markers travel only as true flags",
   const marked = toNodeEnvironmentSummary("bk_test" as never, {
     id: "e",
     projectId: "p",
+    buildPipeline: true,
     buildPipelineId: "pipeline-1",
     autoMerge: true,
   })!;
@@ -164,7 +165,8 @@ test("a node's build pipeline and auto-merge markers travel only as true flags",
 
   for (const raw of [
     {},
-    { buildPipelineId: "", autoMerge: false },
+    { buildPipelineId: "stale-pipeline", autoMerge: false },
+    { buildPipeline: "true", autoMerge: false },
     { buildPipelineId: 7, autoMerge: "true" },
   ]) {
     const environment = toNodeEnvironmentSummary("bk_test" as never, {

@@ -176,9 +176,17 @@ export function registerEnvironmentCommands(
     await runtime.prMonitor.sync(context);
     const environments = await load();
     const announced = runtime.prMonitor.announcedStates();
+    // Match the local sidebar's pipeline.environmentId membership. Persisted
+    // buildPipelineId can outlive deletion and is also copied onto forks.
+    const buildEnvironmentIds = new Set(
+      (await storage.listBuildPipelines(asString(args.projectId, "projectId"))).map(
+        (pipeline) => pipeline.environmentId,
+      ),
+    );
     return environments.map((environment) => ({
       ...environment,
       ...runtime.prMonitor.relayedHealth(environment, announced),
+      ...(buildEnvironmentIds.has(environment.id) ? { buildPipeline: true as const } : {}),
     }));
   });
   /**

@@ -476,6 +476,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "stop_node_environment",
   "stop_worker_turn",
   "switch_provider_account",
+  "set_account_auto_switch",
   "transfer_files",
   "update_schedule",
   "update_ticket",
@@ -523,7 +524,7 @@ export const COORDINATOR_PR_RULE =
  * when it fires (nobody may be there) or switch without asking.
  */
 export const COORDINATOR_TIMERS_AND_ACCOUNTS_RULE =
-  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch. Never switch accounts on your own initiative.';
+  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch. Never switch accounts on your own initiative. Automatic switching is separate: when the user asks, set_account_auto_switch turns it on, the backend then moves accounts by itself and you get a notice each time, and your own switch would pin the account and turn it off.';
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";

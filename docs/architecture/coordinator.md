@@ -1102,7 +1102,7 @@ machine's local zone (the user's) unless `timeZone` is given, and the result
 names the zone (`timeZoneUsed`) and the local time (`nextFireLocal`).
 
 For "check in 2 hours and switch accounts if the workers hit a usage limit"
-the main coordinator has three tools (capability `accounts`, plus
+the main coordinator has four tools (capability `accounts`, plus
 `get_usage_limits` under `environments`; side agents get none):
 
 - `get_usage_limits` lists the agent tabs whose newest recorded turn failed
@@ -1116,6 +1116,12 @@ the main coordinator has three tools (capability `accounts`, plus
   permission it creates a `switch-agent-account` request the user approves
   in the same dialog as `request_environment_deletion`. With the `scheduleId`
   of a self-timer that carries the user's permission it switches at once.
+  Either way it pins the account if automatic switching is on.
+- `set_account_auto_switch` changes the automatic-switching ticks, with no
+  approval, because the backend then does the switching. On a leaf it refuses the
+  shared ticks, which its command node holds, and can still end that leaf's pin. Each
+  automatic switch sends the main coordinator a notice. See
+  [agent-accounts.md](agent-accounts.md#automatic-switching).
 
 A self-timer carries that permission only when the main coordinator sets it
 with `authorizeAccountSwitch` in a turn the user started with their own

@@ -30,6 +30,7 @@ import { useAppDialogStore } from "@/stores/appDialogStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ProjectBoardTab } from "@/stores";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
+import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { KanbanTask } from "@/lib/backend";
@@ -161,6 +162,11 @@ const enqueuePromptQueueMessageMock = mock(
 
 const startedMultiReview = { id: "multi-workflow-1", phase: "reviewing" as const };
 const startMultiReviewMock = mock(async (_options: unknown) => startedMultiReview);
+// Most of this file drives the renderer path for a backend without the one-request launch.
+const unknownLaunchCommand = async (_input: unknown): Promise<MultiReviewActionResult> => {
+  throw new Error("Unknown backend command: launch_multi_review");
+};
+const launchMultiReviewMock = mock(unknownLaunchCommand);
 const cancelMultiReviewMock = mock(
   async (_workflowId: string): Promise<{ id: string; phase: "cancelled" | "cancelling" }> => ({
     id: "multi-workflow-1",
@@ -802,6 +808,7 @@ mock.module("@/lib/backend", () => ({
   setEnvironmentPr: setEnvironmentPrBackendMock,
   setEnvironmentAutoMerge: setEnvironmentAutoMergeMock,
   startMultiReview: startMultiReviewMock,
+  launchMultiReview: launchMultiReviewMock,
   cancelMultiReview: cancelMultiReviewMock,
   deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
@@ -938,6 +945,8 @@ beforeEach(() => {
   usePaneLayoutStore.setState({
     clearTabInitialPrompt: clearTabInitialPromptMock,
   });
+  launchMultiReviewMock.mockReset();
+  launchMultiReviewMock.mockImplementation(unknownLaunchCommand);
   startMultiReviewMock.mockReset();
   startMultiReviewMock.mockImplementation(async () => startedMultiReview);
   cancelMultiReviewMock.mockReset();
@@ -4768,6 +4777,102 @@ describe("ActionBar workflow tabs", () => {
     expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
   });
 
+  describe("through the backend's one-request launch", () => {
+    const launched = (overrides: Partial<MultiReviewActionResult> = {}) =>
+      ({
+        workflow: startedMultiReview,
+        reused: false,
+        outcome: "opened",
+        ui: { status: "opened", tabId: "multi-review:multi-workflow-1", paneId: "default" },
+        ...overrides,
+      }) as unknown as MultiReviewActionResult;
+
+    beforeEach(() => {
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+      };
+      currentWorkspaceReady = true;
+    });
+
+    test("leaves the branch, instruction and tab to the backend", async () => {
+      launchMultiReviewMock.mockImplementation(async () => launched());
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+      await waitFor(() => expect(launchMultiReviewMock).toHaveBeenCalledTimes(1));
+      const input = launchMultiReviewMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(input.environmentId).toBe("env-1");
+      expect(typeof input.requestId).toBe("string");
+      expect(input).not.toHaveProperty("targetBranch");
+      expect(input).not.toHaveProperty("reviewInstruction");
+      await waitFor(() =>
+        expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
+          "env-1",
+          "multi-review:multi-workflow-1",
+          expect.anything(),
+        ),
+      );
+      expect(startMultiReviewMock).not.toHaveBeenCalled();
+      expect(createTabMock).not.toHaveBeenCalledWith("multi-review", expect.anything());
+      expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
+    });
+
+    test("says so when the backend reattached to a running review", async () => {
+      launchMultiReviewMock.mockImplementation(async () => launched({ reused: true }));
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+      await waitFor(() =>
+        expect(toastInfoMock).toHaveBeenCalledWith("Multi Review already running", {
+          description: expect.stringContaining("Cancel or abandon it there"),
+        }),
+      );
+      expect(toastErrorMock).not.toHaveBeenCalled();
+    });
+
+    test("shows the backend's recovery when the review saved but its tab did not open", async () => {
+      launchMultiReviewMock.mockImplementation(async () =>
+        launched({
+          outcome: "partial",
+          ui: { status: "unavailable" },
+          recovery: "The review is saved but its tab could not be opened.",
+        }),
+      );
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+      await waitFor(() =>
+        expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
+          description: "The review is saved but its tab could not be opened.",
+        }),
+      );
+      // The backend already decided what happened to the review.
+      expect(cancelMultiReviewMock).not.toHaveBeenCalled();
+    });
+
+    test("reports a refusal without falling back to the renderer sequence", async () => {
+      launchMultiReviewMock.mockImplementation(async () => {
+        throw new Error("Start the environment and finish setup before opening Multi Review");
+      });
+      render(<ActionBar />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+      await waitFor(() =>
+        expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
+          description: "Start the environment and finish setup before opening Multi Review",
+        }),
+      );
+      expect(startMultiReviewMock).not.toHaveBeenCalled();
+    });
+  });
+
   test("right-click Multi Review can override auto-fix for one launch", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -7845,11 +7950,11 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
   test("does not start a second Multi Review while the first shortcut launch is pending", async () => {
     currentWorkspaceReady = true;
-    let finishLookup!: () => void;
-    findActiveMultiReviewWorkflowMock.mockImplementationOnce(
+    let finishLaunch!: (error: Error) => void;
+    launchMultiReviewMock.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          finishLookup = () => resolve(null);
+        new Promise((_resolve, reject) => {
+          finishLaunch = reject;
         }),
     );
     render(<ActionBar />);
@@ -7857,9 +7962,9 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
 
-    expect(findActiveMultiReviewWorkflowMock).toHaveBeenCalledTimes(1);
+    expect(launchMultiReviewMock).toHaveBeenCalledTimes(1);
     expect(startMultiReviewMock).not.toHaveBeenCalled();
-    finishLookup();
+    finishLaunch(new Error("Unknown backend command: launch_multi_review"));
     await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
   });
 

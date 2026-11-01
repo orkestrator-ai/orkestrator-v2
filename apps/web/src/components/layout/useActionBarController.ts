@@ -36,6 +36,7 @@ import {
   createOrkestratorScriptPrompt,
 } from "@/prompts";
 import * as backend from "@/lib/backend";
+import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isGatewayBrowserPreviewSupported, isRemoteGatewayConnection } from "@/lib/gateway-url";
@@ -57,7 +58,7 @@ import {
   beginPaneTabActivationRequest,
   requestPaneTabActivation,
 } from "@/lib/pane-layout-authoritative";
-import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
+import { legacyLaunchMultiReview } from "@/lib/multi-review-launch-compat";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
@@ -904,84 +905,68 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         return;
       multiReviewLaunchInFlightRef.current = true;
       setMultiReviewLaunchPending(true);
-      let workflowId: string | undefined;
-      let cancelRequested = false;
+      const activationRequest = beginPaneTabActivationRequest(selectedEnvironmentId);
+      const announceReused = () =>
+        toast.info("Multi Review already running", {
+          description:
+            "Reopened the review already running in this environment." +
+            " Cancel or abandon it there to start a new one.",
+        });
       try {
-        // An environment may hold only one active Multi Review, and closing its
-        // tab deliberately leaves the backend workflow running. Reattach to it
-        // rather than failing the launch: the running one is otherwise
-        // unreachable, and its Abandon control — the only way to free the
-        // environment for a new review — lives inside the tab being reopened.
-        const active = await findActiveMultiReviewWorkflow(selectedEnvironmentId);
-        if (active) {
-          if (
-            !createTab("multi-review", {
-              multiReviewId: active.id,
-              displayTitle: "Multi Review",
-            })
-          ) {
-            throw new Error(
-              "A Multi Review is already running, but its tab could not be reopened." +
-                " Close a tab and try again.",
-            );
-          }
-          setMultiReviewDialogOpen(false);
-          toast.info("Multi Review already running", {
-            description:
-              "Reopened the review already running in this environment." +
-              " Cancel or abandon it there to start a new one.",
+        // One request: the backend reuses an active review, takes the target
+        // branch and instruction from saved settings, starts the review and
+        // writes its tab into the layout, so a crash here cannot orphan it.
+        const launched = await backend
+          .launchMultiReview({
+            requestId: createUuid(),
+            environmentId: selectedEnvironmentId,
+            reviewers: selection.reviewers,
+            reviewModel: selection.reviewModel,
+            fixModel: selection.fixModel,
+            autoFix: selection.autoFix,
+            autoPr: selection.autoPr,
+          })
+          .catch((error: unknown) => {
+            if (!isUnsupportedBackendCommand(error, "launch_multi_review")) throw error;
+            return null;
           });
+        if (!launched) {
+          const legacy = await legacyLaunchMultiReview({
+            environmentId: selectedEnvironmentId,
+            projectId: selectedProjectId,
+            targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+            reviewInstruction: config.global.reviewInstruction,
+            selection,
+            createTab: (workflowId) =>
+              Boolean(
+                createTab("multi-review", {
+                  multiReviewId: workflowId,
+                  displayTitle: "Multi Review",
+                }),
+              ),
+          });
+          setMultiReviewDialogOpen(false);
+          if (legacy.reused) announceReused();
           return;
         }
-        const workflow = await backend.startMultiReview({
-          environmentId: selectedEnvironmentId,
-          projectId: selectedProjectId,
-          targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
-          reviewInstruction: config.global.reviewInstruction,
-          reviewers: selection.reviewers,
-          reviewModel: selection.reviewModel,
-          fixModel: selection.fixModel,
-          autoFix: selection.autoFix,
-          autoPr: selection.autoPr,
-        });
-        workflowId = workflow.id;
-        useMultiReviewStore.getState().replaceWorkflow(workflow);
-        const created = createTab("multi-review", {
-          multiReviewId: workflow.id,
-          displayTitle: "Multi Review",
-        });
-        if (!created) {
-          const launchError = "The environment is not ready or the maximum tab count was reached.";
-          const cancelled = await backend.cancelMultiReview(workflow.id);
-          cancelRequested = true;
-          useMultiReviewStore.getState().replaceWorkflow(cancelled);
-          // Cancellation is asynchronous, and only a terminal workflow may be
-          // deleted. Deleting a still-cancelling one is rejected by the backend,
-          // which would replace this message with a confusing storage error and
-          // strand the record. Keep it installed for recovery instead.
-          if (cancelled.phase !== "cancelled") {
-            throw new Error(
-              `${launchError} Cancellation is still in progress; the saved Multi Review remains available for recovery.`,
-            );
-          }
-          await backend.deleteMultiReviewWorkflow(workflow.id);
-          useMultiReviewStore.getState().removeWorkflow(workflow.id);
-          throw new Error(launchError);
+        useMultiReviewStore.getState().replaceWorkflow(launched.workflow);
+        if (launched.ui.status !== "opened" || !launched.ui.tabId) {
+          throw new Error(launched.recovery ?? "The review's tab could not be opened.");
         }
+        activateLaunchedTab(selectedEnvironmentId, launched.ui.tabId, activationRequest);
         setMultiReviewDialogOpen(false);
+        if (launched.reused) announceReused();
       } catch (error) {
         toast.error("Could not open Multi Review", {
           description: error instanceof Error ? error.message : String(error),
         });
-        if (workflowId && !cancelRequested) {
-          void backend.cancelMultiReview(workflowId).catch(() => undefined);
-        }
       } finally {
         multiReviewLaunchInFlightRef.current = false;
         setMultiReviewLaunchPending(false);
       }
     },
     [
+      activateLaunchedTab,
       canCreateTab,
       config.global.reviewInstruction,
       config.repositories,

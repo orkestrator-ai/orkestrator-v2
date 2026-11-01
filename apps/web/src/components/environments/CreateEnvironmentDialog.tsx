@@ -1558,6 +1558,8 @@ export function CreateEnvironmentDialog({
 
   // Cmd+Enter (Ctrl+Enter off macOS) from anywhere in the dialog does what the
   // Create Environment button does, including staying inert while it is disabled.
+  // Capture before Radix consumes Enter on checkbox and select triggers. Stop
+  // propagation so the chord cannot also toggle, open, or activate a control.
   const handleDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (
       e.key !== "Enter" ||
@@ -1571,6 +1573,7 @@ export function CreateEnvironmentDialog({
       return;
     }
     e.preventDefault();
+    e.stopPropagation();
     if (submitDisabled) return;
     formRef.current?.requestSubmit();
   };
@@ -1578,7 +1581,7 @@ export function CreateEnvironmentDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        onKeyDown={handleDialogKeyDown}
+        onKeyDownCapture={handleDialogKeyDown}
         size="4xl"
         className={cn(
           "flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90vh] sm:p-0",

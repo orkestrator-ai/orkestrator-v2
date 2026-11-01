@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { useConfigStore } from "@/stores/configStore";
@@ -321,6 +330,69 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     fireEvent.keyDown(name, { key: "Enter", metaKey: true });
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
   });
+
+  test("ignores repeated, composing, prevented, Shift and Alt chords", async () => {
+    const onCreate = mock(async () => true);
+    render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog open onOpenChange={() => undefined} onCreate={onCreate} />
+      </DockerAvailabilityProvider>,
+    );
+    const prompt = screen.getByRole("textbox", { name: /Initial Prompt/ });
+    for (const extra of [
+      { repeat: true },
+      { isComposing: true },
+      { shiftKey: true },
+      { altKey: true },
+    ]) {
+      fireEvent.keyDown(prompt, { key: "Enter", ctrlKey: true, ...extra });
+    }
+    const prevented = createEvent.keyDown(prompt, { key: "Enter", metaKey: true });
+    prevented.preventDefault();
+    fireEvent(prompt, prevented);
+    expect(onCreate).not.toHaveBeenCalled();
+    fireEvent.keyDown(prompt, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  });
+
+  for (const reason of ["loading", "ports", "blank feature", "missing feature handler"] as const) {
+    test(`shortcut respects disabled submission: ${reason}`, () => {
+      const onCreate = mock(async () => true);
+      const onCreateFeatureBuild = mock(async () => undefined);
+      render(
+        <DockerAvailabilityProvider available>
+          <CreateEnvironmentDialog
+            open
+            onOpenChange={() => undefined}
+            onCreate={onCreate}
+            isLoading={reason === "loading"}
+            defaultPortMappings={
+              reason === "ports" ? [{ containerPort: 0, hostPort: 3000, protocol: "tcp" }] : []
+            }
+            onCreateFeatureBuild={
+              reason === "missing feature handler" ? undefined : onCreateFeatureBuild
+            }
+          />
+        </DockerAvailabilityProvider>,
+      );
+      if (reason.includes("feature")) {
+        fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+        if (reason === "missing feature handler") {
+          fireEvent.change(screen.getByLabelText(/^Description/), {
+            target: { value: "Build a feature" },
+          });
+        }
+      }
+      expect(
+        (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+        fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", ...modifier });
+      }
+      expect(onCreate).not.toHaveBeenCalled();
+      expect(onCreateFeatureBuild).not.toHaveBeenCalled();
+    });
+  }
 
   test("Cmd+Enter does nothing while Create Environment is disabled", async () => {
     const onCreate = mock(async (_options: ClaudeOptions) => true);

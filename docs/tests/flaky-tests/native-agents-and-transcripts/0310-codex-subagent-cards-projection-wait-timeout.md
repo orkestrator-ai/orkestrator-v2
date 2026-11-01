@@ -129,3 +129,15 @@ passed both complete owners (10 tests, 5.1 s, exit 0).
 - **Assessment:** confirmed intermittent recurrence. This review changes the
   OpenCode retry and ACP persistence/prompt paths; it does not change the Codex
   subagent fixture, implementation, assertion, timeout or skip.
+
+
+## Held-history reconciliation review — 2026-11-01
+
+The exact `mise run test` rerun observed `recovering` rather than `idle` at
+`apps/backend/tests/codex-subagent-cards.test.ts:170` after 2229.63 ms, with two
+backend workers. The backend group reported 12,521 passed, 107 skipped and
+three failed. The complete unchanged owner passed alone with
+`mise run test:logged -- --name current-codex-cards -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures`
+(exit zero, 4.9 s). Evidence: `/tmp/orkestrator-test-run.NettPR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed after completion). No owner implementation, assertion, deadline or
+skip changed; the isolated pass does not make the aggregate green.

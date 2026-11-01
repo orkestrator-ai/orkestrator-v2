@@ -273,6 +273,33 @@ describe("useAutoLoadEarlier", () => {
     await settle();
   });
 
+  test("a transcript that keeps collapsing to its tail stops being paged", async () => {
+    const { load, settle } = pages();
+    const input = baseInput({ load });
+    const view = render(<Harness {...input} withSentinel />);
+    // The tail is short, so its head stays in range once it is back on screen.
+    setHeadInView(true);
+    expect(load).toHaveBeenCalledTimes(1);
+
+    // Each round: the page lands, the next page chains from the head it
+    // brought, then a poll collapses the list back to the same live tail.
+    const round = async (older: string) => {
+      view.rerender(<Harness {...input} headId={older} withSentinel />);
+      await settle();
+      view.rerender(<Harness {...input} withSentinel />);
+      await settle();
+    };
+    await round("row-50");
+    expect(load).toHaveBeenCalledTimes(3);
+    await round("row-50");
+    // Two pages from the tail and two from the older head: nothing is left to
+    // try, however many more times the list comes back.
+    expect(load).toHaveBeenCalledTimes(4);
+    view.rerender(<Harness {...input} headId="row-50" withSentinel />);
+    view.rerender(<Harness {...input} withSentinel />);
+    expect(load).toHaveBeenCalledTimes(4);
+  });
+
   test("does not start a page while another is loading", async () => {
     const { load, settle } = pages();
     const input = baseInput({ loading: true, load });

@@ -97,9 +97,9 @@ once newer rows push it out of the live tail.
   is always in the window, and noting it turns every streamed write into
   `revisedMessages` once it ages out. Clear the list when the history is
   replaced. Pass `revisedRowsOverflowVersion` with the notes: count/byte
-  omissions produce `historyReconciliationToken`, whose change invalidates
-  retained history so it can be re-paged. Tokens stay stable during unrelated
-  live deltas; bounded notes must never silently certify stale held rows.
+  omissions produce `historyReconciliationToken`, whose change makes readers
+  re-read the history they hold. Tokens stay stable during unrelated live
+  deltas; bounded notes must never silently certify stale held rows.
 - **Pages never cut a row.** A page sends a row larger than its target whole,
   up to `BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES`, because the next cursor starts
   before that row, never inside it.

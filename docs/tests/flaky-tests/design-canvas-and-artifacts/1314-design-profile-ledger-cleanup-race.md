@@ -217,3 +217,14 @@ mise run test:logged -- --name branch-browser-profile -- bun test --cwd apps/bac
 No cleanup implementation, assertion, timeout, or skip changed. This isolated
 pass confirms the existing intermittent observation; it does not establish a new
 root cause or resolve the flake.
+
+
+## Held-history reconciliation review — 2026-11-01
+
+Preparation's `mise run test` repeated the remaining-ledger assertion after
+326.35 ms with two backend workers. The backend group reported 12,523 passed,
+107 skipped and one failed (469.38 s). The unchanged complete owner passed
+alone with `mise run test:logged -- --name prior-design-failure -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 2.0 s). Preparation evidence is
+`.orkestrator/review-artifacts/review-validation-b8f98852-001a-4729-aa23-7e07f56c9ac5/validation-04.stdout.txt`.
+No design implementation, assertion, timeout or skip changed.

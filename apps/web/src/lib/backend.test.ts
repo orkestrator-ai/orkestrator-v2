@@ -2530,6 +2530,72 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
+  describe("commands an older backend may not know", () => {
+    const unknown = (name: string) => new Error(`Unknown command: ${name}`);
+
+    test("arrangeProjectsByIntent sends the gesture, and the preview only to an older backend", async () => {
+      const intent = { kind: "sort-folder", folder: "Work" } as const;
+      const preview = { projectIds: ["b", "a"], folders: {} };
+      invokeMock.mockResolvedValueOnce([]);
+      await backendWrappers.arrangeProjectsByIntent(intent, preview);
+      expect(invokeMock).toHaveBeenLastCalledWith("arrange_projects_by_intent", { intent });
+
+      invokeMock.mockRejectedValueOnce(unknown("arrange_projects_by_intent"));
+      invokeMock.mockResolvedValueOnce([]);
+      await backendWrappers.arrangeProjectsByIntent(intent, preview);
+      expect(invokeMock).toHaveBeenLastCalledWith("arrange_projects", preview);
+
+      invokeMock.mockClear();
+      invokeMock.mockRejectedValueOnce(new Error("denied"));
+      await expect(backendWrappers.arrangeProjectsByIntent(intent, preview)).rejects.toThrow(
+        "denied",
+      );
+      expect(invokeMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("patchRepositorySettings sends edits, and the whole record only to an older backend", async () => {
+      const whole = { defaultBranch: "dev", prBaseBranch: "main" };
+      invokeMock.mockResolvedValueOnce({});
+      await backendWrappers.patchRepositorySettings(
+        "p",
+        { defaultBranch: "dev" },
+        ["filesToCopy"],
+        whole,
+      );
+      expect(invokeMock).toHaveBeenLastCalledWith("patch_repository_settings", {
+        projectId: "p",
+        updates: { defaultBranch: "dev" },
+        unset: ["filesToCopy"],
+      });
+
+      invokeMock.mockRejectedValueOnce(unknown("patch_repository_settings"));
+      invokeMock.mockResolvedValueOnce({});
+      await backendWrappers.patchRepositorySettings("p", { defaultBranch: "dev" }, [], whole);
+      expect(invokeMock).toHaveBeenLastCalledWith("update_repository_config", {
+        projectId: "p",
+        repoConfig: whole,
+      });
+    });
+
+    test("writeLocalFile and writeContainerFile carry a precondition only when given one", async () => {
+      invokeMock.mockResolvedValue("/path");
+      const expected = { sha256: "a".repeat(64) };
+      await backendWrappers.writeLocalFile("/repo", "a.txt", "eA==", expected);
+      expect(invokeMock).toHaveBeenLastCalledWith("write_local_file", {
+        worktreePath: "/repo",
+        filePath: "a.txt",
+        base64Data: "eA==",
+        expected,
+      });
+      await backendWrappers.writeContainerFile("c", "a.txt", "eA==");
+      expect(invokeMock).toHaveBeenLastCalledWith("write_container_file", {
+        containerId: "c",
+        filePath: "a.txt",
+        base64Data: "eA==",
+      });
+    });
+  });
+
   test("readBinaryFile decodes the base64 wrapper result", async () => {
     await expect(backendWrappers.readBinaryFile("/tmp/image.bin")).resolves.toEqual(
       Uint8Array.from(new TextEncoder().encode("binary")),

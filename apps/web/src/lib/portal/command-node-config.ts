@@ -14,7 +14,7 @@ import { invoke } from "@/lib/native/backend";
 import type { AppConfig, GlobalConfig } from "@/types";
 import { portalStore } from "./portal-store";
 import { portalInvoke, workspaceTarget } from "./portal-transport";
-import { isUnknownBackendCommand } from "@/lib/backend/unknown-command";
+import { isUnknownBackendCommand } from "./unknown-command";
 
 type ConfigInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 

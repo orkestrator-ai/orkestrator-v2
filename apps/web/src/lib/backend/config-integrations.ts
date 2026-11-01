@@ -45,7 +45,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 import type { PrDetectionResult } from "./projects-environments";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
-import { isUnknownBackendCommand } from "./unknown-command";
+import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
 
 /**
  * Workspace machine settings with the command node's inherited preferences.

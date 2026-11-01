@@ -2115,7 +2115,7 @@ for (const rejectWrite of [false, true]) {
         },
         b: { projects: [{ id: "p", name: "App B", order: 0 }], environments: {} },
       },
-      respond: ({ command }) => (command === "arrange_projects" ? write : undefined),
+      respond: ({ command }) => (command === "arrange_projects_by_intent" ? write : undefined),
     });
     useMachineViewStore.getState().setFolderKeyCollapsed("bk_a/work", true);
     renderWithFederation(<RemoteSections />);
@@ -2125,12 +2125,11 @@ for (const rejectWrite of [false, true]) {
       target: { value: "  Work  " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add to Folder" }));
-    await waitFor(() => expect(fake.callsTo("a", "arrange_projects")).toHaveLength(1));
-    expect(fake.callsTo("a", "arrange_projects")[0]!.args).toEqual({
-      projectIds: ["q", "p"],
-      folders: { p: "Work" },
+    await waitFor(() => expect(fake.callsTo("a", "arrange_projects_by_intent")).toHaveLength(1));
+    expect(fake.callsTo("a", "arrange_projects_by_intent")[0]!.args).toEqual({
+      intent: { kind: "add-to-folder", projectId: "p", folder: "Work" },
     });
-    expect(fake.callsTo("b", "arrange_projects")).toHaveLength(0);
+    expect(fake.callsTo("b", "arrange_projects_by_intent")).toHaveLength(0);
     await screen.findByRole("button", { name: "Collapse folder Work" });
     await act(async () => finish(rejectWrite ? new Error("write denied") : { ok: true }));
     if (rejectWrite) {
@@ -2141,10 +2140,9 @@ for (const rejectWrite of [false, true]) {
     } else {
       fireEvent.contextMenu(screen.getByRole("button", { name: "App A" }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from Folder" }));
-      await waitFor(() => expect(fake.callsTo("a", "arrange_projects")).toHaveLength(2));
-      expect(fake.callsTo("a", "arrange_projects")[1]!.args).toEqual({
-        projectIds: ["q", "p"],
-        folders: { p: null },
+      await waitFor(() => expect(fake.callsTo("a", "arrange_projects_by_intent")).toHaveLength(2));
+      expect(fake.callsTo("a", "arrange_projects_by_intent")[1]!.args).toEqual({
+        intent: { kind: "remove-from-folder", projectId: "p" },
       });
       expectDomAbsent(
         screen.getByRole("button", { name: "App A" }).closest("[data-project-folder-content]"),

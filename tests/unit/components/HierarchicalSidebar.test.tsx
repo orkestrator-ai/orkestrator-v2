@@ -105,7 +105,7 @@ const createProjectFromScratchMock = mock(async () => {});
 const removeProjectMock = mock(async (_projectId: string) => {});
 const updateProjectMock = mock(async () => {});
 const reorderProjectsMock = mock(async () => {});
-const arrangeProjectsMock = mock(async () => {});
+const arrangeProjectsMock = mock(async (_intent: unknown) => {});
 let projectsValue: Project[] = [project];
 let environmentsValue: Environment[] = [];
 let projectsLoadingValue = false;
@@ -128,7 +128,7 @@ mock.module("@/hooks/useProjects", () => ({
     removeProject: removeProjectMock,
     updateProject: updateProjectMock,
     reorderProjects: reorderProjectsMock,
-    arrangeProjects: arrangeProjectsMock,
+    arrangeProjectsByIntent: arrangeProjectsMock,
     validateGitUrl: mock(async () => true),
     isLoading: projectsLoadingValue,
   }),
@@ -2601,7 +2601,11 @@ describe("HierarchicalSidebar", () => {
       } as DragEndEvent);
       await Promise.resolve();
     });
-    expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-2", "project-1"], {});
+    expect(arrangeProjectsMock).toHaveBeenCalledWith({
+      kind: "move",
+      activeId: "project-1",
+      overId: "project-2",
+    });
 
     act(() => {
       currentDndContextProps().onDragStart?.({ active: { id: "env-1" } } as DragStartEvent);
@@ -2966,10 +2970,11 @@ describe("HierarchicalSidebar", () => {
       fireEvent.change(input, { target: { value: "  Work  " } });
       fireEvent.click(screen.getByRole("button", { name: "Add to Folder" }));
 
-      // The folder takes the project's own slot, so nothing is reordered.
       await waitFor(() =>
-        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
-          "project-1": "Work",
+        expect(arrangeProjectsMock).toHaveBeenCalledWith({
+          kind: "add-to-folder",
+          projectId: "project-1",
+          folder: "Work",
         }),
       );
     });
@@ -2987,8 +2992,10 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(screen.getByRole("button", { name: "Add to Folder" }));
 
       await waitFor(() =>
-        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
-          "project-2": "Work",
+        expect(arrangeProjectsMock).toHaveBeenCalledWith({
+          kind: "add-to-folder",
+          projectId: "project-2",
+          folder: "Work",
         }),
       );
     });
@@ -3057,8 +3064,10 @@ describe("HierarchicalSidebar", () => {
         await Promise.resolve();
       });
 
-      expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-2", "project-1"], {
-        "project-2": "Work",
+      expect(arrangeProjectsMock).toHaveBeenCalledWith({
+        kind: "move",
+        activeId: "project-2",
+        overId: "project-folder:work",
       });
     });
 
@@ -3079,7 +3088,11 @@ describe("HierarchicalSidebar", () => {
         await Promise.resolve();
       });
 
-      expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-2", "project-1"], {});
+      expect(arrangeProjectsMock).toHaveBeenCalledWith({
+        kind: "move",
+        activeId: "project-folder:work",
+        overId: "project-2",
+      });
     });
 
     test("only a foldered project offers to leave its folder", async () => {
@@ -3095,8 +3108,9 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from Folder" }));
 
       await waitFor(() =>
-        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
-          "project-1": null,
+        expect(arrangeProjectsMock).toHaveBeenCalledWith({
+          kind: "remove-from-folder",
+          projectId: "project-1",
         }),
       );
     });
@@ -3112,9 +3126,9 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(await screen.findByRole("menuitem", { name: "Remove Folder" }));
 
       await waitFor(() =>
-        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
-          "project-1": null,
-          "project-2": null,
+        expect(arrangeProjectsMock).toHaveBeenCalledWith({
+          kind: "ungroup-folder",
+          folder: "Work",
         }),
       );
     });
@@ -3131,24 +3145,11 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
 
       await waitFor(() =>
-        expect(arrangeProjectsMock).toHaveBeenCalledWith(
-          ["project-alpha", "project-zulu", "project-outside"],
-          {},
-        ),
+        expect(arrangeProjectsMock).toHaveBeenCalledWith({
+          kind: "sort-folder",
+          folder: "Work",
+        }),
       );
-    });
-
-    test("does not persist a folder that is already alphabetized", async () => {
-      projectsValue = [
-        { ...project, id: "project-alpha", name: "Alpha", folder: "Work", order: 0 },
-        { ...secondProject, id: "project-zulu", name: "Zulu", folder: "Work", order: 1 },
-      ];
-      render(<HierarchicalSidebar />);
-
-      fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
-      fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
-
-      expect(arrangeProjectsMock).not.toHaveBeenCalled();
     });
 
     test("sorts a collapsed folder without expanding it", async () => {
@@ -3164,7 +3165,10 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
 
       await waitFor(() =>
-        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-alpha", "project-zulu"], {}),
+        expect(arrangeProjectsMock).toHaveBeenCalledWith({
+          kind: "sort-folder",
+          folder: "Work",
+        }),
       );
       expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
       expect(screen.getByTitle("Expand folder Work")).toBeTruthy();
@@ -3211,9 +3215,10 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(screen.getByRole("button", { name: "Rename" }));
 
       await waitFor(() =>
-        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
-          "project-1": "Personal",
-          "project-2": "Personal",
+        expect(arrangeProjectsMock).toHaveBeenCalledWith({
+          kind: "rename-folder",
+          folder: "Work",
+          name: "Personal",
         }),
       );
     });
@@ -3236,9 +3241,10 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(screen.getByRole("button", { name: "Rename" }));
 
       await waitFor(() =>
-        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
-          "project-1": "Team Work",
-          "project-2": "Team Work",
+        expect(arrangeProjectsMock).toHaveBeenCalledWith({
+          kind: "rename-folder",
+          folder: "Work",
+          name: "Team  Work",
         }),
       );
       await waitFor(() =>

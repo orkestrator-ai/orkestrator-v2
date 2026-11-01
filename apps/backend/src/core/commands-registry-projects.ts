@@ -2,6 +2,7 @@ import { boundSummaryIcons } from "./nodes/index.js";
 import nodePath from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
+import { parseProjectArrangementIntent } from "@orkestrator/protocol/project-arrangement";
 import {
   isResourceChange,
   type ResourceChange,
@@ -525,6 +526,13 @@ export function registerProjectCommands(
   register("reorder_projects", ({ projectIds }, { storage }) =>
     storage.reorderProjects(asStringArray(projectIds)),
   );
+  // The gesture rather than its result: resolved against the current projects
+  // under the store lock, so a client's stale copy cannot undo another's work.
+  register("arrange_projects_by_intent", async (args, { storage }) => {
+    assertOnlyKeys(args, ["intent"], "arrange_projects_by_intent argument");
+    return storage.arrangeProjectsByIntent(parseProjectArrangementIntent(args.intent));
+  });
+  // Kept for older clients and nodes; current clients send the intent above.
   // One command rather than a reorder plus N updates: the sidebar derives a
   // folder's position from its first member, so a half-applied arrangement is
   // a visibly wrong tree rather than a slightly stale one.

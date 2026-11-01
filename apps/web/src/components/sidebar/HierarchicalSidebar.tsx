@@ -113,13 +113,6 @@ import {
   normalizeProjectFolderName,
   parseProjectFolderDragId,
   projectSortableIds,
-  resolveAddProjectToFolder,
-  resolveProjectArrangement,
-  resolveRemoveProjectFromFolder,
-  resolveRenameProjectFolder,
-  resolveSortProjectFolder,
-  resolveUngroupProjectFolder,
-  type ProjectArrangement,
   type ProjectFolderEntry,
 } from "@/lib/project-folders";
 
@@ -482,7 +475,7 @@ export function HierarchicalSidebar() {
     createProjectFromScratch,
     removeProject,
     updateProject,
-    arrangeProjects,
+    arrangeProjectsByIntent,
     validateGitUrl,
     isLoading: projectsLoading,
   } = useProjects();
@@ -701,12 +694,6 @@ export function HierarchicalSidebar() {
     setActiveType(projects.some((p) => p.id === draggedId) ? "project" : "environment");
   };
 
-  /** Persists one arrangement, or nothing when the gesture was a no-op. */
-  const applyArrangement = async (arrangement: ProjectArrangement | null): Promise<void> => {
-    if (!arrangement) return;
-    await arrangeProjects(arrangement.projectIds, arrangement.folders);
-  };
-
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
@@ -717,7 +704,7 @@ export function HierarchicalSidebar() {
     const droppedOnId = String(over.id);
     try {
       if (activeType === "project" || activeType === "folder") {
-        await applyArrangement(resolveProjectArrangement(draggedId, droppedOnId, projects));
+        await arrangeProjectsByIntent({ kind: "move", activeId: draggedId, overId: droppedOnId });
         return;
       }
       const reorder = resolveSidebarReorder(
@@ -734,14 +721,14 @@ export function HierarchicalSidebar() {
   };
 
   const handleAddToFolder = async (projectId: string, folderName: string): Promise<void> => {
-    await applyArrangement(resolveAddProjectToFolder(projects, projectId, folderName));
+    await arrangeProjectsByIntent({ kind: "add-to-folder", projectId, folder: folderName });
     // A folder the user just filed something into has to be visible, otherwise
     // the project appears to have vanished from the sidebar.
     setProjectFolderCollapsed(folderName, false);
   };
 
   const handleRemoveFromFolder = (projectId: string): void => {
-    void applyArrangement(resolveRemoveProjectFromFolder(projects, projectId)).catch((err) => {
+    void arrangeProjectsByIntent({ kind: "remove-from-folder", projectId }).catch((err) => {
       console.error("Failed to remove project from folder:", err);
     });
   };
@@ -752,7 +739,7 @@ export function HierarchicalSidebar() {
     // runs, and a key that no longer matches leaves the renamed folder expanded
     // while stranding the old entry in the persisted list forever.
     const storedName = normalizeProjectFolderName(nextName);
-    void applyArrangement(resolveRenameProjectFolder(projects, folderName, nextName))
+    void arrangeProjectsByIntent({ kind: "rename-folder", folder: folderName, name: nextName })
       .then(() => {
         if (storedName && isProjectFolderCollapsed(collapsedProjectFolders, folderName)) {
           setProjectFolderCollapsed(folderName, false);
@@ -765,7 +752,7 @@ export function HierarchicalSidebar() {
   };
 
   const handleUngroupFolder = (folderName: string): void => {
-    void applyArrangement(resolveUngroupProjectFolder(projects, folderName))
+    void arrangeProjectsByIntent({ kind: "ungroup-folder", folder: folderName })
       .then(() => setProjectFolderCollapsed(folderName, false))
       .catch((err) => {
         console.error("Failed to remove project folder:", err);
@@ -773,7 +760,7 @@ export function HierarchicalSidebar() {
   };
 
   const handleSortFolder = (folderName: string): void => {
-    void applyArrangement(resolveSortProjectFolder(projects, folderName)).catch((err) => {
+    void arrangeProjectsByIntent({ kind: "sort-folder", folder: folderName }).catch((err) => {
       console.error("Failed to sort project folder:", err);
     });
   };

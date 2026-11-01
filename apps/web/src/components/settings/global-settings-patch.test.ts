@@ -3,16 +3,14 @@ import { shippedReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
 import { useConfigStore } from "@/stores/configStore";
 import { storedCoreFields } from "./GlobalSettings";
-import { globalConfigPatchFromCoreFields, isEmptyGlobalConfigPatch } from "./global-settings-patch";
+import { globalConfigPatchFromCoreFields } from "./global-settings-patch";
 import { repositorySettingsPatch } from "./repository-settings-patch";
 
 const baseline = storedCoreFields(useConfigStore.getState().config.global);
 
 describe("globalConfigPatchFromCoreFields", () => {
   test("an unchanged form produces an empty patch", () => {
-    expect(isEmptyGlobalConfigPatch(globalConfigPatchFromCoreFields(baseline, baseline))).toBe(
-      true,
-    );
+    expect(globalConfigPatchFromCoreFields(baseline, baseline)).toEqual({ patch: {}, unset: [] });
   });
 
   test("sends only the changed fields", () => {

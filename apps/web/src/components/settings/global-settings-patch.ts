@@ -137,7 +137,3 @@ export function globalConfigPatchFromCoreFields(
   }
   return { patch: patch as Partial<GlobalConfig>, unset };
 }
-
-export function isEmptyGlobalConfigPatch(value: GlobalConfigPatch): boolean {
-  return Object.keys(value.patch).length === 0 && value.unset.length === 0;
-}

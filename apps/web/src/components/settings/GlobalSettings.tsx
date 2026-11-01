@@ -66,11 +66,7 @@ import {
 import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import { parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
-import {
-  globalConfigPatchFromCoreFields,
-  isEmptyGlobalConfigPatch,
-  type CoreFieldsSnapshot,
-} from "./global-settings-patch";
+import { globalConfigPatchFromCoreFields, type CoreFieldsSnapshot } from "./global-settings-patch";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import { cn } from "@/lib/utils";
 
@@ -830,21 +826,21 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         githubPropagationFailureToastShownRef.current = false;
       }
 
-      if (!isEmptyGlobalConfigPatch(changes)) {
-        const newConfig = await backend.patchGlobalConfig(changes.patch, {
-          unset: changes.unset,
-          machine,
-        });
-        if (coreSignatureRef.current !== signature) {
-          // An edit landed while this write was in flight. Mark the returned store
-          // state as already accounted for so the sync effect does not reset the
-          // form to this write's values and discard the newer edit; the debounce
-          // will persist it next, diffed against this write's result.
-          syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
-          syncedGlobalRef.current = newConfig.global;
-        }
-        setConfig(newConfig);
+      // A retry of a failed credential propagation has no changes to send; the
+      // empty patch writes nothing and answers with the authoritative config.
+      const newConfig = await backend.patchGlobalConfig(changes.patch, {
+        unset: changes.unset,
+        machine,
+      });
+      if (coreSignatureRef.current !== signature) {
+        // An edit landed while this write was in flight. Mark the returned store
+        // state as already accounted for so the sync effect does not reset the
+        // form to this write's values and discard the newer edit; the debounce
+        // will persist it next, diffed against this write's result.
+        syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
+        syncedGlobalRef.current = newConfig.global;
       }
+      setConfig(newConfig);
       if (useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true)) {
         // The Claude plan read goes unavailable when host credentials are off,
         // so the card must re-read rather than serve the pre-toggle snapshot.

@@ -363,3 +363,19 @@ changed; the existing timing investigation remains open.
 
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8VTwNj/bridges.log.gz`
 and `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.53Ejpu/repair-catalogue-owner.log.gz`.
+
+## Live logging review repair validation — 2026-11-01
+
+Original command: `mise run test:logged -- --name review-repair-default -- mise run test`
+on the shared macOS host, workspace/root/bridges/protocol reservations 5/1/2/1,
+with the web package using two workers and the bridge packages one worker each.
+The run waited 925 seconds for another worktree's aggregate reservation while
+browser and Electron checks were also active. No assertion, timeout, skip or
+implementation in this owner changed.
+
+`a cold app-server child > two pre-plugin answers stay stale until late plugins
+are observed and confirmed` expected `stale`, received `ready` at line 273
+(80.14 ms). The complete unchanged owner passed in 1.3 s:
+`mise run test:logged -- --name codex-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures`.
+Evidence: aggregate `orkestrator-test-run.BSqVX9/bridges.log` (compressed at
+finalization). The settling timer remains an unconfirmed cause.

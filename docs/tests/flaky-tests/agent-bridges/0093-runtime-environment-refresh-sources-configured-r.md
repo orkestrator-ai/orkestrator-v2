@@ -116,3 +116,24 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Evidence:** `orkestrator-test-run.oNZxqS/bridges.log` below the host temporary
   directory (compressed at aggregate finalization). This confirms the existing
   timing-sensitive recurrence; no runtime environment code or deadline changed.
+
+## Live logging review repair validation — 2026-11-01
+
+Original command: `mise run test:logged -- --name review-repair-default -- mise run test`
+on the shared macOS host, workspace/root/bridges/protocol reservations 5/1/2/1,
+with the web package using two workers and the bridge packages one worker each.
+The run waited 925 seconds for another worktree's aggregate reservation while
+browser and Electron checks were also active. No assertion, timeout, skip or
+implementation in this owner changed.
+
+The source-helper case timed out at 15,048.06 ms. Its first unchanged owner
+rerun also timed out (15,012.73 ms, eight pass and one fail):
+`mise run test:logged -- --name codex-runtime-env-owner -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures`.
+A second unchanged owner passed in 0.6 s with the same arguments and name
+`codex-runtime-env-owner-rerun`. Detached origin/main `4626c4d7a` also passed its
+owner in 0.6 s; that pass is not evidence that the timeout is main-specific.
+This confirms intermittence; the cause remains unknown.
+
+Evidence: aggregate `orkestrator-test-run.BSqVX9/bridges.log` (compressed at
+aggregate finalization), first owner `orkestrator-test-run.8in1Rk/codex-runtime-env-owner.log.gz`,
+below the host temporary directory.

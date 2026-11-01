@@ -3,11 +3,11 @@ import { mkdtemp, writeFile, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger, resetLogger } from "@orkestrator/protocol/logger";
-import { installProductionApplicationLogging } from "./application-logging";
+import { installProductionApplicationLogging } from "../electron/application-logging";
 import { logPolicyChangedRecord } from "@orkestrator/protocol/node/log-policy";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
-import { createLiveLogPolicy } from "./live-log-policy";
-import { relayBackendLine } from "./backend-process";
+import { createLiveLogPolicy } from "../electron/live-log-policy";
+import { relayBackendLine } from "../electron/backend-process";
 
 const dirs: string[] = [];
 afterEach(async () => {

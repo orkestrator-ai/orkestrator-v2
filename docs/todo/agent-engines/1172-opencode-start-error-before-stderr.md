@@ -15,7 +15,9 @@ Analysed 2026-10-31 against `main` at `931e55417`.
 
 ### Tasks
 
-1. **Decide the startup error after stdio has ended**. Status: open.
+1. **Decide the startup error after stdio has ended**. Status: done
+   (2026-11-01) in code and offline tests; 0723's aggregate recurrence check
+   is still open.
 
 ### 1. Decide after stdio has ended
 
@@ -30,7 +32,9 @@ through `openCodeStderrReportsLockedDatabase`. The retry loop is
 `startLocalServer…` at `:674`, keyed on `isOpenCodeDatabaseLockedError`. Node
 and Bun emit `close` after the child's streams end; `exit` can come first.
 
-**Investigation.** Still present on 2026-10-31. Flake 0723 recurred three
+**Investigation.** Rechecked 2026-11-01 against `main` at `93b99bfba`: still
+present, `onExit` decided the error synchronously from the stderr read so far.
+Still present on 2026-10-31. Flake 0723 recurred three
 times with exactly this shape: received "exited before becoming healthy (code
 1)" right after the child printed `database is locked`, where the test
 expected the retry path's "shutting down".
@@ -48,15 +52,24 @@ expected the retry path's "shutting down".
 
 ## Current state
 
-Race present; 0723 open.
+Fixed 2026-11-01. `waitForLocalServerStartup` (`commands-servers.ts`) now
+decides an OpenCode exit on the child's `close`, once stdio has ended, or
+after `OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS` (1 s, `opencode-host-start.ts`)
+following `exit`, whichever comes first, using the stderr read by then. A
+health result that lands after `exit` is ignored. Other server kinds still
+decide on `exit`, since only OpenCode's stderr is read. Tests in
+`opencode-host-start.test.ts` (`waitForLocalServerStartup on an OpenCode
+exit`) drive a fake child that emits `exit` before the `database is locked`
+chunk, with and without a `close`; the first two fail on the old code. 0723
+stays open until an aggregate run shows it gone.
 
 ## Outstanding work
 
 ### Code
 
-1. The `close`-based decision with a bound, and a test that delivers `exit`
-   before the `database is locked` chunk (a fake child can order them).
-2. Then rerun 0723's owner in an aggregate and resolve the case if it holds.
+1. ~~The `close`-based decision with a bound, and a test that delivers `exit`
+   before the `database is locked` chunk.~~ Done 2026-11-01.
+2. Rerun 0723's owner in an aggregate and resolve the case if it holds.
 
 ## Constraints and rationale
 
@@ -67,6 +80,19 @@ Race present; 0723 open.
 
 - 2026-10-31: filed here, not in 0030, because it is a product bug (a missed
   retry and a wrong error), not test health.
+- 2026-11-01: took the recommended option, decide on `close` with a bound
+  after `exit`, not a fixed grace after `exit`. A normal exit decides as soon
+  as stdio closes, with no added wait.
+- 2026-11-01: the bound is 1 s. A real exiting OpenCode closes its pipes at
+  once, so the bound only matters when a surviving grandchild holds stderr
+  open. It is longer than any stderr flush we expect and short against the
+  start budget, and the start keeps the host turn for at most that much
+  longer. Tests pass a shorter bound.
+- 2026-11-01: only OpenCode waits for `close`. The other kinds' failure text
+  does not depend on stderr, so they keep deciding on `exit` and gain no
+  delay.
+- 2026-11-01: once `exit` has fired, a later health success or failure does
+  not decide the start. An exited server is a failed start, as before.
 
 ## Open questions
 

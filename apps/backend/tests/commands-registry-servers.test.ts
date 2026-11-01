@@ -197,6 +197,8 @@ exit 0
     const { context } = createContext(environment, {
       globalConfig: { codexMaxConcurrentThreads: 9, debugLogging: true },
     });
+    const bridgeStarted = mock((_target: { agent: string; baseUrl: string }) => undefined);
+    context.runtime.logPolicy = { bridgeStarted } as never;
     const commands = createCommandRegistry();
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
@@ -261,6 +263,12 @@ exit 0
         expect(execLog).not.toContain("CODEX_HOME=");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
+        // Every start, including one that finds it running: the service dedupes.
+        expect(bridgeStarted).toHaveBeenCalled();
+        expect(bridgeStarted.mock.calls[0]![0]).toMatchObject({
+          agent: "codex",
+          baseUrl: `http://127.0.0.1:${hostPort}`,
+        });
         expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
         expect(execLog).not.toContain("setsid node");
       });

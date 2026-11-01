@@ -12,6 +12,7 @@ describe("refreshClaudeModelCatalog", () => {
     const updateEnvironment = mock(async () => undefined);
     const cacheAgentModelCatalog = mock(async () => undefined);
     const emitted: unknown[][] = [];
+    const bridgeStarted = mock(() => undefined);
     const context = {
       storage: {
         getEnvironment: async () => ({
@@ -26,6 +27,7 @@ describe("refreshClaudeModelCatalog", () => {
         cacheAgentModelCatalog,
       },
       emit: (...args: unknown[]) => emitted.push(args),
+      runtime: { logPolicy: { bridgeStarted } },
     } as unknown as CommandContext;
 
     const fetchCatalog = mock(async () => ({
@@ -54,6 +56,7 @@ describe("refreshClaudeModelCatalog", () => {
     expect(fetchCatalog).toHaveBeenCalledWith(43123, "catalog-token", true);
 
     expect(startContainer).toHaveBeenCalledWith("container-123", undefined, true, 6);
+    expect(bridgeStarted).toHaveBeenCalledTimes(1);
     expect(snapshot).toMatchObject({
       environmentId: "docker-env",
       source: "sdk",

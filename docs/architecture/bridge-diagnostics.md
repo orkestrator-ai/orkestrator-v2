@@ -2,17 +2,38 @@
 
 Status: Living — shared bridge debug logging.
 
-Enable **Settings → Save Logs for Debugging**, save, and restart Orkestrator
-with the updated build. The desktop log sink reads the setting at startup.
-The backend explicitly passes `ORKESTRATOR_BRIDGE_DEBUG=1` or `0` to every
-new local and Docker bridge. Changing the setting does not restart an existing
-agent or interrupt its work. Restart Docker bridges as well if they were
-already running before the setting changed.
+Set `bridge` or `bridge.diagnostics` to Debug or Trace in **Settings → Debug → Log
+Detail**, or the default level to either. It applies to running local and Docker
+bridges at once, with no restart. To keep what they write, turn on **Save Logs to
+Disk** too; that also applies at once. [logging.md](logging.md#live-settings) covers
+both controls and how the setting reaches a bridge.
 
-Standalone bridges accept the same variable. An unset common variable allows
-`CLAUDE_BRIDGE_DEBUG`, `CODEX_BRIDGE_DEBUG`, `CURSOR_BRIDGE_DEBUG`,
-`PI_BRIDGE_DEBUG`, or `ACP_BRIDGE_DEBUG` as a compatibility fallback. Only `1`
-enables logging; an explicit common `0` overrides every legacy flag.
+The backend also passes `ORKESTRATOR_BRIDGE_DEBUG=1` or `0` to every new local and
+Docker bridge, as its startup default until the setting arrives. Standalone bridges
+accept the same variable. An unset common variable allows `CLAUDE_BRIDGE_DEBUG`,
+`CODEX_BRIDGE_DEBUG`, `CURSOR_BRIDGE_DEBUG`, `PI_BRIDGE_DEBUG`, or `ACP_BRIDGE_DEBUG`
+as a compatibility fallback. Only `1` enables logging; an explicit common `0`
+overrides every legacy flag.
+
+## Turning detail on during a turn
+
+Every scope opens whether or not detail is on, and counts from the start. Only its
+writes are gated. So turning detail on writes one `event=heartbeat` snapshot straight
+away, covering the turn so far, and then one a minute. Keeping the scopes open costs
+a few counters and a sha256 per tool call on every turn, plus one unreferenced timer.
+No arguments are built for a snapshot while it is off.
+
+| Bridge | A running turn or process | Gap |
+| --- | --- | --- |
+| Claude | The turn's scope reports at once, with its pending tools and clocks. `debugLog` sites and HTTP summaries start from the change. | Debug events before the change were never recorded. |
+| Codex | The process scope reports at once. | None for this scope. Codex has no per-turn scope, on or off. |
+| Cursor | The turn's public scope reports at once, with its pending tools and clocks. The SDK seam installs at that moment, and stays installed. | A transport already running is adopted at its next frame, so a completely silent one is not seen. A local execution already in progress is not seen; only later ones are. `transportAttempts` and frame counts start from the change. |
+| Pi | The turn's scope reports at once, with its pending tools and approvals. | None. |
+| ACP/Grok | The process scope reports at once, with its counters and pending requests. | None. |
+
+A bridge without the route (an older container image) keeps its startup setting until
+its next start. A level change reaches only what is on the shared logger, so it has no
+visible effect on a bridge's own `console.*` lines until those migrate.
 
 Search for `[bridge-diagnostics]`. These lines have not moved onto the
 [shared logger](logging.md) yet, so they keep this format; they reach the desktop
@@ -56,7 +77,7 @@ Only exact, allowlisted console markers from the main frame and bounded lifecycl
 metadata enter the desktop log. Raw renderer console output, subframe messages,
 error messages, stacks, URLs, paths and backend responses are not forwarded.
 Duplicate events are suppressed per main-frame navigation, with a maximum of 32
-records per navigation. Existing Save Logs for Debugging and retention settings
+records per navigation. The existing Save Logs to Disk and retention settings
 apply. In the JSON log format (`ORKESTRATOR_LOG_FORMAT=json`) the same events are
 records with `"area":"desktop.startup"` and the event name, such as `ready`.
 
@@ -66,6 +87,7 @@ records with `"area":"desktop.startup"` and the event name, such as `ready`.
 snapshots, correlation ID hashing, metadata filtering, pending-operation bounds,
 event batching and log formatting. Bridge adapters describe their own events;
 they do not own logging timers or copy the privacy and size policies.
+`src/node/bridge-log-policy.ts` is the route every bridge shares.
 
 Each active diagnostic scope reports once a minute, plus lifecycle boundaries.
 SDK callbacks only update bounded counters. A scope belongs to the bridge turn
@@ -109,9 +131,8 @@ change retries, timeout budgets, approval decisions or cancellation semantics.
 ## Cursor SDK boundary snapshots
 
 Cursor also emits `event=sdk-snapshot` on the same timer and lifecycle
-boundaries, correlated by the same hashed `session` and `run`. It is enabled
-by the existing Save Logs for Debugging setting; install the updated build and
-restart Orkestrator (and existing Docker bridges) to activate it.
+boundaries, correlated by the same hashed `session` and `run`. It follows the same
+Log Detail setting as the other snapshots, with the gap the table above gives.
 
 `coverage=installed` means the pinned SDK's Bun diagnostic seam was installed.
 `coverage=unavailable` means the extra observations are missing, not that the

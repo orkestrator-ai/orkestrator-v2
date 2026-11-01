@@ -1,7 +1,7 @@
 # Application logging
 
-Status: Living. The shared logger, its vocabulary, and how entries reach the log
-file. Electron's main process is fully on it. The bridges, backend and renderer
+Status: Living. The shared logger, its vocabulary, how entries reach the log file,
+and the live settings that control them. Electron's main process is fully on it. The bridges, backend and renderer
 are migrating; `tests/unit/raw-console-ratchet.test.ts` lists what is left.
 
 ## Using it
@@ -36,8 +36,9 @@ Node-only setup is in `src/node/logger-environment.ts`.
 | `debug` | Detail for investigating one area. | Off |
 | `trace` | Per-item detail too heavy for `debug`. | Off |
 
-A site moved to `debug` disappears from normal logs, including from a saved log.
-Treat that as a decision to review, not a tidy-up.
+A site moved to `debug` disappears from normal logs, including from a saved log,
+until someone turns on **Log Detail**. Treat that as a decision to review, not a
+tidy-up.
 
 ### Hot paths
 
@@ -143,16 +144,96 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
   `console.debug`, because `console.trace` prints a stack of its own and neither
   the bounded console nor the file tee wraps it.
 
-### Levels at startup
+## Live settings
 
-`ORKESTRATOR_LOG_LEVEL` takes a default, areas, or both: `warn`,
-`updater=debug` or `warn,updater=debug,desktop.dialog=trace`. An area covers its
-children unless a child has its own entry: `desktop=debug` also covers
-`desktop.dialog`. The default is `info`.
+**Settings → Debug** has two controls. Neither needs a restart, and neither
+interrupts a running agent.
 
-This is read once at startup and is the only control. Live settings and a settings
-screen are undecided. **Save Logs for Debugging** still decides whether anything is
-saved, and `ORKESTRATOR_BRIDGE_DEBUG` still follows it; neither changed.
+| Control | Config keys | Decides |
+| --- | --- | --- |
+| **Save Logs to Disk**, with retention | `debugLogging`, `debugLogRetentionDays` | Whether what is written reaches the log file, and for how long it stays. |
+| **Log Detail** | `logDetail` (`level`, `areaLevels`) | What each process writes: a default level and levels by area. |
+
+An area covers its children unless a child has its own entry: `desktop=debug` also
+covers `desktop.dialog`. The default is `info`. Bridge snapshots
+([bridge-diagnostics.md](bridge-diagnostics.md)) run when the level in force for
+`bridge.diagnostics` is `debug` or `trace`, so `bridge=debug` or a global `debug`
+turns them on.
+
+```mermaid
+flowchart LR
+  S[Settings save] --> C[(config.json)]
+  C -->|config change announced| B[Backend LogPolicyService]
+  B -->|configureLogger, writer| B1[Backend]
+  B -->|policy.changed on stdout: re-read config| E[Electron]
+  B -->|POST /debug/log-policy| R[Running bridges, local and Docker]
+  B -.->|resend at every bridge start| R
+```
+
+- **The backend owns the change.** `LogPolicyService` watches the config's change
+  announcements, so every writer counts: the settings screen, an older client, the
+  CLI. A write that leaves logging alone does nothing. Levels go to a bridge only
+  when they changed, so a saving change does not touch one.
+- **One audit line per change:** `logging` `policy.changed`, with `saving`,
+  `retentionDays`, `level` and `areaLevels` (names and levels only). It goes
+  straight to the sink because a change to `error` would otherwise filter it.
+- **Electron re-reads `config.json`.** The audit line reaches it on the relay and
+  only prompts the read, so an imitation of it costs one read and changes nothing.
+  The order keeps the line in the saved log: turning saving on starts the writer
+  first, and turning it off writes the line first. A config resource event and
+  every backend start also prompt a read, in case the bounded console dropped the
+  line. A file that cannot be read leaves the settings as they are.
+- **The file writer is always installed.** It writes only while saving is on, and
+  off costs one comparison per console call. Off announces any drop not yet
+  reported. The byte bounds and drop markers do not change. A retention change
+  while saving is on sweeps at once. While saving is off nothing sweeps, as before,
+  and files already on disk stay until saving returns or someone uses **Clean up
+  logs**.
+- **Upgrading.** Before the split, `debugLogging` meant saving and bridge snapshots.
+  A config without `logDetail` is upgraded once by `normalizePersistedConfig`: on
+  maps to `level: info`, `areaLevels: { bridge: debug }`, off to the defaults. The
+  key names stay, so a downgrade still reads them. `resolveLogDetail` applies the
+  same mapping for a reader that gets there first (Electron starts before its
+  backend). A save from a client that predates `logDetail` keeps the stored value.
+- **`ORKESTRATOR_LOG_LEVEL` stays on top.** It takes a default, areas, or both:
+  `warn`, `updater=debug` or `warn,updater=debug,desktop.dialog=trace`. Whoever set
+  it asked for those levels, so a settings save does not undo them, and the backend
+  sends the combined result to bridges. Unset, the settings are the whole answer.
+- **Renderer logs are not part of this.** See [What stays out of the persistent
+  log](#what-stays-out-of-the-persistent-log).
+
+### The bridge route
+
+`POST /debug/log-policy` on all five bridges, behind each bridge's existing token.
+OpenCode is not one of ours and has no route.
+
+```json
+{ "seq": 1793000000000, "level": "info", "areaLevels": { "bridge": "debug" } }
+```
+
+| Answer | Means |
+| --- | --- |
+| 200 `{ "applied": true, "seq", "diagnostics" }` | In force now. |
+| 200 `{ "applied": false, "stale": true, "seq" }` | The bridge holds a newer `seq`. The backend sends again past it. |
+| 400 `{ "error" }` | The body does not parse. Nothing changed. |
+| 404 or 405 | An older bridge. It keeps working and applies the setting at its next start, through `ORKESTRATOR_BRIDGE_DEBUG`. Never an error for the session. |
+
+It is metadata only, by the same rule as `/activity`: it reads no session, touches
+no liveness, hydrates nothing and re-attaches nothing. `seq` rises with each policy,
+seeded from the clock, so a delayed request cannot undo a newer one and a restarted
+backend still counts as newer.
+
+Delivery is best-effort. A failure is retried twice and then logged once as
+`policy.push-failed`, without the bridge's address or token. The listing skips health
+probes, because a bridge whose event loop is busy is the one whose detail matters
+most. Every bridge start resends if that bridge has not taken the current policy, and
+a backend start sends to whatever is running, because Docker bridges outlive it.
+`ORKESTRATOR_BRIDGE_DEBUG` is still set at launch, as the startup default until the
+first request arrives.
+
+Levels on a bridge only affect what is on the logger. Until the `console.*` calls in
+`bridges/` move onto it, a bridge's level changes nothing visible there; its
+diagnostic snapshots follow the setting regardless.
 
 ## The Electron relay
 
@@ -213,8 +294,8 @@ download URL loses its signature.
 
 The differential download plan is the library's `debug` output. It made up most of
 the lines in a sampled log. It is now off by default, and neither built nor written.
-To see it, set `ORKESTRATOR_LOG_LEVEL=updater=debug`; it appears as one line cut at
-2 KiB.
+To see it, set `updater` to Debug in **Log Detail**, or
+`ORKESTRATOR_LOG_LEVEL=updater=debug`; it appears as one line cut at 2 KiB.
 
 `library.message` is the one event whose field is vendor text rather than ours.
 

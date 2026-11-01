@@ -22,7 +22,9 @@ async function localTargets(context: CommandContext): Promise<BridgeLogPolicyTar
     if (!LOG_POLICY_BRIDGES.includes(agent)) continue;
     const environmentId = key.slice(separator + 1);
     const authToken = localServers.bridgeToken(agent, environmentId);
-    const port = localServerPort(await localRuntimeEnvironment(environmentId, context), agent);
+    // One environment that cannot be resolved must not cost the others their update.
+    const environment = await localRuntimeEnvironment(environmentId, context).catch(() => null);
+    const port = localServerPort(environment, agent);
     if (authToken && port) {
       targets.push({ agent, baseUrl: `http://127.0.0.1:${port}`, authToken });
     }
@@ -52,7 +54,7 @@ async function containerTarget(
 export async function listRunningBridgeTargets(
   context: CommandContext,
 ): Promise<BridgeLogPolicyTarget[]> {
-  const targets: BridgeLogPolicyTarget[] = await localTargets(context).catch(() => []);
+  const targets = await localTargets(context);
   const environments = await context.storage.loadEnvironments();
   const containerIds = Array.from(
     new Set(

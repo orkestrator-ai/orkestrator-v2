@@ -2992,6 +2992,8 @@ exit 1
       context.appRoot = appRoot;
       context.resourceRoot = resourceRoot;
       context.toolchainBinDir = toolchainBinDir;
+      const bridgeStarted = mock((_target: { agent: string; baseUrl: string }) => undefined);
+      context.runtime.logPolicy = { bridgeStarted } as never;
       const commands = createCommandRegistry();
 
       const started = (await commands.get("start_local_cursor_server_cmd")?.(
@@ -3000,6 +3002,11 @@ exit 1
       )) as { port: number; wasRunning: boolean };
       try {
         expect(started.wasRunning).toBe(false);
+        // The environment is only its startup default; the live setting follows.
+        expect(bridgeStarted.mock.calls[0]![0]).toMatchObject({
+          agent: "cursor",
+          baseUrl: `http://127.0.0.1:${started.port}`,
+        });
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
         // The bridge bootstraps from its own package directory and enters the
         // worktree itself once `bun` is up (see `applyWorkingDirectory` in the

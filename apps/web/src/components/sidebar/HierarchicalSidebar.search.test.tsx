@@ -23,6 +23,14 @@ import {
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
 
+/** A project's header button, found through its "+" button, which names project and machine. */
+async function findProjectHeading(project: string, machine: string): Promise<HTMLElement> {
+  const add = await screen.findByRole("button", {
+    name: `New environment in ${project} on ${machine}`,
+  });
+  return add.parentElement!.querySelector("button")!;
+}
+
 const initialView = useMachineViewStore.getState();
 const initialUI = useUIStore.getState();
 const initialProjects = useProjectStore.getState();
@@ -97,7 +105,10 @@ for (const { mode, offline } of [
         <HierarchicalSidebar />
       </FederationProvider>,
     );
-    expectDomAbsent(screen.queryByTitle("Open telegram-scraper on mbp3"), "hidden project");
+    expectDomAbsent(
+      screen.queryByRole("button", { name: "New environment in telegram-scraper on mbp3" }),
+      "hidden project",
+    );
     fireEvent.click(screen.getByTestId("project-search-trigger"));
     const input = await screen.findByRole("combobox", { name: "Search projects and environments" });
     fireEvent.change(input, { target: { value: "telegram" } });
@@ -106,7 +117,7 @@ for (const { mode, offline } of [
     });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    const button = await screen.findByTitle("Open telegram-scraper on mbp3");
+    const button = await findProjectHeading("telegram-scraper", "mbp3");
     // Shown in the central region, as a click on the row opens it.
     await waitFor(() => expect(button.getAttribute("aria-current")).toBe("page"));
     expect(button.closest("[data-project]")?.getAttribute("data-project")).toBe(key);

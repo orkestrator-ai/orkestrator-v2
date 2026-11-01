@@ -54,10 +54,11 @@ export interface RealmPanelControl {
 }
 
 /** Explicit board navigation overrides a node's default project landing tab. */
-export type RealmBoardTab = "coordinator" | "kanban" | "github" | "linear" | "features";
+export type RealmBoardTab = "home" | "coordinator" | "kanban" | "github" | "linear" | "features";
 
 function boardTab(value: unknown): RealmBoardTab | undefined {
-  return value === "coordinator" ||
+  return value === "home" ||
+    value === "coordinator" ||
     value === "kanban" ||
     value === "github" ||
     value === "linear" ||

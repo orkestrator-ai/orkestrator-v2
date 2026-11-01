@@ -1,21 +1,7 @@
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import {
-  FEDERATED_LINK_PARAM,
-  encodeResourceLink,
-  type EnvironmentRef,
-} from "@orkestrator/protocol/federation";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { FEDERATED_LINK_PARAM, encodeResourceLink } from "@orkestrator/protocol/federation";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment, FederatedProject } from "@/lib/federation/summaries";
 import {
@@ -42,9 +28,8 @@ export interface FederatedEnvironmentActions {
   restart: () => void;
   /** Forks it on its own machine, starts the fork there and opens it. */
   fork: (environmentType: "local" | "containerized") => void;
-  requestDelete: () => void;
-  /** The delete confirmation; render it alongside the row. */
-  deleteDialog: ReactNode;
+  /** Deletes it on its own machine; the row asks for confirmation first. */
+  remove: () => void;
 }
 
 /**
@@ -58,7 +43,6 @@ export function useFederatedEnvironmentActions(
 ): FederatedEnvironmentActions {
   const { portal } = useFederation();
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
-  const [pendingDelete, setPendingDelete] = useState<EnvironmentRef | null>(null);
   const [busy, setBusy] = useState(false);
 
   const open = () => {
@@ -112,40 +96,6 @@ export function useFederatedEnvironmentActions(
     );
   };
 
-  const deleteDialog = (
-    <AlertDialog
-      open={pendingDelete !== null}
-      onOpenChange={(next) => !next && setPendingDelete(null)}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            Delete “{environment.name}” on {machine.name}?
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            This deletes the environment on <strong>{machine.name}</strong>, including its
-            container, storage and recovery copies. Environments on other machines are not affected.
-            This cannot be undone.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            onClick={() => {
-              // The reference captured when the dialog opened, whatever is focused now.
-              const ref = pendingDelete;
-              setPendingDelete(null);
-              if (ref) void run("Delete", () => deleteFederatedEnvironment(portal, ref));
-            }}
-          >
-            Delete on {machine.name}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-
   return {
     busy,
     writable: isMachineWritable(machine),
@@ -195,8 +145,11 @@ export function useFederatedEnvironmentActions(
         );
       });
     },
-    requestDelete: () => setPendingDelete(environment.ref),
-    deleteDialog,
+    remove: () => {
+      // The reference this row was drawn for, whatever is focused now.
+      const ref = environment.ref;
+      void run("Delete", () => deleteFederatedEnvironment(portal, ref));
+    },
   };
 }
 

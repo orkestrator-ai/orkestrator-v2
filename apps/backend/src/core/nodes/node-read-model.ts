@@ -256,6 +256,7 @@ export class NodeReadModel {
         resource !== "environment" &&
         resource !== "environment-pr-health" &&
         resource !== "build-pipeline" &&
+        resource !== "agent-mail-summary" &&
         resource !== "config"
       ) {
         return;
@@ -469,6 +470,12 @@ export class NodeReadModel {
           : this.projectOfEnvironment(state, change.id);
       if (projectId) this.scheduleProjectRefresh(state, projectId);
       else void this.requestHydrate(nodeId);
+    } else if (change.resource === "agent-mail-summary") {
+      // The rows' mail badges. The change names no project, so every known
+      // project is re-read, through the same debounce as environment changes.
+      for (const project of state.projects) {
+        this.scheduleProjectRefresh(state, project.ref.projectId);
+      }
     }
   }
 

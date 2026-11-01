@@ -210,3 +210,26 @@ describe("aggregate projections", () => {
     expect(Array.from(collisions.entries())).toEqual([["teal", ["a", "b"]]]);
   });
 });
+
+test("build-active rows sort with working rows on bound and remote machines", () => {
+  for (const bound of [true, false]) {
+    const view = machine("build", "Build", {
+      bound,
+      environmentsByProject: new Map([
+        [
+          "p",
+          [
+            environment("bk_build", "idle", "p", { order: 0 }),
+            environment("bk_build", "build", "p", { order: 1, buildActive: true }),
+            environment("bk_build", "working", "p", { order: 2, activity: "working" }),
+          ],
+        ],
+      ]),
+    });
+    expect(activityRows([view]).map((row) => row.environment.name)).toEqual([
+      "build",
+      "working",
+      "idle",
+    ]);
+  }
+});

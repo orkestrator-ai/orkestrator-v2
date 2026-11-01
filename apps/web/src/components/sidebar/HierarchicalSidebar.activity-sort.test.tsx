@@ -1,5 +1,17 @@
 import { afterEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { useBoundMachineView } from "@/components/federation/useMachineViews";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { activityRows } from "@/lib/federation/aggregate";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
@@ -13,6 +25,7 @@ import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar, sortEnvironmentsByActivity } from "./HierarchicalSidebar";
 
 const originalNative = window.orkestrator;
+const initialBuilds = useBuildPipelineStore.getState();
 const initialView = useMachineViewStore.getState();
 const initialUI = useUIStore.getState();
 const initialProjects = useProjectStore.getState();
@@ -20,6 +33,7 @@ const initialEnvironments = useEnvironmentStore.getState();
 
 afterEach(() => {
   cleanup();
+  useBuildPipelineStore.setState(initialBuilds, true);
   uninstallDesktopFake();
   window.orkestrator = originalNative;
   useMachineViewStore.setState(initialView, true);
@@ -168,4 +182,45 @@ test("the static bottom bar follows the scrolling list, outside it", async () =>
   expect(scroll.nextElementSibling).toBe(bar);
   expect(bar.contains(settings)).toBe(true);
   expect(within(bar as HTMLElement).getByRole("button", { name: "Report a bug" })).toBeTruthy();
+});
+
+test("an active build sorts with working environments even when persisted activity is idle", () => {
+  const idle = { ...environment, id: "idle", agentActivityState: "idle", order: 0 } as Environment;
+  const build = { ...idle, id: "build", order: 1 };
+  const working = {
+    ...idle,
+    id: "working",
+    agentActivityState: "working",
+    order: 2,
+  } as Environment;
+  expect(
+    sortEnvironmentsByActivity(
+      [idle, build, working],
+      [project],
+      "priority",
+      new Set(["build"]),
+    ).map((row) => row.id),
+  ).toEqual(["build", "working", "idle"]);
+});
+
+test("bound machine activity order rehydrates from the active build store", async () => {
+  installDesktopFake({ list: connectionList([]), datasets: {} });
+  const idle = { ...environment, id: "idle", agentActivityState: "idle", order: 0 } as Environment;
+  const build = { ...idle, id: "build", order: 1 };
+  useEnvironmentStore.setState({ environments: [idle, build] });
+  useProjectStore.setState({ projects: [project] });
+  const { result, unmount } = renderHook(() => useBoundMachineView(), {
+    wrapper: FederationProvider,
+  });
+  await waitFor(() => expect(result.current).not.toBeNull());
+  const ids = () => activityRows([result.current!]).map((row) => row.environment.ref.environmentId);
+  expect(ids()).toEqual(["idle", "build"]);
+  act(() => useBuildPipelineStore.setState({ activeBuildEnvironmentIds: new Set(["build"]) }));
+  expect(ids()).toEqual(["build", "idle"]);
+  unmount();
+  const restored = renderHook(() => useBoundMachineView(), { wrapper: FederationProvider });
+  await waitFor(() => expect(restored.result.current).not.toBeNull());
+  expect(
+    activityRows([restored.result.current!]).map((row) => row.environment.ref.environmentId),
+  ).toEqual(["build", "idle"]);
 });

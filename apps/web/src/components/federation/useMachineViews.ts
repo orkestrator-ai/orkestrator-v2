@@ -10,6 +10,7 @@ import {
   type BackendId,
 } from "@orkestrator/protocol/federation";
 import type { NodeSummary, SelfNodeSummary } from "@orkestrator/protocol/node-summaries";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore, useProjectStore } from "@/stores";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { orderMachines, registryOrder } from "@/lib/federation/sidebar-layout";
@@ -81,6 +82,7 @@ function boundProjects(backendId: BackendId, projects: readonly Project[]): Fede
 function boundEnvironments(
   backendId: BackendId,
   environments: readonly Environment[],
+  activeBuildEnvironmentIds: ReadonlySet<string>,
 ): Map<string, FederatedEnvironment[]> {
   const byProject = new Map<string, FederatedEnvironment[]>();
   for (const environment of environments) {
@@ -95,6 +97,7 @@ function boundEnvironments(
       ...(environment.branch ? { branch: environment.branch } : {}),
       status: environment.status,
       activity: environment.agentActivityState ?? "idle",
+      ...(activeBuildEnvironmentIds.has(environment.id) ? { buildActive: true as const } : {}),
       ...(environment.agentActivityUpdatedAt
         ? { activityUpdatedAt: environment.agentActivityUpdatedAt }
         : {}),
@@ -143,6 +146,9 @@ export function useBoundMachineView(): MachineView | null {
   const { bound } = useFederation();
   const projects = useProjectStore((state) => state.projects);
   const environments = useEnvironmentStore((state) => state.environments);
+  const activeBuildEnvironmentIds = useBuildPipelineStore(
+    (state) => state.activeBuildEnvironmentIds,
+  );
   return useMemo(() => {
     if (!bound) return null;
     return {
@@ -154,12 +160,16 @@ export function useBoundMachineView(): MachineView | null {
       freshness: "current",
       transport: "connected",
       projects: boundProjects(bound.backendId, projects),
-      environmentsByProject: boundEnvironments(bound.backendId, environments),
+      environmentsByProject: boundEnvironments(
+        bound.backendId,
+        environments,
+        activeBuildEnvironmentIds,
+      ),
       truncated: false,
       // This realm's own stores are its machine's live state.
       loadedAt: BOUND_MACHINE_LOADED,
     };
-  }, [bound, environments, projects]);
+  }, [bound, environments, projects, activeBuildEnvironmentIds]);
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { BackendId } from "./federation.js";
 import { expect, test } from "bun:test";
 import {
+  MAX_SUMMARY_MAIL_COUNT,
   repositoryHint,
   toNodeProjectSummary,
   toNodeEnvironmentSummary,
@@ -238,5 +239,29 @@ test("check summaries relay a usable required-failure count and drop any other",
       total: 3,
       pending: 0,
     });
+  }
+});
+
+test("environment summaries carry the row's active build and mail markers, bounded", () => {
+  const raw = { id: "e", projectId: "p" };
+  expect(
+    toNodeEnvironmentSummary("bk_test" as never, {
+      ...raw,
+      buildActive: true,
+      agentMailUnread: 3,
+      agentMailFailed: true,
+    }),
+  ).toMatchObject({ buildActive: true, agentMailUnread: 3, agentMailFailed: true });
+  // Older nodes and malformed values leave the fields absent.
+  for (const value of [0, -1, 1.5, "3", MAX_SUMMARY_MAIL_COUNT + 1, null]) {
+    const row = toNodeEnvironmentSummary("bk_test" as never, {
+      ...raw,
+      buildActive: "yes",
+      agentMailUnread: value,
+      agentMailFailed: 1,
+    })!;
+    expect("buildActive" in row || "agentMailUnread" in row || "agentMailFailed" in row).toBe(
+      false,
+    );
   }
 });

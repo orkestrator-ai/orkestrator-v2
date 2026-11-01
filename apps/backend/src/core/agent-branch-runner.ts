@@ -43,6 +43,7 @@ import {
 import { AgentBranchObserver } from "./agent-branch-observation.js";
 import {
   agentBranchPollScope,
+  classifyAgentBranchStartFailure,
   clearAgentBranchStall,
   failAgentBranch,
   recordAgentBranchStall,
@@ -268,10 +269,11 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         error instanceof AgentBranchPolicyUnavailableError ||
         error instanceof AgentBranchDispatchSetupError
       ) {
-        // The branch is still durably prepared. Leave it retryable instead
-        // of converting a pre-prompt failure into a terminal result; its peers
-        // carry on regardless.
+        // No prompt ran. Persist the reason and use the durable idle budget
+        // so a broken setup cannot hold the whole fan-in open indefinitely.
+        branch.error = agentBranchErrorMessage(error).slice(0, 4_096);
         this.record({ operation: "reviewer.task", outcome: "retryable" });
+        await recordAgentBranchStall(this.context, branch, branch.error, undefined, "system");
         return;
       }
       // The failure may have been raised while the provider turn was still
@@ -286,8 +288,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       branch.error = agentBranchErrorMessage(error).slice(0, 4_096);
       // Session allocation can precede authentication/attachment. Only an
       // accepted turn proves startup; keep this fact across continuation sends.
-      if (branch.agentStarted ?? branch.dispatchState === "sent") delete branch.startFailed;
-      else branch.startFailed = true;
+      classifyAgentBranchStartFailure(branch);
       branch.completedAt = agentBranchNowIso();
       this.host.clearAdmission?.(branch);
       delete branch.idleResultPolls;
@@ -610,6 +611,10 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     await host.assertFence();
     branch.agentStarted = true;
     branch.dispatchState = "sent";
+    delete branch.error;
+    delete branch.startFailed;
+    delete branch.idleResultPolls;
+    host.pollGate?.clear(agentBranchPollScope(this.context, branch, "idle"));
     delete branch.continuationPrompt;
     await this.commits.commit();
     return "continue";

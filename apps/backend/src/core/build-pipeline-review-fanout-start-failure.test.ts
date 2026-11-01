@@ -1,6 +1,10 @@
+import { ProviderDispatchPreparationError } from "./build-pipeline-provider.js";
 import { describe, expect, test } from "bun:test";
 import { isBuildPipeline, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import { reviewerCouldNotStart } from "@orkestrator/protocol/review-fanout";
+import {
+  REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS,
+  reviewerCouldNotStart,
+} from "@orkestrator/protocol/review-fanout";
 import {
   advanceUntil,
   startInput,
@@ -179,3 +183,37 @@ test("a failure before the first observation preserves a generic classification 
     ]);
   });
 });
+
+for (const persistent of [false, true]) {
+  test(`dispatch setup ${persistent ? "exhausts a bounded retry budget" : "recovers and clears diagnostics"} alongside a healthy reviewer`, async () => {
+    await withPipeline(async ({ service, read, provider, providers }) => {
+      const cursor = providers.get("cursor")!;
+      const send = cursor.send.bind(cursor);
+      let attempts = 0;
+      cursor.send = async (...args) => {
+        attempts++;
+        if (persistent || attempts === 1)
+          throw new ProviderDispatchPreparationError("MCP registration unavailable");
+        return send(...args);
+      };
+      provider.runningModels.add("opus");
+      const started = await service.start(startInput(PANEL));
+      let current = await advanceUntil(service, read, started.id, "reviewing");
+      for (let i = 0; i < 20 && attempts === 0; i++) {
+        await service.advanceNow(started.id);
+        current = await read(started.id);
+      }
+      expect(current.reviewFanout!.reviewers[1]!.error).toBe("MCP registration unavailable");
+      expect(current.reviewFanout!.reviewers[1]!.status).toBe("running");
+      const settled = await untilReviewerSettles(service, read, started.id, 1);
+      const reviewer = settled.reviewFanout!.reviewers[1]!;
+      expect(reviewer.status).toBe(persistent ? "failed" : "completed");
+      expect(reviewer.startFailed).toBe(persistent ? true : undefined);
+      expect(reviewer.error).toBe(persistent ? "MCP registration unavailable" : undefined);
+      expect(attempts).toBe(persistent ? REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS : 2);
+      provider.runningModels.delete("opus");
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
+    });
+  });
+}

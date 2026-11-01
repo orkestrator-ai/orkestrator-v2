@@ -68,7 +68,8 @@ import {
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const ENVIRONMENT_PREFIX = "ui-load-";
 const TARGET_NAME = `${ENVIRONMENT_PREFIX}target`;
-const STOP_FILE = "/tmp/orkestrator-ui-load.stop";
+export const STOP_FILE = "/tmp/orkestrator-ui-load.stop";
+const DONE_FILE = `${STOP_FILE}.done`;
 const CHURN_FILE = "ui-load-churn.txt";
 /** How long `<main>` must stay unchanged before a switch counts as settled. */
 const QUIET_MS = 300;
@@ -96,7 +97,7 @@ interface Options {
   out: string | null;
 }
 
-function parseOptions(argv: string[]): Options {
+export function parseOptions(argv: string[]): Options {
   const options: Options = {
     profile: process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "",
     environments: 3,
@@ -201,7 +202,7 @@ function ownedContainer(environment: Environment): string {
   return containerId;
 }
 
-function loadScript(workers: number, memoryMiB: number): string {
+export function loadScript(workers: number, memoryMiB: number): string {
   const spinners = Array.from(
     { length: workers },
     () => `(while [ ! -e ${STOP_FILE} ]; do :; done) &`,
@@ -215,13 +216,16 @@ function loadScript(workers: number, memoryMiB: number): string {
     memory,
     `(n=0; while [ ! -e ${STOP_FILE} ]; do n=$((n+1)); echo "$n" > ${CHURN_FILE}; sleep 1; done; rm -f ${CHURN_FILE}) &`,
     "wait",
+    `touch ${DONE_FILE}`,
   ]
     .filter(Boolean)
     .join("\n");
 }
 
 function startLoad(containerId: string, options: Options): void {
-  docker(["exec", containerId, "rm", "-f", STOP_FILE]);
+  if (!docker(["exec", containerId, "rm", "-f", STOP_FILE, DONE_FILE]).ok) {
+    throw new Error("Could not prepare the load in a probe container");
+  }
   const started = docker([
     "exec",
     "-d",
@@ -237,8 +241,20 @@ function startLoad(containerId: string, options: Options): void {
   if (!started.ok) throw new Error("Could not start the load in a probe container");
 }
 
+export function stopLoadScript(): string {
+  return `touch ${STOP_FILE}
+n=0
+while [ ! -e ${DONE_FILE} ]; do
+  n=$((n+1))
+  [ "$n" -le 100 ] || exit 1
+  sleep 0.1
+done`;
+}
+
 function stopLoad(containerId: string): void {
-  docker(["exec", containerId, "touch", STOP_FILE]);
+  if (!docker(["exec", containerId, "sh", "-c", stopLoadScript()], 15_000).ok) {
+    throw new Error("Probe workload did not finish before the stop deadline");
+  }
 }
 
 /** `docker stats` CPU for the probe's own containers only. */
@@ -305,7 +321,7 @@ interface WatchResult {
   slowEvents: number[];
 }
 
-async function watchWindow(
+export async function watchWindow(
   page: Page,
   durationMs: number,
   projectId: string,
@@ -322,24 +338,28 @@ async function watchWindow(
       let running = true;
       const frame = (time: number) => {
         frames.push(time);
-        if (running) requestAnimationFrame(frame);
+        if (running) lastFrame = requestAnimationFrame(frame);
       };
-      requestAnimationFrame(frame);
+      let lastFrame = requestAnimationFrame(frame);
+      const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(), durationMs);
 
       const timerLagMs: number[] = [];
       const timers = (async () => {
         while (performance.now() - start < durationMs) {
           const scheduled = performance.now();
-          await new Promise((resolve) => setTimeout(resolve, timerIntervalMs));
-          timerLagMs.push(performance.now() - scheduled - timerIntervalMs);
+          const delay = Math.min(timerIntervalMs, Math.max(0, durationMs - (scheduled - start)));
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          timerLagMs.push(Math.max(0, performance.now() - scheduled - delay));
         }
       })();
       const invokeMs: Array<number | null> = [];
       const invokes = (async () => {
-        while (performance.now() - start < durationMs) {
+        while (!controller.signal.aborted && performance.now() - start < durationMs) {
           const sent = performance.now();
           try {
             const response = await fetch("/__orkestrator/invoke", {
+              signal: controller.signal,
               method: "POST",
               credentials: "same-origin",
               headers: { "content-type": "application/json" },
@@ -351,11 +371,23 @@ async function watchWindow(
             invokeMs.push(null);
           }
           const wait = invokeIntervalMs - (performance.now() - sent);
-          if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+          if (wait > 0)
+            await new Promise((resolve) =>
+              setTimeout(
+                resolve,
+                Math.min(wait, Math.max(0, durationMs - (performance.now() - start))),
+              ),
+            );
         }
       })();
-      await Promise.all([timers, invokes]);
-      running = false;
+      try {
+        await Promise.all([timers, invokes]);
+      } finally {
+        running = false;
+        cancelAnimationFrame(lastFrame);
+        clearTimeout(deadline);
+        controller.abort();
+      }
       const end = performance.now();
       const within = (entries: number[][]) =>
         entries.filter(([at]) => at! >= start && at! <= end).map(([, duration]) => duration!);
@@ -468,10 +500,11 @@ interface StatusResult {
 }
 
 /** Sends a lifecycle command from the page and waits for the sidebar to show its result. */
-async function measureStatus(
+export async function measureStatus(
   page: Page,
   environment: Environment,
   command: "stop_environment" | "start_environment",
+  deadlineMs = STATUS_DEADLINE_MS,
 ): Promise<StatusResult> {
   return page.evaluate(
     async ({ environmentId, name, command, deadlineMs }) => {
@@ -493,27 +526,48 @@ async function measureStatus(
       };
       const sent = performance.now();
       let visibleAt: number | null = null;
+      const controller = new AbortController();
+      let frameId = 0;
+      let finishVisible = () => {};
       const visible = new Promise<void>((resolve) => {
+        finishVisible = resolve;
         const tick = (now: number) => {
           if (reached()) {
             visibleAt = now;
             resolve();
-          } else if (performance.now() - sent > deadlineMs) resolve();
-          else requestAnimationFrame(tick);
+          } else frameId = requestAnimationFrame(tick);
         };
-        requestAnimationFrame(tick);
+        frameId = requestAnimationFrame(tick);
       });
-      const response = await fetch("/__orkestrator/invoke", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ command, args: { environmentId } }),
-      });
-      await response.text();
-      const invokeMs = performance.now() - sent;
-      await visible;
+      const deadline = setTimeout(() => {
+        controller.abort();
+        cancelAnimationFrame(frameId);
+        finishVisible();
+      }, deadlineMs);
+      let ok = false;
+      let invokeMs = 0;
+      try {
+        const response = await fetch("/__orkestrator/invoke", {
+          signal: controller.signal,
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ command, args: { environmentId } }),
+        });
+        await response.text();
+        invokeMs = performance.now() - sent;
+        ok = response.ok;
+        if (ok) await visible;
+      } catch {
+        invokeMs = performance.now() - sent;
+      } finally {
+        clearTimeout(deadline);
+        cancelAnimationFrame(frameId);
+        finishVisible();
+        controller.abort();
+      }
       return {
-        ok: response.ok,
+        ok,
         invokeMs,
         visibleMs: visibleAt === null ? null : Math.max(0, visibleAt - sent),
       };
@@ -522,7 +576,7 @@ async function measureStatus(
       environmentId: environment.id,
       name: environment.name,
       command,
-      deadlineMs: STATUS_DEADLINE_MS,
+      deadlineMs,
     },
   );
 }
@@ -765,7 +819,8 @@ async function main(): Promise<void> {
       const end = hostSample();
 
       if (phase === "busy") {
-        for (const containerId of loaded.splice(0)) stopLoad(containerId);
+        for (const containerId of loaded) stopLoad(containerId);
+        loaded.length = 0;
       }
       phases.push({
         phase,
@@ -851,7 +906,13 @@ async function main(): Promise<void> {
     printSummary(report.coldVisit, phases, ratios);
     console.log(`report: ${path.relative(repositoryRoot, outPath)}`);
   } finally {
-    for (const containerId of loaded) stopLoad(containerId);
+    for (const containerId of loaded) {
+      try {
+        stopLoad(containerId);
+      } catch (error) {
+        console.error(String(error));
+      }
+    }
     for (const environment of created) {
       await invoke("delete_environment", { environmentId: environment.id }).catch((error) =>
         console.error(`could not delete ${environment.name}: ${String(error).slice(0, 200)}`),
@@ -901,7 +962,8 @@ function printSummary(
   if (ratios) console.log(`busy / idle medians: ${JSON.stringify(ratios)}`);
 }
 
-await main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (import.meta.main)
+  await main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });

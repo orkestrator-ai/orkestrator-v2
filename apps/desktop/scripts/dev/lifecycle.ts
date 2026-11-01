@@ -397,18 +397,6 @@ export async function seedAgentTestProfileState(
 const ELECTRON_READINESS_TIMEOUT_MS = 60_000;
 
 /**
- * How long the launcher waits for Electron to announce readiness before
- * killing it, or `null` to wait for as long as Electron stays alive.
- *
- * Readiness comes only after startup finishes, and a `development` profile's
- * startup can wait on a person: a fresh profile opens the first-run agent
- * platform chooser, then may download toolchains and show the macOS
- * permissions splash. Timing that out killed Electron while the chooser was
- * still on screen, so `mise run dev` never reached the app. `agent-test` runs
- * non-interactively (no chooser, no retry dialogs), so a hang there is a
- * failure worth reporting.
- */
-/**
  * Electron's leading switches and environment. `--headless-electron` (Linux
  * only) selects Chromium's headless Ozone platform and drops the display
  * variables, so the profile cannot open a window in the session that started
@@ -430,6 +418,18 @@ export function electronLaunch(
   return { switches: ["--ozone-platform=headless"], env: result };
 }
 
+/**
+ * How long the launcher waits for Electron to announce readiness before
+ * killing it, or `null` to wait for as long as Electron stays alive.
+ *
+ * Readiness comes only after startup finishes, and a `development` profile's
+ * startup can wait on a person: a fresh profile opens the first-run agent
+ * platform chooser, then may download toolchains and show the macOS
+ * permissions splash. Timing that out killed Electron while the chooser was
+ * still on screen, so `mise run dev` never reached the app. `agent-test` runs
+ * non-interactively (no chooser, no retry dialogs), so a hang there is a
+ * failure worth reporting.
+ */
 export function electronReadinessTimeoutMs(flavor: "development" | "agent-test"): number | null {
   return flavor === "agent-test" ? ELECTRON_READINESS_TIMEOUT_MS : null;
 }
@@ -539,6 +539,7 @@ export async function startDevelopment(
   args: DevArguments,
   flavor: "development" | "agent-test",
   dependencies: ElectronCompilationDependencies & {
+    platform?: NodeJS.Platform;
     roots?: RuntimeProfileRoots;
     prune?: typeof pruneProfiles;
     turbo?: TurboRunner;
@@ -548,7 +549,7 @@ export async function startDevelopment(
   } = {},
 ): Promise<void> {
   // Refuse an unsupported platform before anything is built or started.
-  electronLaunch(args.headlessElectron === true, process.platform, {});
+  electronLaunch(args.headlessElectron === true, dependencies.platform ?? process.platform, {});
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
   const existingStatusPath = statusManifestPath(existingProfile);
   const existingStatus = await readStatus(existingStatusPath);
@@ -710,7 +711,11 @@ export async function startDevelopment(
     });
     await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
 
-    const launch = electronLaunch(args.headlessElectron === true, process.platform, process.env);
+    const launch = electronLaunch(
+      args.headlessElectron === true,
+      dependencies.platform ?? process.platform,
+      process.env,
+    );
     const electronEnv = launch.env;
     electron = (dependencies.spawn ?? spawn)(
       electronExecutable,

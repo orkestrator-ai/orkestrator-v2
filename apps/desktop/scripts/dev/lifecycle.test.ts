@@ -104,6 +104,7 @@ describe("Electron readiness", () => {
       homeDir: root,
     };
     const args = parseDevArguments(["--profile", "ready-race"]);
+    args.headlessElectron = true;
     const profile = resolveRuntimeProfile({
       repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
       requestedId: args.profile,
@@ -127,16 +128,38 @@ describe("Electron readiness", () => {
     let postSpawnWritePending = false;
     let reachedReady = false;
     const signals = { SIGINT: process.listeners("SIGINT"), SIGTERM: process.listeners("SIGTERM") };
+    const inherited = {
+      DISPLAY: process.env.DISPLAY,
+      WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY,
+      ELECTRON_OZONE_PLATFORM_HINT: process.env.ELECTRON_OZONE_PLATFORM_HINT,
+      ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE,
+    };
+    Object.assign(process.env, {
+      DISPLAY: ":99",
+      WAYLAND_DISPLAY: "test-display",
+      ELECTRON_OZONE_PLATFORM_HINT: "wayland",
+      ELECTRON_RUN_AS_NODE: "1",
+    });
     const watchdog = setTimeout(() => electron.emit("exit", 1, null), 2000);
     try {
       await startDevelopment(args, "development", {
         roots,
+        platform: "linux",
         prune: async () => [],
         typecheck: () => ({ status: 0 }),
         bundle: async () =>
           ({ success: true, outputs: [], logs: [] }) as unknown as Bun.BuildOutput,
-        spawn: ((command: string) =>
-          command === "bun" ? vite : electron) as typeof import("node:child_process").spawn,
+        spawn: ((command: string, argv: string[], options: { env: NodeJS.ProcessEnv }) => {
+          if (command === "bun") return vite;
+          expect(argv).toEqual(["--ozone-platform=headless", "apps/desktop/dist/electron/main.js"]);
+          expect(options.env.DISPLAY).toBeUndefined();
+          expect(options.env.WAYLAND_DISPLAY).toBeUndefined();
+          expect(options.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+          expect(options.env.ELECTRON_OZONE_PLATFORM_HINT).toBeUndefined();
+          expect(options.env.ELECTRON_DEV).toBe("1");
+          expect(options.env.ORKESTRATOR_RUNTIME_PROFILE_FILE).toBeTruthy();
+          return electron;
+        }) as typeof import("node:child_process").spawn,
         waitForUrl: async () => {},
         writeStatus: async (file, value) => {
           const status = value as { status: string; pids: { electron?: number } };
@@ -162,6 +185,10 @@ describe("Electron readiness", () => {
       expect(reachedReady).toBe(true);
       expect(await readFile(path.join(profile.logDir, "electron.log"), "utf8")).toContain(frame);
     } finally {
+      for (const [key, value] of Object.entries(inherited)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       clearTimeout(watchdog);
       for (const signal of ["SIGINT", "SIGTERM"] as const) {
         for (const listener of process.listeners(signal)) {
@@ -174,6 +201,32 @@ describe("Electron readiness", () => {
 });
 
 describe("Electron launch", () => {
+  test("rejects unsupported headless startup before building or spawning", async () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      let touched = false;
+      const args = parseDevArguments(["--profile", "unsupported"]);
+      args.headlessElectron = true;
+      await expect(
+        startDevelopment(args, "agent-test", {
+          platform,
+          typecheck: () => {
+            touched = true;
+            return { status: 0 };
+          },
+          spawn: (() => {
+            touched = true;
+            throw new Error("unexpected spawn");
+          }) as typeof import("node:child_process").spawn,
+          prune: async () => {
+            touched = true;
+            return [];
+          },
+        }),
+      ).rejects.toThrow("only supported on Linux");
+      expect(touched).toBe(false);
+    }
+  });
+
   const env = {
     DISPLAY: ":0",
     WAYLAND_DISPLAY: "wayland-1",

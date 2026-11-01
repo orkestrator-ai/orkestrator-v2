@@ -28,6 +28,7 @@ import {
   Server,
   HardDrive,
   ChartArea,
+  GitBranch,
 } from "lucide-react";
 import { AgentPlatformIcon, DockerIcon } from "@/components/icons/AgentIcons";
 import { DockerSettings } from "@/components/docker";
@@ -57,6 +58,7 @@ import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 
 const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
+  { id: "version-control", label: "Version control", icon: <GitBranch className="h-4 w-4" /> },
   { id: "machines", label: "Machines", icon: <Network className="h-4 w-4" /> },
   { id: "disk-usage", label: "Disk usage", icon: <HardDrive className="h-4 w-4" /> },
   { id: "usage", label: "Usage", icon: <ChartArea className="h-4 w-4" /> },

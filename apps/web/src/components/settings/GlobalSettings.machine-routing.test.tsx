@@ -59,6 +59,19 @@ for (const machine of [null, "other"]) {
         machine,
       ),
     );
+    cleanup();
+    mount("version-control", machine);
+    const requireChecks = await screen.findByRole("switch", {
+      name: "Require checks to pass before auto-merge",
+    });
+    expect(requireChecks.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(requireChecks);
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({ autoMergeRequireChecks: true }),
+        machine,
+      ),
+    );
     const field = screen.getByLabelText("GitHub token");
     fireEvent.change(field, { target: { value: "fixture-token" } });
     fireEvent.blur(field);

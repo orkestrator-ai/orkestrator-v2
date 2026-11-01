@@ -257,8 +257,19 @@ freshness rule as the green shimmer (`isPrReadingConfirmedByMonitor`):
   that finishes with conflicts still present is left for the user rather than
   relaunched.
 - **Anything else** (stale, mergeability unknown, draft, blocked, behind,
-  checks pending or failing, no merge permission): it waits for the next
-  reading.
+  no merge permission, and checks pending or failing when checks are
+  required): it waits for the next reading.
+
+Settings → Version control → Auto-merge → **Require checks to pass**
+(`global.autoMergeRequireChecks`, off when absent) decides whether checks
+GitHub does not require hold a merge back. Off, `decideAutoMerge` passes
+`requireChecks: false` to `evaluatePrMergeReadiness`, so an `unstable` PR and a
+failing or pending check rollup count as ready and the PR merges as soon as
+GitHub allows it. On, it uses the shimmer's rule unchanged. Checks required by
+branch protection always block, because GitHub reports them as `blocked`. The
+setting is per machine and is read on every decision, so a change applies at
+the next monitor reading. The shimmer is unaffected and still stops on any
+failing check.
 
 A failed merge or launch is retried after 60 s, doubling up to 15 minutes. A
 successful attempt also holds the same PR for 60 s, because a merge GitHub has

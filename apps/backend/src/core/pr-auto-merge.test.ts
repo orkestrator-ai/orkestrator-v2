@@ -73,11 +73,34 @@ describe("decideAutoMerge", () => {
     });
   });
 
-  test("waits while checks are pending or the PR is blocked", () => {
+  test("waits while checks are pending or the PR is blocked when checks are required", () => {
     const env = environment();
     expect(
-      decideAutoMerge(env, monitor(env, { checkSummary: { passed: 1, pending: 1, total: 2 } })),
+      decideAutoMerge(env, monitor(env, { checkSummary: { passed: 1, pending: 1, total: 2 } }), {
+        requireChecks: true,
+      }),
     ).toEqual({ kind: "wait", reason: "checks-pending" });
+    const unstable = environment({ prMergeability: "unstable" });
+    expect(decideAutoMerge(unstable, monitor(unstable), { requireChecks: true })).toEqual({
+      kind: "wait",
+      reason: "checks-not-passing",
+    });
+    const blocked = environment({ prMergeability: "blocked" });
+    expect(decideAutoMerge(blocked, monitor(blocked), { requireChecks: true })).toEqual({
+      kind: "wait",
+      reason: "blocked",
+    });
+  });
+
+  test("by default merges past failing or pending checks GitHub does not require", () => {
+    const unstable = environment({ prMergeability: "unstable" });
+    expect(
+      decideAutoMerge(
+        unstable,
+        monitor(unstable, { checkSummary: { passed: 1, pending: 1, total: 3 } }),
+      ),
+    ).toEqual({ kind: "merge" });
+    // Required checks surface as `blocked`, which GitHub would refuse anyway.
     const blocked = environment({ prMergeability: "blocked" });
     expect(decideAutoMerge(blocked, monitor(blocked))).toEqual({
       kind: "wait",
@@ -119,6 +142,7 @@ function harness(initial: Environment) {
   const timers: Array<{ callback: () => void; delayMs: number; cancelled: boolean }> = [];
   let failNext: Error | null = null;
   let nextStatus: string | null = null;
+  let requireChecks: boolean | undefined;
   const storage = {
     getEnvironment: async (id: string) => (id === stored.id ? stored : null),
     loadEnvironments: async () => [stored],
@@ -131,7 +155,10 @@ function harness(initial: Environment) {
       return stored;
     },
     loadConfig: async () =>
-      ({ global: { enabledAgentPlatforms: ["claude"] }, repositories: {} }) as never,
+      ({
+        global: { enabledAgentPlatforms: ["claude"], autoMergeRequireChecks: requireChecks },
+        repositories: {},
+      }) as never,
     getRepositoryConfig: async () => ({ prBaseBranch: "develop" }) as never,
   };
   const controller = new PrAutoMergeController({
@@ -181,6 +208,9 @@ function harness(initial: Environment) {
     nextStatus(status: string) {
       nextStatus = status;
     },
+    requireChecks(value: boolean | undefined) {
+      requireChecks = value;
+    },
     failNextInvoke(error: Error) {
       failNext = error;
     },
@@ -209,6 +239,21 @@ describe("PrAutoMergeController", () => {
           expectedPrUrl: PR_URL,
         },
       },
+    ]);
+  });
+
+  test("follows the machine's check requirement for an unstable PR", async () => {
+    const required = harness(environment({ prMergeability: "unstable" }));
+    required.requireChecks(true);
+    required.controller.start();
+    await required.announce();
+    expect(required.invocations).toEqual([]);
+
+    const unset = harness(environment({ prMergeability: "unstable" }));
+    unset.controller.start();
+    await unset.announce();
+    expect(unset.invocations.map((invocation) => invocation.command)).toEqual([
+      "merge_environment_pr",
     ]);
   });
 

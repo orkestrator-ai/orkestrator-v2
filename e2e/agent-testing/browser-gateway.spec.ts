@@ -323,6 +323,16 @@ test.describe("host path browsing", () => {
           }
           await page.getByRole("button", { name: "Global settings", exact: true }).click();
           const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+          const section = settings.getByRole("combobox", {
+            name: "Settings section",
+            exact: true,
+          });
+          if (await section.isVisible()) {
+            await section.click();
+            await page.getByRole("option", { name: "Version control", exact: true }).click();
+          } else {
+            await settings.getByRole("button", { name: "Version control", exact: true }).click();
+          }
           await settings.getByRole("button", { name: "Browse for SSH agent socket" }).click();
           const filePicker = await assertPickerLayers("Select SSH agent socket", "Settings");
           await filePicker.getByLabel("Path", { exact: true }).fill(socketPath);

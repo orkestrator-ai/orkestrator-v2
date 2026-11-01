@@ -11,11 +11,19 @@ questions" and "Needs verification" both say none, which is still accurate.
 Two findings recorded in the body as "not changed" are still true today and
 have no owning todo.
 
+Rechecked 2026-11-01 against `main` at `93b99bfba`: task 3 was still true and
+is now done (below). Task 1 is unchanged: the floor is still v2.21.0 (it moves
+to v2.21.1 on 2026-12-15), `scripts/qualify-slash-mixed-versions.ts` does not
+exist, and the renderer error now sits at
+`apps/web/src/lib/backend/workflows.ts:570`. No new evidence bears on its
+decisions, so their recommendations stand as written. Flake 0710 is still
+open.
+
 ### Tasks
 
 1. **Mixed versions against real v2.21.0 builds** (outstanding item 1): pair a real v2.21.0 bridge, backend and renderer with current ones. Status: open (unblocked).
 2. **Container picker lag under host load** (flake 0710): a container tab's catalogue lags the backend's when the host is heavily loaded. Status: open (tracked as a flake, not as an item here).
-3. **User skills and Grok commands not staged into containers**: host `~/.claude/skills` and `~/.grok/commands` are missing in container catalogues. Status: open (found 2026-10-23, never filed).
+3. **User skills and Grok commands not staged into containers**: host `~/.claude/skills` and `~/.grok/commands` are missing in container catalogues. Status: done 2026-11-01 (staged as `entries`; shared and linked skills follow up in [2170](../containers-and-environments/2170-shared-and-linked-skills-in-containers.md)).
 
 ### 1. Mixed versions against real v2.21.0 builds
 
@@ -76,7 +84,7 @@ have no owning todo.
 
 **Context.** Recorded in the 2026-10-23 container record as "found on the way, not changed". No other todo mentions it.
 
-**Investigation.** Still true. In `apps/backend/src/core/portable-inputs.ts` the Claude entry (`:213`) stages `commands`, `agents`, `ide` and `plugins` (`:237-240`) but no `skills`; the Grok entry (`:341`) stages `hooks` and `skills` (`:356-357`) but no `commands`. Codex stages `skills` and `prompts`, and Pi stages `agent/skills` and `agent/prompts`, so Claude and Grok are the outliers. Recent commits to the file (#1289, #1298, #1307) did not change this.
+**Investigation.** Still true on 2026-10-27 and again on 2026-11-01 (`93b99bfba`). In `apps/backend/src/core/portable-inputs.ts` the Claude entry (`:213`) stages `commands`, `agents`, `ide` and `plugins` (`:237-240`) but no `skills`; the Grok entry (`:341`) stages `hooks` and `skills` (`:356-357`) but no `commands`. Codex stages `skills` and `prompts`, and Pi stages `agent/skills` and `agent/prompts`, so Claude and Grok are the outliers. Recent commits to the file (#1289, #1298, #1307) did not change this.
 
 **Decisions.**
 
@@ -87,6 +95,38 @@ have no owning todo.
   - **Accept the gap and document it in `native-agent-commands.md`.**
     - Pros: nothing new crosses the container boundary.
     - Cons: an unexplained provider-parity difference in the picker.
+
+  Chosen 2026-11-01: stage both, built here rather than in a new file because
+  the ticket for this task asked for the change itself (decision 11).
+
+**Outcome (2026-11-01).**
+
+- `portableInputSpec` stages `skills` in Claude's `/claude-config` and
+  `commands` in Grok's `/grok-home`, both `entries` (one unit per skill
+  directory or command file). `docker/entrypoint.sh` copies both with
+  `copy_agent_directory_entries`. `PORTABLE_INPUT_SPEC_VERSION` is 3.
+- What crosses: what the user wrote for the provider. Links are skipped and
+  counted (`symlink`), state (`history.jsonl`, `projects/`, Grok's
+  `sessions/`, `active_sessions.json`, `logs/`) stays out, both only for an
+  environment with that provider enabled, and revocation is unchanged (it
+  removes logins, not configuration).
+- Grok reads it: the pinned Grok 1.0.70, with only a fixture `HOME` built by
+  the real staging and entrypoint copy, lists `~/.grok/commands/*.md` as user
+  skills and `~/.claude/skills` as `user [claude]` (`grok inspect`, no login).
+  Claude reads `~/.claude/skills` from `HOME` in a container (no
+  `CLAUDE_CONFIG_DIR`), from code and docs; no live Claude listing ran.
+- Tests: `apps/backend/tests/portable-inputs-user-extensions.test.ts` (fixture
+  homes only) stages from a fixture home, checks no link or state crosses,
+  checks the entrypoint's loops copy exactly the staged directories, runs
+  those loops into a fixture container home, and, with `GROK_CLI_PATH` set to
+  the pinned binary, runs `grok inspect` there. All four fail without the
+  change.
+- Not done: a container tab's picker in a browser on a rebuilt image (needs a
+  `dev:test` profile with container fixtures and Claude or Grok credentials).
+  An image built before this change copies neither directory until the
+  environment is rebuilt. Linked skills (`~/.claude/skills/<name>` linking to
+  `~/.agents/skills`) and the shared `~/.agents/skills` root are still
+  missing in containers: [2170](../containers-and-environments/2170-shared-and-linked-skills-in-containers.md).
 
 Every slash-command executor was first qualified from installed SDK
 declarations and source, then exercised through each integration's real
@@ -533,6 +573,7 @@ for the user `config.toml`, the only place 0.162.1 honours.
 - Found on the way, not changed: host `~/.claude/skills` and `~/.grok/commands`
   are not staged into containers (`portable-inputs.ts`), so those user rows are
   missing in a container. That is what is listed, not where it resolves.
+  Staged since 2026-11-01 (task 3).
 
 ### Mixed-version matrix (item 3)
 
@@ -844,6 +885,7 @@ file passed in containers at low load earlier the same day.
 ## Assumptions and decisions
 
 Made on 2026-10-23 while closing items 1 to 5 and both follow-ups.
+Decisions 11 to 14 were made on 2026-11-01 for task 3.
 
 1. **Mixed-version window.** No support window is agreed (0034).
    - Options: wait for 0034; test only the previous release; test the shapes
@@ -943,6 +985,43 @@ Made on 2026-10-23 while closing items 1 to 5 and both follow-ups.
     safety issue. The larger limits (sync-v1 delta strictness, error codes)
     are recorded above and in tests rather than changed, because changing them
     needs the support window.
+
+11. **User skills and Grok commands in containers (task 3, 2026-11-01).**
+    - Options: stage `~/.claude/skills` and `~/.grok/commands`; leave the gap
+      and document it; file a new todo and stage later.
+    - Chosen: stage both, in this change.
+    - Why: they are user-authored provider resources of the same class as
+      Claude `commands` and Grok `skills`, which were already staged, and
+      Codex and Pi already stage their skills and prompts. The ticket for this
+      task asked for the change, so a new todo would only have deferred it.
+    - Pros: the container picker matches the host for real directories and
+      files; no new mount, capability or relay path. Cons: more user files
+      cross into the container (contents only); a skill may assume host-only
+      paths or tools.
+12. **Unit and filtering.**
+    - Options: `entries` with no content filter; `tree` (all-or-nothing for
+      the whole directory); `entries` plus a secret-file heuristic (skip
+      `.env`, `*.pem` and similar inside skills).
+    - Chosen: `entries`, no heuristic.
+    - Why: one oversized or linked skill must not drop the rest, as with
+      Claude's `commands` and Grok's `skills`; a name heuristic would apply to
+      two directories but not to the Codex, Pi or plugin skills already
+      staged, and would suggest a guarantee it cannot give.
+    - Pros: same rules as every other extension directory. Cons: a file a
+      user keeps inside a skill crosses with it; that is now written in
+      `container-lifecycle.md`.
+13. **Linked skills.** Options: follow links whose target is a skill; skip
+    links as every other staged directory does. Chosen: skip, and file
+    [2170](../containers-and-environments/2170-shared-and-linked-skills-in-containers.md).
+    Why: following links below a home entry is the rule staging exists to
+    keep, and widening it needs its own design. Con: skills installed as
+    links (`npx skills`) are still host-only.
+14. **No `staged-inputs` capability bump.** Options: bump to 4 so the
+    backend can tell an image that copies the new directories; leave it at
+    3. Chosen: 3. Why: the mounts are unchanged and an older entrypoint
+    ignores the extra staged directory, so nothing needs to be gated. Con:
+    nothing tells a user that an environment on an older image needs a
+    rebuild to get these rows.
 
 ## Open questions
 

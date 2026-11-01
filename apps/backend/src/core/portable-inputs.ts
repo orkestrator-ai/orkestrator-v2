@@ -47,8 +47,11 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
  * half-written revision.
  */
 
-/** Version 2 adds Cursor's `~/.cursor/mcp.json`. */
-export const PORTABLE_INPUT_SPEC_VERSION = 2;
+/**
+ * Version 2 adds Cursor's `~/.cursor/mcp.json`; version 3 adds Claude's
+ * `skills` and Grok's `commands`.
+ */
+export const PORTABLE_INPUT_SPEC_VERSION = 3;
 
 export type InputLimits = {
   fileBytes: number;
@@ -235,6 +238,9 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           filteredFiles: { "settings.json": claudeContainerPluginSettings },
           directories: [
             { path: "commands", mode: "entries" },
+            // One unit per skill directory, like Grok's and Pi's skills. A
+            // skill linked in from `~/.agents/skills` is a symlink and skipped.
+            { path: "skills", mode: "entries" },
             { path: "agents", mode: "entries" },
             { path: "ide", mode: "entries" },
             { path: "plugins", mode: "entries" },
@@ -355,6 +361,8 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           directories: [
             { path: "hooks", mode: "entries" },
             { path: "skills", mode: "entries" },
+            // Legacy flat commands (`*.md`), which Grok lists as user skills.
+            { path: "commands", mode: "entries" },
           ],
           accessOnlyLogin: { file: "auth.json", restrict: restrictGrokAuthSnapshot },
         },

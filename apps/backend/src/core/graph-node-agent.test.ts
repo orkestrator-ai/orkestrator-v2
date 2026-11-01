@@ -1,3 +1,12 @@
+import {
+  MULTI_REVIEW_WORKFLOW_VERSION,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
+import {
+  AmbiguousPromptDispatchError,
+  ProviderDispatchPreparationError,
+} from "./build-pipeline-provider.js";
+import { projectMultiReviewGraphRun } from "./multi-review-graph-projection.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
 import {
@@ -449,3 +458,64 @@ describe("restart recovery", () => {
     expect(world.provider.deliveries).toHaveLength(0);
   });
 });
+
+for (const failure of ["setup", "lost"] as const) {
+  test(`unstartable review activation persists and projects a ${failure} failure`, async () => {
+    world = await graphAgentWorld();
+    world.provider.beforeSend = (turn) => {
+      if (failure === "lost") {
+        world!.provider.journal.set(turn.requestId, "lost");
+        throw new AmbiguousPromptDispatchError("acceptance unknown");
+      }
+      throw new ProviderDispatchPreparationError("MCP registration unavailable");
+    };
+    world.start();
+    // Exercise the real executor and journal with a review-named agent node.
+    const template = JSON.parse(
+      JSON.stringify(agentTestTemplate()).replaceAll('"describe"', '"review"'),
+    ) as ReturnType<typeof agentTestTemplate>;
+    const review = template.nodes[0]!;
+    if (review.kind !== "agent") throw new Error("expected agent");
+    review.replicate = { over: "panel", role: "worker" };
+    template.roles = [{ key: "worker", multiplicity: "panel" }];
+    template.outputs = [];
+    template.limits.maxAgentSessions = 40;
+    const run = await world.launch(
+      template,
+      { ticket: TEST_TICKET, target: TEST_WORKSPACE },
+      { worker: [{ platform: "opencode", model: "model" }] },
+    );
+    const done = await world.drive(run.id);
+    const activation = activationOf(done, "review");
+    expect(activation.state).toBe("failed");
+    expect(activation.session?.agentStarted).toBe(false);
+    expect(activation.session?.providerSessionId).toBeDefined();
+    expect(activation.error).toContain(
+      failure === "setup" ? "MCP registration unavailable" : "lost",
+    );
+    const workflow: MultiReviewWorkflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow",
+      projectId: "p1",
+      environmentId: "e1",
+      targetBranch: "main",
+      phase: "reviewing",
+      engine: "graph",
+      graphRun: { runId: run.id },
+      backendRevision: 0,
+      createdAt: run.createdAt,
+      updatedAt: run.updatedAt,
+      reviewers: [{ id: "reviewer", agent: "opencode", model: "model", status: "pending" }],
+      fixModel: { agent: "opencode", model: "model" },
+    };
+    const projected = await projectMultiReviewGraphRun(workflow, done, (id) =>
+      world!.artifacts.get(run.id, id),
+    );
+    expect(projected.reviewers[0]).toMatchObject({
+      status: "failed",
+      startFailed: true,
+      error: activation.error,
+    });
+  });
+}

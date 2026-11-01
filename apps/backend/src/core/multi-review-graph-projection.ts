@@ -325,6 +325,10 @@ async function projectReviewer(
         ...projected,
         status: "failed",
         ...(bounded(activation.error) ? { error: bounded(activation.error) } : {}),
+        // Allocation is not proof of an accepted agent turn.
+        ...((session?.agentStarted ?? session?.dispatchState === "sent")
+          ? {}
+          : { startFailed: true }),
         ...(activation.finishedAt ? { completedAt: activation.finishedAt } : {}),
       };
     default:

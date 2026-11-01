@@ -22,7 +22,9 @@ test.each([
       "-e",
       `
     import os from "node:os";
-    os.cpus = () => Array(${cores}).fill({});
+    // Keep real entries: Playwright reads cpu.model on macOS while loading.
+    const cpu = os.cpus()[0];
+    os.cpus = () => Array(${cores}).fill(cpu);
     const { default: config } = await import(${JSON.stringify(configPath)});
     process.stdout.write(JSON.stringify({ workers: config.workers ?? null, retries: config.retries }));
   `,

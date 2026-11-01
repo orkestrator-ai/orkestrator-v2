@@ -440,6 +440,7 @@ function resetReviewerForRestart(
   dropProvisionalFindings(reviewer);
   reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
   delete reviewer.providerSessionId;
+  delete reviewer.agentStarted;
   delete reviewer.requestId;
   delete reviewer.dispatchState;
   delete reviewer.resultTransport;
@@ -460,6 +461,7 @@ function resetReviewerForRestart(
   delete reviewer.commandSandboxOff;
   delete reviewer.report;
   delete reviewer.error;
+  delete reviewer.startFailed;
   delete reviewer.startedAt;
   delete reviewer.completedAt;
 }
@@ -1424,9 +1426,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
           reviewer.status = "pending";
           delete reviewer.error;
+          delete reviewer.startFailed;
           delete reviewer.report;
           dropProvisionalFindings(reviewer);
           delete reviewer.providerSessionId;
+          delete reviewer.agentStarted;
           reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
           delete reviewer.requestId;
           delete reviewer.dispatchState;
@@ -1529,8 +1533,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
             reviewer.status = "pending";
             delete reviewer.error;
+            delete reviewer.startFailed;
             dropProvisionalFindings(reviewer);
             delete reviewer.providerSessionId;
+            delete reviewer.agentStarted;
             reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
             delete reviewer.requestId;
             delete reviewer.dispatchState;
@@ -4864,6 +4870,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       for (const reviewer of abandoned) {
         reviewer.status = "failed";
         reviewer.error = workflow.error;
+        delete reviewer.startFailed;
       }
     }
     if (workflow.fixSession?.status === "running") {

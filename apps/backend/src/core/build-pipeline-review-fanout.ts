@@ -911,6 +911,7 @@ export class BuildPipelineReviewFanout {
             {
               id: reviewer.id.slice(0, 128),
               slot,
+              startFailed: reviewer.startFailed === true,
               agent: reviewer.agent as BuildPipelineAgent,
               ...(reviewer.model && !reviewer.modelUnpinned
                 ? { model: reviewer.model.slice(0, 256) }
@@ -1512,6 +1513,7 @@ export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
   dropProvisionalFindings(reviewer);
   delete reviewer.sessionKey;
   delete reviewer.providerSessionId;
+  delete reviewer.agentStarted;
   delete reviewer.requestId;
   delete reviewer.dispatchState;
   delete reviewer.resultTransport;
@@ -1532,6 +1534,7 @@ export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
   delete reviewer.commandSandboxOff;
   delete reviewer.report;
   delete reviewer.error;
+  delete reviewer.startFailed;
   delete reviewer.startedAt;
   delete reviewer.completedAt;
 }

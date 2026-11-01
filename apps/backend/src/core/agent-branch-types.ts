@@ -78,6 +78,10 @@ export interface AgentBranchRecord {
   progressDigest?: string;
   stalledSince?: string;
   error?: string;
+  /** Failed before its first agent turn was accepted: the agent could not be started. */
+  startFailed?: boolean;
+  /** Whether this session has accepted an agent turn (allocation alone is insufficient). */
+  agentStarted?: boolean;
   tokenCount?: number;
   cacheReadTokens?: number;
   usageFinalizationPolls?: number;

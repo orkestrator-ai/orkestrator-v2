@@ -95,6 +95,7 @@ test("a reviewed remote worker gets one PR tab with its node's defaults, includi
           return { outcome: "ok", result };
         },
       },
+      runtime: new BackendRuntime({ emit: () => undefined }),
     } as unknown as CommandContext;
     mcp = new ControlMcpServer(
       world.root,
@@ -278,6 +279,7 @@ test("a remote worker's conflicts get one Resolve tab, and its PR is followed th
       coordinators: world.coordinator,
       nodes: { status: async () => ({ nodeId: "bk_command", mode: "command" }) },
       nodePortal: { summaries, invokeOnNode },
+      runtime: new BackendRuntime({ emit: () => undefined }),
     } as unknown as CommandContext;
     mcp = new ControlMcpServer(
       world.root,

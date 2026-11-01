@@ -316,6 +316,7 @@ function browserFallback(title: string, body: string, reason: string): BugReport
  * approved in the sheet, not a re-read of the file the agent may still be
  * rewriting.
  */
+// Process-wide on purpose: keyed by data directory and report, so it is per backend already.
 const filingFlights = new Map<string, Promise<BugReportFileResult>>();
 const UNCERTAIN_FILING =
   "A filing attempt may already have created this issue. Check GitHub and record its URL before trying again.";

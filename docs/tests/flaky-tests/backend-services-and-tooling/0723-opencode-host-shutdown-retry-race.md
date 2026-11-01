@@ -43,3 +43,9 @@ implementation, assertion, timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name opencode-host-isolated -- bun test --cwd apps/backend ./src/core/opencode-host-start.test.ts --parallel=1 --only-failures` passed, exit 0 in 6.0 seconds.
 - **Evidence:** `orkestrator-test-run.7ku54G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory.
 - **Assessment:** recurrence of the existing ordering failure; no owning implementation, assertion, deadline or skip changed.
+
+## Fix for the likely cause — 2026-11-01
+
+- **Change:** [1172](../../../todo/agent-engines/1172-opencode-start-error-before-stderr.md) task 1. `waitForLocalServerStartup` decides an OpenCode exit on `close`, or 1 s after `exit` if stdio stays open, so a `database is locked` chunk read after `exit` still selects the retry path.
+- **Evidence:** new fake-child tests in the owner (`waitForLocalServerStartup on an OpenCode exit`) fail on the old code (2 of 3) and pass with the fix. The full owner passed five consecutive runs alone (12 pass each).
+- **Disposition:** stays open until an aggregate run under load passes without it; then resolve.

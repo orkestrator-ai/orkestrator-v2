@@ -15,13 +15,7 @@ import {
   withPolicyCliFixture,
 } from "../../../../tests/conformance/execution-policy/vendor-cli.js";
 import { checkHttpHealth, openCodeHealthHeaders } from "./commands-server-health.js";
-import {
-  configureOpenCodeCoordinatorResearch,
-  ensureOpenCodeCoordinatorResearch,
-  forgetOpenCodeCoordinatorResearch,
-  invalidateOpenCodeCoordinatorResearch,
-  openCodeCoordinatorResearchToolIds,
-} from "./opencode-coordinator-research.js";
+import { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 
 const opencode = policyQualificationCli("opencode");
 
@@ -75,6 +69,8 @@ describe("OpenCode coordinator research servers", () => {
           },
         );
         let provider: OpenCodeProvider | undefined;
+        // One backend's registrations (`runtime.localServers.openCodeAgentTools.research`).
+        const researchRegistrations = new OpenCodeCoordinatorResearch();
         try {
           const headers = openCodeHealthHeaders(password);
           const deadline = Date.now() + 20_000;
@@ -104,7 +100,7 @@ describe("OpenCode coordinator research servers", () => {
             if (Date.now() > deadline) throw new Error("opencode serve did not become ready");
             await Bun.sleep(200);
           }
-          const allowed = await configureOpenCodeCoordinatorResearch({
+          const allowed = await researchRegistrations.configure({
             serverKey: "local:fixture",
             port,
             password,
@@ -112,7 +108,7 @@ describe("OpenCode coordinator research servers", () => {
             servers: [{ name: "context7", url: `${research.url.origin}/mcp` }],
           });
           expect(allowed).toEqual(["context7_query-docs"]);
-          expect(openCodeCoordinatorResearchToolIds("local:fixture")).toEqual(allowed);
+          expect(researchRegistrations.toolIds("local:fixture")).toEqual(allowed);
           const status = (await (
             await fetch(
               `http://127.0.0.1:${port}/mcp?directory=${encodeURIComponent(fixture.cwd)}`,
@@ -132,11 +128,11 @@ describe("OpenCode coordinator research servers", () => {
               directory: fixture.cwd,
             },
             {
-              coordinatorResearchToolIds: () => openCodeCoordinatorResearchToolIds("local:fixture"),
+              coordinatorResearchToolIds: () => researchRegistrations.toolIds("local:fixture"),
               invalidateCoordinatorResearch: () =>
-                invalidateOpenCodeCoordinatorResearch("local:fixture"),
+                researchRegistrations.invalidate("local:fixture"),
               ensureCoordinatorResearch: () =>
-                ensureOpenCodeCoordinatorResearch("local:fixture").then(() => undefined),
+                researchRegistrations.ensure("local:fixture").then(() => undefined),
             },
           );
           const policy = resolveNativeAgentExecutionPolicy(
@@ -147,11 +143,11 @@ describe("OpenCode coordinator research servers", () => {
           );
           const session = await provider.createSession("coordinator", "Reload fixture", { policy });
           await provider.refreshCommands();
-          expect(openCodeCoordinatorResearchToolIds("local:fixture")).toEqual([]);
+          expect(researchRegistrations.toolIds("local:fixture")).toEqual([]);
           const beforeRestore = research.requests();
           await provider.synchronizeSessionPolicy(session, policy);
           expect(research.requests()).toBeGreaterThan(beforeRestore);
-          expect(openCodeCoordinatorResearchToolIds("local:fixture")).toEqual(allowed);
+          expect(researchRegistrations.toolIds("local:fixture")).toEqual(allowed);
           const restored = (await fetch(
             `http://127.0.0.1:${port}/session/${session}?directory=${encodeURIComponent(fixture.cwd)}`,
             { headers },
@@ -166,7 +162,7 @@ describe("OpenCode coordinator research servers", () => {
           expect(action("context7_x_query-docs")).toBe("deny");
         } finally {
           await provider?.dispose();
-          forgetOpenCodeCoordinatorResearch("local:fixture");
+          researchRegistrations.forget("local:fixture");
           child.kill();
           await child.exited;
           research.stop();

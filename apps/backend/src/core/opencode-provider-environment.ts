@@ -6,11 +6,6 @@
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import { openCodeCommandChangeJournalDirectory } from "./opencode-command-changes.js";
-import {
-  ensureOpenCodeCoordinatorResearch,
-  invalidateOpenCodeCoordinatorResearch,
-  openCodeCoordinatorResearchToolIds,
-} from "./opencode-coordinator-research.js";
 import type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
 
 export type OpenCodeEnvironmentDependencies = Pick<
@@ -38,15 +33,14 @@ export function openCodeEnvironmentDependencies(
       ),
     };
   }
-  // A coordinator's research tool ids, recorded when its launch registered
-  // them, keyed like the launcher's agent-tools configuration.
-  if (coordinatorIdFromRuntimeId(environment.environmentId)) {
-    dependencies.ensureCoordinatorResearch = () =>
-      ensureOpenCodeCoordinatorResearch(`local:${environment.environmentId}`).then(() => undefined);
-    dependencies.invalidateCoordinatorResearch = () =>
-      invalidateOpenCodeCoordinatorResearch(`local:${environment.environmentId}`);
-    dependencies.coordinatorResearchToolIds = () =>
-      openCodeCoordinatorResearchToolIds(`local:${environment.environmentId}`);
+  // A coordinator's research tool ids, recorded in its backend when its launch
+  // registered them, keyed like the launcher's agent-tools configuration.
+  const research = environment.openCodeCoordinatorResearch;
+  if (research && coordinatorIdFromRuntimeId(environment.environmentId)) {
+    const serverKey = `local:${environment.environmentId}`;
+    dependencies.ensureCoordinatorResearch = () => research.ensure(serverKey).then(() => undefined);
+    dependencies.invalidateCoordinatorResearch = () => research.invalidate(serverKey);
+    dependencies.coordinatorResearchToolIds = () => research.toolIds(serverKey);
   }
   const loadConfig = environment.loadConfig;
   if (loadConfig) {

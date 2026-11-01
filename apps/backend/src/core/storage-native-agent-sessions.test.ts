@@ -936,6 +936,7 @@ describe("StorageService native agent sessions", () => {
       const confirmedSession = await first.getNativeAgentSession(input.key);
       expect(confirmedSession?.pendingSteer).toBeUndefined();
       expect(confirmedSession?.dispatchedRequestIds).toEqual([pending.requestId]);
+      expect(confirmedSession?.lastDispatchedTurn?.requestId).toBe(pending.requestId);
 
       const escapedText = '"'.repeat(64 * 1024);
       const escapedPending = {
@@ -981,6 +982,7 @@ describe("StorageService native agent sessions", () => {
           {
             requestId: "request-a",
             prompt: "first prompt",
+            mode: "plan",
             createdAt: new Date(1).toISOString(),
           },
         ),
@@ -1009,6 +1011,7 @@ describe("StorageService native agent sessions", () => {
           {
             requestId: "request-a",
             prompt: "first prompt",
+            mode: "plan",
             createdAt: new Date(1).toISOString(),
           },
         ),
@@ -1023,6 +1026,7 @@ describe("StorageService native agent sessions", () => {
       expect(session?.pendingDispatch).toBeUndefined();
       // Recording the id is what stops a later retry from running it twice.
       expect(session?.dispatchedRequestIds).toEqual(["request-a"]);
+      expect(session?.lastDispatchedTurn).toEqual({ requestId: "request-a", mode: "plan" });
 
       const replay = mock(async () => undefined);
       const outcome = await first.dispatchNativeAgentPromptOnce(input.key, "request-a", replay);

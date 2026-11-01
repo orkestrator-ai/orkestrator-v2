@@ -37,6 +37,7 @@ import type {
 } from "./graph-run-executors.js";
 import {
   GraphSystemActionContext,
+  GraphSystemActionMemory,
   GraphSystemActionError,
   type GraphSystemActionHandler,
   type GraphSystemDependencies,
@@ -99,6 +100,7 @@ export class GraphNodeSystemExecutor implements GraphNodeExecutor {
   private readonly jobs = new Map<string, SystemJob>();
   private readonly watches = new Map<string, { environmentId: string; stop: () => void }>();
   private readonly stopController = new AbortController();
+  private readonly memory = new GraphSystemActionMemory();
 
   constructor(
     private readonly deps: GraphSystemDependencies,
@@ -176,6 +178,7 @@ export class GraphNodeSystemExecutor implements GraphNodeExecutor {
         environmentId: context.environmentId,
         artifacts: context.artifacts,
         now: () => context.now(),
+        memory: this.memory,
       },
       this.deps,
       signal,

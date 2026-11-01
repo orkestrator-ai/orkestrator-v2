@@ -11,7 +11,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Live container sessions (review gap 9)**: save an environment-private server during a running turn in a container and confirm the turn finishes and the next turn loads it, for Claude, Codex, Cursor and Pi (plus terminal work not being interrupted). Status: open.
-2. **Real-browser pass of the overlay UI**: overlay states, conflict and divergence actions, the refresh dialog and the corrupt-record reset in a real browser against a container fixture. Status: open.
+2. **Real-browser pass of the overlay UI**: overlay states, conflict and divergence actions, the refresh dialog and the corrupt-record reset in a real browser against a container fixture. Status: done (2026-11-01); three bugs fixed, see its Outcome.
 3. **Remote-browser check**: from a browser on a second machine, the URL location hint and container sign-in reason show and no callback is offered. Status: open (needs two machines).
 4. **Stale notes in this file**: the 0058 observation and the remote-run batching reference are out of date. Status: done (2026-10-31).
 
@@ -53,7 +53,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Context.** The UI lives in `apps/web/src/components/settings/mcp-servers/McpEnvironmentOverlay.tsx` (refresh entry at `:303`, dialog at `:452`). AGENTS.md requires a real-browser path, reload and inactive-environment check for frontend interaction changes. The file notes that `mise run test:browser` has no MCP settings spec.
 
-**Investigation.** `e2e/agent-testing/mcp-overlay-recovery.spec.ts` exists and is in the browser config (`playwright.browser.config.ts:41`); it is skipped unless `ORKESTRATOR_AGENT_TEST_DOCKER=1` or `ORKESTRATOR_AGENT_TEST_MCP_CONTAINER=1` (`:21-25`) and covers only the corrupt-record reset plus a reload. No run of it is recorded. The location hint text is present in both places the file names (`McpServerForm.tsx:460`, `AgentInfoMcpSection.tsx:133`). The struck deletion item notes that no real-stack environment deletion was run; it is covered by unit tests only.
+**Investigation.** `e2e/agent-testing/mcp-overlay-recovery.spec.ts` exists and is in the browser config (`playwright.browser.config.ts:41`); it is skipped unless `ORKESTRATOR_AGENT_TEST_DOCKER=1` or `ORKESTRATOR_AGENT_TEST_MCP_CONTAINER=1` (`:21-25`) and covers only the corrupt-record reset plus a reload. No run of it was recorded before 2026-11-01. The location hint text is present in both places the file names (`McpServerForm.tsx:460`, `AgentInfoMcpSection.tsx:133`). The struck deletion item notes that no real-stack environment deletion was run; it is covered by unit tests only.
 
 **Decisions.**
 
@@ -71,6 +71,33 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **No, accept the unit coverage.**
     - Pros: smaller run.
     - Cons: the caveat stays.
+
+**Outcome (2026-11-01, `main` at `93b99bfb`).** Done, taking both recommended options. One disposable profile, `mise run dev:test --profile overlay-ui-3c5d --fixture --fixture-environments local,container --no-agent-credentials --agent-platforms codex,pi`, on a `volume-v1` restricted container built from this tree. The browser was headless Chromium driven by Playwright against the profile's `browserUrl`, signed in through `dev:login`. Every check below used the Codex target of a container environment and ended with the file read back with `docker exec`. The profile was reset afterwards and the image removed.
+
+| Check | How it was reached | Result |
+| --- | --- | --- |
+| `mcp-overlay-recovery.spec.ts` (corrupt record, reset, reload) | the spec, `ORKESTRATOR_AGENT_TEST_DOCKER=1` | Failed at first: the host's "Docker containers can't reach Orkestrator" notice covered the app. Fixed (bug 1); then passed. |
+| No overlay yet | fresh container | Only "Refresh from backend user…" offered; its dialog says "Nothing to refresh". Escape closes only the dialog and focus returns to the trigger. |
+| Refresh with an added server | a server added to the backend user's file in the editor | Preview listed it as added; Refresh wrote it. The toast wrongly said the staged copy "could not be updated" (bug 2, fixed; rechecked after a profile restart: "Refreshed from the backend user"). |
+| In sync, Added and Replaced | an environment-only server added and the inherited one edited in the editor | Both listed; only reset and refresh offered. Kept after reload. |
+| Diverged | `sed` and an appended server inside the container | "Edited inside the container", with the edited names. Row actions disabled; import, reapply, reset and refresh offered. The refresh preview listed the names under "Edited in the container" and warned they would be overwritten. "Add server" showed a blank "Save to" (bug 3, fixed). |
+| Diverged → Import | button | Toast, in sync, the container's values adopted; kept after reload. |
+| Diverged → Reapply | a second in-container edit | Toast, in sync, the edit overwritten. |
+| Pending | `docker restart` outside Orkestrator, then the inherited copy written into the file by hand (see decision 18) | "Not in the container yet"; reapply only, no import. Kept after reload. |
+| Edit while pending | Disable a row | Refused with "The configuration changed since it was loaded" and "Reload latest and review again" (decision 5); after reload the save succeeded. |
+| Pending → Reapply | button | Toast, in sync, the overlay written back. |
+| Stale refresh token | backend user's file changed while the preview was open | Refresh refused; "Preview again" took a new preview, and Refresh then succeeded. |
+| Conflict → Keep | refresh over a changed inherited server this environment had replaced | Preview listed the conflict and its reason. The panel showed "Needs a decision" with the inherited value in the file; kept after reload. Keep wrote this environment's version back. |
+| Conflict → Use inherited | the same, with another backend-user change | The change was dropped and the inherited value kept. |
+| Reset (readable record) | button | The confirm dialog's "Keep changes" left everything and returned focus to the trigger. Reset restored the inherited server and removed the record file. |
+| Narrow viewport | 390 px | The refresh dialog and conflict panel fit without horizontal overflow. |
+| Real-stack deletion | a second container environment with a record, deleted from the sidebar | Its container, volumes, staged inputs and its `mcp-environment-overlays` directory were removed; the other environment's directory was untouched. |
+
+Bugs found and fixed, each with a test:
+
+1. `mcp-overlay-recovery.spec.ts` did not close the host reachability notice, so it could not run on a host whose firewall drops container traffic (this one). It now acknowledges it the way `container-rebuild-cycle.spec.ts` does, without touching the firewall.
+2. A refresh of a file nothing was staged for reported `stagedCopy: "unavailable"`, so the user was told to "refresh again after the next rebuild". The entrypoint copies only staged files that exist, so the next boot keeps the refreshed file, and a rebuild stages the backend user's current file anyway. `createStagedDefaultsWriter` now reports `not-needed` when the staged file is absent from an existing input revision (decision 19). Tests: `commands-registry-mcp.test.ts`, "staged defaults writer".
+3. While the target's default file was blocked (diverged), the add dialog kept it as the selection: "Save to" was blank, the form could be filled and reviewed, and only the backend's refusal explained why. It now shows "Choose where to save", says why the default file is not offered, and keeps "Review change" disabled until a writable file is chosen (decision 20). Test: `McpEnvironmentOverlay.test.tsx`, "a diverged default file is not preselected…".
 
 ### 3. Remote-browser check
 
@@ -222,8 +249,9 @@ remote runs with
 - ~~Environment deletion removes only its own overlay and jobs.~~ The overlay is
   in `ENVIRONMENT_STATE_ROOTS`, so the per-environment cleanup entry and the
   orphan reconciler cover it (`environment-cleanup.test.ts`,
-  `environment-state-paths.test.ts`). The overlay has no jobs. No real-stack
-  deletion was run for this change.
+  `environment-state-paths.test.ts`). The overlay has no jobs. A real-stack
+  deletion from the UI was run on 2026-11-01 (task 2's Outcome): only the
+  deleted environment's record directory went.
 - ~~Pi and Cursor delivery respect opt-outs, size bounds, symlink rules and
   modes.~~ Cursor: unit tests plus the live entrypoint run. Pi was already
   covered.
@@ -243,14 +271,12 @@ remote runs with
   runs `e2e/agent-testing/mcp-apply-live.spec.ts` against container
   environment-private sources. It needs provider credentials and has not been
   run for this change.
-- **Real-browser pass of the overlay UI: open.** The overlay states, the
-  conflict and divergence actions, and the refresh dialog need a check in a
-  real browser on a `dev:test` profile with a container fixture. See the UI note
-  in Evidence for what the unit tests cover.
-  `e2e/agent-testing/mcp-overlay-recovery.spec.ts` (opt-in,
-  `ORKESTRATOR_AGENT_TEST_DOCKER=1`) drives the corrupt-record reset through
-  the real renderer and a disposable container, including a reload. No run of
-  it is recorded for this change.
+- ~~**Real-browser pass of the overlay UI.**~~ Done on 2026-11-01 on a
+  `dev:test` profile with a container fixture: every overlay state and action,
+  the refresh dialog (including a stale token) and the corrupt-record reset,
+  each with a reload. `e2e/agent-testing/mcp-overlay-recovery.spec.ts` (opt-in,
+  `ORKESTRATOR_AGENT_TEST_DOCKER=1`) passed after a fix. Results and the three
+  bugs fixed are in task 2's Outcome.
 
 ### Evidence
 
@@ -517,6 +543,44 @@ All of these are additive and in scope.
       batch first.
     - Pros: cheap, and it closes the gap. Cons: touches 0031, which is outside
       this file.
+
+18. **How the real-browser pass reached each state** (2026-11-01, task 2).
+    - Options: hand-walk the states not covered by `mcp-overlay-recovery.spec.ts`;
+      extend the spec to drive every state.
+    - Chosen: hand-walk, as the task analysis recommended, and fix the spec only
+      where it could not run.
+    - Why: the states need container-side edits, out-of-band restarts and
+      backend-user changes between steps, and the fixes found are covered by
+      unit tests at their own layer.
+    - Pros: cheap; covers every state. Cons: the walk is not repeatable.
+    - With `--no-agent-credentials` no provider's inputs are staged, so a restart
+      cannot re-copy the inherited file by itself. "Pending" was reached by
+      restarting the container outside Orkestrator and writing the inherited copy
+      into the file, which is what the entrypoint does when a file is staged.
+      The boot id comes from the entrypoint's boot status, so the restart is a
+      real new boot.
+19. **A refresh with nothing staged reports `not-needed`** (2026-11-01, bug 2).
+    - Options: `not-needed` when the staged file is absent from an existing input
+      revision; create the staged file so the next boot copies it; keep
+      `unavailable`.
+    - Chosen: `not-needed`. A missing revision directory, a symlink or any other
+      read failure stays `unavailable`.
+    - Why: the entrypoint copies only files that exist, so the container's
+      refreshed file survives the next boot; a rebuild stages from the backend
+      user's current file.
+    - Pros: no false warning; no new staged file or mount. Cons: creating the
+      file would not reach the container anyway, because a staged input that was
+      absent at creation has no mount.
+20. **The add dialog's file choice when the default file is blocked** (2026-11-01,
+    bug 3).
+    - Options: choose nothing and explain; preselect the first writable file.
+    - Chosen: choose nothing, show "Choose where to save" and say why the default
+      file is not offered.
+    - Why: the other writable file is usually the project file, which is
+      committed with the repository; a silent switch could put a server there by
+      surprise.
+    - Pros: the user decides; the reason is visible before the form is filled.
+      Cons: one extra choice while the default is blocked.
 
 ## Open questions
 

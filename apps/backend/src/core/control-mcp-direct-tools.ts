@@ -81,6 +81,7 @@ export function directToolSchema(
   };
 }
 
+// Process-wide on purpose: compiled from constant schemas, the same for every backend.
 const compiled = new Map<string, ReturnType<typeof fromJsonSchema>>();
 
 /** Compiled once per process: the server is rebuilt for every request. */

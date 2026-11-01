@@ -1,16 +1,10 @@
 import { OpenCodeAgentToolsReconciler } from "./opencode-agent-tools.js";
 import { describe, expect, test } from "bun:test";
-import {
-  configureOpenCodeCoordinatorResearch,
-  ensureOpenCodeCoordinatorResearch,
-  forgetOpenCodeCoordinatorResearch,
-  invalidateOpenCodeCoordinatorResearch,
-  openCodeCoordinatorResearchToolIds,
-} from "./opencode-coordinator-research.js";
+import { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 import { fixtureMcpServer } from "./opencode-coordinator-research-test-support.js";
 import { MAX_OPENCODE_MCP_STATUS_BYTES } from "./opencode-bounded-response.js";
 
-function fixture() {
+function fixture(registrations = new OpenCodeCoordinatorResearch()) {
   const research = fixtureMcpServer(["query-docs", "x_shadow"]);
   const posts: unknown[] = [];
   let response: () => Response | Promise<Response> = () =>
@@ -36,13 +30,14 @@ function fixture() {
   };
   return {
     research,
+    registrations,
     posts,
     input,
     respond(next: typeof response) {
       response = next;
     },
     close() {
-      forgetOpenCodeCoordinatorResearch(input.serverKey);
+      registrations.forget(input.serverKey);
       server.stop(true);
       research.stop();
     },
@@ -54,9 +49,9 @@ describe("OpenCode research registration", () => {
     const f = fixture();
     try {
       const launch = new AbortController();
-      expect(
-        await configureOpenCodeCoordinatorResearch({ ...f.input, signal: launch.signal }),
-      ).toEqual(["context7_query-docs"]);
+      expect(await f.registrations.configure({ ...f.input, signal: launch.signal })).toEqual([
+        "context7_query-docs",
+      ]);
       launch.abort();
       expect(f.posts).toEqual([
         {
@@ -75,40 +70,38 @@ describe("OpenCode research registration", () => {
         },
       ]);
       expect(f.research.requests()).toBeGreaterThan(0);
-      await ensureOpenCodeCoordinatorResearch(f.input.serverKey);
+      await f.registrations.ensure(f.input.serverKey);
       expect(f.posts).toHaveLength(1);
-      invalidateOpenCodeCoordinatorResearch(f.input.serverKey);
-      expect(openCodeCoordinatorResearchToolIds(f.input.serverKey)).toEqual([]);
+      f.registrations.invalidate(f.input.serverKey);
+      expect(f.registrations.toolIds(f.input.serverKey)).toEqual([]);
       await Promise.all([
-        ensureOpenCodeCoordinatorResearch(f.input.serverKey),
-        ensureOpenCodeCoordinatorResearch(f.input.serverKey),
+        f.registrations.ensure(f.input.serverKey),
+        f.registrations.ensure(f.input.serverKey),
       ]);
       expect(f.posts).toHaveLength(2);
-      expect(openCodeCoordinatorResearchToolIds(f.input.serverKey)).toEqual([
-        "context7_query-docs",
-      ]);
+      expect(f.registrations.toolIds(f.input.serverKey)).toEqual(["context7_query-docs"]);
     } finally {
       f.close();
     }
   });
 
   test("the runtime reconciler forgets research registrations on cancellation and shutdown", async () => {
-    const f = fixture();
     const reconciler = new OpenCodeAgentToolsReconciler();
+    const f = fixture(reconciler.research);
     try {
       for (const cancel of [
         () => reconciler.cancel(f.input.serverKey),
         () => reconciler.cancelAll(),
       ]) {
-        await configureOpenCodeCoordinatorResearch(f.input);
+        await f.registrations.configure(f.input);
         reconciler.recordLaunchConnection(f.input.serverKey, {
           url: f.input.servers[0]!.url,
           token: "fixture",
         });
         const posts = f.posts.length;
         cancel();
-        invalidateOpenCodeCoordinatorResearch(f.input.serverKey);
-        expect(await ensureOpenCodeCoordinatorResearch(f.input.serverKey)).toEqual([]);
+        f.registrations.invalidate(f.input.serverKey);
+        expect(await f.registrations.ensure(f.input.serverKey)).toEqual([]);
         expect(f.posts).toHaveLength(posts);
       }
     } finally {
@@ -120,15 +113,15 @@ describe("OpenCode research registration", () => {
   test("disconnected and non-OK registrations grant nothing after invalidation", async () => {
     const f = fixture();
     try {
-      await configureOpenCodeCoordinatorResearch(f.input);
+      await f.registrations.configure(f.input);
       for (const respond of [
         () => new Response("failed", { status: 503 }),
         () => Response.json({ context7: { status: "failed" } }),
       ]) {
-        invalidateOpenCodeCoordinatorResearch(f.input.serverKey);
+        f.registrations.invalidate(f.input.serverKey);
         f.respond(respond);
-        expect(await ensureOpenCodeCoordinatorResearch(f.input.serverKey)).toEqual([]);
-        expect(openCodeCoordinatorResearchToolIds(f.input.serverKey)).toEqual([]);
+        expect(await f.registrations.ensure(f.input.serverKey)).toEqual([]);
+        expect(f.registrations.toolIds(f.input.serverKey)).toEqual([]);
       }
     } finally {
       f.close();
@@ -136,10 +129,7 @@ describe("OpenCode research registration", () => {
   });
 
   test("a late registration cannot restore allowances after disposal or process teardown", async () => {
-    for (const retire of [
-      invalidateOpenCodeCoordinatorResearch,
-      forgetOpenCodeCoordinatorResearch,
-    ]) {
+    for (const retire of ["invalidate", "forget"] as const) {
       const f = fixture();
       let release!: (response: Response) => void;
       let started!: () => void;
@@ -153,17 +143,15 @@ describe("OpenCode research registration", () => {
         started();
         return response;
       });
-      const pending = configureOpenCodeCoordinatorResearch(f.input).catch(
-        (error: unknown) => error,
-      );
+      const pending = f.registrations.configure(f.input).catch((error: unknown) => error);
       try {
         await requested;
-        retire(f.input.serverKey);
+        f.registrations[retire](f.input.serverKey);
         release(Response.json({ context7: { status: "connected" } }));
         const error = await pending;
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toContain("instance changed");
-        expect(openCodeCoordinatorResearchToolIds(f.input.serverKey)).toEqual([]);
+        expect(f.registrations.toolIds(f.input.serverKey)).toEqual([]);
       } finally {
         release(new Response(null, { status: 503 }));
         await pending;
@@ -175,15 +163,13 @@ describe("OpenCode research registration", () => {
   test("oversized status responses fail closed and can be retried", async () => {
     const f = fixture();
     try {
-      await configureOpenCodeCoordinatorResearch(f.input);
-      invalidateOpenCodeCoordinatorResearch(f.input.serverKey);
+      await f.registrations.configure(f.input);
+      f.registrations.invalidate(f.input.serverKey);
       f.respond(() => new Response("x".repeat(MAX_OPENCODE_MCP_STATUS_BYTES + 1)));
-      await expect(ensureOpenCodeCoordinatorResearch(f.input.serverKey)).rejects.toThrow(
-        "too large",
-      );
-      expect(openCodeCoordinatorResearchToolIds(f.input.serverKey)).toEqual([]);
+      await expect(f.registrations.ensure(f.input.serverKey)).rejects.toThrow("too large");
+      expect(f.registrations.toolIds(f.input.serverKey)).toEqual([]);
       f.respond(() => Response.json({ context7: { status: "connected" } }));
-      expect(await ensureOpenCodeCoordinatorResearch(f.input.serverKey)).toEqual([
+      expect(await f.registrations.ensure(f.input.serverKey)).toEqual([
         "context7_query-docs",
         "context7_x_shadow",
       ]);

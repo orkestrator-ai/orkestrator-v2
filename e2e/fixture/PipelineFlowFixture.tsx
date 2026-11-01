@@ -782,6 +782,31 @@ function SplitPipelineViews({ pipeline }: { pipeline: BuildPipeline }) {
   );
 }
 
+/** Hides the tab with `display: none`, as `PaneLeafContainer` does when another tab takes over. */
+function BuildPaneControls({ pipeline }: { pipeline: BuildPipeline }) {
+  const [isActive, setIsActive] = useState(true);
+  return (
+    <div className="flex h-screen flex-col">
+      <div className="shrink-0">
+        <button onClick={() => setIsActive(!isActive)}>
+          {isActive ? "Activate other pane" : "Activate build pane"}
+        </button>
+      </div>
+      <div hidden={!isActive} className="relative flex min-h-0 flex-1 flex-col">
+        <BuildChatTab
+          data={{
+            pipelineId: pipeline.id,
+            environmentId: pipeline.environmentId,
+            taskId: pipeline.taskId,
+            isLocal: true,
+          }}
+          isActive={isActive}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function PipelineFlowFixture() {
   const [pipeline] = useState(seed);
   const [review, setReview] = useState<CreateTabOptions | null>(() =>
@@ -820,6 +845,8 @@ export function PipelineFlowFixture() {
               <p>Another tab</p>
             )}
           </>
+        ) : new URLSearchParams(window.location.search).has("paneControls") ? (
+          <BuildPaneControls pipeline={pipeline} />
         ) : (
           <BuildChatTab
             data={{

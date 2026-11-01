@@ -118,13 +118,6 @@ const COPY_TIMEOUT_MS = 60 * 60_000;
 /** Capacity headroom on top of the estimated copy size. */
 const CAPACITY_HEADROOM_BYTES = 512 * 1024 * 1024;
 
-/** Operations whose user asked to stop before commit. */
-const cancellationRequests = new Set<string>();
-
-export function requestReplacementCancellation(operationId: string): void {
-  cancellationRequests.add(operationId);
-}
-
 class ReplacementCancelled extends Error {
   constructor() {
     super(formatContainerLifecycleError("operation-unknown", "The rebuild was cancelled."));
@@ -609,15 +602,20 @@ export async function quiesceRuntime(
   context.previews?.registry.beforeEnvironmentTargetChange(environmentId);
   await context.nativeAgents?.runtimeStopRequested(environmentId);
   const capabilities = await imageCapabilities(imageId, context);
-  const drain = await withEnvironmentDraining(environmentId, containerId, async () => {
-    const result = capabilities?.["graceful-shutdown"]
-      ? await drainContainerProcesses(containerId)
-      : null;
-    // The runtime, then its egress gateway: a candidate's gateway binds the
-    // same fixed host ports.
-    await stopRuntimeContainer(containerId);
-    return result;
-  });
+  const drain = await withEnvironmentDraining(
+    context.runtime.environments,
+    environmentId,
+    containerId,
+    async () => {
+      const result = capabilities?.["graceful-shutdown"]
+        ? await drainContainerProcesses(containerId)
+        : null;
+      // The runtime, then its egress gateway: a candidate's gateway binds the
+      // same fixed host ports.
+      await stopRuntimeContainer(containerId);
+      return result;
+    },
+  );
   shutdownClaudeStatePolling(context, containerId);
   // The bridges stopped with the runtime, and their turns and parked requests
   // with them. Before a commit too: a failed rebuild leaves it stopped.
@@ -725,7 +723,9 @@ async function replaceRuntimePreservingStateUnfenced(
   if (admission.kind === "replayed") return undefined;
   const { operationId } = admission.operation;
   const checkCancelled = () => {
-    if (cancellationRequests.has(operationId)) throw new ReplacementCancelled();
+    if (context.runtime.environments.isReplacementCancellationRequested(operationId)) {
+      throw new ReplacementCancelled();
+    }
   };
   const phase = (name: (typeof REPLACEMENT_PHASES)[number], patch = {}) =>
     advanceContainerOperation(context, environment.id, operationId, { phase: name, ...patch });
@@ -935,10 +935,10 @@ async function replaceRuntimePreservingStateUnfenced(
         );
       });
     context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(sourceContainerId);
-    cancellationRequests.delete(operationId);
+    context.runtime.environments.forgetReplacementCancellation(operationId);
     return { kind, containerId: candidateId, runtimeGeneration, files, bytes };
   } catch (error) {
-    cancellationRequests.delete(operationId);
+    context.runtime.environments.forgetReplacementCancellation(operationId);
     if (committed) throw error;
     const failedCandidate = await rollbackCandidate(
       context,

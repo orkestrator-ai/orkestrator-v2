@@ -58,9 +58,24 @@ import { provenanceKey, type ChangeProjectionService } from "./projection-servic
 import type { SnapshotFileChange } from "./snapshot-diff.js";
 import { renderSnapshotBodies } from "./snapshot-diff.js";
 import type { WorktreeRegistry, WorktreeTarget } from "./worktree-owner.js";
+import { committedHead } from "./git-scopes.js";
 
 const FILES_PER_BODY_PAGE = 20;
 export const LIVE_FILE_REPRESENTATION_ID = "git-baseline-vs-worktree-bytes-v1";
+/** committed-net: the baseline blob against HEAD's blob, both read with `git cat-file`. */
+export const COMMITTED_FILE_REPRESENTATION_ID = "git-baseline-vs-head-bytes-v1";
+
+/**
+ * Live rows a file body can be resolved for: the environment's own
+ * measurement, and the two Git scopes that split it at HEAD. Their
+ * `baselineVersion` ends in the before side's commit (`…@<oid>`).
+ */
+const LIVE_DETAIL_SCOPES: ReadonlySet<string> = new Set([
+  "environment-net",
+  "uncommitted-net",
+  "committed-net",
+]);
+type LiveDetailScope = "environment-net" | "uncommitted-net" | "committed-net";
 
 function err(
   code: "not-found" | "body-expired" | "invalid-request" | "stale-revision",
@@ -345,12 +360,18 @@ export class DiffBodyService {
     path?: string;
   }): Promise<ChangesResolveLiveDetailResult> {
     const parts = parseChangeResourceKey(input.resourceKey);
-    if (!parts || parts.scope !== "environment-net" || parts.ownerKind !== "environment") {
+    if (
+      !parts ||
+      !LIVE_DETAIL_SCOPES.has(parts.scope) ||
+      parts.ownerKind !== "environment" ||
+      (parts.scope !== "environment-net" && parts.selector !== "live")
+    ) {
       return {
         kind: "error",
         error: { code: "invalid-request", reasonKey: "changes.error.invalid-request" },
       };
     }
+    const scope = parts.scope as LiveDetailScope;
     const environmentId = parts.ownerId;
     if (!input.pathId && input.path) {
       const relative = await this.relativePath(environmentId, input.path);
@@ -395,6 +416,18 @@ export class DiffBodyService {
     const pathId = row?.new_path ?? row?.path_id ?? input.pathId;
     if (!pathId)
       return { kind: "error", error: { code: "not-found", reasonKey: "changes.error.not-found" } };
+    // A Git scope's rows are Git's view; a path Git measures through a filter
+    // program has no raw-byte body that would match it.
+    if (scope !== "environment-net" && (!row || row.reason === "git-filter-unsupported"))
+      return {
+        kind: "error",
+        error: {
+          code: row ? "unsupported-capability" : "invalid-request",
+          reasonKey: row
+            ? "changes.reason.git-filter-unsupported"
+            : "changes.error.invalid-request",
+        },
+      };
     if (!validCapturePath(decodePath(pathId)))
       return {
         kind: "error",
@@ -413,24 +446,40 @@ export class DiffBodyService {
     // Claim the fence before reading, so a takeover during the read is seen.
     owner.ownerFence();
     const baseline = measurement?.baselineVersion?.split("@")[1] ?? null;
+    // committed-net's after side is HEAD's blob, never the working tree.
+    const afterCommit =
+      scope === "committed-net" ? committedHead(measurement?.baselineVersion) : null;
+    if (scope === "committed-net" && !afterCommit)
+      return {
+        kind: "error",
+        error: { code: "stale-revision", reasonKey: "changes.error.stale-revision" },
+      };
     // Current side: read through the owner's executor (host or container).
     const deleted = row?.status === "deleted";
     const signal = new AbortController().signal;
-    const [current] = deleted
-      ? [null]
-      : await owner.executor.fetch(
-          [pathId],
-          {
-            maxCandidates: 1,
-            maxFileBytes: 16 * 1024 * 1024,
-            maxCaptureBytes: 16 * 1024 * 1024,
-            readers: 1,
-            stableReadAttempts: 2,
-          },
-          signal,
-        );
+    const [current] =
+      deleted || afterCommit
+        ? [null]
+        : await owner.executor.fetch(
+            [pathId],
+            {
+              maxCandidates: 1,
+              maxFileBytes: 16 * 1024 * 1024,
+              maxCaptureBytes: 16 * 1024 * 1024,
+              readers: 1,
+              stableReadAttempts: 2,
+            },
+            signal,
+          );
     let afterBlob: string | null = null;
-    if (current && (current.kind === "file" || current.kind === "symlink") && current.bytes) {
+    if (afterCommit && !deleted) {
+      const bytes = await this.readBaseline(target, afterCommit, pathId);
+      if (bytes) afterBlob = (await this.deps.store.put("blob", bytes)).id;
+    } else if (
+      current &&
+      (current.kind === "file" || current.kind === "symlink") &&
+      current.bytes
+    ) {
       afterBlob = (await this.deps.store.put("blob", current.bytes)).id;
     }
     // Baseline side: the immutable commit the projection compared against.
@@ -486,7 +535,7 @@ export class DiffBodyService {
     const captureId = `live:${randomUUID()}`;
     const measurementDraft = {
       ...this.deps.measurements.base({
-        scope: "environment-net",
+        scope,
         owner: { environmentId },
         worktreeId: identity.worktreeId,
         worktreeIncarnation: identity.incarnation,
@@ -494,7 +543,9 @@ export class DiffBodyService {
       baselineVersion: measurement?.baselineVersion ?? null,
       origin: "captured-endpoints" as const,
       algorithmPolicyId: RAW_LINES_ALGORITHM_ID,
-      representationPolicyId: LIVE_FILE_REPRESENTATION_ID,
+      representationPolicyId: afterCommit
+        ? COMMITTED_FILE_REPRESENTATION_ID
+        : LIVE_FILE_REPRESENTATION_ID,
       effectClaim: "workspace-observed" as const,
       finality: "provisional" as const,
       boundary: { before: "not-applicable" as const, after: "running-observation" as const },
@@ -527,9 +578,13 @@ export class DiffBodyService {
         changedFiles: beforeBlob === afterBlob && beforeBlob !== null ? 0 : 1,
       },
     };
+    const pathHash = createHash("sha256").update(pathId).digest("hex").slice(0, 24);
     const owned = {
       kind: "environment-file",
-      id: `${environmentId}:${createHash("sha256").update(pathId).digest("hex").slice(0, 24)}`,
+      id:
+        scope === "environment-net"
+          ? `${environmentId}:${pathHash}`
+          : `${environmentId}:${scope}:${pathHash}`,
     };
     const { measurement: sealed } = this.deps.measurements.seal(measurementDraft, owned, null);
     const diffIdentity: DiffIdentity = {
@@ -540,10 +595,12 @@ export class DiffBodyService {
         .slice(0, 40)}`,
       worktreeId: identity.worktreeId,
       worktreeIncarnation: identity.incarnation,
-      scope: "environment-net",
+      scope,
       measurementId: sealed.measurementId,
       algorithmPolicyId: RAW_LINES_ALGORITHM_ID,
-      representationPolicyId: LIVE_FILE_REPRESENTATION_ID,
+      representationPolicyId: afterCommit
+        ? COMMITTED_FILE_REPRESENTATION_ID
+        : LIVE_FILE_REPRESENTATION_ID,
       rendererPolicyId: HUNK_RENDERER_POLICY_ID,
       whitespacePolicy: "preserve",
       kind: "file",
@@ -560,7 +617,12 @@ export class DiffBodyService {
       after: deleted
         ? { state: "absent" }
         : afterBlob
-          ? { state: "present", snapshotId: captureId, pathId, blobId: afterBlob }
+          ? {
+              state: "present",
+              snapshotId: afterCommit ? `gitref:${afterCommit}` : captureId,
+              pathId,
+              blobId: afterBlob,
+            }
           : { state: "unknown", reason: "current-unreadable" },
       basePathDisplay: oldPathId ? displayPath(oldPathId) : null,
       targetPathDisplay: deleted ? null : displayPath(pathId),

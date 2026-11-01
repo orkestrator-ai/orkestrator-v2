@@ -11,7 +11,7 @@
  */
 import { Cursor, FileCredentialStore, type SdkCredentialStore } from "@cursor/sdk";
 import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
-import { credentialFile, LOGIN_TIMEOUT_MS } from "./config.js";
+import { ACCOUNT_LOOKUP_TIMEOUT_MS, credentialFile, LOGIN_TIMEOUT_MS } from "./config.js";
 
 export type CredentialSource = "api-key-env" | "stored-login" | "none";
 
@@ -26,6 +26,22 @@ export interface CredentialResolution {
 export type BridgeAuthStatus = NativeAgentAuthStatus;
 const AUTH_CACHE_TTL_MS = 15_000;
 let authCache: { credential: string; expiresAt: number; value: BridgeAuthStatus } | undefined;
+type CursorAccount = Awaited<ReturnType<typeof Cursor.me>>;
+/**
+ * The account lookup still in flight, shared by every read for the same key.
+ * `Cursor.me` takes no signal, so a read that stops waiting cannot cancel it;
+ * sharing limits retries to one request per cache window. Abandoned requests
+ * may overlap because the SDK cannot cancel them.
+ */
+let accountLookup:
+  | {
+      credential: string;
+      expiresAt: number;
+      timedOut: boolean;
+      result: Promise<CursorAccount | undefined>;
+    }
+  | undefined;
+let accountLookupTimeoutMs = ACCOUNT_LOOKUP_TIMEOUT_MS;
 
 /**
  * The credential store this bridge reads and writes.
@@ -67,17 +83,27 @@ export function useCursorCredentialRuntimeForTests(runtime: {
   store: SdkCredentialStore;
   auth: typeof Cursor.auth;
   me?: typeof Cursor.me;
+  meTimeoutMs?: number;
 }): () => void {
-  const previous = { store: credentialStore, auth: cursorAuth, me: cursorMe };
+  const previous = {
+    store: credentialStore,
+    auth: cursorAuth,
+    me: cursorMe,
+    meTimeoutMs: accountLookupTimeoutMs,
+  };
   credentialStore = runtime.store;
   cursorAuth = runtime.auth;
   cursorMe = runtime.me;
+  accountLookupTimeoutMs = runtime.meTimeoutMs ?? ACCOUNT_LOOKUP_TIMEOUT_MS;
   authCache = undefined;
+  accountLookup = undefined;
   return () => {
     credentialStore = previous.store;
     cursorAuth = previous.auth;
     cursorMe = previous.me;
+    accountLookupTimeoutMs = previous.meTimeoutMs;
     authCache = undefined;
+    accountLookup = undefined;
   };
 }
 
@@ -129,9 +155,12 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
   if (credential && authCache?.credential === credential && authCache.expiresAt > Date.now()) {
     return authCache.value;
   }
-  const meFn = cursorMe;
-  const me =
-    credential && meFn ? await meFn({ apiKey: credential }).catch(() => undefined) : undefined;
+  // The label is the only thing the lookup buys, so a slow API must not hold
+  // the answer: readiness reads this, and a signed-in key stays signed in.
+  const lookup = credential
+    ? await lookUpAccount(credential)
+    : { settled: true as const, account: undefined };
+  const me = lookup.account;
   const label =
     [me?.userFirstName, me?.userLastName].filter(Boolean).join(" ") ||
     me?.apiKeyName ||
@@ -149,10 +178,57 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
       : { kind: "browser-url" },
     signOut: !fromEnvironment,
   };
-  if (credential) {
+  // A timeout fallback is not cached. The shared lookup retries after its
+  // bounded window, or sooner if the original request settles.
+  if (credential && lookup.settled) {
     authCache = { credential, expiresAt: Date.now() + AUTH_CACHE_TTL_MS, value };
   }
   return value;
+}
+
+/**
+ * The account behind `credential`, or nothing if the lookup failed or did not
+ * answer within `accountLookupTimeoutMs`. `settled` is false only for the
+ * latter, which is retried after the shared entry expires.
+ */
+async function lookUpAccount(
+  credential: string,
+): Promise<{ settled: boolean; account: CursorAccount | undefined }> {
+  const meFn = cursorMe;
+  if (!meFn) return { settled: true, account: undefined };
+  let entry = accountLookup;
+  if (!entry || entry.credential !== credential || entry.expiresAt <= Date.now()) {
+    const started = {
+      credential,
+      expiresAt: Date.now() + AUTH_CACHE_TTL_MS,
+      timedOut: false,
+      result: meFn({ apiKey: credential }).catch(() => undefined),
+    };
+    void started.result.finally(() => {
+      if (accountLookup === started) accountLookup = undefined;
+    });
+    entry = accountLookup = started;
+  }
+  // Avoid paying the full timeout on every poll while the same call is hung.
+  // Once the retry window expires, a later read can replace it even if it never settles.
+  if (entry.timedOut) return { settled: false, account: undefined };
+  const active = entry;
+  const { result } = entry;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      result.then((account) => ({ settled: true, account })),
+      new Promise<{ settled: boolean; account: undefined }>((resolve) => {
+        timer = setTimeout(() => {
+          active.timedOut = true;
+          resolve({ settled: false, account: undefined });
+        }, accountLookupTimeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export interface LoginHandle {
@@ -218,6 +294,7 @@ export function beginLogin(options: { openBrowser?: boolean } = {}): LoginHandle
 
 export async function logout(): Promise<void> {
   authCache = undefined;
+  accountLookup = undefined;
   await cursorAuth.logout({ store: credentialStore });
 }
 

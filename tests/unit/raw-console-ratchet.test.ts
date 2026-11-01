@@ -15,8 +15,8 @@ const oxlint = join(repoRoot, "node_modules/.bin/oxlint");
  * uses the logger, which needs no number raised.
  */
 const UNMIGRATED: Readonly<Record<string, number>> = {
-  "apps/backend/**": 466,
-  "apps/web/**": 371,
+  "apps/backend/**": 455,
+  "apps/web/**": 369,
   "apps/web-public/**": 0,
   "bridges/acp-bridge/**": 9,
   "bridges/claude-bridge/**": 71,

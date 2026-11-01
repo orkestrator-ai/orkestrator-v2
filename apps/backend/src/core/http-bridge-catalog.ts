@@ -15,6 +15,7 @@ import type {
   ProviderCommandCatalogue,
   ProviderCommandRefreshResult,
 } from "./agent-provider-contract.js";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 import {
@@ -26,6 +27,8 @@ import {
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
+
+const log = createLogger("native-agent");
 
 /**
  * Session catalogue reads answered 404 by a bridge older than the contract,
@@ -44,26 +47,27 @@ export function resetOutdatedBridgeCatalogueReadCounts(): void {
 
 /** Optional discovery and account surfaces shared by the HTTP-backed agents. */
 export class HttpBridgeCatalogAdapter {
-  private warnedOutdatedBridge = false;
-
   constructor(
     private readonly agent: HttpBridgeAgent,
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
   ) {}
 
-  /** Count every 404 from the session route; warn once per provider instance. */
+  /** One bridge's own fault: an old bridge must not look recovered when a current one answers. */
+  private get logScope(): string {
+    return `${this.agent}:${this.connection.baseUrl}`;
+  }
+
+  /** Count every 404 from the session route; throttle the warning per bridge. */
   private noteOutdatedBridge(): void {
     const count = (outdatedBridgeCatalogueReads.get(this.agent) ?? 0) + 1;
     outdatedBridgeCatalogueReads.set(this.agent, count);
     compatibilityPathUsage.record("slash-catalogue.outdated-bridge");
-    if (this.warnedOutdatedBridge) return;
-    this.warnedOutdatedBridge = true;
-    console.warn(
-      `[native-agent] ${this.agent} bridge is older than the command catalogue (session route 404); ` +
-        `its commands stay unavailable until the environment runs a current bridge ` +
-        `(outdated-bridge reads for ${this.agent} so far: ${count})`,
-    );
+    log.throttled("warn", "catalogue.outdated-bridge", {
+      scope: this.logScope,
+      kind: "session-route-404",
+      fields: () => ({ agent: this.agent, readsSoFar: count }),
+    });
   }
 
   /**
@@ -108,6 +112,7 @@ export class HttpBridgeCatalogAdapter {
       });
     }
     const normalized = normalizeCommandCataloguePayload(payload);
+    if (normalized.enhanced) log.recovered("catalogue.outdated-bridge", this.logScope);
     return {
       enhanced: normalized.enhanced,
       commands: normalized.commands,

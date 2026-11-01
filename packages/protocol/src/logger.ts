@@ -2,10 +2,11 @@ import {
   formatLogError,
   isSafeLogError,
   logErrorFromWire,
+  logErrorKind,
   type LogErrorDetails,
   type SafeLogError,
 } from "./log-error.js";
-import { LOG_VOCABULARY, type LogAreaSpec } from "./log-vocabulary/index.js";
+import { LOG_VOCABULARY, type LogAreaSpec, type ThrottleLogEvent } from "./log-vocabulary/index.js";
 
 /**
  * The application logger. Browser-safe, dependency-free and shared by every
@@ -16,7 +17,12 @@ import { LOG_VOCABULARY, type LogAreaSpec } from "./log-vocabulary/index.js";
  * types do not reach, the runtime replaces it with a marker.
  */
 
-export { formatLogError, type FormatLogErrorOptions, type SafeLogError } from "./log-error.js";
+export {
+  formatLogError,
+  logErrorKind,
+  type FormatLogErrorOptions,
+  type SafeLogError,
+} from "./log-error.js";
 
 export const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -52,12 +58,50 @@ export type LogFields = Readonly<Record<string, LogFieldValue>> & {
 /** A function is called only when the level is on, so a hot path builds nothing. */
 export type LogFieldsInput = LogFields | (() => LogFields);
 
+/** The events an area may throttle: every one of its own, if it lists the throttle's lines. */
+export type ThrottledEvent<Event extends string> = ThrottleLogEvent extends Event
+  ? Exclude<Event, ThrottleLogEvent>
+  : never;
+
+export type ThrottledLogOptions = {
+  /**
+   * Which instance of the site failed, when one site runs for several tabs or
+   * jobs, so that one instance's success does not clear another's fault. A
+   * bounded identifier, never content: it reaches every line.
+   */
+  scope?: string;
+  /** Detail for a first occurrence only. Repeats never build it. */
+  fields?: LogFieldsInput;
+} & (
+  | {
+      /** Keyed by its code or type through `logErrorKind`, never by its message. */
+      error: unknown;
+      kind?: never;
+    }
+  | {
+      /** A static name, for a failure that has no error object. */
+      kind: string;
+      error?: never;
+    }
+);
+
 export interface Logger<Event extends string> {
   error(event: Event, fields?: LogFieldsInput): void;
   warn(event: Event, fields?: LogFieldsInput): void;
   info(event: Event, fields?: LogFieldsInput): void;
   debug(event: Event, fields?: LogFieldsInput): void;
   trace(event: Event, fields?: LogFieldsInput): void;
+  /**
+   * For a loop that repeats a line as long as a fault lasts. The first occurrence
+   * of each site and error kind is written in full, repeats are counted, and one
+   * summary is written per window. docs/architecture/logging.md has the rules.
+   */
+  throttled(level: LogLevel, event: ThrottledEvent<Event>, options: ThrottledLogOptions): void;
+  /**
+   * The operation `throttled` reports on succeeded. Writes one recovered line if
+   * the site was failing; otherwise costs two comparisons, so call it every pass.
+   */
+  recovered(event: ThrottledEvent<Event>, scope?: string): void;
   /** For a guard around work that is not just building fields. */
   isEnabled(level: LogLevel): boolean;
 }
@@ -104,6 +148,8 @@ const TRUNCATION_MARKER_RESERVE = 32;
 const MAX_FIELDS = 32;
 const FIELD_NAME_PATTERN = /^[A-Za-z][\w.-]{0,63}$/;
 const BARE_TEXT_VALUE = /^[\w./:@+,~-]+$/;
+const THROTTLE_KIND_PATTERN = /^[\w.:-]{1,64}$/;
+const MAX_THROTTLE_SCOPE_CHARS = 128;
 const FORBIDDEN_FIELD_NAMES = new Set([
   "stdout",
   "stderr",
@@ -166,6 +212,9 @@ export function configureLogger(change: Partial<LoggerConfig>): void {
 export function resetLogger(): void {
   config = DEFAULT_CONFIG;
   generation += 1;
+  throttledSites.clear();
+  throttledKeyCount = 0;
+  nextThrottleFlushAt = 0;
 }
 
 export function getLogFormat(): LogFormat {
@@ -315,6 +364,206 @@ function buildRecord(
   };
 }
 
+/** One line per window per key, however fast the loop repeats. */
+export const LOG_THROTTLE_WINDOW_MS = 60_000;
+/** Keys tracked across the process (AGENTS.md invariant 11). */
+export const LOG_THROTTLE_MAX_KEYS = 512;
+/** A stopped loop must not hide the next incident behind an old key. */
+export const LOG_THROTTLE_IDLE_MS = 5 * LOG_THROTTLE_WINDOW_MS;
+
+interface ThrottledKey {
+  /** Repeats counted since the last line that reported them. */
+  pending: number;
+  windowStart: number;
+  lastFailureAt: number;
+  recency: number;
+}
+
+/** One site and scope. Its keys are the error kinds seen since it last recovered. */
+interface ThrottledSite {
+  area: string;
+  event: string;
+  scope: string | undefined;
+  level: LogLevel;
+  since: number;
+  failures: number;
+  keys: Map<string, ThrottledKey>;
+}
+
+// Each kind carries its own recency; a busy sibling kind cannot protect it.
+const throttledSites = new Map<string, ThrottledSite>();
+let throttledKeyCount = 0;
+let throttleRecency = 0;
+let throttleGeneration = generation;
+let nextThrottleFlushAt = 0;
+
+function writeThrottleLine(
+  site: ThrottledSite,
+  event: ThrottleLogEvent,
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  const spec = areaSpec(site.area);
+  if (!spec) return;
+  const listed = Object.hasOwn(spec.events, event);
+  const line = { site: site.event, ...(site.scope === undefined ? {} : { scope: site.scope }) };
+  deliver(
+    buildRecord(
+      site.level,
+      site.area,
+      listed ? event : "invalid-event",
+      listed ? { ...line, ...fields } : undefined,
+    ),
+  );
+}
+
+/**
+ * A level is re-read here rather than remembered, because it can be replaced at
+ * any time. A site whose level is now off is dropped with its count, so nothing
+ * tracked ever outlives the reader's ability to see it: the next failure after
+ * the level returns is a first occurrence again.
+ */
+function syncThrottleLevels(): void {
+  if (throttleGeneration === generation) return;
+  throttleGeneration = generation;
+  for (const [siteKey, site] of Array.from(throttledSites)) {
+    if (LEVEL_RANK[site.level] <= thresholdRank(site.area)) continue;
+    throttledSites.delete(siteKey);
+    throttledKeyCount -= site.keys.size;
+  }
+}
+
+/** Closes a key's window once it has run its length; a clock moved back also closes it. */
+function rollThrottleWindow(site: ThrottledSite, kind: string, key: ThrottledKey, now: number) {
+  const elapsed = now - key.windowStart;
+  if (elapsed >= 0 && elapsed < LOG_THROTTLE_WINDOW_MS) return;
+  if (key.pending > 0) {
+    writeThrottleLine(site, "throttle.suppressed", {
+      kind,
+      suppressed: key.pending,
+      windowSeconds: Math.max(0, Math.round(elapsed / 1000)),
+    });
+  }
+  key.pending = 0;
+  key.windowStart = now;
+}
+
+/** So a loop that stopped calling still reports its count, while any other throttle runs. */
+function flushDueThrottleWindows(now: number): void {
+  if (now < nextThrottleFlushAt && nextThrottleFlushAt - now <= LOG_THROTTLE_WINDOW_MS) return;
+  nextThrottleFlushAt = now + LOG_THROTTLE_WINDOW_MS;
+  for (const site of throttledSites.values()) {
+    for (const [kind, key] of site.keys) rollThrottleWindow(site, kind, key, now);
+  }
+}
+
+/**
+ * Makes room by dropping the key that has gone longest without failing, most
+ * likely a loop that stopped without ever succeeding. It says so, because its
+ * count and its recovered line go with it. If it fails again it is a first
+ * occurrence, so the limit can cost extra lines but never hides a failure.
+ */
+function evictOldestThrottleKey(): void {
+  let oldest: { siteKey: string; site: ThrottledSite; kind: string; key: ThrottledKey } | undefined;
+  for (const [siteKey, site] of throttledSites) {
+    for (const [kind, key] of site.keys) {
+      if (!oldest || key.recency < oldest.key.recency) oldest = { siteKey, site, kind, key };
+    }
+  }
+  if (!oldest) return;
+  const { siteKey, site, kind, key } = oldest;
+  writeThrottleLine(site, "throttle.evicted", { kind, suppressed: key.pending });
+  site.keys.delete(kind);
+  throttledKeyCount -= 1;
+  if (site.keys.size === 0) throttledSites.delete(siteKey);
+}
+
+function throttleSiteKey(area: string, event: string, scope: string | undefined): string {
+  return `${area}\0${event}\0${scope ?? ""}`;
+}
+
+/** Counts one failure. Returns true when it is a first occurrence, to write in full. */
+function noteThrottledFailure(
+  area: string,
+  level: LogLevel,
+  event: string,
+  scope: string | undefined,
+  kind: string,
+): boolean {
+  const now = Date.now();
+  flushDueThrottleWindows(now);
+  const siteKey = throttleSiteKey(area, event, scope);
+  let site = throttledSites.get(siteKey);
+  let known = site?.keys.get(kind);
+  if (known && now - known.lastFailureAt >= LOG_THROTTLE_IDLE_MS) {
+    site!.keys.delete(kind);
+    throttledKeyCount -= 1;
+    if (site!.keys.size === 0) {
+      throttledSites.delete(siteKey);
+      site = undefined;
+    }
+    known = undefined;
+  }
+  if (!known && throttledKeyCount >= LOG_THROTTLE_MAX_KEYS) {
+    evictOldestThrottleKey();
+    site = throttledSites.get(siteKey);
+  }
+  site ??= { area, event, scope, level, since: now, failures: 0, keys: new Map() };
+  site.level = level;
+  site.failures += 1;
+  throttledSites.delete(siteKey);
+  throttledSites.set(siteKey, site);
+  if (known) {
+    rollThrottleWindow(site, kind, known, now);
+    known.pending += 1;
+    known.lastFailureAt = now;
+    known.recency = ++throttleRecency;
+    site.keys.delete(kind);
+    site.keys.set(kind, known);
+    return false;
+  }
+  site.keys.set(kind, {
+    pending: 0,
+    windowStart: now,
+    lastFailureAt: now,
+    recency: ++throttleRecency,
+  });
+  throttledKeyCount += 1;
+  return true;
+}
+
+function noteThrottledSuccess(area: string, event: string, scope: string | undefined): void {
+  const now = Date.now();
+  flushDueThrottleWindows(now);
+  const siteKey = throttleSiteKey(area, event, scope);
+  const site = throttledSites.get(siteKey);
+  if (!site) return;
+  throttledSites.delete(siteKey);
+  throttledKeyCount -= site.keys.size;
+  let suppressed = 0;
+  for (const key of site.keys.values()) suppressed += key.pending;
+  writeThrottleLine(site, "throttle.recovered", {
+    failures: site.failures,
+    kinds: site.keys.size,
+    suppressed,
+    faultSeconds: Math.max(0, Math.round((now - site.since) / 1000)),
+  });
+}
+
+function throttleKind(options: ThrottledLogOptions): string {
+  if (options.kind === undefined) return logErrorKind(options.error);
+  return THROTTLE_KIND_PATTERN.test(options.kind) ? options.kind : "invalid-kind";
+}
+
+function resolveFields(
+  fields: LogFieldsInput | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  try {
+    return typeof fields === "function" ? fields() : fields;
+  } catch {
+    return { fieldsFailed: true };
+  }
+}
+
 export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventOf<Area>> {
   const spec = areaSpec(area);
   let seenGeneration = -1;
@@ -326,14 +575,11 @@ export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventO
     }
     return LEVEL_RANK[level] <= rank;
   };
-  const write = (level: LogLevel, event: string, fields?: LogFieldsInput): void => {
-    if (!enabled(level)) return;
-    let resolved: Readonly<Record<string, unknown>> | undefined;
-    try {
-      resolved = typeof fields === "function" ? fields() : fields;
-    } catch {
-      resolved = { fieldsFailed: true };
-    }
+  const writeResolved = (
+    level: LogLevel,
+    event: string,
+    resolved: Readonly<Record<string, unknown>> | undefined,
+  ): void => {
     if (!spec) {
       deliver(buildRecord(level, "logging", "unknown-area", undefined));
     } else if (Object.hasOwn(spec.events, event)) {
@@ -343,12 +589,50 @@ export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventO
       deliver(buildRecord(level, area, "invalid-event", undefined));
     }
   };
+  const write = (level: LogLevel, event: string, fields?: LogFieldsInput): void => {
+    if (!enabled(level)) return;
+    writeResolved(level, event, resolveFields(fields));
+  };
   return {
     error: (event, fields) => write("error", event, fields),
     warn: (event, fields) => write("warn", event, fields),
     info: (event, fields) => write("info", event, fields),
     debug: (event, fields) => write("debug", event, fields),
     trace: (event, fields) => write("trace", event, fields),
+    throttled: (level, event, options) => {
+      syncThrottleLevels();
+      // While the level is off a call counts nothing and builds nothing.
+      if (!enabled(level)) return;
+      if (
+        !spec ||
+        !Object.hasOwn(spec.events, event) ||
+        event.startsWith("throttle.") ||
+        !Object.hasOwn(spec.events, "throttle.recovered")
+      ) {
+        deliver(
+          buildRecord(
+            level,
+            spec ? area : "logging",
+            spec ? "invalid-event" : "unknown-area",
+            undefined,
+          ),
+        );
+        return;
+      }
+      const kind = throttleKind(options);
+      const scope = options.scope?.slice(0, MAX_THROTTLE_SCOPE_CHARS);
+      if (!noteThrottledFailure(area, level, event, scope, kind)) return;
+      writeResolved(level, event, {
+        ...(scope === undefined ? {} : { scope }),
+        kind,
+        ...resolveFields(options.fields),
+      });
+    },
+    recovered: (event, scope) => {
+      syncThrottleLevels();
+      if (throttledKeyCount === 0) return;
+      noteThrottledSuccess(area, event, scope?.slice(0, MAX_THROTTLE_SCOPE_CHARS));
+    },
     isEnabled: enabled,
   };
 }

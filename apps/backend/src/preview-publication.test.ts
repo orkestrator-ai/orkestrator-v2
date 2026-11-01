@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpsServer } from "node:https";
@@ -354,6 +355,70 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     expect(harness.runtime.capabilities().surfaces.browserTopLevel.available).toBe(false);
     // Desktop transport is independent of publication.
     expect(harness.runtime.capabilities().access.available).toBe(true);
+  });
+
+  test("a failing certificate check logs once, reports recovery, and keeps the old certificate", async () => {
+    const logs = captureLogs();
+    const events = () => logs.records().map((record) => record.event);
+    const until = async (done: () => boolean) => {
+      while (!done()) await Bun.sleep(10);
+    };
+    const leaf = join(dir, "leaf.pem");
+    const original = await readFile(leaf, "utf8");
+    const before = manager.status().certificate!.validTo;
+    const healthy = new PreviewPublicationManager({
+      runtime: harness.runtime,
+      logger: { info() {}, warn() {} },
+      certificateCheckMs: 60_000,
+    });
+    await healthy.start();
+    try {
+      await rm(leaf);
+      await until(() => events().includes("certificate.refresh-failed"));
+      await Bun.sleep(150); // Several more 50 ms checks fail in this time.
+      expect(events()).toEqual(["certificate.refresh-failed"]);
+      expect(logs.records()[0]?.fields).toMatchObject({ kind: "ENOENT" });
+      expect(manager.status().certificate!.validTo).toBe(before);
+
+      clearInterval(
+        (manager as unknown as { certificateTimer: ReturnType<typeof setInterval> })
+          .certificateTimer,
+      );
+      await writeFile(leaf, original);
+      await (healthy as unknown as { refreshCertificate(): Promise<void> }).refreshCertificate();
+      // The healthy manager must not clear the first owner's still-tracked fault.
+      expect(events()).toEqual(["certificate.refresh-failed"]);
+      await (manager as unknown as { refreshCertificate(): Promise<void> }).refreshCertificate();
+      await until(() => events().includes("throttle.recovered"));
+      expect(logs.records().at(-1)?.fields).toMatchObject({ site: "certificate.refresh-failed" });
+    } finally {
+      await healthy.dispose();
+      logs.restore();
+    }
+  });
+
+  test("a renewal that does not cover the hosts is refused once and clears when it does", async () => {
+    const logs = captureLogs();
+    const events = () => logs.records().map((record) => record.event);
+    const until = async (done: () => boolean) => {
+      while (!done()) await Bun.sleep(10);
+    };
+    const before = manager.status().certificate!.validTo;
+    try {
+      await rm(join(dir, "ca.pem"));
+      certificates(dir, ["other.example"]);
+      await until(() => events().includes("certificate.renewal-refused"));
+      await Bun.sleep(150);
+      expect(events().filter((event) => event === "certificate.renewal-refused")).toHaveLength(1);
+      expect(manager.status().certificate!.validTo).toBe(before);
+
+      await rm(join(dir, "ca.pem"));
+      certificates(dir);
+      await until(() => events().includes("throttle.recovered"));
+      expect(logs.records().at(-1)?.fields).toMatchObject({ site: "certificate.renewal-refused" });
+    } finally {
+      logs.restore();
+    }
   });
 
   test("renewed certificates are picked up by re-binding on the same port", async () => {

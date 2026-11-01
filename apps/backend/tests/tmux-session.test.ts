@@ -1,5 +1,6 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   agentMcpConfigJson,
   agentToolConnectionTarget,
@@ -1068,16 +1069,28 @@ describe("live session read paths", () => {
       // for the whole session, and the tab silently stops receiving hooks and
       // transcript lines with nothing reporting an error.
       await fs.chmod(pendingDir, 0o000);
-      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      const logs = captureLogs();
+      const tmuxEvents = () =>
+        logs
+          .records()
+          .filter((record) => record.area === "tmux")
+          .map((record) => record.event);
       try {
         // The three whole ticks the former 750ms wait covered at POLL_INTERVAL_MS
-        // (250ms). Each must fail its snapshot and still park for the next tick.
+        // (250ms). Each must fail its snapshot and still park for the next tick,
+        // and only the first of them is written.
         for (let tick = 0; tick < 3; tick += 1) await ticks.step();
-        expect(
-          warn.mock.calls.filter(([message]) => message === "[tmux] poll snapshot failed"),
-        ).toHaveLength(3);
+        expect(tmuxEvents()).toEqual(["poll.snapshot-failed"]);
+        await fs.chmod(pendingDir, 0o755);
+        await ticks.step();
+        expect(tmuxEvents()).toEqual(["poll.snapshot-failed", "throttle.recovered"]);
+        expect(logs.records().at(-1)?.fields).toMatchObject({
+          site: "poll.snapshot-failed",
+          failures: 3,
+          suppressed: 2,
+        });
       } finally {
-        warn.mockRestore();
+        logs.restore();
         await fs.chmod(pendingDir, 0o755);
       }
 
@@ -1097,6 +1110,51 @@ describe("live session read paths", () => {
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
       await ticks.release();
+    });
+  }, 20_000);
+
+  test("a replacement poller logs a fresh snapshot failure under the same tab", async () => {
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "tab-replacement-fault", environmentId: environment.id };
+      const logs = captureLogs();
+      const scopes: unknown[] = [];
+      try {
+        for (let lifetime = 0; lifetime < 2; lifetime += 1) {
+          const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+            session_id: string;
+          };
+          const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+          await fs.mkdir(pendingDir, { recursive: true });
+          await fs.chmod(pendingDir, 0o000);
+          try {
+            await ticks.step();
+            await ticks.step();
+            const faults = logs
+              .records()
+              .filter((record) => record.event === "poll.snapshot-failed");
+            expect(faults).toHaveLength(lifetime + 1);
+            scopes.push(faults.at(-1)?.fields?.scope);
+          } finally {
+            await fs.chmod(pendingDir, 0o755);
+            await invoke(handlers, "claude_tmux_stop", args, context);
+            await ticks.release();
+          }
+        }
+        expect(scopes[0]).not.toBe(scopes[1]);
+        expect(
+          logs.records().filter((record) => record.event === "throttle.recovered"),
+        ).toHaveLength(0);
+      } finally {
+        logs.restore();
+      }
     });
   }, 20_000);
 

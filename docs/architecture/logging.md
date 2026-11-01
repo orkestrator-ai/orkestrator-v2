@@ -47,6 +47,106 @@ off, pass a function for the fields; it runs only when the level is on. Use
 per-frame guard becomes. electron-updater's `debug` method reads as absent while
 the level is off, because the library checks for it before serializing its plan.
 
+## Repeating faults
+
+A loop that retries while a fault lasts would write the same line for as long as
+the fault lasts. Use `log.throttled`, and report each success with `log.recovered`:
+
+```ts
+const log = createLogger("tmux");
+
+try {
+  snapshot = await poll();
+  log.recovered("poll.snapshot-failed", tabId);
+} catch (error) {
+  log.throttled("warn", "poll.snapshot-failed", {
+    scope: tabId,
+    error,
+    fields: () => ({ error: formatLogError(error) }),
+  });
+}
+```
+
+```text
+[tmux] poll.snapshot-failed scope=tab-1 kind=EACCES error.name=Error error.code=EACCES ...
+[tmux] throttle.suppressed site=poll.snapshot-failed scope=tab-1 kind=EACCES suppressed=240 windowSeconds=60
+[tmux] throttle.recovered site=poll.snapshot-failed scope=tab-1 failures=251 kinds=1 suppressed=10 faultSeconds=63
+```
+
+- **First occurrence:** written in full, with `kind` and your `fields`. Repeats do
+  not build `fields`, so detail only ever appears on this line.
+- **Idle keys:** after five minutes without that kind failing, its next failure
+  is written in full as a new incident. A replacement tmux poller has its own
+  lifetime scope, even when it reuses the same tab.
+- **Repeats:** only counted. One `throttle.suppressed` line per 60-second window,
+  written by the next call after the window ends.
+- **A new kind of error** on the same site is a new key, and is written at once
+  with its own count and window.
+- **Recovery:** one `throttle.recovered` line for the site and scope, whatever
+  number of kinds it had, with the count no summary has reported yet.
+  A later failure is a first occurrence again.
+- All three lines use the level of the call, so a fault you can see always has a
+  summary and a recovery you can see. A `warn` fault does not recover at `info`.
+
+An area spreads `THROTTLE_LOG_EVENTS` into its events to use it, and the types
+refuse `throttled` otherwise. The lines carry the event as a `site` field, so one
+short list serves every site, and area levels apply to them as to anything else.
+
+**Use it** for a recurring loop's failure that repeats while a fault lasts. **Do
+not use it** for a one-off failure or for a state that is not a fault:
+`[agent-mail]` waiting is one line per change of reason, and a line a minute per
+waiting message would be noise. A retry that backs off to minutes also suits it
+badly, since every retry falls in a new window: see `PendingRenameFailureLog`,
+which keeps its powers of two. Its count also sets the retry delay, so it must
+exist whatever the level is. The event-loop stall monitor keeps its own rule too,
+because stalls of 10 seconds or more must always be logged.
+
+### Keys
+
+A key is the area, the event, the `scope` and the kind.
+
+- **Kind:** `logErrorKind(error)`, the error's code or else its type, or a static
+  `kind` for a failure with no error object. Never the message, which varies and
+  can hold content. A `kind` that is not a short name becomes `invalid-kind`.
+- **Scope:** pass one when a site runs for several tabs, jobs or bridges. Without
+  it, a success in one tab would report a recovery for another's fault, and the
+  two would alternate full lines for ever. It is an identifier, reaches every
+  line, and is cut at 128 characters.
+
+### The limit
+
+At most `LOG_THROTTLE_MAX_KEYS` (512) keys are tracked in a process. A new key at
+the limit is still written, and takes the place of the key that has gone longest
+without failing, which is most likely a loop that stopped without succeeding. That
+key writes `throttle.evicted` with its count, because its recovered line is lost
+with it. If it fails again it is a first occurrence, so the limit can cost extra
+lines but never hides a failure.
+
+### While a level is off
+
+The level is read on every call, never captured.
+
+- A call while the level is off costs one comparison. **It does not count**, and
+  builds nothing, so a summary never claims evidence from time nobody could read.
+- A site already tracked when its level goes off is dropped, on the next throttled
+  or recovered call by any site. **Its unreported count is lost**, and so is the
+  recovered line if the fault clears before the level returns.
+- When the level returns, the next failure is a first occurrence, written in full.
+
+Dropping is what makes this safe: a tracked key left in place would treat the first
+failure the reader can see as a repeat. `configureLogger` replaces levels at
+runtime; nothing outside tests calls it after startup yet, so this mostly matters
+for the live settings that may come later.
+
+### Limits
+
+- Summaries come from calls, with no timer. A loop that stops calling reports its
+  count at the next throttled or recovered call of any site in the process.
+- A site that alternates between failing and succeeding writes two lines per cycle.
+  First occurrences and recoveries always reach the log, so this is not collapsed.
+- `kind` comes from the type or code, so failures with different messages and the
+  same type are collapsed. Only the first one's detail is written.
+
 ## Vocabulary
 
 One file per domain in `log-vocabulary/`. Each lists its areas and events, with a
@@ -223,7 +323,8 @@ To see it, set `ORKESTRATOR_LOG_LEVEL=updater=debug`; it appears as one line cut
 The renderer's console does not reach the log. Only the seven allowlisted
 `[DesktopStartup]` markers cross, matched exactly in the main frame, as
 [bridge-diagnostics.md](bridge-diagnostics.md) describes. A renderer using the logger
-does not change that: `isDesktopStartupMessage` only accepts those exact strings.
+does not change that: `isDesktopStartupMessage` only accepts those exact strings. So
+the terminal's `input.undelivered` line stays in the browser console.
 
 ## The lint rule
 
@@ -254,6 +355,16 @@ record what was observed at the time and are left as they are.
 | `[ArtifactHost]` | `[artifact-host]` |
 | `[Clipboard]` | `[desktop] clipboard.write-failed` |
 | `[ApplicationLogging]` | `[logging]` |
+| `[tmux] transcript discovery failed`, `poll snapshot failed`, `drainPending failed`, `drainTimeouts failed`, `transcript tail failed` | `[tmux] poll.*-failed` |
+| `[backend] Failed to <job>` (keyed activity jobs) | `[backend.activity] job.failed scope=<job name>` |
+| `[web-annotations] Reconcile pass failed` | `[web-annotations] reconcile.failed` |
+| `[previews] Certificate refresh failed`, `Ignoring a renewed certificate` | `[preview] certificate.refresh-failed`, `certificate.renewal-refused` |
+| `[local-server] ... is not answering health checks` | `[local-server] bridge.not-answering` |
+| `[useTerminal] write called but no sessionId`, `Terminal input was not delivered` | `[terminal] input.undelivered` (browser console only) |
+| `[ElectronBackend] ... pending prompt` | `[environment] rename.failed`, `rename.still-failing`, `rename.recovered` |
+| `[backend] Kept the local branch of deleted environment` | `[environment] cleanup.branch-kept` |
+| `[agent-mail] waiting` | `[agent-mail] delivery.waiting` |
+| `[native-agent] ... older than the command catalogue` | `[native-agent] catalogue.outdated-bridge` |
 | `[Backend]` (unmigrated backend output) | Unchanged until the backend migrates |
 | `[DesktopStartup]` | Unchanged |
 
@@ -271,3 +382,8 @@ record what was observed at the time and are left as they are.
   `MAX_ENTRY_BYTES` there is the existing limit to reconcile.
 - **Command failures** lose their message. A backend site that needs stderr to be
   diagnosable has to log a classified reason, because a raw tail is not available.
+
+Backend jobs, annotation reconciliation and certificate refresh scopes include a
+content-free owner UUID so separate backend instances cannot clear each other.
+Kept-branch notices use a bounded per-storage deduplication set and plain info
+logging; they consume no shared fault keys.

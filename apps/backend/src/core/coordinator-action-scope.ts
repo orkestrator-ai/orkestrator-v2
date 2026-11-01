@@ -90,24 +90,20 @@ export async function withCoordinatorReceipt(
   const requestId = input.requestId.trim();
   if (!requestId || requestId.length > 256)
     throw new Error("Expected a requestId of 1-256 characters");
-  // Concurrent identical calls in this process run once and share the answer;
+  // Concurrent identical calls in this backend run once and share the answer;
   // the payload check still applies to each through `admit`.
   const key = `${caller.coordinatorId}\0${requestId}`;
-  const prior = inFlightReceipts.get(key);
+  const flights = context.runtime.coordinatorRequests;
+  const prior = flights.receiptAttempt(key);
   if (prior) {
     await prior.catch(() => undefined);
     return withCoordinatorReceipt(context, caller, input, run);
   }
-  const attempt = admitAndRun(context, caller, { ...input, requestId }, run);
-  inFlightReceipts.set(key, attempt);
-  try {
-    return await attempt;
-  } finally {
-    if (inFlightReceipts.get(key) === attempt) inFlightReceipts.delete(key);
-  }
+  return flights.trackReceiptAttempt(
+    key,
+    admitAndRun(context, caller, { ...input, requestId }, run),
+  );
 }
-
-const inFlightReceipts = new Map<string, Promise<Record<string, unknown>>>();
 
 async function admitAndRun(
   context: CommandContext,

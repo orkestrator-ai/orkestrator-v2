@@ -72,6 +72,44 @@ describe("pull request status", () => {
     ]);
   });
 
+  test("only a required check failing wakes; GitHub not saying which counts every failure", () => {
+    const optional = reading({
+      mergeability: "unstable",
+      checkSummary: { passed: 2, total: 3, pending: 0, requiredFailed: 0 },
+    });
+    const required = reading({
+      mergeability: "blocked",
+      checkSummary: { passed: 1, total: 3, pending: 0, requiredFailed: 1 },
+    });
+    expect(run([reading({ mergeability: "blocked", checkSummary: null }), optional])).toEqual([
+      "pr-opened",
+    ]);
+    const quiet = pullRequestStatus(optional, "env-1", `opened:${prKeyTag(URL)}`)!;
+    expect(quiet).toMatchObject({ wake: false, status: { state: "pr-open" } });
+    expect(quiet.status.details.join("\n")).toContain("1 failed (0 required)");
+
+    const failed = pullRequestStatus(required, "env-1", quiet.status.key)!;
+    expect(failed).toMatchObject({
+      wake: true,
+      status: { state: "pr-checks-failed", headline: "has failing required checks" },
+    });
+    expect(failed.status.details.join("\n")).toContain("2 failed (1 required)");
+    expect(failed.status.details.join("\n")).not.toContain("may not be required");
+
+    // An older node, or GitHub not answering: every failing check counts.
+    const unknown = pullRequestStatus(
+      reading({ mergeability: "unstable", checkSummary: { passed: 2, total: 3, pending: 0 } }),
+      "env-1",
+      quiet.status.key,
+    )!;
+    expect(unknown.status).toMatchObject({
+      state: "pr-checks-failed",
+      headline: "has failing checks",
+    });
+    expect(unknown.status.details.join("\n")).toContain("1 failed (required unknown)");
+    expect(unknown.status.details.join("\n")).toContain("A check failed (it may not be required)");
+  });
+
   test("a first reading that already needs action carries the URL instead of opened", () => {
     const conflicts = pullRequestStatus(reading({ hasMergeConflicts: true }), "env-1", undefined)!;
     expect(conflicts.status.state).toBe("pr-conflicts");
@@ -136,7 +174,7 @@ describe("coordinator environment PR fields", () => {
     expect(fields).toEqual({
       prHasMergeConflicts: false,
       prMergeability: "clean",
-      prChecks: { passed: 2, failed: 1, pending: 1, total: 4 },
+      prChecks: { passed: 2, failed: 1, requiredFailed: null, pending: 1, total: 4 },
       prReadyToMerge: false,
       prNotReadyReason: "checks-failing",
     });
@@ -148,6 +186,18 @@ describe("coordinator environment PR fields", () => {
         ),
       ),
     ).toMatchObject({ prReadyToMerge: true, prChecks: null });
+    // The relayed count survives the reading, clamped to the failing checks.
+    expect(
+      coordinatorPrFields(
+        prReadingFrom(
+          { prUrl: URL, prState: "open", hasMergeConflicts: false, prMergeability: "unstable" },
+          {
+            prMonitorConfirmed: true,
+            prCheckSummary: { passed: 1, total: 3, pending: 0, requiredFailed: 5 },
+          },
+        ),
+      ).prChecks,
+    ).toEqual({ passed: 1, failed: 2, requiredFailed: 2, pending: 0, total: 3 });
   });
 
   test("another node's row vouches only while that node is connected and current", () => {

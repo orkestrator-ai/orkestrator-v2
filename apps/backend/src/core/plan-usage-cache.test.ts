@@ -1,3 +1,4 @@
+import { weeklyLimitReading } from "@orkestrator/protocol/agent-account-auto-switch";
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   CACHE_TTL_MS,
@@ -271,4 +272,22 @@ describe("contextUsageWithPlanUsage", () => {
     contextUsageWithPlanUsage(planUsage, "pi", { usedTokens: 10 });
     expect(planUsage.cache.peek("pi" as "claude")).toBeUndefined();
   });
+});
+
+test("session windows preserve known paid-overage metadata in lastOk", () => {
+  const cache = createPlanUsageCache();
+  cache.store(
+    "claude",
+    {
+      ...okSnapshot("claude", [{ window: "seven_day", usedPercent: 20 }], new Date().toISOString()),
+      paidOverage: { enabled: true },
+    },
+    CACHE_TTL_MS,
+  );
+  cache.recordSessionWindows("claude", [{ window: "five_hour", usedPercent: 100 }]);
+  expect(cache.lastOk("claude")?.paidOverage).toEqual({ enabled: true });
+  // This is the outgoing reading persisted on a switch, then served stale
+  // when a direct inactive-account read cannot answer.
+  const saved = JSON.parse(JSON.stringify(cache.lastOk("claude")));
+  expect(weeklyLimitReading("claude", { ...saved, stale: true }, Date.now()).wouldPay).toBe(true);
 });

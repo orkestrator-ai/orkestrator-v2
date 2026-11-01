@@ -614,6 +614,15 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    CLI now unloads launch servers by itself; the restatement is then harmless,
    but update the module's header to say so.
 
+   After a Claude or Codex bump, also run automatic switching's resend across a
+   real bridge replacement. It uses the pinned CLIs against scripted provider
+   servers, so no turn is billed. If a refusal no longer ends the turn, the CLI
+   changed how it retries or words a refused 429:
+
+   ```bash
+   mise run verify:accounts:resend-live
+   ```
+
    Re-prove the MCP editor's Claude plugin rules (`enabledPlugins` for the
    `@inline` plugins the bridge passes, the bridge passing an install only
    when its `<name>@<marketplace>` id is `true`, Claude Code's own installed

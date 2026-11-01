@@ -50,6 +50,91 @@ async function openCodexAccounts(page: Page): Promise<void> {
   await expect(page.getByRole("region", { name: "Codex accounts" })).toBeVisible();
 }
 
+test("automatic switching, its pin and its ticks rehydrate from the real backend", async ({
+  page,
+}, testInfo) => {
+  const statusCommand = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  });
+  if (statusCommand.status !== 0) throw new Error(statusCommand.stderr || "dev:status failed");
+  const status = JSON.parse(statusCommand.stdout) as { dataDir: string };
+  const original = accountRegistry(status.dataDir, "read");
+  // No access token, so no usage read leaves this machine: the rule has no reading
+  // of either account, and the host login has no email, so it stays unticked.
+  const accounts = ["one", "two"].map((name) => ({
+    id: randomUUID(),
+    platform: "codex",
+    label: `Fixture ${name}`,
+    createdAt: "2026-09-28T00:00:00Z",
+    identity: { email: `${name}@example.com` },
+  }));
+  for (const account of accounts) {
+    const home = path.join(status.dataDir, "agent-accounts", "codex", account.id);
+    await fs.mkdir(home, { recursive: true });
+    await fs.writeFile(
+      path.join(home, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { refresh_token: "fixture-only", account_id: "fixture" },
+      }),
+    );
+  }
+  accountRegistry(status.dataDir, "write", { version: 1, active: {}, accounts });
+  const mainTick = () =>
+    page.getByRole("checkbox", { name: /Automatically use the account whose weekly limit/ });
+  const row = (name: string) => page.getByRole("listitem", { name });
+  const region = () => page.getByRole("region", { name: "Codex accounts" });
+  try {
+    await login(page, testInfo);
+    await openCodexAccounts(page);
+    // A manual profile keeps its config, so an earlier failed run may have left it on.
+    await expect(mainTick()).toBeVisible();
+    if (await mainTick().isChecked()) await mainTick().click();
+    await expect(mainTick()).not.toBeChecked();
+    await expect(region().getByText("Off", { exact: true })).toBeVisible();
+
+    // Ticked, the host login is not included, so the machine moves by itself.
+    await mainTick().click();
+    await expect(region().getByText("Automatic", { exact: true })).toBeVisible();
+    await expect(mainTick()).toBeChecked();
+    await expect(region().getByText("Active", { exact: true })).toBeVisible();
+    await expect(row("Host login").getByText("Active", { exact: true })).toHaveCount(0);
+
+    // Its own switch does not pin. The next one, made by hand, does.
+    const activeIsOne = (await row("Fixture one").getByText("Active", { exact: true }).count()) > 0;
+    const other = activeIsOne ? "Fixture two" : "Fixture one";
+    await row(other).getByRole("button", { name: "Use" }).click();
+    await expect(region().getByText(`Pinned to ${other}`)).toBeVisible();
+    await expect(mainTick()).not.toBeChecked();
+
+    await page.reload();
+    await openCodexAccounts(page);
+    await expect(region().getByText(`Pinned to ${other}`)).toBeVisible();
+    await expect(row(other).getByText("Active", { exact: true })).toBeVisible();
+
+    await mainTick().click();
+    await expect(region().getByText("Automatic", { exact: true })).toBeVisible();
+
+    // An account's own tick off moves the machine off it, and it is never chosen.
+    await row(other)
+      .getByRole("checkbox", { name: `Include ${other} in automatic switching` })
+      .click();
+    const remaining = other === "Fixture one" ? "Fixture two" : "Fixture one";
+    await expect(row(remaining).getByText("Active", { exact: true })).toBeVisible();
+    await page.reload();
+    await openCodexAccounts(page);
+    await expect(
+      row(other).getByRole("checkbox", { name: `Include ${other} in automatic switching` }),
+    ).not.toBeChecked();
+    await mainTick().click();
+    await expect(region().getByText("Off", { exact: true })).toBeVisible();
+  } finally {
+    if (original) accountRegistry(status.dataDir, "write", original.value);
+    else accountRegistry(status.dataDir, "delete");
+  }
+});
+
 test("account switching and errors rehydrate from the real backend", async ({ page }, testInfo) => {
   const statusCommand = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
     cwd: repositoryRoot,

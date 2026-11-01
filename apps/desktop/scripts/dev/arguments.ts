@@ -23,6 +23,13 @@ export type DevArguments = {
    * profile, so test fixtures and moves see the same layout on every host.
    */
   useDevWorktreeFolder?: boolean;
+  /**
+   * `dev:test` only, Linux only: run Electron on Chromium's headless Ozone
+   * platform with no display variables, so the profile opens no window in the
+   * desktop session it was started from. The renderer is still reachable
+   * through `browserUrl`.
+   */
+  headlessElectron?: boolean;
 };
 
 const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [...AGENT_PLATFORMS];
@@ -73,6 +80,11 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
         throw new Error("--use-dev-worktree-folder is only supported by mise run dev:test");
       }
       result.useDevWorktreeFolder = true;
+    } else if (argument === "--headless-electron") {
+      if (!options.agentTest) {
+        throw new Error("--headless-electron is only supported by mise run dev:test");
+      }
+      result.headlessElectron = true;
     } else if (argument === "--fixture-environments") {
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
       if (values.some((value) => value !== "local" && value !== "container")) {

@@ -656,6 +656,14 @@ export class StorageService {
     return this.repos.config.setContainerResourceLimits(limits);
   }
 
+  updateAgentAccountAutoSwitchSettings(
+    update: (
+      current: AppConfig["global"]["agentAccountAutoSwitch"],
+    ) => NonNullable<AppConfig["global"]["agentAccountAutoSwitch"]>,
+  ): Promise<AppConfig> {
+    return this.repos.config.updateAgentAccountAutoSwitchSettings(update);
+  }
+
   setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.repos.config.setGitHubCliReminderDismissed(dismissed);
   }
@@ -1043,12 +1051,17 @@ export class StorageService {
   dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
-      dispatched: false;
-      mailRefused?: true;
-      /** Recorded under the session's persisted notice field; `null` clears it. */
-      incompleteTurnNotice?: IncompleteTurnNotice | null;
-    }>,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<
+      | void
+      | {
+          dispatched: false;
+          mailRefused?: true;
+          /** Recorded under the session's persisted notice field; `null` clears it. */
+          incompleteTurnNotice?: IncompleteTurnNotice | null;
+        }
+      /** The provider accepted the turn in this mode. */
+      | { dispatched: true; mode: "plan" | "build" | undefined }
+    >,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
     admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
   ): Promise<{

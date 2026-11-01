@@ -39,6 +39,9 @@ import {
 
 type SettledSteer = "dispatched" | "absent" | undefined;
 
+/** How soon the queue looks again while a weekly-limit stop is being decided. */
+const USAGE_LIMIT_QUEUE_HOLD_MS = 5_000;
+
 /** What the prompt-queue dispatcher needs from the service that wires it. */
 export interface NativeAgentPromptQueueDispatcherHost {
   storage: StorageService;
@@ -76,6 +79,8 @@ export interface NativeAgentPromptQueueDispatcherHost {
     detail: string | undefined,
     provider?: Pick<NativeAgentRuntimeProvider, "turnTerminalError">,
   ): Promise<number | void>;
+  /** A weekly-limit stop is being decided; its resend goes ahead of the queue. */
+  usageLimitResendPending?(key: string): boolean;
   /** Resolve a parked prompt dispatch as confirmed or permanently retired. */
   settleAmbiguousDispatch(
     input: NativeAgentProjectionInput,
@@ -686,6 +691,10 @@ export class NativeAgentPromptQueueDispatcher {
       typeof head === "object" &&
       head !== null &&
       (head as { origin?: { kind?: unknown } }).origin?.kind === "goal";
+    if (status === "error" && this.host.usageLimitResendPending?.(session.key)) {
+      this.queueRetryAt.set(queueKey, Date.now() + USAGE_LIMIT_QUEUE_HOLD_MS);
+      return;
+    }
     if (status !== "idle" && !goalTurn) {
       await this.deferQueue(queueKey, `provider session is ${status}`, queue.inFlight?.requestId, {
         /*

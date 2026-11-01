@@ -1,18 +1,23 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { EnvironmentOperations } from "./environment-operations.js";
 import type { Environment, Project } from "./models.js";
 import {
   PROJECT_HOME_DETACHED_BRANCH,
-  ensureProjectHomeEnvironment,
+  ensureProjectHomeEnvironment as ensureWith,
   isProjectHomeEnvironment,
-  projectHomeTesting,
   refreshProjectHomeBranch,
   type ProjectHomeDependencies,
 } from "./project-home-environment.js";
 import { createEnvironment } from "./storage-shared-core.js";
 
-afterEach(() => {
-  projectHomeTesting.reset();
+let operations: EnvironmentOperations;
+beforeEach(() => {
+  operations = new EnvironmentOperations();
 });
+
+/** One backend's ensure: concurrent calls share its in-flight work. */
+const ensureProjectHomeEnvironment = (projectId: string, dependencies: ProjectHomeDependencies) =>
+  ensureWith(operations, projectId, dependencies);
 
 const project: Project = {
   id: "project-1",

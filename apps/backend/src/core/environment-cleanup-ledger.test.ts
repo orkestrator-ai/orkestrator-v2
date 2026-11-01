@@ -7,6 +7,7 @@ import {
   EnvironmentCleanupLedger,
   environmentCleanupSweepState,
   isEnvironmentCleanupExhausted,
+  isEnvironmentCleanupRetryableByVersion,
   MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
   parseEnvironmentCleanupLedger,
   type EnvironmentCleanupEntry,
@@ -128,7 +129,82 @@ describe("environment cleanup ledger", () => {
         e1: { ...entry(), attempts: -3, pending: ["worktree", "format-disk"] },
       },
     });
-    expect(parsed).toEqual([entry({ attempts: 0, pending: ["worktree"], worktreeRoot: null })]);
+    expect(parsed).toEqual([
+      entry({ attempts: 0, pending: ["worktree"], worktreeRoot: null, attemptedVersions: [] }),
+    ]);
+    const versions = parseEnvironmentCleanupLedger({
+      version: 1,
+      entries: { e1: { ...entry(), attemptedVersions: ["1.0.0", 7, "", "1.0.0", "1.1.0"] } },
+    });
+    expect(versions[0]?.attemptedVersions).toEqual(["1.0.0", "1.1.0"]);
+  });
+
+  test("records each backend version that counts an attempt, most recent last", async () => {
+    const { ledger } = await ledgerInTempDir();
+    await ledger.record(entry());
+    const at = new Date("2026-09-26T01:00:00.000Z");
+    await ledger.noteAttempt("e1", at, "1.0.0");
+    await ledger.noteAttempt("e1", at, "1.1.0");
+    await ledger.noteAttempt("e1", at, "1.0.0");
+    await ledger.noteAttempt("e1", at);
+    const current = (await ledger.get("e1"))!;
+    expect(current.attempts).toBe(4);
+    expect(current.attemptedVersions).toEqual(["1.1.0", "1.0.0"]);
+    for (let version = 0; version < 40; version += 1) {
+      await ledger.noteAttempt("e1", at, `2.${version}.0`);
+    }
+    const bounded = (await ledger.get("e1"))!.attemptedVersions!;
+    expect(bounded).toHaveLength(16);
+    expect(bounded.at(-1)).toBe("2.39.0");
+    // A re-deletion keeps what earlier versions already tried.
+    await ledger.record(entry({ attempts: 0 }));
+    expect((await ledger.get("e1"))?.attemptedVersions).toEqual(bounded);
+  });
+
+  test("re-arms an exhausted entry once per backend version that never tried it", async () => {
+    const { ledger } = await ledgerInTempDir();
+    const lastAttemptAt = "2026-09-26T02:00:00.000Z";
+    await ledger.record(entry());
+    for (let pass = 0; pass < MAX_ENVIRONMENT_CLEANUP_ATTEMPTS; pass += 1) {
+      await ledger.noteAttempt("e1", new Date(lastAttemptAt), "1.0.0");
+    }
+    // The version that exhausted it gets nothing more.
+    expect(isEnvironmentCleanupRetryableByVersion((await ledger.get("e1"))!, "1.0.0")).toBe(false);
+    expect(await ledger.rearmForVersion("e1", "1.0.0")).toBe(false);
+
+    expect(await ledger.rearmForVersion("e1", "1.1.0")).toBe(true);
+    const rearmed = (await ledger.get("e1"))!;
+    expect(rearmed).toMatchObject({
+      attempts: 0,
+      attemptedVersions: ["1.0.0", "1.1.0"],
+      lastAttemptAt,
+      pending: ["worktree", "branch", "state-dirs"],
+    });
+    // Recorded at once, so the same version cannot re-arm it twice.
+    for (let pass = 0; pass < MAX_ENVIRONMENT_CLEANUP_ATTEMPTS; pass += 1) {
+      await ledger.noteAttempt("e1", new Date(lastAttemptAt), "1.1.0");
+    }
+    expect(await ledger.rearmForVersion("e1", "1.1.0")).toBe(false);
+    // Going back to an older version that already tried it does not either.
+    expect(await ledger.rearmForVersion("e1", "1.0.0")).toBe(false);
+    expect((await ledger.get("e1"))!.attempts).toBe(MAX_ENVIRONMENT_CLEANUP_ATTEMPTS);
+  });
+
+  test("never re-arms an entry that is still retrying or is gone", async () => {
+    const { ledger } = await ledgerInTempDir();
+    await ledger.record(entry({ attempts: MAX_ENVIRONMENT_CLEANUP_ATTEMPTS - 1 }));
+    expect(await ledger.rearmForVersion("e1", "9.9.9")).toBe(false);
+    expect((await ledger.get("e1"))!.attempts).toBe(MAX_ENVIRONMENT_CLEANUP_ATTEMPTS - 1);
+    expect(await ledger.rearmForVersion("missing", "9.9.9")).toBe(false);
+  });
+
+  test("an entry from before versions were recorded is re-armable by any version", async () => {
+    const { ledger, dataDir } = await ledgerInTempDir();
+    // `entry()` has no `attemptedVersions`, as entries written before it.
+    const legacy = entry({ attempts: MAX_ENVIRONMENT_CLEANUP_ATTEMPTS });
+    seedStore(dataDir, LEDGER, { version: 1, entries: { e1: legacy } });
+    expect(await ledger.rearmForVersion("e1", "1.0.0")).toBe(true);
+    expect((await ledger.get("e1"))?.attemptedVersions).toEqual(["1.0.0"]);
   });
 
   test("ignores malformed entries and unknown steps", async () => {

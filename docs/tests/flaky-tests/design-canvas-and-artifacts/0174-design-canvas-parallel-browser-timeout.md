@@ -305,3 +305,27 @@ run (147 passed, three skipped, two unrelated AgentLaunchDialog failures).
 This was a combined owner run, not a new standalone qualification. No assertion,
 deadline or implementation changed. Exact commands and evidence are recorded in
 [session history validation](../aggregate-validation-runs/1166-session-titles-0006-validation.md#structured-review-fixes--2026-10-31).
+
+## Reviewer start failure (todo 1090) — 2026-11-01
+
+Preparation's browser validation on `agent-start-failure-28f9b34a1026-r1`
+reported the desktop case at its 30-second deadline. The branch does not touch
+the canvas, its fixture or this spec. The only branch files in the fixture's
+import graph are additive optional fields and validators in `packages/protocol`.
+
+- **Unchanged owner:** passed alone on the branch and on `origin/main`
+  (`93b99bfba`). A nine-worker `--repeat-each=6` run on `origin/main` with
+  DataSavingGateway passed 24 of 24. The nine-worker component suite on
+  `origin/main` did not hit it (1029 passed, 108 skipped, one flaky, two failed;
+  see [1310](../previews-annotations-and-gateway/1310-data-saving-gateway-browser-timeout.md#reviewer-start-failure-todo-1090--2026-11-01)).
+- **Reproduced on `origin/main`:** this spec's own throttle,
+  `CI=1 ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE=8 bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --repeat-each=2`,
+  failed all four runs at the 30-second deadline: mobile at the reconnect
+  snapshot poll (line 208) and at `page.reload()` (209), and desktop waiting
+  for `Changed while away` (202 and 210). These are the steps that aggregate
+  failures have reported. Evidence: `orkestrator-test-run.cN314m/main-designcanvas-throttle8.log.gz`
+  under the host temporary directory.
+- **Assessment:** the same as the 2026-10-25 throttle runs. After the Apply
+  styles fix, the remaining failure is the 30-second budget running out while
+  the page is starved of CPU. The step that is running at the deadline varies.
+  No implementation, assertion, timeout or skip changed.

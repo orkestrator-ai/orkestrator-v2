@@ -1,6 +1,11 @@
 /**
- * Git source-control scopes: `uncommitted-net`, `staged`, `unstaged`,
- * `commit` and `pull-request`.
+ * Git source-control scopes: `uncommitted-net`, `committed-net`, `staged`,
+ * `unstaged`, `commit` and `pull-request`.
+ *
+ * `committed-net` is the environment's base commit to `HEAD`: what its
+ * commits changed, without the working tree. Its base is the one the
+ * environment's own measurement (`environment-net`) compares against, so it
+ * and `uncommitted-net` split that measurement at `HEAD`.
  *
  * Each answers its own question with Git semantics and is never derived by
  * adding another scope's numbers: staged + unstaged is not uncommitted-net.
@@ -20,7 +25,11 @@ import {
   type LineCount,
   type MeasurementScope,
 } from "@orkestrator/protocol/change-measurements";
-import { changeResourceKey, parseChangeResourceKey } from "@orkestrator/protocol/change-resources";
+import {
+  changeResourceKey,
+  environmentChangeResourceKey,
+  parseChangeResourceKey,
+} from "@orkestrator/protocol/change-resources";
 import {
   GIT_REPRESENTATION_ID,
   gitNumstatAlgorithmId,
@@ -41,6 +50,7 @@ import type { WorktreeRegistry, WorktreeTarget } from "./worktree-owner.js";
 
 export const GIT_SCOPES = [
   "uncommitted-net",
+  "committed-net",
   "staged",
   "unstaged",
   "commit",
@@ -76,6 +86,20 @@ export function isGitScope(scope: MeasurementScope): scope is GitScope {
 }
 
 type GitRunner = (args: string[]) => Promise<string>;
+
+/**
+ * `committed-net`'s baseline version: `committed:<head>@<base>`. The part
+ * after `@` is the before side, as for every scope; the head is the after side.
+ */
+export function committedBaselineVersion(head: string, base: string): string {
+  return `committed:${head}@${base}`;
+}
+
+/** The after-side commit of a `committed-net` baseline version, or null. */
+export function committedHead(baselineVersion: string | null | undefined): string | null {
+  const match = /^committed:([0-9a-f]{40,64})@[0-9a-f]{40,64}$/.exec(baselineVersion ?? "");
+  return match?.[1] ?? null;
+}
 
 /**
  * Filter drivers (clean/smudge/process) configured in any scope. Reading
@@ -184,8 +208,9 @@ export class GitScopeService {
           },
           stale: true,
           unavailableReason:
-            error instanceof Error && error.message === "commit-not-found"
-              ? "commit-not-found"
+            error instanceof Error &&
+            (error.message === "commit-not-found" || error.message === "baseline-unavailable")
+              ? error.message
               : "scan-failed",
         });
         this.deps.projections.bump(resourceKey);
@@ -238,6 +263,15 @@ export class GitScopeService {
     };
   }
 
+  /** The immutable commit the environment's own measurement compares against, if any. */
+  private environmentBase(environmentId: string): string | null {
+    const version = this.deps.projections.selectedMeasurement(
+      environmentChangeResourceKey(environmentId),
+    )?.baselineVersion;
+    const oid = version?.slice(version.lastIndexOf("@") + 1);
+    return oid && version?.includes("@") && OID.test(oid) ? oid : null;
+  }
+
   private async resolve(git: GitRunner, ref: string): Promise<string | null> {
     const value = (
       await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`]).catch(() => "")
@@ -286,6 +320,16 @@ export class GitScopeService {
             baselineVersion = `HEAD@${before}`;
             if (!head) reasons.push("unborn-head");
             break;
+          case "committed-net": {
+            const base = this.environmentBase(environmentId);
+            if (!base) throw new Error("baseline-unavailable");
+            if (!head) throw new Error("head-unavailable");
+            before = base;
+            after = head;
+            mode = "trees";
+            baselineVersion = committedBaselineVersion(head, base);
+            break;
+          }
           case "commit": {
             const sha = commit ? await this.resolve(git, commit) : null;
             if (!sha) throw new Error("commit-not-found");

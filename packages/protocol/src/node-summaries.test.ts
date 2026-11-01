@@ -214,3 +214,29 @@ test("check summaries carry only validated counts", () => {
     ).not.toHaveProperty("prCheckSummary");
   }
 });
+
+test("check summaries relay a usable required-failure count and drop any other", () => {
+  const relay = (prCheckSummary: Record<string, unknown>) =>
+    toNodeEnvironmentSummary("bk_leaf" as BackendId, { id: "e1", projectId: "p1", prCheckSummary })!
+      .prCheckSummary;
+  expect(relay({ passed: 1, total: 3, pending: 0, requiredFailed: 1 })).toEqual({
+    passed: 1,
+    total: 3,
+    pending: 0,
+    requiredFailed: 1,
+  });
+  // Clamped to the failing checks; dropped when nothing fails or it is not a count.
+  expect(relay({ passed: 1, total: 3, pending: 0, requiredFailed: 9 })?.requiredFailed).toBe(2);
+  expect(relay({ passed: 3, total: 3, pending: 0, requiredFailed: 0 })).toEqual({
+    passed: 3,
+    total: 3,
+    pending: 0,
+  });
+  for (const requiredFailed of [-1, 1.5, "1", null]) {
+    expect(relay({ passed: 1, total: 3, pending: 0, requiredFailed })).toEqual({
+      passed: 1,
+      total: 3,
+      pending: 0,
+    });
+  }
+});

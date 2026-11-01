@@ -9,6 +9,7 @@ import {
   isReviewerModelSelection,
   isReviewerRecord,
   isReviewerRecordList,
+  reviewerCouldNotStart,
   reviewersSettled,
   usableReviewerReports,
   type ReviewerRecord,
@@ -98,6 +99,21 @@ describe("reviewer records", () => {
   test("persists the spent restart continuation as a boolean", () => {
     expect(isReviewerRecord(reviewer({ restartContinuationSent: true }))).toBe(true);
     expect(isReviewerRecord(reviewer({ restartContinuationSent: 1 as never }))).toBe(false);
+  });
+
+  test("records a start failure as a boolean, read only on a failed reviewer", () => {
+    const unstartable = reviewer({ status: "failed", error: "bridge missing", startFailed: true });
+    expect(isReviewerRecord(unstartable)).toBe(true);
+    expect(isReviewerRecord(reviewer({ agentStarted: true }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ agentStarted: false }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ agentStarted: "yes" as never }))).toBe(false);
+    expect(isReviewerRecord(reviewer({ startFailed: "yes" as never }))).toBe(false);
+    expect(reviewerCouldNotStart(unstartable)).toBe(true);
+    expect(reviewerCouldNotStart(reviewer({ status: "failed", error: "session failed" }))).toBe(
+      false,
+    );
+    // A retried reviewer that kept a stale flag is not reported while it runs.
+    expect(reviewerCouldNotStart(reviewer({ status: "pending", startFailed: true }))).toBe(false);
   });
 
   test("requires a 64-character digest so a truncated one cannot be compared", () => {

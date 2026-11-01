@@ -26,6 +26,7 @@
  */
 import type { Page, TestInfo } from "@playwright/test";
 import { closeElectronWithin } from "./design-electron-cleanup";
+import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
 import { expect, test } from "./electron-fixtures";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
@@ -1471,7 +1472,14 @@ async function showRendererPreview(
   });
   await uiStore("selectProjectAndEnvironment", environment.projectId, s().environmentId);
   await expect(s().window.locator(PREVIEW_HOST)).toBeVisible({ timeout: 30_000 });
-  await expect.poll(async () => (await nativePreviewView())?.visible ?? false).toBe(true);
+  // Locator assertions run the startup-dismiss handler; a main-process poll
+  // alone cannot dismiss a notice that opened after the host became visible.
+  await expect
+    .poll(async () => {
+      await expect(s().window.getByRole("button", { name: /^Annotations, / })).toBeVisible();
+      return (await nativePreviewView())?.visible ?? false;
+    })
+    .toBe(true);
   await waitForFixturePage(ROUTE_VARIANTS.settings);
 }
 
@@ -1623,6 +1631,56 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
     // the host and never reaches under the column, its resize handle or a
     // focus ring inside it.
     await pressControl(notesButton);
+    // Force the late startup-notice race, using the production dialog and
+    // focus hook. The installed locator handler must dismiss it on the next
+    // assertion and return focus to Notes without another locator.focus().
+    await s().window.evaluate(async () => {
+      // Reuse the app's versioned Vite URLs so hooks use its React singleton.
+      const resources = performance.getEntriesByType("resource").map((entry) => entry.name);
+      const reactPath = resources.find((url) => url.includes("/deps/react.js?"))!;
+      const rootPath = resources.find((url) => url.includes("/deps/react-dom_client.js?"))!;
+      const dialogPath = "/src/components/ui/alert-dialog.tsx";
+      const focusPath = "/src/lib/dialog-focus.ts";
+      const { default: React } = await import(reactPath);
+      const { default: ReactDOM } = await import(rootPath);
+      const dialog = await import(dialogPath);
+      const { useDialogFocusReturn } = await import(focusPath);
+      const mount = document.createElement("div");
+      document.body.append(mount);
+      const root = ReactDOM.createRoot(mount);
+      function LateNotice() {
+        const [open, setOpen] = React.useState(true);
+        const focus = useDialogFocusReturn();
+        return React.createElement(
+          dialog.AlertDialog,
+          { open, onOpenChange: setOpen },
+          React.createElement(
+            dialog.AlertDialogContent,
+            { ...focus, "data-late-startup-notice": "" },
+            React.createElement(dialog.AlertDialogTitle, null, "GitHub CLI Not Found"),
+            React.createElement(dialog.AlertDialogDescription, null, "Forced late startup check"),
+            React.createElement(dialog.AlertDialogAction, null, "Continue Without GitHub CLI"),
+          ),
+        );
+      }
+      root.render(React.createElement(LateNotice));
+      window.addEventListener(
+        "cleanup-late-startup-notice",
+        () => {
+          root.unmount();
+          mount.remove();
+        },
+        { once: true },
+      );
+    });
+    await expect
+      .poll(() =>
+        s().window.evaluate(() => Boolean(document.querySelector("[data-late-startup-notice]"))),
+      )
+      .toBe(true);
+    await expect(notesButton).toBeFocused();
+    await expect(s().window.locator("[data-late-startup-notice]")).toHaveCount(0);
+    await s().window.evaluate(() => window.dispatchEvent(new Event("cleanup-late-startup-notice")));
     await expect(s().window.locator(NOTES_PANEL)).toBeVisible();
     for (const zoom of [100, 80, 125]) {
       await uiStore("setZoomLevel", zoom);
@@ -1708,6 +1766,7 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
     const reclosed = await expectViewOnHost(testInfo, "notes-reclosed");
     expect(Math.abs(reclosed.width - closed.width)).toBeLessThanOrEqual(1.5);
   } finally {
+    await s().window.evaluate(() => window.dispatchEvent(new Event("cleanup-late-startup-notice")));
     await restoreDirectPreview();
   }
 });
@@ -1765,9 +1824,15 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     });
     const before = new Set((await listAnnotations()).items.map((item) => item.id));
 
-    // Bring the app forward so native focus is observable. Another app may
-    // keep the key window on a shared desktop; then only the in-app handoff
-    // (main focusing the view, the renderer focusing the editor) is asserted.
+    // Bring the app forward so native focus is observable. Another app, or a
+    // locked session, may keep the key window; then OS focus is not asserted,
+    // but the in-app handoff still is: the view Chromium focuses (main
+    // focusing the preview, then the host) and the renderer's editor focus.
+    await trackWebContentsFocus(s().app);
+    const focusedViews = async () =>
+      (await focusedWebContentsUrls(s().app)).map((url) =>
+        url.startsWith(s().fixture.url) ? "preview" : url === s().window.url() ? "host" : url,
+      );
     const windowFocused = await s().app.evaluate(async ({ app, BrowserWindow }) => {
       const host = BrowserWindow.getAllWindows()[0]!;
       if (process.platform === "darwin") app.focus({ steal: true });
@@ -1802,6 +1867,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     await s().app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]!.webContents.focus(),
     );
+    await expect.poll(focusedViews).toEqual(["host"]);
     const addNote = s().window.getByRole("button", { name: "Add note" });
     await tabTo(addNote);
     // Reverse and return to establish both directions of the local tab order.
@@ -1818,6 +1884,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
           .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin));
         return contents?.isFocused() ?? false;
       }, s().fixture.url);
+    await expect.poll(focusedViews).toEqual(["preview"]);
     if (windowFocused) await expect.poll(previewFocus).toBe(true);
     record(testInfo, "preview-focused-while-selecting", String(await previewFocus()));
     await trustedInput([
@@ -1829,6 +1896,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     // Main hands focus back: the renderer focuses the note editor.
     const editor = s().window.locator(`${NOTES_PANEL} textarea`).first();
     await expect(editor).toBeFocused({ timeout: 20_000 });
+    await expect.poll(focusedViews).toEqual(["host"]);
     const body = "Keyboard-only note: align the Save button with Cancel.";
     await s().window.keyboard.type(body);
     await tabActivate(s().window.getByRole("button", { name: "Save note", exact: true }));

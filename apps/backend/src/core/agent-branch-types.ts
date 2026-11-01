@@ -61,6 +61,8 @@ export interface AgentBranchRecord {
   providerSessionId?: string;
   requestId?: string;
   dispatchState?: AgentBranchDispatchState;
+  /** Dispatch time of the current request, including follow-up turns. */
+  turnStartedAt?: string;
   resultTransport?: WorkflowResultTransport;
   resultSubmission?: WorkflowResultSubmissionState;
   schemaRepairAttempts?: number;
@@ -69,6 +71,8 @@ export interface AgentBranchRecord {
   continuationPrompt?: string;
   resultReminderSent?: boolean;
   restartContinuationSent?: boolean;
+  /** Times this turn was resent after the weekly limit stopped it. */
+  usageLimitResends?: number;
   idleResultPolls?: number;
   progressAt?: string;
   progressDigest?: string;
@@ -145,6 +149,8 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   reviewerSession?(branch: B): boolean;
   interactionContext(branch: B, fence: string | undefined): ProviderSessionRegistration;
   provider(branch: B): Promise<BuildPipelineProvider>;
+  /** The environment its turns run in, which a stopped turn's account is read from. */
+  readonly environmentId?: string;
   /** See `ReviewFanoutHost.providerUnavailable`. */
   providerUnavailable?(branch: B, provider: BuildPipelineProvider): Promise<void>;
   /** Trusted policy for the branch's session, never provider defaults. */

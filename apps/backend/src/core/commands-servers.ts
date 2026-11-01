@@ -18,6 +18,7 @@ import { stopEnvironmentReviewValidation } from "./review-validation-service.js"
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
 import {
   OPENCODE_STARTUP_STDERR_TAIL_BYTES,
+  OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS,
   isOpenCodeDatabaseLockedError,
   openCodeDatabaseLockedError,
   openCodeStderrReportsLockedDatabase,
@@ -302,6 +303,10 @@ export async function waitForLocalServerStartup(
   port: number,
   kind: LocalServerKind,
   headers?: Record<string, string>,
+  options: {
+    health?: Parameters<typeof waitForLocalServerHealth>[3];
+    stdioCloseBoundMs?: number;
+  } = {},
 ): Promise<void> {
   let settled = false;
   // Only OpenCode's is read: its servers share one database on the host, and
@@ -310,11 +315,15 @@ export async function waitForLocalServerStartup(
   const onStderr = (data: Buffer | string) => {
     stderrTail = (stderrTail + data.toString()).slice(-OPENCODE_STARTUP_STDERR_TAIL_BYTES);
   };
+  let exitStatus: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  let closeBound: ReturnType<typeof setTimeout> | undefined;
 
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       child.off("error", onError);
       child.off("exit", onExit);
+      child.off("close", onClose);
+      if (closeBound) clearTimeout(closeBound);
       if (kind === "opencode") child.stderr.off("data", onStderr);
     };
     const complete = (error?: Error) => {
@@ -325,24 +334,46 @@ export async function waitForLocalServerStartup(
       else resolve();
     };
     const onError = (error: Error) => complete(error);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    const exitedError = (code: number | null, signal: NodeJS.Signals | null) => {
       const message = `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`;
-      complete(
-        kind === "opencode" && openCodeStderrReportsLockedDatabase(stderrTail)
-          ? openCodeDatabaseLockedError(
-              `${message}: another OpenCode process held its database (database is locked)`,
-            )
-          : new Error(message),
+      return kind === "opencode" && openCodeStderrReportsLockedDatabase(stderrTail)
+        ? openCodeDatabaseLockedError(
+            `${message}: another OpenCode process held its database (database is locked)`,
+          )
+        : new Error(message);
+    };
+    // OpenCode's failure is decided once its stdio has closed, so stderr that
+    // is still in flight at `exit` is read first; the bound stops a pipe held
+    // open by a grandchild from delaying the failure past it.
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      const status = exitStatus ?? { code, signal };
+      complete(exitedError(status.code, status.signal));
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (kind !== "opencode") {
+        complete(exitedError(code, signal));
+        return;
+      }
+      exitStatus = { code, signal };
+      closeBound = setTimeout(
+        () => complete(exitedError(code, signal)),
+        options.stdioCloseBoundMs ?? OPENCODE_STARTUP_STDIO_CLOSE_BOUND_MS,
       );
     };
 
     child.once("error", onError);
     child.once("exit", onExit);
-    if (kind === "opencode") child.stderr.on("data", onStderr);
-    waitForLocalServerHealth(port, kind, headers).then(
-      () => complete(),
+    if (kind === "opencode") {
+      child.once("close", onClose);
+      child.stderr.on("data", onStderr);
+    }
+    waitForLocalServerHealth(port, kind, headers, options.health).then(
+      () => {
+        // A server that has already exited is not healthy, whatever answers.
+        if (!exitStatus) complete();
+      },
       (error: unknown) => {
-        complete(error instanceof Error ? error : new Error(String(error)));
+        if (!exitStatus) complete(error instanceof Error ? error : new Error(String(error)));
       },
     );
   });

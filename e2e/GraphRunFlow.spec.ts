@@ -49,3 +49,25 @@ test("Graph Run retains its view behind another pane and centres a background se
   await expect(level).toHaveText("125%");
   await expect.poll(inView).toBe(true);
 });
+
+// WebKit resets a hidden scroller that holds a container query container (0860, 1080).
+test("Graph Run keeps its overview scroll position behind another pane", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  // Short enough that the wide layout overflows too.
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  await page.goto("/graph-run-flow");
+  const overview = page.getByTestId("graph-run-overview-scroll");
+  await expect(page.locator("[data-flow-viewport]")).toBeVisible();
+  const range = await overview.evaluate((element) => element.scrollHeight - element.clientHeight);
+  expect(range).toBeGreaterThan(100);
+  const offset = Math.floor(range / 2);
+  await overview.evaluate((element, top) => {
+    element.scrollTop = top;
+  }, offset);
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(offset);
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await expect(overview).toBeHidden();
+  await page.getByRole("button", { name: "Activate graph pane" }).click();
+  await expect(overview).toBeVisible();
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(offset);
+});

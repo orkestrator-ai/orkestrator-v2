@@ -704,6 +704,19 @@ export type ProviderSessionStateSnapshot = Omit<ProviderInteractiveSnapshot, "me
 export interface AgentSessionProvider {
   readonly agent: ProviderAgent;
   /**
+   * What a workflow's turn that ended in an error does next, under automatic
+   * account switching (`AgentAccountAutoSwitcher.handleLimitStop`). Absent for a
+   * provider without accounts, and answering `stop` for every other failure.
+   */
+  usageLimitStop?(input: {
+    environmentId: string;
+    requestId: string;
+    error: string | undefined;
+    resends: number;
+    /** When the turn is known to have been running by; see `UsageLimitStopInput`. */
+    turnStartedAt?: string;
+  }): Promise<import("@orkestrator/protocol/agent-account-auto-switch").UsageLimitStopVerdict>;
+  /**
    * Register a session restored from durable workflow state. Providers that
    * monitor environment-wide event streams must ignore requests for every
    * session not registered here or created through createSession().

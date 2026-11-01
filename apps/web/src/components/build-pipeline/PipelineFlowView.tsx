@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -35,6 +36,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { flowAttemptKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
 import { useOptionalTerminalContext, type CreateTabOptions } from "@/contexts/TerminalContext";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { usePullRequest } from "@/hooks/usePullRequest";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { modelsForAgent } from "@/lib/agent-launch";
@@ -575,10 +577,7 @@ export function PipelineFlowView({
 
   return (
     <div ref={setTabRoot} className="relative flex min-h-0 flex-1 flex-col">
-      <div
-        data-testid="pipeline-flow-scroll"
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]"
-      >
+      <OverviewScroll>
         <div className="@container flex min-h-full flex-col">
           {notices}
           {reportHint ? (
@@ -717,8 +716,27 @@ export function PipelineFlowView({
             />
           </FlowInspectorPanel>
         </div>
-      </div>
+      </OverviewScroll>
       {codeRewind.dialog}
+    </div>
+  );
+}
+
+/**
+ * The graph and inspector's shared scroll area. A stable gutter keeps the
+ * graph's width, and so its zoom, from changing when the inspector grows enough
+ * to need a scrollbar. The reader's place survives another tab taking over.
+ */
+function OverviewScroll({ children }: { children: ReactNode }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useScrollOffsetAcrossHide(scrollRef);
+  return (
+    <div
+      ref={scrollRef}
+      data-testid="pipeline-flow-scroll"
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]"
+    >
+      {children}
     </div>
   );
 }

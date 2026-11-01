@@ -12,7 +12,7 @@ import {
 import {
   createPushChangesPrompt,
   createReviewPrompt,
-  defaultPrTargetBranch,
+  resolvePrTargetBranch,
   PUSH_CHANGES_TAB_TITLE,
   REVIEW_TAB_TITLE,
 } from "@orkestrator/protocol/git-workflow-prompts";
@@ -396,9 +396,11 @@ function buttonHandler(action: ButtonAction): MutationActionHandler<ButtonInput>
         input,
       );
       const targetBranch = button.targetBranch
-        ? (input.targetBranch ??
-          (action === "pr.resolve" ? environment.prBaseBranch || undefined : undefined) ??
-          defaultPrTargetBranch(repositoryBase))
+        ? resolvePrTargetBranch({
+            override: input.targetBranch,
+            environmentBase: action === "pr.resolve" ? environment.prBaseBranch : undefined,
+            repositoryBase,
+          })
         : undefined;
       const start: StartInput = {
         environmentId: environment.id,

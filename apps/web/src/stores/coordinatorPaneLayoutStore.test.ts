@@ -256,6 +256,28 @@ describe("against a backend that owns coordinator layouts", () => {
     expect(localStorage.getItem(key)).not.toBeNull();
   });
 
+  test("an edit made while capabilities were unknown is saved over the stored layout", async () => {
+    const stored = single();
+    const edited = reconcileCoordinatorLayout(null, ["main", "other"]);
+    const server = fakeBackend();
+    server.remoteSave("p", stored);
+    const healthy = invokeMock.getMockImplementation()!;
+    resetClientStateCapabilitiesForTests();
+    invokeMock.mockImplementation(async () => {
+      throw new Error("transport closed");
+    });
+    await store.getState().hydrate("p");
+    store.getState().setLayout("p", edited);
+
+    resetClientStateCapabilitiesForTests(capabilities(true));
+    invokeMock.mockImplementation(healthy);
+    await store.getState().hydrate("p");
+    await flushPromises();
+
+    expect(server.records.get("p")?.layout).toEqual(edited);
+    expect(selectCoordinatorPaneLayout("p")(store.getState())).toEqual(edited);
+  });
+
   test("a failed read still lets the page render", async () => {
     invokeMock.mockImplementation(async () => {
       throw new Error("transport closed");

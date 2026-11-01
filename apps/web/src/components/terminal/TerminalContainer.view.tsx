@@ -67,6 +67,7 @@ import {
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { createOrkestratorScriptPrompt } from "@/prompts";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
@@ -165,7 +166,7 @@ export function TerminalContainer({
   const isLocalEnvironment = environment?.environmentType === "local";
   const setupPhase = environment?.setupPhase ?? "pending";
   const backendSetupRunning = setupPhase === "running";
-  const setupReady = setupPhase === "ready";
+  const setupReady = isEnvironmentSetupSettled(environment);
   // Prompt-bearing launches keep this true until the initial prompt is
   // dispatched. Prompt-less launches consume it in the same setup-complete
   // snapshot, so the one-shot window activation is the remaining owed handoff.

@@ -1167,7 +1167,9 @@ describe("resolveAgentDefaults", () => {
         invokeMock.mock.calls.some(([command]) => command === "ensure_host_pi_model_catalog"),
       ).toBe(true),
     );
-    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("GPT-5.4"));
+    // No model is marked as the default, so the choice is left to Pi's own
+    // resolution rather than the catalogue's first row.
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Pi default"));
     expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
       "openai-codex/gpt-5.4",
     ]);

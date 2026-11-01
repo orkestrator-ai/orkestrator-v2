@@ -86,6 +86,29 @@ describe("useFileSave", () => {
     expect(useFileDirtyStore.getState().isDirty("tab")).toBe(false);
   });
 
+  test("a reload while the buffer is edited does not move what the save checks", async () => {
+    useFileDirtyStore.getState().setOriginalContent("tab", "original");
+    useFileDirtyStore.getState().setContent("tab", "mine");
+    // An agent changed the file; the tab remounted and read it back.
+    useFileDirtyStore.getState().observeDiskContent("tab", "agent's version");
+
+    const { result } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
+    await act(async () => {
+      await result.current.saveFile();
+    });
+
+    expect(writeContainerFileMock.mock.calls[0]?.[3]).toEqual({
+      sha256: fileContentSha256("original"),
+    });
+  });
+
   test("a file changed on disk keeps the buffer and offers overwrite or reload", async () => {
     writeLocalFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
     useFileDirtyStore.getState().setOriginalContent("tab", "original");

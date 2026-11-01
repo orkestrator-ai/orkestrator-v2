@@ -1156,11 +1156,12 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(read(DEFAULT_ALLOWED_DOMAINS_FILE)).toBe(renderDefaultAllowedDomains());
 
     // No second copy of the list survives anywhere it used to live.
-    expect(read("apps/web/src/stores/configStore.ts")).toContain(
+    expect(read("packages/protocol/src/app-config-defaults.ts")).toContain(
       "allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],",
     );
+    expect(read("apps/web/src/stores/configStore.ts")).toContain("createDefaultAppConfig");
     expect(read("apps/backend/src/core/storage-shared-config.ts")).toContain(
-      "allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],",
+      "createDefaultAppConfig",
     );
     for (const rel of [
       "apps/web/src/stores/configStore.ts",

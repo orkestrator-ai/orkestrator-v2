@@ -7,6 +7,10 @@ import { StorageService } from "./storage.js";
 import { startFeaturePlanBuild } from "./feature-plan-build.js";
 import { launchBuildPipeline } from "./build-pipeline-launch.js";
 import type { Project } from "./models.js";
+import {
+  FEATURE_PLANNING_RECORD_VERSION,
+  type FeaturePlanningRecord,
+} from "@orkestrator/protocol/feature-planning";
 import type { FeaturePlan } from "./storage-shared.js";
 
 type StartBehaviour = (input: StartBuildPipelineInput, storage: StorageService) => Promise<void>;
@@ -48,6 +52,24 @@ async function withStorage(run: (storage: StorageService) => Promise<void>): Pro
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
+}
+
+function planningRecord(plan: FeaturePlan, phase: FeaturePlanningRecord["phase"]) {
+  const timestamp = new Date(0).toISOString();
+  return {
+    version: FEATURE_PLANNING_RECORD_VERSION,
+    operationId: `operation-${plan.id}`,
+    featureId: plan.id,
+    projectId: plan.projectId,
+    kind: "feature",
+    userMessage: "Let me export reports",
+    environmentId: "env-1",
+    phase,
+    startedAt: timestamp,
+    attemptStartedAt: timestamp,
+    updatedAt: timestamp,
+    backendRevision: 0,
+  } satisfies FeaturePlanningRecord;
 }
 
 async function plannedFeature(storage: StorageService): Promise<FeaturePlan> {
@@ -132,7 +154,8 @@ describe("startFeaturePlanBuild", () => {
         { featureId: plan.id },
         { storage, buildPipelines: supervisor.service },
       );
-      expect(result).toMatchObject({ taskId: task.id, reused: true });
+      // It reuses the ticket, but the pipeline is new, so this reports a new build.
+      expect(result).toMatchObject({ taskId: task.id, reused: false });
       expect(supervisor.started[0]?.taskId).toBe(task.id);
       expect((await storage.kanban.getKanbanTasks("project-1")).length).toBe(1);
     });
@@ -156,6 +179,75 @@ describe("startFeaturePlanBuild", () => {
       expect(await storage.kanban.getKanbanTasks("project-1")).toEqual([]);
     });
   });
+
+  test("starts over when the ticket of an unfinished claim was deleted", async () => {
+    await withStorage(async (storage) => {
+      const plan = await plannedFeature(storage);
+      const orphan = await storage.kanban.addKanbanTask("project-1", "Old", "Old");
+      await storage.kanban.claimFeaturePlanBuild(plan.id, orphan.id);
+      await storage.kanban.deleteKanbanTask(orphan.id);
+      const supervisor = fakeSupervisor(storage);
+
+      const result = await startFeaturePlanBuild(
+        { featureId: plan.id },
+        { storage, buildPipelines: supervisor.service },
+      );
+
+      expect(result.reused).toBe(false);
+      expect(result.taskId).not.toBe(orphan.id);
+      const after = await storage.kanban.getFeaturePlan(plan.id);
+      expect(after?.buildTaskId).toBe(result.taskId);
+    });
+  });
+
+  test("a resume keeps its claim and ticket when the pipeline fails again", async () => {
+    await withStorage(async (storage) => {
+      const plan = await plannedFeature(storage);
+      const ticket = await storage.kanban.addKanbanTask("project-1", "Dark mode", "Stories");
+      await storage.kanban.claimFeaturePlanBuild(plan.id, ticket.id);
+      const failing = fakeSupervisor(storage, async () => {
+        throw new Error("environment failed");
+      });
+
+      await expect(
+        startFeaturePlanBuild({ featureId: plan.id }, { storage, buildPipelines: failing.service }),
+      ).rejects.toThrow("environment failed");
+
+      const after = await storage.kanban.getFeaturePlan(plan.id);
+      expect(after?.buildTaskId).toBe(ticket.id);
+      expect((await storage.kanban.getKanbanTasks("project-1")).map((task) => task.id)).toEqual([
+        ticket.id,
+      ]);
+
+      // The retry finishes under the same ticket, and it is a new build.
+      const working = fakeSupervisor(storage);
+      const resumed = await startFeaturePlanBuild(
+        { featureId: plan.id },
+        { storage, buildPipelines: working.service },
+      );
+      expect(resumed.taskId).toBe(ticket.id);
+      expect(resumed.reused).toBe(false);
+    });
+  });
+
+  for (const phase of ["dispatching", "failed"] as const) {
+    test(`refuses while a planning turn in the project is ${phase}`, async () => {
+      await withStorage(async (storage) => {
+        const plan = await plannedFeature(storage);
+        const other = await plannedFeature(storage);
+        await storage.kanban.startFeaturePlanning(planningRecord(other, phase));
+        const supervisor = fakeSupervisor(storage);
+
+        await expect(
+          startFeaturePlanBuild(
+            { featureId: plan.id },
+            { storage, buildPipelines: supervisor.service },
+          ),
+        ).rejects.toThrow("planning");
+        expect(supervisor.started).toEqual([]);
+      });
+    });
+  }
 
   test("never undoes a link the supervisor already recorded", async () => {
     await withStorage(async (storage) => {

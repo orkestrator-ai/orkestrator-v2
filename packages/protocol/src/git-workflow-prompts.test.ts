@@ -4,6 +4,7 @@ import {
   createReviewPrompt,
   createPushChangesPrompt,
   defaultPrTargetBranch,
+  resolvePrTargetBranch,
 } from "./git-workflow-prompts";
 import { createPRPrompt, createResolveConflictsPrompt } from "./pr-prompt";
 import { REVIEW_INSTRUCTION_MAX_LENGTH } from "./review-prompt";
@@ -11,6 +12,23 @@ import {
   DEFAULT_REVIEW_INSTRUCTION,
   REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
 } from "./review-workflow";
+
+describe("resolvePrTargetBranch", () => {
+  test("prefers the override, then the environment, then the repository", () => {
+    const all = { override: "o", environmentBase: "e", repositoryBase: "r" };
+    expect(resolvePrTargetBranch(all)).toBe("o");
+    expect(resolvePrTargetBranch({ ...all, override: undefined })).toBe("e");
+    expect(resolvePrTargetBranch({ repositoryBase: "r" })).toBe("r");
+    expect(resolvePrTargetBranch({})).toBe("main");
+  });
+
+  test("treats blank values as unset and trims the one it uses", () => {
+    expect(
+      resolvePrTargetBranch({ override: "  ", environmentBase: "", repositoryBase: "r" }),
+    ).toBe("r");
+    expect(resolvePrTargetBranch({ override: " release " })).toBe("release");
+  });
+});
 
 describe("defaultPrTargetBranch", () => {
   test("uses the repository's PR base branch", () => {

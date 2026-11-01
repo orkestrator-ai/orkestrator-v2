@@ -672,6 +672,8 @@ describe("FileViewerTab component", () => {
     expect(useFileDirtyStore.getState().dirtyFiles.get("remount-tab")).toEqual({
       content: "newer unsaved buffer",
       originalContent: "container text",
+      // A save still checks what the buffer was edited from, not the newer read.
+      baseContent: "older disk",
     });
   });
 
@@ -702,6 +704,7 @@ describe("FileViewerTab component", () => {
     expect(useFileDirtyStore.getState().dirtyFiles.get("restore-tab")).toEqual({
       content: "restored buffer",
       originalContent: "container text",
+      baseContent: "old disk",
     });
   });
 

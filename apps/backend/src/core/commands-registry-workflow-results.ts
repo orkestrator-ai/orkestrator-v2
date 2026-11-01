@@ -67,7 +67,7 @@ export function registerWorkflowResultCommands(register: CommandRegistrar): void
         providers: providers ?? existing.providers,
         kinds: kinds ?? existing.kinds,
       });
-      await storage.updateGlobalConfig({ ...current.global, workflowResultTools: next });
+      await storage.patchGlobalConfig({ workflowResultTools: next });
       await workflowResultRollout?.refresh();
       return next;
     },

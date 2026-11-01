@@ -55,6 +55,7 @@ export const useCoordinatorPaneLayoutStore = create<CoordinatorPaneLayoutState>(
   let stopSubscriptions: Array<() => void> | null = null;
   const saving = new Set<string>();
   const pending = new Map<string, CoordinatorPaneLayout>();
+  const unconfirmedEdits = new Map<string, CoordinatorPaneLayout>();
 
   const entry = (projectId: string): LayoutEntry | undefined => get().entries[projectId];
   const patch = (projectId: string, next: Partial<LayoutEntry>) =>
@@ -119,7 +120,7 @@ export const useCoordinatorPaneLayoutStore = create<CoordinatorPaneLayoutState>(
 
   const adopt = (projectId: string, record: CoordinatorPaneLayoutRecord | null) => {
     // A local change still being saved is newer than what was read.
-    if (saving.has(projectId) || pending.has(projectId)) return;
+    if (saving.has(projectId) || pending.has(projectId) || unconfirmedEdits.has(projectId)) return;
     const current = entry(projectId);
     // The revision already held (this client's own save, announced back) or an
     // older answer: nothing new, and keeping the object avoids a re-render.
@@ -196,6 +197,25 @@ export const useCoordinatorPaneLayoutStore = create<CoordinatorPaneLayoutState>(
     }
   };
 
+  /**
+   * Edits made before the backend answered its capabilities were based on no
+   * revision of its layout, so they are saved over whatever it holds now. The
+   * import cannot carry them: revision 0 never replaces a stored layout.
+   */
+  const sendUnconfirmedEdits = async () => {
+    for (const [projectId, layout] of Array.from(unconfirmedEdits)) {
+      try {
+        const record = await backend.getCoordinatorPaneLayout(projectId);
+        patch(projectId, { revision: record?.revision ?? 0 });
+      } catch {
+        continue; // Still unconfirmed; the next mount or reconnect tries again.
+      }
+      unconfirmedEdits.delete(projectId);
+      if (!pending.has(projectId)) pending.set(projectId, layout);
+      void flush(projectId);
+    }
+  };
+
   return {
     entries: {},
     setLayout: (projectId, layout) => {
@@ -203,8 +223,10 @@ export const useCoordinatorPaneLayoutStore = create<CoordinatorPaneLayoutState>(
       if (current?.layout === layout) return;
       patch(projectId, { layout });
       if (mode !== "backend") {
-        // Unknown yet: kept in the browser copy too, which the import picks up.
+        // Unknown yet: kept in the browser copy too, which an older backend's
+        // session keeps using.
         writeLegacy(projectId, layout);
+        if (mode === null) unconfirmedEdits.set(projectId, layout);
         return;
       }
       pending.set(projectId, layout);
@@ -222,6 +244,7 @@ export const useCoordinatorPaneLayoutStore = create<CoordinatorPaneLayoutState>(
       }
       if (!capabilities.coordinatorPaneLayouts) {
         mode = "legacy";
+        unconfirmedEdits.clear();
         const current = entry(projectId);
         if (current?.ready) return;
         patch(projectId, {
@@ -236,18 +259,20 @@ export const useCoordinatorPaneLayoutStore = create<CoordinatorPaneLayoutState>(
       await migrate();
       if (entry(projectId)?.ready) {
         await refresh(projectId);
+        await sendUnconfirmedEdits();
         return;
       }
       try {
         const record = await backend.getCoordinatorPaneLayout(projectId);
         patch(projectId, {
-          layout: record?.layout ?? entry(projectId)?.layout,
+          layout: unconfirmedEdits.get(projectId) ?? record?.layout ?? entry(projectId)?.layout,
           revision: record?.revision ?? 0,
           ready: true,
         });
       } catch {
         patch(projectId, { ready: true });
       }
+      await sendUnconfirmedEdits();
       if (pending.has(projectId)) void flush(projectId);
     },
     reset: () => {
@@ -257,6 +282,7 @@ export const useCoordinatorPaneLayoutStore = create<CoordinatorPaneLayoutState>(
       migration = null;
       saving.clear();
       pending.clear();
+      unconfirmedEdits.clear();
       set({ entries: {} });
     },
   };

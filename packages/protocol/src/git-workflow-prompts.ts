@@ -69,6 +69,23 @@ export function defaultPrTargetBranch(repositoryPrBaseBranch: string | null | un
 }
 
 /**
+ * The branch a PR action targets: the caller's choice, then the environment's
+ * recorded base where the action uses one, then the repository default. Blank
+ * values count as unset, because settings persist a cleared base as "".
+ */
+export function resolvePrTargetBranch(input: {
+  override?: string | null;
+  environmentBase?: string | null;
+  repositoryBase?: string | null;
+}): string {
+  return (
+    input.override?.trim() ||
+    input.environmentBase?.trim() ||
+    defaultPrTargetBranch(input.repositoryBase)
+  );
+}
+
+/**
  * Generates the prompt for pushing changes to an existing PR.
  * This prompt instructs the agent to commit all changes and push to the current branch.
  */

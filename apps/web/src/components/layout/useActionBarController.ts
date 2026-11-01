@@ -10,6 +10,7 @@ import {
   resolveActionDefaults,
   resolveAgentPlatformSettings,
 } from "@orkestrator/protocol/agent-settings";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
@@ -32,6 +33,7 @@ import {
   createPushChangesPrompt,
   createReviewPrompt,
   defaultPrTargetBranch,
+  resolvePrTargetBranch,
   PUSH_CHANGES_TAB_TITLE,
   REVIEW_TAB_TITLE,
 } from "@orkestrator/protocol/git-workflow-prompts";
@@ -137,7 +139,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       ? state.environments.find((environment) => environment.id === selectedEnvironmentId)
       : undefined,
   );
-  const workspaceReady = selectedEnvironment?.setupPhase === "ready";
+  const workspaceReady = isEnvironmentSetupSettled(selectedEnvironment);
   const setupRunning = selectedEnvironment?.setupPhase === "running";
   const getProjectById = useProjectStore((state) => state.getProjectById);
   const { updateProject } = useProjects();
@@ -1472,9 +1474,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
       try {
         const repoConfig = config.repositories[selectedProjectId];
-        // Falsy, not nullish: repository settings persist a cleared PR base branch
-        // as "", and an empty base would reach the agent as `gh pr create --base `.
-        const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
+        const targetBranch = resolvePrTargetBranch({
+          override: targetBranchOverride,
+          repositoryBase: repoConfig?.prBaseBranch,
+        });
         const prPrompt = createPRPrompt(targetBranch);
         const actionDefault = actionDefaultFor("pr");
         const agent = agentOverride || actionDefault.agent;
@@ -1760,11 +1763,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       setResolveLaunchEnvironmentId(operationEnvironmentId);
 
       const repoConfig = config.repositories[selectedProjectId];
-      const targetBranch =
-        targetBranchOverride ||
-        selectedEnvironment?.prBaseBranch ||
-        repoConfig?.prBaseBranch ||
-        "main";
+      const targetBranch = resolvePrTargetBranch({
+        override: targetBranchOverride,
+        environmentBase: selectedEnvironment?.prBaseBranch,
+        repositoryBase: repoConfig?.prBaseBranch,
+      });
       const resolvePrompt = createResolveConflictsPrompt(targetBranch);
       const fail = (message: string): ResolveLaunchResult => {
         if (reportFailure === "toast") {

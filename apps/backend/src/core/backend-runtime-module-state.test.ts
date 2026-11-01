@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { AgentsMdPrResult } from "./agents-md-pr.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import type { CommandContext } from "./commands-context.js";
 import {
   assertContainerNotDraining,
   assertEnvironmentNotDraining,
   withEnvironmentDraining,
 } from "./container-readiness.js";
+import { withCoordinatorReceipt } from "./coordinator-action-scope.js";
+import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { Environment, Project } from "./models.js";
 import {
   ensureProjectHomeEnvironment,
@@ -12,6 +16,7 @@ import {
   type ProjectHomeDependencies,
 } from "./project-home-environment.js";
 import { createEnvironment } from "./storage-shared-core.js";
+import type { StorageService } from "./storage.js";
 
 /**
  * Two backends in one process do not share the module state todo 1070 moved
@@ -70,6 +75,26 @@ function projectHomeDependencies(gate?: Promise<void>): ProjectHomeDependencies 
     resolveRoot: async () => "/checkout",
     readBranch: async () => "main",
     createRecord: (projectId, name) => createEnvironment(projectId, { name }),
+  };
+}
+
+/** A backend whose coordinator store claims every receipt it is asked for. */
+function receiptContext(runtime: BackendRuntime): CommandContext {
+  const coordinators = {
+    admitCoordinatorActionReceipt: async () => ({
+      receipt: { createdAt: "2026-11-01T00:00:00.000Z", state: "pending" },
+      claimed: true,
+    }),
+    releaseCoordinatorActionReceipt: async () => undefined,
+    completeCoordinatorActionReceipt: async () => undefined,
+  };
+  return {
+    storage: { coordinators } as unknown as StorageService,
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime,
   };
 }
 
@@ -154,5 +179,60 @@ describe("two BackendRuntimes in one process (todo 1070)", () => {
     expect(await running).toBe("running");
     expect(await queued).toBe("queued");
     expect(order).toEqual(["second backend", "first backend, second apply"]);
+  });
+
+  test("coordinator receipt attempts are shared within one backend only", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const caller = { projectId: "project-1", coordinatorId: "coordinator-1", conversationId: "c" };
+    const input = { requestId: "request-1", action: "close" as never, payload: {} };
+    const attempt = held<Record<string, unknown>>();
+    const runs: string[] = [];
+
+    const running = withCoordinatorReceipt(receiptContext(first), caller, input, () => {
+      runs.push("first");
+      return attempt.promise;
+    });
+    // An identical call in the same backend waits for the attempt in flight.
+    const retried = withCoordinatorReceipt(receiptContext(first), caller, input, async () => {
+      runs.push("first, retried");
+      return { retried: true };
+    });
+    // The other backend's call with the same ids runs at once against its own store.
+    expect(
+      await withCoordinatorReceipt(receiptContext(second), caller, input, async () => {
+        runs.push("second");
+        return { other: true };
+      }),
+    ).toEqual({ other: true });
+    expect(runs).toEqual(["first", "second"]);
+    attempt.resolve({ done: true });
+    expect(await running).toEqual({ done: true });
+    expect(await retried).toEqual({ retried: true });
+    expect(runs).toEqual(["first", "second", "first, retried"]);
+  });
+
+  test("AGENTS.md pull request runs are joined within one backend only", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const pullRequest = held<AgentsMdPrResult>();
+    const mine = { status: "opened" } as AgentsMdPrResult;
+    const other = { status: "unchanged" } as AgentsMdPrResult;
+
+    const running = first.coordinatorRequests.joinAgentsMdPullRequest(
+      "0123456789abcdef",
+      () => pullRequest.promise,
+    );
+    expect(
+      first.coordinatorRequests.joinAgentsMdPullRequest("0123456789abcdef", async () => other),
+    ).toBe(running);
+    expect(
+      await second.coordinatorRequests.joinAgentsMdPullRequest(
+        "0123456789abcdef",
+        async () => other,
+      ),
+    ).toBe(other);
+    pullRequest.resolve(mine);
+    expect(await running).toBe(mine);
   });
 });

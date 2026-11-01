@@ -1530,30 +1530,55 @@ export function CreateEnvironmentDialog({
     ],
   );
 
-  const handlePromptKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Only handle plain Enter (no modifier keys) to submit the form
-      // Shift+Enter allows normal newline behavior
-      // Cmd/Ctrl+key combinations (copy, paste, etc.) pass through normally
-      if (
-        e.key === "Enter" &&
-        !e.shiftKey &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        !isLoading &&
-        pendingAttachmentOperations === 0
-      ) {
-        e.preventDefault();
-        formRef.current?.requestSubmit();
-      }
-    },
-    [isLoading, pendingAttachmentOperations],
-  );
+  const submitDisabled =
+    isLoading ||
+    pendingAttachmentOperations > 0 ||
+    (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings())) ||
+    (environmentType === "local" && !localEnvironmentAvailable) ||
+    // A blank name is generated from the description by the backend.
+    // At least one must be present so the ticket is identifiable.
+    (buildIntent === "feature" &&
+      (!onCreateFeatureBuild || (!featureName.trim() && !initialPrompt.trim())));
+
+  // Plain Enter never submits: multi-line fields take it as a newline, and a
+  // single-line field (the name, ports) would otherwise submit the form
+  // implicitly, so it is swallowed there.
+  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
+    if (
+      e.key === "Enter" &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      e.target instanceof HTMLInputElement &&
+      // Pickers portal their search inputs out of the form; leave those alone.
+      e.currentTarget.contains(e.target)
+    ) {
+      e.preventDefault();
+    }
+  };
+
+  // Cmd+Enter (Ctrl+Enter off macOS) from anywhere in the dialog does what the
+  // Create Environment button does, including staying inert while it is disabled.
+  const handleDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (
+      e.key !== "Enter" ||
+      e.defaultPrevented ||
+      e.repeat ||
+      e.nativeEvent.isComposing ||
+      !(e.metaKey || e.ctrlKey) ||
+      e.shiftKey ||
+      e.altKey
+    ) {
+      return;
+    }
+    e.preventDefault();
+    if (submitDisabled) return;
+    formRef.current?.requestSubmit();
+  };
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
+        onKeyDown={handleDialogKeyDown}
         size="4xl"
         className={cn(
           "flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90vh] sm:p-0",
@@ -1621,6 +1646,7 @@ export function CreateEnvironmentDialog({
         <form
           ref={formRef}
           onSubmit={handleSubmit}
+          onKeyDown={handleFormKeyDown}
           className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         >
           <Tabs
@@ -2117,7 +2143,6 @@ export function CreateEnvironmentDialog({
                           }
                           value={initialPrompt}
                           onChange={(e) => setInitialPrompt(e.target.value)}
-                          onKeyDown={handlePromptKeyDown}
                           disabled={isLoading}
                           rows={3}
                           className="min-h-36 max-h-[calc(15*theme(lineHeight.normal)*1em)] resize-y overflow-y-auto rounded-xl border border-border/70 bg-input-surface px-3 py-2 shadow-none"
@@ -2154,17 +2179,7 @@ export function CreateEnvironmentDialog({
           <Button
             type="button"
             onClick={() => formRef.current?.requestSubmit()}
-            disabled={
-              isLoading ||
-              pendingAttachmentOperations > 0 ||
-              (environmentType === "containerized" &&
-                (!dockerAvailable || !validatePortMappings())) ||
-              (environmentType === "local" && !localEnvironmentAvailable) ||
-              // A blank name is generated from the description by the backend.
-              // At least one must be present so the ticket is identifiable.
-              (buildIntent === "feature" &&
-                (!onCreateFeatureBuild || (!featureName.trim() && !initialPrompt.trim())))
-            }
+            disabled={submitDisabled}
             className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

@@ -267,6 +267,83 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     );
   });
 
+  test("Cmd+Enter or Ctrl+Enter anywhere in the dialog creates the environment", async () => {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      const onCreate = mock(async (_options: ClaudeOptions) => true);
+      render(
+        <DockerAvailabilityProvider available>
+          <CreateEnvironmentDialog
+            open
+            onOpenChange={() => undefined}
+            onCreate={onCreate}
+            projectId="project-1"
+          />
+        </DockerAvailabilityProvider>,
+      );
+
+      const prompt = screen.getByRole("textbox", { name: /Initial Prompt/ });
+      fireEvent.change(prompt, { target: { value: "first line" } });
+      fireEvent.keyDown(prompt, { key: "Enter", ...modifier });
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      expect(onCreate.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ initialPrompt: "first line" }),
+      );
+      cleanup();
+    }
+  });
+
+  test("plain Enter never creates the environment", async () => {
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
+    render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={onCreate}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    // The prompt is multi-line: Enter is left to the textarea to insert a newline.
+    const prompt = screen.getByRole("textbox", { name: /Initial Prompt/ });
+    fireEvent.change(prompt, { target: { value: "first line" } });
+    expect(fireEvent.keyDown(prompt, { key: "Enter" })).toBe(true);
+    expect(fireEvent.keyDown(prompt, { key: "Enter", shiftKey: true })).toBe(true);
+
+    // The name is single-line: Enter is swallowed so it cannot submit the form.
+    const name = screen.getByRole("textbox", { name: "Environment Name (optional)" });
+    expect(fireEvent.keyDown(name, { key: "Enter" })).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onCreate).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(name, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  });
+
+  test("Cmd+Enter does nothing while Create Environment is disabled", async () => {
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
+    render(
+      <DockerAvailabilityProvider available={false}>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={onCreate}
+          projectId="project-1"
+          localEnvironmentAvailable={false}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", metaKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
   test("keeps disabled environment-type explanations visible and associated", () => {
     render(
       <DockerAvailabilityProvider available={false}>

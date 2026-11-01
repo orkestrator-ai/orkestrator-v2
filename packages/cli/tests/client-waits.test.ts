@@ -408,7 +408,12 @@ describe("waiting through a lost submission response", () => {
 });
 
 describe("environment --wait through a lost submission response", () => {
-  type Mutation = "environment.start" | "environment.stop" | "environment.exec";
+  type Mutation =
+    | "environment.start"
+    | "environment.stop"
+    | "environment.recreate"
+    | "environment.delete"
+    | "environment.exec";
 
   function environmentSummary(overrides: Partial<PublicEnvironmentSummary> = {}) {
     return {
@@ -439,7 +444,11 @@ describe("environment --wait through a lost submission response", () => {
     action: Mutation,
     byKey: Array<PublicReceipt | null>,
     byId: PublicReceipt[],
-    options: { mutationDelay?: number; environment?: PublicEnvironmentSummary } = {},
+    options: {
+      mutationDelay?: number;
+      readDelay?: "run.get" | "environment.get";
+      environment?: PublicEnvironmentSummary | null;
+    } = {},
   ) {
     const box = await createSandbox();
     const lookups: Array<Record<string, unknown>> = [];
@@ -461,13 +470,16 @@ describe("environment --wait through a lost submission response", () => {
               publicErrorEnvelope("run.get", { code: "not-found", message: "not admitted yet" }),
             );
       }
+      if (called === options.readDelay && input.requestId === undefined) await Bun.sleep(1_500);
       if (called === "run.get") {
         const next = byId.length > 1 ? byId.shift()! : byId[0]!;
         return envelope(publicSuccessEnvelope("run.get", null, next));
       }
       if (called === "environment.get")
         return envelope(
-          publicSuccessEnvelope("environment.get", options.environment ?? environmentSummary()),
+          options.environment === null
+            ? publicErrorEnvelope("environment.get", { code: "not-found", message: "deleted" })
+            : publicSuccessEnvelope("environment.get", options.environment ?? environmentSummary()),
         );
       return defaultResponder()(request);
     });
@@ -569,6 +581,101 @@ describe("environment --wait through a lost submission response", () => {
     expect(lookups[0]).toMatchObject({ action: "environment.stop" });
     expect(submissions()).toBe(1);
   });
+
+  test.each([false, true])("recreate recovery preserves discard=%s intent", async (discard) => {
+    const completed = startReceipt({ action: "environment.recreate" });
+    const { box, lookups, submissions } = await lostEnvironmentMutation(
+      "environment.recreate",
+      [completed],
+      [completed],
+    );
+    const result = await box.run([
+      "--json",
+      "environment",
+      "recreate",
+      "env",
+      "--request-id",
+      "slow-env",
+      "--wait",
+      "ready",
+      ...(discard ? ["--discard"] : []),
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({
+      receipt: { action: "environment.recreate", state: "succeeded" },
+      result: { condition: "ready", environment: { ready: true } },
+    });
+    expect(lookups[0]).toMatchObject({
+      action: "environment.recreate",
+      submittedInput: { environmentId: "env", ...(discard ? { discard: true } : {}) },
+    });
+    expect(lookups[0]!.submittedInput).toEqual({
+      environmentId: "env",
+      ...(discard ? { discard: true } : {}),
+    });
+    expect(submissions()).toBe(1);
+  });
+
+  test("delete recovery waits for a successful operation and a missing environment", async () => {
+    const running = startReceipt({
+      action: "environment.delete",
+      state: "running",
+      completedAt: undefined,
+    });
+    const completed = startReceipt({ action: "environment.delete" });
+    const { box, lookups, submissions } = await lostEnvironmentMutation(
+      "environment.delete",
+      [running],
+      [running, completed],
+      { environment: null },
+    );
+    const result = await box.run([
+      "--json",
+      "environment",
+      "delete",
+      "env",
+      "--request-id",
+      "slow-env",
+      "--wait",
+      "deleted",
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({
+      receipt: { action: "environment.delete", state: "succeeded" },
+      result: { condition: "deleted", environment: null },
+    });
+    expect(lookups[0]).toMatchObject({
+      action: "environment.delete",
+      submittedInput: { environmentId: "env" },
+    });
+    expect(submissions()).toBe(1);
+  });
+
+  test.each(["run.get", "environment.get"] as const)(
+    "recovered lifecycle bounds a stalled %s read by the remaining deadline",
+    async (readDelay) => {
+      const running = startReceipt({ state: "running", stage: "setup", completedAt: undefined });
+      const { box, submissions } = await lostEnvironmentMutation(
+        "environment.start",
+        [running],
+        [startReceipt({})],
+        { mutationDelay: 400, readDelay },
+      );
+      const started = Date.now();
+      const result = await box.run([...START, "--wait", "ready", "--timeout", "600ms"]);
+      expect(result.code).toBe(5);
+      expect(JSON.parse(result.out)).toMatchObject({
+        error: { code: "deadline-exceeded" },
+        receipt: {
+          operationId: OPERATION,
+          action: "environment.start",
+          state: readDelay === "run.get" ? "running" : "succeeded",
+        },
+      });
+      expect(Date.now() - started).toBeLessThan(950);
+      expect(submissions()).toBe(1);
+    },
+  );
 
   test("exec --wait observes a recovered, not yet claimed command to its exit", async () => {
     // The worker had not claimed the operation when it was found: the lookup

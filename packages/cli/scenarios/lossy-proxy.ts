@@ -109,7 +109,7 @@ export async function startLossyProxy(options: {
     dropped: (action) => dropped.get(action) ?? 0,
     lookups: (action) => lookedUp.get(action) ?? 0,
     async stop() {
-      await Promise.allSettled([...pending]);
+      await Promise.allSettled(pending);
       await server.stop(true);
     },
   };

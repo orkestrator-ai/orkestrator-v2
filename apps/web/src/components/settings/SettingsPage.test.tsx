@@ -134,7 +134,7 @@ test("the Docker tab renders while global config is still loading", async () => 
   render(<SettingsPage open defaultSection="docker" onOpenChange={() => undefined} />);
   expect(await screen.findByText("System Resources")).toBeTruthy();
   expect(useConfigStore.getState().isLoading).toBe(true);
-  expect(screen.queryByText("Loading Docker stats...")).toBeNull();
+  expect(screen.queryByText("Loading Docker stats...") === null).toBe(true);
 });
 
 test("a remote workspace opens Docker in parent Settings and every action targets its selected host", async () => {
@@ -256,7 +256,7 @@ test("a remote workspace opens Docker in parent Settings and every action target
     expect(routed.some((call) => call.command === "reattach_container")).toBe(true),
   );
   expect(useEnvironmentStore.getState().environments).toEqual(initialEnvironments.environments);
-  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
 
   fireEvent.click(screen.getByRole("button", { name: "Review cleanup…" }));
   await screen.findByText("Can be removed (1)");
@@ -305,7 +305,7 @@ test("a remote workspace opens Docker in parent Settings and every action target
   // Switching back loads the command node and discards the remote UI.
   fireEvent.click(screen.getAllByRole("button", { name: /Command.*command node/ })[0]!);
   expect(await screen.findByText("Command container")).toBeTruthy();
-  expect(screen.queryByText("Remote container")).toBeNull();
+  expect(screen.queryByText("Remote container") === null).toBe(true);
 });
 
 for (const scenario of [
@@ -440,8 +440,8 @@ for (const scenario of [
     // Settings can change its selected machine while a previous view has pending work.
     act(() => useAccountMachineStore.getState().choose(null));
     await screen.findByText("New container");
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(screen.queryByText("Old container")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
+    expect(screen.queryByText("Old container") === null).toBe(true);
     expect(oldTimers.every((id) => !callbacks.has(id))).toBe(true);
     await act(async () =>
       resolveOld(
@@ -453,9 +453,9 @@ for (const scenario of [
       ),
     );
     expect(screen.getByText("New container")).toBeTruthy();
-    expect(screen.queryByText(/Docker is not running/)).toBeNull();
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(screen.queryByText(/Old orphan/)).toBeNull();
+    expect(screen.queryByText(/Docker is not running/) === null).toBe(true);
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
+    expect(screen.queryByText(/Old orphan/) === null).toBe(true);
     await act(async () => {
       for (const callback of Array.from(callbacks.values())) callback();
     });
@@ -470,7 +470,7 @@ for (const scenario of [
     fireEvent.click(screen.getByRole("button", { name: "Review cleanup…" }));
     await screen.findByText("Can be removed (1)");
     expect(screen.getByText(/New orphan/)).toBeTruthy();
-    expect(screen.queryByText(/Old orphan/)).toBeNull();
+    expect(screen.queryByText(/Old orphan/) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Remove 1 selected" }));
     await screen.findByText(/1 removed/);
     expect(direct.find((call) => call.command === "docker_cleanup_execute")?.args).toEqual({

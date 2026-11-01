@@ -254,7 +254,7 @@ describe("GoalPanel details", () => {
     });
     fireEvent.click(button("Show output"));
     expect((await screen.findByRole("alert")).textContent).toContain("no longer available");
-    expect(screen.queryByTestId("goal-check-output")).toBeNull();
+    expect(screen.queryByTestId("goal-check-output") === null).toBe(true);
   });
 });
 
@@ -287,12 +287,12 @@ describe("GoalPanel form", () => {
     expect(screen.getByTestId("goal-advisory-note").textContent).toContain("best-effort");
     cleanup();
     renderPanel();
-    expect(screen.queryByTestId("goal-advisory-note")).toBeNull();
+    expect(screen.queryByTestId("goal-advisory-note") === null).toBe(true);
   });
 
   test("no budget field where the agent's usage cannot back one", () => {
     renderPanel({ platform: "unknown" as AgentPlatform, agentLabel: "Unknown" });
-    expect(screen.queryByLabelText("Token budget (optional)")).toBeNull();
+    expect(screen.queryByLabelText("Token budget (optional)") === null).toBe(true);
     expect(screen.getByLabelText("Iteration limit")).toBeTruthy();
   });
 
@@ -355,6 +355,6 @@ describe("GoalPanel approval warning", () => {
 
   test("absent when the session will not stop", () => {
     renderPanel();
-    expect(screen.queryByTestId("goal-approval-warning")).toBeNull();
+    expect(screen.queryByTestId("goal-approval-warning") === null).toBe(true);
   });
 });

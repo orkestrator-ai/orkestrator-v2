@@ -39,7 +39,7 @@ async function openOverControlAndContinue(returnFocus: boolean): Promise<HTMLEle
   action.focus();
   fireEvent.click(action);
   rerender(<Notice open={false} returnFocus={returnFocus} />);
-  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
   return control;
 }
 
@@ -109,13 +109,13 @@ for (const order of ["chain", "overlap-close-first", "overlap-close-second"] as 
     github.focus();
     if (order === "overlap-close-first") {
       rerender(<NoticeSequence first={false} second />);
-      await waitFor(() => expect(screen.queryByText("Claude login")).toBeNull());
+      await waitFor(() => expect(screen.queryByText("Claude login") === null).toBe(true));
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(document.activeElement).toBe(github);
     } else if (order === "overlap-close-second") {
       fireEvent.click(github);
       rerender(<NoticeSequence first second={false} />);
-      await waitFor(() => expect(screen.queryByText("GitHub setup")).toBeNull());
+      await waitFor(() => expect(screen.queryByText("GitHub setup") === null).toBe(true));
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(document.activeElement).not.toBe(control);
     }

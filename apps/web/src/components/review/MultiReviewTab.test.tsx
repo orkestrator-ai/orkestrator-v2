@@ -1559,7 +1559,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
 
     await screen.findAllByText("Session failed");
-    expect(screen.queryByTestId("reviewer-start-failures")).toBeNull();
+    expect(screen.queryByTestId("reviewer-start-failures") === null).toBe(true);
   });
 
   test("bounds a long reviewer failure while keeping its complete text available", async () => {

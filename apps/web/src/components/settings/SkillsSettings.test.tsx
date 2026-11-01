@@ -1158,7 +1158,9 @@ for (const embedded of [false, true]) {
   test(`${embedded ? "embedded" : "standalone"} skills owns its heading and keeps provider tabs in its header`, async () => {
     render(<SkillsSettings embedded={embedded} />);
     const heading = screen.getByRole("heading", { name: "Skills", level: embedded ? 3 : 2 });
-    expect(screen.queryByRole("heading", { name: "Skills", level: embedded ? 2 : 3 })).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Skills", level: embedded ? 2 : 3 }) === null,
+    ).toBe(true);
     const header = embedded ? heading.parentElement!.parentElement! : heading.closest("header")!;
     expect(within(header).getByRole("tablist")).toBeTruthy();
     expect(within(header).getAllByRole("tab").length).toBeGreaterThan(1);

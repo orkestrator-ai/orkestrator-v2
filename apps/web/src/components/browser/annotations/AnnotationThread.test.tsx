@@ -231,8 +231,8 @@ describe("annotation threads and list", () => {
     ]);
     expect(rows.map((row) => row.getAttribute("data-verified"))).toEqual(["true", "false"]);
     // Page strings stay text, and the list is visible without opening the evidence.
-    expect(document.querySelector("[data-source-candidates] img")).toBeNull();
-    expect(document.querySelector("details [data-source-candidates]")).toBeNull();
+    expect(document.querySelector("[data-source-candidates] img") === null).toBe(true);
+    expect(document.querySelector("details [data-source-candidates]") === null).toBe(true);
   });
 
   test("a capture without source hints shows no candidate list", async () => {
@@ -240,7 +240,7 @@ describe("annotation threads and list", () => {
     openThread(annotation.id);
     render(<AnnotationHarness />);
     await screen.findByText("Page evidence (untrusted)");
-    expect(document.querySelector("[data-source-candidates]")).toBeNull();
+    expect(document.querySelector("[data-source-candidates]") === null).toBe(true);
   });
 
   test("shows missing images distinctly from stale captures", async () => {

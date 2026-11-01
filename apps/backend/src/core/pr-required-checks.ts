@@ -36,8 +36,8 @@ const REQUIRED_CHECKS_QUERY = `query($owner: String!, $repo: String!, $number: I
           pageInfo { hasNextPage }
           nodes {
             __typename
-            ... on CheckRun { status conclusion isRequired(pullRequestNumber: $number) }
-            ... on StatusContext { state isRequired(pullRequestNumber: $number) }
+            ... on CheckRun { name checkSuite { workflowRun { workflow { name } } } status conclusion isRequired(pullRequestNumber: $number) }
+            ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
           }
         }
       } } } }
@@ -59,7 +59,10 @@ export function failingCheckNames(rollup: unknown): string[] {
       const text = (value: unknown) => (typeof value === "string" ? value : "");
       return [
         text(check.__typename),
-        text(check.workflowName),
+        text(
+          check.workflowName ??
+            record(record(record(check.checkSuite)?.workflowRun)?.workflow)?.name,
+        ),
         text(check.name ?? check.context),
       ].join("/");
     })
@@ -103,7 +106,11 @@ function record(value: unknown): Record<string, unknown> | null {
  * is not about `headSha`, is incomplete, or does not say: the caller then
  * counts every failing check.
  */
-export function parsePrRequiredChecks(stdout: string, headSha: string): number {
+export function parsePrRequiredChecks(
+  stdout: string,
+  headSha: string,
+  failing?: readonly string[],
+): number {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout.trim());
@@ -122,6 +129,12 @@ export function parsePrRequiredChecks(stdout: string, headSha: string): number {
   }
   if (record(contexts.pageInfo)?.hasNextPage !== false) {
     throw new Error("More checks than one page");
+  }
+  if (
+    failing &&
+    JSON.stringify(failingCheckNames(contexts.nodes)) !== JSON.stringify([...failing].sort())
+  ) {
+    throw new Error("Failing checks changed while reading required status");
   }
   let required = 0;
   for (const node of contexts.nodes) {
@@ -148,7 +161,7 @@ export class PrRequiredChecksCache {
 
   /**
    * The cached count, or one lookup through `fetch`. A failed lookup resolves
-   * to null (unknown) and is retried after {@link PR_REQUIRED_CHECKS_RETRY_MS}.
+   * to the last known answer, or null (unknown), and is retried after {@link PR_REQUIRED_CHECKS_RETRY_MS}.
    */
   async resolve(
     prUrl: string,
@@ -171,8 +184,9 @@ export class PrRequiredChecksCache {
           return Math.min(requiredFailed, failing.length);
         },
         () => {
-          this.store(key, null, PR_REQUIRED_CHECKS_RETRY_MS);
-          return null;
+          const fallback = cached?.requiredFailed ?? null;
+          this.store(key, fallback, PR_REQUIRED_CHECKS_RETRY_MS);
+          return fallback;
         },
       );
     this.inFlight.set(key, lookup);
@@ -200,7 +214,7 @@ export class PrRequiredChecksCache {
 
   private prune(now: number): void {
     for (const [key, entry] of this.entries) {
-      if (entry.expiresAt <= now) this.entries.delete(key);
+      if (entry.expiresAt <= now && entry.requiredFailed === null) this.entries.delete(key);
     }
   }
 }

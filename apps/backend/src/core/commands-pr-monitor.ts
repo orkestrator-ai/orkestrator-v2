@@ -207,7 +207,7 @@ async function withRequiredFailures(
   const args = prRequiredChecksArgs(prUrl);
   if (!args) return summary;
   const requiredFailed = await cache.resolve(prUrl, headSha, failing, async () =>
-    parsePrRequiredChecks(await runGh(args), headSha),
+    parsePrRequiredChecks(await runGh(args), headSha, failing),
   );
   return requiredFailed === null ? summary : { ...summary, requiredFailed };
 }

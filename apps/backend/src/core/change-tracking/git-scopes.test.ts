@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHarness, git, type Harness } from "./service-test-support.js";
@@ -139,4 +139,74 @@ describe("Git source-control scopes", () => {
     expect(view.projection.state).toBe("unavailable");
     expect(view.projection.measurementId).toBeNull();
   });
+});
+
+test("committed live detail reads deleted and renamed blobs, independent of working bytes", async () => {
+  const h = createHarness();
+  harnesses.push(h);
+  const base = git(h.repo, "rev-parse", "HEAD").trim();
+  writeFileSync(join(h.repo, "deleted.txt"), "removed content\n");
+  git(h.repo, "add", ".");
+  git(h.repo, "commit", "-qm", "add deletion fixture");
+  const before = git(h.repo, "rev-parse", "HEAD").trim();
+  git(h.repo, "mv", "a.txt", "renamed.txt");
+  git(h.repo, "rm", "deleted.txt");
+  git(h.repo, "commit", "-qm", "rename and delete");
+  await scanned(h, before);
+  const key = gitScopeResourceKey("committed-net", "env-1");
+  await measured(h, key);
+  writeFileSync(join(h.repo, "renamed.txt"), "working sentinel\n");
+  const view = h.service.getView({ resourceKey: key });
+  if (view.kind !== "projection") throw new Error("projection expected");
+  const rows = view.projection.filePage!.rows;
+  expect(rows.some((row) => row.status === "renamed")).toBe(true);
+  expect(rows.some((row) => row.status === "deleted")).toBe(true);
+  for (const row of rows) {
+    const detail = await h.service.diffBodies.resolveLiveDetail({
+      resourceKey: key,
+      rowId: row.rowId,
+      revision: view.projection.revision,
+    });
+    expect(detail.kind).toBe("identity");
+    if (detail.kind !== "identity") continue;
+    const body = await h.service.diffBodies.getDiff({ diffIdentityId: detail.identity.id });
+    expect(body.kind).toBe("body");
+    expect(JSON.stringify(body)).not.toContain("working sentinel");
+    if (row.status === "deleted") expect(JSON.stringify(body)).toContain("removed content");
+  }
+  expect(base).not.toBe(before);
+});
+
+test("live Git detail refuses filters and committed measurements missing their HEAD", async () => {
+  const h = createHarness();
+  harnesses.push(h);
+  git(h.repo, "config", "filter.upper.clean", "tr a-z A-Z");
+  writeFileSync(join(h.repo, ".gitattributes"), "a.txt filter=upper\n");
+  writeFileSync(join(h.repo, "a.txt"), "changed\n");
+  const filteredKey = gitScopeResourceKey("uncommitted-net", "env-1");
+  await measured(h, filteredKey);
+  expect(
+    await h.service.diffBodies.resolveLiveDetail({ resourceKey: filteredKey, pathId: "u:a.txt" }),
+  ).toMatchObject({ kind: "error", error: { reasonKey: "changes.reason.git-filter-unsupported" } });
+  const base = git(h.repo, "rev-parse", "HEAD").trim();
+  await scanned(h, base);
+  const key = gitScopeResourceKey("committed-net", "env-1");
+  writeFileSync(join(h.repo, "plain.txt"), "committed\n");
+  git(h.repo, "add", "plain.txt");
+  git(h.repo, "commit", "-qm", "plain commit");
+  await measured(h, key);
+  const selected = h.service.projections.selectedMeasurement.bind(h.service.projections);
+  const spy = spyOn(h.service.projections, "selectedMeasurement").mockImplementation((resource) => {
+    const measurement = selected(resource);
+    return resource === key && measurement
+      ? { ...measurement, baselineVersion: null }
+      : measurement;
+  });
+  try {
+    expect(
+      await h.service.diffBodies.resolveLiveDetail({ resourceKey: key, pathId: "u:plain.txt" }),
+    ).toMatchObject({ kind: "error", error: { code: "stale-revision" } });
+  } finally {
+    spy.mockRestore();
+  }
 });

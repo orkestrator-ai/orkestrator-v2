@@ -68,9 +68,19 @@ function graphqlAnswer(
 }
 
 const requiredAnswer = [
-  { __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", isRequired: true },
-  { __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE", isRequired: true },
-  { __typename: "StatusContext", state: "ERROR", isRequired: false },
+  {
+    ...failingRollup[0],
+    workflowName: undefined,
+    checkSuite: { workflowRun: { workflow: { name: "CI" } } },
+    isRequired: true,
+  },
+  {
+    ...failingRollup[1],
+    workflowName: undefined,
+    checkSuite: { workflowRun: { workflow: { name: "CI" } } },
+    isRequired: true,
+  },
+  { ...failingRollup[2], isRequired: false },
 ];
 
 describe("required check answers", () => {
@@ -153,6 +163,24 @@ describe("required check cache", () => {
     expect(asked).toBe(4);
   });
 
+  test("failed refresh retains a known zero and retries shortly", async () => {
+    let now = 0;
+    const cache = new PrRequiredChecksCache(() => now);
+    const failing = failingCheckNames(failingRollup);
+    expect(await cache.resolve(PR_URL, HEAD, failing, async () => 0)).toBe(0);
+    now += PR_REQUIRED_CHECKS_TTL_MS;
+    // Refreshing another key must not prune the stale known answer.
+    await cache.resolve(PR_URL, "b".repeat(40), failing, async () => 1);
+    expect(
+      await cache.resolve(PR_URL, HEAD, failing, async () => {
+        throw new Error("offline");
+      }),
+    ).toBe(0);
+    expect(await cache.resolve(PR_URL, HEAD, failing, async () => 1)).toBe(0);
+    now += PR_REQUIRED_CHECKS_RETRY_MS;
+    expect(await cache.resolve(PR_URL, HEAD, failing, async () => 1)).toBe(1);
+  });
+
   test("a failed lookup is unknown until the retry delay; concurrent polls share one lookup", async () => {
     let now = 0;
     const cache = new PrRequiredChecksCache(() => now);
@@ -197,6 +225,7 @@ describe("the PR monitor's gh boundary", () => {
 printf '%s\\n' "$1 $2" >> "$FAKE_GH_LOG"
 case "$*" in
   "api graphql"*)
+    case "$6" in query=*isRequired*number*) ;; *) exit 8 ;; esac
     if [ -s "$FAKE_GH_REQUIRED" ]; then cat "$FAKE_GH_REQUIRED"; exit 0; fi
     echo "HTTP 403: Resource not accessible by integration" >&2
     exit 1 ;;
@@ -259,6 +288,55 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","headR
     });
     expect(second?.checkSummary).toMatchObject({ requiredFailed: 1 });
     expect(await ghCalls()).toEqual(["pr view", "pr view"]);
+  });
+
+  test("same-head reruns cannot cache zero for the earlier failing rollup", async () => {
+    let now = 0;
+    const requiredChecks = new PrRequiredChecksCache(() => now);
+    await fs.writeFile(
+      ghRequired,
+      graphqlAnswer(
+        requiredAnswer.map((node, i) =>
+          i === 1 ? { ...node, status: "QUEUED", conclusion: null } : node,
+        ),
+      ),
+    );
+    const first = await detectEnvironmentPullRequest(knownPr(), {
+      includeCheckSummary: true,
+      requiredChecks,
+    });
+    expect(first?.checkSummary).not.toHaveProperty("requiredFailed");
+    await ghCalls();
+    now += PR_REQUIRED_CHECKS_RETRY_MS;
+    await fs.writeFile(ghRequired, graphqlAnswer(requiredAnswer));
+    const later = await detectEnvironmentPullRequest(knownPr(), {
+      includeCheckSummary: true,
+      requiredChecks,
+    });
+    expect(later?.checkSummary?.requiredFailed).toBe(1);
+    expect(await ghCalls()).toContain("api graphql");
+  });
+
+  test("container runner preserves the GraphQL query as one shell argument", async () => {
+    await fs.writeFile(ghRequired, graphqlAnswer(requiredAnswer));
+    await fs.writeFile(
+      path.join(root, "bin", "docker"),
+      `#!/bin/sh
+[ "$1" = exec ] || exit 2
+shift 2
+[ "$1" = bash ] || exit 3
+shift 2
+exec /bin/bash -c "$1"
+`,
+      { mode: 0o755 },
+    );
+    const target = { ...knownPr(), kind: "container" as const, containerId: "test-container" };
+    const detection = await detectEnvironmentPullRequest(target, {
+      includeCheckSummary: true,
+      requiredChecks: new PrRequiredChecksCache(),
+    });
+    expect(detection?.checkSummary?.requiredFailed).toBe(1);
+    expect(await ghCalls()).toEqual(["pr view", "pr view", "api graphql"]);
   });
 
   test("when GitHub does not say, the summary has no required count and every failure counts", async () => {

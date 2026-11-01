@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { createHarness, git } from "./change-tracking/service-test-support.js";
@@ -18,7 +18,9 @@ async function withWorker(
     ) => Promise<Record<string, unknown>>,
     base: string,
     addHome: () => Promise<string>,
+    scan: () => Promise<void>,
   ) => Promise<void>,
+  config: { prescan?: boolean; commitBetween?: boolean } = {},
 ) {
   const h = createHarness();
   const storage = new StorageService(path.join(h.dataDir, "storage"));
@@ -38,31 +40,49 @@ async function withWorker(
       delegationBaseBranch: "main",
     });
     await storage.addEnvironment(environment);
-    const detailed = await getLocalGitStatusDetailed(h.repo, base, true, createGitFetchScheduler());
-    const now = new Date().toISOString();
-    h.service.onDiffScanEvent({
-      kind: "scanned",
-      target: {
-        environmentId: environment.id,
-        comparisonRef: base,
-        kind: "local",
-        worktreePath: h.repo,
-      },
-      result: {
-        stats: {
-          additions: detailed.changes.reduce((sum, row) => sum + row.additions, 0),
-          deletions: detailed.changes.reduce((sum, row) => sum + row.deletions, 0),
-          filesChanged: detailed.changes.length,
-          truncated: detailed.truncated,
+    const scan = async () => {
+      const detailed = await getLocalGitStatusDetailed(
+        h.repo,
+        base,
+        true,
+        createGitFetchScheduler(),
+      );
+      const now = new Date().toISOString();
+      h.service.onDiffScanEvent({
+        kind: "scanned",
+        target: {
+          environmentId: environment.id,
+          comparisonRef: base,
+          kind: "local",
+          worktreePath: h.repo,
         },
-        changes: detailed.changes,
-        baseOid: detailed.baseOid,
-      },
-      changed: true,
-      at: now,
-      startedAt: now,
+        result: {
+          stats: {
+            additions: detailed.changes.reduce((sum, row) => sum + row.additions, 0),
+            deletions: detailed.changes.reduce((sum, row) => sum + row.deletions, 0),
+            filesChanged: detailed.changes.length,
+            truncated: detailed.truncated,
+          },
+          changes: detailed.changes,
+          baseOid: detailed.baseOid,
+        },
+        changed: true,
+        at: now,
+        startedAt: now,
+      });
+      await h.service.environments.idle();
+    };
+    if (config.prescan !== false) await scan();
+    let committedBetween = false;
+    const ensure = h.service.ensureResource.bind(h.service);
+    const spy = spyOn(h.service, "ensureResource").mockImplementation(async (key) => {
+      await ensure(key);
+      if (config.commitBetween && key.includes("uncommitted-net") && !committedBetween) {
+        committedBetween = true;
+        git(h.repo, "add", ".");
+        git(h.repo, "commit", "-qm", "commit between reads");
+      }
     });
-    await h.service.environments.idle();
     const context = {
       storage,
       runtime: { changeTracking: h.service, diffStats: { service: { isTracked: () => true } } },
@@ -81,7 +101,9 @@ async function withWorker(
         await storage.addEnvironment(home);
         return home.id;
       },
+      scan,
     );
+    spy.mockRestore();
   } finally {
     storage.close();
     h.cleanup();
@@ -180,5 +202,44 @@ test("controller changes read real baseline, commits, uncommitted files and diff
       expect(JSON.stringify(result.diffs)).toContain("+uncommitted change");
       await expect(read(undefined, await addHome())).rejects.toThrow("project checkout");
     },
+  );
+});
+
+test("split rejects scopes measured across a worker commit", async () => {
+  await withWorker(
+    (repo) => writeFileSync(path.join(repo, "a.txt"), "one\nnew edit\n"),
+    async (read) => {
+      const result = await read({ diffScope: "split" });
+      expect(result).toHaveProperty("pending");
+      expect(result.committed).toMatchObject({
+        available: false,
+        reason: "changes.reason.inconsistent-head",
+      });
+      expect(result.uncommittedDiffs).toMatchObject({ files: [] });
+      expect(result.committedDiffs).toMatchObject({ files: [] });
+    },
+    { commitBetween: true },
+  );
+});
+
+test("first read without a baseline is unavailable and omits committed flags, then recovers", async () => {
+  await withWorker(
+    (repo) => {
+      writeFileSync(path.join(repo, "a.txt"), "one\ncommitted edit\n");
+      git(repo, "commit", "-qam", "worker commit");
+    },
+    async (read, _base, _home, scan) => {
+      const first = await read({ diffScope: "split" });
+      expect(first.committed).toMatchObject({ available: false });
+      expect(first).toHaveProperty("pending");
+      expect(JSON.stringify(first.sinceBase)).not.toContain('"committed":false');
+      await scan();
+      const second = await read({ diffScope: "split" });
+      expect(second.committed).toMatchObject({
+        available: true,
+        files: [expect.objectContaining({ path: "a.txt" })],
+      });
+    },
+    { prescan: false },
   );
 });

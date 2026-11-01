@@ -65,6 +65,10 @@ function changes(resources: Record<string, ChangeFileRow[]>, diffLines = 3) {
           kind: "projection",
           projection: {
             revision: 7,
+            baselineVersion:
+              key.includes("committed-net") && !key.includes("uncommitted-net")
+                ? `committed:${BASE}@${BASE}`
+                : `HEAD@${BASE}`,
             state: "ready",
             observationState: "fresh",
             coverageState: "complete",

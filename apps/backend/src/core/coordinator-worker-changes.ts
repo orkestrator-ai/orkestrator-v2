@@ -261,6 +261,14 @@ async function readMeasurement(
       scanCapped: false,
     };
   const { projection } = view;
+  if (projection.state === "unavailable" || projection.state === "loading" || !projection.filePage)
+    return {
+      projection: null,
+      unavailable: projection.reasonKeys[0] ?? "changes.error.unavailable",
+      rows: [],
+      matched: null,
+      scanCapped: false,
+    };
   // One past the page tells whether there is more.
   const wanted = allRows ? L.maxScannedRows : options.maxFiles + 1;
   const rows: ChangeFileRow[] = [];
@@ -489,14 +497,34 @@ export async function readWorkerChanges(
   const environmentKey = environmentChangeResourceKey(environment.id);
   const uncommittedKey = uncommittedChangeResourceKey(environment.id);
   const committedKey = committedChangeResourceKey(environment.id);
-  // First materialize the Git scopes: their initial measurement can advance
-  // the environment projection revision. Read sinceBase after them so its live
-  // detail identities still belong to the revision returned to this caller.
-  const uncommitted = await readMeasurement(run, uncommittedKey, options, true);
-  const committed = await readMeasurement(run, committedKey, options, true);
+  // Establish the environment baseline before committed-net needs it. Re-read
+  // after Git scopes since materialization can advance the shared revision.
+  await readMeasurement(run, environmentKey, options);
+  let uncommitted = await readMeasurement(run, uncommittedKey, options, true);
+  let committed = await readMeasurement(run, committedKey, options, true);
   const sinceBase = await readMeasurement(run, environmentKey, options);
+  const uncommittedHead = uncommitted.projection?.baselineVersion?.split("@")[1];
+  const committedHead = /^committed:([0-9a-f]{40,64})@/.exec(
+    committed.projection?.baselineVersion ?? "",
+  )?.[1];
+  const inconsistent =
+    options.diffScope === "split" &&
+    uncommitted.projection &&
+    committed.projection &&
+    (!uncommittedHead || !committedHead || uncommittedHead !== committedHead);
+  if (inconsistent) {
+    const unavailable = {
+      projection: null,
+      unavailable: "changes.reason.inconsistent-head",
+      rows: [],
+      matched: null,
+      scanCapped: false,
+    };
+    uncommitted = unavailable;
+    committed = unavailable;
+  }
   const flags: ChangeFlags = {
-    uncommitted: new Set(uncommitted.rows.map(rowPath)),
+    ...(uncommitted.projection ? { uncommitted: new Set(uncommitted.rows.map(rowPath)) } : {}),
     ...(committed.projection ? { committed: new Set(committed.rows.map(rowPath)) } : {}),
   };
   const base =
@@ -614,7 +642,10 @@ export async function readWorkerChanges(
             "Some output was cut. Page files with offset (sinceBase.nextOffset), narrow with paths (files or directories), read one file's whole diff with file, ask for one diffScope instead of split, or raise maxFiles, maxDiffFiles, maxDiffBytes or maxCommits up to their limits.",
         }
       : {}),
-    ...(sinceBase.projection?.state === "loading" ||
+    ...(!committed.projection ||
+    !uncommitted.projection ||
+    inconsistent ||
+    sinceBase.projection?.state === "loading" ||
     committed.projection?.state === "loading" ||
     uncommitted.projection?.state === "loading"
       ? { pending: "Change tracking is still measuring this worker; read again shortly." }

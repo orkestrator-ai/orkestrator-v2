@@ -68,6 +68,11 @@ const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY",
   "ORKESTRATOR_CONTROL_MCP_PORT",
   "ORKESTRATOR_GATEWAY_DISABLED",
+  // `off` skips the startup container-to-host probe, as other disposable test
+  // backends do: each spec run is a new data directory, so its probe network
+  // would belong to an owner no reaper revisits, and its result dialog takes
+  // keyboard focus mid-test. A switch, never a credential.
+  "ORKESTRATOR_HOST_REACHABILITY_CHECK",
   // Recurring-work policy switches (rollback and metrics), so an isolated
   // profile can qualify the previous drivers. Policy only, never credentials.
   "ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK",

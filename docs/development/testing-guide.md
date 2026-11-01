@@ -611,7 +611,10 @@ host-reachability check: each backend is a new Docker owner stopped seconds
 after `ready`, so its Linux probe network would belong to an owner nothing
 reaps. A later on-demand check (a container scenario on a rootless daemon, a
 workflow preflight) still runs. A scenario that needs the boot check passes
-the variable through its own `env`.
+the variable through its own `env`. `service-preview-electron.spec.ts` sets it
+for both of its backends too (agent-test backends keep it, in
+`AGENT_TEST_SAFE_ENV_NAMES`): on a host whose firewall drops Docker traffic the
+check's result dialog opened mid-test and took keyboard focus (flake 0620).
 
 `mise run test:agent:browser:isolated` includes `e2e/agent-testing/cli-ui.spec.ts`
 (CLI changes seen by an open and a reloaded renderer). Its live question and

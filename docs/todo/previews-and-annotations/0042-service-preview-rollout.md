@@ -4,7 +4,8 @@ Checked against `main` at `2459b05c` (2026-10-15); real-Electron runs against
 `a5d338c1` (2026-10-18) and `9b3f53a2` (2026-10-21); partition retention,
 fault tests and single-machine runs against `b83ae534` (2026-10-22); node
 retention, tunnel liveness, compatibility cases and UI items against
-`00a0cb82` (2026-10-25).
+`00a0cb82` (2026-10-25); the preview flakes (task 11) against `93b99bfba`
+(2026-11-01).
 
 ## Task analysis
 
@@ -39,7 +40,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 10. **Real-window leftovers**: the pane-layout announcement (item 9), node
     retention against a real command node, and the narrow toolbar measured in
     a window (item 11). Status: open.
-11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: open.
+11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: done
+    (2026-11-01): both reproduced by forcing their timing, fixed in the spec
+    and resolved in the registry; see decisions D9 to D11.
 12. **Partition disk use on a long-lived profile**: the "Needs verification"
     item. Status: partly done (`disk:report` measures it; no long-lived data).
 
@@ -385,6 +388,18 @@ complete owner then passed alone. Throttling switches are in `ELECTRON_TEST_SWIT
     - Pros: no work.
     - Cons: both already recurred; observation alone has not closed them.
 
+**Outcome (2026-11-01, `main` at `93b99bfba`).** Both took the recommended
+direction, and both turned out to be spec timing, not product defects.
+Neither recurred naturally on Linux; forcing the suspected timing reproduced
+each recorded symptom. 0620: Radix moves menu focus in a timer, and the spec
+read focus and pressed again before a late move landed. Each key now waits
+for a page-side marker queued behind that move (D9). The Linux host-reachability
+dialog, a second focus thief, is now off for the spec's backends (D11). 0622:
+the multi-backend test counted an attachment still inside its 30-second
+retirement lease. The test now waits for those leases before counting (D10).
+The single 2026-10-21 window-close failure was not reproduced; its check now
+reports the main process's release warnings. Runs are in the evidence log.
+
 ### 12. Partition disk use on a long-lived profile
 
 **Problem.** Only two snapshots of partition size exist; growth over months is
@@ -578,23 +593,33 @@ partitions, and the evidence log where run results are now recorded.
     a 519 px pane gives the address about 358 px in a service tab and 371 px in
     a URL tab (was 92 and about 144). Class-contract tests only; not measured
     in a real window.
-12. Done 2026-10-25: flake
+12. Done 2026-11-01: flake
     [0620](../../tests/flaky-tests/previews-annotations-and-gateway/0620-service-preview-keyboard-picker-register-item.md)
-    (the keyboard test missing **Register a service…** under Chromium timer
-    throttling) held on loaded runs: it passed in all 7 runs (5 single-spec,
-    2 full suites, load 21 to 80). The three throttling switches moved into
-    `ELECTRON_TEST_SWITCHES` (`electron-launch-switches.ts`), so every
-    Electron spec gets them. 0620 stays open in the registry for one more
-    loaded window.
-13. Flake [0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md):
-    once, in a slow run, a remote preview attachment was still held 20 s after
-    its window's `close()`. It did not recur; the spec now times the close
-    and the release separately. If it recurs with the window gone, capture
-    Electron's output and check the close-path release. 2026-10-25: no
-    recurrence in 6 runs on this branch (window gone 208 to 230 ms after
-    `close()`), but the registry records a recurrence the same day on another
-    branch at an earlier attachment-count check, with no output captured.
-    Still open.
+    is resolved. Delaying the renderer's zero-delay timers, as Chromium's
+    throttling does, reproduced both recorded variants with the pre-change
+    picker logic. The spec read focus before Radix's queued move landed and
+    pressed again, so it either never reached **Register a service…** or
+    overshot it before Enter. The 2026-10-21 focus wait helped only while
+    timers ran within 2 seconds. `chooseFromPicker` now presses each key
+    through `pressHandled`, which waits for a marker the page queues behind
+    Radix's move (D9). On Linux hosts whose firewall drops Docker traffic, the
+    startup host-reachability dialog also took focus mid-test, so the spec's
+    backends now skip that probe (D11). The three throttling switches stay in
+    `ELECTRON_TEST_SWITCHES`. Natural recurrence was not reproduced on Linux;
+    a loaded macOS run with covered windows has not been repeated.
+13. Done 2026-11-01: flake
+    [0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md)
+    is resolved. Its recurrences (2026-10-24 twice and 2026-10-25) all failed
+    the attachment-count poll right after the second window attached. The
+    test's Local baseline still counted window 1's `svc-b` while its
+    30-second retirement lease ran. A run slow enough to pass the lease saw
+    the count fall by one. A 32-second hold after the baseline reproduced it
+    exactly. The test now destroys window 1's tabs before starting the second
+    backend and waits for its own `svc-a` to be the only Local attachment
+    (D10). The single 2026-10-21 window-close failure was not reproduced and is
+    not explained by the lease, since a closing window releases without one.
+    That check now prints main's `[Previews]` lines (such as `Failed to
+    release preview attachment.`) on failure.
 
 ### Qualification
 
@@ -1441,6 +1466,68 @@ shipping Safari, iOS, Windows or real DNS evidence.
   left; the A/B spec and config were deleted. No containers were used.
   Evidence: `output/agent-testing/svc0042-*`.
 
+2026-11-01, preview flakes 0620 and 0622 (task 11), branch
+`preview-flakes-d5abda30c5f5-r1` from `main` at `93b99bfba`. Linux 7.1.8
+(x86_64, Arch, beelink), Bun 1.4.4, Electron 45.0.0, Playwright 1.64.0, one
+worker, with other builds running on the host; durations are not reference
+figures. `ORKESTRATOR_PREVIEW_TRANSPORT=1` as the spec sets it. No run used
+the desktop session: Electron used a private Xvfb display (the Arch
+`xorg-server-xvfb` 21.1.25-2 binary extracted to a temporary directory, not
+installed) with the Wayland and session-bus variables removed (from the third
+run, the compositor and scale variables too). From the fifth run onwards it
+also ran inside a private loopback-only network namespace
+(`unshare --user --net`, `lo` up, then `unshare --user --map-user` back to the
+same uid). The command was
+`bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts
+service-preview-electron.spec.ts --workers=1`, with `--repeat-each` and `-g`
+for single tests.
+
+- Host conditions found first: two of the first four starts failed with
+  `net::ERR_NETWORK_CHANGED` while loading the renderer. Docker networks from
+  other builds, and the spec's own reachability probe, change the host's
+  interfaces, and Chromium aborts loads in flight when that happens; the
+  private network namespace removed this. On this host ufw drops Docker
+  traffic, so the startup reachability dialog covered the window (D11).
+- 0622, reproduced: a temporary hold of 32 seconds after the Local baseline
+  (2) read 2 until about 30 seconds, then 1, and the next poll failed with
+  `Expected: 3, Received: 2`. With the fix and the same hold: 1 throughout,
+  passed.
+- 0620, natural: the 2026-10-21 logic passed 5 of 5 and the pre-change logic
+  3 of 3, both on two pinned cores. Forced (renderer zero-delay timers delayed
+  while the picker is open): the pre-change logic failed at 60 ms (the dialog
+  missing after **Register a service…**, and in another run the dialog opening
+  in place of the switch to `svc-b`) and at 1 second (every read stale). The
+  reachability dialog took focus in four forced runs before the switch, which
+  were repeated after it.
+  The 2026-10-21 logic passed at 60 ms, 1 second and 2.5 seconds, but at 2.5
+  seconds it pressed again while a move was queued. The new logic passed at
+  60 ms, 1 second and 2 seconds.
+- After both fixes: the keyboard test passed 5 of 5, and 5 of 5 on two pinned
+  cores. The multi-backend test, run with the two tests before it, passed 3
+  of 3, and 2 of 2 on two pinned cores. The first complete owner passed 18 of
+  18. The second passed both owning tests but failed
+  `a remote terminal link opens the native localhost forward in a separate
+  browser`, recorded and fixed as
+  [2390](../../tests/flaky-tests/previews-annotations-and-gateway/2390-remote-terminal-link-hover-new-window.md).
+  Unchanged, it failed 4 of 4 alone; fixed, it passed 5 of 5, and 3 of 3 on
+  two pinned cores. With every change in, the complete owner passed 18 of 18
+  twice more.
+- `apps/desktop/tests/backend-process.test.ts` (56, including the new
+  allowlist assertion) passed from `apps/desktop` with its package preload;
+  `tests/unit/flaky-tests-index.test.ts` passed; `bun check -p
+  e2e/agent-testing/tsconfig.json`, `oxlint` and `bun fmt --check` on the
+  changed files passed.
+- Not run: macOS (the platform of every recorded 0620 failure), a full
+  `mise run test:agent:electron` suite, and the window-close failure of
+  2026-10-21 under its original load.
+- Cleanup: every run's temporary profile root was removed by the spec, and no
+  Electron, backend or Vite process of these runs is left. The private Xvfb,
+  its extracted binary, the wrapper scripts and the timer-delay and hold
+  hooks (never committed) are removed. The runs before the switch removed
+  their own probe containers and networks; the three probe networks created
+  on the host later that morning belong to other builds' owners and were left
+  alone. Evidence: `output/agent-testing/d5ab-*` in the worktree.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -1632,6 +1719,47 @@ Recorded 2026-10-25 for the work done on branch
   the direct route over the same link, no
   unbounded queue growth, and zero cross-service reach), signed off by the
   maintainer.
+
+Recorded 2026-11-01 for task 11 (flakes 0620 and 0622), on branch
+`preview-flakes-d5abda30c5f5-r1`.
+
+- **D9. How the keyboard test waits for the picker (0620).** Options: (a)
+  keep the 2026-10-21 wait (up to 2 seconds for focus to change, then assume
+  the end of the menu) and keep observing; (b) a longer focus wait; (c) wait
+  for proof that the page handled each key: a capture-phase keydown listener
+  queues a timer that queues another, which runs after Radix's focus move.
+  Chose (c), as the task analysis recommended. Pros: no time-based guess, so
+  delayed timers cannot make a read stale or cause a second press; a key that
+  never arrives fails as such, with the last keys and focus; no assertion
+  timeout raised. Cons: it relies on Chromium running equal-delay timers in
+  order (the HTML timer rules) and on Radix moving focus in one zero-delay
+  timer (`@radix-ui/react-roving-focus` 1.2.1); a Radix change to that would
+  show as a failure that names the key and focus. (a) passes at forced delays
+  up to 2.5 seconds but already presses again while a move is queued; (b)
+  only moves the threshold.
+- **D10. How the multi-backend test counts Local attachments (0622).**
+  Options: (a) shorten the retirement lease for agent-test runtimes; (b) count
+  per service or per window, which `get_preview_diagnostics` does not expose;
+  (c) wait until window 1's own `svc-a` is the only Local attachment before
+  taking the baseline. Chose (c). Pros: spec-only; tests the product's real
+  lease; the teardown now runs before the second backend starts, so its start
+  overlaps the wait. Cons: the test waits up to the lease (about 30 seconds,
+  less the backend's start) on every run; it now asserts that no earlier test
+  leaves a Local service attached, which was already its stated assumption
+  ("only this test's own views"). (a) would change what the other tests
+  measure (the retention test relies on the 30-second lease); (b) needs new
+  diagnostics in the product for a test.
+- **D11. The Linux host-reachability dialog during the spec.** Options: (a)
+  dismiss it with another startup-dialog handler; (b) turn the startup probe
+  off for the spec's backends with the existing
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, which scenario and CLI test
+  backends already use, adding it to `AGENT_TEST_SAFE_ENV_NAMES` so agent-test
+  backends keep it. Chose (b). Pros: handlers run only before locator actions,
+  so (a) cannot stop the dialog taking focus during key presses; (b) also
+  stops each run creating a probe network for a profile that is deleted
+  afterwards (the leak 0241 and 0730 closed for the CLI harnesses). Cons: the
+  allowlist grows by one policy switch; other Electron specs still probe and
+  can show the dialog on such hosts until they set it too.
 
 ## Needs verification
 

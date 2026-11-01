@@ -23,7 +23,7 @@ function notice(
   sessionImport: BrowserPreviewSessionImport,
   blockedHost: string | undefined,
 ): { title: string; detail: string; retry: boolean } | null {
-  if (blockedHost && sessionImport.state !== "waiting")
+  if (blockedHost && (sessionImport.state === "idle" || sessionImport.state === "imported"))
     return {
       title: `${blockedHost} can't open inside a preview.`,
       detail: "To sign in, use your browser, then bring that session here.",

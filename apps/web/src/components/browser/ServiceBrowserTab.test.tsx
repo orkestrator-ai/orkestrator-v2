@@ -624,6 +624,12 @@ describe("service browser tabs", () => {
       screen.getByRole("button", { name: "Bring sign-in back" });
     });
 
+    test("a failed browser launch keeps its failure notice after a refused navigation", async () => {
+      await renderWithState({ ...blocked, sessionImport: { state: "failed" } });
+      expect(screen.getByRole("status").textContent).toContain("Could not copy your sign-in");
+      screen.getByRole("button", { name: "Bring sign-in back" });
+    });
+
     test("a copied sign-in reports its count, and what could not be used", async () => {
       await renderWithState({ sessionImport: { state: "imported", cookies: 2, skipped: 1 } });
       expect(screen.getByRole("status").textContent).toContain("Copied 2 cookies; 1 could not");

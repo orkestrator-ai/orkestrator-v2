@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
   getAgentSignInStatus,
   listAgentAccounts,
   setActiveAgentAccount,
+  setAgentAccountAutoSwitch,
   listMachineAgentAccounts,
   setPreferredAgentIdentity,
 } from "./agent-accounts";
@@ -121,4 +122,63 @@ test("overview preference requests propagate command-node failures without a loc
   await expect(setPreferredAgentIdentity("claude", null)).rejects.toBe(failure);
   expect(portal).toHaveBeenCalledTimes(2);
   expect(workspace).not.toHaveBeenCalled();
+});
+
+describe("automatic switching ticks", () => {
+  const nodeCalls = () =>
+    portal.mock.calls
+      .filter(([command]) => command === "invoke_on_node")
+      .map(([, args]) => (args as { command: string }).command);
+
+  test("in a leaf's window the tick goes to the command node, and the pin ends on the leaf", async () => {
+    workspace.mockImplementation(async () => ({}));
+    await setAgentAccountAutoSwitch("claude", { enabled: true, pinned: true });
+    expect(portal).toHaveBeenCalledWith("set_agent_account_auto_switch", {
+      platform: "claude",
+      enabled: true,
+    });
+    expect(workspace).toHaveBeenCalledWith("resume_agent_account_auto_switch", {
+      platform: "claude",
+    });
+    expect(workspace).toHaveBeenCalledWith("list_agent_accounts", {});
+  });
+
+  test("with nothing pinned, or turning it off, no pin is touched", async () => {
+    workspace.mockImplementation(async () => ({}));
+    await setAgentAccountAutoSwitch("claude", { enabled: true, pinned: false });
+    await setAgentAccountAutoSwitch("claude", { enabled: false, pinned: true });
+    expect(workspace.mock.calls.map(([command]) => command)).toEqual([
+      "list_agent_accounts",
+      "list_agent_accounts",
+    ]);
+  });
+
+  test("an account with an email goes by email to the command node, whichever machine shows it", async () => {
+    workspace.mockImplementation(async () => ({}));
+    await setAgentAccountAutoSwitch("codex", {
+      account: { id: "account-1", identity: { email: "a@example.com" } },
+      included: false,
+    });
+    expect(portal).toHaveBeenCalledWith("set_agent_account_auto_switch", {
+      platform: "codex",
+      email: "a@example.com",
+      included: false,
+    });
+    expect(JSON.stringify(portal.mock.calls)).not.toContain("account-1");
+  });
+
+  test("an account with no email stays on the machine that shows it", async () => {
+    workspace.mockImplementation(async () => ({}));
+    await setAgentAccountAutoSwitch("codex", {
+      account: { id: "account-1", identity: {} },
+      included: true,
+    });
+    expect(workspace).toHaveBeenCalledWith("set_agent_account_auto_switch", {
+      platform: "codex",
+      accountId: "account-1",
+      included: true,
+    });
+    expect(portal).not.toHaveBeenCalled();
+    expect(nodeCalls()).toEqual([]);
+  });
 });

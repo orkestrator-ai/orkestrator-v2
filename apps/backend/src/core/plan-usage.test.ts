@@ -261,6 +261,15 @@ describe("paid usage past the plan", () => {
     expect(
       codexPaidOverage({ ordinaryUsageAllowed: false, rateLimits: { credits: null } }),
     ).toEqual({ enabled: false, inUse: true });
+    expect(
+      codexPaidOverage({
+        credits: { has_credits: true },
+        rate_limit: { allowed: true, limit_reached: true },
+      }),
+    ).toEqual({ enabled: true, inUse: true });
+    expect(
+      codexPaidOverage({ credits: { has_credits: false }, rate_limit: { limit_reached: true } }),
+    ).toEqual({ enabled: false });
     // A balance alone says nothing about whether credits are on.
     expect(codexPaidOverage({ credits: { balance: "$0" } })).toBeUndefined();
     expect(codexPaidOverage(undefined)).toBeUndefined();

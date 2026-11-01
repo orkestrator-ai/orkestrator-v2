@@ -724,7 +724,17 @@ describe("automatic switching", () => {
     expect(switches).toEqual([]);
   });
 
+  test("a machine that predates it is left alone when the tick is set", async () => {
+    await call("main", "set_account_auto_switch", {
+      platform: "claude",
+      enabled: true,
+      nodeId: LEAF,
+    });
+    expect(tickCalls.map((entry) => entry.machine)).toEqual([SELF]);
+  });
+
   test("ticking with a machine named ends that machine's pin, keeping the ticks here", async () => {
+    autoSwitch[LEAF] = { mode: "pinned", pinnedAccountId: "default", includedAccountIds: [] };
     await call("main", "set_account_auto_switch", {
       platform: "claude",
       enabled: true,

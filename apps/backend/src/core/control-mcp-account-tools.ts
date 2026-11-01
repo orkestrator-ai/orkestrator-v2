@@ -340,7 +340,12 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       const machine = await machineFor(invoke, nodeId);
       if (enabled !== undefined) {
         await invoke("set_agent_account_auto_switch", { platform, enabled });
-        if (enabled && !machine.self) {
+        // A machine that predates this reports no state, so has no pin to end.
+        if (
+          enabled &&
+          !machine.self &&
+          (await machineAccounts(machine)).autoSwitch?.[platform]?.mode === "pinned"
+        ) {
           await machine.call("resume_agent_account_auto_switch", { platform });
         }
       }

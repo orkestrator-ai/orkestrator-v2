@@ -36,10 +36,7 @@ import {
 } from "./nodes/index.js";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
-import {
-  AGENT_ACCOUNT_AUTO_SWITCHED_EVENT,
-  isAgentAccountAutoSwitchedEvent,
-} from "@orkestrator/protocol/agent-account-auto-switch";
+import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "@orkestrator/protocol/agent-account-auto-switch";
 import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
@@ -59,7 +56,10 @@ import {
   readAgentAccountUsage,
 } from "./agent-accounts.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
-import { mailAutoSwitchNotice } from "./agent-accounts-auto-switch-notices.js";
+import {
+  bridgeRemoteAutoSwitchNotices,
+  mailAutoSwitchNotice,
+} from "./agent-accounts-auto-switch-notices.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
@@ -784,19 +784,11 @@ export class OrkestratorBackend {
         collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
       }),
     );
-    this.nodePortal.readModel.onNodeEvent((event, payload, nodeId) => {
-      if (event !== AGENT_ACCOUNT_AUTO_SWITCHED_EVENT) return;
-      if (!isAgentAccountAutoSwitchedEvent(payload)) return;
-      void this.nodePortal
-        .summaries([nodeId])
-        .then(
-          (result) => result.nodes[0]?.view.displayName ?? nodeId,
-          () => nodeId,
-        )
-        .then((machineName) => mailAutoSwitchNotice(storage, payload, machineName))
-        .catch(() => {
-          console.warn("[agent-accounts] Another machine's automatic switch notice failed");
-        });
+    bridgeRemoteAutoSwitchNotices({
+      onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
+      nodeName: async (nodeId) =>
+        (await this.nodePortal.summaries([nodeId])).nodes[0]?.view.displayName ?? nodeId,
+      mail: (event, machineName) => mailAutoSwitchNotice(storage, event, machineName),
     });
     bridgeRemoteCoordinatorEvents({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),

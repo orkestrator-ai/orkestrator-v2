@@ -290,7 +290,8 @@ export function claudePaidOverage(value: unknown): PlanUsagePaidOverage | undefi
 /**
  * Whether Codex can bill past the plan: `credits.has_credits` or `unlimited`,
  * plus `ordinaryUsageAllowed: false`, the provider's own word that the included
- * allowance is unavailable and credits may be used instead.
+ * allowance is unavailable and credits may be used instead. Field names are from
+ * the pinned binary's `RateLimitStatusDetails` and `CreditStatusDetails`.
  */
 export function codexPaidOverage(value: unknown): PlanUsagePaidOverage | undefined {
   const body = asRecord(value);
@@ -304,7 +305,11 @@ export function codexPaidOverage(value: unknown): PlanUsagePaidOverage | undefin
   const ordinary = body.ordinary_usage_allowed ?? body.ordinaryUsageAllowed;
   if (typeof hasCredits !== "boolean" && !unlimited && ordinary !== false) return undefined;
   const enabled = hasCredits === true || unlimited;
-  return { enabled, ...(ordinary === false ? { inUse: true } : {}) };
+  // The usage endpoint's own word for the same thing: a limit is reached, so with
+  // credits on the next turn draws them.
+  const limit = asRecord(body.rate_limit ?? body.rateLimit);
+  const reached = (limit?.limit_reached ?? limit?.limitReached) === true;
+  return { enabled, ...(ordinary === false || (enabled && reached) ? { inUse: true } : {}) };
 }
 
 /** Codex reports window length as seconds on HTTP and as minutes on app-server. */

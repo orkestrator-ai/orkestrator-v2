@@ -637,7 +637,8 @@ export class NativeAgentService {
       stops: () => this.options.usageLimitStops,
       now: () => this.now(),
       isStopped: () => this.stopped,
-      requestOutcome: (input) => this.sessionRequestOutcome(input),
+      requestOutcome: (input) =>
+        this.sessionRequestOutcome({ ...input, ignoreQueuedPrompts: true }),
       observedActivity: (key) => this.launches.observedActivity(key),
       // It continues a turn something else started, so it keeps that origin.
       dispatchPrompt: (input, prepare) =>
@@ -2633,6 +2634,8 @@ export class NativeAgentService {
     input: NativeAgentProjectionInput & {
       requestId: string;
       expectedProviderSessionId?: string;
+      /** Prompts queued behind the turn say nothing about how the turn itself ended. */
+      ignoreQueuedPrompts?: boolean;
     },
   ): Promise<{
     outcome: "completed" | "failed" | "interrupted" | "superseded" | "pending" | "unknown";
@@ -2682,9 +2685,8 @@ export class NativeAgentService {
         this.promptQueues.hasPendingSessionMutation(key) ||
         session.pendingDispatch ||
         session.pendingSteer ||
-        queue?.messages.length ||
-        queue?.inFlight ||
-        queue?.outstandingClaim
+        (!input.ignoreQueuedPrompts &&
+          (queue?.messages.length || queue?.inFlight || queue?.outstandingClaim))
       ) {
         return { outcome: "pending" as const };
       }

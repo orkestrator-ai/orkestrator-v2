@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { UsageLimitStopVerdict } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   NativeAgentUsageLimitResend,
+  USAGE_LIMIT_CANDIDATE_MAX_MS,
   type NativeAgentUsageLimitResendDependencies,
 } from "./native-agent-usage-limit-resend.js";
 import type { PersistedNativeAgentSession } from "./native-agent-service-shared.js";
@@ -153,6 +154,18 @@ describe("a native tab the weekly limit stopped", () => {
     h.resend.noteActivity(h.state.session, "idle", "idle");
     await h.settle();
     expect(h.dispatches).toHaveLength(1);
+  });
+
+  test("a decision that never comes is abandoned, letting the queue go", async () => {
+    const h = harness({ outcome: { outcome: "pending" } });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.resend.isPending("session-key")).toBe(true);
+    h.advance(USAGE_LIMIT_CANDIDATE_MAX_MS);
+    h.resend.noteActivity(h.state.session, "idle", "idle");
+    await h.settle();
+    expect(h.resend.isPending("session-key")).toBe(false);
+    expect(h.dispatches).toEqual([]);
   });
 
   test("a stop that is not the weekly limit stays stopped", async () => {

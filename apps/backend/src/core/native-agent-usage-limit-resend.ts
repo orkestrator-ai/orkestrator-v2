@@ -38,6 +38,8 @@ import {
 } from "./native-agent-service-shared.js";
 
 const RETRY_MS = 15_000;
+/** A stop still undecided after this stays stopped, and the queue it holds is let go. */
+export const USAGE_LIMIT_CANDIDATE_MAX_MS = 45 * 60_000;
 const MAX_TRACKED_SESSIONS = 1_024;
 
 /** The part of the auto-switcher a session needs; absent in tests and older wiring. */
@@ -77,7 +79,12 @@ export interface NativeAgentUsageLimitResendDependencies {
   ): Promise<unknown>;
 }
 
-type Candidate = { providerSessionId: string; requestId: string; retryAt: number };
+type Candidate = {
+  providerSessionId: string;
+  requestId: string;
+  retryAt: number;
+  firstSeenAt: number;
+};
 
 export class NativeAgentUsageLimitResend {
   private readonly candidates = new Map<string, Candidate>();
@@ -150,6 +157,7 @@ export class NativeAgentUsageLimitResend {
         providerSessionId: session.providerSessionId,
         requestId,
         retryAt: 0,
+        firstSeenAt: this.deps.now(),
       });
     }
     this.schedule(session);
@@ -157,6 +165,10 @@ export class NativeAgentUsageLimitResend {
 
   private schedule(session: PersistedNativeAgentSession): void {
     const candidate = this.candidates.get(session.key);
+    if (candidate && this.deps.now() - candidate.firstSeenAt >= USAGE_LIMIT_CANDIDATE_MAX_MS) {
+      this.candidates.delete(session.key);
+      return;
+    }
     if (
       !candidate ||
       this.deps.isStopped() ||

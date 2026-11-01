@@ -64,11 +64,11 @@ for (const machine of [null, "other"]) {
     const requireChecks = await screen.findByRole("switch", {
       name: "Require checks to pass before auto-merge",
     });
-    expect(requireChecks.getAttribute("aria-checked")).toBe("false");
+    expect(requireChecks.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(requireChecks);
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith(
-        expect.objectContaining({ autoMergeRequireChecks: true }),
+        expect.objectContaining({ autoMergeRequireChecks: false }),
         machine,
       ),
     );

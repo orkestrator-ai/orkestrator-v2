@@ -52,7 +52,7 @@ export type PrAutoMergeDecision =
     };
 
 export interface PrAutoMergePolicy {
-  /** Wait for checks GitHub does not require to pass. Off by default. */
+  /** Wait for checks GitHub does not require to pass. On by default. */
   requireChecks?: boolean;
 }
 
@@ -87,7 +87,7 @@ export function decideAutoMerge(
     checkSummary: monitor?.checkSummary ?? null,
     viewerCanMerge: monitor?.viewerCanMerge ?? null,
     fresh: isPrReadingConfirmedByMonitor(environment, monitor),
-    requireChecks: policy.requireChecks === true,
+    requireChecks: policy.requireChecks !== false,
   });
   if (readiness.ready)
     return monitor?.headSha && /^[a-f0-9]{40}$/i.test(monitor.headSha)
@@ -272,22 +272,28 @@ export class PrAutoMergeController {
   }
 
   /** Revalidate the decision after asynchronous preparation. */
-  private async authorized(environment: Environment, kind: "merge" | "resolve"): Promise<boolean> {
+  private async authorized(
+    environment: Environment,
+    kind: "merge" | "resolve",
+    expectedHeadSha?: string,
+  ): Promise<boolean> {
+    const policy = await this.policy();
     const current = await this.options.storage.getEnvironment(environment.id);
+    const reading = this.options.monitorState(environment.id);
     return (
       !this.closed &&
       !!current &&
       current.prUrl === environment.prUrl &&
       current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
-      decideAutoMerge(current, this.options.monitorState(current.id), await this.policy()).kind ===
-        kind
+      (expectedHeadSha === undefined || reading?.headSha === expectedHeadSha) &&
+      decideAutoMerge(current, reading, policy).kind === kind
     );
   }
 
   /** Read per decision, so a settings change applies at the next reading. */
   private async policy(): Promise<PrAutoMergePolicy> {
     const config = await this.options.storage.loadConfig();
-    return { requireChecks: config.global.autoMergeRequireChecks === true };
+    return { requireChecks: config.global.autoMergeRequireChecks !== false };
   }
 
   private async recordError(environment: Environment, error: string | null): Promise<void> {
@@ -303,15 +309,15 @@ export class PrAutoMergeController {
 
   /** The Merge PR button's command, pinned to the observed PR and head. */
   private async merge(environment: Environment): Promise<boolean> {
-    if (!(await this.authorized(environment, "merge"))) return false;
-    const reading = this.options.monitorState(environment.id);
-    if (!reading?.headSha) return false;
+    const headSha = this.options.monitorState(environment.id)?.headSha;
+    if (!headSha || !(await this.authorized(environment, "merge", headSha)) || this.closed)
+      return false;
     await this.options.invoke("merge_environment_pr", {
       environmentId: environment.id,
       method: "squash",
       deleteBranch: true,
       cleanupAfterMerge: false,
-      expectedHeadSha: reading.headSha,
+      expectedHeadSha: headSha,
       expectedPrUrl: environment.prUrl,
     });
     return true;

@@ -582,7 +582,7 @@ export interface GlobalConfig {
   githubCliReminderDismissed?: boolean;
   /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
   sshAgentSocketPath?: string;
-  /** Auto-merge waits for non-required checks to pass. Absent is off. */
+  /** Auto-merge waits for non-required checks to pass. Absent is on. */
   autoMergeRequireChecks?: boolean;
   /** Absolute folder new projects are cloned into on this machine (copies from other machines). */
   defaultProjectsDirectory?: string;

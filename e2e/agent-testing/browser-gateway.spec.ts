@@ -323,11 +323,13 @@ test.describe("host path browsing", () => {
           }
           await page.getByRole("button", { name: "Global settings", exact: true }).click();
           const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+          await expect(settings).toBeVisible();
           const section = settings.getByRole("combobox", {
             name: "Settings section",
             exact: true,
           });
-          if (await section.isVisible()) {
+          if (viewport.name === "narrow") {
+            await expect(section).toBeVisible();
             await section.click();
             await page.getByRole("option", { name: "Version control", exact: true }).click();
           } else {

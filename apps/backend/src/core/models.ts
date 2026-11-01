@@ -1106,8 +1106,8 @@ export interface AppConfig {
     sshAgentSocketPath?: string;
     /**
      * Auto-merge waits for failing or pending checks GitHub does not require.
-     * Absent or false merges once GitHub allows it; required checks still
-     * block. Read by `PrAutoMergeController` on this machine.
+     * True or absent waits for all checks; false merges once GitHub allows it.
+     * Required checks still block. Read by `PrAutoMergeController` on this machine.
      */
     autoMergeRequireChecks?: boolean;
     /**

@@ -92,12 +92,13 @@ describe("decideAutoMerge", () => {
     });
   });
 
-  test("by default merges past failing or pending checks GitHub does not require", () => {
+  test("explicitly opting out merges past failing or pending checks GitHub does not require", () => {
     const unstable = environment({ prMergeability: "unstable" });
     expect(
       decideAutoMerge(
         unstable,
         monitor(unstable, { checkSummary: { passed: 1, pending: 1, total: 3 } }),
+        { requireChecks: false },
       ),
     ).toEqual({ kind: "merge" });
     // Required checks surface as `blocked`, which GitHub would refuse anyway.
@@ -156,7 +157,10 @@ function harness(initial: Environment) {
     },
     loadConfig: async () =>
       ({
-        global: { enabledAgentPlatforms: ["claude"], autoMergeRequireChecks: requireChecks },
+        global: {
+          enabledAgentPlatforms: ["claude"],
+          ...(requireChecks === undefined ? {} : { autoMergeRequireChecks: requireChecks }),
+        },
         repositories: {},
       }) as never,
     getRepositoryConfig: async () => ({ prBaseBranch: "develop" }) as never,
@@ -250,9 +254,16 @@ describe("PrAutoMergeController", () => {
     expect(required.invocations).toEqual([]);
 
     const unset = harness(environment({ prMergeability: "unstable" }));
+    unset.storage.loadConfig = async () => ({ global: {}, repositories: {} }) as never;
+    unset.setMonitor(monitor(unset.stored, { checkSummary: { passed: 1, pending: 1, total: 2 } }));
     unset.controller.start();
     await unset.announce();
-    expect(unset.invocations.map((invocation) => invocation.command)).toEqual([
+    expect(unset.invocations).toEqual([]);
+
+    const optedOut = harness(environment({ prMergeability: "unstable" }));
+    optedOut.requireChecks(false);
+    await optedOut.controller.evaluate("env-1");
+    expect(optedOut.invocations.map((invocation) => invocation.command)).toEqual([
       "merge_environment_pr",
     ]);
   });
@@ -437,5 +448,52 @@ for (const status of ["rejected", "unknown"]) {
       status === "rejected" ? "agent refused" : "unconfirmed",
     );
     expect(h.timers[0]!.delayMs).toBe(PR_AUTO_MERGE_RETRY_BASE_MS);
+  });
+}
+
+for (const change of ["disable", "dispose", "intent", "head", "readiness", "policy"] as const) {
+  test(`final policy loading fences merge after ${change}`, async () => {
+    const h = harness(environment({ prMergeability: "unstable" }));
+    h.requireChecks(false);
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const loadConfig = h.storage.loadConfig;
+    let reads = 0;
+    h.storage.loadConfig = async () => {
+      if (++reads === 2) {
+        entered();
+        await gate;
+      }
+      return loadConfig();
+    };
+    const running = h.controller.evaluate("env-1");
+    await started;
+    switch (change) {
+      case "disable":
+        h.set({ ...h.stored, autoMerge: false });
+        break;
+      case "dispose":
+        h.controller.dispose();
+        break;
+      case "intent":
+        h.set({ ...h.stored, autoMergeEnabledAt: new Date().toISOString() });
+        break;
+      case "head":
+        // Even a ready replacement must not substitute an unauthorized head.
+        h.setMonitor(monitor(h.stored, { headSha: "b".repeat(40) }));
+        break;
+      case "readiness":
+        h.setMonitor(monitor(h.stored, { viewerCanMerge: false }));
+        break;
+      case "policy":
+        h.requireChecks(true);
+        break;
+    }
+    release();
+    await running;
+    expect(h.invocations).toEqual([]);
+    expect(h.timers).toEqual([]);
   });
 }

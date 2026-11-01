@@ -169,7 +169,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     allowedDomains: normalizeAllowedDomainsInput(global.allowedDomains ?? []),
     useHostGitHubCredentials: global.useHostGitHubCredentials ?? true,
     sshAgentSocketPath: global.sshAgentSocketPath ?? "",
-    autoMergeRequireChecks: global.autoMergeRequireChecks ?? false,
+    autoMergeRequireChecks: global.autoMergeRequireChecks ?? true,
     defaultProjectsDirectory: global.defaultProjectsDirectory ?? "",
     useHostClaudeCredentials: global.useHostClaudeCredentials ?? true,
     preferredEditor: global.preferredEditor ?? "vscode",
@@ -265,7 +265,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.envFilePatterns,
     global.useHostGitHubCredentials ?? true,
     global.sshAgentSocketPath ?? "",
-    global.autoMergeRequireChecks ?? false,
+    global.autoMergeRequireChecks ?? true,
     global.defaultProjectsDirectory ?? "",
     global.useHostClaudeCredentials ?? true,
     global.allowedDomains ?? [],
@@ -323,7 +323,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   );
   const [sshAgentSocketPath, setSshAgentSocketPath] = useState(global.sshAgentSocketPath ?? "");
   const [autoMergeRequireChecks, setAutoMergeRequireChecks] = useState(
-    global.autoMergeRequireChecks ?? false,
+    global.autoMergeRequireChecks ?? true,
   );
   const [defaultProjectsDirectory, setDefaultProjectsDirectory] = useState(
     global.defaultProjectsDirectory ?? "",
@@ -467,7 +467,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     // typed keeps a rejected secret retryable across an unrelated store write.
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
-    setAutoMergeRequireChecks(global.autoMergeRequireChecks ?? false);
+    setAutoMergeRequireChecks(global.autoMergeRequireChecks ?? true);
     setDefaultProjectsDirectory(global.defaultProjectsDirectory ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setAllowedDomains((global.allowedDomains || []).join("\n"));

@@ -261,7 +261,7 @@ freshness rule as the green shimmer (`isPrReadingConfirmedByMonitor`):
   required): it waits for the next reading.
 
 Settings → Version control → Auto-merge → **Require checks to pass**
-(`global.autoMergeRequireChecks`, off when absent) decides whether checks
+(`global.autoMergeRequireChecks`, on when absent) decides whether checks
 GitHub does not require hold a merge back. Off, `decideAutoMerge` passes
 `requireChecks: false` to `evaluatePrMergeReadiness`, so an `unstable` PR and a
 failing or pending check rollup count as ready and the PR merges as soon as

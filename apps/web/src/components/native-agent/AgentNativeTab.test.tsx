@@ -12733,6 +12733,64 @@ describe("AgentNativeTab", () => {
       ).toBe("Still usable");
     });
 
+    test("inline edit mid-turn skips the settings change when they already match", async () => {
+      // Claude refuses any settings change while a turn runs, so a prompt
+      // queued with the composer's own settings must not ask for one.
+      seedProjection({
+        phase: "running",
+        composer: { selectedReasoningId: "high" },
+        queue: {
+          items: [
+            {
+              id: "queued-1",
+              text: "Queued task",
+              model: "model-a",
+              reasoningEffort: "high",
+              mode: "build",
+              fastMode: false,
+            },
+          ],
+        },
+      });
+      render(<AgentNativeTab tabId="tab-inline-edit-running" data={identity("claude")} isActive />);
+      const input = await screen.findByRole("textbox");
+      updateNativeAgentControlsMock.mockClear();
+      mockToastError.mockClear();
+      fireEvent.click(await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" }));
+      await waitFor(() => expect(input.textContent).toBe("Queued task"));
+      expect(removePromptQueueMessageMock).toHaveBeenCalled();
+      expect(updateNativeAgentControlsMock).not.toHaveBeenCalled();
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    test("inline edit mid-turn explains a refused settings restore and keeps the prompt", async () => {
+      seedProjection({
+        phase: "running",
+        queue: { items: [{ id: "queued-1", text: "Queued task", mode: "plan" }] },
+      });
+      render(
+        <AgentNativeTab
+          tabId="tab-inline-edit-running-refused"
+          data={identity("claude")}
+          isActive
+        />,
+      );
+      const input = await screen.findByRole("textbox");
+      updateNativeAgentControlsMock.mockRejectedValueOnce(new Error("Session is running"));
+      mockToastError.mockClear();
+      fireEvent.click(await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" }));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "This prompt was queued with different settings, which can't be restored while Claude is working. It is still queued; edit it once the turn finishes.",
+        ),
+      );
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { mode: "plan" },
+      });
+      expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(input.textContent).toBe("");
+    });
+
     test.each(["steer", "edit", "remove"] as const)(
       "inline %s uses queue error toasts",
       async (action) => {

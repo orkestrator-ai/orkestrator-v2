@@ -38,6 +38,7 @@ export default defineConfig({
     "grok-container-login.spec.ts",
     "container-rebuild-cycle.spec.ts",
     "container-files-wiring.spec.ts",
+    "container-app-wiring.spec.ts",
     "container-root-terminal.spec.ts",
     "container-approval-stop.spec.ts",
     "container-claude-terminal-signal.spec.ts",

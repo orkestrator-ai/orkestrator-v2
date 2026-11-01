@@ -1,9 +1,20 @@
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
-import { spawnSync } from "node:child_process";
+import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { loadAppWithDevRetry } from "./dev-startup-retry";
+import {
+  POLL_BUDGET_MS,
+  containerName,
+  fixtureEnvironment,
+  inContainer,
+  invoke,
+  localName,
+  login,
+  openSecondWindow,
+  reloadApp,
+  selectEnvironment,
+  setDocumentHidden,
+} from "./container-wiring-support";
 
 /**
  * Container app wiring in a real browser (todo 0048, task 4), against a
@@ -18,68 +29,15 @@ import { loadAppWithDevRetry } from "./dev-startup-retry";
  * - On a watched local worktree, a tree revision announced while the document
  *   was hidden (the final invalidation the panel skips) still shows after
  *   return.
- * - The project coordinator view opens beside container environments and
- *   survives an environment switch and a reload.
  *
- * Merge from the UI needs a GitHub pull request and validation output needs a
- * workflow with model turns; both are out of reach of this credential-free
- * profile (see the todo).
+ * Merge from the UI, validation output and the coordinator view are in
+ * `container-app-wiring.spec.ts`.
  */
-
-const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
-const containerName = process.env.ORKESTRATOR_AGENT_TEST_CONTAINER_ENV ?? "fixture-container";
-const localName = process.env.ORKESTRATOR_AGENT_TEST_LOCAL_ENV ?? "fixture-local";
-/** The Files panel poll (5 s), a read, and margin for a loaded host. */
-const POLL_BUDGET_MS = 20_000;
 
 // The direct invoke carries the gateway token; keep it out of artifacts.
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
-type Status = { browserUrl?: string; authFile?: string };
-type Environment = {
-  id: string;
-  name: string;
-  projectId: string;
-  environmentType: string;
-  containerId?: string | null;
-  worktreePath?: string | null;
-};
 type FetchCounters = { started: number; requested: number };
-
-function profileStatus(): Status {
-  const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-  if (!command.stdout.trim()) throw new Error(command.stderr || "dev:status returned no manifest");
-  return JSON.parse(command.stdout) as Status;
-}
-
-async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
-  const status = profileStatus();
-  const token = (JSON.parse(readFileSync(status.authFile!, "utf8")) as { token: string }).token;
-  const response = await fetch(new URL("/__orkestrator/invoke", status.browserUrl!), {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ command, args }),
-  });
-  const payload = (await response.json()) as { result?: T; error?: string };
-  if (!response.ok || payload.error) throw new Error(payload.error ?? `${command} failed`);
-  return payload.result as T;
-}
-
-async function fixtureEnvironment(name: string): Promise<Environment> {
-  const projects = await invoke<Array<{ id: string }>>("get_projects");
-  for (const project of projects) {
-    const environments = await invoke<Environment[]>("get_environments", {
-      projectId: project.id,
-    });
-    const match = environments.find((environment) => environment.name === name);
-    if (match) return match;
-  }
-  throw new Error(`No fixture environment named ${name}`);
-}
 
 async function fetchCounters(): Promise<FetchCounters> {
   const diagnostics = await invoke<{
@@ -87,56 +45,6 @@ async function fetchCounters(): Promise<FetchCounters> {
   }>("get_recurring_work_diagnostics");
   const kind = diagnostics.metrics.kinds["git-fetch-container"];
   return { started: kind?.started ?? 0, requested: kind?.requested ?? 0 };
-}
-
-/** Runs a shell script in the container's workspace as the container user. */
-function inContainer(containerId: string, script: string): string {
-  const result = spawnSync(
-    "docker",
-    ["exec", "-u", "node", "-w", "/workspace", containerId, "sh", "-c", script],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) throw new Error(result.stderr || `docker exec failed: ${script}`);
-  return result.stdout;
-}
-
-/** This host diagnostic can cover the app; acknowledge it without touching the firewall. */
-async function acknowledgeConnectivityWarning(page: Page, testInfo: TestInfo) {
-  await page.addLocatorHandler(
-    page.getByRole("dialog", { name: "Docker containers can't reach Orkestrator", exact: true }),
-    async (dialog) => {
-      testInfo.annotations.push({
-        type: "environment",
-        description: "Acknowledged container-to-host connectivity warning.",
-      });
-      await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
-    },
-  );
-}
-
-async function login(page: Page, testInfo: TestInfo) {
-  await acknowledgeConnectivityWarning(page, testInfo);
-  // The one-shot login URL is parsed in memory and never copied into output.
-  const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-  });
-  if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
-  const { loginUrl } = JSON.parse(command.stdout) as { loginUrl?: unknown };
-  if (typeof loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  await loadAppWithDevRetry(page, testInfo, () =>
-    page.goto(loginUrl, { waitUntil: "domcontentloaded" }),
-  );
-}
-
-async function selectEnvironment(page: Page, name: string) {
-  const expand = page.getByRole("button", { name: /^Expand project / }).first();
-  const collapse = page.getByRole("button", { name: /^Collapse project / }).first();
-  await expect(expand.or(collapse)).toBeVisible({ timeout: 30_000 });
-  if (await expand.isVisible()) await expand.click();
-  const item = page.getByText(name, { exact: true }).first();
-  await expect(item).toBeVisible({ timeout: 15_000 });
-  await item.click();
 }
 
 async function openFilesPanel(page: Page) {
@@ -151,22 +59,6 @@ async function openFilesPanel(page: Page) {
 /** A changed-file row; both the projection and the legacy list title it by path. */
 function changeRow(page: Page, file: string) {
   return page.getByTitle(file, { exact: false }).first();
-}
-
-/**
- * Makes the read coordinator see a hidden (or visible again) document. A real
- * hidden tab also throttles timers; the coordinator decides from
- * `visibilityState` and the `visibilitychange` event, which this drives.
- */
-async function setDocumentHidden(page: Page, hidden: boolean) {
-  await page.evaluate((next) => {
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => (next ? "hidden" : "visible"),
-    });
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => next });
-    document.dispatchEvent(new Event("visibilitychange"));
-  }, hidden);
 }
 
 test("Docker fixture container Files panel follows changes across switch, hidden document, reload and two windows", async ({
@@ -230,7 +122,7 @@ test("Docker fixture container Files panel follows changes across switch, hidden
     });
 
     await test.step("a reload shows the same changes", async () => {
-      await page.reload({ waitUntil: "domcontentloaded" });
+      await reloadApp(page, testInfo);
       await selectEnvironment(page, containerName);
       await openFilesPanel(page);
       for (const file of [visibleFile, inactiveFile, hiddenFile]) {
@@ -239,12 +131,7 @@ test("Docker fixture container Files panel follows changes across switch, hidden
     });
 
     await test.step("two windows on the same container both follow it", async () => {
-      const second = await page.context().newPage();
-      await second.setViewportSize({ width: 1400, height: 900 });
-      await acknowledgeConnectivityWarning(second, testInfo);
-      await loadAppWithDevRetry(second, testInfo, () =>
-        second.goto(profileStatus().browserUrl!, { waitUntil: "domcontentloaded" }),
-      );
+      const second = await openSecondWindow(page.context(), testInfo);
       await selectEnvironment(second, containerName);
       await openFilesPanel(second);
       await expect(changeRow(second, visibleFile)).toBeVisible({ timeout: POLL_BUDGET_MS });
@@ -330,36 +217,4 @@ test("Docker fixture local Files panel shows a file whose announcement arrived w
   } finally {
     rmSync(filePath, { force: true });
   }
-});
-
-test("Docker fixture coordinator view opens beside container environments and survives a reload", async ({
-  page,
-}, testInfo) => {
-  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "Docker fixture profile required");
-  const container = await fixtureEnvironment(containerName);
-  await page.setViewportSize({ width: 1400, height: 900 });
-  await login(page, testInfo);
-
-  const openCoordinator = async () => {
-    const projectRow = page.getByRole("button", { name: /^origin/ }).first();
-    await expect(projectRow).toBeVisible({ timeout: 30_000 });
-    await projectRow.click();
-    const tab = page.getByRole("tab", { name: "Coordinator", exact: true });
-    await expect(tab).toBeVisible({ timeout: 15_000 });
-    await tab.click();
-    const panel = page.locator("#project-panel-coordinator");
-    await expect(panel).toBeVisible({ timeout: 15_000 });
-    await expect(panel.getByText("Coordinator unavailable")).toHaveCount(0);
-    return panel;
-  };
-
-  expect(container.environmentType).toBe("containerized");
-  await openCoordinator();
-  await selectEnvironment(page, containerName);
-  await expect(page.getByRole("button", { name: /^(Show|Hide) file panel$/ })).toBeVisible({
-    timeout: 30_000,
-  });
-  await openCoordinator();
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await openCoordinator();
 });

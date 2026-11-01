@@ -324,13 +324,13 @@ command-failure site checks that `reason` comes from the classifier.
 | `branch-not-found` | The branch does not exist. | `no branch named`, `refname ... not found`, `did not match any file(s) known to git` |
 | `invalid-ref` | A name or revision is bad. | `not a valid branch name` or `object name`, `bad revision`, `unknown revision`, `ambiguous argument` |
 | `ref-conflict` | An existing ref occupies the path. | `exists; cannot create`, `cannot lock ref ... is at ... but expected` |
-| `lock-held` | A git lock is held. | `unable to create '....lock'`, `cannot lock ref`, `another git process` |
+| `lock-held` | A git lock is held. | `unable to create '....lock'`, `cannot lock ref`, `another git process`, `could not lock config file ...: File exists` |
 | `not-a-repository` | Not inside a repository. | `not a git repository` |
 | `worktree-conflict` | Checked out in another worktree. | `already checked out`, `used by worktree` |
 | `merge-conflict` | Stopped on conflicts. | `CONFLICT (`, `merge conflict`, `could not apply`, `unmerged files` |
 | `dirty-worktree` | Changes would be overwritten. | `local changes ... would be overwritten`, `commit your changes or stash` |
 | `nothing-to-commit` | Nothing staged. | `nothing to commit`, `no changes added to commit` |
-| `push-rejected` | The remote refused the push. | `[rejected]`, `[remote rejected]`, `non-fast-forward`, `failed to push some refs` |
+| `push-rejected` | The remote refused the push. | `[rejected]`, `[remote rejected]`, `non-fast-forward` |
 | `remote-ref-missing` | The ref is not on the remote. | `couldn't find remote ref`, `not our ref` |
 | `no-remote` | No such remote or repository. | `does not appear to be a git repository`, `no such remote`, `repository ... not found` |
 | `dubious-ownership` | Owned by another user. | `detected dubious ownership` |
@@ -347,7 +347,7 @@ command-failure site checks that `reason` comes from the classifier.
 | `container-not-running` | Stopped, paused or restarting. | `container ... is not running`, `paused`, `restarting` |
 | `container-name-conflict` | The name is taken. | `name ... is already in use` |
 | `image-not-found` | No such image. | `no such image`, `pull access denied`, `manifest ... not found`, `manifest unknown` |
-| `server-not-running` | No tmux server. | `no server running`, `error connecting to`, `server exited`, `lost server` |
+| `server-not-running` | No tmux server. | `no server running`, `failed to connect to server`, `no sessions`, socket missing/refused errors, `server exited`, `lost server` |
 | `session-not-found` | No such tmux target. | `can't find session`, `window` or `pane`, `session not found` |
 | `session-exists` | The session name is taken. | `duplicate session` |
 | `unclassified` | Nothing above matched. | The fallback, with the exit code and signal as the evidence |
@@ -391,7 +391,8 @@ characters with the same relative paths, and any `code`, `exitCode` and `signal`
 look like identifiers. It drops a command failure's message and output. An arbitrary
 rejected object is described by shape (`[object Object] code=E_NOPE keys=3`), never by
 its contents, and a function by `[function]`. It redacts common credential shapes with
-a short local list, because it cannot load `secret-redaction.ts`.
+a local copy of the shared credential rules, because it cannot load `secret-redaction.ts`.
+Its metadata and names are redacted too; common fixtures enforce parity.
 `fatal-rejections.test.ts` holds its paths to the same results as `formatLogError`.
 `scripts/recurring-live-ab.ts` counts `Unhandled promise rejection (continuing)` by its
 exact text, so that prefix does not change.

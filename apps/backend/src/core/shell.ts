@@ -131,15 +131,16 @@ function commandFailureOutcome(error: unknown): {
     code?: number | string | null;
     signal?: NodeJS.Signals | null;
     message?: unknown;
+    outputLimitExceeded?: boolean;
   };
-  // Read before the message is replaced by the child's output. These two messages
-  // are written by `executeCommandBytes` below, so they are not CLI output.
+  // Read the internal abort message before it is replaced by child output.
+  // Capture overflow carries a marker independent of command arguments.
   const message = typeof details.message === "string" ? details.message : "";
   return {
     timedOut: details.killed === true,
     executableMissing: details.code === "ENOENT",
     aborted: message === COMMAND_ABORTED_MESSAGE,
-    outputLimitExceeded: message.endsWith(OUTPUT_LIMIT_MESSAGE),
+    outputLimitExceeded: details.outputLimitExceeded === true,
     exitCode: typeof details.code === "number" ? details.code : null,
     signal: details.signal ?? null,
   };
@@ -290,7 +291,11 @@ function executeCommandBytes(
       else stderrBytes += retained.length;
       if (previousBytes + chunk.length > MAX_COMMAND_OUTPUT_BYTES) {
         signalCommand(child, "SIGKILL");
-        fail(new Error(`${stream} ${OUTPUT_LIMIT_MESSAGE}`));
+        fail(
+          Object.assign(new Error(`${stream} ${OUTPUT_LIMIT_MESSAGE}`), {
+            outputLimitExceeded: true,
+          }),
+        );
       }
     };
     child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk, "stdout"));

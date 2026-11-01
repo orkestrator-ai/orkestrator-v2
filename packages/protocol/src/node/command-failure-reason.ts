@@ -41,6 +41,7 @@ const TOOL_RULES: Readonly<Record<CommandFailureTool, readonly Rule[]>> = {
   git: [
     ["branch-exists", /a branch named .* already exists/i],
     ["ref-conflict", /exists; cannot create|cannot lock ref .* is at .* but expected/i],
+    ["lock-held", /could not lock config file [^\n]*: File exists/i],
     ["lock-held", /unable to create '.*\.lock'|cannot lock ref|another git process/i],
     ["worktree-conflict", /already (?:checked out|used by worktree)|used by worktree at/i],
     ["invalid-ref", /not a valid (?:branch name|object name)|bad (?:revision|object)/i],
@@ -49,18 +50,18 @@ const TOOL_RULES: Readonly<Record<CommandFailureTool, readonly Rule[]>> = {
     ["branch-not-found", /did not match any file\(s\) known to git/i],
     ["dubious-ownership", /detected dubious ownership/i],
     ["no-remote", /does not appear to be a git repository|no such remote/i],
-    ["no-remote", /repository .* not found/i],
+    ["no-remote", /repository (?:.* )?not found/i],
     ["not-a-repository", /not a git repository/i],
     ["remote-ref-missing", /could(?:n't| not) find remote ref|not our ref/i],
     ["merge-conflict", /\bCONFLICT \(|merge conflict|could not apply|unmerged files/i],
     ["dirty-worktree", /local changes .* would be overwritten|commit your changes or stash/i],
     ["nothing-to-commit", /nothing to commit|no changes added to commit/i],
-    ["push-rejected", /\[(?:remote )?rejected\]|non-fast-forward|failed to push some refs/i],
+    ["push-rejected", /\[(?:remote )?rejected\]|non-fast-forward/i],
     ["identity-unknown", /please tell me who you are|unable to auto-detect email/i],
   ],
   gh: [
     ["pull-request-exists", /a pull request for branch .* already exists/i],
-    ["no-pull-request", /no (?:open )?pull requests? (?:found|match)/i],
+    ["no-pull-request", /no (?:pull requests? (?:found|match)|open pull requests?\b)/i],
     ["rate-limited", /rate limit|http 429/i],
     ["forbidden", /http 403|resource not accessible/i],
     ["resource-not-found", /http 404|could not resolve to a/i],
@@ -80,7 +81,14 @@ const TOOL_RULES: Readonly<Record<CommandFailureTool, readonly Rule[]>> = {
   ],
   tmux: [
     ["session-exists", /duplicate session/i],
-    ["server-not-running", /no server running|error connecting to|server exited|lost server/i],
+    [
+      "server-not-running",
+      /no server running|failed to connect to server|no sessions|server exited|lost server/i,
+    ],
+    [
+      "server-not-running",
+      /error connecting to \/[^\n]* \((?:No such file or directory|Connection refused)\)/i,
+    ],
     ["session-not-found", /can't find (?:session|window|pane)|session not found/i],
   ],
 };
@@ -97,6 +105,10 @@ const SHARED_RULES: readonly Rule[] = [
   ["network-failed", /network is unreachable|no route to host|temporary failure in name/i],
   ["network-failed", /early eof|failed to connect|remote end hung up|unable to access/i],
   ["network-failed", /tls handshake|i\/o timeout/i],
+  [
+    "network-failed",
+    /error connecting to (?:https?:\/\/)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d+)?(?:[\s/:]|$)/i,
+  ],
   ["port-in-use", /port is already allocated|address already in use/i],
   ["permission-denied", /permission denied|operation not permitted|read-only file system/i],
   ["command-not-found", /command not found/i],

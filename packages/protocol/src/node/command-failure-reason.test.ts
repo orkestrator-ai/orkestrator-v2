@@ -85,6 +85,68 @@ describe("classifyCommandFailure", () => {
     expect(classifyCommandFailure(error, options).reason).toBe(reason as CommandFailureReason);
   });
 
+  test.each([
+    [
+      "ERROR: Repository not found.\nfatal: Could not read from remote repository.",
+      git,
+      "no-remote",
+    ],
+    ["fatal: repository 'https://example.test/repo' not found", git, "no-remote"],
+    ["error: could not lock config file .git/config: File exists", git, "lock-held"],
+    ["error: could not lock config file .git/config: Permission denied", git, "permission-denied"],
+    ["no open pull requests in owner/repo", gh, "no-pull-request"],
+    ["failed to connect to server", tmux, "server-not-running"],
+    ["no sessions", tmux, "server-not-running"],
+    [
+      "error connecting to /tmp/tmux-501/default (No such file or directory)",
+      tmux,
+      "server-not-running",
+    ],
+    ["error connecting to /tmp/tmux-501/default (Connection refused)", tmux, "server-not-running"],
+    ["error connecting to /tmp/tmux-501/default (Permission denied)", tmux, "permission-denied"],
+    ["error connecting to api.github.com", gh, "network-failed"],
+    ["error connecting to api.github.com", undefined, "network-failed"],
+    [
+      "error connecting to /tmp/tmux-501/default (Permission denied)",
+      undefined,
+      "permission-denied",
+    ],
+    ["no sessions", gh, "unclassified"],
+    ["no open pull requests in owner/repo", git, "unclassified"],
+    ["duplicate session: fixture", git, "unclassified"],
+    [
+      "fatal: Authentication failed\nerror: failed to push some refs to 'https://example.test/repo'",
+      git,
+      "auth-failed",
+    ],
+    [
+      "fatal: Could not resolve host: example.test\nerror: failed to push some refs to 'https://example.test/repo'",
+      git,
+      "network-failed",
+    ],
+    ["error: failed to push some refs to 'https://example.test/repo'", git, "unclassified"],
+    ["! [remote rejected] main -> main (protected branch)", git, "push-rejected"],
+  ] as const)("diagnostic: %s", (message, options, reason) => {
+    expect(classifyCommandFailure(failure(message), options).reason).toBe(reason);
+  });
+
+  test("a large Buffer stderr matches its bounded tail, excluding discarded head and middle", () => {
+    const stderr = Buffer.from(
+      `fatal: a branch named 'x' already exists\n${"x".repeat(32 * 1024)}\nfatal: not a git repository`,
+    );
+    const error = failure("ignored", { stderr });
+    expect(stderr.length).toBeGreaterThan(16 * 1024);
+    expect(classifyCommandFailure(error, git)).toEqual({
+      reason: "not-a-repository",
+      exitCode: 1,
+      signal: null,
+    });
+    Object.assign(error, {
+      stderr: Buffer.from(`fatal: a branch named 'x' already exists\n${"x".repeat(32 * 1024)}`),
+    });
+    expect(classifyCommandFailure(error, git).reason).toBe("unclassified");
+  });
+
   test("the result is only the label, the exit code and the signal", () => {
     const marker = "PRIVATE-MARKER";
     for (const [error, options] of Object.values(SAMPLES)) {

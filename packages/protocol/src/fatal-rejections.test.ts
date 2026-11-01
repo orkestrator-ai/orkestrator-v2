@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { installFatalRejectionGuard } from "./fatal-rejections.js";
 import { formatLogError } from "./log-error.js";
+import { redactSecrets } from "./secret-redaction.js";
+import { SECRET_REDACTION_FIXTURES } from "./testing/secret-redaction-fixtures.js";
 
 type Listener = (reason: unknown) => void;
 
@@ -198,6 +200,36 @@ describe("fatal rejection guard", () => {
       expect(reported(new Error(text))).not.toContain("abcdef123456");
       expect(reported(text)).not.toContain("abcdef123456");
     });
+
+    test.each(SECRET_REDACTION_FIXTURES)("shared credential parity: %s", (input, secret) => {
+      const error = new Error(input);
+      error.stack = `Error: ${input}`;
+      const expected = redactSecrets(input);
+      expect(expected).not.toContain(secret);
+      expect(reported(input)).toBe(expected);
+      expect(reported(error)).toBe(expected);
+      expect(formatLogError(error).message).toBe(expected);
+    });
+
+    test.each(["name", "code", "exitCode", "signal"])(
+      "redacts %s in error and object metadata",
+      (key) => {
+        for (const token of [
+          "ghp_" + "A".repeat(36),
+          "AKIA" + "A".repeat(16),
+          "AIza" + "a".repeat(30),
+        ]) {
+          for (const value of [
+            { [key]: token },
+            Object.assign(new Error("fixture"), { [key]: token }),
+          ]) {
+            const text = reported(value);
+            expect(text).not.toContain(token);
+            expect(text).toContain("[redacted]");
+          }
+        }
+      },
+    );
 
     test("a secret split by the cut is still redacted", () => {
       const text = `${"x ".repeat(495)}Bearer abcdefghijklmnopqrstuvwxyz`;

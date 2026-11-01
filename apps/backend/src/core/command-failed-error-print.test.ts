@@ -150,6 +150,13 @@ describe("failures runCommand produces", () => {
     expect(printed).toContain("reason=unclassified exitCode=3");
   });
 
+  posixOnly("an overflow phrase in argv remains an ordinary exit", async () => {
+    const error = await failed("exit 3 # maxBuffer length exceeded");
+    expect(error.exitCode).toBe(3);
+    expect(error.outputLimitExceeded).toBe(false);
+    expect(inspect(error)).toContain("reason=unclassified exitCode=3");
+  });
+
   posixOnly("stderr picks the reason without reaching the print", async () => {
     const printed = inspect(await failed("echo 'fatal: not a git repository' >&2; exit 128"));
     expect(printed).toContain("reason=not-a-repository exitCode=128");
@@ -177,8 +184,10 @@ describe("failures runCommand produces", () => {
     expect(inspect(error)).toContain("reason=aborted");
   });
 
-  posixOnly("output over the capture limit is named, not a bare null exit", async () => {
-    const error = await failed(`yes ${"x".repeat(64)}`, { timeoutMs: 20_000 });
+  posixOnly.each(["stdout", "stderr"])("%s over the capture limit is named", async (stream) => {
+    const error = await failed(`yes ${"x".repeat(64)}${stream === "stderr" ? " >&2" : ""}`, {
+      timeoutMs: 20_000,
+    });
     expect(error.outputLimitExceeded).toBe(true);
     const printed = inspect(error);
     expect(printed).toContain("reason=output-too-large");

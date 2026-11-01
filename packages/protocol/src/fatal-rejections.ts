@@ -72,29 +72,56 @@ export function installFatalRejectionGuard(options: FatalRejectionGuardOptions):
   const APP_PATH =
     /(?:^|\/)((?:apps\/(?:backend|desktop|web|web-public)|packages\/(?:protocol|cli|toolchain)|bridges\/[\w-]+|[\w-]+-bridge)\/.*)$/;
   const PACKAGED_PATH = /\/((?:app\.asar(?:\.unpacked)?|resources)\/.*)$/i;
-  // The credential shapes most likely to reach a rejection's text. The full list
-  // is `secret-redaction.ts`; a worker running this has no way to load it.
-  const CREDENTIALS: ReadonlyArray<readonly [RegExp, string]> = [
-    [/([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/gi, "$1[redacted]@"],
-    [
-      /([?&](?:[a-z_-]*token|api[_-]?key|auth|secret|password|signature|sig|key|code)=)[^&\s"'`]+/gi,
-      "$1[redacted]",
-    ],
-    [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [redacted]"],
-    [/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g, "[redacted]"],
-    [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, "[redacted]"],
-    [/\b(?:(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}|xox[baprse]-[A-Za-z0-9-]{8,})/g, "[redacted]"],
-    [
-      /\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|token|secret|password|passwd))("?\s*[:=]\s*)("?)[^\s"',;)&]{6,}\3/gi,
-      "$1$2[redacted]",
-    ],
+  // Keep these rules equivalent to secret-redaction.ts. Serialized workers cannot
+  // import it; common fixtures in fatal-rejections.test.ts enforce parity.
+  const CREDENTIALS: ReadonlyArray<{ pattern: RegExp; replacement: string }> = [
+    // scheme://user:password@host — the password is the point, but the username is
+    // identity, so both go.
+    {
+      pattern: /([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/gi,
+      replacement: "$1[redacted]@",
+    },
+    // Query credentials and OAuth state/code in a URL or a log line containing one.
+    {
+      pattern:
+        /([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|auth|authorization|token|secret|password|passwd|signature|sig|key|state|code)=)[^&\s"'`]+/gi,
+      replacement: "$1[redacted]",
+    },
+    { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: "Bearer [redacted]" },
+    { pattern: /\bBasic\s+[A-Za-z0-9+/=]{8,}/gi, replacement: "Basic [redacted]" },
+    // JWTs: three base64url segments. Matched before the generic key rules so a
+    // token in an `Authorization:` header line is not partially replaced.
+    {
+      pattern: /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g,
+      replacement: "[redacted]",
+    },
+    { pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g, replacement: "[redacted]" },
+    { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}/g, replacement: "[redacted]" },
+    { pattern: /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}/g, replacement: "[redacted]" },
+    { pattern: /\bxox[baprse]-[A-Za-z0-9-]{8,}/g, replacement: "[redacted]" },
+    { pattern: /\bAKIA[0-9A-Z]{12,}/g, replacement: "[redacted]" },
+    { pattern: /\bAIza[0-9A-Za-z_-]{20,}/g, replacement: "[redacted]" },
+    /**
+     * `api_key: "…"`, `OPENAI_API_KEY=…`, `password: …` in prose or a config dump.
+     *
+     * The leading `(?:[A-Za-z0-9]+[_-])*` matters: `\bAPI_KEY` never matches inside
+     * `OPENAI_API_KEY`, because `_` is a word character and there is no boundary
+     * before `API`. The lookahead keeps this from swallowing an auth *scheme* whose
+     * token an earlier rule has already replaced, and `&` is excluded from the
+     * value so it stops at the end of one query parameter.
+     */
+    {
+      pattern:
+        /\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|secret|client[_-]?secret|password|passwd|passphrase|authorization))("?\s*[:=]\s*)("?)(?!Bearer\b|Basic\b|\[redacted\])[^\s"',;)&]{6,}\3/gi,
+      replacement: "$1$2[redacted]",
+    },
   ];
 
   /** Cuts first and redacts after, so a secret split by the cut still matches. */
   function bounded(value: string, maxChars: number): string {
     const cut = value.length > maxChars ? `${value.slice(0, maxChars - 14)}...[truncated]` : value;
     let text = cut;
-    for (const [pattern, replacement] of CREDENTIALS) text = text.replace(pattern, replacement);
+    for (const { pattern, replacement } of CREDENTIALS) text = text.replace(pattern, replacement);
     // oxlint-disable-next-line no-control-regex -- the report is one line of text
     return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
   }
@@ -145,13 +172,16 @@ export function installFatalRejectionGuard(options: FatalRejectionGuardOptions):
       .flatMap((key) => {
         const value = read(target, key);
         const text = typeof value === "number" ? String(value) : value;
-        return typeof text === "string" && IDENTIFIER.test(text) ? [`${key}=${text}`] : [];
+        return typeof text === "string" && IDENTIFIER.test(text)
+          ? [`${key}=${bounded(text, 64)}`]
+          : [];
       })
       .join(" ");
   }
   function describeError(error: object): string {
     const rawName = read(error, "name");
-    const name = typeof rawName === "string" && IDENTIFIER.test(rawName) ? rawName : "Error";
+    const name =
+      typeof rawName === "string" && IDENTIFIER.test(rawName) ? bounded(rawName, 64) : "Error";
     const rawMessage = read(error, "message");
     const message = typeof rawMessage === "string" ? rawMessage : undefined;
     // A failed child process's message is its output, and its other fields are too.
@@ -182,7 +212,8 @@ export function installFatalRejectionGuard(options: FatalRejectionGuardOptions):
     // Keys and values can be anything, so an arbitrary object is never described
     // by its contents: only its shape, and identifiers that pass the same check.
     const rawName = read(target, "name");
-    const name = typeof rawName === "string" && IDENTIFIER.test(rawName) ? `name=${rawName}` : "";
+    const name =
+      typeof rawName === "string" && IDENTIFIER.test(rawName) ? `name=${bounded(rawName, 64)}` : "";
     return [tag, name, identifiers(target), keyCount === undefined ? "" : `keys=${keyCount}`]
       .filter(Boolean)
       .join(" ");

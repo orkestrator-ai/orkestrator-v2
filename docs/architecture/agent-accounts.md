@@ -275,6 +275,18 @@ the tab without a send.
   turn, an auth read that still finds a credential reports `expired` instead
   of `signed-in` until a model answers again (`claude-sign-in.ts`). That
   never locks the composer.
+- Cursor's status read never waits on Cursor's API for long. Readiness comes
+  from the stored or environment credential; `Cursor.me` only supplies the
+  account label, and the bridge waits at most `ACCOUNT_LOOKUP_TIMEOUT_MS`
+  (3 s) for it (`bridges/cursor-bridge/src/credentials.ts`). A lookup that
+  misses the bound leaves the session signed in and ready, labelled with the
+  stored email or "Cursor account". That fallback is not cached, so the label
+  can recover on a later read. Reads share a lookup for up to 15 s. After
+  its first timeout, reads return the fallback immediately until that window
+  expires or the lookup settles. A later read can then start a fresh lookup.
+  `Cursor.me` takes no abort signal, so abandoned requests may overlap; the
+  retry window limits new requests to one per 15 s for the same credential. The backend gives the status request
+  30 s.
 - Grok's ACP `authenticate` does not fail without a login: it waits on an
   interactive sign-in. The bridge refuses before asking, and a session created
   without a login is deferred (no agent, empty `acpSessionId`) until the first

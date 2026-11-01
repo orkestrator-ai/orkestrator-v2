@@ -27,6 +27,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
 | How projects or environments are listed or displayed (`components/sidebar/`, `EnvironmentItem*`, `components/federation/RemoteMachineTree.tsx`, `FederatedSidebarSections.tsx`, `lib/federation/aggregate.ts`, `node-summaries.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#one-presentation-for-both-paths) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
+| Logging, `createLogger`, log areas and events, the Electron relay | [`docs/architecture/logging.md`](docs/architecture/logging.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
 | The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
@@ -433,6 +434,8 @@ To format or check only the files you touched, pass them to `bun fmt` or
 - Iterate a collection you are about to mutate with
   `for (const x of Array.from(collection))`, not a spread; lint's suggested fix
   for the spread form silently skips entries.
+- Raw `console` is a lint error outside tests, scripts, the CLI and paths not yet
+  migrated; use `createLogger` from `@orkestrator/protocol/logger`.
 - Module boundaries are lint errors: no runtime import cycles
   (`import/no-cycle`; type-only imports are exempt), no new `export let`, no
   `node:`/`bun:` or `@orkestrator/protocol/node/*` value imports in the

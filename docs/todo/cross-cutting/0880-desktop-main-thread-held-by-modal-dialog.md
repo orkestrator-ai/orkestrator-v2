@@ -265,7 +265,9 @@ give; see Needs verification.
   ran live through `dialog.showMessageBox`.
 - Linux and Windows were not run.
 - The incident's real source. Search production logs for
-  `[Desktop] Main thread stalled`, `[Dialog]` and `[Desktop] Uncaught exception`.
+  `[Desktop] Main thread stalled`, `[Dialog]` and `[Desktop] Uncaught exception`
+  (`[desktop] main-thread.stalled`, `[desktop.dialog]` and
+  `[desktop] uncaught-exception` in builds on the shared logger).
 
 ## Related
 

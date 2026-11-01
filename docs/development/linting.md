@@ -100,6 +100,17 @@ the typo the rule is looking for.
 Warnings never fail the build, so `mise run lint` exiting `0` means zero errors,
 not zero findings. Read the output.
 
+## Raw `console`
+
+`no-restricted-globals` refuses `console`, used directly or passed as a value, so
+new code goes through the [shared logger](../architecture/logging.md). Two
+overrides in `.oxlintrc.json` turn it off: one for code whose console is its
+product or which wraps the console (tests, scripts, the CLI, container scripts,
+the logger itself), and one for paths not migrated yet.
+`tests/unit/raw-console-ratchet.test.ts` pins both lists and a site limit per
+unmigrated path, so those limits only fall. Migrating a path removes its entry
+from the override and the test together.
+
 ## Module boundaries
 
 Three rules outside `correctness` are errors because they hold an

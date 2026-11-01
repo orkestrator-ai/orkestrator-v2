@@ -408,6 +408,28 @@ const ELECTRON_READINESS_TIMEOUT_MS = 60_000;
  * non-interactively (no chooser, no retry dialogs), so a hang there is a
  * failure worth reporting.
  */
+/**
+ * Electron's leading switches and environment. `--headless-electron` (Linux
+ * only) selects Chromium's headless Ozone platform and drops the display
+ * variables, so the profile cannot open a window in the session that started
+ * it. The switch has to be on the command line: appended from the main script
+ * it is read too late.
+ */
+export function electronLaunch(
+  headless: boolean,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): { switches: string[]; env: NodeJS.ProcessEnv } {
+  const result = { ...env };
+  delete result.ELECTRON_RUN_AS_NODE;
+  if (!headless) return { switches: [], env: result };
+  if (platform !== "linux") throw new Error("--headless-electron is only supported on Linux");
+  delete result.DISPLAY;
+  delete result.WAYLAND_DISPLAY;
+  delete result.ELECTRON_OZONE_PLATFORM_HINT;
+  return { switches: ["--ozone-platform=headless"], env: result };
+}
+
 export function electronReadinessTimeoutMs(flavor: "development" | "agent-test"): number | null {
   return flavor === "agent-test" ? ELECTRON_READINESS_TIMEOUT_MS : null;
 }
@@ -525,6 +547,8 @@ export async function startDevelopment(
     writeStatus?: typeof atomicWriteJson;
   } = {},
 ): Promise<void> {
+  // Refuse an unsupported platform before anything is built or started.
+  electronLaunch(args.headlessElectron === true, process.platform, {});
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
   const existingStatusPath = statusManifestPath(existingProfile);
   const existingStatus = await readStatus(existingStatusPath);
@@ -686,11 +710,11 @@ export async function startDevelopment(
     });
     await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
 
-    const electronEnv = { ...process.env };
-    delete electronEnv.ELECTRON_RUN_AS_NODE;
+    const launch = electronLaunch(args.headlessElectron === true, process.platform, process.env);
+    const electronEnv = launch.env;
     electron = (dependencies.spawn ?? spawn)(
       electronExecutable,
-      ["apps/desktop/dist/electron/main.js"],
+      [...launch.switches, "apps/desktop/dist/electron/main.js"],
       {
         cwd: repositoryRoot,
         detached: true,

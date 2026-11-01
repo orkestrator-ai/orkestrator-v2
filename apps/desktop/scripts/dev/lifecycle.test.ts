@@ -11,6 +11,7 @@ import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
+  electronLaunch,
   electronReadinessTimeoutMs,
   outputTail,
   startDevelopment,
@@ -169,6 +170,40 @@ describe("Electron readiness", () => {
       }
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Electron launch", () => {
+  const env = {
+    DISPLAY: ":0",
+    WAYLAND_DISPLAY: "wayland-1",
+    ELECTRON_OZONE_PLATFORM_HINT: "wayland",
+    ELECTRON_RUN_AS_NODE: "1",
+    PATH: "/usr/bin",
+  };
+
+  test("a normal launch keeps the display and never runs Electron as Node", () => {
+    const launch = electronLaunch(false, "linux", env);
+    expect(launch.switches).toEqual([]);
+    expect(launch.env).toEqual({
+      DISPLAY: ":0",
+      WAYLAND_DISPLAY: "wayland-1",
+      ELECTRON_OZONE_PLATFORM_HINT: "wayland",
+      PATH: "/usr/bin",
+    });
+    expect(env.ELECTRON_RUN_AS_NODE).toBe("1");
+  });
+
+  test("headless selects the headless Ozone platform with no display to open a window on", () => {
+    const launch = electronLaunch(true, "linux", env);
+    expect(launch.switches).toEqual(["--ozone-platform=headless"]);
+    expect(launch.env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  test("headless is refused where Ozone does not apply", () => {
+    expect(() => electronLaunch(true, "darwin", env)).toThrow("only supported on Linux");
+    expect(() => electronLaunch(true, "win32", env)).toThrow("only supported on Linux");
+    expect(electronLaunch(false, "darwin", env).switches).toEqual([]);
   });
 });
 

@@ -26,6 +26,7 @@
  */
 import type { Page, TestInfo } from "@playwright/test";
 import { closeElectronWithin } from "./design-electron-cleanup";
+import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
 import { expect, test } from "./electron-fixtures";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
@@ -1765,9 +1766,15 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     });
     const before = new Set((await listAnnotations()).items.map((item) => item.id));
 
-    // Bring the app forward so native focus is observable. Another app may
-    // keep the key window on a shared desktop; then only the in-app handoff
-    // (main focusing the view, the renderer focusing the editor) is asserted.
+    // Bring the app forward so native focus is observable. Another app, or a
+    // locked session, may keep the key window; then OS focus is not asserted,
+    // but the in-app handoff still is: the view Chromium focuses (main
+    // focusing the preview, then the host) and the renderer's editor focus.
+    await trackWebContentsFocus(s().app);
+    const focusedViews = async () =>
+      (await focusedWebContentsUrls(s().app)).map((url) =>
+        url.startsWith(s().fixture.url) ? "preview" : url === s().window.url() ? "host" : url,
+      );
     const windowFocused = await s().app.evaluate(async ({ app, BrowserWindow }) => {
       const host = BrowserWindow.getAllWindows()[0]!;
       if (process.platform === "darwin") app.focus({ steal: true });
@@ -1802,6 +1809,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     await s().app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0]!.webContents.focus(),
     );
+    await expect.poll(focusedViews).toEqual(["host"]);
     const addNote = s().window.getByRole("button", { name: "Add note" });
     await tabTo(addNote);
     // Reverse and return to establish both directions of the local tab order.
@@ -1818,6 +1826,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
           .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin));
         return contents?.isFocused() ?? false;
       }, s().fixture.url);
+    await expect.poll(focusedViews).toEqual(["preview"]);
     if (windowFocused) await expect.poll(previewFocus).toBe(true);
     record(testInfo, "preview-focused-while-selecting", String(await previewFocus()));
     await trustedInput([
@@ -1829,6 +1838,7 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     // Main hands focus back: the renderer focuses the note editor.
     const editor = s().window.locator(`${NOTES_PANEL} textarea`).first();
     await expect(editor).toBeFocused({ timeout: 20_000 });
+    await expect.poll(focusedViews).toEqual(["host"]);
     const body = "Keyboard-only note: align the Save button with Cancel.";
     await s().window.keyboard.type(body);
     await tabActivate(s().window.getByRole("button", { name: "Save note", exact: true }));

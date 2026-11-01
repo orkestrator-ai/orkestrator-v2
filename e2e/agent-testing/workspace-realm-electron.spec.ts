@@ -15,6 +15,7 @@ import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scri
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
+import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
 
 /**
  * Another node's workspace in a desktop window's central region
@@ -223,6 +224,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);
     await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await trackWebContentsFocus(electronApp);
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
       window.evaluate(
         ({ command, args }) =>
@@ -523,6 +525,13 @@ test("a leaf's workspace opens in the window's central region without moving or 
       })()`)) as { label: string | null; focused: boolean };
         return { ...dom, nativeFocus: realm.isFocused() };
       });
+    // The views Chromium gives keyboard focus inside the window. Unlike
+    // `nativeFocus`, this needs no active window, so it is checked on every
+    // host (todo 1170).
+    const focusedViews = async () =>
+      (await focusedWebContentsUrls(electronApp)).map((url) =>
+        url.includes("realm=workspace") ? "realm" : url === window.url() ? "host" : url,
+      );
     // A coordinator that finishes loading under an open panel (a slow link, a
     // loaded host) mounts its composer there. The composer must not take the
     // panel's focus: it did, and the panel focus checks below failed whenever
@@ -550,12 +559,14 @@ test("a leaf's workspace opens in the window's central region without moving or 
         host.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
       });
       await expect.poll(panelState).toMatchObject({ label: "Agent information", focused: true });
+      await expect.poll(focusedViews).toEqual(["realm"]);
       expect(await coordinatorComposer()).toBe(false);
     } finally {
       await releaseCoordinator();
     }
     await expect.poll(coordinatorComposer, { timeout: 30_000 }).toBe(true);
     expect(await panelState()).toMatchObject({ label: "Agent information", focused: true });
+    expect(await focusedViews()).toEqual(["realm"]);
     await agentTrigger.click();
     await expect.poll(async () => (await panelState()).label).toBeNull();
     // Reopen on the reloaded document: mounted UI must consume the new snapshot.
@@ -581,7 +592,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
       test.info().annotations.push({
         type: "native-focus",
         description:
-          "The desktop session did not activate Electron. DOM keyboard handoffs are checked; native focus calls are covered by WorkspaceViews unit tests.",
+          "The desktop session did not activate Electron. DOM keyboard handoffs and the view that holds Chromium focus are checked; OS window focus is not.",
       });
     {
       const realmPage = electronApp
@@ -661,6 +672,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
           await expect(
             realmPage.getByRole("textbox", { name: "Search keyboard shortcuts" }),
           ).toBeFocused();
+          await expect.poll(focusedViews).toEqual(["realm"]);
           await expect(window.getByTestId("keyboard-shortcuts-dialog")).toHaveCount(0);
           if (source === "menu") {
             // The built MenuItem adapts its event-first call to the template's
@@ -692,6 +704,8 @@ test("a leaf's workspace opens in the window's central region without moving or 
               .click({ position: { x: 2, y: 2 } });
           else await realmPage.keyboard.press(source === "menu" ? "Escape" : chord);
           await expect(dialog).toHaveCount(0);
+          // Main returns focus to the preview only while the window is key
+          // (KeyboardShortcutsController), so this needs an active window.
           if (windowFocused)
             await expect
               .poll(() =>
@@ -734,6 +748,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
         await realmPage.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+K`);
         await expect(search).toBeVisible();
         await expect(realmPage.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(0);
+        await expect.poll(focusedViews).toEqual(["host"]);
         if (windowFocused)
           await expect
             .poll(() =>
@@ -772,6 +787,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
           host.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
         });
         await expect.poll(panelState).toMatchObject({ label: panelLabel, focused: true });
+        await expect.poll(focusedViews).toEqual(["realm"]);
         if (windowFocused)
           await expect.poll(async () => (await panelState()).nativeFocus).toBe(true);
         // Clear the shell's retained DOM focus so return-focus cannot pass
@@ -791,6 +807,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
         }, dismiss);
         await expect.poll(async () => (await panelState()).label).toBeNull();
         await expect(trigger).toBeFocused();
+        await expect.poll(focusedViews).toEqual(["host"]);
         await expect.poll(async () => (await panelState()).nativeFocus).toBe(false);
       }
     }

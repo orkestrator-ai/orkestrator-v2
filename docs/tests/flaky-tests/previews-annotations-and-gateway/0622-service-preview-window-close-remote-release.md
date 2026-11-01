@@ -1,7 +1,7 @@
 # Remote preview attachment still held 20 s after its window closed
 
 - **ID:** 0622
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-21
 - **Test:** `windows on different backends never share previews, and switches
   release on the issuing backend` in
@@ -72,9 +72,11 @@ Original command: `mise run test:logged -- --name merge-electron -- mise run tes
   branch `todo-0042-service-preview-rollout-f64ae24ade8a`; the window was gone
   208 to 230 ms after `close()` and the remote release followed in time.
 
-## Cause found and fixed (to-do 0042 task 11), 2026-11-01
+## Baseline-count race fixed; window-close symptom open (to-do 0042 task 11), 2026-11-01
 
-Resolved. Run on Linux (beelink), branch `preview-flakes-d5abda30c5f5-r1` from
+The baseline-count race is resolved; the original window-close symptom remains
+open pending reproduction and an explanation. Run on Linux (beelink), branch
+`preview-flakes-d5abda30c5f5-r1` from
 `main` at `93b99bfba`, with one worker while other builds ran on the host.
 Electron used a private Xvfb display inside a private, loopback-only network
 namespace. Durations are not reference figures.
@@ -110,5 +112,6 @@ namespace. Durations are not reference figures.
   every run since, including every run of this test listed in to-do 0042. Its
   failure message now also lists the main process's `[Previews]` lines, such
   as `Failed to release preview attachment.`, which tells a failed release
-  from a slow close. Reopen this case if it fails with the window gone.
+  from a slow close. Keep this case open and capture those diagnostics if it
+  fails again with the window gone.
 

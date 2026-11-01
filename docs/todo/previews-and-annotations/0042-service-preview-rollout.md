@@ -40,9 +40,10 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 10. **Real-window leftovers**: the pane-layout announcement (item 9), node
     retention against a real command node, and the narrow toolbar measured in
     a window (item 11). Status: open.
-11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: done
-    (2026-11-01): both reproduced by forcing their timing, fixed in the spec
-    and resolved in the registry; see decisions D9 to D11.
+11. **Preview flakes 0620 and 0622**: code items 12 and 13. Status: partly done
+    (2026-11-01): 0620 and the 0622 baseline-count race were reproduced and
+    fixed. The original 0622 window-close symptom remains open; see decisions
+    D9 to D11.
 12. **Partition disk use on a long-lived profile**: the "Needs verification"
     item. Status: partly done (`disk:report` measures it; no long-lived data).
 
@@ -389,10 +390,11 @@ complete owner then passed alone. Throttling switches are in `ELECTRON_TEST_SWIT
     - Cons: both already recurred; observation alone has not closed them.
 
 **Outcome (2026-11-01, `main` at `93b99bfba`).** Both took the recommended
-direction, and both turned out to be spec timing, not product defects.
-Neither recurred naturally on Linux; forcing the suspected timing reproduced
-each recorded symptom. 0620: Radix moves menu focus in a timer, and the spec
-read focus and pressed again before a late move landed. Each key now waits
+direction. Spec timing explains 0620 and the 0622 baseline-count race; the
+original 0622 window-close symptom remains unexplained and open. Neither
+recurred naturally on Linux; forcing the suspected timing reproduced the
+keyboard and baseline-count symptoms. 0620: Radix moves menu focus in a
+timer, and the spec read focus and pressed again before a late move landed. Each key now waits
 for a page-side marker queued behind that move (D9). The Linux host-reachability
 dialog, a second focus thief, is now off for the spec's backends (D11). 0622:
 the multi-backend test counted an attachment still inside its 30-second
@@ -607,9 +609,10 @@ partitions, and the evidence log where run results are now recorded.
     backends now skip that probe (D11). The three throttling switches stay in
     `ELECTRON_TEST_SWITCHES`. Natural recurrence was not reproduced on Linux;
     a loaded macOS run with covered windows has not been repeated.
-13. Done 2026-11-01: flake
+13. Partly done 2026-11-01: flake
     [0622](../../tests/flaky-tests/previews-annotations-and-gateway/0622-service-preview-window-close-remote-release.md)
-    is resolved. Its recurrences (2026-10-24 twice and 2026-10-25) all failed
+    remains open for the original window-close symptom. The baseline-count
+    race is fixed: the later failures (2026-10-24 twice and 2026-10-25) all failed
     the attachment-count poll right after the second window attached. The
     test's Local baseline still counted window 1's `svc-b` while its
     30-second retirement lease ran. A run slow enough to pass the lease saw
@@ -619,7 +622,9 @@ partitions, and the evidence log where run results are now recorded.
     (D10). The single 2026-10-21 window-close failure was not reproduced and is
     not explained by the lease, since a closing window releases without one.
     That check now prints main's `[Previews]` lines (such as `Failed to
-    release preview attachment.`) on failure.
+    release preview attachment.`) on failure. Keep the original symptom open
+    pending reproduction and an explanation; retain these diagnostics for the
+    next occurrence.
 
 ### Qualification
 

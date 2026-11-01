@@ -7,7 +7,10 @@ export, Electron, accessibility and client performance against `b83ae534`
 (2026-10-22, see [Qualification evidence](#qualification-evidence-2026-10-22));
 the opening prompt, export into an Orkestrator container, mixed versions and
 the 0174 reproduction against `20f6de91` (2026-10-25, see
-[Qualification evidence (2026-10-25)](#qualification-evidence-2026-10-25)).
+[Qualification evidence (2026-10-25)](#qualification-evidence-2026-10-25));
+container export on Linux Docker Engine, the Linux client performance run and
+flakes 0208 and 0174 against `93b99bfb` (2026-11-01, see
+[Qualification evidence (2026-11-01)](#qualification-evidence-2026-11-01)).
 
 ## Task analysis
 
@@ -16,13 +19,13 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 ### Tasks
 
 1. **Opening prompt without the tab mounted**: the backend sends the brief for a new design tab. Status: done (#1262). One accepted residual window and a stale test name remain.
-2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: open (this host and CI both have a Linux Engine).
+2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: done (2026-11-01): passed on Docker Engine 29.9.2 (Linux x64), both the backend file and the Docker fixture spec, and the backend file now runs in the Linux Engine CI workflow on amd64 and arm64.
 3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open.
 4. **Human screen-reader pass**: VoiceOver and NVDA over the layer tree, frame list, inspector and status regions. Status: open.
-5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: open (this host qualifies as both).
+5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, now to-do [2140](2140-design-frame-bridge-growth-under-culling.md). A slower machine and the Electron decision stay open: the 2026-11-01 host is not a slow laptop.
 6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open (published desktop builds exist).
 7. **Interrupted migration on a real binary**: the record-written, legacy-not-moved window. Status: deferred (unreachable from outside the process; unit-covered).
-8. **Design browser flakes 0208 and 0174**: the import picker late in the suite, and the parallel canvas timeout. Status: open (0174 was reopened on 2026-10-26, after this file called it resolved).
+8. **Design browser flakes 0208 and 0174**: the import picker late in the suite, and the parallel canvas timeout. Status: done (2026-11-01): 0208 was a picker race, fixed in the product; 0174 was the journey's page loads spending its budget under parallel load, fixed in the test. Both are resolved in the registry, and a host cause that hits any browser suite on a Linux host with Docker churn is recorded as [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
 9. **Deferred optimisations**: thumbnails, capture cache, second render worker, warm context pool, storage redesign, plus the open question on whether thumbnails are wanted. Status: deferred.
 10. **Shared live-provider harness (open question)**: whether design joins a shared live harness. Status: done in practice (own specs with a shared support module).
 11. **Cross-environment transfer UI (open question)**: whether to build one. Status: open (question only).
@@ -74,6 +77,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: no new work now.
     - Cons: keeps the "Docker Desktop for macOS only" qualification although a Linux Engine is already at hand.
 - **What counts as a pass?** All 11 backend cases pass on both CI architectures. A pass on this host also needs `design-container-export.spec.ts` to pass once. A skip (no image variable) is not a pass.
+
+**Outcome (2026-11-01).** Both options were taken. On beelink (Docker Engine 29.9.2, Linux x64, rootful) the backend file passed 4 of 4 runs (11 cases each) and `design-container-export.spec.ts` passed 3 of 3 against a headless `dev:test` profile; nothing needed fixing. The backend file is now a step of `container-live-qualification.yml`, with the job's own image, and `ci-workflows.test.ts` pins it. The arm64 half is that workflow's first run, which had not happened when this was written. See [Container export on Linux](#container-export-on-linux).
 
 ### 3. Electron gaps
 
@@ -180,6 +185,8 @@ No screen-reader automation (for example Guidepup) is a dependency, and Orca is 
     - Pros: measures the shipped desktop path, including the transport.
     - Cons: a sizeable harness change; Electron cannot run headless, so it needs a display.
 
+**Outcome (2026-11-01).** The run happened on beelink, not on the Ryzen laptop above: an Intel Core Ultra 9 285H with no Google Chrome, so the harness gained `--browser chromium` (Playwright's Chromium 156) and its `--rev` build was repaired. The host was shared with other builds throughout, so the figures are a busy host's, not reference numbers. See [Client performance on Linux](#client-performance-on-linux). The structural results matched the M5 Max; the 100-cycle leak check did not converge at 64 frames (window listeners and frames grew one for one), which is new to-do [2140](2140-design-frame-bridge-growth-under-culling.md). Still open: a slower machine, and the Electron question above (not decided here). On Linux, `_electron.launch` can now run without a display: Electron 45 starts on `--ozone-platform=headless --disable-gpu` (see decision 11).
+
 ### 6. Old renderer with new backend, and the reverse
 
 **Problem.** No run has paired an old renderer with the new backend, or the reverse. The desktop app can connect to a remote backend with either side newer (`docs/architecture/version-compatibility.md:45`, through `apps/desktop/electron/connection-manager.ts`), so users can hit both.
@@ -261,6 +268,11 @@ No screen-reader automation (for example Guidepup) is a dependency, and Orca is 
   - **Raise the per-test deadline for the mobile project.**
     - Pros: quick.
     - Cons: decision 7 rejected this, because it hides real stalls.
+
+**Outcome (2026-11-01).** The registry owns the detail; see [Design flakes (2026-11-01)](#design-flakes-2026-11-01).
+- **0208** is a product race: the host path picker's first listing replaced a path typed before it landed, so Enter browsed the home folder and **Select file** stayed disabled. Fixed in `HostPathPickerDialog.tsx`, with a unit reproduction and a real-stack A/B (decision 12).
+- **0174** reproduced 16 of 16 with eight workers on a loaded host, without throttling: the two dev-server page loads took 14–16 s of the 30 s budget and no step stalled. The test now adds page-load time back to its deadline (decision 13). The CPU throttle found nothing new: 4x passed 10 of 10, 8x 9 of 10, and the failure was the host cause below.
+- **2340** (environmental): on Linux, Chromium aborts in-flight loopback requests with `net::ERR_NETWORK_CHANGED` whenever Docker adds or removes a bridge or veth, so pages from a Vite server render blank while other work starts containers. It spoiled several runs here and is the likely cause of 0826's blank fixture pages.
 
 ### 9. Deferred optimisations
 
@@ -379,11 +391,14 @@ nobody builds them speculatively.
   [`testing-guide.md`](../../development/testing-guide.md#opt-in-design-checks))
   exports from a running container of the environment image through real
   `docker exec` and interrupts it. It passed on 2026-10-22 on Docker Desktop
-  (macOS arm64). The container is started directly, not by Orkestrator's
+  (macOS arm64) and on 2026-11-01 on Docker Engine 29.9.2 (Linux x64); the
+  Linux Engine CI workflow now runs it on amd64 and arm64. The container is
+  started directly, not by Orkestrator's
   container lifecycle. The Docker fixture case
   `e2e/agent-testing/design-container-export.spec.ts` (part of
   `mise run test:agent:docker`) covers a container Orkestrator created; it
-  passed three times on 2026-10-25.
+  passed three times on 2026-10-25 (macOS) and three times on 2026-11-01
+  (Linux Engine).
 - Electron: `e2e/agent-testing/design-canvas-electron.spec.ts`, part of
   `mise run test:agent:electron`, opens, edits, exports, downloads, imports a
   host file and drives the keyboard shortcuts in the real window.
@@ -396,7 +411,8 @@ nobody builds them speculatively.
   leak cycles and library open time. Culling is also unit-tested
   (`planLiveFrames` in `apps/web/src/components/design/design-visibility.ts`,
   tested in `design-viewport.test.ts`); `scripts/benchmark-design.ts`
-  measures the backend side.
+  measures the backend side. It ran on an Apple M5 Max (2026-10-22) and on a
+  busy Linux x64 host with Chromium (2026-11-01).
 - Mixed-version fallback and migration are unit-tested
   (`design-controller.test.ts`, `records.test.ts`). On 2026-10-25
   `scripts/qualify-design-mixed-versions.ts` ran the published backend
@@ -445,12 +461,13 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   protocol passed against a container Orkestrator created, through its
   network-policy entrypoint, cloned workspace and `ContainerService`
   lifecycle (`design-container-export.spec.ts`, see
-  [Orkestrator container export](#orkestrator-container-export)). Still
-  open:
-  - Docker Engine on Linux, batched with
-    [0019](../containers-and-environments/0019-container-platform-qualification.md).
-    This machine is macOS with Docker Desktop only.
-  Describe container export as qualified on Docker Desktop for macOS only.
+  [Orkestrator container export](#orkestrator-container-export)). On
+  2026-11-01 both passed on Docker Engine 29.9.2 on Linux x64 (see
+  [Container export on Linux](#container-export-on-linux)), and the backend
+  file joined the Linux Engine CI workflow for amd64 and arm64. Describe
+  container export as qualified on Docker Desktop for macOS and Docker Engine
+  on Linux x64; arm64 Linux follows from that workflow's next run. Not
+  covered: rootless Engine and SELinux hosts.
 - **Electron window.** Done on 2026-10-22 through
   `e2e/agent-testing/design-canvas-electron.spec.ts` (see
   [Electron](#electron)). Not covered: native menu key equivalents (Playwright
@@ -484,7 +501,9 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   measured; the numbers are host evidence, not thresholds. Still not done on
   2026-10-25: only this Apple M5 Max host was available, and the harness
   (`e2e/perf/design-canvas-perf.ts`) drives headless Chrome, not an Electron
-  window.
+  window. On 2026-11-01 it ran on a busy Linux x64 host with Playwright's
+  Chromium (see [Client performance on Linux](#client-performance-on-linux)).
+  Still open: a slower machine and the Electron renderer.
 - **Mixed versions and migration on real binaries.** The backend half is
   done on 2026-10-25 with the published `orkestrator@2.22.3` (the oldest
   Stable release on npm, inside the support window) and this checkout's
@@ -503,12 +522,19 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
     legacy file not yet moved) is not reachable from outside the process; it
     stays covered by "an interrupted migration (record written, legacy not
     retired) reads the record" in `records.test.ts`.
-- **Browser design flakes under controlled parallel load.**
+- **Browser design flakes under controlled parallel load.** Both resolved
+  on 2026-11-01 (see [Design flakes (2026-11-01)](#design-flakes-2026-11-01)):
+  0208 was a host path picker race, fixed in the product, and 0174's
+  recurrences after 2026-10-25 were the journey's page loads spending its
+  budget under parallel load, fixed in the test. On Linux hosts, browser
+  runs beside Docker churn also lose page loads to
+  [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+  The history below is kept as it was.
   [0174](../../tests/flaky-tests/design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md)
   (`e2e/DesignCanvas.spec.ts` timeouts with six workers) is fixed on
   2026-10-25: a 4x CDP CPU throttle reproduced it as a race in the test's
   conflicting edit, now made deterministic (see
-  [Design flakes](#design-flakes)). Still open:
+  [Design flakes](#design-flakes)). Still open on 2026-10-25:
   - [0208](../../tests/flaky-tests/design-canvas-and-artifacts/0208-design-canvas-private-import-picker-disabled-in-suite.md)
     (import picker stays disabled late in `test:agent:browser`). Its case
     passed all seven standalone `test:agent:design:isolated` runs on
@@ -1117,6 +1143,169 @@ full `test:agent:browser` suite were not run: the change is renderer
 dispatch, the design specs and a script, covered by the isolated design
 suite and the Docker fixture case above.
 
+## Qualification evidence (2026-11-01)
+
+Branch `linux-canvas-export-c8f02f652ad2-r1` from `93b99bfb`. Host: beelink,
+Linux 7.1.8 (Arch-based), Intel Core Ultra 9 285H (16 logical CPUs), 62 GiB,
+Bun 1.4.4, Docker Engine 29.9.2 (linux/amd64, rootful, overlayfs, seccomp
+builtin, cgroupns), Playwright 1.64.0 with Chromium 156. Other builds ran on
+this host throughout, starting and removing containers; load averages are
+given per run and ranged from 3 to 77. No timing here is a reference figure.
+
+### Container export on Linux
+
+- **Backend file.** `ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE=orkestrator-v2:latest`
+  (image `ba91a0125f81`, the published `2.34.4-beta` build of 2026-10-29),
+  `bun test --cwd apps/backend ./src/core/design/export-container.test.ts`:
+  11 pass, 0 fail, 86 expectations, three runs in a row (11.2, 10.8 and
+  10.8 s; load 4.7–5.3). The workflow's form (`--preload
+  ../../tests/setup-node.ts --parallel=1`) passed once more (10.6 s; load
+  8.5). No Docker call took over 10 s, unlike `docker stop` on Docker
+  Desktop. Nothing with the test's owner label was left behind.
+- **Every case held as on Docker Desktop**, including the one that depends
+  on this daemon: with the Docker client killed after sending every byte, the
+  Engine closed the helper's stdin, the helper published the complete file,
+  and reconcile proved `exported` by digest without a second writer.
+- **Docker fixture spec.** A disposable profile,
+  `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 mise run dev:test --profile
+  qa-0036-linux --fixture --fixture-environments local,container
+  --no-agent-credentials --agent-platforms codex`, which built
+  `orkestrator-v2:dev-a2140e5dc5e5` from this checkout and ran its backend on
+  port 34803. `ORKESTRATOR_AGENT_TEST_DOCKER=1 bunx playwright test --config
+  e2e/agent-testing/playwright.browser.config.ts
+  e2e/agent-testing/design-container-export.spec.ts` passed three times
+  (5.3, 6.5 and 7.7 s; load 9–17). `dev:reset` then removed two containers,
+  two volumes and one network by exact owner, and the dev image was removed
+  by tag.
+- **CI.** `container-live-qualification.yml` gained a "Live design export"
+  step with `ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE` set to the job's
+  qualification image, and runs on pull requests that change the test,
+  `export-writer.ts` or `exports.ts`. It has not run yet.
+- **Headless profile.** This host's `DISPLAY` and `WAYLAND_DISPLAY` belong to
+  the signed-in user, so the profile's Electron ran on
+  `--ozone-platform=headless --disable-gpu` with both removed (decision 11).
+  Electron 45.0.0 (Chromium 156) started, loaded its window and announced
+  readiness in that mode.
+- **Host firewall.** The container-fixture profile showed **Docker containers
+  can't reach Orkestrator** (this host's ufw drops container traffic to the
+  agent tools port). It does not affect export, which goes over
+  `docker exec`, but it covers the app and fails UI specs on that profile.
+
+### Client performance on Linux
+
+`mise exec -- bun e2e/perf/design-canvas-perf.ts --runs 3 --samples 20
+--moves 3 --html-samples 5 --cycles 12 --skip-library --rev HEAD --browser
+chromium`, then the same with `--skip-canvas --library-samples 5`: the
+2026-10-22 parameters, in two invocations so one late failure cannot lose
+both halves (an earlier single invocation failed in its library phase,
+waiting 30 s for **New design workspace**, and wrote no report; the library
+phase alone then passed).
+
+- **Setup.** Playwright's Chromium 156.0.8078.4, headless (no Google Chrome
+  on this host), a production React build of `95093c16`, served by
+  `vite preview` at 1440×900; otherwise as on 2026-10-22. Reports:
+  `output/benchmarks/design-canvas/2026-11-01T03-57-50-519Z.json` (canvas)
+  and `2026-11-01T04-13-42-394Z.json` (library), numbers only.
+- **Host load, measured by the harness at each phase.** Canvas runs 1 and 2
+  (03:58–04:08 UTC): load1 0.8–12, other processes 1–12 cores busy. Run 3
+  (04:08–04:13): other builds started again and load1 climbed from 0.8 to
+  79 (up to 21 cores busy). Library (04:13–04:17): load1 58–77. These are a
+  busy shared host's figures, not reference figures, and they do not rank
+  this host against the M5 Max.
+
+| Metric | 1 frame | 16 frames | 64 frames |
+| --- | --- | --- | --- |
+| Pointer move → preview painted, p50/p95 ms (360 samples) | 11.8/30.35 | 13.75/31.86 | 16.6/33.54 |
+| Pointer up → acknowledgment painted, p50/p95 ms (120 samples) | 25.1/69.18 | 35/129.11 | 51.75/258.58 |
+| Longest acknowledgment ms (runs 1/2/3) | 48/36/91 | 90/41/160 | 115/65/395 |
+| Pan frame interval p50/p95 ms; dropped frames (pooled) | 16.7/16.7; 0% | 16.7/16.7; 0.6% | 16.7/16.8; 5.2% |
+| Live iframes at fit all / 100% / panned away / max while panning | 1/1/0/1 | 8/8/2/8 | 8/8/6/8 |
+| Mounted layer rows at fit all / 100% / panned | 7/7/7 | 16/16/22 | 37/37/37 |
+| Iframe replacements per geometry edit (120 edits) | 0 | 0 | 0 |
+| Iframe replacements / in-frame re-renders per HTML edit | 0/1 | 0/1 | 0/1 |
+| Post-GC JS heap MiB at 100% / after 12 leak cycles | 10.36/12.16 | 11.59/13.29 | 12.72/14.27 |
+| DOM nodes at 100% | 415 | 655 | 892 |
+
+| Library | 1 canvas | 50 canvases | 256 canvases |
+| --- | --- | --- | --- |
+| **Saved designs** press → first page painted, p50/p95 ms (15 samples) | 93.6/208.56 | 124.7/286.83 | 87.7/183.58 |
+| `design_library` call p50/p95 ms | 4.54/14.62 | 3.2/6.66 | 1.37/9.78 |
+
+- **What the numbers mean.**
+  - The structural results match the M5 Max exactly: geometry edits never
+    replaced or re-rendered an iframe, an HTML edit re-rendered its frame
+    once in place, culling held live iframes at 8, and layer rows stayed
+    bounded. DOM nodes are about 98 higher at every size than on
+    `b83ae534`, from UI added since; heap is about 1.5 MiB higher.
+  - Load showed directly in run 3. With load1 at 33–79 the 64-frame pan
+    dropped 13.5% of frames (pan p95 33.4 ms) and acknowledgment p95 reached
+    293 ms, against 0% and 56–84 ms in runs 1 and 2 at load1 0.8–12. In
+    runs 1 and 2 alone, preview p95 was 29–31 ms, acknowledgment p95
+    33–84 ms and no pan frame dropped, close to the M5 Max's figures.
+  - The library open times (88–125 ms p50) were taken at load1 58–77; the
+    one quiet probe of the same step, at load1 14, took 45 ms. The first
+    page is still 50 rows, so 256 canvases cost the same as 50; all pages
+    took 879 ms p50.
+- **Leak check** (12 cycles × 3 runs). Converged at 16 frames in all three
+  runs. At 1 frame, `jsEventListeners` grew once from 260 to 285 in runs 1
+  and 2: the same +25 warm-up the M5 Max showed at 12 cycles, which settled
+  at 100 cycles there. At 64 frames, run 2 grew window listeners 33 → 35
+  and CDP frames 9 → 11, and run 3 (load1 67–79) grew listeners 441 → 450,
+  window listeners 39 → 44 and CDP frames 15 → 20.
+- **Recheck at 100 cycles** (`--runs 1 --frames 1,64 --cycles 100
+  --skip-library`, load1 falling from 42 to 3; report
+  `2026-11-01T04-18-05-573Z.json`). At 1 frame it converged: listeners
+  settled at 260 after the first cycle. At 64 frames it did not: window
+  listeners grew 34 → 61 and CDP frames 10 → 37, one for one, unevenly,
+  while the DOM held 8 iframes and the post-GC heap rose 13.8 → 14.6 MiB.
+  The M5 Max converged at 64 frames on `60a75b73`. A frame bridge that is
+  created but never committed would explain it; that is unverified and is
+  new to-do
+  [2140](2140-design-frame-bridge-growth-under-culling.md).
+- **Decision.** Unchanged apart from 2140: nothing here argues for a client optimisation,
+  and the backend items under [Deferred until measured](#deferred-until-measured)
+  stay deferred. Not covered: a slower machine, and the Electron renderer.
+
+### Design flakes (2026-11-01)
+
+- **0208.** A race in `HostPathPickerDialog`: the picker's first listing (the
+  home folder) wrote its folder into the address field when it landed, so a
+  path typed before then was replaced, Enter browsed the home folder, and
+  **Select file** stayed disabled. The new unit test holds that listing,
+  types a path and releases it; it failed before the fix (`/home/me` in the
+  field) and passes after it. On the real stack, a diagnostic edit of the
+  case (not committed) held the first `list_host_directory` until the path
+  was typed: without the fix **Select file** stayed disabled in 2 of 2 runs,
+  with it the case passed 2 of 2 (1.2 min, 56.4 s; load 35–45). The
+  unchanged `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 mise run
+  test:agent:design:isolated` failed all three cases before any picker,
+  each on a page that never rendered (2340; load 43–57).
+- **0174.** One worker with the CPU throttle and a 120 s deadline: 4x passed
+  10 of 10, 8x passed 9 of 10 (21.9–25.1 s), and the failure was 2340. No
+  stall at **Apply styles** or the replacement element. Eight workers
+  (`--workers=8 --repeat-each=8`, default 30 s, load 48–77) failed 16 of 16
+  at the deadline at lines 210, 220 and 224; in the traces `page.goto` took
+  8.6–10.0 s and `page.reload()` 5.2–5.8 s, and no other step more than
+  1.4 s. After `pageLoad()` gave that time back: mobile passed 8 of 8
+  (36.2–40.3 s wall time; load 58–73); desktop lost 15 of 16 runs across two
+  attempts to 2340 (4–340 aborted module requests each) and passed the one
+  without aborts; one worker passed 6 of 6 (16.2–22.5 s; load 44–62).
+- **2340** (environmental). With a page of 60 slow loopback scripts loaded
+  15 times, 0 of 915 requests failed without Docker churn of mine and 797 of
+  915 failed with `net::ERR_NETWORK_CHANGED` while a labelled network was
+  created and removed every 0.5 s. `ip monitor` showed other builds'
+  bridges and veths appearing every few seconds. Chromium on Linux treats
+  each as a network change and aborts in-flight requests, loopback included.
+
+### Repository checks (2026-11-01)
+
+Focused only, as this stage requires: `HostPathPickerDialog.test.tsx`
+(23 pass), `apps/desktop/scripts/dev/lifecycle.test.ts` (17 pass),
+`tests/unit/ci-workflows.test.ts` (7 pass), `tests/unit/flaky-tests-index.test.ts`
+(18 pass), `tests/unit/docs` and `tests/unit/todo-index.test.ts` (33 pass),
+`tests/unit/mise-tasks.test.ts` (15 pass) and `bun fmt --check` on the changed files. The full suites, typecheck and
+lint are left to the next stage's validation.
+
 ## Constraints and rationale
 
 - Runs use a unique isolated profile and only its fixture repository, with
@@ -1260,6 +1449,71 @@ Made on 2026-10-25 while working this file.
    screen readers) and an old renderer, all Medium by the rating rules; the
    opening prompt, which users hit, is done.
 
+Made on 2026-11-01 while working tasks 2, 5 and 8.
+
+10. **Linux Engine: both a run here and the CI workflow.**
+    - Options: the CI workflow only (task 2's recommendation); a manual run
+      on this host only; both.
+    - Chosen: both. The local run gives the evidence now, including the
+      Orkestrator-created container, which CI cannot run; the workflow gives
+      arm64 and keeps it from regressing.
+    - Pros: amd64 proved today, arm64 and recurrence covered by CI. Cons:
+      about 11 s more per architecture in that workflow; CI runners are
+      still not rootless or SELinux hosts.
+11. **Headless Electron for agent-test profiles on Linux.**
+    - Options: run `dev:test` as is (its Electron window would open on the
+      signed-in user's desktop, which this host's rules forbid); a virtual
+      X server (`xvfb-run`; not installed, and nothing may be installed
+      system-wide); an opt-in that starts Electron on Chromium's headless
+      Ozone platform without `DISPLAY` or `WAYLAND_DISPLAY`.
+    - Chosen: the opt-in, `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`
+      (`electronLaunchForRuntime` in `apps/desktop/scripts/dev/lifecycle.ts`),
+      honoured only by agent-test profiles on Linux.
+    - Pros: no display or install needed; nothing changes unless it is set.
+      Cons: Electron window specs and screenshots of that window do not work
+      in this mode (`capturePage` hung in a probe); it is one more
+      environment variable to know about.
+12. **0208: fix the picker, not the test.**
+    - Options: have the test wait for the first listing before typing; keep
+      a typed path when a listing lands.
+    - Chosen: the product fix.
+    - Why: a person typing a path while the picker loads (a remote backend,
+      a large home folder) loses it the same way; the test only showed it.
+    - Pros: fixes users' input as well as the flake; a unit test pins it.
+      Cons: a path typed and then abandoned stays in the field until the
+      next navigation, rather than being replaced by the listed folder.
+13. **0174: give page-load time back to the deadline.**
+    - Options: raise the 30 s deadline (decision 7 rejected it); split the
+      journey into several tests; build the fixture for production in the
+      component suite; add the time spent in `page.goto` and `page.reload()`
+      back to the deadline.
+    - Chosen: the last, `pageLoad()` in `e2e/DesignCanvas.spec.ts`.
+    - Why: under eight workers the two page loads took 14–16 s of the 30 s
+      and no step stalled; the steps alone fit.
+    - Pros: the steps keep exactly the budget decision 7 defended, so a
+      stalled step still fails at 30 s; one small helper. Cons: a slow page
+      load is no longer caught by this test (it still fails if a load hangs
+      past the deadline); the wall time of a passing run can exceed 30 s;
+      only mobile was confirmed under parallel load, because 2340 spoiled
+      the desktop runs.
+14. **Perf on this host with Playwright's Chromium.**
+    - Options: install Google Chrome (not allowed system-wide); wait for a
+      host with Chrome; add `--browser chromium` and run here.
+    - Chosen: `--browser chromium`.
+    - Pros: Linux numbers now. Cons: Chromium 156 rather than Chrome; the
+      host was shared with other builds throughout, so the numbers are not
+      comparable with the M5 Max ones as a ranking.
+15. **2340 is recorded, not mitigated.**
+    - Options: route every Vite module request through Playwright in the
+      browser suites; keep Docker work and browser suites apart on Linux
+      hosts; record it and leave the suites unchanged.
+    - Chosen: record it.
+    - Why: the condition is the host's, not the product's, and routing
+      every module request through Playwright would change what the suites
+      measure.
+    - Pros: no test transport change. Cons: browser runs on a shared Linux
+      host stay exposed while other builds start containers.
+
 ## Open questions
 
 - Should design join a shared live-provider harness (like
@@ -1273,6 +1527,9 @@ Made on 2026-10-25 while working this file.
 ## Related
 
 - [0038-design-agent-conversation-links.md](0038-design-agent-conversation-links.md).
+- [2140-design-frame-bridge-growth-under-culling.md](2140-design-frame-bridge-growth-under-culling.md):
+  the window listener and frame growth the 2026-11-01 Linux leak check found
+  at 64 frames.
 - [`design-canvas.md`](../../architecture/design-canvas.md) ("Operations" and
   "Client"): the operation recovery edges and accessibility fixes, moved there
   when todos 0037 and 0054 were retired on 2026-10-29.
@@ -1282,11 +1539,16 @@ Made on 2026-10-25 while working this file.
   [0030-test-suite-and-ci-health.md](../cross-cutting/0030-test-suite-and-ci-health.md) for flake triage.
 - [`agent-testing.md`](../../development/agent-testing.md) and
   [`testing-guide.md`](../../development/testing-guide.md).
-- Open design flakes:
+- Design flakes resolved on 2026-11-01:
   [0208](../../tests/flaky-tests/design-canvas-and-artifacts/0208-design-canvas-private-import-picker-disabled-in-suite.md)
-  and [0246](../../tests/flaky-tests/design-canvas-and-artifacts/0246-design-renderer-real-chromium-launch-deadline.md)
-  (real-Chromium launch on CI). Resolved on 2026-10-25 as a test race:
-  [0174](../../tests/flaky-tests/design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md).
+  (host path picker race) and
+  [0174](../../tests/flaky-tests/design-canvas-and-artifacts/0174-design-canvas-parallel-browser-timeout.md)
+  (page loads under parallel load; also a test race on 2026-10-25). The Linux
+  host condition behind blank pages beside Docker churn:
+  [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+  Resolved earlier:
+  [0246](../../tests/flaky-tests/design-canvas-and-artifacts/0246-design-renderer-real-chromium-launch-deadline.md)
+  (real-Chromium launch on CI).
   Resolved on 2026-10-16 as test artefacts:
   [0193](../../tests/flaky-tests/design-canvas-and-artifacts/0193-design-sync-gap-aggregate-timeout.md),
   [0215](../../tests/flaky-tests/design-canvas-and-artifacts/0215-design-operation-replay-event-count.md),

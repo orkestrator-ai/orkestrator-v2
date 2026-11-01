@@ -14,7 +14,6 @@ import {
   MessagesSquare,
   RefreshCw,
   RotateCcw,
-  X,
 } from "lucide-react";
 import {
   coordinatorRuntimeId,
@@ -62,10 +61,6 @@ import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
-import {
-  useNativeNoticeDismissalStore,
-  useNoticeDismissalsReady,
-} from "@/stores/nativeNoticeDismissalStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useStore } from "zustand";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -633,29 +628,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   );
   const switchBlocked = Boolean(blocked && !discardableDirty);
   const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitch?.ref);
-  const newestContextEvent = snapshot?.workspace.repositoryContextEvents?.at(-1);
-  const contextNoticeSessionIdentity = snapshot
-    ? `coordinator\u0000${projectId}\u0000${snapshot.workspace.id}\u0000${selected?.id ?? "none"}`
-    : undefined;
-  const contextNoticeOccurrenceId = newestContextEvent
-    ? `repository-context\u0000${newestContextEvent.revision}`
-    : undefined;
-  const contextNoticeDismissed = useNativeNoticeDismissalStore((state) =>
-    contextNoticeSessionIdentity && contextNoticeOccurrenceId
-      ? (state.sessions
-          .find((session) => session.sessionIdentity === contextNoticeSessionIdentity)
-          ?.occurrenceIds.includes(contextNoticeOccurrenceId) ?? false)
-      : false,
-  );
-  const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
-  const noticeDismissalsReady = useNoticeDismissalsReady();
-  const latestContextEvent =
-    noticeDismissalsReady &&
-    newestContextEvent &&
-    (selected?.repositoryContextRevisionAcknowledged ?? 0) < newestContextEvent.revision &&
-    !contextNoticeDismissed
-      ? newestContextEvent
-      : undefined;
 
   /*
    * Held until the turn is observed, not until the tab has rendered once.
@@ -1067,33 +1039,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           environments.find((item) => item.id === entry.environmentId)?.name ?? entry.environmentId
         }
       />
-
-      {latestContextEvent ? (
-        <div
-          role="status"
-          className="flex shrink-0 items-center gap-3 border-b border-blue-400/20 bg-blue-400/5 px-3 py-1.5 text-xs text-blue-200"
-        >
-          <span className="min-w-0 flex-1">
-            Repository context changed to {latestContextEvent.branch ?? "detached HEAD"} at{" "}
-            <code>{latestContextEvent.headCommit?.slice(0, 12) ?? "an unborn commit"}</code>{" "}
-            (context r{latestContextEvent.revision}). Earlier analysis may be stale; the next turn
-            receives the new context.
-          </span>
-          <button
-            type="button"
-            aria-label="Dismiss repository context notice"
-            title="Dismiss notice"
-            className="shrink-0 cursor-pointer rounded-sm opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
-            onClick={() => {
-              if (contextNoticeSessionIdentity && contextNoticeOccurrenceId) {
-                dismissNotice(contextNoticeSessionIdentity, contextNoticeOccurrenceId);
-              }
-            }}
-          >
-            <X aria-hidden="true" className="size-3.5" />
-          </button>
-        </div>
-      ) : null}
 
       <div className="relative min-h-0 flex-1">
         {layout ? (

@@ -1,15 +1,24 @@
+/**
+ * Which Verify run a pipeline's acceptance criteria are judged by.
+ *
+ * The backend only stores each Verify session's results. Choosing the run that
+ * counts (the newest one that reported, never a superseded one) and matching
+ * its ids back onto the snapshot's criteria is a projection every client must
+ * make identically, so the inspector, the flow graph and any other reader of a
+ * pipeline agree on the ticks.
+ */
 import {
   isSupersededPipelineSession,
   taskSnapshotCriteria,
   type BuildPipeline,
   type PipelineSession,
-} from "@orkestrator/protocol/build-pipeline";
+} from "./build-pipeline.js";
 import {
   acceptanceCriteriaTally,
   sectionsFromTicketText,
   TICKET_SECTION_LIMITS,
   type AcceptanceCriterion,
-} from "@orkestrator/protocol/ticket-sections";
+} from "./ticket-sections.js";
 
 export interface PipelineCriteriaView {
   /** The snapshot's criteria, each with the newest live Verify result for it. */

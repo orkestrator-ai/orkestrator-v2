@@ -92,10 +92,10 @@ export class GraphAgentProviders {
     const creation = (async () => {
       const provider = this.options.create
         ? await this.options.create(environment, agent)
-        : createBuildPipelineProvider(
-            await this.requireConnection(environment, agent),
-            this.options.dependencies ?? {},
-          );
+        : createBuildPipelineProvider(await this.requireConnection(environment, agent), {
+            ...this.options.dependencies,
+            refreshConnection: () => this.requireConnection(environment, agent),
+          });
       const managed = managedProvider(provider);
       this.providers.set(key, managed);
       return managed;

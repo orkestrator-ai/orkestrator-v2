@@ -189,6 +189,7 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    */
   commandSandboxOff?: string;
   startedAt?: string;
+  turnStartedAt?: string;
   completedAt?: string;
 }
 
@@ -428,6 +429,7 @@ const REVIEWER_KEYS = [
   "progressDigest",
   "stalledSince",
   "startedAt",
+  "turnStartedAt",
   "completedAt",
 ] as const;
 
@@ -478,6 +480,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     optionalProgressDigest(value.progressDigest) &&
     optionalDate(value.stalledSince) &&
     optionalDate(value.startedAt) &&
+    optionalDate(value.turnStartedAt) &&
     optionalDate(value.completedAt) &&
     (value.report === undefined || isStructuredReviewReport(value.report)) &&
     (value.provisionalFindings === undefined ||

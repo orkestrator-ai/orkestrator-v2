@@ -61,6 +61,8 @@ export interface AgentBranchRecord {
   providerSessionId?: string;
   requestId?: string;
   dispatchState?: AgentBranchDispatchState;
+  /** Dispatch time of the current request, including follow-up turns. */
+  turnStartedAt?: string;
   resultTransport?: WorkflowResultTransport;
   resultSubmission?: WorkflowResultSubmissionState;
   schemaRepairAttempts?: number;

@@ -716,9 +716,9 @@ make the machine flap. Three things can move it:
   the order. That is a move when the active limit reaches 98% used, and also when
   another included account simply resets sooner, or the active account's own tick
   is off. A running turn finishes on the old account, as with any switch. A native
-  tab's next turn moves over. A workflow's cached provider does not until it is
-  dropped, so its next stage can still run on the old account, reach the limit and
-  move through the path below (see
+  tab's next turn moves over. Workflow providers resolve the local bridge before
+  creating a session or preparing each new turn, so an idle bridge moves over
+  even when the provider is cached. A busy bridge stays on its running account (see
   [1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-workflows-next-turn-after-a-between-turns-move)).
 - **A limit error mid-turn.** The turn's error has to read as a usage limit, and
   then a forced read of the account the turn ran on has to show the general weekly

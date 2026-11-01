@@ -135,6 +135,7 @@ export function graphAgentBranch(
             ? { commandSandboxOff: session.commandSandboxOff }
             : {}),
           ...(session.startedAt !== undefined ? { startedAt: session.startedAt } : {}),
+          ...(session.turnStartedAt !== undefined ? { turnStartedAt: session.turnStartedAt } : {}),
         }
       : {}),
   };
@@ -167,6 +168,7 @@ export function graphAgentSession(
     ...(extras.continuedFrom !== undefined ? { continuedFrom: extras.continuedFrom } : {}),
     ...(extras.turnMode !== undefined ? { turnMode: extras.turnMode } : {}),
     ...(branch.startedAt !== undefined ? { startedAt: branch.startedAt } : {}),
+    ...(branch.turnStartedAt !== undefined ? { turnStartedAt: branch.turnStartedAt } : {}),
     ...(branch.resultSubmission !== undefined ? { resultSubmission: branch.resultSubmission } : {}),
     ...(branch.schemaRepairAttempts !== undefined
       ? { repairAttempts: branch.schemaRepairAttempts }

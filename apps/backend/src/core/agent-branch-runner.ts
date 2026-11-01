@@ -532,6 +532,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       await this.commits.commit({
         apply: () => {
           branch.dispatchState = "dispatching";
+          branch.turnStartedAt = agentBranchNowIso();
         },
         revert: () => {
           branch.dispatchState = "prepared";
@@ -713,7 +714,9 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         requestId,
         error: statusDetail,
         resends: branch.usageLimitResends ?? 0,
-        ...(branch.startedAt ? { turnStartedAt: branch.startedAt } : {}),
+        ...((branch.turnStartedAt ?? branch.startedAt)
+          ? { turnStartedAt: branch.turnStartedAt ?? branch.startedAt }
+          : {}),
       });
       await host.assertFence();
       if (verdict === "wait") return "continue";

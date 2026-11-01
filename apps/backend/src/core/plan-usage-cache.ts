@@ -131,6 +131,7 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
         new Date(at).toISOString(),
         cached?.snapshot.plan,
       );
+      snapshot.paidOverage = cached?.snapshot.paidOverage ?? lastOk.get(platform)?.paidOverage;
       entries.set(platform, { expiresAt: at + CACHE_TTL_MS, snapshot });
       lastOk.set(platform, snapshot);
     },

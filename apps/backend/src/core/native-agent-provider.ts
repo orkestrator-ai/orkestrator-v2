@@ -75,6 +75,8 @@ function applySignInGuidance(
 export type ProviderDependencies = HttpBridgeProviderDependencies &
   OpenCodeProviderDependencies & {
     workflowResults?: WorkflowResultReader;
+    /** Resolve the bridge before a new workflow turn; local startup preserves busy bridges. */
+    refreshConnection?: () => Promise<BridgeConnection>;
     /** Platform-specific dependencies are derived from this; explicit ones win. */
     environment?: NativeAgentProviderEnvironment;
     /** Automatic account switching, which turns a workflow's weekly-limit stop into a resend. */
@@ -97,6 +99,11 @@ export function trackRunningTurns(provider: NativeAgentRuntimeProvider): () => b
   const note = (sessionId: string, status: string) => {
     if (status === "running" || status === "blocked") seen.set(sessionId, Date.now());
     else seen.delete(sessionId);
+  };
+  const send = provider.send?.bind(provider);
+  provider.send = async (sessionId, ...args) => {
+    note(sessionId, "running");
+    return send?.(sessionId, ...args);
   };
   const status = provider.status.bind(provider);
   provider.status = async (sessionId) => {
@@ -122,6 +129,8 @@ export function trackRunningTurns(provider: NativeAgentRuntimeProvider): () => b
   };
 }
 
+const bridgeTurnObservers = new Map<string, Set<() => boolean>>();
+
 export function createNativeAgentProvider(
   connection: BridgeConnection,
   dependencies: ProviderDependencies = {},
@@ -139,12 +148,49 @@ export function createNativeAgentProvider(
           dependencies.onObservationHint,
           dependencies.planUsage,
         );
-  const { usageLimitStops } = dependencies;
-  if (usageLimitStops && isAgentAccountPlatform(connection.agent)) {
-    const platform = connection.agent;
-    const siblingTurnRunning = trackRunningTurns(provider);
+  const platform = connection.agent;
+  const tracksTurns =
+    isAgentAccountPlatform(platform) &&
+    (dependencies.usageLimitStops || dependencies.refreshConnection);
+  const siblingTurnRunning = tracksTurns ? trackRunningTurns(provider) : () => false;
+  const bridgeKey = `${connection.agent}:${connection.baseUrl}`;
+  const bridgeRunning = () =>
+    [...(bridgeTurnObservers.get(bridgeKey) ?? [])].some((running) => running());
+  if (tracksTurns) {
+    const key = bridgeKey;
+    const observers = bridgeTurnObservers.get(key) ?? new Set<() => boolean>();
+    observers.add(siblingTurnRunning);
+    bridgeTurnObservers.set(key, observers);
+    const dispose = provider.dispose?.bind(provider);
+    provider.dispose = () => {
+      observers.delete(siblingTurnRunning);
+      if (!observers.size) bridgeTurnObservers.delete(key);
+      dispose?.();
+    };
+    if (dependencies.refreshConnection) {
+      const refresh = async () => {
+        if ([...observers].some((running) => running())) return;
+        Object.assign(connection, await dependencies.refreshConnection!());
+      };
+      const create = provider.createSession.bind(provider);
+      provider.createSession = async (...args) => {
+        await refresh();
+        return create(...args);
+      };
+      const prepare = provider.prepareDispatch?.bind(provider);
+      provider.prepareDispatch = async (...args) => {
+        await refresh();
+        await prepare?.(...args);
+      };
+    }
+  }
+  if (dependencies.usageLimitStops && isAgentAccountPlatform(platform)) {
     provider.usageLimitStop = (input) =>
-      usageLimitStops.handleLimitStop({ ...input, platform, siblingTurnRunning });
+      dependencies.usageLimitStops!.handleLimitStop({
+        ...input,
+        platform,
+        siblingTurnRunning: bridgeRunning,
+      });
   }
   // Codex runs the model its session was created with; the other bridges carry
   // the model on each prompt and keep the configured one.

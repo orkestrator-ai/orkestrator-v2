@@ -251,7 +251,7 @@ export function weeklyLimitReading(
     snapshot.windows.some((window) => (windowUsed(window, now) ?? 0) >= 100);
   const wouldPay = snapshot.paidOverage?.inUse === true || otherLimitOut;
   const window = generalWeeklyWindow(platform, snapshot.windows);
-  if (!window) return { freshness, wouldPay };
+  if (!window) return { freshness: "none", wouldPay };
   const reset = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
   const usedPercent = windowUsed(window, now);
   return {
@@ -329,6 +329,8 @@ export function decideAutoSwitch(
   accounts: readonly AutoSwitchAccount[],
   activeAccountId: string,
 ): AutoSwitchDecision {
+  const current = accounts.find(({ account }) => account.id === activeAccountId);
+  if (current?.included && current.reading.freshness === "none") return { action: "stay" };
   const best = rankAutoSwitchAccounts(accounts, activeAccountId)[0];
   if (!best || best.account.id === activeAccountId) return { action: "stay" };
   const active = accounts.find(({ account }) => account.id === activeAccountId);

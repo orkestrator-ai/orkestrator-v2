@@ -177,3 +177,14 @@ describe("a reviewer the weekly limit stopped", () => {
     expect(reviewer.status).toBe("failed");
   });
 });
+
+test("stop attribution uses current follow-up turn time instead of session start", async () => {
+  const { reviewer, runner, usageLimitStop } = harness("stop", {
+    startedAt: "2026-11-01T10:00:00Z",
+    turnStartedAt: "2026-11-01T12:00:00Z",
+  });
+  await runner.advanceReviewers([reviewer]);
+  expect(usageLimitStop).toHaveBeenCalledWith(
+    expect.objectContaining({ turnStartedAt: "2026-11-01T12:00:00Z" }),
+  );
+});

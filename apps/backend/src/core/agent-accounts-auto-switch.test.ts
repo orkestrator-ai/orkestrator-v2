@@ -81,7 +81,7 @@ function harness(options: {
     async (
       _platform: AgentAccountPlatform,
       accountId: string,
-      _automatic: { expectedActive: string; reason: string },
+      _automatic: { expectedActive: string; reason: string; expectedIdentity?: string },
     ) => {
       if (!state.moved) return false;
       state.active = accountId;
@@ -162,6 +162,7 @@ describe("between turns", () => {
     expect(h.state.active).toBe("b");
     expect(h.switchAccount.mock.calls[0]?.[2]).toEqual({
       expectedActive: "a",
+      expectedIdentity: JSON.stringify({ email: "b@example.com" }),
       reason: "soonest-reset",
     });
     expect(h.notices).toEqual([
@@ -679,5 +680,54 @@ describe("the provider a workflow holds", () => {
     } finally {
       now.mockRestore();
     }
+  });
+});
+
+describe("weekly evidence lifetime", () => {
+  test("session-only active usage stays unknown and a stop waits", async () => {
+    const partial: PlanUsageSnapshot = {
+      platform: "claude",
+      status: "ok",
+      fetchedAt: inHours(0),
+      windows: [{ window: "five_hour", usedPercent: 100 }],
+    };
+    const h = harness({ accounts: { a: partial, b: usage({ used: 20, resetsInHours: 1 }) } });
+    await h.switcher.evaluate("claude");
+    expect(h.state.active).toBe("a");
+    expect(await h.stop()).toBe("wait");
+    expect(h.notices).toHaveLength(0);
+  });
+
+  test("confirmation expires at reset before its reuse TTL", async () => {
+    let reading = usage({ used: 100, resetsInHours: 1 / 120 });
+    const h = harness({
+      busy: true,
+      accounts: { a: () => reading, b: usage({ used: 20, resetsInHours: 2 }) },
+      session: {
+        platform: "claude",
+        source: "account",
+        account: { id: "a" },
+        running: true,
+      } as AgentSessionAccount,
+    });
+    expect(await h.stop()).toBe("wait");
+    h.advance(60_000);
+    reading = usage({ used: 10, resetsInHours: 168 });
+    expect(await h.stop({ requestId: "another" })).toBe("stop");
+  });
+
+  test("confirmed busy stop retains attribution and proof beyond read and move budgets", async () => {
+    let reading = usage({ used: 100, resetsInHours: 24 });
+    const h = harness({
+      busy: true,
+      accounts: { a: () => reading, b: usage({ used: 20, resetsInHours: 2 }) },
+    });
+    expect(await h.stop({ turnStartedAt: inHours(-1) })).toBe("wait");
+    h.advance(11 * 60_000);
+    reading = usage("unavailable");
+    expect(await h.stop({ turnStartedAt: inHours(-1) })).toBe("wait");
+    h.advance(USAGE_LIMIT_RECHECK_MS);
+    h.state.busy = false;
+    expect(await h.stop({ turnStartedAt: inHours(-1) })).toBe("resend");
   });
 });

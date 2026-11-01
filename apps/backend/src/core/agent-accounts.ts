@@ -224,7 +224,11 @@ function assertKnownAccountId(accountId: string): void {
   }
 }
 
-type AutomaticSwitch = { expectedActive: string; reason: AutoSwitchReason };
+type AutomaticSwitch = {
+  expectedActive: string;
+  reason: AutoSwitchReason;
+  expectedIdentity?: string;
+};
 
 /**
  * Make an account the one new launches use. Running bridges are not touched:
@@ -270,6 +274,20 @@ async function switchActiveAccount(
 ): Promise<boolean> {
   const accounts = context.runtime.accounts;
   return accounts.withMutation(async () => {
+    if (options.automatic) {
+      const latest = await listAgentAccounts(context);
+      const target = latest.accounts.find(
+        (entry) => entry.platform === platform && entry.id === accountId,
+      );
+      if (
+        latest.autoSwitch?.[platform]?.mode !== "automatic" ||
+        !latest.autoSwitch[platform]?.includedAccountIds.includes(accountId) ||
+        !target ||
+        (options.automatic.expectedIdentity !== undefined &&
+          JSON.stringify(target.identity) !== options.automatic.expectedIdentity)
+      )
+        return false;
+    }
     const outgoing = accounts.planUsage.cache.lastOk(platform);
     const nowIso = new Date().toISOString();
     let pinned = false;
@@ -347,21 +365,23 @@ export async function setAgentAccountAutoSwitch(
   platform: AgentAccountPlatform,
   change: { enabled?: boolean; email?: string; accountId?: string; included?: boolean },
 ): Promise<AgentAccountsSnapshot> {
-  if (change.enabled !== undefined || change.email !== undefined) {
-    await context.storage.updateAgentAccountAutoSwitchSettings((current) =>
-      withAutoSwitchTicks(normalizeAgentAccountAutoSwitchSettings(current), platform, change),
-    );
-  }
-  if (change.accountId !== undefined && change.included !== undefined) {
-    const { accountId, included } = change;
-    await mutateMachineAutoSwitch(context, platform, (machine) => {
-      const ids = new Set(machine.includedAccountIds ?? []);
-      if (included) ids.add(accountId);
-      else ids.delete(accountId);
-      if (ids.size) machine.includedAccountIds = [...ids];
-      else delete machine.includedAccountIds;
-    });
-  }
+  await context.runtime.accounts.withMutation(async () => {
+    if (change.enabled !== undefined || change.email !== undefined) {
+      await context.storage.updateAgentAccountAutoSwitchSettings((current) =>
+        withAutoSwitchTicks(normalizeAgentAccountAutoSwitchSettings(current), platform, change),
+      );
+    }
+    if (change.accountId !== undefined && change.included !== undefined) {
+      const { accountId, included } = change;
+      await mutateMachineAutoSwitch(context, platform, (machine) => {
+        const ids = new Set(machine.includedAccountIds ?? []);
+        if (included) ids.add(accountId);
+        else ids.delete(accountId);
+        if (ids.size) machine.includedAccountIds = [...ids];
+        else delete machine.includedAccountIds;
+      });
+    }
+  });
   announceAccountsChanged(context, platform);
   return listAgentAccounts(context);
 }

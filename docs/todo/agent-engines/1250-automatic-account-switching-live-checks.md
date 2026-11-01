@@ -102,7 +102,7 @@ provider, so none can run in CI.
 
 **Context.** Tests assert the prompt, session and request id at the provider boundary. The bridge replacement itself is `localBridgeIsOnActiveAccount`, unchanged.
 
-**Investigation.** Claude keeps a warm CLI per session, so a bridge that is not replaced would answer on the old login: the resend waits for the bridge to go idle and each workflow drops its cached provider. A workflow's cached provider otherwise stays on its old bridge after any switch, until it stops answering, so the next stage after a between-turns switch can hit the limit once on the old account and then move through this same path; see [A workflow's next turn after a between-turns move](#a-workflows-next-turn-after-a-between-turns-move).
+**Investigation.** Claude keeps a warm CLI per session. Workflow providers now resolve their bridge before session creation and turn preparation, and shared provider observations defer replacement while another owner has a running turn. Deterministic HTTP-provider tests cover token replacement and sibling preservation; task 5 still needs a real provider and shared transcript.
 
 **Decisions.**
 
@@ -216,25 +216,13 @@ provider, so none can run in CI.
 
 ### A workflow's next turn after a between-turns move
 
-- **Options.**
-  - **Leave a workflow on its cached provider until the limit stops it, then move through the limit path (chosen for now).**
-    - Pros: no change at any workflow's dispatch; a confirmed stop already moves and resends, so no work is lost; the same rule as any switch today.
-    - Cons: the old account is spent past 98% until refused, and the soonest-reset move only reaches a long pipeline when it is refused. If a reading can lag behind a refusal (task 4), that stage fails with room on another account.
-  - **Drop the cached provider before each new turn when its bridge is on an account that is no longer active and none of its turns are running.**
-    - Pros: between-turns switching then means the same thing for workflows as for native tabs.
-    - Cons: a change at four dispatch paths, and each turn's reconnect could replace a bridge another owner is using, so it needs the next decision settled first.
-- **Recommendation:** decide after task 4. If a reading can lag behind a refusal, build the second.
-
-### A bridge shared by owners that cannot see each other
-
-- **Options.**
-  - **Count what each workflow's own polls see on its provider, and leave other owners as they are (chosen for now).**
-    - Pros: covers the common case, reviewers of one harness sharing a bridge, with a small change at one seam; two turns stopped together never wait on each other.
-    - Cons: a native tab beside a Multi Review, or a pipeline beside a Multi Review, in one environment can still have the other's running turn killed when a bridge is replaced. That is true of any switch on `main` too: `hasObservedLiveWork` has only ever seen native turns. The killed turn takes the restart continuation, once. A turn dispatched since the last poll is not seen either.
-  - **Teach `hasObservedLiveWork` about every workflow's running turns.**
-    - Pros: closes it for every bridge replacement, not only this feature's.
-    - Cons: durable state cannot tell a running turn from a stopped one awaiting its verdict, so it needs a shared live-turn registry fed from every workflow, and it changes when bridges are replaced everywhere.
-- **Recommendation:** the second as its own to-do, if real use shows it. It predates this feature.
+Workflow providers now refresh the connection before creating a session and
+preparing a turn. This applies to build pipelines, Multi Review and graph runs.
+The cached provider keeps its identity while the connection receives the new
+bridge token. A shared registry of provider observations and sends preserves
+another workflow owner's running turn. Native activity protection remains in
+the local bridge startup path. The deterministic test is
+`workflow-account-handoff.test.ts`; task 5 remains open for live qualification.
 
 ### Stale and unknown readings
 

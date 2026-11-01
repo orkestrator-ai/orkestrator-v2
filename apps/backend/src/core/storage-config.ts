@@ -814,7 +814,6 @@ export class ConfigRepository {
     });
   }
 
-  /** Turn the startup GitHub CLI reminder off, or back on. */
   /** The only writer of `agentAccountAutoSwitch`; see `update_global_config`'s exception. */
   async updateAgentAccountAutoSwitchSettings(
     update: (
@@ -838,6 +837,7 @@ export class ConfigRepository {
     });
   }
 
+  /** Turn the startup GitHub CLI reminder off, or back on. */
   async setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();

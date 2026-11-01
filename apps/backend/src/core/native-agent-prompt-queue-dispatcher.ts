@@ -39,10 +39,10 @@ import {
 
 type SettledSteer = "dispatched" | "absent" | undefined;
 
-/** What the prompt-queue dispatcher needs from the service that wires it. */
 /** How soon the queue looks again while a weekly-limit stop is being decided. */
 const USAGE_LIMIT_QUEUE_HOLD_MS = 5_000;
 
+/** What the prompt-queue dispatcher needs from the service that wires it. */
 export interface NativeAgentPromptQueueDispatcherHost {
   storage: StorageService;
   isStopped(): boolean;

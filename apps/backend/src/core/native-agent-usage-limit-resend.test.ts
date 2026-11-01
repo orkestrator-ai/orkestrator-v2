@@ -1,3 +1,4 @@
+import { createNativeAgentProvider } from "./native-agent-provider.js";
 import { describe, expect, mock, test } from "bun:test";
 import type { UsageLimitStopVerdict } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
@@ -298,4 +299,41 @@ describe("a native tab the weekly limit stopped", () => {
     h.resend.noteActivity(h.state.session, "idle", "working");
     expect(h.noteTurnEnded).toHaveBeenCalledWith("claude");
   });
+});
+
+test("native continuation reaches the replacement HTTP bridge with its new token", async () => {
+  const sends: string[] = [];
+  let activeToken = "old";
+  const provider = createNativeAgentProvider(
+    { agent: "claude", baseUrl: "http://native-replacement", authToken: "old" },
+    {
+      refreshConnection: async () => ({
+        agent: "claude",
+        baseUrl: "http://native-replacement",
+        authToken: activeToken,
+      }),
+      fetch: (async (url: unknown, init?: RequestInit) => {
+        if (String(url).endsWith("/prompt"))
+          sends.push(new Headers(init?.headers).get("X-Orkestrator-Claude-Token")!);
+        return Response.json({ status: "processing" });
+      }) as typeof fetch,
+    },
+  );
+  const h = harness({
+    dispatch: async (input, prepare) => {
+      activeToken = "replacement";
+      const decision = await prepare(sessionWith(), provider);
+      if (decision.dispatch) {
+        await provider.prepareDispatch!("provider-session");
+        await provider.send("provider-session", input.prompt, { requestId: input.requestId });
+      }
+    },
+  });
+  try {
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(sends).toEqual(["replacement"]);
+  } finally {
+    provider.dispose?.();
+  }
 });

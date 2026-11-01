@@ -68,7 +68,7 @@ export interface AgentAccountAutoSwitcherDeps {
   switchAccount(
     platform: AgentAccountPlatform,
     accountId: string,
-    automatic: { expectedActive: string; reason: AutoSwitchReason },
+    automatic: { expectedActive: string; reason: AutoSwitchReason; expectedIdentity?: string },
   ): Promise<boolean>;
   sessionAccount(
     environmentId: string,
@@ -105,14 +105,20 @@ export class AgentAccountAutoSwitcher {
   private readonly queues = new Map<AgentAccountPlatform, Promise<unknown>>();
   private readonly lastEvaluated = new Map<AgentAccountPlatform, number>();
   /** Accounts a fresh reading proved used up, keyed `<platform>:<id>`. */
-  private readonly confirmed = new Map<string, number>();
+  private readonly confirmed = new Map<
+    string,
+    { until: number; reset: number; identity: string }
+  >();
   /** The last move, per provider. */
   private readonly recentMoves = new Map<
     AgentAccountPlatform,
     { from: string; to: string; at: number }
   >();
   /** When each stopped turn first had to wait. */
-  private readonly waitingSince = new Map<string, { since: number; checkedAt: number }>();
+  private readonly waitingSince = new Map<
+    string,
+    { since: number; checkedAt: number; bridgeSince?: number; confirmedUntil?: number }
+  >();
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
 
@@ -208,6 +214,9 @@ export class AgentAccountAutoSwitcher {
     if (waiting && this.now() - waiting.checkedAt < USAGE_LIMIT_RECHECK_MS) return "wait";
     const state = await this.automaticState(platform);
     if (!state) return "stop";
+    if (waiting?.confirmedUntil !== undefined && this.now() < waiting.confirmedUntil) {
+      return this.resendOnceBridgeIsFree(input);
+    }
     const session = await this.deps.sessionAccount(environmentId, platform);
     // An isolated container keeps its own login; this machine's accounts say nothing about it.
     if (session?.source !== "account" || !session.account) return "stop";
@@ -234,7 +243,9 @@ export class AgentAccountAutoSwitcher {
       }
       const left = await this.confirmUsedUp(platform, move.from);
       if (left === "unreadable") return this.waitFor(requestId, USAGE_LIMIT_READ_WAIT_MS);
-      return left === "used-up" ? this.resendOnceBridgeIsFree(input) : "stop";
+      return left === "used-up"
+        ? this.resendOnceBridgeIsFree(input, `${platform}:${move.from}`)
+        : "stop";
     }
 
     const accounts = await this.readings(platform, state, new Set([ranOn]), false);
@@ -247,14 +258,24 @@ export class AgentAccountAutoSwitcher {
       });
       if (!moved) return "stop";
     }
-    return this.resendOnceBridgeIsFree(input);
+    return this.resendOnceBridgeIsFree(input, `${platform}:${ranOn}`);
   }
 
-  private async resendOnceBridgeIsFree(input: UsageLimitStopInput): Promise<UsageLimitStopVerdict> {
+  private async resendOnceBridgeIsFree(
+    input: UsageLimitStopInput,
+    proofKey?: string,
+  ): Promise<UsageLimitStopVerdict> {
     const held =
       input.siblingTurnRunning?.() === true ||
       (await this.deps.bridgeBusy(input.environmentId, input.platform));
-    return held ? this.waitFor(input.requestId, USAGE_LIMIT_BRIDGE_WAIT_MS) : "resend";
+    if (!held) return "resend";
+    this.waitFor(input.requestId, USAGE_LIMIT_BRIDGE_WAIT_MS);
+    const waiting = this.waitingSince.get(input.requestId)!;
+    waiting.bridgeSince ??= this.now();
+    // Attribution and weekly proof belong to the stopped request, not the
+    // replacement bridge. Never reuse that proof beyond the weekly reset.
+    waiting.confirmedUntil ??= proofKey ? this.confirmed.get(proofKey)?.reset : undefined;
+    return this.now() - waiting.bridgeSince < USAGE_LIMIT_BRIDGE_WAIT_MS ? "wait" : "stop";
   }
 
   private waitFor(requestId: string, limitMs: number): UsageLimitStopVerdict {
@@ -277,8 +298,12 @@ export class AgentAccountAutoSwitcher {
     accountId: string,
   ): Promise<"used-up" | "room" | "unreadable"> {
     const key = `${platform}:${accountId}`;
-    const confirmedAt = this.confirmed.get(key);
-    if (confirmedAt !== undefined && this.now() - confirmedAt < CONFIRMATION_REUSE_MS) {
+    const account = (await this.deps.snapshot()).accounts.find(
+      (entry) => entry.platform === platform && entry.id === accountId,
+    );
+    const identity = JSON.stringify(account?.identity);
+    const proof = this.confirmed.get(key);
+    if (proof && proof.identity === identity && this.now() < proof.until) {
       return "used-up";
     }
     let snapshot: PlanUsageSnapshot;
@@ -294,7 +319,11 @@ export class AgentAccountAutoSwitcher {
       return "room";
     }
     if (this.confirmed.size >= MAX_TRACKED_STOPS) this.confirmed.clear();
-    this.confirmed.set(key, this.now());
+    this.confirmed.set(key, {
+      until: Math.min(this.now() + CONFIRMATION_REUSE_MS, reading.resetsAt ?? Infinity),
+      reset: reading.resetsAt ?? this.now() + USAGE_LIMIT_BRIDGE_WAIT_MS,
+      identity,
+    });
     return "used-up";
   }
 
@@ -306,6 +335,11 @@ export class AgentAccountAutoSwitcher {
   ): Promise<boolean> {
     const moved = await this.deps.switchAccount(platform, target.accountId, {
       expectedActive: activeId,
+      expectedIdentity: JSON.stringify(
+        snapshot.accounts.find(
+          (entry) => entry.platform === platform && entry.id === target.accountId,
+        )?.identity,
+      ),
       reason: target.reason,
     });
     if (!moved) return false;

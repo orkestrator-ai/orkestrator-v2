@@ -12,6 +12,7 @@ import {
   setActiveAgentAccount,
   setAgentAccountAutoSwitch,
 } from "./agent-accounts.js";
+import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { StorageService } from "./storage.js";
@@ -325,3 +326,82 @@ describe("settings from a command node", () => {
     expect(Object.keys(parsed)).toEqual(["agentAccountAutoSwitch"]);
   });
 });
+
+test("automatic commit gives way to completed opt-outs", async () => {
+  await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+  await setAgentAccountAutoSwitch(context, "codex", { email: "b@example.com", included: false });
+  expect(
+    await applyAutomaticAccountSwitch(context, "codex", B, {
+      expectedActive: A,
+      reason: "soonest-reset",
+    }),
+  ).toBe(false);
+  await setAgentAccountAutoSwitch(context, "codex", { enabled: false });
+  expect(
+    await applyAutomaticAccountSwitch(context, "codex", A, {
+      expectedActive: A,
+      reason: "soonest-reset",
+    }),
+  ).toBe(false);
+  expect((await listAgentAccounts(context)).active.codex).toBe(A);
+});
+
+for (const optOut of ["provider", "target"] as const) {
+  test(`in-flight evaluation gives way to ${optOut} opt-out`, async () => {
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    let release!: () => void;
+    let entered!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let notices = 0;
+    const switcher = new AgentAccountAutoSwitcher({
+      settings: async () => ({ codex: { enabled: true, excludedEmails: [] } }),
+      snapshot: async () => {
+        const snapshot = await listAgentAccounts(context);
+        return {
+          ...snapshot,
+          accounts: snapshot.accounts.map((account) => ({ ...account, signedIn: true })),
+        };
+      },
+      readUsage: async (_platform, id) => {
+        entered();
+        await paused;
+        return {
+          platform: "codex",
+          status: "ok",
+          fetchedAt: new Date().toISOString(),
+          windows: [
+            {
+              window: "secondary",
+              windowMinutes: 10080,
+              usedPercent: id === A ? 99 : 20,
+              resetsAt: new Date(Date.now() + 3600000).toISOString(),
+            },
+          ],
+        };
+      },
+      switchAccount: (platform, id, automatic) =>
+        applyAutomaticAccountSwitch(context, platform, id, automatic),
+      sessionAccount: async () => null,
+      bridgeBusy: async () => false,
+      notify: () => {
+        notices++;
+      },
+    });
+    const evaluation = switcher.evaluate("codex");
+    await reading;
+    await setAgentAccountAutoSwitch(
+      context,
+      "codex",
+      optOut === "provider" ? { enabled: false } : { email: "b@example.com", included: false },
+    );
+    release();
+    await evaluation;
+    expect((await listAgentAccounts(context)).active.codex).toBe(A);
+    expect(notices).toBe(0);
+  });
+}

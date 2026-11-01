@@ -118,6 +118,7 @@ export interface GraphAgentSessionState {
   continuedFrom?: string;
   turnMode?: GraphAgentTurnMode;
   startedAt?: string;
+  turnStartedAt?: string;
   resultSubmission?: WorkflowResultSubmissionState;
   repairAttempts?: number;
   repairPrompt?: string;
@@ -145,6 +146,7 @@ export const GRAPH_AGENT_SESSION_FIELDS = [
   "continuedFrom",
   "turnMode",
   "startedAt",
+  "turnStartedAt",
   "resultSubmission",
   "repairAttempts",
   "repairPrompt",
@@ -318,7 +320,7 @@ export function checkGraphAgentSessionFields(
   if (value.turnMode !== undefined) {
     checkEnum(value.turnMode, field("turnMode"), errors, GRAPH_AGENT_TURN_MODES);
   }
-  for (const name of ["startedAt", "progressAt", "stalledSince"] as const) {
+  for (const name of ["startedAt", "turnStartedAt", "progressAt", "stalledSince"] as const) {
     if (value[name] !== undefined) checkWhen(value[name], field(name), errors);
   }
   if (

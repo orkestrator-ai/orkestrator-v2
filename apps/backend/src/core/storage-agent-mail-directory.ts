@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { randomUUID } from "node:crypto";
 import {
   AGENT_MAIL_DEFAULT_LIST_LIMIT,
@@ -169,7 +170,7 @@ export class AgentMailboxDirectory {
     }
     const tabs = await this.listAgentMailPullTabIds(input.toEnvironmentId);
     if (tabs.length === 1) return tabs[0]!;
-    if (tabs.includes("startup-agent")) return "startup-agent";
+    if (tabs.includes(STARTUP_AGENT_TAB_ID)) return STARTUP_AGENT_TAB_ID;
     if (tabs.length === 0)
       throw new AgentMailError(
         "recipient-not-found",

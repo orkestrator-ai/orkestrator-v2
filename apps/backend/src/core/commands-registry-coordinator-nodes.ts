@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -406,13 +407,13 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           coordinatorDelegationOpened = Boolean(
             await context.storage.coordinators.openCoordinatorDelegation(
               receipt.association.id,
-              "startup-agent",
+              STARTUP_AGENT_TAB_ID,
             ),
           );
           await startRemoteRequest(context, caller, receipt.association.id, {
             nodeId: target.nodeId,
             environmentId,
-            tabId: "startup-agent",
+            tabId: STARTUP_AGENT_TAB_ID,
           });
         }
         return {

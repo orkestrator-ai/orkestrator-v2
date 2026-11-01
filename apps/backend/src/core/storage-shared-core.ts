@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -305,7 +306,7 @@ export function isStartupAgentSession(
 ): value is NonNullable<Environment["startupAgentSession"]> {
   return (
     isRecord(value) &&
-    value.tabId === "startup-agent" &&
+    value.tabId === STARTUP_AGENT_TAB_ID &&
     isAgentPlatform(value.agent) &&
     isOneOf(value.style, ["terminal", "native"]) &&
     isOneOf(value.status, ["starting", "running", "error"]) &&

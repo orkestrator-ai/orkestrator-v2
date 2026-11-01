@@ -5,15 +5,19 @@ import { nativeComposeDraft, useNativeComposeStore } from "@/stores/nativeCompos
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import {
+  buildTabInitialPromptQueueMessage,
+  tabInitialPromptRequestId,
+  type TabInitialPromptOptions,
+} from "@orkestrator/protocol/tab-initial-prompt";
 
-/**
- * The one request id a tab's opening prompt is ever sent under, by the backend
- * queue or by the mounted tab. Sharing it is what keeps the prompt at most once
- * when both paths race.
+/*
+ * The request id and the per-provider queue message shape are the backend
+ * dispatcher's contract, so they live in the protocol package; this module
+ * keeps only the renderer side of the hand-off.
  */
-export function tabInitialPromptRequestId(environmentId: string, tabId: string): string {
-  return `initial-prompt:${environmentId}:${tabId}`;
-}
+export { buildTabInitialPromptQueueMessage, tabInitialPromptRequestId };
+export type { TabInitialPromptOptions };
 
 // Only live attempts are retained; hand-off marks them before clearing the tab.
 const fallbacks = new Map<string, Set<{ backendOwned: boolean }>>();
@@ -94,58 +98,6 @@ async function removeOpeningPromptDraft(
         : {}),
     };
   });
-}
-
-export interface TabInitialPromptOptions {
-  model?: string;
-  reasoningEffort?: string;
-  fastMode?: boolean;
-  /** Defaults to Build, as a composer send does. */
-  mode?: "build" | "plan";
-  /** Already staged in the workspace, as the composer stages them. */
-  attachments?: ReadonlyArray<{
-    /** Renderer identity used to remove only the seeded draft attachment. */
-    id?: string;
-    type: "image" | "file";
-    path: string;
-    filename?: string;
-  }>;
-}
-
-/**
- * A durable prompt-queue entry in the shape the backend dispatcher reads for
- * each provider (Claude's `effort`/`planModeEnabled`, Codex's
- * `reasoningEffort`, the others' `variant`).
- */
-export function buildTabInitialPromptQueueMessage(
-  agent: AgentPlatform,
-  requestId: string,
-  text: string,
-  options: TabInitialPromptOptions = {},
-): Record<string, unknown> {
-  const attachments = (options.attachments ?? []).map(({ type, path, filename }) => ({
-    type,
-    path,
-    ...(filename ? { filename } : {}),
-  }));
-  const base = { id: requestId, requestId, text, attachments, model: options.model };
-  if (agent === "claude")
-    return {
-      ...base,
-      ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
-      planModeEnabled: options.mode === "plan",
-      ...(typeof options.fastMode === "boolean" ? { fastModeEnabled: options.fastMode } : {}),
-    };
-  return {
-    ...base,
-    ...(options.reasoningEffort
-      ? agent === "codex"
-        ? { reasoningEffort: options.reasoningEffort }
-        : { variant: options.reasoningEffort }
-      : {}),
-    mode: options.mode ?? "build",
-    ...(typeof options.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
-  };
 }
 
 /**

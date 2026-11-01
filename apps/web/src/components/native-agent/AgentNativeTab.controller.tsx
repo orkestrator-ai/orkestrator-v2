@@ -126,6 +126,7 @@ import {
 } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
+import { STARTUP_AGENT_TAB_ID } from "@/lib/startup-agent-handoff";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
@@ -685,7 +686,7 @@ export function SharedNativeAgentController({
   });
   const classifyCommand = commandComposer.classify;
   const backendOwnsStartupPrompt =
-    tabId === "startup-agent" &&
+    tabId === STARTUP_AGENT_TAB_ID &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
   const {
     favorites: allFavorites,

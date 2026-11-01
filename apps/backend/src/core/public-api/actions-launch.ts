@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { createHash } from "node:crypto";
 import { canonicalJson, PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import {
@@ -110,11 +111,11 @@ const environmentLaunch: MutationActionHandler<LaunchInput> = {
             .digest("hex"),
         });
         const environmentId = created.id;
-        const sessionId = encodePublicSessionId(environmentId, "startup-agent");
+        const sessionId = encodePublicSessionId(environmentId, STARTUP_AGENT_TAB_ID);
         const resources = {
           environmentId,
           sessionId,
-          tabId: "startup-agent",
+          tabId: STARTUP_AGENT_TAB_ID,
           dispatchRequestId: initialPromptRequestId(environmentId),
         };
         await operation.update({
@@ -207,7 +208,7 @@ export async function reconcileLaunch(
   const requestId = initialPromptRequestId(environmentId);
   const agent =
     environment.startupAgentSession?.agent ?? (record.resolved?.agent as string | undefined);
-  const logicalSessionKey = nativeTabLogicalSessionKey(environmentId, "startup-agent");
+  const logicalSessionKey = nativeTabLogicalSessionKey(environmentId, STARTUP_AGENT_TAB_ID);
   const session = agent
     ? await context.command.storage.getNativeAgentSession(
         nativeAgentSessionStorageKey(environmentId, agent as never, logicalSessionKey),

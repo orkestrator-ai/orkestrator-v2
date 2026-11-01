@@ -1,3 +1,4 @@
+import type { StartupAgentTabId } from "@orkestrator/protocol/tab-initial-prompt";
 // Re-exported rather than redeclared: the renderer orders activity reports
 // against the same vocabulary, and two copies of it drift silently.
 import type {
@@ -224,7 +225,7 @@ export interface InitialPromptImageAttachment {
 }
 
 export interface StartupAgentSessionSnapshot {
-  tabId: "startup-agent";
+  tabId: StartupAgentTabId;
   agent: DefaultAgent;
   style: AgentStyle;
   model?: string;

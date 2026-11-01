@@ -1,3 +1,4 @@
+import { environmentIsReadyForSetupHandoff as isReadyForSetupHandoff } from "@orkestrator/protocol/tab-initial-prompt";
 import type {
   PaneLayoutMergeInput,
   PaneLayoutSelectionIntent,
@@ -95,12 +96,9 @@ export function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
   return leaves;
 }
 
+/** The renderer's own predicate, from the shared startup-tab contract. */
 export function environmentIsReadyForSetupHandoff(environment: Environment): boolean {
-  return (
-    environment.setupPhase === "ready" ||
-    environment.setupScriptsComplete === true ||
-    environment.setupOverride === true
-  );
+  return isReadyForSetupHandoff(environment);
 }
 
 /**

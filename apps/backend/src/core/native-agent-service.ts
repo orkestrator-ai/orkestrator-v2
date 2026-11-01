@@ -1,4 +1,5 @@
 export * from "./native-agent-service-shared.js";
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import * as shared from "./native-agent-service-shared.js";
 import type {
   BuildPipelineAgent,
@@ -1306,7 +1307,7 @@ export class NativeAgentService {
       .filter(
         (session) =>
           session.origin === "interactive-native" &&
-          session.logicalSessionKey === `env-${session.environmentId}:startup-agent`,
+          session.logicalSessionKey === `env-${session.environmentId}:${STARTUP_AGENT_TAB_ID}`,
       )
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     const repairedEnvironments = new Set<string>();

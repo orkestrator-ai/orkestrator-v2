@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { createHash, randomUUID } from "node:crypto";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -333,14 +334,14 @@ export function registerCoordinatorForkWorker(
             (
               await context.storage.coordinators.openCoordinatorDelegation(
                 association.id,
-                "startup-agent",
+                STARTUP_AGENT_TAB_ID,
               )
             )?.delegation?.state === "running";
           if (remote)
             await startRemoteRequest(context, caller, association.id, {
               nodeId: remote.nodeId,
               environmentId,
-              tabId: "startup-agent",
+              tabId: STARTUP_AGENT_TAB_ID,
             });
         }
         return {
@@ -348,7 +349,7 @@ export function registerCoordinatorForkWorker(
           forkedFromEnvironmentId: sourceEnvironmentId,
           ...(remote ? { nodeId: remote.nodeId } : {}),
           status: startError ? "created" : "accepted",
-          ...(launch.prompt ? { tabId: "startup-agent", agent: agent ?? null } : {}),
+          ...(launch.prompt ? { tabId: STARTUP_AGENT_TAB_ID, agent: agent ?? null } : {}),
           coordinatorDelegationOpened,
           ...(startError ? { startError } : {}),
         };

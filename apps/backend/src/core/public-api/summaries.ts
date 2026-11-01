@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import {
@@ -79,7 +80,7 @@ export function publicEnvironmentSummary(environment: Environment): PublicEnviro
     startupSession:
       startup && startupAgent
         ? {
-            sessionId: encodePublicSessionId(environment.id, "startup-agent"),
+            sessionId: encodePublicSessionId(environment.id, STARTUP_AGENT_TAB_ID),
             agent: startupAgent,
             status: startup.status,
             ...(startup.error ? { error: startup.error.slice(0, 500) } : {}),

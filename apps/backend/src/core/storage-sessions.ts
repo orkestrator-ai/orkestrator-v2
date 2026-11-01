@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import * as shared from "./storage-shared.js";
 import { StoreCorruptError } from "./storage-database.js";
 import { UsageHistoryStore, type RecordUsageTurnsInput } from "./usage-history-store.js";
@@ -915,12 +916,12 @@ export class SessionsRepository {
       if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
 
       const existingLeaf = leaves.find((leaf) =>
-        leaf.tabs.some((tab) => tab.id === "startup-agent"),
+        leaf.tabs.some((tab) => tab.id === STARTUP_AGENT_TAB_ID),
       );
       if (input.existingOnly && !existingLeaf) return null;
       const target =
         existingLeaf ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
-      const existingIndex = target.tabs.findIndex((tab) => tab.id === "startup-agent");
+      const existingIndex = target.tabs.findIndex((tab) => tab.id === STARTUP_AGENT_TAB_ID);
       const existingTab = existingIndex >= 0 ? target.tabs[existingIndex]! : undefined;
       if (input.upgradeOnly && existingTab?.type === "agent-native") return previous ?? null;
 
@@ -962,7 +963,7 @@ export class SessionsRepository {
 
       const tab: Record<string, unknown> = {
         ...existingTab,
-        id: "startup-agent",
+        id: STARTUP_AGENT_TAB_ID,
         type: "agent-native",
         nativeAgentData,
       };
@@ -1023,7 +1024,7 @@ export class SessionsRepository {
             // means this is no longer a setup handoff.
             selectedTabIsSetupHandoffSource(target) &&
             (focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf))));
-      if (shouldActivateStartupAgent) target.activeTabId = "startup-agent";
+      if (shouldActivateStartupAgent) target.activeTabId = STARTUP_AGENT_TAB_ID;
 
       // Pane focus follows the tab handoff and nothing else. Unconditionally
       // pointing it at the startup agent's pane moved the user's focus to that

@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import type { McpServer } from "@modelcontextprotocol/server";
 import {
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
@@ -410,7 +411,7 @@ export function registerNodeTools(
         nodeId: input.nodeId,
         node: target.nodeName,
         environmentId: environment.id,
-        tabId: "startup-agent",
+        tabId: STARTUP_AGENT_TAB_ID,
         status: startError ? "created" : "accepted",
         ...(startError ? { error: startError } : {}),
       });

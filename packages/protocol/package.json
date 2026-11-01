@@ -201,6 +201,7 @@
     "./workspace-guard": "./src/workspace-guard.ts",
     "./task-list": "./src/task-list.ts",
     "./tab-teardown": "./src/tab-teardown.ts",
+    "./tab-initial-prompt": "./src/tab-initial-prompt.ts",
     "./terminal-agent-launch": "./src/terminal-agent-launch.ts",
     "./terminal-history": "./src/terminal-history.ts",
     "./terminal-input-batcher": "./src/terminal-input-batcher.ts",

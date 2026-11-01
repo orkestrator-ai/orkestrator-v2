@@ -1,3 +1,7 @@
+import {
+  STARTUP_AGENT_TAB_ID,
+  tabInitialPromptRequestId,
+} from "@orkestrator/protocol/tab-initial-prompt";
 import type {
   BuildPipelineAgent,
   AgentActivityState,
@@ -1649,7 +1653,7 @@ export class NativeAgentLaunchActivityReconciler {
     const configuredLaunch = resolveStartupLaunchFromSettings(tiers);
     const agent = environment.initialAgentPlatform ?? configuredLaunch.agent;
 
-    const logicalSessionKey = `env-${environment.id}:startup-agent`;
+    const logicalSessionKey = `env-${environment.id}:${STARTUP_AGENT_TAB_ID}`;
     // One resolver for the whole chain. This used to read the repository's
     // single `defaultModel` for *whatever* agent launched, so a model id
     // belonging to one platform's catalogue could be sent to another; a model
@@ -1679,7 +1683,7 @@ export class NativeAgentLaunchActivityReconciler {
       try {
         await this.storage.ensureTerminalJobTab({
           environmentId: environment.id,
-          tabId: "startup-agent",
+          tabId: STARTUP_AGENT_TAB_ID,
           type: agent === "claude" && claudeNativeBackend === "tmux" ? "claude-tmux" : agent,
           // A restored renderer must not attach to a PTY identity left by a
           // previous backend generation while this launch is still pending.
@@ -1688,7 +1692,7 @@ export class NativeAgentLaunchActivityReconciler {
         const startupSession = environment.startupAgentSession;
         if (
           !startupSession ||
-          startupSession.tabId !== "startup-agent" ||
+          startupSession.tabId !== STARTUP_AGENT_TAB_ID ||
           startupSession.agent !== agent ||
           startupSession.style !== "terminal" ||
           startupSession.model !== model ||
@@ -1697,7 +1701,7 @@ export class NativeAgentLaunchActivityReconciler {
         ) {
           await this.storage.updateEnvironment(environment.id, {
             startupAgentSession: {
-              tabId: "startup-agent",
+              tabId: STARTUP_AGENT_TAB_ID,
               agent,
               style: "terminal",
               model,
@@ -1734,9 +1738,9 @@ export class NativeAgentLaunchActivityReconciler {
 
         if (agent === "claude" && claudeNativeBackend === "tmux") {
           await this.invoke("launch_terminal_job", {
-            requestId: `initial-prompt:${environment.id}:startup-agent`,
+            requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
             environmentId: environment.id,
-            tabId: "startup-agent",
+            tabId: STARTUP_AGENT_TAB_ID,
             tabType: "claude-tmux",
             initialPrompt: prompt || undefined,
             model,
@@ -1754,9 +1758,9 @@ export class NativeAgentLaunchActivityReconciler {
           });
           if (!command) throw new Error(`${agent} does not support terminal launch`);
           await this.invoke("launch_terminal_job", {
-            requestId: `initial-prompt:${environment.id}:startup-agent`,
+            requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
             environmentId: environment.id,
-            tabId: "startup-agent",
+            tabId: STARTUP_AGENT_TAB_ID,
             tabType: agent,
             data: `${command}\n`,
             activateTab: true,
@@ -1779,7 +1783,7 @@ export class NativeAgentLaunchActivityReconciler {
         this.launchRetryAt.set(environment.id, Date.now() + LAUNCH_RETRY_MS);
         await this.storage.updateEnvironment(environment.id, {
           startupAgentSession: {
-            tabId: "startup-agent",
+            tabId: STARTUP_AGENT_TAB_ID,
             agent,
             style: "terminal",
             model,
@@ -1831,7 +1835,7 @@ export class NativeAgentLaunchActivityReconciler {
       ) {
         await this.storage.updateEnvironment(environment.id, {
           startupAgentSession: {
-            tabId: "startup-agent",
+            tabId: STARTUP_AGENT_TAB_ID,
             agent,
             style: "native",
             model,
@@ -1865,7 +1869,7 @@ export class NativeAgentLaunchActivityReconciler {
           startupAgentSession: publishedLayout
             ? undefined
             : {
-                tabId: "startup-agent",
+                tabId: STARTUP_AGENT_TAB_ID,
                 agent,
                 style: "native",
                 model,
@@ -1907,7 +1911,7 @@ export class NativeAgentLaunchActivityReconciler {
         // A file-only turn needs non-blank text before its final workspace paths
         // can be resolved inside the dispatch lock below.
         prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
-        requestId: `initial-prompt:${environment.id}:startup-agent`,
+        requestId: tabInitialPromptRequestId(environment.id, STARTUP_AGENT_TAB_ID),
         images,
         ...(environment.initialPromptPresentation
           ? { initialPromptPresentation: environment.initialPromptPresentation }
@@ -1962,7 +1966,7 @@ export class NativeAgentLaunchActivityReconciler {
         startupAgentSession: publishedLayout
           ? undefined
           : {
-              tabId: "startup-agent",
+              tabId: STARTUP_AGENT_TAB_ID,
               agent,
               style: "native",
               model,
@@ -1999,7 +2003,7 @@ export class NativeAgentLaunchActivityReconciler {
             }
           : {}),
         startupAgentSession: {
-          tabId: "startup-agent",
+          tabId: STARTUP_AGENT_TAB_ID,
           agent,
           style: "native",
           model,

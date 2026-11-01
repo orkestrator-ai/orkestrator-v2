@@ -217,7 +217,7 @@ export function ContainerHostReachabilityDialog({
                   </div>
                   <pre
                     data-testid="container-host-reachability-commands"
-                    className="whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-xs text-foreground"
+                    className="whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs text-foreground"
                   >
                     {commands.join("\n")}
                   </pre>

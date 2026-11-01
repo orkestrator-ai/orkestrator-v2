@@ -826,6 +826,7 @@ export class OrkestratorBackend {
         signInGuidance: (environmentId, agent) =>
           containerSignInGuidance(context, environmentId, agent),
         environmentFence: this.runtime.environments.fence,
+        openCodeCoordinatorResearch: this.runtime.localServers.openCodeAgentTools.research,
         interactionMonitorMode,
         // Rollback for step 07's observation sharing; fences stay either way.
         observationSharing: process.env.ORKESTRATOR_NATIVE_OBSERVATION_SHARING !== "0",

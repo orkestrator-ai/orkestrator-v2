@@ -1,5 +1,5 @@
 import { readBoundedOpenCodeResponse } from "./opencode-bounded-response.js";
-import { forgetOpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
+import { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 import { createHash } from "node:crypto";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "./agent-tools.js";
 import { conciseError } from "./commands-error-text.js";
@@ -190,6 +190,8 @@ export class OpenCodeAgentToolsReconciler {
    * which a tab's Agent Tools connection must never replace.
    */
   private readonly launchConnections = new Map<string, AgentToolConnection>();
+  /** Coordinator research registrations, keyed the same way and forgotten with them. */
+  readonly research = new OpenCodeCoordinatorResearch();
   private readonly retryDelaysMs: readonly number[];
   private readonly connectedTtlMs: number;
   private readonly unavailableCooldownMs: number;
@@ -331,11 +333,11 @@ export class OpenCodeAgentToolsReconciler {
     this.configurations.delete(key);
     this.outcomes.delete(key);
     this.launchConnections.delete(key);
-    forgetOpenCodeCoordinatorResearch(key);
+    this.research.forget(key);
   }
 
   cancelAll(): void {
-    for (const key of this.launchConnections.keys()) forgetOpenCodeCoordinatorResearch(key);
+    for (const key of this.launchConnections.keys()) this.research.forget(key);
     for (const configuration of this.configurations.values()) {
       configuration.controller.abort();
     }

@@ -114,7 +114,6 @@ import {
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
-import { configureOpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 
 /** Provider-neutral process authority every coordinator bridge honours. */
 export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
@@ -1310,19 +1309,21 @@ async function startLocalServerAttempt(
       // a new session is created with already allow their tools. Optional:
       // a server that does not connect leaves the coordinator without it.
       if (coordinatorId) {
-        await configureOpenCodeCoordinatorResearch({
-          serverKey: `local:${environmentId}`,
-          port,
-          password: authToken,
-          directory: environment.worktreePath,
-          servers: coordinatorResearchMcpServersFromEnv(env),
-          signal: AbortSignal.timeout(15_000),
-        }).catch((error: unknown) => {
-          console.warn(
-            `[backend] OpenCode coordinator research servers are unavailable for ${environmentId}:`,
-            conciseError(error),
-          );
-        });
+        await context.runtime.localServers.openCodeAgentTools.research
+          .configure({
+            serverKey: `local:${environmentId}`,
+            port,
+            password: authToken,
+            directory: environment.worktreePath,
+            servers: coordinatorResearchMcpServersFromEnv(env),
+            signal: AbortSignal.timeout(15_000),
+          })
+          .catch((error: unknown) => {
+            console.warn(
+              `[backend] OpenCode coordinator research servers are unavailable for ${environmentId}:`,
+              conciseError(error),
+            );
+          });
       }
     }
     if (coordinatorId) {

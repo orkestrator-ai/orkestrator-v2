@@ -1,3 +1,4 @@
+import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import * as sdk from "@cursor/sdk";
 import {
@@ -24,7 +25,7 @@ function harness(id = "session-private") {
   const scope = new CursorSdkDiagnostics(
     id,
     () => now,
-    (line) => lines.push(line),
+    ({ payload }) => lines.push(payload),
   );
   return {
     scope,
@@ -34,7 +35,7 @@ function harness(id = "session-private") {
     },
     snapshot: () => {
       scope.report("heartbeat");
-      return JSON.parse(lines.at(-1)!.slice("[bridge-diagnostics] ".length));
+      return JSON.parse(lines.at(-1)!);
     },
   };
 }
@@ -170,7 +171,7 @@ describe("Cursor SDK boundary diagnostics", () => {
         await dispatchPrompt(state, agent, { prompt: "private", images: [] })
       ).completion;
       expect(retainedDetector).toBeDefined();
-      const records = lines.map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)));
+      const records = bridgeDiagnosticPayloads(lines);
       const sdkRecord = records.findLast((r) => r.event === "sdk-snapshot");
       const bridgeRecord = records.findLast((r) => r.event === "closed");
       expect(sdkRecord).toMatchObject({
@@ -337,7 +338,7 @@ describe("Cursor SDK boundary diagnostics", () => {
     const diagnostic = new CursorRunDiagnostics(
       newSessionState(),
       Date.now,
-      (line) => lines.push(line),
+      ({ payload }) => lines.push(payload),
       5,
     );
     try {
@@ -428,7 +429,7 @@ describe("Cursor SDK boundary diagnostics", () => {
         await dispatchPrompt(state, agent, { prompt: "private", images: [] })
       ).completion;
       expect(writes).toEqual([{ ok: true }]);
-      const records = lines.map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)));
+      const records = bridgeDiagnosticPayloads(lines);
       const sdkRecord = records.findLast((r) => r.event === "sdk-snapshot");
       expect(sdkRecord).toMatchObject({
         coverage: "installed",

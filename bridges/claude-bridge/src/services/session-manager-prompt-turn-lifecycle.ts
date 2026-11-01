@@ -22,6 +22,9 @@ import {
   idleClaudeRuntime,
 } from "./session-manager-runtime-idle.js";
 import { inProgressClaudeUsage } from "./session-manager-usage.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 // Who owns the foreground and the continuation a background task notification
 // owes, for one `sendPrompt` turn. The CLI's input belongs to its runtime,
@@ -128,10 +131,7 @@ export async function reconcilePlanModeFromStatus(turn: TurnState, reported: unk
   try {
     await applySessionPlanMode(session, false);
   } catch (error) {
-    console.warn("[session-manager] Could not record plan mode from a status frame", {
-      sessionId,
-      errorClass: diagnosticErrorClass(error),
-    });
+    log.warn("plan-mode.record-failed", { sessionId, errorClass: diagnosticErrorClass(error) });
   }
 }
 

@@ -24,6 +24,9 @@ import type { ParkedHoldOutcome } from "./app-server/server-request-router.js";
 import { estimateOrderedEventBytes, isJsonObject } from "./app-server-runtime-base.js";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /**
  * Outcome of a pause or resume request from a tab.
@@ -183,7 +186,7 @@ export class CodexRuntimeApprovals {
     if (this.ctx.options.engine.resolveApproval(approvalId, decision)) {
       if (decision === "cancel") {
         void this.ctx.callbacks.abort(sessionId).catch((error: unknown) => {
-          console.error("[codex-bridge] Failed to cancel turn after approval response:", error);
+          log.error("approval.cancel-failed", { error: formatLogError(error) });
         });
       }
       return "applied";

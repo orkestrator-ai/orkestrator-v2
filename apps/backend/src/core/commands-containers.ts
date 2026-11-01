@@ -2,6 +2,7 @@ import {
   boundedBackgroundLaunch,
   boundedTailCommand,
   boundDiagnosticTail,
+  bridgeLogEnvironmentExports,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
 import { mkdir, writeFile, rm } from "node:fs/promises";
@@ -941,6 +942,7 @@ export async function startContainerClaudeServer(
       export HOSTNAME=0.0.0.0
       export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
       export ORKESTRATOR_BRIDGE_DEBUG=${debugLogging ? "1" : "0"}
+      ${bridgeLogEnvironmentExports()}
       ${bashMaxTimeout ? `export ${CLAUDE_BASH_MAX_TIMEOUT_ENV}=${quoteShell(bashMaxTimeout)}` : ""}
       ${
         agentToolConnection

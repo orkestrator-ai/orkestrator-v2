@@ -80,6 +80,9 @@ import {
   isNativeAgentExecutionPolicy,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /** A workflow turn's artifact-only grant (`agentMcp.artifacts.token`), when well-formed. */
 function artifactConnectionToken(value: unknown): string | undefined {
@@ -332,10 +335,10 @@ export class CodexRuntimeLifecycle {
             // — reported as `running` — with nothing scheduled to resolve it, and
             // every later prompt 409s until an unrelated generation change.
             this.ctx.callbacks.scheduleRecoveryBackstop(existing);
-            console.warn(
-              `[codex-bridge] Could not restore dispatch ${record.requestId}:`,
-              error instanceof Error ? error.message : error,
-            );
+            log.warn("dispatch.restore-failed", {
+              requestId: record.requestId,
+              error: formatLogError(error, { stack: false }),
+            });
             return;
           }
 
@@ -606,12 +609,11 @@ export class CodexRuntimeLifecycle {
           }),
         );
       }
-      console.warn(
-        `[codex-bridge] Could not re-attach thread ${threadId}${
-          isMissingRolloutError(error) ? " (no rollout on disk)" : ""
-        }:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("thread.reattach-failed", {
+        threadId,
+        rolloutMissing: isMissingRolloutError(error),
+        error: formatLogError(error, { stack: false }),
+      });
       if (!isMissingRolloutError(error)) throw error;
       return undefined;
     }
@@ -723,8 +725,7 @@ export class CodexRuntimeLifecycle {
                 this.ctx.threadState.get(threadId)?.lastPublishedSnapshotChars ?? 0,
               )),
           publish: () => this.ctx.callbacks.publishAssistantMessage(threadId),
-          onError: (error) =>
-            console.error("[codex-bridge] Failed to publish message update:", error),
+          onError: (error) => log.error("message.publish-failed", { error: formatLogError(error) }),
         }),
       };
       this.ctx.threadState.set(threadId, state);
@@ -782,7 +783,7 @@ export class CodexRuntimeLifecycle {
         this.ctx.callbacks.recoverAfterGenerationChange(event.generation),
       );
       this.ctx.generationRecovery = recovery.catch((error) => {
-        console.error("[codex-bridge] Generation recovery failed:", error);
+        log.error("generation.recovery-failed", { error: formatLogError(error) });
       });
       return;
     }
@@ -804,10 +805,7 @@ export class CodexRuntimeLifecycle {
     }
     if (event.kind === "account.reload.requested") {
       void this.ctx.callbacks.reloadStoredAccountLogin().catch((error: unknown) => {
-        console.warn(
-          "[codex-bridge] Reloading the stored account login failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("account.login-reload-failed", { error: formatLogError(error, { stack: false }) });
       });
       return;
     }
@@ -1201,10 +1199,10 @@ export class CodexRuntimeLifecycle {
         this.ctx.options.changeEvidence?.turn(this.evidenceSource(context, turn), event.status);
         const finalize = () =>
           this.runFinalization(context, turn).catch((error) => {
-            console.error(
-              `[codex-bridge] Failed to finalize turn ${turn.turnId}:`,
-              error instanceof Error ? error.message : error,
-            );
+            log.error("turn.finalize-failed", {
+              turnId: turn.turnId,
+              error: formatLogError(error, { stack: false }),
+            });
           });
         // The last cells are read before the turn's rows are rendered for good.
         const tail = this.takeRefusedCellTail(threadId, turn);
@@ -1512,10 +1510,7 @@ export class CodexRuntimeLifecycle {
 
   trackCommandChangeWork(work: Promise<void>): void {
     const tracked = work.catch((error) => {
-      console.error(
-        "[codex-bridge] Failed to record a command's line changes:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("command-changes.record-failed", { error: formatLogError(error, { stack: false }) });
     });
     this.ctx.pendingCommandChanges.add(tracked);
     void tracked.finally(() => this.ctx.pendingCommandChanges.delete(tracked));
@@ -2184,10 +2179,7 @@ export class CodexRuntimeLifecycle {
             try {
               await state.coalescer.flushNow();
             } catch (error) {
-              console.error(
-                "[codex-bridge] Failed to flush before ordered-event reconciliation:",
-                error,
-              );
+              log.error("ordered-events.flush-failed", { error: formatLogError(error) });
             }
             state.orderedReconcilePending = false;
             for (const sessionId of this.ctx.sessionIdsForThread(threadId)) {
@@ -2206,7 +2198,7 @@ export class CodexRuntimeLifecycle {
             await state.coalescer.flushNow();
             event.publish();
           } catch (error) {
-            console.error("[codex-bridge] Failed to publish ordered event:", error);
+            log.error("ordered-events.publish-failed", { error: formatLogError(error) });
             // Approval/interaction/status state remains authoritative. Make
             // the loss explicit so clients rehydrate it instead of silently
             // trusting a stream with a hole.
@@ -2218,7 +2210,7 @@ export class CodexRuntimeLifecycle {
           }
         }
       } catch (error) {
-        console.error("[codex-bridge] Failed to reconcile ordered events:", error);
+        log.error("ordered-events.reconcile-failed", { error: formatLogError(error) });
       } finally {
         state.orderedEventDraining = false;
         if (

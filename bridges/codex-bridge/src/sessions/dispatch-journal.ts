@@ -37,6 +37,9 @@ import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { codexBridgeStateDir, codexLoginBridgeDir } from "../bridge-state-dir.js";
 import { hashCwd } from "./persistence.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 export type DispatchState = "prepared" | "accepted" | "retryable" | "terminal";
 export type DispatchTerminalStatus = "completed" | "interrupted" | "failed";
@@ -872,10 +875,7 @@ export class DispatchJournal {
           throw error;
         });
       } catch (error) {
-        console.warn(
-          "[codex-bridge] Failed to persist dispatch journal:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("journal.persist-failed", { error: formatLogError(error, { stack: false }) });
         if (options.failClosed) throw error;
       }
     });

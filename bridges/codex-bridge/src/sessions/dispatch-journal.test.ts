@@ -1128,7 +1128,7 @@ describe("flush failure handling", () => {
       await store.markRetryable("soft");
     });
 
-    expect(warnings.some((line) => line.includes("Failed to persist dispatch journal"))).toBe(true);
+    expect(warnings.some((line) => line.includes("journal.persist-failed"))).toBe(true);
     expect(store.get("soft")).toMatchObject({ state: "retryable" });
   });
 

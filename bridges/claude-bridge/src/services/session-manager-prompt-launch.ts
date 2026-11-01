@@ -49,6 +49,9 @@ import {
   submitClaudeTurn,
 } from "./session-manager-runtime.js";
 import { reportUltracodeRuntime } from "./ultracode.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 // Running a turn on the session's one CLI: writing it into the process that
 // is still running, or launching a new one, and the consumer of its frames.
@@ -182,9 +185,7 @@ function releaseOrphanedForeground(runtime: ClaudeRuntime, error: unknown): void
     eventEmitter.emit({ type: "session.idle", sessionId, data: { success: true } });
     return;
   }
-  console.error("[session-manager] Claude runtime ended under a resumed root turn", {
-    sessionId,
-  });
+  log.error("runtime.ended-under-resumed-turn", { sessionId });
   session.status = "error";
   session.error = error instanceof Error ? error.message : String(error);
   eventEmitter.emit({ type: "session.error", sessionId, data: { error: session.error } });

@@ -13,6 +13,9 @@ import {
 } from "../services/session-manager.js";
 import { readTranscriptVersion } from "../services/transcript-revision.js";
 import type { NormalizedMessage } from "../types/index.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 /**
  * What every transcript route of one resident session reads right now.
@@ -128,10 +131,9 @@ export function registerSessionTranscriptRoutes(
     const response = c.json(bridgeTranscriptRouteBody(read.source, query(c)));
     if (read.needsHydration) {
       void hydratePersistedSessionMessages(id).catch((error) => {
-        console.warn(
-          "[session] Background transcript hydration failed:",
-          error instanceof Error ? error.message : "unknown error",
-        );
+        log.warn("transcript.background-hydrate-failed", {
+          error: formatLogError(error, { stack: false }),
+        });
       });
     }
     return response;

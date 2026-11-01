@@ -49,6 +49,9 @@ import { commitToolPartMutation, ensureAcpToolSource, renderAcpToolSource } from
 import { findToolPart } from "./acp-rows.js";
 import { commandChangeRole } from "./acp-tool-classification.js";
 import { commandMeasurementSetting, recordAcpShellObservation } from "./change-evidence.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.acp");
 
 export { commandChangeRole };
 
@@ -235,11 +238,9 @@ function closeWindow(
       recordCommandChange(state, toolUseId, legacyCommandChange(observation));
     })
     .catch((error: unknown) => {
-      console.warn(
-        `[acp-bridge] Failed to record a measured command change: ${
-          error instanceof Error ? error.name : "unknown error"
-        }`,
-      );
+      log.warn("command-change.record-failed", {
+        errorClass: error instanceof Error ? error.name : "unknown",
+      });
     });
 }
 

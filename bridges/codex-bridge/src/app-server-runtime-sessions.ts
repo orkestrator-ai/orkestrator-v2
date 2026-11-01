@@ -45,6 +45,9 @@ import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-ti
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 
 import { type StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /** Fixed, content-free refusal for work arriving while a tab close is retiring the session. */
 export const SESSION_CLOSING_ERROR = "Session is closing";
@@ -256,10 +259,10 @@ export class CodexRuntimeSessions {
     } catch (error) {
       // A restarting or failed app-server rejects here. That is an availability
       // problem, not a route bug — surface it as the mapped 503, never a raw 500.
-      console.warn(
-        `[codex-bridge] thread/fork failed for ${parent.threadId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("thread.fork-failed", {
+        threadId: parent.threadId,
+        error: formatLogError(error, { stack: false }),
+      });
       return { outcome: "unavailable" };
     }
     if (!fork.id) return { outcome: "unavailable" };
@@ -319,10 +322,10 @@ export class CodexRuntimeSessions {
       // orphan bridge session bound to a fork no client ever learned about.
       // Close it — which unsubscribes, never `thread/delete` — before reporting.
       await this.ctx.callbacks.deleteSession(child.id).catch(() => undefined);
-      console.warn(
-        `[codex-bridge] Fork of ${parent.threadId} could not be hydrated:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("thread.fork-hydrate-failed", {
+        threadId: parent.threadId,
+        error: formatLogError(error, { stack: false }),
+      });
       return { outcome: "unavailable" };
     }
   }
@@ -347,10 +350,10 @@ export class CodexRuntimeSessions {
       });
       turns = thread?.turns;
     } catch (error) {
-      console.warn(
-        `[codex-bridge] Could not read turns for thread ${context.threadId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("thread.turns-read-failed", {
+        threadId: context.threadId,
+        error: formatLogError(error, { stack: false }),
+      });
       return undefined;
     }
     if (!turns?.length) return undefined;
@@ -1078,10 +1081,10 @@ export class CodexRuntimeSessions {
       turns = (await this.ctx.options.engine.readThread(context.threadId, { includeTurns: true }))
         ?.turns;
     } catch (error) {
-      console.warn(
-        `[codex-bridge] Could not read turns after a revert of thread ${context.threadId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("thread.turns-read-after-revert-failed", {
+        threadId: context.threadId,
+        error: formatLogError(error, { stack: false }),
+      });
       return;
     }
     // Detached or replaced while reading: the next attach rehydrates from the
@@ -1210,10 +1213,10 @@ export class CodexRuntimeSessions {
       // A transient resume, an in-flight restart or an open circuit are all
       // retryable. Reported as an outcome rather than thrown so the route answers
       // 503 instead of leaking a stack trace as a 500.
-      console.warn(
-        `[codex-bridge] Could not apply configuration for session ${sessionId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("session.config-apply-failed", {
+        sessionId,
+        error: formatLogError(error, { stack: false }),
+      });
       return "unavailable";
     }
 
@@ -1239,10 +1242,10 @@ export class CodexRuntimeSessions {
       // deliberately preserved for the next attempt (see ensureAttached), so the
       // honest answer here is the last transcript we know about rather than a 500
       // in place of a conversation.
-      console.warn(
-        `[codex-bridge] Serving the last known transcript for session ${sessionId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("transcript.serving-last-known", {
+        sessionId,
+        error: formatLogError(error, { stack: false }),
+      });
       const known = this.ctx.registry.getThreadForSession(sessionId);
       return known
         ? this.ctx.callbacks.messagesForSession(session, known)
@@ -1628,10 +1631,7 @@ export class CodexRuntimeSessions {
         }
         return "unpublished";
       }
-      console.warn(
-        "[codex-bridge] Failed to persist bridge session registry:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("registry.persist-failed", { error: formatLogError(error, { stack: false }) });
     }
     // A concurrent release may have won the race while the write was in flight.
     if (this.ctx.registry.getSession(sessionId) !== session) return "released";

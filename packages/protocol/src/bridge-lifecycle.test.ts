@@ -5,6 +5,7 @@ import {
   type LifecycleSignalTarget,
 } from "./bridge-lifecycle.js";
 import { FakeIntervals } from "./testing/fake-intervals.js";
+import { captureLogs } from "./testing/log-capture.js";
 
 class FakeSignals implements LifecycleSignalTarget {
   readonly listeners = new Map<string, Set<() => void>>();
@@ -46,7 +47,7 @@ function deferred<T = void>() {
 function harness(overrides: Partial<BridgeLifecycleOptions> = {}) {
   const timers = new FakeIntervals();
   const signals = new FakeSignals();
-  const calls = { open: 0, close: 0, sweep: 0, exits: [] as number[], reports: [] as string[] };
+  const calls = { open: 0, close: 0, sweep: 0, exits: [] as number[] };
   let parentAlive = true;
   const lifecycle = new BridgeLifecycle({
     label: "[test-bridge]",
@@ -68,7 +69,6 @@ function harness(overrides: Partial<BridgeLifecycleOptions> = {}) {
     timers,
     isParentAlive: () => parentAlive,
     signals,
-    report: (message) => calls.reports.push(message),
     ...overrides,
   });
   return {
@@ -197,6 +197,7 @@ describe("BridgeLifecycle", () => {
   });
 
   test("the idle sweep runs on its interval and reports, rather than throws, a failure", async () => {
+    const capture = captureLogs();
     let throwNext = false;
     const { lifecycle, timers, calls } = harness({
       idleSweep: {
@@ -215,7 +216,15 @@ describe("BridgeLifecycle", () => {
     expect(() => timers.tick(60_000)).not.toThrow();
     expect(calls.sweep).toBe(2);
     // Content-free: the class name only, never the message.
-    expect(calls.reports).toEqual(["[test-bridge] idle sweep failed (TypeError)"]);
+    expect(capture.records()).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        area: "bridge.lifecycle",
+        event: "idle-sweep.failed",
+        fields: { bridge: "[test-bridge]", errorClass: "TypeError" },
+      }),
+    ]);
+    capture.restore();
   });
 
   test("a late sweep callback after shutdown does nothing", async () => {
@@ -251,6 +260,7 @@ describe("BridgeLifecycle", () => {
   });
 
   test("a failed shutdown is reported and still exits, once", async () => {
+    const capture = captureLogs();
     const { lifecycle, calls, killParent, timers } = harness({
       close: async () => {
         calls.close += 1;
@@ -266,7 +276,14 @@ describe("BridgeLifecycle", () => {
 
     expect(calls.close).toBe(1);
     expect(calls.exits).toEqual([1]);
-    expect(calls.reports).toEqual(["[test-bridge] shutdown failed (Error)"]);
+    expect(capture.records()).toEqual([
+      expect.objectContaining({
+        level: "error",
+        event: "shutdown.failed",
+        fields: { bridge: "[test-bridge]", errorClass: "Error" },
+      }),
+    ]);
+    capture.restore();
   });
 
   test("a signal shuts down and exits once; the handler for the other signal is removed", async () => {

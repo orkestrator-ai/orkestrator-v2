@@ -18,20 +18,13 @@ const UNMIGRATED: Readonly<Record<string, number>> = {
   "apps/backend/**": 455,
   "apps/web/**": 369,
   "apps/web-public/**": 0,
-  "bridges/acp-bridge/**": 9,
-  "bridges/claude-bridge/**": 71,
-  "bridges/codex-bridge/**": 77,
-  "bridges/cursor-bridge/**": 11,
-  "bridges/pi-bridge/**": 4,
-  "packages/protocol/src/bridge-lifecycle.ts": 1,
-  "packages/protocol/src/event-loop-stall-monitor.ts": 1,
-  "packages/protocol/src/node/bridge-diagnostics.ts": 2,
 };
 
 /**
  * Paths excluded for good. A test's console is not the application log, and for
  * the rest `console` is the product: a CLI's and a script's output, a container
- * script with no logger to import, and the three files that wrap the console.
+ * script with no logger to import, a bridge's build script, a live probe whose
+ * stdout is the test's result channel, and the three files that wrap the console.
  * `fatal-rejections.ts` is serialized into workers, so it cannot import anything.
  */
 const PERMANENT: readonly string[] = [
@@ -48,6 +41,8 @@ const PERMANENT: readonly string[] = [
   "**/*test-fixtures*",
   "scripts/**",
   "apps/desktop/scripts/**",
+  "bridges/*/scripts/**",
+  "**/*.live-probe.ts",
   "packages/cli/**",
   "docker/**",
   "packages/protocol/src/logger.ts",
@@ -157,6 +152,20 @@ describe("raw console ratchet", () => {
   test("the electron main process holds no raw console site", () => {
     expect(rawConsoleSites("apps/desktop/electron/**", trackedSources())).toBe(0);
   });
+
+  test("the bridges and their shared modules hold no raw console site", () => {
+    const sources = trackedSources().filter(
+      (file) => !/^bridges\/[^/]+\/scripts\/|\.live-probe\.ts$/.test(file),
+    );
+    for (const path of [
+      "bridges/**",
+      "packages/protocol/src/bridge-lifecycle.ts",
+      "packages/protocol/src/event-loop-stall-monitor.ts",
+      "packages/protocol/src/node/bridge-diagnostics.ts",
+    ]) {
+      expect(rawConsoleSites(path, sources)).toBe(0);
+    }
+  });
 });
 
 describe("raw console lint rule", () => {
@@ -164,6 +173,8 @@ describe("raw console lint rule", () => {
     ["apps/desktop/electron/probe.ts"],
     ["packages/protocol/src/probe.ts"],
     ["packages/toolchain/src/probe.ts"],
+    ["bridges/claude-bridge/src/probe.ts"],
+    ["packages/protocol/src/bridge-lifecycle.ts"],
   ])("rejects console in %s, used directly or passed as a value", (path) => {
     expect(lintCodes(path, 'console.warn("x");\nexport const logger = console;\n')).toEqual([
       RESTRICTED,
@@ -186,7 +197,8 @@ describe("raw console lint rule", () => {
     ["apps/backend/src/bounded-console.ts"],
     ["apps/backend/src/core/probe.ts"],
     ["apps/web/src/lib/probe.ts"],
-    ["bridges/claude-bridge/src/probe.ts"],
+    ["bridges/claude-bridge/scripts/probe.ts"],
+    ["bridges/claude-bridge/src/services/probe.live-probe.ts"],
     ["apps/desktop/tests/probe.test.ts"],
     ["apps/desktop/scripts/probe.ts"],
     ["packages/cli/src/probe.ts"],

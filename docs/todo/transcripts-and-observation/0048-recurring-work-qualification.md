@@ -16,7 +16,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: open.
 2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: open.
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
-4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: partly done (2026-11-01: every case except merge from the UI and validation output passed in a real browser, `container-files-wiring.spec.ts`; those two need GitHub and provider turns, decision 16).
+4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: open (partial evidence only: Files-panel cases and coordinator smoke have live results; hidden-return rerun now observes the revision while hidden. UI merge, validation output and deeper coordinator qualification remain open; decision 19).
 5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown. Status: open.
 6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: partly done (the `dev:test` save-detection run passed).
@@ -743,8 +743,9 @@ credentials or a platform CI lacks are batched in
   transition boundaries; an older backend.
 - Real-browser QA of the Files panel (inactive-environment switch, two
   windows, hidden document, reload, missed final invalidation), the
-  coordinator view and hidden-document reconcile: done 2026-11-01
-  (`container-files-wiring.spec.ts`). Validation output is still owed: it
+  coordinator view and hidden-document reconcile: partial evidence from 2026-11-01
+  (`container-files-wiring.spec.ts`); coordinator coverage is smoke-only and
+  hidden-return passed with revision observation on the repair rerun. Validation output is still owed: it
   needs a Multi Review or build pipeline with model turns, so it belongs with
   the live provider runs (0049, batched in 0031).
 
@@ -1110,6 +1111,39 @@ Recorded 2026-11-01 by the worker that ran tasks 3 and 4 live on Linux.
     coordinator delegation (provider turns); or accept the smoke check.
     Chosen: the smoke check. The delegation path is covered by
     `coordinator-live.spec.ts`, which needs credentials.
+
+### 19. Task 4 acceptance after review
+
+Task 4 remains open. This repair accepts only the fetch-skip correctness fix
+and the Files-panel regression test improvements. It does not complete task 4
+or the overall qualification ticket. UI merge and validation-output QA remain
+required in the live GitHub and provider runs (task 5 and 0049 respectively);
+coordinator qualification still needs more than opening, switching and reload.
+The original hidden-return pass did not observe the revision while hidden and
+is not sufficient evidence of missed-event recovery. The revised spec waits
+for the renderer's authoritative revision store to advance before returning.
+
+Repair rerun (2026-11-01): profile `review-wiring-fix`, disposable local and
+container fixtures with no agent credentials. Command:
+`ORKESTRATOR_AGENT_TEST_PROFILE=review-wiring-fix ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name wiring-fix -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-files-wiring.spec.ts --workers=1`.
+All 3 tests passed in 107.1 s, including revision-observed hidden-return,
+no-fetch UI revert and coordinator smoke. Results:
+`output/agent-testing/review-wiring-fix/browser/results.json`. Profile stopped
+and reset; its two exact-owner containers were removed. Visibility is still
+emulated, so this does not qualify browser timer throttling.
+
+Options: keep the task open with these explicit evidence limits (recommended:
+accurate acceptance, but needs later live runs), or claim completion from smoke
+coverage (less work, but does not establish the required behavior). Chosen:
+keep it open and narrow this repair's acceptance to the regressions above.
+
+Deterministic repair validation also completed: the policy and real-Git caller
+files passed, targeted backend and agent-spec type checks passed, and
+`ORKESTRATOR_TEST_ALLOW_CONCURRENT=1 ORKESTRATOR_TEST_WORKERS=2 mise run test`
+passed all four default-tier groups in 190.3 s (exit 0). The documented
+concurrent opt-in was used after cancelling an exclusively queued attempt;
+no other worktree's processes were stopped. Separate rerun output is at
+`/tmp/ork-review-fix-tests-concurrent.log`; original review artifacts are unchanged.
 
 ## Related
 

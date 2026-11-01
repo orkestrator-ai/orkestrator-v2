@@ -304,9 +304,21 @@ test("Docker fixture local Files panel shows a file whose announcement arrived w
     await expect(page.getByText("README.md", { exact: true }).first()).toBeVisible({
       timeout: 30_000,
     });
+    const observedTreeRevision = () =>
+      page.evaluate(async (environmentId) => {
+        const modulePath = "/src/stores/worktreeSnapshotStore.ts";
+        const { useWorktreeSnapshotStore } = await import(/* @vite-ignore */ modulePath);
+        return useWorktreeSnapshotStore.getState().entries.get(environmentId)?.treeRevision ?? 0;
+      }, local.id);
+    await expect.poll(observedTreeRevision).toBeGreaterThan(0);
+    const beforeRevision = await observedTreeRevision();
     await setDocumentHidden(page, true);
     writeFileSync(filePath, "missed final invalidation\n");
-    await page.waitForTimeout(2_000);
+    // Prove the renderer received the invalidation while hidden. A watcher
+    // event delayed until after return must not satisfy this regression.
+    await expect
+      .poll(observedTreeRevision, { timeout: POLL_BUDGET_MS })
+      .toBeGreaterThan(beforeRevision);
     await expect(treeEntry()).toHaveCount(0);
     const returned = Date.now();
     await setDocumentHidden(page, false);

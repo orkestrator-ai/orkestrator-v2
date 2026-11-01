@@ -282,9 +282,11 @@ describe("BuildChatTab on a phone", () => {
     expect(node("Ticket").getAttribute("aria-selected")).toBe("true");
   });
 
-  test("the review report hint selects the stage holding the report", () => {
+  test("the stage holding the review report shows it when picked", () => {
     renderPipeline(reviewed, "stacked");
-    fireEvent.click(screen.getByRole("button", { name: /The review reported/ }));
+    // The header no longer carries a banner pointing at the report.
+    expect(screen.queryByRole("button", { name: /The review reported/ }) === null).toBe(true);
+    fireEvent.click(node("Review"));
 
     expect(node("Review").getAttribute("aria-selected")).toBe("true");
     expect(screen.getByLabelText("Structured review report")).toBeTruthy();

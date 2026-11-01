@@ -563,10 +563,7 @@ describe("BuildChatTab reports and verdicts", () => {
       backendRevision: 46,
     });
 
-    const hint = screen.getByRole("button", { name: /The review reported/ });
-    expect(hint.textContent).toContain("open Review");
-
-    fireEvent.click(hint);
+    selectNode("Review");
     await waitFor(() => expect(screen.getByLabelText("Structured review report")).toBeTruthy());
   });
 
@@ -687,20 +684,16 @@ describe("BuildChatTab reports and verdicts", () => {
     expect(selectedTitle()).toBe("Verify");
   });
 
-  test("points at the stage holding the report while showing another", async () => {
+  test("shows no review banner while following the pipeline past review", async () => {
     renderTab(reviewed);
 
-    // The tab follows the pipeline past review, so without this nothing on
-    // screen would say a review had happened at all.
-    const hint = screen.getByRole("button", { name: /The review reported/ });
-    expect(hint.textContent).toContain("1 issue");
-    expect(hint.textContent).toContain("open Review");
-
-    fireEvent.click(hint);
-    await waitFor(() => expect(screen.getByLabelText("Structured review report")).toBeTruthy());
-    expect(selectedTitle()).toBe("Review");
-    // Once the report is on screen the pointer to it is redundant.
+    // The review's outcome lives on its node and in the key information
+    // panel, not in a banner above the graph.
+    expect(selectedTitle()).toBe("Verify");
     expect(screen.queryByRole("button", { name: /The review reported/ }) === null).toBe(true);
+
+    selectNode("Review");
+    await waitFor(() => expect(screen.getByLabelText("Structured review report")).toBeTruthy());
   });
 
   test("counts issues on the node that holds the report, and only that node", () => {

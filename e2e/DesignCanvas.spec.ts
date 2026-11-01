@@ -18,6 +18,22 @@ test.beforeEach(async ({ page, browserName }) => {
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
 });
 
+/**
+ * Flake 0174: with eight workers on a loaded host the fixture's two dev-server
+ * page loads took 14–16 s of the 30 s budget, and no step stalled; whichever
+ * step came next hit the deadline. A page load still runs under the deadline,
+ * then its time is given back, so the journey's steps keep the whole budget
+ * and a step that stalls still fails at it.
+ */
+async function pageLoad<T>(load: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await load();
+  } finally {
+    test.info().setTimeout(test.info().timeout + (Date.now() - started));
+  }
+}
+
 test("canvas edits, script isolation, missed events, conflict and reload", async ({
   page,
 }, testInfo) => {
@@ -52,7 +68,7 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
         return service.invoke(command, args);
       },
     );
-    await page.goto(`/design-canvas?canvasId=${canvas.id}`);
+    await pageLoad(() => page.goto(`/design-canvas?canvasId=${canvas.id}`));
     await expect(page.getByRole("button", { name: "title", exact: true })).toBeVisible();
     const hierarchy = page.getByRole("navigation", { name: "Design hierarchy" });
     const divider = page.getByRole("separator", { name: "Resize design hierarchy" });
@@ -206,7 +222,7 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       window.dispatchEvent(new CustomEvent("orkestrator-fixture:native-event-stream-connected")),
     );
     await expect.poll(() => snapshots).toBeGreaterThan(snapshotsBeforeReconnect);
-    await page.reload();
+    await pageLoad(() => page.reload());
     await expect(embedded.getByRole("heading")).toHaveText("Changed while away");
     await page.getByRole("button", { name: "title", exact: true }).click();
     await page.getByLabel("Color", { exact: true }).fill("blue");

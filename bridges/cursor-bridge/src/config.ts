@@ -195,8 +195,14 @@ export const CANCEL_ACK_TIMEOUT_MS = parseBoundedInteger(
  * a dropped request; the close itself carries on and a retry joins it.
  */
 export const CLOSE_ACK_TIMEOUT_MS = 4_000;
-/** Bounded budget for catalogue and account reads, which are never on a turn. */
+/** Bounded budget for catalogue reads, which are never on a turn. */
 export const CATALOG_TIMEOUT_MS = 30_000;
+/**
+ * How long a status read waits on `Cursor.me` for the account label. Readiness
+ * does not depend on the label, so this stays short; a lookup that misses it
+ * falls back to the stored email or a generic label.
+ */
+export const ACCOUNT_LOOKUP_TIMEOUT_MS = 3_000;
 /** Interactive browser login is a human-paced flow; give it room but bound it. */
 export const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 

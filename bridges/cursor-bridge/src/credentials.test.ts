@@ -209,6 +209,44 @@ describe("authStatus", () => {
     expect(meCalls).toBe(1);
   });
 
+  test("a lookup that never answers falls back within the bound, and is not cached", async () => {
+    // To-do 1173: the label is all `Cursor.me` buys, so a hung API must not
+    // hold the status read or turn a signed-in key into a signed-out one.
+    stored = { apiKey: "hung-key", email: "hung@example.com" };
+    let answer: ((account: { apiKeyName: string }) => void) | undefined;
+    let cursorAnswers = false;
+    let lookups = 0;
+    const restore = useCursorCredentialRuntimeForTests({
+      store: new FakeCredentialStore(),
+      auth: {} as typeof realCursorSdk.Cursor.auth,
+      me: (() => {
+        lookups += 1;
+        if (cursorAnswers) return Promise.resolve({ apiKeyName: "Recovered account" });
+        return new Promise((resolve) => (answer = resolve));
+      }) as typeof realCursorSdk.Cursor.me,
+      meTimeoutMs: 20,
+    });
+    try {
+      const fallback = { state: "signed-in", account: { label: "hung@example.com" } };
+      const [first, second] = await Promise.all([authStatus(), authStatus()]);
+      expect(first).toMatchObject(fallback);
+      expect(second).toMatchObject(fallback);
+      // Concurrent and repeated reads share the one outstanding request.
+      expect(await authStatus()).toMatchObject(fallback);
+      expect(lookups).toBe(1);
+
+      // Cursor answers late. The fallback was not cached, so the next read
+      // asks again and the label recovers.
+      answer?.({ apiKeyName: "Late account" });
+      cursorAnswers = true;
+      await Bun.sleep(0);
+      expect(await authStatus()).toMatchObject({ account: { label: "Recovered account" } });
+      expect(lookups).toBe(2);
+    } finally {
+      restore();
+    }
+  });
+
   test("an expired login reads as signed out, so the UI offers the fix", async () => {
     stored = { apiKey: "k", apiKeyExpiresAtMs: Date.now() - 1 };
     expect(await authStatus()).toEqual({

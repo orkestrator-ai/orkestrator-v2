@@ -3012,9 +3012,9 @@ describe("AgentNativeTab", () => {
       pickerProps = props;
       return <OriginalPicker {...props} />;
     });
-    const persist = spyOn(realBackend, "updateGlobalConfig").mockImplementation(async (global) => ({
+    const persist = spyOn(realBackend, "patchGlobalConfig").mockImplementation(async (patch) => ({
       ...useConfigStore.getState().config,
-      global,
+      global: { ...useConfigStore.getState().config.global, ...patch },
     }));
     try {
       render(
@@ -3049,7 +3049,7 @@ describe("AgentNativeTab", () => {
       await waitFor(() =>
         expect(useConfigStore.getState().config.global.favoriteModels).toEqual(reordered),
       );
-      expect(persist).toHaveBeenCalledWith(expect.objectContaining({ favoriteModels: reordered }));
+      expect(persist).toHaveBeenCalledWith({ favoriteModels: reordered });
     } finally {
       cleanup();
       picker.mockRestore();

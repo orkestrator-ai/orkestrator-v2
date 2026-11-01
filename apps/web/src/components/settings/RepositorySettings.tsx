@@ -46,6 +46,7 @@ import { ProjectIconImage } from "@/components/federation/MachineDot";
 import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/types";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { SettingsPageLayout } from "./SettingsPageLayout";
+import { repositorySettingsPatch } from "./repository-settings-patch";
 
 interface RepositorySettingsProps {
   project: Project;
@@ -113,6 +114,8 @@ export function RepositorySettings({
   const [entryPort, setEntryPort] = useState(
     initialConfig.entryPort != null ? String(initialConfig.entryPort) : "",
   );
+  // The record the form was loaded from: a save sends only what differs from it.
+  const [baselineConfig, setBaselineConfig] = useState<RepositoryConfig>(initialConfig);
   const tiers = useMemo(
     () => ({ ...agentSettingsTiers(config, project.id), repository: agentSettings }),
     [config, project.id, agentSettings],
@@ -138,6 +141,7 @@ export function RepositorySettings({
 
       // Reset repo config fields
       const repoConfig = getRepositoryConfig(project.id) ?? DEFAULT_CONFIG;
+      setBaselineConfig(repoConfig);
       setDefaultBranch(repoConfig.defaultBranch);
       setPrBaseBranch(repoConfig.prBaseBranch);
       setPortMappings(repoConfig.defaultPortMappings ?? []);
@@ -470,8 +474,16 @@ export function RepositorySettings({
         agentSettings: normalizeAgentSettings(agentSettings),
       };
 
-      // Update backend
-      const newConfig = await backend.updateRepositoryConfig(project.id, repoConfig);
+      // Only the edited fields travel; the backend merges them onto its own
+      // record, so another window's change to a different field is kept. An
+      // empty patch still returns the authoritative record.
+      const { updates, unset } = repositorySettingsPatch(repoConfig, baselineConfig);
+      const newConfig = await backend.patchRepositorySettings(
+        project.id,
+        updates,
+        unset,
+        repoConfig,
+      );
       setConfig(newConfig);
 
       toast.success("Settings saved");

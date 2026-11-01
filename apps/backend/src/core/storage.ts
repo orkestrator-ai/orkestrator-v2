@@ -634,6 +634,18 @@ export class StorageService {
     return this.repos.config.updateGlobalConfig(globalConfig, options);
   }
 
+  patchGlobalConfig(
+    ...args: Parameters<ConfigRepository["patchGlobalConfig"]>
+  ): Promise<AppConfig> {
+    return this.repos.config.patchGlobalConfig(...args);
+  }
+
+  patchRepositorySettings(
+    ...args: Parameters<ConfigRepository["patchRepositorySettings"]>
+  ): Promise<AppConfig> {
+    return this.repos.config.patchRepositorySettings(...args);
+  }
+
   updateWorktreeLocations(
     locations: import("@orkestrator/protocol/disk-usage").WorktreeLocationSettings,
   ): Promise<AppConfig> {

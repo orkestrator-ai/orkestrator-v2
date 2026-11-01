@@ -4,9 +4,10 @@ import { useConfigStore } from "@/stores/configStore";
 import type { ActionDefaults } from "../../../packages/protocol/src/action-defaults";
 import { installControlledTimeout } from "../../helpers/controlled-timeout";
 
-const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
+// As the backend does, merge the changed keys onto the current settings.
+const mockPatchGlobalConfig = mock(async (patch: Record<string, unknown>, _options?: unknown) => ({
   version: "1.0",
-  global: globalConfig,
+  global: { ...useConfigStore.getState().config.global, ...patch },
   repositories: {},
 }));
 const mockGetLogDirectory = mock(async () => null);
@@ -14,20 +15,20 @@ const actualBackend = await import("../../../apps/web/src/lib/backend");
 
 mock.module("@/lib/backend", () => ({
   ...actualBackend,
-  updateGlobalConfig: mockUpdateGlobalConfig,
+  patchGlobalConfig: mockPatchGlobalConfig,
   getLogDirectory: mockGetLogDirectory,
 }));
 
 const { GlobalSettings } = await import("../../../apps/web/src/components/settings/GlobalSettings");
 
 function savedActionDefaults(): ActionDefaults {
-  const call = mockUpdateGlobalConfig.mock.calls.at(-1)?.[0] as
+  const call = mockPatchGlobalConfig.mock.calls.at(-1)?.[0] as
     { agentSettings?: { actionDefaults?: ActionDefaults } } | undefined;
   return call?.agentSettings?.actionDefaults ?? {};
 }
 
 function savedAgentSettings() {
-  const call = mockUpdateGlobalConfig.mock.calls.at(-1)?.[0] as
+  const call = mockPatchGlobalConfig.mock.calls.at(-1)?.[0] as
     { agentSettings?: Record<string, unknown> } | undefined;
   return call?.agentSettings;
 }
@@ -52,7 +53,7 @@ describe("GlobalSettings defaults section", () => {
   beforeEach(() => {
     autoSaveClock = installControlledTimeout(400, { label: "GlobalSettings auto-save debounce" });
     cleanup();
-    mockUpdateGlobalConfig.mockClear();
+    mockPatchGlobalConfig.mockClear();
     mockGetLogDirectory.mockClear();
     window.orkestratorGateway = { enabled: true };
 
@@ -127,7 +128,7 @@ describe("GlobalSettings defaults section", () => {
 
     await flushAutoSave();
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedActionDefaults()).toEqual({
       review: { platform: "claude", model: "haiku" },
     });
@@ -152,7 +153,7 @@ describe("GlobalSettings defaults section", () => {
       }),
     );
 
-    mockUpdateGlobalConfig.mockClear();
+    mockPatchGlobalConfig.mockClear();
     const review2Picker = screen.getByRole("combobox", {
       name: "Review 2 default agent, model and reasoning",
     });
@@ -178,7 +179,7 @@ describe("GlobalSettings defaults section", () => {
 
     await flushAutoSave();
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
     // Claude's `haiku` is meaningless to Codex, so the platform switch must
     // fall back to Codex's own default model rather than carry it across.
     expect(savedActionDefaults()).toEqual({ pr: { platform: "codex" } });
@@ -202,7 +203,7 @@ describe("GlobalSettings defaults section", () => {
     await flushAutoSave();
 
     await waitFor(() =>
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           enabledAgentPlatforms: ["codex"],
           agentSettings: expect.objectContaining({
@@ -210,7 +211,7 @@ describe("GlobalSettings defaults section", () => {
             actionDefaults: { review: { platform: "codex", model: "gpt-5.4" } },
           }),
         }),
-        undefined,
+        expect.objectContaining({ unset: [] }),
       ),
     );
   });
@@ -243,7 +244,7 @@ describe("GlobalSettings defaults section", () => {
 
     await flushAutoSave();
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedActionDefaults()).toEqual({});
   });
 
@@ -261,7 +262,7 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Add Haiku.* to favorites$/ }));
     fireEvent.keyDown(document.body, { key: "Escape" });
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalled());
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalled());
     expect(
       screen.getByRole("combobox", { name: "Review default agent, model and reasoning" })
         .textContent,
@@ -330,7 +331,7 @@ describe("GlobalSettings defaults section", () => {
 
     // Back to "Default" means the model's own level, which is an absent value
     // rather than a stored "default" string.
-    mockUpdateGlobalConfig.mockClear();
+    mockPatchGlobalConfig.mockClear();
     openPicker("Resolve");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Default" }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
@@ -394,7 +395,7 @@ describe("GlobalSettings defaults section", () => {
     );
   });
 
-  test("carries saved defaults through a save made from another section", async () => {
+  test("a save from another section does not resend saved defaults", async () => {
     const stored: ActionDefaults = { review: { platform: "codex", reasoningEffort: "xhigh" } };
     useConfigStore.setState((state) => ({
       ...state,
@@ -408,18 +409,21 @@ describe("GlobalSettings defaults section", () => {
     }));
     render(<GlobalSettings activeSection="review" />);
 
-    // `update_global_config` replaces the stored global wholesale, so a save
-    // from an unrelated pane must resend these or it silently deletes them.
+    // Only the changed field travels; the backend merges it onto its own
+    // copy, so another window's newer defaults cannot be overwritten from here.
     fireEvent.change(screen.getByLabelText("Review instruction"), {
       target: { value: "Focus on release blockers." },
     });
     await flushAutoSave();
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
-    expect(savedActionDefaults()).toEqual(stored);
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(mockPatchGlobalConfig.mock.calls.at(-1)?.[0]).toEqual({
+      reviewInstruction: "Focus on release blockers.",
+    });
+    expect(useConfigStore.getState().config.global.agentSettings?.actionDefaults).toEqual(stored);
   });
 
-  test("carries notification preferences through an unrelated global save", async () => {
+  test("an unrelated global save does not resend notification preferences", async () => {
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -437,12 +441,14 @@ describe("GlobalSettings defaults section", () => {
     });
     await flushAutoSave();
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
-    expect(mockUpdateGlobalConfig.mock.calls.at(-1)?.[0]).toEqual(
-      expect.objectContaining({
-        notificationSounds: { agentStopped: false, prMerged: true },
-      }),
-    );
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(mockPatchGlobalConfig.mock.calls.at(-1)?.[0]).toEqual({
+      reviewInstruction: "Preserve unrelated preferences.",
+    });
+    expect(useConfigStore.getState().config.global.notificationSounds).toEqual({
+      agentStopped: false,
+      prMerged: true,
+    });
   });
 
   test("edits a two-column variable reviewer list shared with Defaults", async () => {
@@ -472,7 +478,7 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     await flushAutoSave();
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedAgentSettings()).toMatchObject({
       actionDefaults: { review: { platform: "claude", model: "haiku" } },
       multiReview: {
@@ -551,7 +557,7 @@ describe("GlobalSettings defaults section", () => {
     ).toHaveLength(2);
     await flushAutoSave();
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedAgentSettings()?.multiReview).toBeUndefined();
   });
 
@@ -583,7 +589,7 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.click(within(rows[2]!).getByRole("button", { name: "Reset model" }));
     await flushAutoSave();
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedAgentSettings()?.multiReview).toEqual({
       reviewerCount: 4,
       additionalReviewers: [null, { platform: "claude", model: "haiku" }],
@@ -615,7 +621,7 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.click(within(rows[2]!).getByRole("button", { name: "Reset model" }));
     await flushAutoSave();
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedAgentSettings()?.multiReview).toEqual({ reviewerCount: 3 });
   });
 

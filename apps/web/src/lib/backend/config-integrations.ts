@@ -45,6 +45,7 @@ import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 import type { PrDetectionResult } from "./projects-environments";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
+import { isUnknownBackendCommand } from "./unknown-command";
 
 /**
  * Workspace machine settings with the command node's inherited preferences.
@@ -186,11 +187,33 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
     : invoke<GlobalConfig>("get_global_config");
 }
 
+/**
+ * Replace the whole stored global. Kept for compatibility; it overwrites
+ * whatever another client changed since this copy was loaded, so new callers
+ * use `patchGlobalConfig`.
+ */
 export async function updateGlobalConfig(
   global: GlobalConfig,
   machine?: AccountMachine,
 ): Promise<AppConfig> {
   return invokeGlobalConfigCommand("update_global_config", { global }, machine);
+}
+
+/**
+ * Change only the given top-level settings. The backend merges them onto its
+ * current global under the config lock, so concurrent edits of other fields
+ * from another window or machine survive. `unset` removes keys.
+ */
+export async function patchGlobalConfig(
+  patch: Partial<GlobalConfig>,
+  options: { unset?: readonly (keyof GlobalConfig)[]; machine?: AccountMachine } = {},
+): Promise<AppConfig> {
+  const unset = options.unset ?? [];
+  return invokeGlobalConfigCommand(
+    "patch_global_config",
+    { patch, ...(unset.length > 0 ? { unset: [...unset] } : {}) },
+    options.machine,
+  );
 }
 
 /** Turn the startup reminder to set up the GitHub CLI off, or back on. */
@@ -370,6 +393,29 @@ export async function updateRepositoryConfig(
   repoConfig: RepositoryConfig,
 ): Promise<AppConfig> {
   return invokeRepositoryConfigCommand("update_repository_config", { projectId, repoConfig });
+}
+
+/**
+ * Change only the repository settings the user edited. `fallback` is the
+ * whole record the form would have saved; it is sent with the older replace
+ * command only to a backend that predates the patch.
+ */
+export async function patchRepositorySettings(
+  projectId: string,
+  updates: Partial<RepositoryConfig>,
+  unset: readonly (keyof RepositoryConfig)[],
+  fallback: RepositoryConfig,
+): Promise<AppConfig> {
+  try {
+    return await invokeRepositoryConfigCommand("patch_repository_settings", {
+      projectId,
+      updates,
+      ...(unset.length > 0 ? { unset: [...unset] } : {}),
+    });
+  } catch (error) {
+    if (!isUnknownBackendCommand(error, "patch_repository_settings")) throw error;
+    return updateRepositoryConfig(projectId, fallback);
+  }
 }
 
 export async function getLogDirectory(machine?: AccountMachine): Promise<string> {

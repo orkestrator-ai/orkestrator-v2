@@ -21,8 +21,11 @@ let updateRepositoryConfigImpl = (_projectId: string, repoConfig: unknown) =>
     repositories: { "project-1": repoConfig as Record<string, unknown> },
   });
 
-const mockUpdateRepositoryConfig = mock((projectId: string, repoConfig: unknown) =>
-  updateRepositoryConfigImpl(projectId, repoConfig),
+// The fourth argument is the whole record, sent only to an older backend; the
+// assertions below read it to check what the form built.
+const mockPatchRepositorySettings = mock(
+  (projectId: string, _updates: unknown, _unset: unknown, repoConfig: unknown) =>
+    updateRepositoryConfigImpl(projectId, repoConfig),
 );
 const mockUpdateProject = mock(async (project: unknown) => project);
 const mockGetGitRemoteUrl = mock(async (_path: string): Promise<string | null> => null);
@@ -50,7 +53,7 @@ const realSelectSnapshot = { ...realSelect };
 mock.module("@/lib/backend", () => ({
   findProjectIcons: mockFindProjectIcons,
   readHostImageFile: mockReadHostImageFile,
-  updateRepositoryConfig: mockUpdateRepositoryConfig,
+  patchRepositorySettings: mockPatchRepositorySettings,
   updateProject: mockUpdateProject,
   getGitRemoteUrl: mockGetGitRemoteUrl,
   getCachedOpenCodeModelCatalog: mockGetCachedOpenCodeModelCatalog,
@@ -272,7 +275,7 @@ function getMockSelects() {
 }
 
 function getSavedConfig() {
-  return mockUpdateRepositoryConfig.mock.calls[0]?.[1] as Record<string, unknown>;
+  return mockPatchRepositorySettings.mock.calls[0]?.[3] as Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +294,7 @@ describe("RepositorySettings", () => {
         repositories: { "project-1": repoConfig as Record<string, unknown> },
       });
 
-    mockUpdateRepositoryConfig.mockClear();
+    mockPatchRepositorySettings.mockClear();
     mockUpdateProject.mockClear();
     mockGetGitRemoteUrl.mockReset();
     mockGetGitRemoteUrl.mockImplementation(async () => null);
@@ -343,8 +346,10 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() =>
-        expect(mockUpdateRepositoryConfig).toHaveBeenCalledWith(
+        expect(mockPatchRepositorySettings).toHaveBeenCalledWith(
           "project-1",
+          expect.anything(),
+          expect.anything(),
           expect.objectContaining({
             agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
           }),
@@ -365,7 +370,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {
-        const saved = mockUpdateRepositoryConfig.mock.calls.at(-1)?.[1] as {
+        const saved = mockPatchRepositorySettings.mock.calls.at(-1)?.[3] as {
           agentSettings?: { platforms?: Record<string, unknown> };
         };
         expect(saved.agentSettings?.platforms).toEqual({ codex: { mode: "terminal" } });
@@ -394,7 +399,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {
-        const saved = mockUpdateRepositoryConfig.mock.calls.at(-1)?.[1] as {
+        const saved = mockPatchRepositorySettings.mock.calls.at(-1)?.[3] as {
           agentSettings?: { platforms?: Record<string, unknown> };
         };
         expect(saved.agentSettings?.platforms).toEqual({ claude: { reasoningEffort: "high" } });
@@ -421,7 +426,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {
-        const saved = mockUpdateRepositoryConfig.mock.calls.at(-1)?.[1] as {
+        const saved = mockPatchRepositorySettings.mock.calls.at(-1)?.[3] as {
           agentSettings?: { platforms?: Record<string, unknown> };
         };
         expect(saved.agentSettings?.platforms).toEqual({ codex: { reasoningEffort: "high" } });
@@ -434,8 +439,10 @@ describe("RepositorySettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() =>
-        expect(mockUpdateRepositoryConfig).toHaveBeenCalledWith(
+        expect(mockPatchRepositorySettings).toHaveBeenCalledWith(
           "project-1",
+          expect.anything(),
+          expect.anything(),
           expect.objectContaining({ agentSettings: {} }),
         ),
       );
@@ -487,7 +494,7 @@ describe("RepositorySettings", () => {
       fireEvent.click(getSaveButton());
 
       await waitFor(() => expect(onUpdateProject).toHaveBeenCalledTimes(1));
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
 
       expect(onUpdateProject.mock.calls[0]?.[0]).toEqual(
         expect.objectContaining({
@@ -527,7 +534,7 @@ describe("RepositorySettings", () => {
 
       fireEvent.click(getSaveButton());
 
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
       expect(onUpdateProject).not.toHaveBeenCalled();
     });
 
@@ -543,9 +550,22 @@ describe("RepositorySettings", () => {
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(false);
       fireEvent.click(getSaveButton());
 
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
       expect(getSavedConfig().defaultBranch).toBe("develop");
       expect(onUpdateProject).not.toHaveBeenCalled();
+    });
+
+    test("sends only the fields edited since the dialog loaded", async () => {
+      renderSettings({ section: "branches" });
+
+      fireEvent.change(screen.getByLabelText("Default Branch"), { target: { value: "develop" } });
+      fireEvent.click(getSaveButton());
+
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
+      const [projectId, updates, unset] = mockPatchRepositorySettings.mock.calls[0]!;
+      expect(projectId).toBe("project-1");
+      expect(updates).toEqual({ defaultBranch: "develop" });
+      expect(unset).toEqual([]);
     });
 
     test("can rename a project with an existing local-path remote", async () => {
@@ -830,7 +850,7 @@ describe("RepositorySettings", () => {
       await waitFor(() => expect(mockProjectIconFromFile).toHaveBeenCalledTimes(1));
       expect(getSaveButton().hasAttribute("disabled")).toBe(true);
       fireEvent.click(getSaveButton());
-      expect(mockUpdateRepositoryConfig).not.toHaveBeenCalled();
+      expect(mockPatchRepositorySettings).not.toHaveBeenCalled();
       expect(onUpdateProject).not.toHaveBeenCalled();
       await act(async () => conversion.resolve(PICKED_ICON));
       fireEvent.click(getSaveButton());
@@ -986,7 +1006,7 @@ describe("RepositorySettings", () => {
         expect(getSaveButton().hasAttribute("disabled")).toBe(true);
         fireEvent.click(getSaveButton());
         expect(onUpdateProject).not.toHaveBeenCalled();
-        expect(mockUpdateRepositoryConfig).not.toHaveBeenCalled();
+        expect(mockPatchRepositorySettings).not.toHaveBeenCalled();
       };
       assertBlocked();
       await act(async () => discovery.resolve(["/repo/logo.png"]));
@@ -1077,7 +1097,7 @@ describe("RepositorySettings", () => {
       fireEvent.change(screen.getByLabelText("PR Base Branch"), { target: { value: "release" } });
       fireEvent.click(getSaveButton());
 
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
 
       const savedConfig = getSavedConfig();
       expect(savedConfig.defaultBranch).toBe("develop");
@@ -1112,7 +1132,7 @@ describe("RepositorySettings", () => {
       fireEvent.change(screen.getByLabelText("Default Branch"), { target: { value: "develop" } });
       fireEvent.click(getSaveButton());
 
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
 
       expect(getSavedConfig().lastEnvironmentType).toBeUndefined();
       await waitFor(() => {
@@ -1146,7 +1166,7 @@ describe("RepositorySettings", () => {
       fireEvent.change(getMockSelects()[0]!, { target: { value: "udp" } });
       fireEvent.click(getSaveButton());
 
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
 
       const savedConfig = getSavedConfig();
       expect(savedConfig.entryPort).toBe(8080);
@@ -1200,7 +1220,7 @@ describe("RepositorySettings", () => {
       });
       fireEvent.click(getSaveButton());
 
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
       expect(getSavedConfig().entryPort).toBeUndefined();
     });
   });
@@ -1215,7 +1235,7 @@ describe("RepositorySettings", () => {
       fireEvent.change(inputs[0]!, { target: { value: "config/settings.json" } });
       fireEvent.click(getSaveButton());
 
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockPatchRepositorySettings).toHaveBeenCalledTimes(1));
       expect(getSavedConfig().filesToCopy).toEqual(["config/settings.json"]);
     });
 

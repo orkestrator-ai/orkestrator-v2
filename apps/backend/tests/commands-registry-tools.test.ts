@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 
+import { homePath } from "../src/core/shell";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -174,6 +175,18 @@ describe("agent extension discovery commands", () => {
     }) as unknown as Parameters<typeof commandTesting.createExtensionCommandRunner>[2];
     return { run, calls };
   }
+
+  test("runs the host's agent CLI from the home directory, outside any project", async () => {
+    const { context } = createContext(createEnvironment());
+    const { run, calls } = recordingRun("[]");
+
+    const runner = commandTesting.createHostExtensionCommandRunner(context, run);
+    await expect(runner("claude", ["plugin", "list", "--json"])).resolves.toBe("[]");
+
+    expect(calls[0]!.args).toEqual(["plugin", "list", "--json"]);
+    expect(calls[0]!.options).toMatchObject({ cwd: homePath(), timeoutMs: 20_000 });
+    expect((calls[0]!.options as { env: Record<string, string> }).env.NO_COLOR).toBe("1");
+  });
 
   test("runs the agent CLI inside the worktree for a local environment", async () => {
     const environment = createEnvironment({

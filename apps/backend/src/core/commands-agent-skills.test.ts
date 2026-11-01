@@ -16,4 +16,19 @@ describe("agent skill commands", () => {
       });
     }
   });
+
+  test("keeps host plugins out of isolated agent-test profiles", async () => {
+    const command = createCommandRegistry().get("list_agent_plugins");
+    if (!command) throw new Error("list_agent_plugins command is not registered");
+
+    const context = { runtimeFlavor: "agent-test" } as CommandContext;
+    await expect(command({ provider: "claude" }, context)).resolves.toEqual({
+      agent: "claude",
+      plugins: [],
+    });
+    await expect(command({ provider: "claude", unexpected: true }, context)).rejects.toThrow(
+      "Unexpected list_agent_plugins argument field",
+    );
+    await expect(command({ provider: "other" }, context)).rejects.toThrow();
+  });
 });

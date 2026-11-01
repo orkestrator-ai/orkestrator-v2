@@ -25,7 +25,12 @@ import type {
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
-import { SettingsPageHeader, SettingsSectionHeader } from "./SettingsPageLayout";
+import { AgentPluginsBrowser, useAgentPlugins } from "./AgentPluginsBrowser";
+import {
+  SETTINGS_PAGE_BROWSER_WIDTH_CLASS,
+  SettingsPageHeader,
+  SettingsSectionHeader,
+} from "./SettingsPageLayout";
 
 const PROVIDERS: Array<{ id: AgentSkillProvider; label: string }> = [
   { id: "claude", label: "Claude" },
@@ -215,6 +220,10 @@ export function SkillsSettings({
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileRetry, setFileRetry] = useState(0);
   const [copied, setCopied] = useState(false);
+  // An environment's dialog lists its plugins beside this pane, so only the page has the view.
+  const showPlugins = !embedded;
+  const [view, setView] = useState<"skills" | "plugins">("skills");
+  const plugins = useAgentPlugins(provider, machine, showPlugins && view === "plugins");
 
   /**
    * Guards both async paths against a stale response landing after the user has
@@ -402,9 +411,9 @@ export function SkillsSettings({
   const presentRoots = (state.scan?.roots.length ?? 0) - missingRoots;
   const headerDescription = description ?? (
     <>
-      Every skill each agent can load from its user-level skill directories, including shared
-      locations such as <code className="text-[11px]">~/.agents/skills</code>. Project skills are
-      not listed here.
+      Every skill and plugin each agent can load. Skills come from its user-level skill directories,
+      including shared locations such as <code className="text-[11px]">~/.agents/skills</code>.
+      Project skills are not listed here.
     </>
   );
   const providerTabs = showProviderTabs ? (
@@ -412,7 +421,7 @@ export function SkillsSettings({
       value={provider}
       onValueChange={(value) => setInternalProvider(value as AgentSkillProvider)}
     >
-      <TabsList className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
+      <TabsList aria-label="Agent" className="h-auto min-h-8 flex-wrap bg-zinc-900/80">
         {PROVIDERS.map((entry) => (
           <TabsTrigger key={entry.id} value={entry.id} className={TAB_TRIGGER_CLASSES}>
             <AgentPlatformIcon platform={entry.id} accent className="h-3.5 w-3.5" />
@@ -427,7 +436,9 @@ export function SkillsSettings({
     <div
       className={cn(
         "flex min-h-[28rem] flex-col gap-4",
-        embedded ? "h-[calc(100dvh-17rem)]" : PANE_HEIGHT_CLASSES,
+        embedded
+          ? "h-[calc(100dvh-17rem)]"
+          : cn(PANE_HEIGHT_CLASSES, SETTINGS_PAGE_BROWSER_WIDTH_CLASS),
       )}
     >
       {embedded ? (
@@ -436,249 +447,289 @@ export function SkillsSettings({
           {providerTabs}
         </div>
       ) : (
-        <SettingsPageHeader title="Skills" description={headerDescription} actions={providerTabs} />
+        <SettingsPageHeader
+          title="Skills and plugins"
+          description={headerDescription}
+          actions={providerTabs}
+        />
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 rounded-md border border-zinc-800 md:flex-row">
-        {/* Skill list */}
-        <div className="flex h-56 w-full shrink-0 flex-col border-b border-zinc-800 md:h-auto md:w-[17rem] md:border-b-0 md:border-r">
-          <div className="flex items-center gap-2 border-b border-zinc-800 p-2">
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Filter skills"
-                aria-label="Filter skills"
-                className="h-8 pl-7 text-xs"
-              />
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={() => void loadProvider(provider)}
-              disabled={state.loading}
-              aria-label="Rescan skill directories"
-              title="Rescan skill directories"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", state.loading && "animate-spin")} />
-            </Button>
-          </div>
+      {showPlugins && (
+        <Tabs value={view} onValueChange={(value) => setView(value as "skills" | "plugins")}>
+          <TabsList aria-label="Skills or plugins" className="h-8 bg-zinc-900/80">
+            <TabsTrigger value="skills" className={TAB_TRIGGER_CLASSES}>
+              Skills
+              {state.scan && <span className="tabular-nums opacity-70">{skills.length}</span>}
+            </TabsTrigger>
+            <TabsTrigger value="plugins" className={TAB_TRIGGER_CLASSES}>
+              Plugins
+              {plugins.state.catalog && !plugins.state.catalog.pluginError && (
+                <span className="tabular-nums opacity-70">
+                  {plugins.state.catalog.plugins.length}
+                </span>
+              )}
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
 
-          {state.error && state.scan && (
-            <p role="alert" className="border-b border-zinc-800 px-3 py-2 text-xs text-destructive">
-              Refresh failed: {state.error}
-            </p>
-          )}
-
-          <ScrollArea className="min-h-0 flex-1">
-            {state.loading && !state.scan ? (
-              <div className="flex items-center justify-center py-10">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      {view === "plugins" ? (
+        <AgentPluginsBrowser
+          key={provider}
+          state={plugins.state}
+          onReload={plugins.reload}
+          skills={state.scan?.skills}
+          onOpenSkill={(skill) => {
+            setSelectedByProvider((prev) => ({ ...prev, [provider]: skill.id }));
+            setQuery("");
+            setView("skills");
+          }}
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col gap-4 rounded-md border border-zinc-800 md:flex-row">
+          {/* Skill list */}
+          <div className="flex h-56 w-full shrink-0 flex-col border-b border-zinc-800 md:h-auto md:w-[17rem] md:border-b-0 md:border-r">
+            <div className="flex items-center gap-2 border-b border-zinc-800 p-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Filter skills"
+                  aria-label="Filter skills"
+                  className="h-8 pl-7 text-xs"
+                />
               </div>
-            ) : state.error && !state.scan ? (
-              <p className="p-3 text-xs text-destructive">{state.error}</p>
-            ) : filtered.length === 0 ? (
-              <p className="p-3 text-xs text-muted-foreground">
-                {skills.length === 0
-                  ? "No skills found in any of this agent's skill directories."
-                  : "No skills match this filter."}
-              </p>
-            ) : (
-              <ul aria-label="Skills">
-                {filtered.map((skill) => {
-                  const isSelected = selected?.id === skill.id;
-                  return (
-                    <li key={skill.id}>
-                      <button
-                        type="button"
-                        aria-current={isSelected ? "true" : undefined}
-                        onClick={() =>
-                          setSelectedByProvider((prev) => ({ ...prev, [provider]: skill.id }))
-                        }
-                        className={cn(
-                          "flex w-full flex-col items-start gap-0.5 border-l-2 px-3 py-2 text-left transition-colors",
-                          isSelected
-                            ? "border-blue-500 bg-zinc-900/80"
-                            : "border-transparent hover:bg-zinc-900/50",
-                        )}
-                      >
-                        <span className="flex w-full items-center gap-1.5">
-                          <span
-                            className={cn(
-                              "truncate text-xs font-medium",
-                              skill.shadowed ? "text-muted-foreground" : "text-foreground",
-                            )}
-                          >
-                            {skill.name}
-                          </span>
-                          {skill.shadowed && (
-                            <span
-                              title="A higher-precedence directory provides a skill with this name, so this copy is not loaded"
-                              className="shrink-0 rounded bg-zinc-800 px-1 text-[9px] uppercase tracking-wide text-muted-foreground"
-                            >
-                              Shadowed
-                            </span>
-                          )}
-                        </span>
-                        <span
-                          className="w-full truncate font-mono text-[10px] text-muted-foreground"
-                          title={skill.location}
-                        >
-                          {skill.location}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </ScrollArea>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                onClick={() => void loadProvider(provider)}
+                disabled={state.loading}
+                aria-label="Rescan skill directories"
+                title="Rescan skill directories"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", state.loading && "animate-spin")} />
+              </Button>
+            </div>
 
-          {/* Gated on a completed scan: before one lands the counts are all
+            {state.error && state.scan && (
+              <p
+                role="alert"
+                className="border-b border-zinc-800 px-3 py-2 text-xs text-destructive"
+              >
+                Refresh failed: {state.error}
+              </p>
+            )}
+
+            <ScrollArea className="min-h-0 flex-1">
+              {state.loading && !state.scan ? (
+                <div className="flex items-center justify-center py-10">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : state.error && !state.scan ? (
+                <p className="p-3 text-xs text-destructive">{state.error}</p>
+              ) : filtered.length === 0 ? (
+                <p className="p-3 text-xs text-muted-foreground">
+                  {skills.length === 0
+                    ? "No skills found in any of this agent's skill directories."
+                    : "No skills match this filter."}
+                </p>
+              ) : (
+                <ul aria-label="Skills">
+                  {filtered.map((skill) => {
+                    const isSelected = selected?.id === skill.id;
+                    return (
+                      <li key={skill.id}>
+                        <button
+                          type="button"
+                          aria-current={isSelected ? "true" : undefined}
+                          onClick={() =>
+                            setSelectedByProvider((prev) => ({ ...prev, [provider]: skill.id }))
+                          }
+                          className={cn(
+                            "flex w-full flex-col items-start gap-0.5 border-l-2 px-3 py-2 text-left transition-colors",
+                            isSelected
+                              ? "border-blue-500 bg-zinc-900/80"
+                              : "border-transparent hover:bg-zinc-900/50",
+                          )}
+                        >
+                          <span className="flex w-full items-center gap-1.5">
+                            <span
+                              className={cn(
+                                "truncate text-xs font-medium",
+                                skill.shadowed ? "text-muted-foreground" : "text-foreground",
+                              )}
+                            >
+                              {skill.name}
+                            </span>
+                            {skill.shadowed && (
+                              <span
+                                title="A higher-precedence directory provides a skill with this name, so this copy is not loaded"
+                                className="shrink-0 rounded bg-zinc-800 px-1 text-[9px] uppercase tracking-wide text-muted-foreground"
+                              >
+                                Shadowed
+                              </span>
+                            )}
+                          </span>
+                          <span
+                            className="w-full truncate font-mono text-[10px] text-muted-foreground"
+                            title={skill.location}
+                          >
+                            {skill.location}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </ScrollArea>
+
+            {/* Gated on a completed scan: before one lands the counts are all
               zero, which reads as a definitive "no skills, no directories"
               rather than "not looked yet". */}
-          <div className="border-t border-zinc-800 px-3 py-1.5 text-[10px] text-muted-foreground">
-            {state.scan ? (
-              <>
-                {needle && `${filtered.length} of `}
-                {skills.length} skill{skills.length === 1 ? "" : "s"} · {presentRoots} of{" "}
-                {state.scan.roots.length} directories present
-              </>
-            ) : state.loading ? (
-              "Scanning…"
-            ) : (
-              "Scan failed"
-            )}
-          </div>
-        </div>
-
-        {/* Skill detail */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          {!selected ? (
-            <div className="flex flex-1 items-center justify-center p-6 text-xs text-muted-foreground">
-              Select a skill to read its SKILL.md.
+            <div className="border-t border-zinc-800 px-3 py-1.5 text-[10px] text-muted-foreground">
+              {state.scan ? (
+                <>
+                  {needle && `${filtered.length} of `}
+                  {skills.length} skill{skills.length === 1 ? "" : "s"} · {presentRoots} of{" "}
+                  {state.scan.roots.length} directories present
+                </>
+              ) : state.loading ? (
+                "Scanning…"
+              ) : (
+                "Scan failed"
+              )}
             </div>
-          ) : (
-            <>
-              <div className="flex items-start justify-between gap-3 border-b border-zinc-800 p-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h4 className="truncate text-sm font-medium text-foreground">
-                      {selected.name}
-                    </h4>
-                    <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
-                      {selected.plugin
-                        ? `Plugin · ${selected.plugin}`
-                        : SCOPE_LABELS[selected.scope]}
-                    </span>
-                  </div>
-                  <p
-                    className="mt-1 truncate font-mono text-[10px] text-muted-foreground"
-                    title={selected.filePath}
-                  >
-                    {selected.location}/SKILL.md
-                  </p>
-                  {/* Rendered mode strips the frontmatter, so surface its
-                      description here rather than losing it entirely. */}
-                  {selected.description && (
-                    <p className="mt-1.5 line-clamp-2 text-[11px] text-muted-foreground">
-                      {selected.description}
-                    </p>
-                  )}
-                </div>
+          </div>
 
-                <div className="flex shrink-0 items-center gap-1">
-                  <Tabs
-                    value={rawMode ? "raw" : "rendered"}
-                    onValueChange={(v) => setRawMode(v === "raw")}
-                  >
-                    <TabsList className="h-7 bg-zinc-900/80">
-                      <TabsTrigger value="rendered" className={TAB_TRIGGER_CLASSES}>
-                        Rendered
-                      </TabsTrigger>
-                      <TabsTrigger value="raw" className={TAB_TRIGGER_CLASSES}>
-                        Raw
-                      </TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                    onClick={() => void copyPath()}
-                    aria-label={copied ? "Skill path copied" : "Copy skill path"}
-                    title={copied ? "Skill path copied" : "Copy skill path"}
-                  >
-                    {copied ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
+          {/* Skill detail */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            {!selected ? (
+              <div className="flex flex-1 items-center justify-center p-6 text-xs text-muted-foreground">
+                Select a skill to read its SKILL.md.
+              </div>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-3 border-b border-zinc-800 p-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h4 className="truncate text-sm font-medium text-foreground">
+                        {selected.name}
+                      </h4>
+                      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                        {selected.plugin
+                          ? `Plugin · ${selected.plugin}`
+                          : SCOPE_LABELS[selected.scope]}
+                      </span>
+                    </div>
+                    <p
+                      className="mt-1 truncate font-mono text-[10px] text-muted-foreground"
+                      title={selected.filePath}
+                    >
+                      {selected.location}/SKILL.md
+                    </p>
+                    {/* Rendered mode strips the frontmatter, so surface its
+                      description here rather than losing it entirely. */}
+                    {selected.description && (
+                      <p className="mt-1.5 line-clamp-2 text-[11px] text-muted-foreground">
+                        {selected.description}
+                      </p>
                     )}
-                  </Button>
-                  {canRevealInFileManager && (
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Tabs
+                      value={rawMode ? "raw" : "rendered"}
+                      onValueChange={(v) => setRawMode(v === "raw")}
+                    >
+                      <TabsList className="h-7 bg-zinc-900/80">
+                        <TabsTrigger value="rendered" className={TAB_TRIGGER_CLASSES}>
+                          Rendered
+                        </TabsTrigger>
+                        <TabsTrigger value="raw" className={TAB_TRIGGER_CLASSES}>
+                          Raw
+                        </TabsTrigger>
+                      </TabsList>
+                    </Tabs>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                      onClick={() => void revealSkill()}
-                      aria-label="Reveal skill in file manager"
-                      title="Reveal in file manager"
+                      onClick={() => void copyPath()}
+                      aria-label={copied ? "Skill path copied" : "Copy skill path"}
+                      title={copied ? "Skill path copied" : "Copy skill path"}
                     >
-                      <FolderOpen className="h-3.5 w-3.5" />
+                      {copied ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
                     </Button>
-                  )}
+                    {canRevealInFileManager && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                        onClick={() => void revealSkill()}
+                        aria-label="Reveal skill in file manager"
+                        title="Reveal in file manager"
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <ScrollArea className="min-h-0 flex-1 p-4">
-                {fileLoading ? (
-                  <div className="flex items-center justify-center py-10">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  </div>
-                ) : fileError ? (
-                  /* Nothing else re-reads the same path, so without this the
+                <ScrollArea className="min-h-0 flex-1 p-4">
+                  {fileLoading ? (
+                    <div className="flex items-center justify-center py-10">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : fileError ? (
+                    /* Nothing else re-reads the same path, so without this the
                      obvious recovery — clicking the skill again — is a no-op. */
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs text-destructive">{fileError}</p>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      onClick={() => setFileRetry((attempt) => attempt + 1)}
-                    >
-                      Retry
-                    </Button>
-                  </div>
-                ) : file ? (
-                  <>
-                    {file.truncated && (
-                      <p className="mb-3 flex items-center gap-1.5 text-[11px] text-amber-400">
-                        <AlertTriangle className="h-3 w-3" />
-                        This file is large and has been truncated for display.
-                      </p>
-                    )}
-                    {rawMode ? (
-                      <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground">
-                        {file.content}
-                      </pre>
-                    ) : (
-                      <MessageMarkdown
-                        content={stripFrontmatter(file.content)}
-                        components={SKILL_MARKDOWN_COMPONENTS}
-                        enableBreaks={false}
-                      />
-                    )}
-                  </>
-                ) : null}
-              </ScrollArea>
-            </>
-          )}
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs text-destructive">{fileError}</p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        onClick={() => setFileRetry((attempt) => attempt + 1)}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  ) : file ? (
+                    <>
+                      {file.truncated && (
+                        <p className="mb-3 flex items-center gap-1.5 text-[11px] text-amber-400">
+                          <AlertTriangle className="h-3 w-3" />
+                          This file is large and has been truncated for display.
+                        </p>
+                      )}
+                      {rawMode ? (
+                        <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground">
+                          {file.content}
+                        </pre>
+                      ) : (
+                        <MessageMarkdown
+                          content={stripFrontmatter(file.content)}
+                          components={SKILL_MARKDOWN_COMPONENTS}
+                          enableBreaks={false}
+                        />
+                      )}
+                    </>
+                  ) : null}
+                </ScrollArea>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {state.scan && state.scan.errors.length > 0 && (
+      {view === "skills" && state.scan && state.scan.errors.length > 0 && (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2">
           <p className="flex items-center gap-1.5 text-[11px] font-medium text-amber-400">
             <AlertTriangle className="h-3 w-3" />

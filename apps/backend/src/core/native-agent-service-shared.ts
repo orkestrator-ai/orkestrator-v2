@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
+import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
 import type { PlanUsageState } from "./plan-usage-cache.js";
 import type {
   BuildPipelineAgent,
@@ -482,6 +483,8 @@ export interface NativeAgentServiceOptions {
   localBridgeAccountId?: (key: string) => string | undefined;
   /** This backend's plan usage (`runtime.accounts.planUsage`); sessions report into it. */
   planUsage?: PlanUsageState;
+  /** Automatic account switching, which a weekly-limit stop in a native tab consults. */
+  usageLimitStops?: UsageLimitStops;
   /**
    * The backend's replacement and move fence (`runtime.environments.fence`),
    * which admits each prompt. A service built without one gets a private fence

@@ -145,3 +145,9 @@ describe("answers", () => {
     expect(isGraphAgentAnswerUndelivered({ ...answered, delivered: "turn" })).toBe(false);
   });
 });
+
+test("agent acceptance survives graph persistence with strict boolean validation", () => {
+  expect(errors({ agentStarted: false })).toEqual([]);
+  expect(errors({ agentStarted: true })).toEqual([]);
+  expect(errors({ agentStarted: "yes" })).not.toEqual([]);
+});

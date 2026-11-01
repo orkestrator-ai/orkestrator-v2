@@ -831,3 +831,24 @@ test("archived Prepare checks and its read-only Tests view survive reload", asyn
     ).toEqual([]);
   }
 });
+
+// WebKit resets a hidden scroller that holds a container query container (0860, 1080).
+test("the overview keeps its scroll position behind another pane", async ({ page }) => {
+  // Short enough that the wide layout overflows too.
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 560 });
+  await page.goto("/pipeline-flow?scenario=fanout&paneControls");
+  const overview = page.getByTestId("pipeline-flow-scroll");
+  await expect(graph(page)).toBeVisible();
+  const range = await overview.evaluate((element) => element.scrollHeight - element.clientHeight);
+  expect(range).toBeGreaterThan(100);
+  const offset = Math.floor(range / 2);
+  await overview.evaluate((element, top) => {
+    element.scrollTop = top;
+  }, offset);
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(offset);
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  await expect(overview).toBeHidden();
+  await page.getByRole("button", { name: "Activate build pane" }).click();
+  await expect(overview).toBeVisible();
+  await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(offset);
+});

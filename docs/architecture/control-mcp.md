@@ -526,7 +526,10 @@ read/send/ack operations. A self-timer is `create_schedule` with action type
 provider accounts (`list_provider_accounts`, `switch_provider_account`,
 capability `accounts`, main role only); a switch is a user-approved request
 unless a self-timer carries the user's permission (see
-[agent-accounts.md](agent-accounts.md#coordinator-switching)).
+[agent-accounts.md](agent-accounts.md#coordinator-switching)). It can also change
+the automatic-switching ticks (`set_account_auto_switch`, same capability), which
+needs no approval because the backend does the switching (see
+[agent-accounts.md](agent-accounts.md#automatic-switching)).
 
 **Saved graphs** (item 214, capability `graphs`, main role only;
 `control-mcp-graph-tools.ts`, commands in `coordinator-graph-actions.ts`):

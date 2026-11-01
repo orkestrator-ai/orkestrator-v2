@@ -154,7 +154,7 @@ ORKESTRATOR_E2E_BROWSER=webkit mise run test:logged -- --name browser-webkit -- 
   e2e/PaneBreakpoint.spec.ts e2e/EnvironmentSettingsDrawer.spec.ts
 ```
 
-The Chrome-only native datalist spec is skipped on alternate engines, as are
+The native datalist popup spec is skipped on alternate engines, as are
 CDP touch-input cases. Engine checks use `browserName`, independently of the
 viewport project name.
 
@@ -165,8 +165,10 @@ for iOS Safari on a device or simulator. Install it with
 such as `-webkit-app-region` only run under Chromium.
 
 CI runs `MobileAppShellLayout.spec.ts` in Chromium and WebKit, including native
-touch compatibility-event suppression and Chromium's CDP pen input. Other
-component specs and alternate-engine qualification remain opt-in. When an engine
+touch compatibility-event suppression and Chromium's CDP pen input. The same
+matrix also runs the overview scroll-preservation cases from `PipelineFlow.spec.ts`
+and `GraphRunFlow.spec.ts` in both viewport layouts. Other component specs and
+alternate-engine qualification remain opt-in. When an engine
 run finds a bug, also add a unit test that fails without the fix. Touch handling
 is the usual case:
 WebKit and iOS Safari never focus a tapped button, so a dismissal that only
@@ -174,18 +176,31 @@ works through Chromium's focus blur passes in Chromium and fails there.
 
 ### Native browser controls
 
-`e2e/AgentLaunchDialog.spec.ts` uses Google Chrome to exercise the native
-input/datalist popup with keyboard selection at desktop and phone widths.
-It requires a graphical session (or Xvfb on Linux). Install its browser channel
-before running the component browser suite:
+`e2e/AgentLaunchDialog.spec.ts` covers the branch field's input/datalist in
+every engine: the `list` link, the options, and that a chosen suggestion reaches
+the confirmed selection. It chooses one with `fill`, since a suggestion taken
+from the popup only sets the value and fires `input`.
 
-```bash
-mise exec -- bunx playwright install chrome
-```
+`e2e/AgentLaunchDialogNativePopup.spec.ts` drives Chromium's own datalist popup
+with the keyboard (todo 1171). The popup is browser UI, outside the page, so
+three settings matter:
 
-The bundled Chromium build does not expose this native popup through automation
-on macOS; use the Chrome channel for this spec rather than simulating a
-suggestion by assigning the input value.
+- `channel: "chromium"` runs the full bundled build in Chrome's new headless
+  mode. The default headless shell has no autofill popup. A headed window only
+  gets one while it has focus, which a locked or unattended macOS desktop never
+  gives it: Chrome drops the popup with `kNoFrameHasFocus`.
+- `--screen-info={0,0 2000x2000}`. New headless mode's default 800x600 screen
+  leaves no room below the field, so Chrome drops the popup with
+  `kInsufficientSpace`.
+- Keys go through CDP `Input.dispatchKeyEvent` as `rawKeyDown` with the native
+  key code on macOS (ArrowDown 125, Enter 36) and Linux (XKB codes 116 and
+  36). Omitting Linux native codes also closes the popup with `kViewDestroyed`.
+  Playwright's macOS `press` adds editing commands, so the spec sends CDP keys
+  without those commands.
+
+On failure the spec appends Chrome's `Autofill.PopupHidingReason.DataList`
+histogram, which names why the popup closed. `kAcceptSuggestion` is the
+expected one.
 
 The bundled Chromium itself needs no manual step. `test:browser`, the
 `test:agent:browser*` tasks, `test:agent:design:isolated` and

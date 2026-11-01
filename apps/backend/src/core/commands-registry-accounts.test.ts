@@ -213,6 +213,28 @@ test("terminal sign-in resolves the registered launcher at execution and fixes s
   }
 });
 
+describe("automatic switching argument validation", () => {
+  const tick = createCommandRegistry().get("set_agent_account_auto_switch")!;
+  const resume = createCommandRegistry().get("resume_agent_account_auto_switch")!;
+  const context = {} as unknown as CommandContext;
+
+  test.each([
+    [{ platform: "grok", enabled: true }, "not supported"],
+    [{ platform: "claude" }, "Expected enabled"],
+    [{ platform: "claude", enabled: "yes" }, "enabled"],
+    [{ platform: "claude", included: true }, "either an email or an accountId"],
+    [{ platform: "claude", email: "a@b", accountId: "x", included: true }, "either an email"],
+    [{ platform: "claude", enabled: true, token: "x" }, "token"],
+  ])("refuses %j before any work", async (args, message) => {
+    await expect(tick(args as Record<string, unknown>, context)).rejects.toThrow(message);
+  });
+
+  test("ending a pin names a provider and nothing else", async () => {
+    await expect(resume({ platform: "grok" }, context)).rejects.toThrow("not supported");
+    await expect(resume({ platform: "claude", enabled: true }, context)).rejects.toThrow("enabled");
+  });
+});
+
 describe("preferred identity argument validation", () => {
   const setPreferred = createCommandRegistry().get("set_preferred_agent_identity")!;
   test.each([

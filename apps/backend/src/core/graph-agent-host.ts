@@ -332,6 +332,10 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     );
   }
 
+  get environmentId(): string {
+    return this.context.environmentId;
+  }
+
   async providerUnavailable(branch: AgentBranchRecord, provider: BuildPipelineProvider) {
     this.dependencies.providers.unavailable(this.context.environmentId, branch.agent, provider);
   }

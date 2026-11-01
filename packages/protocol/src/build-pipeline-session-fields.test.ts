@@ -99,7 +99,11 @@ describe("pipeline session graph fields", () => {
       error: "Creation failed",
     };
     expect(isBuildPipeline(pipelineWith({ sessionlessReviewers: [reviewer] }))).toBe(true);
+    expect(
+      isBuildPipeline(pipelineWith({ sessionlessReviewers: [{ ...reviewer, startFailed: true }] })),
+    ).toBe(true);
     for (const invalid of [
+      { ...reviewer, startFailed: "yes" },
       { ...reviewer, slot: -1 },
       { ...reviewer, error: "" },
       { ...reviewer, model: "x".repeat(257) },

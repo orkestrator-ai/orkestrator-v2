@@ -25,7 +25,12 @@ import type { NodeView } from "./command-nodes.js";
 import type { GitHubPullRequestMergeability } from "./github-pull-requests.js";
 import { isPrMergeability } from "./pr-merge-readiness.js";
 import { normalizeProjectIcon } from "./project-icon.js";
-import { isPrCheckSummary, type PrCheckSummary, type PrState } from "./pr-monitor.js";
+import {
+  copyPrCheckSummary,
+  isPrCheckSummary,
+  type PrCheckSummary,
+  type PrState,
+} from "./pr-monitor.js";
 
 export const NODE_SUMMARY_CHANGED_EVENT = "node-summary-changed";
 
@@ -286,11 +291,7 @@ export function toNodeEnvironmentSummary(
     ...(isPrMergeability(raw.prMergeability) ? { prMergeability: raw.prMergeability } : {}),
     ...(isPrCheckSummary(raw.prCheckSummary)
       ? {
-          prCheckSummary: {
-            passed: raw.prCheckSummary.passed,
-            total: raw.prCheckSummary.total,
-            pending: raw.prCheckSummary.pending,
-          },
+          prCheckSummary: copyPrCheckSummary(raw.prCheckSummary),
         }
       : {}),
     ...(raw.prMonitorConfirmed === true ? { prMonitorConfirmed: true as const } : {}),

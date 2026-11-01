@@ -134,6 +134,7 @@ So there were two app causes and one test fault:
 3. Open `/multi-review-flow?phase=ready&longTranscript&transcriptControls`, then select Reviewer 1. Scroll to the bottom, open Report, press Append transcript entry, return to Transcript: the newest entry must be in view. Scroll up, repeat: the same reading position must come back.
 4. Open `/multi-review-flow?phase=reviewing&reviewers=4&manyFindings&paneControls` on the phone. Scroll to the findings badge, press Activate other pane, then Activate review pane: the page must not move. Scroll to the end: the badge stays 12 px below the top of the scroll area.
 5. On desktop at a wide window, open `/multi-review-flow?phase=reviewing&reviewers=8&paneControls`. Zoom to 150% and pan, then switch panes and back: zoom and pan must be kept.
+6. Open `/pipeline-flow?scenario=fanout&paneControls` and `/graph-run-flow` ([1080](1080-flow-view-overview-scroll-across-hide.md)). Scroll each overview part way down, press Activate other pane, then Activate build pane or Activate graph pane: the overview must not move.
 
 **Decisions.**
 

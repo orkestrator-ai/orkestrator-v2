@@ -68,6 +68,50 @@ export async function setActiveAgentAccount(
   });
 }
 
+/**
+ * The main automatic-switching tick, and what `machine` shows afterwards.
+ *
+ * The tick belongs to the command node, which hands it to its machines. Ticking it
+ * is also what ends a pin, and a pin belongs to the machine it was set on, so only
+ * `machine`'s ends. A machine that predates this never reports a pin to end.
+ */
+export async function setAgentAccountAutoSwitchEnabled(
+  platform: AgentAccountPlatform,
+  enabled: boolean,
+  pinned: boolean,
+  machine?: AccountMachine,
+): Promise<AgentAccountsSnapshot> {
+  await invokeCommandNodeSetting("set_agent_account_auto_switch", { platform, enabled });
+  if (enabled && pinned) {
+    await machineInvoke(machine, "resume_agent_account_auto_switch", { platform });
+  }
+  return listAgentAccounts(machine);
+}
+
+/**
+ * One account's automatic-switching tick. By email it travels from the command
+ * node. An account with no email cannot be matched on another machine, so its tick
+ * stays on `machine`.
+ */
+export async function setAgentAccountAutoSwitchIncluded(
+  platform: AgentAccountPlatform,
+  accountId: string,
+  email: string | undefined,
+  included: boolean,
+  machine?: AccountMachine,
+): Promise<AgentAccountsSnapshot> {
+  if (email) {
+    await invokeCommandNodeSetting("set_agent_account_auto_switch", { platform, email, included });
+  } else {
+    await machineInvoke(machine, "set_agent_account_auto_switch", {
+      platform,
+      accountId,
+      included,
+    });
+  }
+  return listAgentAccounts(machine);
+}
+
 export async function renameAgentAccount(
   platform: AgentAccountPlatform,
   accountId: string,

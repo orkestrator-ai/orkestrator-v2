@@ -24,6 +24,7 @@ import {
   prViewerPermissionScope,
   prViewerRepository,
 } from "./pr-viewer-permission.js";
+import { PrRequiredChecksCache } from "./pr-required-checks.js";
 
 /** What a node summary relays about an environment's PR monitor (todo 0796). */
 export interface RelayedPrMonitorHealth {
@@ -75,6 +76,8 @@ export class PrMonitorRuntime {
   private readonly listeners = new Set<(event: PrMonitorEvent) => void>();
   /** Merge permission per credential scope and repository, refreshed hourly. */
   readonly viewerPermissions = new PrViewerPermissionCache();
+  /** How many failing checks GitHub requires, per PR head and failing set. */
+  readonly requiredChecks = new PrRequiredChecksCache();
   /**
    * The monitor-side inputs of each environment's relayed health, as last
    * announced. A change announces `environment-pr-health` so command nodes
@@ -306,6 +309,7 @@ export class PrMonitorRuntime {
     if (this.closedService) return;
     this.invalidatePendingSync();
     this.viewerPermissions.clear();
+    this.requiredChecks.clear();
     this.relayedInputs.clear();
     const monitor = this.monitor;
     this.monitor = null;
@@ -363,6 +367,7 @@ export class PrMonitorRuntime {
             ...options,
             storage: this.storage,
             viewerPermissions: this.viewerPermissions,
+            requiredChecks: this.requiredChecks,
           }),
         persistPr: async (environmentId, detection) => {
           await this.requireStorage().updateEnvironment(environmentId, {
@@ -426,5 +431,6 @@ function relayedInputsKey(state: PrMonitorEnvironmentState): string {
     state.checkSummary?.passed ?? null,
     state.checkSummary?.total ?? null,
     state.checkSummary?.pending ?? null,
+    state.checkSummary?.requiredFailed ?? null,
   ]);
 }

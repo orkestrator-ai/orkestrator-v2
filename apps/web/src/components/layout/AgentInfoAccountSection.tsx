@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AutoSwitchBadge } from "@/components/settings/AutoSwitchBadge";
 import { accountOptionLabel } from "@/components/settings/machines/MachineAgentAccountsSection";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
@@ -148,14 +149,21 @@ function AccountSection({
   const accounts = snapshot?.accounts.filter((account) => account.platform === platform) ?? [];
   const activeId = snapshot?.active[platform];
   const where = machineName ? ` on ${machineName}` : "";
+  const autoSwitch = snapshot?.autoSwitch?.[platform];
+  const pinned = accounts.find((account) => account.id === autoSwitch?.pinnedAccountId);
 
   return (
     <div
       className="space-y-2 border-t border-border/60 pt-4 text-xs"
       data-testid="agent-info-account"
     >
-      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-        {platformLabel} account{where}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+          {platformLabel} account{where}
+        </div>
+        {autoSwitch && autoSwitch.mode !== "off" ? (
+          <AutoSwitchBadge state={autoSwitch} pinnedLabel={pinned?.label} />
+        ) : null}
       </div>
       {!session && !error ? (
         <p className="flex items-center gap-2 text-muted-foreground">
@@ -200,6 +208,12 @@ function AccountSection({
             </SelectContent>
           </Select>
         </div>
+      ) : null}
+      {autoSwitch?.mode === "automatic" && accounts.length > 1 ? (
+        <p className="leading-relaxed text-muted-foreground">
+          Switching automatically. Choosing an account here pins it and turns that off until it is
+          ticked again in Settings.
+        </p>
       ) : null}
       {session?.pendingActive ? (
         <p className="leading-relaxed text-muted-foreground">

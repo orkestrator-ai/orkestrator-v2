@@ -104,7 +104,8 @@ open.
 - `portableInputSpec` stages `skills` in Claude's `/claude-config` and
   `commands` in Grok's `/grok-home`, both `entries` (one unit per skill
   directory or command file). `docker/entrypoint.sh` copies both with
-  `copy_agent_directory_entries`. `PORTABLE_INPUT_SPEC_VERSION` is 3.
+  `copy_agent_directory_entries`. `PORTABLE_INPUT_SPEC_VERSION` is 4; the
+  review fix withholds credential-bearing files in both new trees.
 - What crosses: what the user wrote for the provider. Links are skipped and
   counted (`symlink`), state (`history.jsonl`, `projects/`, Grok's
   `sessions/`, `active_sessions.json`, `logs/`) stays out, both only for an
@@ -113,14 +114,17 @@ open.
 - Grok reads it: the pinned Grok 1.0.70, with only a fixture `HOME` built by
   the real staging and entrypoint copy, lists `~/.grok/commands/*.md` as user
   skills and `~/.claude/skills` as `user [claude]` (`grok inspect`, no login).
-  Claude reads `~/.claude/skills` from `HOME` in a container (no
-  `CLAUDE_CONFIG_DIR`), from code and docs; no live Claude listing ran.
+  The review regression also exercises Claude SDK `supportedCommands()`
+  against the imported fixture home with `CLAUDE_CLI_PATH`, no login and no
+  model turn; it lists `fixture-review`. Both live catalogue checks passed.
 - Tests: `apps/backend/tests/portable-inputs-user-extensions.test.ts` (fixture
   homes only) stages from a fixture home, checks no link or state crosses,
   checks the entrypoint's loops copy exactly the staged directories, runs
   those loops into a fixture container home, and, with `GROK_CLI_PATH` set to
-  the pinned binary, runs `grok inspect` there. All four fail without the
-  change.
+  the pinned binary, runs `grok inspect` there. Credential regressions place
+  nested environment files, named and disguised private keys, credential JSON
+  and credential-directory sentinels in both new trees; none reach staged
+  mounts or the imported home, while safe text and binary resources survive.
 - Not done: a container tab's picker in a browser on a rebuilt image (needs a
   `dev:test` profile with container fixtures and Claude or Grok credentials).
   An image built before this change copies neither directory until the
@@ -1002,14 +1006,15 @@ Decisions 11 to 14 were made on 2026-11-01 for task 3.
     - Options: `entries` with no content filter; `tree` (all-or-nothing for
       the whole directory); `entries` plus a secret-file heuristic (skip
       `.env`, `*.pem` and similar inside skills).
-    - Chosen: `entries`, no heuristic.
-    - Why: one oversized or linked skill must not drop the rest, as with
-      Claude's `commands` and Grok's `skills`; a name heuristic would apply to
-      two directories but not to the Codex, Pi or plugin skills already
-      staged, and would suggest a guarantee it cannot give.
-    - Pros: same rules as every other extension directory. Cons: a file a
-      user keeps inside a skill crosses with it; that is now written in
-      `container-lifecycle.md`.
+    - Chosen: `entries` with credential withholding for the two newly added
+      trees (review fix, 2026-11-01).
+    - Why: the no-new-secrets constraint requires checking nested resources
+      before publishing staged bytes. Input spec 4 checks sensitive path names,
+      private-key blocks and credential assignments without logging contents.
+    - Pros: safe resources survive independently of credential files; bounded
+      reads and symlink defenses remain. Cons: conservative checks can withhold
+      legitimate examples and cannot detect arbitrary disguised secrets. Keep
+      credentials outside bundles and configure them explicitly for the environment.
 13. **Linked skills.** Options: follow links whose target is a skill; skip
     links as every other staged directory does. Chosen: skip, and file
     [2170](../containers-and-environments/2170-shared-and-linked-skills-in-containers.md).

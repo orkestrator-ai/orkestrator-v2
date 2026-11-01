@@ -7,6 +7,7 @@
  * With GROK_CLI_PATH pointing at the pinned Grok CLI (`mise run download:grok`
  * or `bun scripts/download-agent.ts grok --dir <dir>`), the last test also
  * runs `grok inspect` in the imported home, which lists both without a login.
+ * CLAUDE_CLI_PATH also exercises the SDK catalogue without a model turn.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
@@ -129,8 +130,9 @@ function entrypointHelpers(entrypoint: string): string {
 }
 
 /** Stages Claude and Grok from the fixture and imports them as the entrypoint does. */
-async function stageAndImport() {
+async function stageAndImport(prepare?: (home: string) => Promise<void>) {
   const fixture = await extensionsFixture();
+  await prepare?.(fixture.home);
   const staged = await stagePortableInputs(
     fixture.dataDir,
     "env-user-extensions",
@@ -213,6 +215,49 @@ describe("user skills and commands in containers", () => {
     ).toEqual([]);
   });
 
+  test("withholds nested credentials before staging and import while preserving safe resources", async () => {
+    const { staged, containerHome } = await stageAndImport(async (home) => {
+      for (const bundle of [".claude/skills/fixture-review", ".grok/commands/nested"]) {
+        for (const [name, contents] of [
+          [".env", "DEPLOY_TOKEN=SENTINEL-ENV"],
+          ["resources/.env.production", "SENTINEL-ENV-PROD"],
+          ["resources/deploy.key", "SENTINEL-KEY"],
+          ["resources/key-disguised.txt", "-----BEGIN OPENSSH PRIVATE KEY-----\nSENTINEL-PRIVATE"],
+          ["resources/config.json", '{"api_key":"SENTINEL-API"}'],
+          ["resources/.aws/config", "SENTINEL-AWS"],
+        ])
+          await write(path.join(home, bundle, name!), contents);
+        await write(path.join(home, bundle, "resources", "guide.txt"), "Safe guide.");
+        await fs.writeFile(
+          path.join(home, bundle, "resources", "icon.bin"),
+          Buffer.from([0, 255, 128]),
+        );
+      }
+      await write(path.join(home, ".grok/commands/.env"), "TOKEN=SENTINEL-FLAT");
+    });
+    for (const directory of [staged.directory, containerHome]) {
+      const files = await listFiles(directory);
+      for (const file of files) {
+        expect((await fs.readFile(path.join(directory, file))).toString()).not.toContain(
+          "SENTINEL",
+        );
+        expect(file).not.toMatch(/(?:\.env|deploy\.key|key-disguised|config\.json|\.aws)/);
+      }
+      expect(files.some((file) => file.endsWith("fixture-review/SKILL.md"))).toBe(true);
+      expect(files.some((file) => file.endsWith("nested/deeper.md"))).toBe(true);
+      for (const file of files.filter((file) => file.endsWith("icon.bin"))) {
+        expect(await fs.readFile(path.join(directory, file))).toEqual(Buffer.from([0, 255, 128]));
+      }
+      expect(files.filter((file) => file.endsWith("guide.txt"))).toHaveLength(2);
+    }
+    expect(
+      staged.providers.find((entry) => entry.provider === "claude")?.skipped["credential-withheld"],
+    ).toBe(6);
+    expect(
+      staged.providers.find((entry) => entry.provider === "grok")?.skipped["credential-withheld"],
+    ).toBe(7);
+  });
+
   test("the entrypoint copies exactly the extension directories the backend stages", async () => {
     const entrypoint = await fs.readFile(ENTRYPOINT, "utf8");
     const spec = portableInputSpec({ home: "/h", agentTest: false });
@@ -247,6 +292,46 @@ describe("user skills and commands in containers", () => {
     ]);
   });
 
+  test.skipIf(!process.env.CLAUDE_CLI_PATH)(
+    "the Claude SDK lists the imported user skill without sending a model turn",
+    async () => {
+      const { root, containerHome } = await stageAndImport();
+      const cwd = path.join(root, "workspace");
+      await fs.mkdir(cwd);
+      const sdk = path.join(
+        import.meta.dir,
+        "../../../bridges/claude-bridge/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs",
+      );
+      const script = `
+        import { query } from ${JSON.stringify(sdk)};
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 25000);
+        const stream = query({
+          prompt: (async function* () { await new Promise(resolve => controller.signal.addEventListener("abort", resolve, { once: true })); })(),
+          options: { cwd: process.cwd(), settingSources: ["user"],
+            pathToClaudeCodeExecutable: process.env.CLAUDE_CLI_PATH,
+            abortController: controller, persistSession: false }
+        });
+        try { console.log(JSON.stringify((await stream.supportedCommands()).map(command => command.name))); }
+        finally { clearTimeout(timer); controller.abort(); stream.close(); }
+      `;
+      const result = Bun.spawnSync({
+        cmd: [process.execPath, "--eval", script],
+        cwd,
+        env: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          HOME: containerHome,
+          CLAUDE_CLI_PATH: process.env.CLAUDE_CLI_PATH!,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 35_000,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout.toString())).toContain("fixture-review");
+    },
+  );
+
   test.skipIf(!process.env.GROK_CLI_PATH)(
     "the pinned Grok CLI lists the imported command and both user skills",
     async () => {
@@ -257,7 +342,7 @@ describe("user skills and commands in containers", () => {
         cmd: [process.env.GROK_CLI_PATH!, "inspect"],
         cwd,
         // Only the fixture home: no GROK_HOME, as in a container.
-        env: { PATH: "/usr/bin:/bin", HOME: containerHome },
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: containerHome },
         stdout: "pipe",
         stderr: "pipe",
         timeout: 60_000,

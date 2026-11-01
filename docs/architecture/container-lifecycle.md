@@ -661,10 +661,17 @@ Staged per provider (`portableInputSpec`):
 User-authored extension directories (Claude's `commands`, `skills`,
 `agents`, `ide`, `plugins`; Grok's `hooks`, `skills`, `commands`; Pi's
 `skills`, `prompts`, `extensions`, `themes`) are staged one top-level entry at
-a time, so one skill directory is one unit. They hold what the user wrote for
-the provider, not logins, and are staged as they are: a file a user keeps
-inside a skill (a `.env` beside a script, say) crosses with it, as it already
-did for Codex and Pi skills. A linked entry is skipped, like any link below a
+a time, so one skill directory is one unit. Input spec version 4 applies a conservative credential guard to the newly
+added Claude `skills` and Grok `commands` trees. It withholds environment files,
+credential/secret/token files, private-key files and common credential directories,
+and files containing private-key blocks or credential assignments. Checks run on
+the bounded bytes before writing any staged file; safe binary resources retain
+their bytes. Withheld files count as `credential-withheld` without logging paths
+or contents. This is defense in depth, not arbitrary-secret detection: keep
+credentials outside extension bundles and supply required secrets explicitly
+through the environment's credential configuration. No secret-file opt-in is
+provided by staging. Older extension trees retain their existing policy.
+A linked entry is skipped, like any link below a
 home entry, so a skill `~/.claude/skills` links in from `~/.agents/skills` (an
 `npx skills` install) is not staged and counts as `symlink`; `~/.agents/skills`
 itself is not staged for any provider (todo

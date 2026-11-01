@@ -50,8 +50,6 @@ interface SortableProjectFolderProps {
   onOpen?: () => void;
   /** Destination named by the repository navigation control. */
   openMachineName?: string;
-  /** Shown instead of the member count. */
-  badge?: ReactNode;
   children: ReactNode;
 }
 
@@ -78,7 +76,6 @@ export function SortableProjectFolder({
   subtitle,
   onOpen,
   openMachineName,
-  badge,
   children,
 }: SortableProjectFolderProps) {
   const [isRenaming, setIsRenaming] = useState(false);
@@ -198,7 +195,7 @@ export function SortableProjectFolder({
           <span className="truncate font-medium">{label}</span>
         </>
       )}
-      {badge ?? (
+      {repository ? null : (
         <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
           {projectCount}
         </span>

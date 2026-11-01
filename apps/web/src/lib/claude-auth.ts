@@ -1,3 +1,4 @@
+import { isClaudeNotLoggedInText } from "@orkestrator/protocol/claude-login-notice";
 import { NATIVE_TERMINAL_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-terminal-rows";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
@@ -14,13 +15,6 @@ const AUTH_ERROR_PATTERNS = [
   "not logged in",
 ] as const;
 
-/**
- * The notice Claude Code itself writes as a reply when no login is available.
- * Matched in full, never as a substring, so assistant prose that merely
- * mentions logging in cannot activate the sign-in card.
- */
-const NOT_LOGGED_IN_NOTICE = /^not logged in\s*[·•\-–—]\s*please run \/login\.?$/i;
-
 export function isClaudeAuthenticationError(message: string | null | undefined): boolean {
   if (!message) return false;
 
@@ -32,7 +26,7 @@ export function isClaudeAuthenticationError(message: string | null | undefined):
 export function isClaudeNotLoggedInNotice(
   message: Pick<NativeMessage, "role" | "content"> | null | undefined,
 ): boolean {
-  return message?.role === "assistant" && NOT_LOGGED_IN_NOTICE.test(message.content.trim());
+  return message?.role === "assistant" && isClaudeNotLoggedInText(message.content);
 }
 
 /**

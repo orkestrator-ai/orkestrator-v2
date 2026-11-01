@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -410,6 +410,23 @@ describe("agent accounts", () => {
       expect(claude).toHaveLength(2);
       expect(claude.some((a) => a.id === accountId && a.isActive)).toBe(true);
       expect(context.runtime.localServers.hasStaleLogin("claude:env-1")).toBe(true);
+    });
+
+    test("a finished sign-in sends the prompts refused for want of a login, whoever signed in", async () => {
+      await addActiveClaudeAccount("claude-one");
+      const resendAll = mock(() => undefined);
+      context.nativeAgents = { signInResends: { resendAll } } as never;
+      try {
+        await startAgentAccountLogin(context, "claude", {
+          reauthenticate: true,
+          executable: "claude",
+          spawnImpl: fakeClaudeLogin("claude-one"),
+        });
+        expect((await settledLogin()).state).toBe("succeeded");
+        expect(resendAll).toHaveBeenCalledTimes(1);
+      } finally {
+        context.nativeAgents = undefined;
+      }
     });
 
     test.each(["original", "replacement"])(

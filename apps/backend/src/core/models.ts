@@ -661,7 +661,33 @@ export interface PersistedNativeAgentPendingDispatch {
    * that was selected (or typed and resolved) can never come back as text.
    */
   command?: import("@orkestrator/protocol/native-agent").NativeAgentCommandIntent;
+  /**
+   * The "Continue in…" handoff this request carries. A confirmation of the
+   * parked request records it delivered; a retry re-sends the same carrier.
+   */
+  agentHandoffId?: string;
   createdAt: string;
+}
+
+/**
+ * A prompt held for re-sending after a Claude sign-in. Everything a dispatch
+ * needs to send the same prompt again; the resend gets its own request id,
+ * derived from the refused one, so it is journaled at most once.
+ */
+export interface PersistedNativeAgentSignInResend {
+  /** The refused request. The session's latest dispatch must still be this one. */
+  requestId: string;
+  providerSessionId: string;
+  prompt: string;
+  attachments?: PersistedNativeAgentPendingDispatch["attachments"];
+  model?: string;
+  reasoningEffort?: string;
+  mode?: "plan" | "build";
+  fastMode?: boolean;
+  subAgent?: string;
+  includeLocalSettings?: boolean;
+  promptSuggestions?: boolean;
+  recordedAt: string;
 }
 
 /**
@@ -745,6 +771,19 @@ export interface PersistedNativeAgentSession {
    * makes. Lets observers settle a turn as failed without reading transcripts.
    */
   turnOutcomes?: PersistedNativeAgentTurnOutcome[];
+  /**
+   * "Continue in…" handoffs this session's journal delivered, written in the
+   * same record update that journals the carrying request as dispatched.
+   * Read through `deliveredAgentHandoffIds` (`native-agent-handoffs.ts`): like
+   * `retiredDispatch`, a malformed value reads as absent.
+   */
+  deliveredAgentHandoffIds?: string[];
+  /**
+   * A prompt Claude refused because it was not signed in, held to be sent
+   * again once a sign-in succeeds (`native-agent-sign-in-resend.ts`). Read
+   * through `sessionSignInResend`; a malformed value reads as absent.
+   */
+  signInResend?: PersistedNativeAgentSignInResend;
   /** Last applied activity for a request; settled roots may still own background work. */
   activityTurn?: {
     providerSessionId: string;

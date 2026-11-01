@@ -24,6 +24,8 @@ import {
 import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
 import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
+import type { AgentHandoffsStorage } from "./storage-drafts.js";
+import type { NativeAgentDispatchOutcome } from "./storage-native-deliveries.js";
 import type { CoordinatorsStorage } from "./storage-coordinators.js";
 import type { BugReportsStorage } from "./storage-bug-reports.js";
 import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
@@ -53,6 +55,7 @@ import type {
   IncompleteTurnNotice,
   NativeAgentJobCompletionAction,
   NativeAgentSessionBackendTitle,
+  PersistedNativeAgentSignInResend,
 } from "./models.js";
 import type { NativeAgentDisplayTailDeletion } from "./native-agent-display-tail-store.js";
 import type { NativeAgentDisplayTail } from "./native-agent-display-tails.js";
@@ -147,6 +150,7 @@ export class StorageService {
   readonly nodes: NodesStorage;
   readonly previewServices: PreviewServicesStorage;
   readonly agentAccounts: AgentAccountsStorage;
+  readonly agentHandoffs: AgentHandoffsStorage;
   readonly bugReports: BugReportsStorage;
   readonly graphTemplates: GraphTemplatesStorage;
   readonly graphRuns: GraphRunsStorage;
@@ -163,6 +167,7 @@ export class StorageService {
     this.nodes = this.repos.nodes;
     this.previewServices = this.repos.previewServices;
     this.agentAccounts = this.repos.agentAccounts;
+    this.agentHandoffs = this.repos.drafts;
     this.bugReports = this.repos.bugReports;
     this.graphTemplates = this.repos.graphTemplates;
     this.graphRuns = this.repos.graphRuns;
@@ -758,6 +763,10 @@ export class StorageService {
     return this.repos.sessions.applyPaneLayoutIntent(environmentId, base, desired, selectionIntent);
   }
 
+  markTabAgentHandoffConsumed(environmentId: string, tabId: string, handoffId: string) {
+    return this.repos.sessions.markTabAgentHandoffConsumed(environmentId, tabId, handoffId);
+  }
+
   ensureBuildPipelineTab(input: {
     pipelineId: string;
     taskId: string;
@@ -1074,12 +1083,7 @@ export class StorageService {
   dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
-      dispatched: false;
-      mailRefused?: true;
-      /** Recorded under the session's persisted notice field; `null` clears it. */
-      incompleteTurnNotice?: IncompleteTurnNotice | null;
-    }>,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<NativeAgentDispatchOutcome>,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
     admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
   ): Promise<{
@@ -1097,6 +1101,14 @@ export class StorageService {
 
   confirmNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
     return this.repos.nativeAgentDeliveries.confirmNativeAgentDispatch(key, requestId);
+  }
+
+  recordNativeAgentSignInResend(key: string, resend: PersistedNativeAgentSignInResend) {
+    return this.repos.nativeAgentDeliveries.recordNativeAgentSignInResend(key, resend);
+  }
+
+  takeNativeAgentSignInResend(key: string, requestId: string) {
+    return this.repos.nativeAgentDeliveries.takeNativeAgentSignInResend(key, requestId);
   }
 
   clearPendingNativeAgentDispatch(

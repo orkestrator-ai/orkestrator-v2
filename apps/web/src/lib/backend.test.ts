@@ -2394,23 +2394,12 @@ describe("backend command wrapper coverage", () => {
     });
   });
 
-  test("deletes an agent handoff through its environment-scoped command", async () => {
-    invokeMock.mockResolvedValueOnce(true);
-
-    await expect(backendWrappers.deleteAgentHandoff("handoff-1", "env-1")).resolves.toBe(true);
-    expect(invokeMock).toHaveBeenCalledWith("delete_agent_handoff", {
-      handoffId: "handoff-1",
-      environmentId: "env-1",
-    });
-  });
-
-  test("reads and writes agent handoff snapshots through their commands", async () => {
-    const snapshot = { messages: [{ id: "m1" }] };
+  test("reads a stored handoff and asks the backend to create one", async () => {
     const stored = {
       id: "handoff-1",
       environmentId: "env-1",
       version: 1,
-      snapshot,
+      snapshot: { messages: [{ id: "m1" }] },
       createdAt: "2026-07-27T11:00:00.000Z",
     };
 
@@ -2420,16 +2409,39 @@ describe("backend command wrapper coverage", () => {
       handoffId: "handoff-1",
     });
 
-    invokeMock.mockResolvedValueOnce(stored);
-    await expect(
-      backendWrappers.saveAgentHandoff("handoff-1", "env-1", 1, snapshot),
-    ).resolves.toEqual(stored);
-    expect(invokeMock).toHaveBeenCalledWith("save_agent_handoff", {
+    const input = {
       handoffId: "handoff-1",
       environmentId: "env-1",
-      version: 1,
-      snapshot,
+      sourceAgent: "claude" as const,
+      logicalSessionKey: "env-env-1:tab-1",
+      sourceSessionId: "session-1",
+      destinationProvider: "codex" as const,
+    };
+    invokeMock.mockResolvedValueOnce(stored);
+    await expect(backendWrappers.createAgentHandoff(input)).resolves.toEqual(stored);
+    expect(invokeMock).toHaveBeenCalledWith("create_agent_handoff", input);
+  });
+
+  test("reads handoff capabilities and treats an older backend as having none", async () => {
+    invokeMock.mockResolvedValueOnce({ create: true, delivery: true, pruning: true });
+    await expect(backendWrappers.getAgentHandoffCapabilities()).resolves.toEqual({
+      create: true,
+      delivery: true,
+      pruning: true,
     });
+
+    invokeMock.mockRejectedValueOnce(
+      new Error("Unknown backend command: get_agent_handoff_capabilities"),
+    );
+    await expect(backendWrappers.getAgentHandoffCapabilities()).resolves.toEqual({
+      create: false,
+      delivery: false,
+      pruning: false,
+    });
+
+    // Anything else is not evidence of an older backend.
+    invokeMock.mockRejectedValueOnce(new Error("connection lost"));
+    await expect(backendWrappers.getAgentHandoffCapabilities()).rejects.toThrow("connection lost");
   });
 
   test("prunes agent handoffs against the layout's reference set", async () => {

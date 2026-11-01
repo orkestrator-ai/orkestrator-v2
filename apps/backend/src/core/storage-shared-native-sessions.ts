@@ -10,7 +10,11 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import { isAgentSessionOwner } from "@orkestrator/protocol/coordinator";
-import { NATIVE_AGENT_SESSION_VERSION, type PersistedNativeAgentSession } from "./models.js";
+import {
+  NATIVE_AGENT_SESSION_VERSION,
+  type PersistedNativeAgentSession,
+  type PersistedNativeAgentSignInResend,
+} from "./models.js";
 import { isNonBlankString, isRecord } from "./storage-shared-core.js";
 
 export const MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES = 32 * 1024 * 1024;
@@ -249,4 +253,44 @@ export function resolveNativeAgentInteractionMetadata(input: {
     return null;
   }
   return { origin, interactionPolicy };
+}
+
+/** How many delivered handoff ids a session remembers; one tab sees very few. */
+export const MAX_DELIVERED_AGENT_HANDOFF_IDS = 32;
+
+/**
+ * The "Continue in…" handoffs a session's dispatch journal recorded as
+ * delivered. Like `retiredDispatch`, deliberately not validated with the
+ * record: a malformed value reads as absent rather than making the session
+ * unreadable.
+ */
+export function deliveredAgentHandoffIds(
+  session: Pick<PersistedNativeAgentSession, "deliveredAgentHandoffIds">,
+): string[] {
+  const value: unknown = session.deliveredAgentHandoffIds;
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+}
+
+/** `ids` plus `handoffId`, newest last and bounded. */
+export function withDeliveredAgentHandoffId(ids: readonly string[], handoffId: string): string[] {
+  return [...ids.filter((id) => id !== handoffId), handoffId].slice(
+    -MAX_DELIVERED_AGENT_HANDOFF_IDS,
+  );
+}
+
+/** A session's held sign-in resend; a malformed value reads as absent. */
+export function sessionSignInResend(
+  session: Pick<PersistedNativeAgentSession, "signInResend">,
+): PersistedNativeAgentSignInResend | undefined {
+  const value: unknown = session.signInResend;
+  return isRecord(value) &&
+    isNonBlankString(value.requestId) &&
+    isNonBlankString(value.providerSessionId) &&
+    isNonBlankString(value.prompt) &&
+    typeof value.recordedAt === "string" &&
+    (value.attachments === undefined || Array.isArray(value.attachments))
+    ? (value as unknown as PersistedNativeAgentSignInResend)
+    : undefined;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Check, KeyRound, Loader2, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
@@ -15,12 +15,11 @@ interface ClaudeAuthRecoveryCardProps {
   /** `pinned` sits above the composer, outside the transcript's own padding. */
   placement?: "transcript" | "pinned";
   /**
-   * Sends the refused message again once signed in. Without it the card asks
-   * the user to resend it.
+   * The backend holds the refused message and sends it again when this
+   * machine's login is renewed, whichever client renews it. Without it the card
+   * asks the user to resend it.
    */
-  onSignedIn?: () => void;
-  /** The message is being sent again after this sign-in. */
-  resendingAfterSignIn?: boolean;
+  resendsAfterSignIn?: boolean;
 }
 
 /**
@@ -38,8 +37,7 @@ export function ClaudeAuthRecoveryCard({
   failureAt,
   containerId,
   placement = "transcript",
-  onSignedIn,
-  resendingAfterSignIn = false,
+  resendsAfterSignIn = false,
 }: ClaudeAuthRecoveryCardProps) {
   const headingId = useId();
   const createTab = useOptionalTerminalContext()?.createTab;
@@ -50,19 +48,13 @@ export function ClaudeAuthRecoveryCard({
   const reauth = useAgentAccountReauth("claude", !isolatedContainer, failureAt);
   const canOpenTerminal = Boolean(createTab) && (isolatedContainer || !containerId);
   const [terminalSignIn, setTerminalSignIn] = useState(false);
-  const automaticResend = !isolatedContainer && !terminalSignIn && Boolean(onSignedIn);
+  // A terminal sign-in runs outside the backend's own, which is what triggers
+  // the resend, so that path still asks the user to send it again.
+  const automaticResend = !isolatedContainer && !terminalSignIn && resendsAfterSignIn;
   const signedIn = !isolatedContainer && reauth.progress.state === "succeeded";
   const signingIn = reauth.progress.state === "pending";
   // The login being renewed is this machine's; with several machines, say which.
   const machineName = useSessionMachineName();
-  // Also when the card mounts on a sign-in that already finished: the hook
-  // only adopts one completed after this failure.
-  const notifySignedIn = useEffectEvent(() => {
-    if (automaticResend) onSignedIn?.();
-  });
-  useEffect(() => {
-    if (signedIn) notifySignedIn();
-  }, [signedIn]);
 
   const openSignInTerminal = () => {
     setTerminalSignIn(true);
@@ -92,7 +84,7 @@ export function ClaudeAuthRecoveryCard({
             {machineName
               ? `Each machine keeps its own Claude login, and ${machineName}'s needs signing in again.`
               : "Claude needs you to sign in again."}{" "}
-            {automaticResend || resendingAfterSignIn
+            {automaticResend
               ? "Your message is sent again once you sign in."
               : "After signing in, return here and resend your message."}
           </p>
@@ -100,7 +92,7 @@ export function ClaudeAuthRecoveryCard({
           {signedIn ? (
             <p role="status" className="mt-3 flex items-center gap-2 text-xs text-emerald-400">
               <Check aria-hidden="true" className="size-3.5" />
-              {resendingAfterSignIn
+              {automaticResend
                 ? "Signed in. Sending your message again…"
                 : "Signed in. Resend your message to continue."}
             </p>

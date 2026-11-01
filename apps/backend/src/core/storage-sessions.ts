@@ -6,6 +6,7 @@ import { UsageHistoryStore, type RecordUsageTurnsInput } from "./usage-history-s
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import {
+  AGENT_HANDOFF_PRUNE_GRACE_MS,
   MAX_SESSIONS_PER_ENVIRONMENT,
   PANE_LAYOUT_VERSION,
   assertPaneLayoutGeneration,
@@ -17,6 +18,8 @@ import {
   isRecord,
   mergePersistedPaneLayouts,
   nowIso,
+  paneLayoutAgentHandoffIds,
+  paneLayoutDroppedAgentHandoff,
   paneLayoutLeaves,
   paneLayoutRevisionConflictMessage,
   selectedTabIsSetupHandoffSource,
@@ -334,7 +337,8 @@ export class SessionsRepository {
     }
     assertPaneLayoutRootWithinBounds(layout.root);
 
-    return this.enqueuePaneLayoutMutation(async () => {
+    let previousRoot: unknown;
+    const saved = await this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.repos.projects.getEnvironment(environmentId);
       if (!environment) {
         throw new Error(`Environment not found: ${environmentId}`);
@@ -351,6 +355,7 @@ export class SessionsRepository {
         () => ({}),
       );
       const previous = layouts[environmentId];
+      previousRoot = previous?.root;
       const currentRevision = previous?.revision ?? 0;
       if (currentRevision !== expectedRevision) {
         throw new Error(paneLayoutRevisionConflictMessage(expectedRevision, currentRevision));
@@ -376,6 +381,74 @@ export class SessionsRepository {
       this.context.changes.announce("pane-layout", environmentId);
       return saved;
     });
+    await this.pruneDroppedAgentHandoffs(environmentId, previousRoot, saved.root);
+    return saved;
+  }
+
+  /**
+   * Reclaims the handoffs a layout write stopped referencing (a closed tab, a
+   * tab that resumed another session). Runs after the layout lease is
+   * released, and only when a reference was dropped: layout writes are
+   * high-churn and the handoff store is large. Records inside the grace window
+   * survive, and the periodic sweep reclaims them later. Never fails the
+   * layout write it follows.
+   */
+  private async pruneDroppedAgentHandoffs(
+    environmentId: string,
+    previousRoot: unknown,
+    nextRoot: unknown,
+  ): Promise<void> {
+    if (!paneLayoutDroppedAgentHandoff(previousRoot, nextRoot)) return;
+    await this.repos.drafts
+      .pruneAgentHandoffs(environmentId, [...paneLayoutAgentHandoffIds(nextRoot)], {
+        graceMs: AGENT_HANDOFF_PRUNE_GRACE_MS,
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          "[storage] Pruning unreferenced agent handoffs failed:",
+          error instanceof Error ? error.message : error,
+        );
+      });
+  }
+
+  /**
+   * Records that a tab's handoff reached its provider, for every client.
+   *
+   * The backend delivers the handoff with the destination's first dispatch;
+   * this is the display state that follows it (renderers stop offering the
+   * history as pending and keep hiding its carrier). Idempotent, and a no-op
+   * when the tab has since moved to another handoff or closed.
+   */
+  async markTabAgentHandoffConsumed(
+    environmentId: string,
+    tabId: string,
+    handoffId: string,
+  ): Promise<boolean> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      if (!previous) return false;
+      const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+      const tab = paneLayoutLeaves(root)
+        .flatMap((leaf) => leaf.tabs)
+        .find((candidate) => candidate.id === tabId);
+      if (!tab || tab.agentHandoffId !== handoffId || tab.consumedAgentHandoffId === handoffId) {
+        return false;
+      }
+      tab.consumedAgentHandoffId = handoffId;
+      layouts[environmentId] = {
+        ...previous,
+        root: root as PersistedPaneLayout["root"],
+        updatedAt: nowIso(),
+        revision: (previous.revision ?? 0) + 1,
+      };
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
+      return true;
+    });
   }
 
   /**
@@ -393,7 +466,8 @@ export class SessionsRepository {
     assertPaneLayoutRootWithinBounds(base.root);
     assertPaneLayoutRootWithinBounds(desired.root);
     assertPaneLayoutSelectionIntentWithinBounds(selectionIntent);
-    return this.enqueuePaneLayoutMutation(async () => {
+    let previousRoot: unknown;
+    const saved = await this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.repos.projects.getEnvironment(environmentId);
       if (!environment) {
         throw new Error(`Environment not found: ${environmentId}`);
@@ -408,6 +482,7 @@ export class SessionsRepository {
         () => ({}),
       );
       const previous = layouts[environmentId];
+      previousRoot = previous?.root;
       const sameGeneration =
         previous &&
         previous.version === desired.version &&
@@ -448,6 +523,8 @@ export class SessionsRepository {
       this.context.changes.announce("pane-layout", environmentId);
       return saved;
     });
+    await this.pruneDroppedAgentHandoffs(environmentId, previousRoot, saved.root);
+    return saved;
   }
 
   /** Add the backend-owned build surface before start_build_pipeline returns. */

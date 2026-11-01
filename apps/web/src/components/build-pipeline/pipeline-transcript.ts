@@ -38,6 +38,7 @@ import {
   type TranscriptSkewKind,
 } from "@/lib/chat/transcript-skew";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
+import { startsWithAgentHandoffCarrier } from "@orkestrator/protocol/agent-handoff-frame";
 import type { TranscriptArtifactRef } from "@orkestrator/protocol/transcript-artifacts";
 import type {
   NativeAgentActivityPart,
@@ -419,9 +420,6 @@ function messageId(raw: Record<string, unknown>, index: number): string {
   return asString(raw.id) ?? `pipeline-message-${index}`;
 }
 
-const PIPELINE_HANDOFF_OPEN = '<orkestrator-handoff format="json-v2">';
-const PIPELINE_HANDOFF_CLOSE = "</orkestrator-handoff>";
-
 /**
  * The fresh address-issues session receives the review history as one large
  * bootstrap prompt. The provider still needs that prompt, but showing it as the
@@ -435,15 +433,9 @@ const PIPELINE_HANDOFF_CLOSE = "</orkestrator-handoff>";
  */
 function isInitialPipelineHandoff(raw: Record<string, unknown>): boolean {
   if (raw.role !== "user") return false;
-
-  const carriesHandoff = (value: unknown): boolean =>
-    typeof value === "string" &&
-    value.trimStart().startsWith(PIPELINE_HANDOFF_OPEN) &&
-    value.includes(PIPELINE_HANDOFF_CLOSE);
-
-  if (carriesHandoff(raw.content)) return true;
+  if (startsWithAgentHandoffCarrier(raw.content)) return true;
   if (!Array.isArray(raw.parts)) return false;
-  return raw.parts.some((part) => carriesHandoff(asRecord(part)?.content));
+  return raw.parts.some((part) => startsWithAgentHandoffCarrier(asRecord(part)?.content));
 }
 
 export function toPipelineTranscript(

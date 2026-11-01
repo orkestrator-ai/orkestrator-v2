@@ -12,6 +12,9 @@
  *   badge with reason `agent_question`. The key is deduped in the same write,
  *   so a replayed change, a restart or a second observer never lights it
  *   twice for one wait, and a badge the user cleared stays cleared.
+ * - **Ends.** When the source stops `working`, the runs that ended meanwhile
+ *   say what the bell reads (`graphRunCompletionOutcome`): a failure as a
+ *   failure, and "completed" only when a run did.
  * - **Hook.** {@link GraphRunAttention.onWaitOpened} tells listeners about
  *   each wait the first time it is recorded (run id, environment and the
  *   pending interactions that are new). The coordinator's status wake reads
@@ -33,7 +36,7 @@ import {
   type GraphRunPendingInteraction,
 } from "@orkestrator/protocol/graphs/run";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
-import type { Environment } from "./models.js";
+import type { AgentActivityCompletionOutcome, Environment } from "./models.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 
@@ -50,6 +53,9 @@ export interface GraphRunAttentionStorage {
     state: AgentActivityState,
     occurredAt: string,
     source: "graph-run",
+    observerId?: string,
+    stale?: boolean,
+    options?: { completionOutcome?: AgentActivityCompletionOutcome },
   ): Promise<Environment>;
   recordEnvironmentAgentAttention(
     environmentId: string,
@@ -115,6 +121,24 @@ export function graphRunEnvironmentActivity(runs: readonly GraphRun[]): AgentAct
     if (run.status === "running") return "working";
   }
   return waiting ? "waiting" : "idle";
+}
+
+/**
+ * How the `graph-run` source's work ended, from the runs that ended since it
+ * started `working`: any failure is a failure, and a completed run is a
+ * completion. Otherwise nothing completed (a run was cancelled or paused, or
+ * deleted).
+ */
+export function graphRunCompletionOutcome(
+  runs: readonly GraphRun[],
+  workingSince: string,
+): AgentActivityCompletionOutcome | undefined {
+  const since = Date.parse(workingSince);
+  const ended = runs.filter(
+    (run) => isGraphRunTerminal(run.status) && Date.parse(run.finishedAt ?? run.updatedAt) >= since,
+  );
+  if (ended.some((run) => run.status === "failed")) return "failed";
+  return ended.some((run) => run.status === "complete") ? undefined : "none";
 }
 
 export class GraphRunAttention {
@@ -259,12 +283,24 @@ export class GraphRunAttention {
   private async syncEnvironment(environmentId: string): Promise<void> {
     const environment = await this.storage.getEnvironment(environmentId);
     if (!environment) return;
-    const desired = graphRunEnvironmentActivity(
-      await this.storage.graphRuns.listGraphRuns(environmentId),
-    );
-    const current = environment.agentActivitySources?.["graph-run"]?.state;
+    const runs = await this.storage.graphRuns.listGraphRuns(environmentId);
+    const desired = graphRunEnvironmentActivity(runs);
+    const source = environment.agentActivitySources?.["graph-run"];
+    const current = source?.state;
     if (current === desired || (current === undefined && desired === "idle")) return;
-    await this.storage.setEnvironmentAgentActivity(environmentId, desired, this.now(), "graph-run");
+    const completionOutcome =
+      source && current === "working"
+        ? graphRunCompletionOutcome(runs, source.observedAt ?? source.updatedAt)
+        : undefined;
+    await this.storage.setEnvironmentAgentActivity(
+      environmentId,
+      desired,
+      this.now(),
+      "graph-run",
+      undefined,
+      false,
+      { completionOutcome },
+    );
   }
 }
 

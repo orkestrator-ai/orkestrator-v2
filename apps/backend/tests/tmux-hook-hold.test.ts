@@ -138,6 +138,10 @@ describe("tmux hook timing sidecar", () => {
       type: "command",
       command: 'bash "/run/hook.sh" Stop',
     });
+    expect(block.StopFailure![0]!.hooks[0]).toEqual({
+      type: "command",
+      command: 'bash "/run/hook.sh" StopFailure',
+    });
   });
 });
 

@@ -102,6 +102,7 @@ export type HookEventKind =
   | "PostToolUse"
   | "UserPromptSubmit"
   | "Stop"
+  | "StopFailure"
   | "SubagentStop"
   | "Notification"
   | "SessionStart";

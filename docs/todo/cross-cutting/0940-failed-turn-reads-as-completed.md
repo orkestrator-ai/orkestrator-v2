@@ -124,7 +124,7 @@ Made 2026-10-31 against `main` at `931e5541`. Every path that could ring `agent_
 | Bridge replaced before the next sweep, restored session reads idle | `agent_finished` from the session edge | `agent_failed` from the bridge's own report (below) |
 | Backend restart, bridge proves the session gone | `agent_finished` from the aggregate | `agent_failed` |
 | Runtime stopped across a restart | Nothing: storage clears activity when it records a stop | Nothing (pinned by a test) |
-| Multi Review, graph runs, terminal agents | `agent_finished` from the aggregate | Unchanged; see [1060](1060-non-native-activity-bell-reads-as-finished.md) |
+| Multi Review, graph runs, terminal agents | `agent_finished` from the aggregate | Unchanged here; fixed in [1060](1060-non-native-activity-bell-reads-as-finished.md) (2026-11-01) |
 
 What each provider reports after its own restart:
 

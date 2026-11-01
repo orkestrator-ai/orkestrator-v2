@@ -249,6 +249,13 @@ export interface StartupAgentSessionSnapshot {
  * - `terminal_finished`: a terminal-hosted agent finished.
  * - `marked_unread`: a client marked the environment unread.
  */
+/**
+ * How a source's work ended, when it knows: `failed` rings `agent_failed`, and
+ * `none` means nothing completed, so going idle rings nothing. Absent, the
+ * aggregate's edge says the work finished.
+ */
+export type AgentActivityCompletionOutcome = "failed" | "none";
+
 export type EnvironmentUnreadReason =
   | "agent_finished"
   | "agent_failed"

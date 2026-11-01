@@ -76,7 +76,11 @@ import {
 import { StorageService } from "./storage.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
-import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
+import {
+  MultiReviewService,
+  workflowCompletionOutcome,
+  type MultiReviewServiceOptions,
+} from "./multi-review-service.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
@@ -6605,10 +6609,92 @@ test("MultiReviewService clears stale review activity when it rehydrates", async
         "multi-review": { state: "idle" },
       },
     });
+    // No workflow is left to say the work completed.
+    expect((await storage.getEnvironment("env-rehydrate"))?.hasUnreadWork ?? false).toBe(false);
   } finally {
     await service.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
+});
+
+test("MultiReviewService reports a failure that ended across a restart", async () => {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-activity-failed-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "env-failed",
+    projectId: "project-1",
+    name: "review",
+    branch: "change",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "full",
+    order: 0,
+    environmentType: "local",
+    worktreePath: "/tmp/review",
+    setupScriptsComplete: true,
+  });
+  const provider = new Provider(false);
+  const first = new MultiReviewService(storage, stableReviewInvoker, {
+    autoAdvance: false,
+    provider: async () => provider,
+  });
+  const started = await startLegacyReview(first, storage, stableReviewInvoker, {
+    environmentId: "env-failed",
+    projectId: "project-1",
+    targetBranch: "main",
+    reviewers: [{ agent: "claude", model: "opus" }],
+    fixModel: { agent: "claude", model: "opus" },
+  });
+  for (let attempt = 0; attempt < 7; attempt++) await first.advanceNow(started.id);
+  await first.shutdown();
+  expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
+    phase: "failed",
+  });
+
+  // The process stopped after saving the failure and before syncing activity.
+  await storage.setEnvironmentUnread("env-failed", false);
+  await storage.setEnvironmentAgentActivity(
+    "env-failed",
+    "working",
+    new Date().toISOString(),
+    "multi-review",
+  );
+  const restored = new MultiReviewService(storage, stableReviewInvoker, {
+    autoAdvance: false,
+    provider: async () => provider,
+  });
+  try {
+    await restored.init();
+    expect(await storage.getEnvironment("env-failed")).toMatchObject({
+      agentActivityState: "idle",
+      hasUnreadWork: true,
+      unreadReason: "agent_failed",
+    });
+  } finally {
+    await restored.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("a workflow's end says failed, nothing, or finished from its own record", () => {
+  const outcome = (phase: string, fixSession?: { status: string }) =>
+    workflowCompletionOutcome({ phase, fixSession } as unknown as MultiReviewWorkflow);
+  expect(outcome("failed")).toBe("failed");
+  expect(outcome("interactive", { status: "failed" })).toBe("failed");
+  expect(outcome("cancelled")).toBe("none");
+  expect(outcome("paused")).toBe("none");
+  expect(outcome("interactive", { status: "cancelled" })).toBe("none");
+  expect(outcome("completed")).toBeUndefined();
+  expect(outcome("ready")).toBeUndefined();
+  expect(outcome("interactive", { status: "idle" })).toBeUndefined();
+  // Only an interactive turn ends on its fix session: a completed workflow's
+  // result is its own, whatever an older session record says.
+  expect(outcome("completed", { status: "failed" })).toBeUndefined();
 });
 
 test("MultiReviewService rehydrates active review activity without a renderer", async () => {
@@ -6788,6 +6874,10 @@ test("MultiReviewService fails an idle reviewer that never returns structured ou
     phase: "failed",
     reviewers: [{ status: "failed", error: expect.stringContaining("structured report") }],
   });
+  expect(await storage.getEnvironment("env-idle")).toMatchObject({
+    hasUnreadWork: true,
+    unreadReason: "agent_failed",
+  });
 
   await service.shutdown();
   await fs.rm(dataDir, { recursive: true, force: true });
@@ -6833,6 +6923,10 @@ test("MultiReviewService leaves an interactive handoff idle for the native tab",
   }
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).toMatchObject({
     phase: "ready",
+  });
+  expect(await storage.getEnvironment("env-interactive")).toMatchObject({
+    hasUnreadWork: true,
+    unreadReason: "agent_finished",
   });
 
   const sendsBeforeAddress = provider.sends.size;
@@ -6910,6 +7004,9 @@ test("MultiReviewService persists cancellation until an aborting consolidation p
     reviewers: [{ status: "completed" }],
     fixSession: { status: "cancelled" },
   });
+  // Someone asked for the stop, and nothing completed.
+  expect((await storage.getEnvironment("env-cancel"))?.agentActivityState).toBe("idle");
+  expect((await storage.getEnvironment("env-cancel"))?.hasUnreadWork ?? false).toBe(false);
   const replacement = await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-cancel",
     projectId: "project-1",

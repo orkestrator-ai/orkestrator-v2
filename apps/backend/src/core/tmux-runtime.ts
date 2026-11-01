@@ -42,6 +42,10 @@ export class TmuxRuntime {
   readonly interactiveTerminals: InteractiveTmuxTerminalManager;
   readonly claudeStatePolls: ClaudeStatePollManager;
   private readonly activityWrites = new Map<string, Promise<void>>();
+  /** Environments with a Stop hook whose activity write has not landed yet. */
+  private readonly finishedTurns = new Set<string>();
+  /** Environments that went idle from `working` with no hook to say how the turn ended. */
+  private readonly unexplainedEnds = new Set<string>();
   /** First time each orphaned tmux session was seen without a managed tab. */
   private readonly orphanMissingSince = new Map<string, number>();
   private lastOrphanSweepAt = 0;
@@ -62,11 +66,45 @@ export class TmuxRuntime {
     return this.configDirectory(context);
   }
 
+  /**
+   * A Stop hook: the only proof a turn finished, so the only thing that rings
+   * "completed". Every other idle edge (a stopped or dead tab, an interrupt, a
+   * session re-attached after a restart) says nothing about how the turn ended.
+   */
+  noteTurnFinished(context: CommandContext, environmentId: string): Promise<void> {
+    this.finishedTurns.add(environmentId);
+    return this.persistEnvironmentActivity(context, environmentId);
+  }
+
+  /**
+   * A StopFailure hook. It rings from the event rather than from an activity
+   * edge, because a hook file outlives a backend restart and the re-attached
+   * session starts with no edge to read.
+   */
+  async noteTurnFailed(
+    context: CommandContext,
+    environmentId: string,
+    completionKey: string,
+  ): Promise<void> {
+    const storage = context.storage as unknown as {
+      recordEnvironmentSessionCompletion?: CommandContext["storage"]["recordEnvironmentSessionCompletion"];
+    };
+    await storage.recordEnvironmentSessionCompletion?.(
+      environmentId,
+      new Date().toISOString(),
+      "agent_failed",
+      completionKey,
+    );
+    await this.persistEnvironmentActivity(context, environmentId);
+    this.unexplainedEnds.delete(environmentId);
+  }
+
   /** Serialize aggregate writes so an older pane observation cannot land last. */
   persistEnvironmentActivity(context: CommandContext, environmentId: string): Promise<void> {
     const storage = context.storage as unknown as {
       getEnvironment?: CommandContext["storage"]["getEnvironment"];
       setEnvironmentAgentActivity?: CommandContext["storage"]["setEnvironmentAgentActivity"];
+      recordEnvironmentSessionCompletion?: CommandContext["storage"]["recordEnvironmentSessionCompletion"];
     };
     // Several command-unit harnesses intentionally provide only the storage
     // methods exercised by that test. Activity persistence is orthogonal there.
@@ -80,13 +118,37 @@ export class TmuxRuntime {
         const state = this.sessions.activityState(environmentId);
         const environment = await storage.getEnvironment!(environmentId);
         const persisted = environment?.agentActivitySources?.["claude-tmux"];
-        if (persisted?.state === state) return;
-        await storage.setEnvironmentAgentActivity!(
-          environmentId,
-          state,
-          new Date().toISOString(),
-          "claude-tmux",
-        );
+        const finished = this.finishedTurns.delete(environmentId);
+        if (persisted?.state === state) {
+          // The Stop of a turn that ended while the backend was away, drained
+          // after the re-attach already wrote idle: there is no edge left.
+          if (finished && state !== "working" && this.unexplainedEnds.delete(environmentId)) {
+            await storage.recordEnvironmentSessionCompletion?.(
+              environmentId,
+              new Date().toISOString(),
+            );
+          }
+          return;
+        }
+        if (state === "working") this.unexplainedEnds.delete(environmentId);
+        else if (persisted?.state === "working" && !finished) {
+          this.unexplainedEnds.add(environmentId);
+        }
+        try {
+          await storage.setEnvironmentAgentActivity!(
+            environmentId,
+            state,
+            new Date().toISOString(),
+            "claude-tmux",
+            undefined,
+            false,
+            { completionOutcome: finished ? undefined : "none" },
+          );
+        } catch (error) {
+          // The next observation reconciles this source; it must still ring.
+          if (finished) this.finishedTurns.add(environmentId);
+          throw error;
+        }
       });
     const settled = operation
       .catch((error) => {

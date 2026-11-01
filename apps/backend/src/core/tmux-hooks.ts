@@ -469,6 +469,8 @@ export function hooksBlock(hookScriptPath: string): unknown {
     PostToolUse: [matcherHook("PostToolUse")],
     UserPromptSubmit: [hook("UserPromptSubmit")],
     Stop: [hook("Stop")],
+    // Runs instead of Stop when the turn ends on an API error.
+    StopFailure: [hook("StopFailure")],
     SubagentStop: [hook("SubagentStop")],
     Notification: [hook("Notification")],
     SessionStart: [hook("SessionStart")],

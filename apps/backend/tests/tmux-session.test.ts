@@ -1468,6 +1468,177 @@ describe("live session read paths", () => {
     });
   }, 20_000);
 
+  describe("what a tmux turn's end rings", () => {
+    type ActivityWrite = { state: string; options?: { completionOutcome?: string } };
+
+    function bellContext(environment: {
+      id: string;
+      agentActivitySources?: Record<string, unknown>;
+    }) {
+      const writes: ActivityWrite[] = [];
+      const completions: Array<{ reason?: string; key?: string }> = [];
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          setEnvironmentAgentActivity: async (
+            _environmentId: string,
+            state: string,
+            occurredAt: string,
+            _source: string,
+            _observerId?: string,
+            _stale?: boolean,
+            options?: ActivityWrite["options"],
+          ) => {
+            writes.push({ state, ...(options ? { options } : {}) });
+            environment.agentActivitySources = {
+              ...environment.agentActivitySources,
+              "claude-tmux": { state, updatedAt: occurredAt },
+            };
+            return environment;
+          },
+          recordEnvironmentSessionCompletion: async (
+            _environmentId: string,
+            _occurredAt: string,
+            reason?: string,
+            key?: string,
+          ) => {
+            completions.push({ reason, key });
+            return environment;
+          },
+        },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      return { context, writes, completions, emitted };
+    }
+
+    function bellHandlers() {
+      const ticks = pollTickStepper();
+      return { ticks, handlers: createHandlers({ sessionTiming: { pollTick: ticks.pollTick } }) };
+    }
+
+    test("a Stop hook rings the aggregate's finished bell", async () => {
+      const { ticks, handlers } = bellHandlers();
+      await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+        const { context, writes, completions } = bellContext(environment);
+        const args = { tabId: "tab-stop-bell", environmentId: environment.id };
+        const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+          session_id: string;
+        };
+        const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+        await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-t1.json"), "{}");
+        await ticks.step();
+        await waitFor(() => writes.at(-1)?.state === "working");
+        await fs.writeFile(path.join(pendingDir, "Stop-t1.json"), "{}");
+        await ticks.step();
+        await waitFor(() => writes.at(-1)?.state === "idle");
+        expect(writes.at(-1)?.options?.completionOutcome).toBeUndefined();
+        expect(completions).toEqual([]);
+        await invoke(handlers, "claude_tmux_stop", args, context);
+        await ticks.release();
+      });
+    }, 20_000);
+
+    test("a StopFailure hook rings agent_failed, once, and ends the turn", async () => {
+      const { ticks, handlers } = bellHandlers();
+      await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+        const { context, writes, completions, emitted } = bellContext(environment);
+        const args = { tabId: "tab-failure-bell", environmentId: environment.id };
+        const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+          session_id: string;
+          busy: boolean;
+        };
+        const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+        await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-t1.json"), "{}");
+        await ticks.step();
+        await waitFor(() => writes.at(-1)?.state === "working");
+        await fs.writeFile(
+          path.join(pendingDir, "StopFailure-t1.json"),
+          JSON.stringify({
+            hook_event_name: "StopFailure",
+            error: "unknown",
+            last_assistant_message: "API Error: 400 fake refusal",
+          }),
+        );
+        await ticks.step();
+        await waitFor(() => writes.at(-1)?.state === "idle");
+        expect(writes.at(-1)).toEqual({ state: "idle", options: { completionOutcome: "none" } });
+        expect(completions).toEqual([
+          { reason: "agent_failed", key: `claude-tmux:${status.session_id}:t1` },
+        ]);
+        const after = (await invoke(handlers, "claude_tmux_status", args, context)) as {
+          busy: boolean;
+          info_events: Array<{ kind: string; message: string }>;
+        };
+        expect(after.busy).toBe(false);
+        expect(after.info_events.at(-1)).toMatchObject({
+          kind: "StopFailure",
+          message: "API Error: 400 fake refusal",
+        });
+        expect(
+          emitted.some(
+            (entry) => (entry.payload as { event_kind?: string }).event_kind === "StopFailure",
+          ),
+        ).toBe(true);
+        await invoke(handlers, "claude_tmux_stop", args, context);
+        await ticks.release();
+      });
+    }, 20_000);
+
+    test("a tab stopped mid-turn says nothing about how the turn ended", async () => {
+      const { ticks, handlers } = bellHandlers();
+      await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+        const { context, writes, completions } = bellContext(environment);
+        const args = { tabId: "tab-stopped-bell", environmentId: environment.id };
+        const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+          session_id: string;
+        };
+        const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+        await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-t1.json"), "{}");
+        await ticks.step();
+        await waitFor(() => writes.at(-1)?.state === "working");
+        await invoke(handlers, "claude_tmux_stop", args, context);
+        expect(writes.at(-1)).toEqual({ state: "idle", options: { completionOutcome: "none" } });
+        expect(completions).toEqual([]);
+        await ticks.release();
+      });
+    }, 20_000);
+
+    test("a re-attached session rings once when its turn's Stop arrives", async () => {
+      const { ticks, handlers } = bellHandlers();
+      await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+        // The durable source from before the restart: the previous process saw
+        // the turn start and never saw it end.
+        (environment as { agentActivitySources?: Record<string, unknown> }).agentActivitySources = {
+          "claude-tmux": { state: "working", updatedAt: new Date(0).toISOString() },
+        };
+        const { context, writes, completions } = bellContext(environment);
+        const args = { tabId: "tab-reattach-bell", environmentId: environment.id };
+        const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+          session_id: string;
+        };
+        // The attach alone proves nothing, so it does not claim the turn finished.
+        expect(writes.at(-1)).toEqual({ state: "idle", options: { completionOutcome: "none" } });
+        expect(completions).toEqual([]);
+
+        const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+        await fs.writeFile(path.join(pendingDir, "Stop-away.json"), "{}");
+        await ticks.step();
+        await waitFor(() => completions.length === 1);
+        expect(completions).toEqual([{ reason: undefined, key: undefined }]);
+
+        await fs.writeFile(path.join(pendingDir, "Stop-again.json"), "{}");
+        await ticks.step();
+        await delay(25);
+        expect(completions).toHaveLength(1);
+        await invoke(handlers, "claude_tmux_stop", args, context);
+        await ticks.release();
+      });
+    }, 20_000);
+  });
+
   test("uses the durable arm to recover a Stop after backend reattach", async () => {
     const ticks = pollTickStepper();
     const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
@@ -1749,6 +1920,7 @@ describe("live session read paths", () => {
     await withFakeTmuxRuntime(async ({ environment, alive, runtimeRoot }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const persistedStates: string[] = [];
+      const persistedOutcomes: Array<string | undefined> = [];
       const context = {
         storage: {
           getEnvironment: async () => environment,
@@ -1756,8 +1928,13 @@ describe("live session read paths", () => {
             _environmentId: string,
             state: "idle" | "working" | "waiting",
             occurredAt: string,
+            _source?: string,
+            _observerId?: string,
+            _stale?: boolean,
+            options?: { completionOutcome?: string },
           ) => {
             persistedStates.push(state);
+            persistedOutcomes.push(options?.completionOutcome);
             environment.agentActivitySources = {
               ...environment.agentActivitySources,
               "claude-tmux": { state, updatedAt: occurredAt },
@@ -1803,6 +1980,8 @@ describe("live session read paths", () => {
       await waitFor(stopped, 8_000);
 
       await waitFor(() => persistedStates.at(-1) === "idle");
+      // A session gone mid-turn proves nothing about how its turn ended.
+      expect(persistedOutcomes.at(-1)).toBe("none");
       await expect(
         invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
       ).resolves.toBeNull();

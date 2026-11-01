@@ -59,7 +59,7 @@ import {
   workflowRestartContinuationPrompt,
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
-import type { AppConfig, Environment } from "./models.js";
+import type { AgentActivityCompletionOutcome, AppConfig, Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
@@ -491,6 +491,22 @@ function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
     workflow.reviewSession?.status === "running" ||
     workflow.fixSession?.status === "running"
   );
+}
+
+/**
+ * What the environment's bell says when this workflow's activity ends. A
+ * failure rings as one; a stop someone asked for rings nothing, because they
+ * already know and nothing completed.
+ */
+export function workflowCompletionOutcome(
+  workflow: MultiReviewWorkflow,
+): AgentActivityCompletionOutcome | undefined {
+  const fixEnded = workflow.phase === "interactive" ? workflow.fixSession?.status : undefined;
+  if (workflow.phase === "failed" || fixEnded === "failed") return "failed";
+  if (workflow.phase === "cancelled" || workflow.phase === "paused" || fixEnded === "cancelled") {
+    return "none";
+  }
+  return undefined;
 }
 
 export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
@@ -2591,6 +2607,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       desired,
       nowIso(),
       "multi-review",
+      undefined,
+      false,
+      { completionOutcome: workflowCompletionOutcome(workflow) },
     );
   }
 
@@ -2609,11 +2628,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (!environment || environment.agentActivitySources?.["multi-review"]?.state === desired) {
       return;
     }
+    // Only closing a workflow lands here, and someone asked for that.
     await this.storage.setEnvironmentAgentActivity(
       environmentId,
       desired,
       occurredAt,
       "multi-review",
+      undefined,
+      false,
+      { completionOutcome: "none" },
     );
   }
 
@@ -2630,6 +2653,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           : [],
       ),
     );
+    // A source still `working` with nothing active means the process stopped
+    // between saving a workflow and syncing its activity, so the workflow saved
+    // last is the one whose end this write reports. With none left, it was
+    // closed, and nothing says the work completed.
+    const lastSaved = new Map<string, MultiReviewWorkflow>();
+    for (const record of records) {
+      if (!isMultiReviewWorkflow(record.snapshot)) continue;
+      const known = lastSaved.get(record.snapshot.environmentId);
+      if (!known || Date.parse(record.snapshot.updatedAt) >= Date.parse(known.updatedAt)) {
+        lastSaved.set(record.snapshot.environmentId, record.snapshot);
+      }
+    }
     await Promise.all(
       environments.flatMap((environment) => {
         const desired = activeEnvironmentIds.has(environment.id) ? "working" : "idle";
@@ -2639,12 +2674,16 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         )
           return [];
         if (environment.agentActivitySources?.["multi-review"]?.state === desired) return [];
+        const ended = lastSaved.get(environment.id);
         return [
           this.storage.setEnvironmentAgentActivity(
             environment.id,
             desired,
             nowIso(),
             "multi-review",
+            undefined,
+            false,
+            { completionOutcome: ended ? workflowCompletionOutcome(ended) : "none" },
           ),
         ];
       }),

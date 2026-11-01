@@ -51,6 +51,7 @@ import {
   Terminal,
   Boxes,
   FolderOpen,
+  GitMerge,
   ExternalLink,
   WifiOff,
   Copy,
@@ -275,6 +276,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     sshAgentSocketPath,
     setSshAgentSocketPath,
     sshAgentSocketPathValidationError,
+    autoMergeRequireChecks,
+    setAutoMergeRequireChecks,
     defaultProjectsDirectory,
     setDefaultProjectsDirectory,
     defaultProjectsDirectoryValidationError,
@@ -686,52 +689,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     </SettingsPageLayout>
   );
 
-  const renderGeneral = () => (
-    <SettingsPageLayout title="General">
-      <DataSavingSetting />
-
-      {/* Preferred Editor */}
-      <div className="space-y-3">
-        <SettingsSectionHeader icon={<Code2 className="h-4 w-4" />} title="Preferred Editor">
-          Editor for "Open in Editor" (Cmd+O)
-        </SettingsSectionHeader>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <button
-            type="button"
-            onClick={() => setPreferredEditor("vscode")}
-            className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
-              preferredEditor === "vscode"
-                ? "border-primary bg-primary/5"
-                : "border-transparent bg-zinc-900 hover:border-zinc-600",
-            )}
-          >
-            <div className="flex items-center gap-2 font-medium text-sm">
-              <Code2 className="h-4 w-4" />
-              VS Code
-            </div>
-          </button>
-          <button
-            type="button"
-            onClick={() => setPreferredEditor("cursor")}
-            className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
-              preferredEditor === "cursor"
-                ? "border-primary bg-primary/5"
-                : "border-transparent bg-zinc-900 hover:border-zinc-600",
-            )}
-          >
-            <div className="flex items-center gap-2 font-medium text-sm">
-              <Code2 className="h-4 w-4" />
-              Cursor
-            </div>
-          </button>
-        </div>
-        <span className="block text-xs text-muted-foreground/60">
-          *Requires the Dev Containers extension
-        </span>
-      </div>
-
+  const renderVersionControl = () => (
+    <SettingsPageLayout title="Version control">
       <div className="space-y-3">
         <SettingsSectionHeader
           icon={<GithubIcon className="h-4 w-4" />}
@@ -832,107 +791,176 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
           )}
         </div>
+      </div>
 
-        <div className="space-y-3 border-t border-zinc-800 pt-4">
-          <div className="space-y-1">
-            <Label htmlFor="default-projects-directory" className="text-sm font-medium">
-              Default projects folder
-            </Label>
-            <p
-              id="default-projects-directory-help"
-              className="text-xs leading-relaxed text-muted-foreground"
-            >
-              Where a project copied to this machine from another one is cloned. Leave blank to use
-              the folder most of this machine's projects are in, or ~/Projects.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Input
-              id="default-projects-directory"
-              aria-label="Default projects folder"
-              aria-invalid={defaultProjectsDirectoryValidationError ? true : undefined}
-              aria-describedby="default-projects-directory-help"
-              value={defaultProjectsDirectory}
-              onChange={(event) => setDefaultProjectsDirectory(event.target.value)}
-              placeholder="Same folder as existing projects"
-              spellCheck={false}
-              className="flex-1 font-mono"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label="Browse for the default projects folder"
-              disabled={!canRevealFiles}
-              onClick={() => {
-                void pickHostPath({
-                  mode: "directory",
-                  title: "Select the default projects folder",
-                  defaultPath: defaultProjectsDirectory.trim() || undefined,
-                }).then((selected) => selected && setDefaultProjectsDirectory(selected));
-              }}
-            >
-              <FolderOpen className="h-4 w-4" />
-            </Button>
-          </div>
-          {defaultProjectsDirectoryValidationError && (
-            <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
-              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              {defaultProjectsDirectoryValidationError}
-            </p>
-          )}
-        </div>
-
-        <div className="space-y-3 border-t border-zinc-800 pt-4">
-          <div className="space-y-1">
-            <Label htmlFor="ssh-agent-socket" className="text-sm font-medium">
-              SSH agent socket
-            </Label>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Used by local worktrees when an SSH remote needs a key from your desktop session.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Input
-              id="ssh-agent-socket"
-              aria-label="SSH agent socket"
-              aria-invalid={sshAgentSocketPathValidationError ? true : undefined}
-              aria-describedby="ssh-agent-socket-help"
-              value={sshAgentSocketPath}
-              onChange={(event) => setSshAgentSocketPath(event.target.value)}
-              placeholder="Auto-detect from desktop session"
-              spellCheck={false}
-              className="flex-1 font-mono"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              aria-label="Browse for SSH agent socket"
-              disabled={!canRevealFiles}
-              onClick={() => {
-                void pickHostPath({
-                  mode: "file",
-                  title: "Select SSH agent socket",
-                  defaultPath: sshAgentSocketPath.trim() || undefined,
-                }).then((selected) => selected && setSshAgentSocketPath(selected));
-              }}
-            >
-              <FolderOpen className="h-4 w-4" />
-            </Button>
-          </div>
-          {sshAgentSocketPathValidationError && (
-            <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
-              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              {sshAgentSocketPathValidationError}
-            </p>
-          )}
-          <p id="ssh-agent-socket-help" className="text-xs leading-relaxed text-muted-foreground">
-            Leave blank to discover the agent from the current desktop session. Set an absolute
-            socket path only when auto-detection is unavailable. Changes apply after restarting
-            Orkestrator.
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <Label htmlFor="ssh-agent-socket" className="text-sm font-medium">
+            SSH agent socket
+          </Label>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Used by local worktrees when an SSH remote needs a key from your desktop session.
           </p>
         </div>
+        <div className="flex gap-2">
+          <Input
+            id="ssh-agent-socket"
+            aria-label="SSH agent socket"
+            aria-invalid={sshAgentSocketPathValidationError ? true : undefined}
+            aria-describedby="ssh-agent-socket-help"
+            value={sshAgentSocketPath}
+            onChange={(event) => setSshAgentSocketPath(event.target.value)}
+            placeholder="Auto-detect from desktop session"
+            spellCheck={false}
+            className="flex-1 font-mono"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="Browse for SSH agent socket"
+            disabled={!canRevealFiles}
+            onClick={() => {
+              void pickHostPath({
+                mode: "file",
+                title: "Select SSH agent socket",
+                defaultPath: sshAgentSocketPath.trim() || undefined,
+              }).then((selected) => selected && setSshAgentSocketPath(selected));
+            }}
+          >
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+        </div>
+        {sshAgentSocketPathValidationError && (
+          <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {sshAgentSocketPathValidationError}
+          </p>
+        )}
+        <p id="ssh-agent-socket-help" className="text-xs leading-relaxed text-muted-foreground">
+          Leave blank to discover the agent from the current desktop session. Set an absolute socket
+          path only when auto-detection is unavailable. Changes apply after restarting Orkestrator.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <SettingsSectionHeader icon={<GitMerge className="h-4 w-4" />} title="Auto-merge">
+          How an environment&apos;s Auto-merge switch decides that its pull request is ready.
+          Applies to environments on this machine.
+        </SettingsSectionHeader>
+        <div className={SETTINGS_CARD_CLASS}>
+          <SettingsRow
+            label="Require checks to pass"
+            htmlFor="auto-merge-require-checks"
+            description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass."
+          >
+            <Switch
+              id="auto-merge-require-checks"
+              aria-label="Require checks to pass before auto-merge"
+              checked={autoMergeRequireChecks}
+              disabled={isSaving}
+              onCheckedChange={setAutoMergeRequireChecks}
+            />
+          </SettingsRow>
+        </div>
+      </div>
+    </SettingsPageLayout>
+  );
+
+  const renderGeneral = () => (
+    <SettingsPageLayout title="General">
+      <DataSavingSetting />
+
+      {/* Preferred Editor */}
+      <div className="space-y-3">
+        <SettingsSectionHeader icon={<Code2 className="h-4 w-4" />} title="Preferred Editor">
+          Editor for "Open in Editor" (Cmd+O)
+        </SettingsSectionHeader>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <button
+            type="button"
+            onClick={() => setPreferredEditor("vscode")}
+            className={cn(
+              "p-3 rounded-lg border-2 text-left transition-colors",
+              preferredEditor === "vscode"
+                ? "border-primary bg-primary/5"
+                : "border-transparent bg-zinc-900 hover:border-zinc-600",
+            )}
+          >
+            <div className="flex items-center gap-2 font-medium text-sm">
+              <Code2 className="h-4 w-4" />
+              VS Code
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setPreferredEditor("cursor")}
+            className={cn(
+              "p-3 rounded-lg border-2 text-left transition-colors",
+              preferredEditor === "cursor"
+                ? "border-primary bg-primary/5"
+                : "border-transparent bg-zinc-900 hover:border-zinc-600",
+            )}
+          >
+            <div className="flex items-center gap-2 font-medium text-sm">
+              <Code2 className="h-4 w-4" />
+              Cursor
+            </div>
+          </button>
+        </div>
+        <span className="block text-xs text-muted-foreground/60">
+          *Requires the Dev Containers extension
+        </span>
+      </div>
+
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <Label htmlFor="default-projects-directory" className="text-sm font-medium">
+            Default projects folder
+          </Label>
+          <p
+            id="default-projects-directory-help"
+            className="text-xs leading-relaxed text-muted-foreground"
+          >
+            Where a project copied to this machine from another one is cloned. Leave blank to use
+            the folder most of this machine's projects are in, or ~/Projects.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Input
+            id="default-projects-directory"
+            aria-label="Default projects folder"
+            aria-invalid={defaultProjectsDirectoryValidationError ? true : undefined}
+            aria-describedby="default-projects-directory-help"
+            value={defaultProjectsDirectory}
+            onChange={(event) => setDefaultProjectsDirectory(event.target.value)}
+            placeholder="Same folder as existing projects"
+            spellCheck={false}
+            className="flex-1 font-mono"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="Browse for the default projects folder"
+            disabled={!canRevealFiles}
+            onClick={() => {
+              void pickHostPath({
+                mode: "directory",
+                title: "Select the default projects folder",
+                defaultPath: defaultProjectsDirectory.trim() || undefined,
+              }).then((selected) => selected && setDefaultProjectsDirectory(selected));
+            }}
+          >
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+        </div>
+        {defaultProjectsDirectoryValidationError && (
+          <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {defaultProjectsDirectoryValidationError}
+          </p>
+        )}
       </div>
 
       {/* Claude Code credentials */}
@@ -2382,6 +2410,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const sectionContent: Record<string, () => React.ReactNode> = {
     general: renderGeneral,
+    "version-control": renderVersionControl,
     defaults: renderDefaults,
     platforms: renderPlatforms,
     review: renderReview,

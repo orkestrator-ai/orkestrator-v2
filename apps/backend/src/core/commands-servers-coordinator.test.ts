@@ -159,7 +159,10 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       runtimeFlavor: "production",
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
       runtime: trackedRuntime(),
-      nativeAgents: { hasObservedLiveWork: async () => busy },
+      nativeAgents: {
+        hasObservedLiveWork: async () => busy,
+        runtimeStopRequested: async () => undefined,
+      },
     } as unknown as CommandContext;
     const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     const key = `claude:${runtimeId}`;
@@ -375,6 +378,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       let busy = true;
       context.nativeAgents = {
         hasObservedLiveWork: async () => busy,
+        runtimeStopRequested: async () => undefined,
       } as unknown as CommandContext["nativeAgents"];
       const retained = await startLocalServerUnlocked(runtimeId, context, "claude");
       expect(retained.pid).toBe(started.pid);
@@ -913,7 +917,10 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
       runtime: trackedRuntime(),
-      nativeAgents: { hasObservedLiveWork: async () => false },
+      nativeAgents: {
+        hasObservedLiveWork: async () => false,
+        runtimeStopRequested: async () => undefined,
+      },
     } as unknown as CommandContext;
     cleanupContext = context;
     cleanupRuntimeId = environment.id;

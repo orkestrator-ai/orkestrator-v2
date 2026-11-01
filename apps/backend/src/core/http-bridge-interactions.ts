@@ -479,14 +479,15 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       : [];
     const inferredActionable =
       kind === "command-approval"
-        ? command !== null
+        ? // A managed-network approval names only the host (Codex 0.166.0).
+          command !== null || networkHost !== null
         : kind === "file-approval"
           ? rawChanges.length > 0
           : requestedPermissions.length > 0;
     const actionable = inferredActionable && request.actionable !== false;
     // `request.amendments` (bridges before todo 0160, such as an older
     // container image) is ignored on purpose. Accepting one saves a rule in the
-    // user's Codex home that Orkestrator can neither list nor revoke, so the
+    // user's Codex home that Orkestrator can list read-only but cannot revoke, so the
     // card offers plain approval only.
     const body = truncatedJoinedText([
       ...(reason ? [`Reason: ${boundedText(reason, "Reason")}`] : []),
@@ -506,7 +507,9 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       presentation: {
         title:
           kind === "command-approval"
-            ? "Approve command"
+            ? command === null && networkHost !== null
+              ? "Approve network access"
+              : "Approve command"
             : kind === "file-approval"
               ? "Approve file changes"
               : "Approve permissions",

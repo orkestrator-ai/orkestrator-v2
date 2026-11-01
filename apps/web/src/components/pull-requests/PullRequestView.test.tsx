@@ -106,7 +106,7 @@ describe("PullRequestView", () => {
     });
     render(<PullRequestView pullRequest={prRef} layout="page" />);
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText(/Settings → GitHub/)).toBeTruthy();
+    expect(within(alert).getByText(/Settings → Version control/)).toBeTruthy();
     fail = false;
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("feat: add usage history tab")).toBeTruthy();

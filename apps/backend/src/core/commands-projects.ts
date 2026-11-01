@@ -38,6 +38,7 @@ export async function refreshClaudeModelCatalog(
   environmentId: string,
   context: CommandContext,
   dependencies: ClaudeCatalogRefreshDependencies = defaultClaudeCatalogRefreshDependencies,
+  forceRefresh = false,
 ): Promise<ClaudeModelCatalogSnapshot> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -72,7 +73,7 @@ export async function refreshClaudeModelCatalog(
     authToken = started.authToken;
   }
 
-  const catalog = await dependencies.fetchClaudeBridgeModelCatalog(port, authToken);
+  const catalog = await dependencies.fetchClaudeBridgeModelCatalog(port, authToken, forceRefresh);
   const snapshot: ClaudeModelCatalogSnapshot = {
     environmentId,
     models: catalog.models,

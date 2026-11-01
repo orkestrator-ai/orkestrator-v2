@@ -14,6 +14,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { realpath, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type {
@@ -54,6 +55,7 @@ import {
   mcpConfigNeedsRefresh,
   mcpConnectionNeedsRefresh,
   piMcpExtension,
+  piMcpInstructions,
   preparePiMcp,
 } from "./mcp.js";
 import {
@@ -465,6 +467,19 @@ export async function reconcileAgentMcp(
   }
 }
 
+/**
+ * What Orkestrator appends to Pi's system prompt: the instructions every
+ * provider receives (not for a read-only coordinator, as on the other
+ * providers), then the connected MCP servers' own instructions.
+ */
+export function piAppendedInstructions(state: SessionState): string[] {
+  const mcp = piMcpInstructions(state);
+  return [
+    ...(state.policy?.id === "coordinator-read-only" ? [] : [agentSystemInstructions()]),
+    ...(mcp ? [mcp] : []),
+  ];
+}
+
 /** Build and reload the actual SDK resources used on every session attach. */
 export async function createPiSessionServices(
   state: SessionState,
@@ -480,6 +495,10 @@ export async function createPiSessionServices(
       // Project resources can execute arbitrary code or replace built-in tools.
       // Read-only sessions exclude them even inside trusted containers.
       ...loaderPolicy.discovery,
+      // Kept after any `APPEND_SYSTEM.md` Pi discovers, which passing
+      // `appendSystemPrompt` itself would switch off. Re-run on every reload,
+      // after `preparePiMcp`, so it sees this attach's MCP connections.
+      appendSystemPromptOverride: (base) => [...base, ...piAppendedInstructions(state)],
       extensionFactories: [
         { name: "orkestrator", factory: approvalExtension(state) },
         { name: "orkestrator-mcp", factory: piMcpExtension(state) },
@@ -840,9 +859,7 @@ export function projectResourceDiscoveryOptions(
     noExtensions: !discoverProjectResources,
     noSkills: !discoverProjectResources,
     noPromptTemplates: !discoverProjectResources,
-    // Context files are part of ordinary host sessions even when executable
-    // project resources are disabled. Package-only reviews are different: a
-    // repository AGENTS.md is untrusted input outside the verified package.
+    // Branch-controlled instructions must not steer a read-only review.
     noContextFiles: readOnly,
   };
 }

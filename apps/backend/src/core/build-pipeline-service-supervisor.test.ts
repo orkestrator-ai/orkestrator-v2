@@ -823,6 +823,10 @@ describe("BuildPipelineService", () => {
       );
       expect(verificationDispatch?.schema).toBe(VERIFICATION_VERDICT_SCHEMA);
       expect(completed.verificationResult).toBe("pass");
+      expect(completed.keyInformation?.verifications).toMatchObject([{ round: 0, passed: true }]);
+      expect(
+        completed.keyInformation?.updates.some((update) => update.sections.includes("issues")),
+      ).toBe(true);
     });
   });
 

@@ -28,23 +28,30 @@ describe("refreshClaudeModelCatalog", () => {
       emit: (...args: unknown[]) => emitted.push(args),
     } as unknown as CommandContext;
 
-    const snapshot = await refreshClaudeModelCatalog("docker-env", context, {
-      enqueueContainerBridgeOperation: async (
-        _context: unknown,
-        _agent: "claude",
-        _containerId: string,
-        operation: () => Promise<unknown>,
-      ) => operation(),
-      startContainerClaudeServer: startContainer,
-      startLocalServer: async () => {
-        throw new Error("local server should not start");
-      },
-      fetchClaudeBridgeModelCatalog: async () => ({
-        models: [{ id: "claude-opus", name: "Claude Opus" }],
-        source: "sdk",
-        fetchedAt: "2026-09-09T00:00:00.000Z",
-      }),
-    } as never);
+    const fetchCatalog = mock(async () => ({
+      models: [{ id: "claude-opus", name: "Claude Opus" }],
+      source: "sdk",
+      fetchedAt: "2026-09-09T00:00:00.000Z",
+    }));
+    const snapshot = await refreshClaudeModelCatalog(
+      "docker-env",
+      context,
+      {
+        enqueueContainerBridgeOperation: async (
+          _context: unknown,
+          _agent: "claude",
+          _containerId: string,
+          operation: () => Promise<unknown>,
+        ) => operation(),
+        startContainerClaudeServer: startContainer,
+        startLocalServer: async () => {
+          throw new Error("local server should not start");
+        },
+        fetchClaudeBridgeModelCatalog: fetchCatalog,
+      } as never,
+      true,
+    );
+    expect(fetchCatalog).toHaveBeenCalledWith(43123, "catalog-token", true);
 
     expect(startContainer).toHaveBeenCalledWith("container-123", undefined, true, 6);
     expect(snapshot).toMatchObject({

@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -46,6 +47,7 @@ import { FlowInspectorHeader, FlowInspectorPanel } from "@/components/flow-graph
 import { defaultFlowSelection } from "@/components/flow-graph/flow-graph-model";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { modelsForAgent } from "@/lib/agent-launch";
 import {
   answerGraphRunHumanNode,
@@ -527,7 +529,7 @@ function GraphRunView({
             })}
         </div>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
+      <OverviewScroll>
         <div className="@container flex min-h-full flex-col">
           {run.error ? (
             <p
@@ -647,7 +649,7 @@ function GraphRunView({
             />
           </FlowInspectorPanel>
         </div>
-      </div>
+      </OverviewScroll>
       {codeRewind.dialog}
       <AlertDialog open={confirmCancel} onOpenChange={setConfirmCancel}>
         <AlertDialogContent data-testid="graph-run-cancel-dialog">
@@ -669,6 +671,25 @@ function GraphRunView({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+/**
+ * The graph and inspector's shared scroll area. A stable gutter keeps the
+ * graph's width, and so its zoom, from changing when the inspector grows enough
+ * to need a scrollbar. The reader's place survives another tab taking over.
+ */
+function OverviewScroll({ children }: { children: ReactNode }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useScrollOffsetAcrossHide(scrollRef);
+  return (
+    <div
+      ref={scrollRef}
+      data-testid="graph-run-overview-scroll"
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]"
+    >
+      {children}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import type { HookCallback, HookJSONOutput, McpServerStatus } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeQueryControl } from "../types/index.js";
 import type { SdkMcpServersConfig } from "./mcp-config.js";
+import { FOREIGN_MCP_SOURCES } from "./mcp-runtime-status.js";
 import { claudeMcpToolPrefix } from "./mcp-tool-prefix.js";
 import { sessionOperationError } from "./session-manager-core.js";
 
@@ -78,12 +79,6 @@ export interface McpSyncTarget {
   /** Injected servers that must be connected before the prompt is written. */
   required: readonly string[];
 }
-
-/**
- * Sources the user's MCP files never declare. A same-named server from one of
- * these is not the one the configuration dropped.
- */
-const FOREIGN_SOURCES = new Set(["plugin", "sdk", "claudeai"]);
 
 /** Bound on the names a revision reports; far beyond any real configuration. */
 export const MAX_REPORTED_STALE_SERVERS = 256;
@@ -173,7 +168,7 @@ export async function syncClaudeRuntimeMcp(
           (server) =>
             server.name === name &&
             server.status !== "disabled" &&
-            !FOREIGN_SOURCES.has(server.source ?? ""),
+            !FOREIGN_MCP_SOURCES.has(server.source ?? ""),
         )
       : !removed?.has(name);
   for (const name of Array.from(mcp.stale)) {

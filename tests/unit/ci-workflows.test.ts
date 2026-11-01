@@ -65,6 +65,11 @@ describe("CI workflow contracts", () => {
     expect(source).toContain(
       "ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}",
     );
+    // Design export skips without its image variable, so the step must set it.
+    expect(source).toContain("./src/core/design/export-container.test.ts --parallel=1");
+    expect(source).toContain(
+      "ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}",
+    );
     expect(source).toContain("apps/backend/scripts/container-exec-cost.ts --image");
     // Without the gate every live test skips and the job passes vacuously.
     expect(source).toContain('RUN_LIVE_DOCKER_TESTS: "1"');

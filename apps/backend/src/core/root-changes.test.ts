@@ -16,6 +16,7 @@ import * as shell from "./shell.js";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { StorageService } from "./storage.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 
 let root: string;
 let checkout: string;
@@ -52,7 +53,10 @@ function contextFor(environment: Record<string, unknown>): CommandContext {
       getEnvironment: async (id: string) => (id === environment.id ? environment : null),
       getProject: async (id: string) => (id === "project-1" ? { id, localPath: checkout } : null),
     },
-    runtime: { environments: { fence: new EnvironmentMutationFence() } },
+    runtime: {
+      environments: { fence: new EnvironmentMutationFence() },
+      coordinatorRequests: new CoordinatorRequestFlights(),
+    },
   } as unknown as CommandContext;
 }
 

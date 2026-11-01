@@ -271,6 +271,44 @@ describe("pipeline inspector controls", () => {
     await waitFor(() => expect(retryReviewerMock).toHaveBeenCalledWith(pipeline.id, "retry"));
   });
 
+  test("a reviewer whose agent could not start is named above the graph (todo 1090)", () => {
+    const reason = "codex bridge directory not found: /data/resources/codex-bridge";
+    const pipeline = build({
+      phase: "reviewing",
+      reviewers: [
+        { agent: "claude", model: "opus" },
+        { agent: "codex", model: "gpt" },
+      ],
+      reviewFanout: {
+        reviewers: [
+          { id: "r1", agent: "claude", model: "opus", status: "running" },
+          {
+            id: "r2",
+            agent: "codex",
+            model: "gpt",
+            status: "failed",
+            error: reason,
+            startFailed: true,
+          },
+        ],
+      },
+    });
+    renderPipelineTab(pipeline);
+    const notice = screen.getByTestId("reviewer-start-failures");
+    expect(notice.textContent).toContain(
+      "Reviewer 2 (Codex) could not start, so this review is missing its findings.",
+    );
+    expect(notice.textContent).toContain(`Reviewer 2 · Codex: ${reason}`);
+    fireEvent.click(within(notice).getByRole("button", { name: "Show reviewer" }));
+    expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Could not start");
+    expect(graphNode("Reviewer 2").textContent).toContain(reason);
+  });
+
+  test("an ordinary reviewer failure raises no start notice", () => {
+    renderPipelineTab(reviewing());
+    expect(screen.queryByTestId("reviewer-start-failures") === null).toBe(true);
+  });
+
   for (const dedicated of [true, false]) {
     test.each(["failed", "incomplete"] as const)(
       `${dedicated ? "dedicated" : "synthetic"} Prepare inspector reflects %s validation commands`,

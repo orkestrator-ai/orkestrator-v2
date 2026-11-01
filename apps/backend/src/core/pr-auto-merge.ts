@@ -21,7 +21,9 @@ import type { StorageService } from "./storage.js";
  * driven by the PR monitor's announced readings, never by a renderer, and use
  * the same conservative readiness rule as the "ready to merge" shimmer
  * (`@orkestrator/protocol/pr-merge-readiness`): an unknown or stale signal
- * waits rather than merging.
+ * waits rather than merging. Unlike the shimmer, failing or pending checks
+ * GitHub does not require only hold a merge back while the machine's
+ * `autoMergeRequireChecks` setting is on; required checks always do.
  *
  * Conflict resolution is launched at most once per conflict episode. The
  * Resolve job arms `prRecheckAfterAgentCompletionArmedAt`, which the monitor
@@ -49,10 +51,16 @@ export type PrAutoMergeDecision =
       reason: PrNotReadyReason | "disabled" | "busy" | "resolve-pending";
     };
 
+export interface PrAutoMergePolicy {
+  /** Wait for checks GitHub does not require to pass. On by default. */
+  requireChecks?: boolean;
+}
+
 /** What auto-merge should do for one environment given the monitor's reading. */
 export function decideAutoMerge(
   environment: Environment,
   monitor: PrMonitorEnvironmentState | null,
+  policy: PrAutoMergePolicy = {},
 ): PrAutoMergeDecision {
   if (environment.autoMerge !== true) return { kind: "wait", reason: "disabled" };
   if (environment.prState !== "open") return { kind: "wait", reason: "not-open" };
@@ -79,6 +87,7 @@ export function decideAutoMerge(
     checkSummary: monitor?.checkSummary ?? null,
     viewerCanMerge: monitor?.viewerCanMerge ?? null,
     fresh: isPrReadingConfirmedByMonitor(environment, monitor),
+    requireChecks: policy.requireChecks !== false,
   });
   if (readiness.ready)
     return monitor?.headSha && /^[a-f0-9]{40}$/i.test(monitor.headSha)
@@ -227,7 +236,11 @@ export class PrAutoMergeController {
   private async run(environmentId: string): Promise<void> {
     const environment = await this.options.storage.getEnvironment(environmentId);
     if (this.closed || !environment) return;
-    const decision = decideAutoMerge(environment, this.options.monitorState(environmentId));
+    const decision = decideAutoMerge(
+      environment,
+      this.options.monitorState(environmentId),
+      await this.policy(),
+    );
     if (decision.kind === "wait") {
       if (decision.reason === "disabled" || decision.reason === "not-open") {
         this.clearRetry(environmentId);
@@ -259,15 +272,28 @@ export class PrAutoMergeController {
   }
 
   /** Revalidate the decision after asynchronous preparation. */
-  private async authorized(environment: Environment, kind: "merge" | "resolve"): Promise<boolean> {
+  private async authorized(
+    environment: Environment,
+    kind: "merge" | "resolve",
+    expectedHeadSha?: string,
+  ): Promise<boolean> {
+    const policy = await this.policy();
     const current = await this.options.storage.getEnvironment(environment.id);
+    const reading = this.options.monitorState(environment.id);
     return (
       !this.closed &&
       !!current &&
       current.prUrl === environment.prUrl &&
       current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
-      decideAutoMerge(current, this.options.monitorState(current.id)).kind === kind
+      (expectedHeadSha === undefined || reading?.headSha === expectedHeadSha) &&
+      decideAutoMerge(current, reading, policy).kind === kind
     );
+  }
+
+  /** Read per decision, so a settings change applies at the next reading. */
+  private async policy(): Promise<PrAutoMergePolicy> {
+    const config = await this.options.storage.loadConfig();
+    return { requireChecks: config.global.autoMergeRequireChecks !== false };
   }
 
   private async recordError(environment: Environment, error: string | null): Promise<void> {
@@ -283,15 +309,15 @@ export class PrAutoMergeController {
 
   /** The Merge PR button's command, pinned to the observed PR and head. */
   private async merge(environment: Environment): Promise<boolean> {
-    if (!(await this.authorized(environment, "merge"))) return false;
-    const reading = this.options.monitorState(environment.id);
-    if (!reading?.headSha) return false;
+    const headSha = this.options.monitorState(environment.id)?.headSha;
+    if (!headSha || !(await this.authorized(environment, "merge", headSha)) || this.closed)
+      return false;
     await this.options.invoke("merge_environment_pr", {
       environmentId: environment.id,
       method: "squash",
       deleteBranch: true,
       cleanupAfterMerge: false,
-      expectedHeadSha: reading.headSha,
+      expectedHeadSha: headSha,
       expectedPrUrl: environment.prUrl,
     });
     return true;

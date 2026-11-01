@@ -10,6 +10,8 @@ import {
 } from "./public-api/exec-control.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./public-api/test-support.js";
 import { createEnvironment } from "./storage.js";
+import { stopEnvironmentOnce } from "./commands-environment.js";
+import { deleteEnvironmentTask } from "./commands-servers.js";
 
 const harnesses: PublicApiHarness[] = [];
 afterEach(async () => {
@@ -101,3 +103,65 @@ test("recovery adopts an already-running check without launching its shell again
   expect(await fs.readFile(path.join(h.root, "launches"), "utf8")).toBe("run\n");
   expect(await fs.readdir(path.join(h.dataDir, "exec-runs"))).toEqual([]);
 }, 20_000);
+
+for (const failure of ["enumeration", "cancellation", "nonterminal"] as const) {
+  test(`local lifecycle drain rejects ${failure} failure and retries a live check`, async () => {
+    const { h, environment } = await fixture();
+    const operationId = goalCheckOperationId(`failed-${failure}`, 1);
+    const directory = execDirectory(environment, operationId, h.context);
+    await control(environment, h.context, {
+      action: "start",
+      operationId,
+      environmentId: environment.id,
+      directory,
+      root: h.root,
+      cwd: h.root,
+      argv: ["sh", "-c", "touch started; sleep 120"],
+      env: {},
+      timeoutMs: 120_000,
+      maxOutputBytes: 1024,
+    });
+    await waitForFile(path.join(h.root, "started"));
+    const bin = path.join(h.root, "fake-bin");
+    await fs.mkdir(bin);
+    const action = failure === "enumeration" ? "list-goal-checks" : "cancel";
+    await fs.writeFile(
+      path.join(bin, "bun"),
+      `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"action":"${action}"'*) ${failure === "nonterminal" ? 'echo \'{"status":"running"}\'; exit 0' : "echo injected-drain-failure >&2; exit 1"} ;;
+esac
+printf '%s' "$payload" | ${JSON.stringify(process.execPath)} "$@"
+`,
+      { mode: 0o755 },
+    );
+    const originalBin = h.context.toolchainBinDir;
+    h.context.toolchainBinDir = bin;
+    const expectedError =
+      failure === "nonterminal"
+        ? "Goal check workers could not be verified stopped"
+        : "injected-drain-failure";
+    try {
+      await expect(stopEnvironmentExecWorkers(environment.id, h.context)).rejects.toThrow(
+        expectedError,
+      );
+      await expect(stopEnvironmentOnce(environment.id, h.context, () => {})).rejects.toThrow(
+        expectedError,
+      );
+      await expect(deleteEnvironmentTask(environment.id, h.context)).rejects.toThrow(expectedError);
+      expect(await fs.stat(environment.worktreePath!)).toBeDefined();
+      expect(await h.storage.getEnvironment(environment.id)).not.toBeNull();
+    } finally {
+      h.context.toolchainBinDir = originalBin;
+    }
+    // The failed drain must not have pretended the detached process exited.
+    expect(
+      await control(environment, h.context, { action: "status", operationId, directory }),
+    ).toMatchObject({ status: "running" });
+    const { pgid } = JSON.parse(await fs.readFile(path.join(directory, "state.json"), "utf8"));
+    await stopEnvironmentExecWorkers(environment.id, h.context);
+    expect(() => process.kill(-pgid, 0)).toThrow();
+    expect(await fs.stat(directory).catch(() => null)).toBeNull();
+  }, 20_000);
+}

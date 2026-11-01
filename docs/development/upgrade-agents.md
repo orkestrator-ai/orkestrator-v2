@@ -614,6 +614,15 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    CLI now unloads launch servers by itself; the restatement is then harmless,
    but update the module's header to say so.
 
+   After a Claude or Codex bump, also run automatic switching's resend across a
+   real bridge replacement. It uses the pinned CLIs against scripted provider
+   servers, so no turn is billed. If a refusal no longer ends the turn, the CLI
+   changed how it retries or words a refused 429:
+
+   ```bash
+   mise run verify:accounts:resend-live
+   ```
+
    Re-prove the MCP editor's Claude plugin rules (`enabledPlugins` for the
    `@inline` plugins the bridge passes, the bridge passing an install only
    when its `<name>@<marketplace>` id is `true`, Claude Code's own installed
@@ -629,6 +638,20 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    A failure means the CLI changed one of the rules recorded under "Claude
    plugins" in `docs/architecture/mcp-management.md`; re-derive it from the
    binary and update `packages/protocol/src/node/claude-plugin-set.ts`.
+
+   Re-prove what a parked spare does and refuses, which is why the bridge does
+   not use `prewarm()`: no model call while parked, a `sessionId` kept, a
+   `resume` refused, a slow MCP server not connected ahead of the claim. This
+   runs the real CLI and bridge in a temporary home, with no credentials and a
+   scripted model:
+
+   ```bash
+   mise run verify:claude:first-turn-live
+   ```
+
+   A failure means that decision in
+   `docs/todo/agent-engines/0005-mid-turn-steer-and-interrupt.md` is worth
+   reopening, not that the bridge is broken.
 
    Re-check the Linux command sandbox on a Linux host. The probe in
    `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI
@@ -908,13 +931,22 @@ the pinned binary's parser over the production argument shape.
 
    Orkestrator never offers or sends Codex's exec-policy and network-policy
    amendments (see `bridges/codex-bridge/AGENTS.md`): accepting one writes a
-   rule into the Codex home that Orkestrator cannot list or revoke. The test expects 0.164.0's (and 0.166.0's)
+   rule into the Codex home that Orkestrator can show but not revoke. The test expects 0.164.0's (and 0.166.0's)
    behaviour: an `untrusted` command approval carries
    `proposedExecpolicyAmendment`, **Approve** leaves `CODEX_HOME/rules/`
    empty, and the identical command asks again in the next turn. Its control
-   answers with the amendment itself and finds `rules/default.rules`. If a
-   release adds an app-server method that lists and removes saved rules, add
-   a list-and-revoke surface before offering the amendments again.
+   answers with the amendment itself and finds `rules/default.rules`, then
+   removes the rule and expects only a new thread to ask again. If a release
+   adds an app-server method that lists and removes saved rules, add a
+   list-and-revoke surface before offering the amendments again.
+
+   Then run the same checks for a host, which also shows whether network rules
+   are still where Settings → Permissions reads them. It needs Docker, downloads
+   the pinned Linux binary inside a disposable container, and spends no credits:
+
+   ```bash
+   mise run verify:codex:network-approval
+   ```
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

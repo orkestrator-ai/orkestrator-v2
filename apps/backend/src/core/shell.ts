@@ -122,7 +122,8 @@ export class GitRemoteTimeoutError extends CommandFailedError {
 /**
  * Subprocesses started through `runCommand`, by program name. Counts only —
  * never arguments — so benchmarks can report how many Docker calls a scenario
- * costs.
+ * costs. Process-wide on purpose, as are the observers: they count this
+ * process's own subprocesses, and `runCommand` has no backend in reach.
  */
 const commandInvocations = new Map<string, number>();
 

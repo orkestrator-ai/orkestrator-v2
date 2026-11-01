@@ -4238,7 +4238,10 @@ describe("idle detach and transparent re-attach", () => {
       }),
     ).toMatchObject({ ok: false, status: 503 });
     expect(h.runtime.getRegistry().getSession(sessionId)?.threadId).toBe("thread-1");
-    expect(h.child().requests.map((request) => request.method)).toEqual(["thread/resume"]);
+    expect(h.child().requests.map((request) => request.method)).toEqual([
+      "config/read",
+      "thread/resume",
+    ]);
 
     expect(
       (

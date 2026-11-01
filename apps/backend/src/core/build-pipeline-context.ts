@@ -86,7 +86,7 @@ export type BuildPipelineServiceOptions = {
   /** Narrow production-provider seam used by deterministic backend tests. */
   providerDependencies?: Pick<
     ProviderDependencies,
-    "openCodeClient" | "monitorRetryMs" | "planUsage"
+    "openCodeClient" | "monitorRetryMs" | "planUsage" | "usageLimitStops"
   >;
   workflowResults?: WorkflowResultService;
   workflowResultRollout?: WorkflowResultRollout;
@@ -466,7 +466,15 @@ export class BuildPipelineContext {
     const git = this.options.environmentGit;
     if (!git) throw new Error("Rewinding code is not available on this backend.");
     await this.withCodeRewindReservation(pipeline, async () => {
-      await resetWorktreeToCommit(git, pipeline.environmentId, code);
+      try {
+        await resetWorktreeToCommit(git, pipeline.environmentId, code);
+      } catch (error) {
+        // Every action on this pipeline waits for the reset, so say so.
+        throw new Error(
+          `The code rewind to ${code.to.slice(0, 12)} has not finished, so this build cannot continue yet. ${errorMessage(error)}`,
+          { cause: error },
+        );
+      }
       delete code.pending;
       try {
         await this.save(pipeline, pipeline.backendRevision);

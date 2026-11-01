@@ -5,6 +5,7 @@ export const GLOBAL_SETTINGS_REQUEST_EVENT = "orkestrator:open-global-settings";
 
 export const GLOBAL_SETTINGS_SECTIONS = [
   "general",
+  "version-control",
   "machines",
   "disk-usage",
   "usage",

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -57,6 +58,46 @@ describe("ACP bridge", () => {
         expect(launch.args).toContain("agent");
         expect(launch.args).toContain("stdio");
       }
+    });
+  }
+
+  for (const readOnly of [false, true]) {
+    test(`a new Grok session carries the shared instructions and AGENTS.md as rules (readOnly ${readOnly})`, async () => {
+      const directory = await temporaryDirectory();
+      const workspace = resolve(directory, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(
+        resolve(workspace, "AGENTS.md"),
+        "Always show visual changes as images.\n",
+      );
+      const requestFile = resolve(directory, "session-requests.jsonl");
+      const bridge = await spawnBridge({
+        env: { ACP_PROVIDER: "grok", CWD: workspace, FAKE_ACP_SESSION_REQUEST_FILE: requestFile },
+      });
+      const response = await nativeFetch(`${bridge.base}/session/create`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({
+          policy: {
+            id: "interactive-host",
+            sandbox: "none",
+            approvals: "auto-approve",
+            projectResources: false,
+            networkAccess: "full",
+          },
+          readOnly,
+        }),
+      });
+      expect(response.status).toBe(201);
+      const requests = (await fs.readFile(requestFile, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { method: string; meta?: { rules?: string } });
+      const rules = requests.find((request) => request.method === "session/new")?.meta?.rules;
+      if (readOnly) expect(rules).toBeUndefined();
+      else expect(rules).toContain("Always show visual changes as images.");
+      // Read-only sessions exclude branch-controlled system instructions.
+      expect(rules?.includes(agentSystemInstructions()) ?? false).toBe(!readOnly);
     });
   }
 

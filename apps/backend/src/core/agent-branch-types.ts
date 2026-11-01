@@ -61,6 +61,8 @@ export interface AgentBranchRecord {
   providerSessionId?: string;
   requestId?: string;
   dispatchState?: AgentBranchDispatchState;
+  /** Dispatch time of the current request, including follow-up turns. */
+  turnStartedAt?: string;
   resultTransport?: WorkflowResultTransport;
   resultSubmission?: WorkflowResultSubmissionState;
   schemaRepairAttempts?: number;
@@ -69,11 +71,17 @@ export interface AgentBranchRecord {
   continuationPrompt?: string;
   resultReminderSent?: boolean;
   restartContinuationSent?: boolean;
+  /** Times this turn was resent after the weekly limit stopped it. */
+  usageLimitResends?: number;
   idleResultPolls?: number;
   progressAt?: string;
   progressDigest?: string;
   stalledSince?: string;
   error?: string;
+  /** Failed before its first agent turn was accepted: the agent could not be started. */
+  startFailed?: boolean;
+  /** Whether this session has accepted an agent turn (allocation alone is insufficient). */
+  agentStarted?: boolean;
   tokenCount?: number;
   cacheReadTokens?: number;
   usageFinalizationPolls?: number;
@@ -145,6 +153,8 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   reviewerSession?(branch: B): boolean;
   interactionContext(branch: B, fence: string | undefined): ProviderSessionRegistration;
   provider(branch: B): Promise<BuildPipelineProvider>;
+  /** The environment its turns run in, which a stopped turn's account is read from. */
+  readonly environmentId?: string;
   /** See `ReviewFanoutHost.providerUnavailable`. */
   providerUnavailable?(branch: B, provider: BuildPipelineProvider): Promise<void>;
   /** Trusted policy for the branch's session, never provider defaults. */

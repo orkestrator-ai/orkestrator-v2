@@ -715,6 +715,11 @@ export interface PersistedNativeAgentSession {
   /** Exact backend-authored frame that may be hidden on the first matching user echo. */
   initialPromptPresentation?: TrustedUserPromptPresentation;
   dispatchedRequestIds?: string[];
+  /**
+   * The mode the newest accepted turn was sent in. A prompt can state its own
+   * mode without changing `controls`, so a continuation of that turn reads it here.
+   */
+  lastDispatchedTurn?: { requestId: string; mode?: "plan" | "build" };
   /** Retained only while the provider outcome is ambiguous. */
   pendingDispatch?: PersistedNativeAgentPendingDispatch;
   /** Retained until an ambiguous steer is authoritatively reconciled or discarded. */
@@ -1100,6 +1105,12 @@ export interface AppConfig {
     /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
     sshAgentSocketPath?: string;
     /**
+     * Auto-merge waits for failing or pending checks GitHub does not require.
+     * True or absent waits for all checks; false merges once GitHub allows it.
+     * Required checks still block. Read by `PrAutoMergeController` on this machine.
+     */
+    autoMergeRequireChecks?: boolean;
+    /**
      * Absolute directory new projects are cloned into on this machine, for
      * example when a project is copied here from another machine. Absent
      * means the most common parent of the existing projects, else `~/Projects`.
@@ -1182,6 +1193,8 @@ export interface AppConfig {
      */
     reviewLensPresets?: import("@orkestrator/protocol/review-lens").ReviewLensPreset[];
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
+    /** The automatic-account ticks; see `updateAgentAccountAutoSwitchSettings`. */
+    agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
     /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal
      * operations setting rather than a user-facing transport choice; changes

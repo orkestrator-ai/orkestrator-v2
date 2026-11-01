@@ -713,7 +713,7 @@ export async function createCommandFixtures() {
         }
         ${
           modelCatalog
-            ? `if (req.url === "/config/models") {
+            ? `if (req.url?.split("?")[0] === "/config/models") {
           res.writeHead(200, {
             "content-type": "application/json",
             "access-control-allow-origin": "*",

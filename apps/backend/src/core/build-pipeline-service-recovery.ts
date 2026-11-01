@@ -47,6 +47,7 @@ import {
   type AgentInteractionResolutionJournalEntry,
 } from "@orkestrator/protocol/agent-interactions";
 import { needsBuildTerminalReconciliation } from "./build-pipeline-scheduling.js";
+import { recordVerdictInKeyInformation } from "./build-pipeline-key-information.js";
 import {
   MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   structuredReportRepairPrompt,
@@ -240,6 +241,12 @@ export class BuildPipelineRecovery {
         ? feedback
         : `${feedback.slice(0, MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH - 1)}…`;
     session.acceptanceCriteriaResults = criterionResults;
+    recordVerdictInKeyInformation(pipeline, session, {
+      passed,
+      rationale,
+      criteria,
+      results: criterionResults,
+    });
     await this.recordTicketCriteriaChecks(pipeline, criteria, criterionResults);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (passed) {

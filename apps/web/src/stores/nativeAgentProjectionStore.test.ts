@@ -157,6 +157,12 @@ describe("native agent projection history cache", () => {
       identity,
       transcriptToken: "tok-old",
       transcriptHistoryEpoch: "epoch-1",
+      transcriptHistoryMetadata: {
+        historyCursor: "before-head",
+        historyPaging: "direct",
+        historyComplete: false,
+        historyReconciliationToken: "row-digest",
+      },
       transcriptAvailability: "current",
       transcriptRefreshing: false,
       stateAvailability: "unavailable",
@@ -170,6 +176,7 @@ describe("native agent projection history cache", () => {
     expect(next.projections.has("session-old")).toBe(false);
     expect(next.progressiveCaches.get("session-old")?.transcriptToken).toBeUndefined();
     expect(next.progressiveCaches.get("session-old")?.transcriptHistoryEpoch).toBeUndefined();
+    expect(next.progressiveCaches.get("session-old")?.transcriptHistoryMetadata).toBeUndefined();
   });
 
   test("drops a progressive transcript token when its projection is cleared", () => {

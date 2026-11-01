@@ -8227,7 +8227,7 @@ describe("ActionBar auto-merge", () => {
     test(`hides auto-merge after the PR is ${state}`, () => {
       currentEnvironment = { ...selectedEnvironment, prState: state, autoMerge: false };
       render(<ActionBar />);
-      expect(screen.queryByRole("button", { name: "Auto-merge" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Auto-merge" }) === null).toBe(true);
     });
   }
 
@@ -8242,6 +8242,6 @@ describe("ActionBar auto-merge", () => {
     expect(screen.getByText("Auto-merge: GitHub refused the merge")).toBeTruthy();
     currentEnvironment = { ...currentEnvironment, autoMergeError: null };
     view.rerender(<ActionBar />);
-    expect(screen.queryByText("Auto-merge: GitHub refused the merge")).toBeNull();
+    expect(screen.queryByText("Auto-merge: GitHub refused the merge") === null).toBe(true);
   });
 });

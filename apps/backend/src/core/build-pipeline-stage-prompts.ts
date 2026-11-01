@@ -29,6 +29,7 @@ import {
   buildPipelineReviewPackageContext,
   buildPrompt,
   fixPrompt,
+  keyInformationInstruction,
   prPrompt,
   resolveConflictsPrompt,
   verificationPrompt,
@@ -67,7 +68,8 @@ export class BuildPipelineStagePrompts {
   ) {}
 
   /**
-   * The prompt that opens a stage's session: the stage's own contract, then the
+   * The prompt that opens a stage's session: the stage's own contract, the
+   * key information instruction of a stage that keeps the brief, then the
    * user's instructions for the step it runs under (Fix runs under Build).
    *
    * The baseline is passed in rather than probed here: the same observation has
@@ -81,10 +83,11 @@ export class BuildPipelineStagePrompts {
     worktree?: ReviewWorktreeSnapshot,
   ): Promise<StagePrompt> {
     const stage = await this.contractFor(pipeline, phase, agent, worktree);
+    const keyInformation = keyInformationInstruction(phase);
     return {
       ...stage,
       prompt: withBuildStepInstructions(
-        stage.prompt,
+        keyInformation ? `${stage.prompt}\n\n${keyInformation}` : stage.prompt,
         pipelineStepInstructions(pipeline, stepKeyForSessionPhase(phase)),
       ),
     };

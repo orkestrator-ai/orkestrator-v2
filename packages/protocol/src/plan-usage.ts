@@ -36,11 +36,24 @@ export interface PlanUsageSnapshot {
   /** User-facing explanation for `unavailable` or `error`, or why a reading is stale. */
   message?: string;
   /**
+   * Whether the account can spend money past its plan allowance, when the
+   * provider says: Claude's extra usage, Codex's credits. Absent means the
+   * reading did not say, not that it cannot.
+   */
+  paidOverage?: PlanUsagePaidOverage;
+  /**
    * The windows are the last successful reading, served because a fresh one
    * could not be made. `fetchedAt` is when that reading was taken.
    */
   stale?: boolean;
   fetchedAt: string;
+}
+
+export interface PlanUsagePaidOverage {
+  /** Paid usage is switched on for this account. */
+  enabled: boolean;
+  /** The provider says the included allowance is unavailable, so a turn would be paid for. */
+  inUse?: boolean;
 }
 
 export function isPlanUsageSnapshot(value: unknown): value is PlanUsageSnapshot {
@@ -85,6 +98,7 @@ export function stalePlanUsageSnapshot(
     status: "ok",
     windows,
     ...(snapshot.plan ? { plan: snapshot.plan } : {}),
+    ...(snapshot.paidOverage ? { paidOverage: snapshot.paidOverage } : {}),
     ...(message ? { message } : {}),
     stale: true,
     fetchedAt: snapshot.fetchedAt,

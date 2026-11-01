@@ -120,6 +120,11 @@ on `self` and on each node:
 }
 ```
 
+- **OS name.** `sw_vers` on a Mac (`macOS 27.0`). On Linux, `/etc/os-release`
+  (`PRETTY_NAME`, else `NAME`), with `VERSION_ID` added when the name has no
+  number of its own and `ID_LIKE` naming what a derivative follows: beelink's
+  `PRETTY_NAME` is only `Omarchy`, which reads as `Omarchy 4.0.6 (like arch)`.
+  On Windows, `os.version()` (not yet seen on a real Windows backend).
 - **Windows.** 5 minutes, 1 hour and 24 hours, named constants in
   `packages/protocol/src/machine-load.ts`. A worker runs for hours, so a
   one-minute figure is mostly noise. `os.loadavg()` is not the source: it is
@@ -146,7 +151,9 @@ on `self` and on each node:
   each is asked in parallel through `invoke_on_node` with a 2 s limit, and its
   `machine` is otherwise `{ "status": "unavailable", "reason", "detail" }` with
   no figures. Reasons: `offline` (not connected, so not asked), `timeout`,
-  `older-version` (it answered that it has no `get_machine_load`) and `error`.
+  `older-version` (it answered `Unknown backend command: get_machine_load`,
+  matched by `isUnknownCommandError` in
+  `packages/protocol/src/unknown-command.ts`) and `error`.
   Last-known figures are never shown. `detail` is fixed wording, so a node's
   error text does not reach the coordinator.
 - **Who sees it.** Read-only, for main coordinators and side agents
@@ -800,7 +807,7 @@ A coordinator's `get_environment` and `list_environments` rows for a worker
 with a pull request carry, besides `prUrl` and `prState`,
 `prHasMergeConflicts`, `prMergeability` (`clean`, `blocked`, `dirty`,
 `behind`, `unstable`, `unknown`, `unavailable`), `prChecks` (`passed`,
-`failed`, `pending` and `total` counts, or null) and `prReadyToMerge` with
+`failed`, `pending` and `total` counts, plus `requiredFailed`, or null) and `prReadyToMerge` with
 `prNotReadyReason` when false (`coordinator-pr-status.ts`). Readiness is
 `evaluatePrMergeReadiness` (`packages/protocol/src/pr-merge-readiness.ts`),
 the rule behind the sidebar's shimmer, with the PR monitor's confirmation as
@@ -810,6 +817,14 @@ node's rows the health its summaries relay while that node is connected and
 current. Other nodes' rows carry `prState` and these fields but never a URL,
 since summaries do not. They are states and counts only, never check names
 or logs. Operator reads are unchanged.
+
+`requiredFailed` is GitHub's `isRequired`, which the PR monitor asks only
+when its rollup shows a failing check, cached per PR head and failing set
+(`pr-required-checks.ts`). A PR whose only failing checks are not required
+stays quiet: no `pr-checks-failed` wake, and still not ready to merge. When
+GitHub does not answer, or an older node does not relay the count, it is
+null and every failing check counts; that notice says the check may not be
+required.
 
 ## Worker delegation
 
@@ -1102,7 +1117,7 @@ machine's local zone (the user's) unless `timeZone` is given, and the result
 names the zone (`timeZoneUsed`) and the local time (`nextFireLocal`).
 
 For "check in 2 hours and switch accounts if the workers hit a usage limit"
-the main coordinator has three tools (capability `accounts`, plus
+the main coordinator has four tools (capability `accounts`, plus
 `get_usage_limits` under `environments`; side agents get none):
 
 - `get_usage_limits` lists the agent tabs whose newest recorded turn failed
@@ -1116,6 +1131,12 @@ the main coordinator has three tools (capability `accounts`, plus
   permission it creates a `switch-agent-account` request the user approves
   in the same dialog as `request_environment_deletion`. With the `scheduleId`
   of a self-timer that carries the user's permission it switches at once.
+  Either way it pins the account if automatic switching is on.
+- `set_account_auto_switch` changes the automatic-switching ticks, with no
+  approval, because the backend then does the switching. On a leaf it refuses the
+  shared ticks, which its command node holds, and can still end that leaf's pin. Each
+  automatic switch sends the main coordinator a notice. See
+  [agent-accounts.md](agent-accounts.md#automatic-switching).
 
 A self-timer carries that permission only when the main coordinator sets it
 with `authorizeAccountSwitch` in a turn the user started with their own
@@ -1162,7 +1183,7 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
-| Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a check failed (`pr-checks-failed`), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
+| Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a required check failed (`pr-checks-failed`; any failing check when GitHub does not say which are required), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
 | Pull request | its Resolve tab finished (`resolve-finished`), with the PR's state after the PR monitor's recheck | `settled` |
 | Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
@@ -1622,21 +1643,25 @@ the commits since the base (a bounded log of `<base>..HEAD` through the
 checkout's Git runner the base picker uses, local or `docker exec`),
 `sinceBase` (the `environment-net` measurement: base to working tree,
 committed and uncommitted together, each file with status and line counts and
-`uncommitted: true` when it also has uncommitted changes), `uncommitted` (the
-`uncommitted-net` measurement, `HEAD` to working tree with untracked files),
-and `diffs`: backend-rendered hunks of the listed `sinceBase` files as unified
-text (`changes_resolve_live_detail` and `changes_get_diff`, the Diff tab's
-path). Every part is bounded: 100 files by default (at most 500), 5,000 rows
+`uncommitted: true` when it also has uncommitted changes, `committed: true`
+when its commits changed it), `committed` (the `committed-net` measurement,
+base to `HEAD`), `uncommitted` (the `uncommitted-net` measurement, `HEAD` to
+working tree with untracked files), and `diffs`: backend-rendered hunks of the
+listed `sinceBase` files as unified text (`changes_resolve_live_detail` and
+`changes_get_diff`, the Diff tab's path). `diffScope` picks other diffs over
+the same path: `committed` (`committedDiffs`, base to `HEAD`), `uncommitted`
+(`uncommittedDiffs`, `HEAD` to working tree) or `split` (both, halving the
+byte budget), so a file changed both ways shows which lines are committed. Every part is bounded: 100 files by default (at most 500), 5,000 rows
 scanned per measurement, 50 commits (at most 200), diffs of 20 files (at most
 50), 16 KiB per file and 64 KiB in total (at most 256 KiB). A cut part says
 `truncated`, and the result names the arguments that page or narrow it:
 `offset` (`sinceBase.nextOffset`), `paths` (files or directories) and `file`,
 which renders one file's whole diff up to the total budget. A stopped
 container worker answers what change tracking last measured, with its commits
-unavailable and each diff `null` with the reason; a measurement still being taken says `pending`. The diff is base to
-working tree, so a file marked `uncommitted` shows both kinds of change
-together: change tracking keeps no bodies for a commits-only or
-uncommitted-only comparison. With `nodeId` the node owning the worker reads it
+unavailable and each diff `null` with the reason; a measurement still being taken says `pending`. Without `diffScope`
+the diff is base to working tree, as before, so older callers are unchanged; an
+older node that ignores `diffScope` answers with that diff and the result says
+`diffScopeUnsupported`. With `nodeId` the node owning the worker reads it
 (`get_controller_worker_changes`) and applies its own bounds.
 
 **Forking a worker.** `fork_worker` runs what the sidebar's Fork runs

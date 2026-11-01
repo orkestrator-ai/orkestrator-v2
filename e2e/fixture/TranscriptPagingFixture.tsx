@@ -25,6 +25,10 @@ const short = query.has("short");
 // does: a direct cursor at the first kept row of a bytes-truncated window
 // (0232). Any joined sync-v1 call fails the fixture.
 const bounded = query.has("bounded");
+// `churn` moves the reconciliation token on every read, as a held row too large
+// to travel as a revision does while its subagents run.
+let churn = query.has("churn");
+let transcriptReads = 0;
 // The native tab pages history in by itself as the reader nears the top.
 // Without `auto` that is off, so a test can drive the button.
 if (!query.has("auto")) disableAutoLoadEarlier();
@@ -152,6 +156,14 @@ const loadHistoryPage = async (_workflow: string, _reviewer: string, page: { bef
 /** The cursors the native tab paged from, in order, for tests to read. */
 const pageRequests: string[] = [];
 (window as unknown as { pagingFixtureRequests: string[] }).pagingFixtureRequests = pageRequests;
+/** How many rows the tab holds right now, for tests sampling every frame. */
+(window as unknown as { pagingFixtureRowCount: () => number }).pagingFixtureRowCount = () =>
+  useNativeAgentProjectionStore.getState().projections.get(identity.logicalSessionKey)?.messages
+    .length ?? 0;
+/** Starts revision overflow after the test has installed its frame probe. */
+(window as unknown as { startPagingFixtureChurn: () => void }).startPagingFixtureChurn = () => {
+  churn = true;
+};
 /** Appends live rows without focusing a control or changing the reader's intent. */
 (window as unknown as { appendPagingFixtureRows: () => void }).appendPagingFixtureRows = () => {
   const store = useNativeAgentProjectionStore.getState();
@@ -216,14 +228,16 @@ function installBackend() {
           };
           break;
         case "get_native_agent_transcript_update":
+          transcriptReads += 1;
           result = {
             viewVersion: 1,
             status: "snapshot",
-            token: "transcript-1",
+            token: churn ? `transcript-${transcriptReads}` : "transcript-1",
             value: {
               identity,
               freshness: "current",
               messages: tail,
+              ...(churn ? { historyReconciliationToken: `row-digest-${transcriptReads}` } : {}),
               historyEpoch: "epoch-1",
               historyCursor: `before-${tailStart}`,
               historyPaging: "direct",

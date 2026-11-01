@@ -206,3 +206,32 @@ Asynchronous ledger removal remains a hypothesis.
 only backend failure. An earlier run of the same suite on this change had passed
 this test. The unchanged owner then passed alone five times out of five (37
 tests each). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.57IN29/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Codex saved-rules review observation (2026-11-01)
+
+Preparation at `a534624935abc5da6e1ef787fb42300830cd20eb` ran `mise run test`
+and repeated the stale-ledger assertion (172.62 ms) while validating the Codex
+saved-rules ticket. The original evidence is retained in
+`.orkestrator/review-artifacts/review-validation-c412558e-d8d4-4963-9650-c35bc996a110/validation-04.stdout.txt`.
+The unchanged complete owner passed with one worker on the fix branch (0.8 s)
+and in a detached `origin/main` worktree at `0bd214ee4` (0.3 s), with separately
+installed dependencies:
+
+```sh
+mise run test:logged -- --name branch-browser-profile -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+No cleanup implementation, assertion, timeout, or skip changed. This isolated
+pass confirms the existing intermittent observation; it does not establish a new
+root cause or resolve the flake.
+
+
+## Held-history reconciliation review — 2026-11-01
+
+Preparation's `mise run test` repeated the remaining-ledger assertion after
+326.35 ms with two backend workers. The backend group reported 12,523 passed,
+107 skipped and one failed (469.38 s). The unchanged complete owner passed
+alone with `mise run test:logged -- --name prior-design-failure -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 2.0 s). Preparation evidence is
+`.orkestrator/review-artifacts/review-validation-b8f98852-001a-4729-aa23-7e07f56c9ac5/validation-04.stdout.txt`.
+No design implementation, assertion, timeout or skip changed.

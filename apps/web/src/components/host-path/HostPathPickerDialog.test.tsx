@@ -237,6 +237,34 @@ describe("HostPathPickerDialog", () => {
     expect(useHostPathPickerStore.getState().request !== null).toBe(true);
   });
 
+  test("a path typed while the first listing loads survives that listing (flake 0208)", async () => {
+    render(<HostPathPickerDialog />);
+    let result!: Promise<string | null>;
+    const initial = deferred<Listing>();
+    invoke.mockImplementationOnce(() => initial.promise);
+    act(() => {
+      result = pickHostPath({ mode: "file" });
+    });
+    const input = (await screen.findByLabelText("Path")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "/home/me/notes.txt" } });
+    // The home listing lands between typing the path and pressing Enter.
+    await act(async () => initial.resolve(listings["/home/me"]!));
+    expect(input.value).toBe("/home/me/notes.txt");
+    invoke.mockImplementationOnce(async () => ({
+      ...listings["/home/me"]!,
+      requestedFile: "/home/me/notes.txt",
+    }));
+    fireEvent.submit(input.closest("form")!);
+    await screen.findByText("Selected file: /home/me/notes.txt");
+    expect(invoke).toHaveBeenLastCalledWith("list_host_directory", {
+      path: "/home/me/notes.txt",
+      includeFiles: true,
+      showHidden: false,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Select file" }));
+    await expect(result).resolves.toBe("/home/me/notes.txt");
+  });
+
   test("double-clicking a current file settles the request", async () => {
     render(<HostPathPickerDialog />);
     let result!: Promise<string | null>;

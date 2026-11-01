@@ -40,6 +40,44 @@ export interface PrCheckSummary {
   total: number;
   /** Checks that have not reached a terminal outcome yet. */
   pending: number;
+  /**
+   * How many of the failing checks GitHub marks required for this pull
+   * request. Absent when no check fails or when GitHub did not say (an older
+   * backend, a token that cannot read it, more checks than one page): every
+   * failing check may then be required.
+   */
+  requiredFailed?: number;
+}
+
+/** The counts alone, plus `requiredFailed` only when it is a usable count. */
+export function copyPrCheckSummary(summary: PrCheckSummary): PrCheckSummary {
+  const { failed, required } = prRequiredCheckFailures(summary);
+  return {
+    passed: summary.passed,
+    total: summary.total,
+    pending: summary.pending,
+    ...(failed > 0 && required !== null ? { requiredFailed: required } : {}),
+  };
+}
+
+/**
+ * Failing checks, and how many of them GitHub requires. A null `required`
+ * means GitHub did not say, so every failing check may be required.
+ */
+export function prRequiredCheckFailures(summary: PrCheckSummary): {
+  failed: number;
+  required: number | null;
+} {
+  const failed = Math.max(0, summary.total - summary.passed - summary.pending);
+  if (failed === 0) return { failed, required: 0 };
+  const required = summary.requiredFailed;
+  return {
+    failed,
+    required:
+      typeof required === "number" && Number.isSafeInteger(required) && required >= 0
+        ? Math.min(required, failed)
+        : null,
+  };
 }
 
 /**

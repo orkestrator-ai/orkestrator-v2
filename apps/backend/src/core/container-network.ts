@@ -456,26 +456,14 @@ export type AllowedDomainsApplyResult =
  */
 export function applyEnvironmentAllowedDomains(
   environmentId: string,
-  context: Pick<CommandContext, "storage" | "registryWriterLease">,
+  context: Pick<CommandContext, "storage" | "registryWriterLease" | "runtime">,
 ): Promise<AllowedDomainsApplyResult> {
   // One apply per environment at a time, each reading the list saved when it
   // starts: two quick edits cannot land in the container in the wrong order.
-  const previous = applyQueue.get(environmentId) ?? Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(() => applyAllowedDomainsNow(environmentId, context));
-  const settled = next.then(
-    () => undefined,
-    () => undefined,
+  return context.runtime.environments.enqueueAllowedDomainsApply(environmentId, () =>
+    applyAllowedDomainsNow(environmentId, context),
   );
-  applyQueue.set(environmentId, settled);
-  void settled.then(() => {
-    if (applyQueue.get(environmentId) === settled) applyQueue.delete(environmentId);
-  });
-  return next;
 }
-
-const applyQueue = new Map<string, Promise<void>>();
 
 async function applyAllowedDomainsNow(
   environmentId: string,

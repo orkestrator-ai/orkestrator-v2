@@ -5,6 +5,7 @@ import {
 import { ContainerLogService, type ContainerLogServiceOptions } from "./container-log-service.js";
 import { ContainerOomEvents, type ContainerOomEventsOptions } from "./container-oom-events.js";
 import { ContainerUsageSampler } from "./container-usage-sampler.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
 import { DockerCleanupGrants } from "./docker-cleanup-grants.js";
 import { DockerContainerStateCache } from "./docker-container-state-cache.js";
@@ -77,6 +78,8 @@ export class BackendRuntime {
   readonly featureBuilds = new FeatureBuildTasks();
   /** Public API operation reconciliations in flight. */
   readonly publicApi = new PublicApiReconciliations();
+  /** Coordinator receipt attempts and AGENTS.md pull request runs in flight. */
+  readonly coordinatorRequests = new CoordinatorRequestFlights();
   /**
    * Backend change tracking (docs/architecture/change-tracking.md). Attached
    * by the backend once storage exists; absent in lightweight command

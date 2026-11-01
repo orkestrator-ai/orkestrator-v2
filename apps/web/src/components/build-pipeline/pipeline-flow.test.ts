@@ -7,6 +7,7 @@ import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import {
   pipelineFlowModel,
   pipelineReviewPassNodes,
+  pipelineReviewerStartFailures,
   pipelineSkipAction,
   type PipelineFlowModel,
 } from "./pipeline-flow";
@@ -236,6 +237,164 @@ describe("pipelineFlowModel", () => {
       "reviewer:failed-before-session",
       "survivor",
     ]);
+  });
+
+  describe("reviewers whose agent could not start", () => {
+    const BRIDGE_MISSING = "cursor bridge directory not found: /data/resources/cursor-bridge";
+    const view = (node: PipelineFlowModel["nodes"][number], pipeline: BuildPipeline) =>
+      pipelineNodeView({
+        node,
+        pipeline,
+        pullRequest: null,
+        now: Date.parse(CREATED),
+        modelLabel: (_agent, model) => model ?? "default",
+        canOpen: false,
+        onOpen: () => {},
+        contextMenu: null,
+      });
+
+    test("the live pass names the reviewer that could not start, with the reason", () => {
+      const pipeline = build({
+        phase: "reviewing",
+        reviewers: [
+          { agent: "claude", model: "opus" },
+          { agent: "cursor", model: "auto" },
+        ],
+        reviewFanout: {
+          reviewers: [
+            {
+              id: "running",
+              agent: "claude",
+              model: "opus",
+              status: "running",
+              sessionKey: "running",
+              providerSessionId: "running-session",
+            },
+            {
+              id: "unstartable",
+              agent: "cursor",
+              model: "auto",
+              status: "failed",
+              error: BRIDGE_MISSING,
+              startFailed: true,
+            },
+          ],
+        },
+        sessions: [reviewer(0, "running", 60, { reviewPassId: "running", status: "running" })],
+      });
+      const model = pipelineFlowModel(pipeline);
+      const node = model.nodes.find((candidate) => candidate.id === "reviewer:unstartable")!;
+      expect(node).toMatchObject({ state: "failed", startFailed: true, error: BRIDGE_MISSING });
+      expect(view(node, pipeline)).toMatchObject({
+        statusLabel: "Could not start",
+        statusWord: { text: "could not start", tone: "destructive" },
+        error: BRIDGE_MISSING,
+      });
+      const { failures, panelSize } = pipelineReviewerStartFailures(model);
+      expect(failures.map((failure) => failure.id)).toEqual(["reviewer:unstartable"]);
+      expect(panelSize).toBe(2);
+    });
+
+    test("a reviewer that failed after its session started is not one", () => {
+      const pipeline = build({
+        phase: "reviewing",
+        reviewers: PANEL.slice(0, 2),
+        reviewFanout: {
+          reviewers: [
+            {
+              id: "failed",
+              agent: "claude",
+              model: "opus",
+              status: "failed",
+              error: "The reviewer session failed",
+            },
+            { id: "pending", agent: "codex", model: "gpt", status: "pending" },
+          ],
+        },
+        sessions: [],
+      });
+      const model = pipelineFlowModel(pipeline);
+      expect(
+        model.nodes.find((node) => node.id === "reviewer:failed")?.startFailed,
+      ).toBeUndefined();
+      expect(pipelineReviewerStartFailures(model).failures).toEqual([]);
+    });
+
+    test("a finished pass keeps its sessionless reviewers as unable to start", () => {
+      const pipeline = build({
+        phase: "addressing",
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          reviewer(1, "survivor", 60, { reviewPassId: "pass-1", reviewerOutcome: "completed" }),
+          session("review", "consolidation", 120, {
+            label: "Consolidation",
+            reviewPassId: "pass-1",
+            sessionlessReviewers: [
+              {
+                id: "unstartable",
+                slot: 0,
+                agent: "cursor",
+                error: BRIDGE_MISSING,
+                startFailed: true,
+              },
+            ],
+          }),
+          session("address", "address", 180, { status: "running" }),
+        ],
+      });
+      const model = pipelineFlowModel(pipeline);
+      const node = model.nodes.find((candidate) => candidate.id === "reviewer:unstartable")!;
+      expect(node.startFailed).toBe(true);
+      expect(view(node, pipeline).statusWord).toEqual({
+        text: "could not start",
+        tone: "destructive",
+      });
+      expect(pipelineReviewerStartFailures(model)).toMatchObject({
+        failures: [{ id: "reviewer:unstartable", error: BRIDGE_MISSING }],
+        panelSize: 2,
+      });
+    });
+
+    test("a later pass whose panel all started clears the notice", () => {
+      const pipeline = build({
+        phase: "reviewing",
+        iteration: 1,
+        reviewers: PANEL.slice(0, 2),
+        sessions: [
+          reviewer(1, "survivor", 60, { reviewPassId: "pass-1", reviewerOutcome: "completed" }),
+          session("review", "consolidation", 120, {
+            label: "Consolidation",
+            reviewPassId: "pass-1",
+            sessionlessReviewers: [
+              {
+                id: "unstartable",
+                slot: 0,
+                agent: "cursor",
+                error: BRIDGE_MISSING,
+                startFailed: true,
+              },
+            ],
+          }),
+          session("address", "address", 180),
+          reviewer(0, "second-0", 240, {
+            reviewPassId: "pass-2",
+            iteration: 1,
+            status: "running",
+          }),
+          reviewer(1, "second-1", 240, {
+            reviewPassId: "pass-2",
+            iteration: 1,
+            status: "running",
+          }),
+        ],
+      });
+      const model = pipelineFlowModel(pipeline);
+      // The first pass's node is still history on the graph.
+      expect(model.nodes.find((node) => node.id === "reviewer:unstartable")?.startFailed).toBe(
+        true,
+      );
+      expect(pipelineReviewerStartFailures(model).failures).toEqual([]);
+    });
   });
 
   test.each([false, true])("full panel restart preserves history (legacy=%s)", (legacy) => {
@@ -1877,4 +2036,35 @@ describe("earlier passes' validation", () => {
       state: "failed",
     });
   });
+});
+
+test("retired sessionless failures preserve generic failure classification", () => {
+  for (const startFailed of [false, undefined]) {
+    const pipeline = build({
+      phase: "addressing",
+      reviewers: PANEL.slice(0, 2),
+      sessions: [
+        reviewer(1, "survivor", 60, { reviewPassId: "pass-1", reviewerOutcome: "completed" }),
+        session("review", "consolidation", 120, {
+          label: "Consolidation",
+          reviewPassId: "pass-1",
+          sessionlessReviewers: [
+            {
+              id: "dispatch-failure",
+              slot: 0,
+              agent: "cursor",
+              error: "Dispatch refused",
+              startFailed,
+            },
+          ],
+        }),
+        session("address", "address", 180, { status: "running" }),
+      ],
+    });
+    const model = pipelineFlowModel(pipeline);
+    const node = model.nodes.find((entry) => entry.id === "reviewer:dispatch-failure")!;
+    expect(node.startFailed).not.toBe(true);
+    expect(node.state).toBe("failed");
+    expect(pipelineReviewerStartFailures(model).failures).toEqual([]);
+  }
 });

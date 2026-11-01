@@ -6,6 +6,10 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  applyAgentKeyInformationUpdate,
+  recordReviewIssuesInKeyInformation,
+} from "./build-pipeline-key-information.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 import type { StorageService } from "./storage.js";
@@ -714,7 +718,7 @@ describe("rewinding to an earlier step", () => {
     });
   });
 
-  test.each(["build", "address", "pr", "resolve-conflicts"] as const)(
+  test.each(["build", "review", "address", "pr", "resolve-conflicts"] as const)(
     "an earlier %s restart restores its round and correct downstream boundary",
     async (phase) => {
       await withService(async (service, storage, provider) => {
@@ -727,6 +731,16 @@ describe("rewinding to an earlier step", () => {
         );
         const old = completed.sessions.at(-1)!;
         await mutateStored(storage, started.id, (snapshot) => {
+          recordReviewIssuesInKeyInformation(
+            snapshot,
+            { iteration: 0 },
+            {
+              issues: [{ title: "A", severity: "P1" }] as never,
+            },
+          );
+          applyAgentKeyInformationUpdate(snapshot, {
+            issues: [{ issue: "A", status: "resolved", resolution: "Fixed A" }],
+          });
           snapshot.iteration = 2;
           snapshot.sessions.push({
             ...old,
@@ -754,17 +768,32 @@ describe("rewinding to an earlier step", () => {
         ).toBeDefined();
         expect(
           restarted.sessions.find((entry) => entry.phase === "verify")?.supersededBy !== undefined,
-        ).toBe(phase === "address" || phase === "build");
+        ).toBe(phase === "address" || phase === "build" || phase === "review");
         expect(
           restarted.sessions.find((entry) => entry.sessionKey === old.sessionKey)?.supersededBy !==
             undefined,
         ).toBe(phase !== "resolve-conflicts");
+        if (phase === "build" || phase === "review") {
+          expect(restarted.keyInformation?.issues).toEqual([]);
+          recordReviewIssuesInKeyInformation(
+            restarted,
+            { iteration: 0 },
+            {
+              issues: [{ title: "B", severity: "P2" }] as never,
+            },
+          );
+          expect(restarted.keyInformation?.issues).toMatchObject([{ issue: "B", status: "open" }]);
+        } else {
+          expect(restarted.keyInformation?.issues).toMatchObject([
+            { issue: "A", status: "resolved", resolution: "Fixed A" },
+          ]);
+        }
         // Round 0's accepted report was kept, so Address reruns alone on it.
         if (phase === "address") expect(restarted.structuredReview).toEqual(cleanReview);
         else expect(restarted.structuredReview).toBeUndefined();
         expect(restarted.verificationResult).toBeUndefined();
         expect(restarted.verificationFeedback).toBeUndefined();
-        expect(restarted.sessions.at(-1)?.phase).toBe(phase);
+        expect(restarted.sessions.at(-1)?.phase).toBe(phase === "review" ? "fix" : phase);
         expect(provider.sent.at(-1)?.sessionId).toBe(restarted.sessions.at(-1)?.sdkSessionId);
         const finished = await advanceUntil(
           service,

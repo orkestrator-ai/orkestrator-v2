@@ -9,10 +9,14 @@ simply asks again. Work item and decisions:
 [0723-orkestrator-permission-rules.md](../todo/agent-engines/0723-orkestrator-permission-rules.md).
 
 Orkestrator never writes a rule into a provider's own files
-(`~/.codex/rules/*.rules`, Claude's `settings.json`, Grok's settings): neither
-documents a format Orkestrator could safely rewrite, and app-server has no
-rules API ([0160](../todo/agent-engines/0160-codex-saved-rules-list-and-revoke.md)).
-Those files are only listed, read-only, in Settings → Permissions.
+(`~/.codex/rules/*.rules`, Claude's `settings.json`, Grok's settings): app-server
+has no rules API, and Codex's docs mark its rules format experimental
+([0160](../todo/agent-engines/0160-codex-saved-rules-list-and-revoke.md)).
+Those files are only listed, read-only, in Settings → Permissions. Codex 0.166.0
+keeps a saved command as `prefix_rule(...)` and a saved host as
+`network_rule(...)`, both in `rules/default.rules`. It reads them when a thread
+starts, so removing one stops it for new threads only, unlike an Orkestrator
+rule.
 
 ## Model
 
@@ -125,7 +129,7 @@ A bridge that predates the marker keeps asking.
 
 | Agent | Eligible | Never |
 | --- | --- | --- |
-| Codex | v2 `item/commandExecution/requestApproval` with app-server's own `command` and `kind` `command`; a managed-network host on a command; a file change without `grantRoot` | `writeStdin`, a command rebuilt from `commandActions`, a legacy argv join, `permissions` grants |
+| Codex | v2 `item/commandExecution/requestApproval` with app-server's own `command` and `kind` `command`; a managed-network host, which arrives with no `command` on 0.166.0; a file change without `grantRoot` | `writeStdin`, a command rebuilt from `commandActions`, a legacy argv join, `permissions` grants |
 | Claude | `Bash` with an untruncated command; file tools with an absolute path; `mcp__<server>__<tool>` with its `mcpServer`; `WebFetch` (by URL host) | truncated values, relative paths, other tools |
 | Pi | `bash` with a command; `edit`/`write` with a path (resolved against its working directory) | `powershell`, custom tools |
 | Grok (ACP) | a command sent as one string, a file change with every path, and only with an explicit `allow_once` option | an argv array, truncated detail, no `allow_once` |
@@ -197,9 +201,12 @@ any other wildcard.
   `permission-rule-rows.test.ts`, `usePermissionRuleSession.test.tsx` (the
   notes read by a tab mounted on return).
 - Live, no credits: `bridges/codex-bridge/src/app-server/live-policy-amendment.test.ts`
-  ("an Orkestrator rule answers the identical command…").
+  ("an Orkestrator rule answers the identical command…"), and its managed-network
+  half in a container (`mise run verify:codex:network-approval`).
 - Browser:
   - `e2e/agent-testing/permission-rules.spec.ts` (Settings → Permissions on a
     `dev:test` profile);
   - `e2e/RememberRulePanel.spec.ts` (the "Approve and remember…" panel on
-    Codex cards built by the real Codex reader, at phone and desktop widths).
+    Codex cards built by the real Codex reader, at phone and desktop widths);
+  - `e2e/agent-testing/codex-saved-rules-live.spec.ts` (opt-in, no credits: a
+    real Codex card and "Rules outside Orkestrator", against a loopback model).

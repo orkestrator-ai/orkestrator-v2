@@ -384,7 +384,7 @@ re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserve
 
 | Provider | Preserved (`state` sub-directory → mount) | Not preserved |
 | --- | --- | --- |
-| Claude | `claude/projects` → `~/.claude/projects` (SDK transcripts); `claude/file-history` → `~/.claude/file-history` (rewind); `claude/orkestrator` → `~/.claude/orkestrator` (bridge dispatch and steer journals, preferences) | `.credentials.json`, settings, `commands`/`agents`/`plugins`, caches, `~/.claude.json` |
+| Claude | `claude/projects` → `~/.claude/projects` (SDK transcripts); `claude/file-history` → `~/.claude/file-history` (rewind); `claude/orkestrator` → `~/.claude/orkestrator` (bridge dispatch and steer journals, preferences) | `.credentials.json`, settings, `commands`/`skills`/`agents`/`plugins`, caches, `~/.claude.json` |
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
 | OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions, console accounts and selected organization) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), `storage/` (the legacy-migration index and each session's saved change list, `session_diff/`), the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
@@ -650,13 +650,35 @@ Staged per provider (`portableInputSpec`):
 
 | Provider | Mount | Staged |
 | --- | --- | --- |
-| Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `settings.json` filtered to its boolean `enabledPlugins` (no hooks, permissions or environment; withheld when it names no plugin), which the entrypoint merges into the container's own `settings.json` so the bridge and the CLI honour the host's plugin enablement, `.credentials.json` (access-only), `commands`, `agents`, `ide`, `plugins`; `~/.claude.json` |
+| Claude | `/claude-config`, `/claude-config.json` | `CLAUDE.md`, `settings.local.json`, `settings.json` filtered to its boolean `enabledPlugins` (no hooks, permissions or environment; withheld when it names no plugin), which the entrypoint merges into the container's own `settings.json` so the bridge and the CLI honour the host's plugin enablement, `.credentials.json` (access-only), `commands`, `skills`, `agents`, `ide`, `plugins`; `~/.claude.json` |
 | OpenCode | `/opencode-config`, `/opencode-data`, `/opencode-state/model.json` | configuration (except `node_modules`); `auth.json` (access-only); `model.json`. Nothing else from the data directory: OpenCode 1.19.4 stores active console accounts and organizations in SQLite (preserved via `OPENCODE_DB`), not `account.json`. Host `snapshot/` is keyed by the worktree path; of `storage/` only the legacy-migration index is needed and an empty directory recreates it. The automated live data-contract suite runs authenticated active console accounts with and without these host files (`scripts/qualify-opencode-seeded-data.sh`) |
 | Codex | `/codex-home` | `auth.json` (access-only), `config.toml`, `AGENTS.md`, `hooks.json`, `.codex-global-state.json`, model and cloud caches, `rules`, `skills`, `prompts`, `vendor_imports`, `plugins/cache` |
-| Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`; `~/.config/grok` |
+| Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`, `commands`; `~/.config/grok` |
 | Pi | `/pi-config` | `agent/auth.json` (access-only), `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills`, `prompts`, `extensions`, `themes` |
 | Cursor (`staged-inputs=2`) | `/cursor-config` | `mcp.json` only, copied to `~/.cursor/mcp.json` mode `0600`; never account or login state, IDE state, hooks, plugins, extensions, `sdk/` or `cli-config.json` (the login arrives through the key sync) |
 | Git | `/tmp/gitconfig` | `~/.gitconfig` (not in agent-test profiles) |
+
+User-authored extension directories (Claude's `commands`, `skills`,
+`agents`, `ide`, `plugins`; Grok's `hooks`, `skills`, `commands`; Pi's
+`skills`, `prompts`, `extensions`, `themes`) are staged one top-level entry at
+a time, so one skill directory is one unit. Input spec version 4 applies a conservative credential guard to the newly
+added Claude `skills` and Grok `commands` trees. It withholds environment files,
+credential/secret/token files, private-key files and common credential directories,
+and files containing private-key blocks or credential assignments. Checks run on
+the bounded bytes before writing any staged file; safe binary resources retain
+their bytes. Withheld files count as `credential-withheld` without logging paths
+or contents. This is defense in depth, not arbitrary-secret detection: keep
+credentials outside extension bundles and supply required secrets explicitly
+through the environment's credential configuration. No secret-file opt-in is
+provided by staging. Older extension trees retain their existing policy.
+A linked entry is skipped, like any link below a
+home entry, so a skill `~/.claude/skills` links in from `~/.agents/skills` (an
+`npx skills` install) is not staged and counts as `symlink`; `~/.agents/skills`
+itself is not staged for any provider (todo
+[2170](../todo/containers-and-environments/2170-shared-and-linked-skills-in-containers.md)).
+Claude `skills` and Grok `commands` were added in input spec version 3; an
+image built before then copies neither until the environment is rebuilt on a
+newer image.
 
 An image at `staged-inputs=1` has no `/cursor-config` copy, so its Cursor
 sessions get no user MCP servers until the environment is rebuilt on a newer

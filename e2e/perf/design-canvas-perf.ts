@@ -5,19 +5,22 @@
  *     [--runs 3] [--samples 20] [--moves 3] [--html-samples 5] [--cycles 12] \
  *     [--library-samples 5] [--frames 1,16,64] [--library 1,50,256] \
  *     [--skip-canvas] [--skip-library] [--port 1470] [--headed] [--no-minify] \
- *     [--dist output/tmp/design-canvas-perf-dist] [--rev HEAD]
+ *     [--dist output/tmp/design-canvas-perf-dist] [--rev HEAD] [--browser chrome]
  *
  * The `e2e/fixture` app is built with `apps/web`'s Vite config (production
  * React) into a temporary directory (or `--dist`, which is reused when it
  * already holds a build: delete it after changing web code) and served by
  * `vite preview`. `--rev` builds the web code of a committed revision instead of
- * the working tree (`git archive` of `apps/web`, `e2e` and `packages`, with
- * this checkout's node_modules linked in and this harness's own fixture files,
+ * the working tree (`git archive` of `apps/web`, `e2e`, `packages` and
+ * `apps/backend/src`, which some component fixtures import, with this
+ * checkout's node_modules linked in and this harness's own fixture files,
  * `DesignLibraryPerfFixture.tsx` and `main.tsx`, laid over it), so uncommitted
  * product edits in the checkout cannot leak into the measurement. Modules
  * resolved through node_modules (`@orkestrator/protocol`) still come from this
  * checkout; the report records whether those paths were clean. Each run
- * launches a fresh installed Google Chrome (`channel: "chrome"`, headless).
+ * launches a fresh installed Google Chrome (`channel: "chrome"`, headless), or
+ * with `--browser chromium` Playwright's own Chromium build (`channel:
+ * "chromium"`, the full browser in new headless mode) on hosts without Chrome.
  * Every backend command goes through `page.exposeFunction("designInvoke")` to a
  * real `DesignService` and command registry hosted in a Bun child process
  * (`e2e/design-service-host.ts`), exactly as `e2e/DesignCanvas.spec.ts` does.
@@ -89,6 +92,7 @@ interface Options {
   minify: boolean;
   dist: string | null;
   rev: string | null;
+  browser: "chrome" | "chromium";
 }
 
 function parseOptions(argv: string[]): Options {
@@ -108,6 +112,7 @@ function parseOptions(argv: string[]): Options {
     minify: true,
     dist: null,
     rev: null,
+    browser: "chrome",
   };
   const list = (value: string) =>
     value.split(",").map((entry) => {
@@ -137,7 +142,11 @@ function parseOptions(argv: string[]): Options {
     else if (arg === "--no-minify") options.minify = false;
     else if (arg === "--dist") options.dist = path.resolve(value());
     else if (arg === "--rev") options.rev = value();
-    else throw new Error(`Unknown option ${arg}`);
+    else if (arg === "--browser") {
+      const browser = value();
+      if (browser !== "chrome" && browser !== "chromium") throw new Error(`Bad browser ${browser}`);
+      options.browser = browser;
+    } else throw new Error(`Unknown option ${arg}`);
   }
   if (options.frames.some((count) => count > 64)) throw new Error("At most 64 frames per canvas");
   if (options.library.some((count) => count > 256)) throw new Error("At most 256 live canvases");
@@ -168,7 +177,7 @@ function exportRevision(rev: string, workDir: string): string {
   mkdirSync(root, { recursive: true });
   const archive = spawnSync(
     "git",
-    ["archive", "--format=tar", rev, "apps/web", "e2e", "packages"],
+    ["archive", "--format=tar", rev, "apps/web", "e2e", "packages", "apps/backend/src"],
     {
       cwd: repositoryRoot,
       maxBuffer: 1024 * 1024 * 1024,
@@ -183,10 +192,12 @@ function exportRevision(rev: string, workDir: string): string {
     if (existsSync(path.join(repositoryRoot, file)))
       copyFileSync(path.join(repositoryRoot, file), path.join(root, file));
   symlinkSync(path.join(repositoryRoot, "node_modules"), path.join(root, "node_modules"));
-  symlinkSync(
-    path.join(repositoryRoot, "apps/web/node_modules"),
-    path.join(root, "apps/web/node_modules"),
-  );
+  for (const app of ["web", "backend"])
+    if (existsSync(path.join(repositoryRoot, `apps/${app}/node_modules`)))
+      symlinkSync(
+        path.join(repositoryRoot, `apps/${app}/node_modules`),
+        path.join(root, `apps/${app}/node_modules`),
+      );
   return root;
 }
 
@@ -1437,6 +1448,7 @@ async function main() {
       ? "vite build (production React, minified), vite preview"
       : "vite build (production React, unminified), vite preview",
     viewport: VIEWPORT,
+    browserChannel: options.browser,
     browser: "",
   };
   const load: Array<{ phase: string } & ReturnType<typeof hostFacts>> = [];
@@ -1447,7 +1459,7 @@ async function main() {
   const seeding: Record<string, number> = {};
   const launch = () =>
     chromium.launch({
-      channel: "chrome",
+      channel: options.browser,
       headless: !options.headed,
       args: [
         "--disable-renderer-backgrounding",
@@ -1568,7 +1580,7 @@ async function main() {
     writeFileSync(reportFile, `${JSON.stringify(report, null, 2)}\n`);
 
     console.log(
-      `\n[perf] host ${environment.cpu} (${environment.logicalCpus} logical), ${environment.os}; ${environment.browser ? `Chrome ${environment.browser}` : ""}; commit ${environment.commit.slice(0, 12)}; web code from ${options.rev ? `${options.rev} (${environment.webRevision.slice(0, 12)})` : "the working tree"}; ${dirty} uncommitted paths in the checkout, ${environment.dirtyPathsInMeasurement.length} reaching the measurement; ${environment.build}`,
+      `\n[perf] host ${environment.cpu} (${environment.logicalCpus} logical), ${environment.os}; ${environment.browser ? `${options.browser === "chrome" ? "Chrome" : "Chromium"} ${environment.browser}` : ""}; commit ${environment.commit.slice(0, 12)}; web code from ${options.rev ? `${options.rev} (${environment.webRevision.slice(0, 12)})` : "the working tree"}; ${dirty} uncommitted paths in the checkout, ${environment.dirtyPathsInMeasurement.length} reaching the measurement; ${environment.build}`,
     );
     const sizes = Object.keys(summary.canvas);
     if (sizes.length) {

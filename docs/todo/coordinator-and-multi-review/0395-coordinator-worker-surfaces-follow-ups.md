@@ -374,9 +374,11 @@ the lock.
 
 ### Task 1: an older leaf is told to update (2026-10-30)
 
-An older leaf answers an unknown controller command with
-`Unknown command: …`, which `coordinatorNodeTarget` already turns into
-"update it, then retry". An older `controller_multi_review_surface` answers
+An older leaf answers an unknown controller command, and `coordinatorNodeTarget`
+turns that into "update it, then retry". (Corrected 2026-11-01: this said the
+answer was `Unknown command: …`, but a real leaf answers
+`Unknown backend command: …`, so the check never matched one until todo 1030
+task 4.) An older `controller_multi_review_surface` answers
 the new surfaces with "Expected surface root, fix or address.", and the
 command node maps that text to the same message.
 

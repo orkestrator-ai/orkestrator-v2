@@ -22,12 +22,15 @@ import {
   readAgentsMdSectionFromBase,
   type AgentsMdPrDependencies,
 } from "./agents-md-pr.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 
 // Real Git against a local bare "origin"; only `gh` is faked, so nothing
 // reaches GitHub.
 
 const TIMEOUT = 60_000;
+/** One backend's in-flight runs; each settles before the next test. */
+const runs = new CoordinatorRequestFlights();
 const KEY = "0123456789abcdef01234567";
 const AGENTS = [
   "# Agent Instructions",
@@ -130,8 +133,8 @@ async function checkoutSnapshot() {
   };
 }
 
-const open = (changes: Parameters<typeof openAgentsMdPullRequest>[0]["changes"], key = KEY) =>
-  openAgentsMdPullRequest({
+const open = (changes: Parameters<typeof openAgentsMdPullRequest>[1]["changes"], key = KEY) =>
+  openAgentsMdPullRequest(runs, {
     root: checkout,
     baseBranch: "main",
     key,
@@ -428,7 +431,7 @@ describe("PR recovery integrity", () => {
         return remoteGit(command, args, options);
       };
       await expect(
-        openAgentsMdPullRequest({
+        openAgentsMdPullRequest(runs, {
           root: checkout,
           baseBranch: "main",
           key: KEY,
@@ -453,7 +456,7 @@ describe("PR recovery integrity", () => {
       };
       expect(
         (
-          await openAgentsMdPullRequest({
+          await openAgentsMdPullRequest(runs, {
             root: checkout,
             baseBranch: "main",
             key: KEY,
@@ -505,7 +508,7 @@ describe("PR recovery integrity", () => {
         }
         return realGit(args, options);
       };
-      await openAgentsMdPullRequest({
+      await openAgentsMdPullRequest(runs, {
         root: checkout,
         baseBranch: "main",
         key: KEY,

@@ -179,6 +179,27 @@ describe("runTurnOnRuntime", () => {
     }
   });
 
+  test("a warm join records layer movement even when inline configuration is unchanged", async () => {
+    const { turn: first, runtime, input } = await launchedTurn();
+    const { turn: second, sdkTextPrompt } = followUp(first);
+    const plan = await resolveQueryPlan(second, sdkTextPrompt, undefined);
+    first.session.mcpServerLayers = new Map([["db", "local"]]);
+    plan.mcpServerLayers = new Map([["db", "project"]]);
+    expect(plan.mcpServersKey).toBe(runtime.mcpServers);
+    try {
+      await runTurnOnRuntime(second, plan, undefined);
+      expect((await input.next()).value?.uuid).toBe(second.promptUuid);
+      expect(second.runtime).toBe(runtime);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(first.session.mcpServerLayers?.get("db")).toBe("project");
+    } finally {
+      runtime.abortController.abort();
+      await runtime.ended;
+      finalizeTurn(second);
+      finalizeTurn(first);
+    }
+  });
+
   test.each(["settings", "MCP", "input"])(
     "a failed %s join abandons claims and keeps the old runtime",
     async (failure) => {
@@ -189,6 +210,9 @@ describe("runTurnOnRuntime", () => {
       const { turn: first, runtime, call } = await launchedTurn();
       const { turn: second, sdkTextPrompt } = followUp(first);
       const plan = await resolveQueryPlan(second, sdkTextPrompt, undefined);
+      const oldLayers = new Map([["db", "local"]] as const);
+      first.session.mcpServerLayers = oldLayers;
+      plan.mcpServerLayers = new Map([["db", "project"]]);
       const push = mock(runtime.input.push);
       runtime.input.push = push;
       // The continuation the old turn waits for must survive a failed setup.
@@ -224,7 +248,10 @@ describe("runTurnOnRuntime", () => {
         expect(runtime.abortController.signal.aborted).toBe(false);
         expect(call.isClosed()).toBe(false);
         expect(mockQuery).toHaveBeenCalledTimes(1);
-        if (failure !== "input") expect(push).not.toHaveBeenCalled();
+        if (failure !== "input") {
+          expect(push).not.toHaveBeenCalled();
+          expect(first.session.mcpServerLayers).toBe(oldLayers);
+        }
         if (failure === "MCP") expect(runtime.mcpServers).toBe("");
       } finally {
         call.finish();

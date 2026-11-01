@@ -1,8 +1,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type {
-  ExternalPermissionRuleFile,
-  ExternalPermissionRulesSnapshot,
+import {
+  codexRuleEntries,
+  type ExternalPermissionRuleFile,
+  type ExternalPermissionRulesSnapshot,
 } from "@orkestrator/protocol/permission-rules";
 import { agentAccountHome, hostClaudeConfigDir, hostCodexHome } from "../agent-accounts-homes.js";
 import type { CommandContext } from "../commands-context.js";
@@ -13,8 +14,9 @@ import type { Environment } from "../models.js";
  * Rules the providers keep themselves (todo 0723, phase 5), listed read-only:
  * Codex `rules/*.rules` in the host's Codex home, each added account's and
  * each running container's, and Claude `permissions.allow` in its user and
- * project settings. Nothing here writes: neither provider documents a format
- * Orkestrator could safely rewrite, so the guidance says where to edit.
+ * project settings. Nothing here writes: neither provider has an API for it
+ * and Codex's docs mark its rules format experimental, so the guidance says
+ * where to edit.
  *
  * Every read is bounded (files, bytes, entries) and best effort: a file that
  * cannot be read is listed with an error instead of failing the whole view.
@@ -28,9 +30,13 @@ const MAX_CODEX_RULE_FILES = 32;
 const MAX_ENVIRONMENTS = 32;
 const CONTAINER_READ_TIMEOUT_MS = 5_000;
 
+// Measured on Codex 0.166.0 (`live-policy-amendment.test.ts`, todo 0160): a
+// thread reads the rules once, when it starts.
 const CODEX_GUIDANCE =
-  "Saved by Codex itself (for example by an older Orkestrator's “Approve with command policy”). " +
-  "Edit or delete the line in this file, or run `codex execpolicy check` to test a command.";
+  "Saved by Codex itself (for example by an older Orkestrator's “Approve with command policy” " +
+  "or “Approve with network policy”). Delete the rule from this file to remove it: new Codex " +
+  "sessions ask again, and a session already running keeps the rule until it ends. " +
+  "Run `codex execpolicy check` to test a command.";
 const CLAUDE_GUIDANCE =
   "Saved by Claude Code. Remove the entry with `/permissions` in Claude Code, or edit " +
   "`permissions.allow` in this file.";
@@ -42,14 +48,6 @@ function bounded(entries: string[]): { entries: string[]; truncated: boolean } {
       entry.length > MAX_ENTRY_LENGTH ? `${entry.slice(0, MAX_ENTRY_LENGTH - 1)}…` : entry,
     );
   return { entries: trimmed, truncated: entries.length > MAX_ENTRIES_PER_FILE };
-}
-
-/** The rule lines of a Codex Starlark rules file: everything but blanks and comments. */
-export function codexRuleEntries(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"));
 }
 
 /** Claude's `permissions.allow`, or `null` when the JSON is not a settings object. */

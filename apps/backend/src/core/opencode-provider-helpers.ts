@@ -47,6 +47,7 @@ import {
 } from "./opencode-model-catalog.js";
 import type { OpenCodeCommandChangeOptions } from "./opencode-command-changes.js";
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
+import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
@@ -885,7 +886,10 @@ export function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<v
 /** Keep plain prompt tool masks consistent with the session permission grant. */
 /**
  * Per-prompt tool options: the read-only turn's tool map, and the trusted
- * `system` instruction carrying this turn's artifact grant when one exists.
+ * `system` instruction. That carries the instructions every provider receives
+ * (`agentSystemInstructions`; not for a read-only coordinator, as on the other
+ * providers) and this turn's artifact grant when one exists. OpenCode keeps
+ * no system text between prompts, so it is sent with every one.
  */
 export function openCodePromptToolOptions(
   options: Pick<
@@ -893,10 +897,15 @@ export function openCodePromptToolOptions(
     "readOnly" | "workflowResultTool" | "workflowResultExtraTools" | "artifactGrant"
   >,
   reviewEnabled: boolean,
+  policy?: NativeAgentExecutionPolicy,
 ): { tools?: Record<string, boolean>; system?: string } {
-  const system = options.artifactGrant
-    ? { system: openCodeArtifactGrantInstruction(options.artifactGrant) }
-    : {};
+  const text = [
+    policy?.id === "coordinator-read-only" ? "" : agentSystemInstructions(),
+    options.artifactGrant ? openCodeArtifactGrantInstruction(options.artifactGrant) : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const system = text ? { system: text } : {};
   if (!options.readOnly || reviewEnabled) return system;
   return {
     ...system,

@@ -30,6 +30,7 @@ import {
 } from "./container-storage.js";
 import {
   ContainerInitializationError,
+  assertContainerNotDraining,
   assertEnvironmentNotDraining,
   containerStopWasForced,
   drainContainerProcesses,
@@ -870,7 +871,8 @@ export async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
 ): Promise<EnvironmentSetupStartResult> {
-  assertEnvironmentNotDraining(environment.id);
+  assertEnvironmentNotDraining(context.runtime.environments, environment.id);
+  if (environment.containerId) assertContainerNotDraining(environment.containerId);
   const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
   if (isProjectHomeEnvironment(current)) {
     // Setup scripts provision disposable workspaces; the user's checkout is
@@ -1721,6 +1723,8 @@ export async function stopEnvironmentOnce(
   const { storage } = context;
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  // Draining execs into the container, so ownership is proven first.
+  if (environment.containerId) await assertDockerContainerOwned(environment.containerId, context);
   await stopEnvironmentReviewValidation(environmentId, context);
   await stopEnvironmentExecWorkers(environmentId, context);
   // Discovery runs inside the environment, so its cached result stops being
@@ -1737,7 +1741,6 @@ export async function stopEnvironmentOnce(
   context.previews?.registry.beforeEnvironmentTargetChange(environment.id);
   if (environment.containerId) {
     const containerId = environment.containerId;
-    await assertDockerContainerOwned(containerId, context);
     await context.nativeAgents?.runtimeStopRequested(environment.id);
     const outcome = await runContainerOperation(
       context,
@@ -1756,8 +1759,11 @@ export async function stopEnvironmentOnce(
             phase: "draining",
             boot: { phase: "draining" },
           });
-          drain = await withEnvironmentDraining(environment.id, containerId, () =>
-            drainContainerProcesses(containerId),
+          drain = await withEnvironmentDraining(
+            context.runtime.environments,
+            environment.id,
+            containerId,
+            () => drainContainerProcesses(containerId),
           );
         }
         await advanceContainerOperation(context, environment.id, operation.operationId, {

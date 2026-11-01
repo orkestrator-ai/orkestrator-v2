@@ -73,7 +73,7 @@ describe("SetupPendingOverlay", () => {
     const { rerender } = render(
       <SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />,
     );
-    expect(screen.queryByTestId("setup-pending-prompt")).toBeNull();
+    expect(screen.queryByTestId("setup-pending-prompt") === null).toBe(true);
 
     rerender(
       <SetupPendingOverlay

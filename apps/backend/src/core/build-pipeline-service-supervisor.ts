@@ -63,10 +63,12 @@ import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   workflowRestartContinuationPrompt,
+  workflowUsageLimitContinuationPrompt,
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { carriesFixBaseline, retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-information.js";
 import { archiveValidationRun } from "./build-pipeline-validation-history.js";
 import {
   safeParseStructuredReviewReport,
@@ -155,12 +157,18 @@ type StageOverride = {
   settings?: BuildStepSelection;
 };
 
-/** Pipelines whose current wait for a graph run was logged; cleared past this. */
+/** Pipelines whose current wait (graph run, pending rewind) was logged; cleared past this. */
 const MAX_WORKSPACE_WAITS_NOTED = 256;
 
 export class BuildPipelineSupervisor {
   /** The wait last logged per pipeline (one line per wait, not per pass). */
   private readonly workspaceWaits = new Map<string, WorkspaceBusyError["reason"]>();
+  /**
+   * The reason a pending code rewind last could not finish, per pipeline.
+   * Every pass retries it (a stopped container can take hours to come back),
+   * so each reason is logged once rather than every 1.5 s.
+   */
+  private readonly pendingRewindFailures = new Map<string, string>();
   /**
    * Progress clocks for the reviewer fan-out.
    *
@@ -331,12 +339,17 @@ export class BuildPipelineSupervisor {
     if (pipeline.rewinds?.at(-1)?.code?.pending) {
       try {
         await this.ctx.finishPendingCodeRewind(pipeline);
+        this.pendingRewindFailures.delete(pipeline.id);
       } catch (error) {
         // Keep the durable intent and restart target intact for retry/startup.
-        console.warn(
-          `[build-pipeline] Pending code rewind for ${pipeline.id}:`,
-          errorMessage(error),
-        );
+        const reason = errorMessage(error);
+        if (this.pendingRewindFailures.get(pipeline.id) !== reason) {
+          if (this.pendingRewindFailures.size >= MAX_WORKSPACE_WAITS_NOTED) {
+            this.pendingRewindFailures.clear();
+          }
+          this.pendingRewindFailures.set(pipeline.id, reason);
+          console.warn(`[build-pipeline] Pending code rewind for ${pipeline.id}:`, reason);
+        }
       }
       return;
     }
@@ -669,7 +682,57 @@ export class BuildPipelineSupervisor {
         // Metering/checkpoint failures must not replace the provider's failure.
       }
     }
-    if (status === "error" && interruption === "restart") {
+    if (status === "error" && interruption !== "restart") {
+      // A resend already waiting to be accepted: this error is the turn before it.
+      if (
+        pipeline.pendingPromptAttempt?.sessionId === session.sdkSessionId &&
+        session.usageLimitResends
+      ) {
+        await this.dispatchPending(pipeline, provider);
+        return;
+      }
+      const verdict = await provider.usageLimitStop?.({
+        environmentId: pipeline.environmentId,
+        requestId:
+          session.structuredRequestId ??
+          pipeline.activePromptContext?.requestId ??
+          session.sdkSessionId,
+        error: statusDetail,
+        resends: session.usageLimitResends ?? 0,
+        ...(session.turnStartedAt ? { turnStartedAt: session.turnStartedAt } : {}),
+      });
+      if (verdict === "wait") return;
+      if (verdict === "resend") {
+        // A submitted result survives the turn that produced it, as after a restart.
+        const result = session.structuredRequestId
+          ? await this.ctx.readWorkflowResult<unknown>(
+              provider,
+              session,
+              session.structuredRequestId,
+            )
+          : null;
+        if (result?.ok === true) {
+          if (pipeline.pendingPromptAttempt?.sessionId === session.sdkSessionId) {
+            delete pipeline.pendingPromptAttempt;
+          }
+        } else {
+          // Reconnecting is what moves the bridge to the new account.
+          await this.agents.evictUnreachableProvider(pipeline, currentAgent, provider);
+          await this.continueUsageLimitedStage(
+            pipeline,
+            await this.agents.provider(pipeline, currentAgent),
+            session,
+          );
+          return;
+        }
+      } else {
+        throw new Error(
+          statusDetail
+            ? `The ${session.label.toLowerCase()} failed: ${statusDetail}`
+            : `The ${session.label.toLowerCase()} failed`,
+        );
+      }
+    } else if (status === "error") {
       // A submitted result survives the process that produced it. Otherwise
       // continue this stage once, under a new durable dispatch/result key.
       const result = session.structuredRequestId
@@ -696,12 +759,6 @@ export class BuildPipelineSupervisor {
       if (pipeline.pendingPromptAttempt?.sessionId === session.sdkSessionId) {
         delete pipeline.pendingPromptAttempt;
       }
-    } else if (status === "error") {
-      throw new Error(
-        statusDetail
-          ? `The ${session.label.toLowerCase()} failed: ${statusDetail}`
-          : `The ${session.label.toLowerCase()} failed`,
-      );
     }
     if (status === "blocked") {
       // Observe-only Milestone 3 must not advance or fail a phase. The parked
@@ -1785,6 +1842,34 @@ export class BuildPipelineSupervisor {
     });
   }
 
+  /** Sends the stage on to the account the machine moved to; `handleLimitStop` bounds the count. */
+  private async continueUsageLimitedStage(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<void> {
+    const phase = resumablePhase(pipeline.phase);
+    if (!phase) {
+      throw new Error(`The ${session.label.toLowerCase()} stopped on a usage limit`);
+    }
+    const validationPlan = pipeline.activePromptContext?.validationPlan === true;
+    const resultKind = session.structuredRequestId
+      ? this.ctx.workflowResultKind(phase, validationPlan)
+      : undefined;
+    session.usageLimitResends = (session.usageLimitResends ?? 0) + 1;
+    await this.sendStageFollowUp(pipeline, provider, session, {
+      phase,
+      validationPlan,
+      prompt: workflowUsageLimitContinuationPrompt({
+        workLabel: session.label.toLowerCase(),
+        resultLabel: resultKind ? workflowResultLabel(resultKind) : "completed work",
+        ...(session.resultTransport === "tool-v1" && resultKind
+          ? { toolName: workflowResultToolName(resultKind) }
+          : {}),
+      }),
+    });
+  }
+
   /**
    * Queues the one result reminder for a tool-mode stage turn that went idle
    * with no accepted result, in place of failing it. Returns false when the
@@ -1858,7 +1943,7 @@ export class BuildPipelineSupervisor {
     session: PipelineSession,
     followUp: {
       phase: NonNullable<ReturnType<typeof resumablePhase>>;
-      spend: "restartContinuationSent" | "resultReminderSent";
+      spend?: "restartContinuationSent" | "resultReminderSent";
       validationPlan: boolean;
       prompt: string;
     },
@@ -1867,7 +1952,7 @@ export class BuildPipelineSupervisor {
     const previousRequestId = session.structuredRequestId;
     const requestId = randomUUID();
     const startedAt = new Date().toISOString();
-    session[followUp.spend] = true;
+    if (followUp.spend) session[followUp.spend] = true;
     session.turnStartedAt = startedAt;
     delete session.completedAt;
     delete session.usageFinalizationPolls;
@@ -1954,6 +2039,7 @@ export class BuildPipelineSupervisor {
     session.reviewIssueCounts = pipelineReviewIssueCounts(report);
     pipeline.structuredReview = report;
     retainRoundReviewReport(pipeline, session, report);
+    recordReviewIssuesInKeyInformation(pipeline, session, report);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
     const next = stageAfterReview(report);
     await this.startStage(pipeline, next.sessionPhase, next.phase);

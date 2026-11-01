@@ -173,6 +173,12 @@ to everything it runs, on every machine it controls.
   settings changed most recently; equal timestamps prefer the later receipt.
   Each snapshot is complete: omitted inherited keys use product defaults,
   while the leaf's persisted own values remain underneath.
+- The automatic-account ticks (`agentAccountAutoSwitch`) travel like the other
+  preferences, matching accounts by email, and each machine applies them to the
+  accounts it has. Its logins, its active account, a pin left by a manual switch
+  and the tick of an account with no email stay on the machine. An older leaf drops
+  the key and keeps working; see
+  [agent-accounts.md](agent-accounts.md#automatic-switching).
 - Machine-specific settings never travel: credentials and API keys, paths
   (including the default projects folder a copied project is cloned into),
   installed or enabled platforms, container budgets, network policy,

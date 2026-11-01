@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
@@ -103,6 +106,50 @@ async function idleAfterOneTurn(name: string, options?: Parameters<typeof sendPr
 }
 
 describe("a warm Claude CLI between turns", () => {
+  for (const initiallyPresent of [false, true]) {
+    test(`refreshes repository instructions on a warm CLI (initially present: ${initiallyPresent})`, async () => {
+      controlIdleWindow();
+      const workspace = await mkdtemp(join(tmpdir(), "claude-warm-rules-"));
+      const previous = process.env.CWD;
+      process.env.CWD = workspace;
+      try {
+        if (initiallyPresent) await writeFile(join(workspace, "AGENTS.md"), "Original rules");
+        const session = createSession("warm rules");
+        track(session.id);
+        session.executionPolicy = {
+          id: "interactive-host",
+          sandbox: "none",
+          approvals: "auto-approve",
+          projectResources: false,
+          networkAccess: "full",
+        };
+        const first = sendPrompt(session.id, "hello");
+        const call = await nextQueryCall();
+        const input = inputOf(call);
+        await input.next();
+        call.push({ type: "result", subtype: "success" });
+        await first;
+        expect(session.claudeRuntime?.state).toBe("open");
+        await writeFile(join(workspace, "AGENTS.md"), "Updated repository rules");
+        const second = sendPrompt(session.id, "continue");
+        expect((await input.next()).done).toBe(true);
+        call.finish();
+        const relaunched = await nextQueryCall();
+        expect(relaunched).not.toBe(call);
+        expect((relaunched.options.systemPrompt as { append: string }).append).toContain(
+          "Updated repository rules",
+        );
+        relaunched.push({ type: "result", subtype: "success" });
+        relaunched.finish();
+        await second;
+      } finally {
+        if (previous === undefined) delete process.env.CWD;
+        else process.env.CWD = previous;
+        await rm(workspace, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("the next prompt is written into the same CLI", async () => {
     controlIdleWindow();
     const { session, call, input } = await idleAfterOneTurn("warm follow-up");

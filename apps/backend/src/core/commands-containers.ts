@@ -1072,11 +1072,15 @@ export function parseClaudeBridgeModelCatalog(value: unknown): ClaudeBridgeModel
 export async function fetchClaudeBridgeModelCatalog(
   port: number,
   authToken?: string,
+  forceRefresh = false,
 ): Promise<ClaudeBridgeModelCatalogResponse> {
-  const response = await fetch(`http://127.0.0.1:${port}/config/models`, {
-    signal: AbortSignal.timeout(CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS),
-    ...(authToken ? { headers: { "X-Orkestrator-Claude-Token": authToken } } : {}),
-  });
+  const response = await fetch(
+    `http://127.0.0.1:${port}/config/models${forceRefresh ? "?forceRefresh=true" : ""}`,
+    {
+      signal: AbortSignal.timeout(CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS),
+      ...(authToken ? { headers: { "X-Orkestrator-Claude-Token": authToken } } : {}),
+    },
+  );
   if (!response.ok) {
     throw new Error(`Claude bridge model discovery failed with HTTP ${response.status}`);
   }

@@ -90,6 +90,12 @@ export interface PrMergeReadinessSignals {
   checkSummary?: PrCheckSummary | null;
   /** Only `false` vetoes; null or absent means unknown. */
   viewerCanMerge?: boolean | null;
+  /**
+   * Only `false` relaxes the rule: failing or pending checks GitHub does not
+   * require (`unstable`, a vetoing `checkSummary`) no longer block. Required
+   * checks still block, because GitHub reports them as `blocked`.
+   */
+  requireChecks?: boolean;
   /** The caller's mirror of these signals is current. */
   fresh: boolean;
 }
@@ -132,11 +138,12 @@ export function evaluatePrMergeReadiness(signals: PrMergeReadinessSignals): PrMe
     case "behind":
       return { ready: false, reason: "behind" };
     case "unstable":
+      if (signals.requireChecks === false) break;
       return { ready: false, reason: "checks-not-passing" };
     default:
       return { ready: false, reason: "mergeability-unknown" };
   }
-  const checks = signals.checkSummary;
+  const checks = signals.requireChecks === false ? null : signals.checkSummary;
   if (checks) {
     if (checks.passed + checks.pending < checks.total) {
       return { ready: false, reason: "checks-failing" };

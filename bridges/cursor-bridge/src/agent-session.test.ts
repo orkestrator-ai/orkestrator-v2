@@ -138,12 +138,13 @@ const {
   rewindSessionHistory,
   SessionConflictError,
   setCursorMcpConfigHomeForTests,
+  setCursorSkillsProjectForTests,
   cursorMcpConfigFingerprint,
   publicCursorMcpConfig,
   setCursorMcpFingerprintForTests,
   useCursorAgentForTests,
 } = await import("./agent-session.js");
-const { refreshAgentUsage } = await import("./prompt.js");
+const { cursorPromptText, refreshAgentUsage } = await import("./prompt.js");
 const {
   resetCursorSandboxBootstrapForTests,
   useCursorLocalAgentStoreForTests,
@@ -820,6 +821,8 @@ describe("ensureAgent", () => {
       Object.keys(research).map((name) => [name, process.env[name]]),
     );
     Object.assign(process.env, research);
+    // Nor in the project: the checkout's own `.claude/skills` must not count.
+    setCursorSkillsProjectForTests(join(bridgeStateRoot, "research-project"));
     try {
       const state = newSessionState();
       state.readOnly = true;
@@ -841,6 +844,7 @@ describe("ensureAgent", () => {
       // Kept with `mcpServerNames`, so the inventory still names it correctly.
       expect(state.researchMcpServerNames).toEqual(["context7"]);
     } finally {
+      setCursorSkillsProjectForTests();
       for (const [name, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
@@ -863,6 +867,8 @@ describe("ensureAgent", () => {
     const env = { ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only", HOME: home };
     const previous = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]));
     Object.assign(process.env, env);
+    // An empty project, so the checkout's own skills cannot come first.
+    setCursorSkillsProjectForTests(join(bridgeStateRoot, "skills-project"));
     try {
       const state = newSessionState();
       state.readOnly = true;
@@ -879,6 +885,7 @@ describe("ensureAgent", () => {
       expect(loaded.content[0]!.text).toContain("Run the release checklist.");
       await detachAgent(state);
     } finally {
+      setCursorSkillsProjectForTests();
       for (const [name, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
@@ -1870,6 +1877,29 @@ describe("resumeSession", () => {
     expect(
       state.messages.filter((message) => message.role === "user").map((message) => message.content),
     ).toEqual(["original", "steer mid-turn"]);
+  });
+
+  test("replays a historic prompt without the shared instructions frame it was sent with", async () => {
+    const sent = cursorPromptText(newSessionState(), { prompt: "make the header blue" });
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: sent },
+              userMessages: [{ text: sent }, { text: "steer mid-turn" }],
+              steps: [{ type: "assistantMessage", message: { text: "done" } }],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    expect(
+      state.messages.filter((message) => message.role === "user").map((message) => message.content),
+    ).toEqual(["make the header blue", "steer mid-turn"]);
   });
 
   test("keeps two identical historic steer texts in order after resume", async () => {

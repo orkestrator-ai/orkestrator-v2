@@ -139,6 +139,7 @@ export const PREVIEW_SCRATCH_STALE_MS = 60 * 60_000;
 export const LEGACY_PREVIEW_SCRATCH_STALE_MS = 24 * 60 * 60_000;
 const SCRATCH_OWNER_FILE = ".ork-preview-owner";
 
+/** Process-wide on purpose: the start identity of this process, which names scratch it owns. */
 let backendStartIdentity: string | null | undefined;
 
 /**

@@ -1,7 +1,7 @@
 # Service preview keyboard picker misses "Register a service…"
 
 - **ID:** 0620
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-21
 - **Test:** `the picker, service dialog, diagnostics and Cmd/Ctrl+L work from
   the keyboard` in `e2e/agent-testing/service-preview-electron.spec.ts`
@@ -84,3 +84,67 @@ switches the fix added (`--disable-backgrounding-occluded-windows`,
 now live in `ELECTRON_TEST_SWITCHES` (`e2e/agent-testing/electron-launch-switches.ts`),
 so every Electron spec launches with them. Left open for one more loaded
 observation window before resolving.
+
+## Reproduced and fixed (to-do 0042 task 11), 2026-11-01
+
+Resolved. Run on Linux (beelink), branch `preview-flakes-d5abda30c5f5-r1` from
+`main` at `93b99bfba`, with one worker while other builds ran on the host.
+Electron used a private Xvfb display inside a private, loopback-only network
+namespace. Durations are not reference figures.
+
+- **Natural reproduction: none.** The keyboard test with the 2026-10-21 picker
+  logic (2-second focus wait) passed 5 of 5 on two pinned CPU cores. The
+  pre-change logic (focus read straight after each key) passed 3 of 3 the same
+  way. Chromium tracks window occlusion only on macOS and Windows, and Xvfb
+  has no compositor, so the throttling this case blames cannot happen here.
+- **Forced reproduction: both recorded variants.** A temporary hook (not
+  committed) delayed the renderer's zero-delay timers while the picker was
+  open, which is the effect of Chromium's throttling:
+  - Pre-change logic, 60 ms delay: the trail read `svc-a` five times and
+    `svc-b` four times before `Register a s…`. Enter was pressed
+    and **Register preview service** never appeared, because a move queued by
+    an extra press had already taken focus to **Backend host port
+    (manual)…**. That is `final3-5`. In another run the trail read `svc-b`,
+    but a queued move reached **Register a service…** before Enter, so the
+    dialog opened instead of the switch to `svc-b`.
+  - Pre-change logic, 1-second delay: every read was stale (`svc-a`
+    throughout), and the item was never reached.
+  - The original trail fits the same mechanism. Radix computes the candidates
+    when the key goes down and moves focus in a timer. Presses sent before an
+    earlier move has landed queue moves from a stale position, and the queued
+    moves then run in order: reads show `svc-b` while the move to **Register a
+    service…** waits, and the ArrowUp's own queued move then takes focus back
+    to `svc-a`.
+  - The 2026-10-21 logic passed with 60 ms, 1-second and 2.5-second delays.
+    At 2.5 seconds its trail repeats reads (`svc-a, svc-a, svc-b, svc-b,
+    Register a s…`): it pressed again while a move was still queued, which is
+    the overshoot behind `final3-5`. It is safe only while timers run within
+    its 2-second wait.
+- **A second focus thief, on Linux.** In filtered runs this host's startup
+  container-to-host probe (ufw drops Docker traffic) finished during the test.
+  Its **Docker containers can't reach Orkestrator** dialog took focus (`Copy`,
+  inside that dialog). Startup-dialog handlers run only before Playwright
+  locator actions, never on a key press.
+- **Fix:**
+  - `chooseFromPicker` sends each key through `pressHandled`. A capture-phase
+    listener counts keydowns and queues a timer that queues another, which
+    therefore runs after Radix's move. The spec waits for that count instead
+    of a 2-second guess, so no read is stale and unchanged focus means the end
+    of the menu. A key the page never handles fails with the last keys it saw
+    and where focus was; a wrong choice also lists the open dialogs.
+  - Both of the spec's backends run with `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`,
+    as scenario backends do. Agent-test backends now keep that variable
+    (`AGENT_TEST_SAFE_ENV_NAMES` in `apps/desktop/electron/backend-process.ts`).
+  - The three throttling switches stay in `ELECTRON_TEST_SWITCHES`.
+  - No timeout was raised and nothing was skipped.
+- **After the fix:** with the same forced delays (60 ms, 1 second and 2
+  seconds) the test passed each time. Unforced, it passed 5 of 5, and 5 of 5 on
+  two pinned cores. It also passed in all five complete-owner runs made with
+  the new picker logic, three of which passed 18 of 18.
+- **Not covered:** a loaded macOS run with covered windows. If it recurs there,
+  the failure now says whether the key reached the page and which dialogs were
+  open.
+- The 2026-10-23 recurrence (the picker trigger detached during a renderer
+  reload caused by source edits) has a different cause and is not part of
+  this fix.
+

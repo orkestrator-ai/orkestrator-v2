@@ -13,7 +13,6 @@ test("leaf-bound Settings preserves ownership across selection, save and reload"
   await page.getByRole("button", { name: /^Command.*command node/ }).click();
   await expect(path).toHaveValue("/command/projects");
   await expect(browse).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Browse for SSH agent socket" })).toBeDisabled();
   await path.fill("/command/changed");
   await expect
     .poll(() =>

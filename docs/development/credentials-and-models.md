@@ -293,7 +293,7 @@ For local environments, Grok uses its normal host state under `~/.grok` and
 For normal containers, both host directories are mounted read-only and copied
 into writable container state using bounded, symlink-safe helpers. The primary
 allowlist includes `auth.json`, `config.toml`, `trusted_folders.toml`,
-`agent_id`, `models_cache.json`, hooks, and skills. Runtime session databases,
+`agent_id`, `models_cache.json`, hooks, skills and commands. Runtime session databases,
 logs, and other
 mutable host state are not imported.
 

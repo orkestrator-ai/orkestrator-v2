@@ -504,6 +504,11 @@ export interface SessionState {
   /** Last bounded MCP inventory, retained while no turn query is attached. */
   mcpInventory?: import("@orkestrator/protocol/native-agent").NativeAgentMcpServer[];
   /**
+   * The layer each server the CLI was last given came from. Recorded with
+   * `mcpConfigRevision`, once the CLI has that configuration.
+   */
+  mcpServerLayers?: import("../services/mcp-runtime-status.js").McpServerLayers;
+  /**
    * Last bounded slash-command catalogue, retained for the same reason as
    * `mcpInventory`.
    *

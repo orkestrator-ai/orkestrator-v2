@@ -6,7 +6,8 @@ node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
 2026-10-28), the shared review routing (2026-10-29), read-only reviewers
 with the Git guard (2026-10-29), per-stage instructions (2026-10-29),
-reviewer lenses (2026-10-29), and the CLI's `build launch` (2026-10-29).
+reviewer lenses (2026-10-29), the CLI's `build launch` (2026-10-29), and the
+header's key information panel (2026-11-01).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -87,7 +88,7 @@ a transcript.
   with no session yet are nodes too. Once the pass is retired, each reviewer
   session keeps how it ended (`reviewerOutcome`), a bounded `error` (2,000
   characters) and per-severity `reviewIssueCounts`; older records without them
-  fall back to the session status. Reviewers that failed before session creation
+  fall back to the session status. Failed reviewers without a mirrored session row
   are retained in the consolidation session’s `sessionlessReviewers` summary
   (at most one entry per panel slot, bounded model and error text), so their
   model and diagnostic remain inspectable after the live pass is retired.
@@ -95,6 +96,15 @@ a transcript.
   remain valid. A retried reviewer replaces its failed
   attempt in the same slot, and the inspector says how many earlier attempts
   there were.
+- **A reviewer that could not start.** A reviewer that fails before its first agent
+  turn is accepted (a missing bridge or CLI, unavailable bridge auth) carries
+  `startFailed` on its live record. The session ID alone does not prove startup: `agentStarted` records acceptance.
+  A retired pass's `sessionlessReviewers` preserve `startFailed` explicitly;
+  entries without it retain a generic failure label. Its node and inspector read "Could not start", and a
+  notice above the graph names each such reviewer of the newest pass, with
+  its agent and error (`ReviewerStartFailureNotice`). The Multi Review
+  overview shows the same notice. The rest of the panel carries on, and each
+  round tries the reviewer again ([to-do 1090](../todo/coordinator-and-multi-review/1090-cursor-reviewer-cannot-start-on-standalone-backend.md)).
 - **Read-only review.** Reviewers, consolidation and Verify must leave HEAD
   and the Git-visible paths as they found them. Reviewers and consolidation
   also run in provider read-only mode, as Multi Review's do. The backend
@@ -271,6 +281,64 @@ other step and `normalizeReviewPreparation` from the preparation step.
   preset, or custom text. It opens on the position's saved focus; an
   incomplete custom focus disables Start build.
 
+## Header and key information
+
+The tab header names the ticket and, under it, the phase and build agent. On
+its right sit the pipeline controls (retry, restart, pause, resume, cancel),
+then the **Key information** button, then the pipeline toolbar at the top
+right: the graph's collapse toggle, "N of M steps" and the elapsed time.
+`PipelineFlowView` still computes the toolbar and renders it through a portal
+into the header (`toolbarSlot`); a review pass opened as its own tab has no
+pipeline header and keeps the toolbar inline above its graph. There is no
+banner pointing at the review report: a review's outcome is on its node, in
+its inspector, and in the key information.
+
+Key information is the running brief a reader opens instead of reading the
+transcripts. It is `BuildPipeline.keyInformation`
+(`@orkestrator/protocol/build-pipeline-key-information`), and the button opens
+it as a panel floating over the tab (`PipelineKeyInformation.tsx`; Escape, the
+close button or a click outside closes it). Its sections, each shown only once
+written:
+
+- **Problem** or **Objective**: `framing` is `problem` by default, `objective`
+  when the ticket adds or changes something that was not broken.
+- **Context**, **Solution**, **What was done**.
+- **Decisions**: each decision with every option, its pros and cons, the
+  option chosen and why.
+- **Not done or needs further work**, **Tests** (each with its result).
+- **Review issues**: each round's issues, how each was handled, and its status.
+- **Verification**: each round's verdict and checks, with what failed.
+
+Stage agents keep it through two agent tools, `get_key_information` and
+`update_key_information` (`build-pipeline-key-information-tools.ts`). They are
+listed only to a credential whose environment a build pipeline owns, on the
+general agent server and on a stage turn's workflow-result server, so a stage
+reaches them on whichever connection its turn runs. Codex approves them
+without asking, as it does the mail and artifact tools: they write only the
+pipeline record. An update names the sections it replaces; `issues` and
+`verification` replace the current round's entries only. The backend records
+it as the running stage and round, under the pipeline lock, and refuses one
+that waits more than 30 seconds behind a supervisor pass (never applying it
+later). Once admitted under the lock, the tool awaits the persistence result;
+the wait timeout cannot report a committed write as failed. The Build, Fix, Address and Verify prompts end with stage-specific
+guidance on what to record (`keyInformationInstruction`); Review and the PR
+stages do not keep it.
+
+The backend also writes two sections itself, so they are never empty because
+a stage skipped the tool: an accepted review records its round's issues as
+open (a repeated review replaces them only while none has been worked on), and
+a Verify verdict sets its round's `passed`, keeping Verify's own summary and
+checks or deriving them from the criterion results. A restart that rewinds to
+an earlier round drops what later rounds recorded and the verification of the
+round it reruns. Restarting at or before Review, or explicitly retrying Review,
+also discards that round's superseded issues; restarting Address or a later
+stage preserves the round's issues and resolutions. On any rewind or review
+retry, narrative sections and update history are cleared conservatively:
+they have no per-attempt snapshots to restore, so stages rebuild the brief
+instead of showing superseded work as current. Every field is bounded
+(`KEY_INFORMATION_LIMITS`, about 200 KB at worst) and checked by
+`isBuildPipeline`.
+
 ## Inspector and actions
 
 `PipelineFlowView` owns selection, which follows the running step (or the last
@@ -435,10 +503,20 @@ action.
    preview read (`expectedHead`); a branch that moved since is refused. Inside
    the pipeline lock, before any state changes, the backend checks again,
    keeps the old tip at `refs/orkestrator/build-pipeline-rewinds/<pipeline>/<rewind>`
-   (`git update-ref`), and runs `git reset --hard <target>`. A refused or failed
-   reset leaves the record untouched. The rewind then records `code` (from, to,
-   dropped commits, backup ref, upstream and its dropped count), and a repeat of
-   the same request is a no-op like any restart.
+   (`git update-ref`), and runs `git reset --hard <target>`. A refused request
+   leaves the record untouched. An admitted one journals the rewind's `code`
+   (from, to, dropped commits, backup ref, upstream and its dropped count) with
+   `pending` before Git changes, and nothing else runs on the pipeline until
+   the reset finishes; a repeat of the same request is a no-op like any
+   restart.
+   In a container environment every Git command runs as
+   `docker exec -w /workspace <container> git …`. When the container is
+   paused, stopped or gone, the refusal says so (`EnvironmentUnavailableError`
+   from `createPipelineEnvironmentGit`, which reads the container's state
+   rather than passing on Docker's text). A reset already journaled is
+   retried on every supervisor pass, logged once per reason, and each control
+   in the meantime says the rewind has not finished; the reset completes, and
+   the step starts, once the container answers again.
 4. **Pushed commits and the pull request.** When the upstream had commits the
    reset dropped, every Ship until a live Ship completes after the rewind is
    told to push with `git push --force-with-lease` (never plain `--force`, never

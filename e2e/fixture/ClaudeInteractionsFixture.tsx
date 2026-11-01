@@ -66,6 +66,18 @@ function ActiveInteractions({ session }: { session: string }) {
             key={interaction.id}
             interaction={interaction}
             onResolve={resolve}
+            onApproveAndRemember={
+              session === "codex-host"
+                ? async (choice) => {
+                    const response = await fetch("/__claude-test/remember", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ id: interaction.id, choice }),
+                    });
+                    return response.json();
+                  }
+                : undefined
+            }
             onHold={(held) => hold(interaction.id, held)}
           />
         ),

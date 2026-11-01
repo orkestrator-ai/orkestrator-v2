@@ -146,6 +146,18 @@ race is forced only by the unit test. Neither spec is in CI
 made Electron frontmost, so every run skipped the `windowFocused` native-focus
 assertions.
 
+Evidence on arktech-mini (2026-11-01, load averages 40 to 48), all with the fix:
+
+- Realm owner alone: 4/4 passed (53 to 60 s each); with the guard disabled
+  the new step failed with `{ label: "Agent information", focused: false }`.
+- Annotation owner alone: 2/2 passed (14 passed, one Docker-only skip).
+- `mise run test:agent:electron`, first run (`t1170-electron-suite-1`): 45
+  passed, 3 skipped, 1 failed. Every annotation case passed. The realm journey
+  failed before any focus step: Electron exited with `SIGSEGV` after startup
+  (flake [1302](../../tests/flaky-tests/electron-and-desktop/1302-workspace-realm-startup-points.md)),
+  and the cleanup's `ENOTEMPTY` (0941) masked that in the report.
+- Second run (`t1170-electron-suite-2`): 46 passed, 3 skipped, 0 failed.
+
 ## Outstanding work
 
 ### Qualification

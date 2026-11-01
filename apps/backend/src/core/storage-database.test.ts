@@ -594,6 +594,68 @@ describe("StorageDatabase read observation", () => {
     expect(fetched).toHaveLength(2);
   });
 
+  test("a keyed write carries a cached store forward without a refetch", async () => {
+    const directory = await dataDir();
+    const fetched: number[] = [];
+    const db = database(directory, { observeFetch: (length) => fetched.push(length) });
+    db.writeStore("records", { a: { n: 1 }, b: { n: 2 }, c: { n: 3 } });
+    db.readStore("records");
+    fetched.length = 0;
+
+    db.updateStoreRow("records", "b", () => ({ result: undefined, value: { n: 20 } }));
+    db.updateStoreRow("records", "d", () => ({ result: undefined, value: { n: 4 } }));
+    db.updateStoreRow("records", "a", () => ({ result: undefined, delete: true }));
+    fetched.length = 0;
+
+    const expected = { b: { n: 20 }, c: { n: 3 }, d: { n: 4 } };
+    expect(db.readStore("records")?.value).toEqual(expected);
+    expect(Object.keys(db.readStore("records")?.value as object)).toEqual(["b", "c", "d"]);
+    expect(fetched).toEqual([]);
+    // The carried revision and rows match what another connection reads fresh.
+    const other = database(directory);
+    expect(other.readStore("records")).toEqual(db.readStore("records"));
+  });
+
+  test("a keyed write carries an envelope's collections forward", async () => {
+    const fetched: number[] = [];
+    const db = database(await dataDir(), { observeFetch: (length) => fetched.push(length) });
+    db.writeStore("mail", { mailboxes: { m: { n: 1 } }, idempotency: { i: { n: 2 } } });
+    db.readStore("mail");
+    db.updateStoreRow("mail", "added", () => ({ result: undefined, value: { n: 3 } }), {
+      collection: "idempotency",
+    });
+    fetched.length = 0;
+    expect(db.readStore("mail")?.value).toEqual({
+      mailboxes: { m: { n: 1 } },
+      idempotency: { i: { n: 2 }, added: { n: 3 } },
+    });
+    expect(fetched).toEqual([]);
+  });
+
+  test("a rolled back keyed write leaves the cached store as committed", async () => {
+    const db = database(await dataDir());
+    db.writeStore("records", { a: { n: 1 } });
+    const committed = db.readStore("records");
+    expect(() =>
+      db.transaction(() => {
+        db.updateStoreRow("records", "a", () => ({ result: undefined, value: { n: 2 } }));
+        throw new Error("rollback");
+      }),
+    ).toThrow("rollback");
+    expect(db.readStore("records")).toEqual(committed);
+    expect(db.readStoreRow("records", "a")).toEqual({ n: 1 });
+  });
+
+  test("a keyed write after another connection's commit does not keep the stale cache", async () => {
+    const directory = await dataDir();
+    const db = database(directory);
+    db.writeStore("records", { a: { n: 1 } });
+    db.readStore("records");
+    database(directory).writeStore("records", { a: { n: 1 }, b: { n: 2 } });
+    db.updateStoreRow("records", "a", () => ({ result: undefined, value: { n: 3 } }));
+    expect(db.readStore("records")?.value).toEqual({ a: { n: 3 }, b: { n: 2 } });
+  });
+
   test.each(["commit", "rollback"] as const)(
     "keyed reads reuse the pending revision before %s",
     async (outcome) => {

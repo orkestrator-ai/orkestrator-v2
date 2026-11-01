@@ -1451,6 +1451,11 @@ export function useNativeAgentSession<TMessage = unknown>({
         stateAvailability: previous?.stateAvailability ?? "unavailable",
         ...previous,
         ...patch,
+        // Every response parses a fresh identity. Keep the object an equal one
+        // already holds so an unchanged poll does not look like a change.
+        ...(patch.identity && sameProgressiveIdentity(previous?.identity, patch.identity)
+          ? { identity: previous?.identity }
+          : {}),
       });
     },
     [sessionKey],

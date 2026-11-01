@@ -577,12 +577,13 @@ describe("graph run control-plane benchmark: the Multi Review shape (item 301)",
         total: width + 1,
       });
       // A pass that only observes the running panel reads its own row once,
-      // fetches only that row (ten retained runs are never scanned), lists
-      // nothing, verifies and reads no artifact and saves nothing: within the
-      // bespoke budget of at most one save per running pass.
+      // from the cache the previous keyed write carried forward, so it fetches
+      // nothing (ten retained runs are never scanned), lists nothing, verifies
+      // and reads no artifact and saves nothing: within the bespoke budget of
+      // at most one save per running pass.
       expect(result.running).toMatchObject({
         runReads: 1,
-        runRowsFetched: 1,
+        runRowsFetched: 0,
         runListings: 0,
         saves: 0,
         starts: 0,
@@ -590,7 +591,7 @@ describe("graph run control-plane benchmark: the Multi Review shape (item 301)",
         artifactReads: 0,
         verifications: 0,
         artifactListings: 0,
-        largestRunFetch: 1,
+        largestRunFetch: 0,
       });
       // No pass of the whole run lists or scans the store: no listing, and no
       // statement returns more than the one row it asked for by id (a scan

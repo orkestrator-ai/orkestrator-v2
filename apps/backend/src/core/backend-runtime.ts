@@ -96,7 +96,9 @@ export class BackendRuntime {
     this.prMonitor = new PrMonitorRuntime(options.prMonitor);
     this.tmux = new TmuxRuntime(options.tmux);
     this.accounts = new AgentAccountsRuntime(options.accounts);
-    this.containerOom = new ContainerOomEvents(options.containerOom?.spawn);
+    this.containerOom = new ContainerOomEvents(options.containerOom?.spawn, () =>
+      this.containerStates.invalidate(),
+    );
     this.containerLogs = new ContainerLogService(
       options.containerLogs?.spawn,
       options.containerLogs?.now,

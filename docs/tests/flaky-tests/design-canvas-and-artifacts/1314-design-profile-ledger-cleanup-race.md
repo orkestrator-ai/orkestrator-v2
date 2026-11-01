@@ -199,3 +199,10 @@ mise exec -- bun test src/core/design/browser-profiles.test.ts
 
 run from `apps/backend`. No design code, assertion, timeout or skip changed.
 Asynchronous ledger removal remains a hypothesis.
+
+## Efficiency review follow-ups, 2026-11-01
+
+`mise run test` repeated the remaining-ledger assertion at 55.68 ms; it was the
+only backend failure. An earlier run of the same suite on this change had passed
+this test. The unchanged owner then passed alone five times out of five (37
+tests each). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.57IN29/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

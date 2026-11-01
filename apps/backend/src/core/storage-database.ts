@@ -758,6 +758,7 @@ export class StorageDatabase {
       }
       const update = mutate(current);
       let document = header.document;
+      let nextRow: StoreRow | null = null;
       if (update.delete) {
         if (!existing) return update.result;
         this.db
@@ -786,6 +787,7 @@ export class StorageDatabase {
                owner = excluded.owner, value = excluded.value`,
           )
           .run(store, collection, key, position, owner ?? null, value);
+        nextRow = { collection, key, position, value };
         if (collection && document !== null) {
           // A first row of a collection the envelope did not have yet.
           const envelope = JSON.parse(document) as Record<string, unknown>;
@@ -801,9 +803,21 @@ export class StorageDatabase {
       this.db
         .query("UPDATE stores SET revision = ?, document = ?, updated_at = ? WHERE name = ?")
         .run(revision, document, Date.now(), store);
-      // Whole-store readers must reload after a keyed write; keeping a full
-      // cached copy here would make each mutation copy retained history.
-      this.setCache(store, null);
+      // Carry an already cached store forward so the next whole-store reader
+      // does not refetch every row for one changed row. The map is copied
+      // because a rollback must restore it, but the row values are shared, so
+      // this copies references, never retained history.
+      const cached = this.pendingCache?.has(store)
+        ? this.pendingCache.get(store)
+        : this.cache.get(store);
+      if (cached?.revision === header.revision && cached.mode === "rows") {
+        const rows = new Map(cached.rows);
+        if (nextRow) rows.set(rowId(collection, key), nextRow);
+        else rows.delete(rowId(collection, key));
+        this.setCache(store, { ...cached, revision, document, rows });
+      } else {
+        this.setCache(store, null);
+      }
       return update.result;
     });
   }

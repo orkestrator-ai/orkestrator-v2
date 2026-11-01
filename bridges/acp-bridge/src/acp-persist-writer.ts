@@ -227,6 +227,24 @@ export function persistedSnapshot(): PersistedState {
   return boundPersistedSnapshot(snapshot);
 }
 
+/**
+ * Streaming output changes the state on every chunk and each write snapshots
+ * every session, so chunks share one write per interval. A crash can lose at
+ * most this much output. Everything else still persists through
+ * {@link schedulePersist}, and any such write carries the output so far.
+ */
+const STREAMING_PERSIST_INTERVAL_MS = 1_000;
+let streamingPersistTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function scheduleStreamingPersist(): void {
+  if (!stateFile || streamingPersistTimer) return;
+  streamingPersistTimer = setTimeout(() => {
+    streamingPersistTimer = null;
+    schedulePersist();
+  }, STREAMING_PERSIST_INTERVAL_MS);
+  streamingPersistTimer.unref();
+}
+
 export function schedulePersist(): void {
   if (!stateFile || persistenceScheduled) return;
   setPersistenceScheduled(true);

@@ -19,4 +19,35 @@ describe("the live panel's MCP layer", () => {
     expect(mcpScope("dynamic", "db", "dynamic")).toBe("user");
     expect(mcpScope(undefined, "orkestrator", "plugin")).toBe("orkestrator");
   });
+
+  test("native SSE rows retain the CLI's local layer in live and init status", () => {
+    // A duplicate project SSE definition is omitted inline, so has no override.
+    const layers = new Map([["inline", "project"]] as const);
+    expect(mcpScope("local", "remote", "local", layers)).toBe("local");
+    expect(initMcpServerStatus({ name: "remote", source: "local" }, layers).scope).toBe("local");
+  });
+
+  test("the session's launch record decides over the CLI's report", () => {
+    const layers = new Map([
+      ["db", "project"],
+      ["orkestrator", "project"],
+      ["plugin:docs:search", "user"],
+    ] as const);
+    // An inline server is `dynamic` to the CLI, whichever file it came from.
+    expect(mcpScope("dynamic", "db", "dynamic", layers)).toBe("project");
+    expect(mcpScope("user", "db", "user", layers)).toBe("project");
+    // Without Orkestrator's connection, a project's server of that name is the project's.
+    expect(mcpScope("dynamic", "orkestrator", "dynamic", layers)).toBe("project");
+    expect(mcpScope("dynamic", "unlisted", "dynamic", layers)).toBe("user");
+    expect(initMcpServerStatus({ name: "db", source: "dynamic" }, layers).scope).toBe("project");
+    expect(initMcpServerStatus({ name: "db" }, layers).scope).toBe("project");
+    expect(initMcpServerStatus({ name: "unlisted" }, layers).scope).toBeUndefined();
+  });
+
+  test("a same-named server from a source the files never declare keeps its own layer", () => {
+    const layers = new Map([["plugin:docs:search", "user"]] as const);
+    expect(mcpScope("dynamic", "plugin:docs:search", "plugin", layers)).toBe("plugin");
+    expect(mcpScope("claudeai", "plugin:docs:search", "claudeai", layers)).toBe("user");
+    expect(mcpScope("dynamic", "plugin:docs:search", "dynamic", layers)).toBe("user");
+  });
 });

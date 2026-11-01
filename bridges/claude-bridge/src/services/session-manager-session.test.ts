@@ -14,6 +14,7 @@ import {
   hydratePersistedSessionMessages,
   materializePersistedSession,
   mockSdkGetSessionInfo,
+  mockGetMcpRuntimeConfig,
   mockSdkGetSessionMessages,
   mockSpawn,
   nextQueryCall,
@@ -106,6 +107,136 @@ describe("idle MCP catalogue", () => {
       "only while this session's Claude is running",
     );
     expect(reconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe("an MCP action through a probe", () => {
+  const CONFIG_LAYERS = new Map([
+    ["docs", "project"],
+    ["late", "project"],
+    ["orkestrator", "orkestrator"],
+  ]);
+  const sessionReport = [
+    { name: "docs", status: "connected", scope: "dynamic", tools: [{ name: "search" }] },
+    { name: "late", status: "failed", scope: "dynamic", error: "exited" },
+    { name: "orkestrator", status: "connected", scope: "dynamic", tools: [{ name: "ticket" }] },
+  ];
+  // A bare CLI: no injected server, and the layers it read for itself.
+  const probeReport = (late: Record<string, unknown>) => [
+    { name: "docs", status: "failed", scope: "user", error: "the probe's own view" },
+    { name: "late", scope: "user", ...late },
+    { name: "only-the-probe-sees-this", status: "connected", scope: "user" },
+  ];
+
+  /** A session whose CLI reported `sessionReport` and has since exited. */
+  async function sessionWithoutCli() {
+    const base = mockGetMcpRuntimeConfig.getMockImplementation()!;
+    mockGetMcpRuntimeConfig.mockImplementationOnce(async () => ({
+      ...(await base()),
+      layers: CONFIG_LAYERS,
+    }));
+    queryControlOverrides.mcpServerStatus = async () => sessionReport;
+    const session = createSession();
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "inspect MCP state");
+    const call = await nextQueryCall();
+    const before = await readSessionMcpServers(session.id);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+    await waitFor(() => session.claudeRuntime === undefined);
+    return { session, before };
+  }
+
+  const without = (rows: Array<{ id: string }>, id: string) => rows.filter((row) => row.id !== id);
+
+  test("the session's report gives each server the layer it was loaded from", async () => {
+    const { before } = await sessionWithoutCli();
+    expect(before.map(({ id, scope }) => [id, scope])).toEqual([
+      ["docs", "project"],
+      ["late", "project"],
+      ["orkestrator", "orkestrator"],
+    ]);
+  });
+
+  test("a reconnect updates only its own row and keeps the injected server", async () => {
+    const { session, before } = await sessionWithoutCli();
+    queryControlOverrides.mcpServerStatus = async () =>
+      probeReport({ status: "connected", tools: [{ name: "late_tool" }] });
+    await performSessionMcpAction(session.id, "late", "reconnect");
+    await expectControlOnlyPrompt(await nextQueryCall());
+
+    const after = await readSessionMcpServers(session.id);
+    expect(without(after, "late")).toEqual(without(before, "late"));
+    expect(after.map((row) => row.id)).toEqual(["docs", "late", "orkestrator"]);
+    const late = after.find((row) => row.id === "late")!;
+    expect(late).toMatchObject({ status: "connected", scope: "project", toolCount: 1 });
+    expect(late.error).toBeUndefined();
+  });
+
+  test("disable and enable update only their own row", async () => {
+    const { session, before } = await sessionWithoutCli();
+    queryControlOverrides.toggleMcpServer = mock(async () => undefined);
+    queryControlOverrides.mcpServerStatus = async () => probeReport({ status: "disabled" });
+    await performSessionMcpAction(session.id, "late", "disable");
+    await expectControlOnlyPrompt(await nextQueryCall());
+    let after = await readSessionMcpServers(session.id);
+    expect(without(after, "late")).toEqual(without(before, "late"));
+    expect(after.find((row) => row.id === "late")).toMatchObject({
+      status: "disabled",
+      scope: "project",
+      actions: ["enable"],
+    });
+
+    queryControlOverrides.mcpServerStatus = async () => probeReport({ status: "connected" });
+    await performSessionMcpAction(session.id, "late", "enable");
+    await expectControlOnlyPrompt(await nextQueryCall());
+    after = await readSessionMcpServers(session.id);
+    expect(without(after, "late")).toEqual(without(before, "late"));
+    expect(after.find((row) => row.id === "late")).toMatchObject({
+      status: "connected",
+      scope: "project",
+    });
+  });
+
+  test("a server the session never listed, or the probe does not report, changes nothing", async () => {
+    const { session, before } = await sessionWithoutCli();
+    queryControlOverrides.mcpServerStatus = async () => probeReport({ status: "connected" });
+    await performSessionMcpAction(session.id, "only-the-probe-sees-this", "reconnect");
+    await expectControlOnlyPrompt(await nextQueryCall());
+    expect(await readSessionMcpServers(session.id)).toEqual(before);
+
+    await performSessionMcpAction(session.id, "orkestrator", "reconnect");
+    await expectControlOnlyPrompt(await nextQueryCall());
+    expect(await readSessionMcpServers(session.id)).toEqual(before);
+  });
+
+  test("a probe's refusal leaves the list alone", async () => {
+    const { session, before } = await sessionWithoutCli();
+    queryControlOverrides.reconnectMcpServer = mock(async () => {
+      throw new Error("Server not found: orkestrator");
+    });
+    await expect(performSessionMcpAction(session.id, "orkestrator", "reconnect")).rejects.toThrow(
+      "Server not found",
+    );
+    await expectControlOnlyPrompt(await nextQueryCall());
+    expect(await readSessionMcpServers(session.id)).toEqual(before);
+  });
+
+  test("a running CLI's answer still replaces the whole list", async () => {
+    let report: Array<Record<string, unknown>> = sessionReport;
+    queryControlOverrides.mcpServerStatus = async () => report;
+    const session = createSession();
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "inspect MCP state");
+    const call = await nextQueryCall();
+    await readSessionMcpServers(session.id);
+    report = [{ name: "docs", status: "connected", scope: "dynamic" }];
+    await performSessionMcpAction(session.id, "docs", "reconnect");
+    expect(session.mcpInventory?.map((row) => row.id)).toEqual(["docs"]);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
   });
 });
 

@@ -452,6 +452,28 @@ is refused with a message asking the user to send a message first
 (`performSessionMcpAction` in the Claude bridge): a probe CLI has no
 `onElicitation` and would deliver the link to no one.
 
+**Claude MCP actions without a running CLI.** Reconnect, enable and disable
+still work with no CLI running, through a probe: a bare CLI with only the
+working directory and environment. It has none of the servers the bridge passes
+inline, so `performSessionMcpAction` takes only the acted-on row from its
+answer. The other rows stay as the session last reported them, the row keeps
+the layer the session loaded it from, and a name the session never listed is
+not added. A live control's answer still replaces the whole list. The next read
+from a running CLI replaces it too.
+
+**Claude's live layers.** The bridge passes configured servers inline, so the
+CLI reports them as `dynamic`, whichever file they came from.
+`getMcpRuntimeConfig` therefore tags each server with the layer that won its
+name: `user` (`~/.claude.json`), `local` (its `projects[cwd]` entry) or
+`project` (`.mcp.json`), in the bridge's own merge order, or `orkestrator` for a
+server it injects. The session records the tags with its config revision, once
+the CLI has that configuration (`session.mcpServerLayers`), and `mcpScope` uses
+them over the CLI's report. A server whose source is `plugin`, `sdk` or
+`claudeai`, or that the tags do not name (an added account's own server, a
+coordinator's research server), keeps the CLI's report. The live row's Config
+link uses this layer to open the saved row the session loaded
+(`joinLiveMcpServer`).
+
 **OpenCode MCP sign-in.** OpenCode completes an MCP OAuth sign-in only for a
 request that waits for the browser's callback (`mcp.auth.authenticate`, or
 `opencode mcp auth`); `mcp.auth.start` alone leaves its callback server with

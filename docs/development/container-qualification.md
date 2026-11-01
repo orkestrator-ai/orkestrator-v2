@@ -51,6 +51,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
 | Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; pinned to the in-container firewall), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
+| Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
 | Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
@@ -795,6 +796,27 @@ network and the benchmark harness) had not kept up with account switching
 (#889). And a stopped container lost its agent tabs
 from view when it was started again. Both are fixed. Detail and decisions are
 in [0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
+
+## Build-pipeline rewind review evidence (2026-11-01)
+
+The review fixes passed all three live build-pipeline rewind cases on Linux
+amd64, Docker Engine 29.9.2, using `orkestrator-v2:dev-3e57790310c6`
+(image ID `sha256:d0cc33252a29f76e08cf502d36bde24520346d485355ce0ccc1737c4d56074b7`).
+The run completed in 14.5 seconds:
+
+```bash
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:dev-3e57790310c6 \
+  mise run test:logged -- --name review-repair-live-rewind -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./tests/build-pipeline-code-rewind-docker.test.ts --parallel=1
+```
+
+This exercised real container Git backup and reset, restart and lease-push
+instructions, refusal while paused, and completion of a journaled reset after
+unpause. The providers were harness fakes; no provider turns were taken.
+The logged runner reported exit 0 and removed its passing output under the
+normal retention policy. Docker Desktop, rootless Docker, and egress-gateway
+configurations were outside this focused run.
 
 ## Provider-state review evidence (2026-10-16)
 

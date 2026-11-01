@@ -1,7 +1,8 @@
 # Build pipeline rewind follow-ups
 
 Checked against the branch that made build pipeline restarts rewind
-(2026-10-27) and the branch that built the code items below (2026-10-28). The
+(2026-10-27), the branch that built the code items below (2026-10-28) and the
+branch that ran the code rewind in a real container (2026-11-01). The
 design is in
 [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step).
 
@@ -10,11 +11,16 @@ design is in
 Analysed 2026-10-28 against `main` at `79f3bc97`.
 
 Items 3 to 6 were built or checked on 2026-10-28 (#1376, `077da798`); they are
-listed as done and covered by "Assumptions and decisions" below. What is left
+listed as done and covered by "Assumptions and decisions" below. Item 7 was
+run against a real container on 2026-11-01 (rechecked against `main` at
+`93b99bfb`) and is done. What is left
 is live qualification: two runs that need provider logins (and, for item 2, a
-GitHub repository), and two narrower checks from "Needs verification". Nothing
-merged since #1376 changes the rewind code; #1393 (`f4e14254`) only rewrote the
-Verify prompt.
+GitHub repository), and the WebKit check of item 8. Since #1376 the Git side
+moved to `workspace-code-rewind.ts`, shared with graph runs' code rewinds
+(#1436), the reset became a journaled intent finished under the environment's
+exclusive mutation fence, and worktree reads retry once without fsmonitor
+(#1460); none of that changes what items 1, 2 and 8 must show. #1393
+(`f4e14254`) only rewrote the Verify prompt.
 
 ### Tasks
 
@@ -24,7 +30,7 @@ Verify prompt.
 4. **Rewind the code to a step**: "Rewind code to here…" with preview, backup ref and reset. Status: done.
 5. **Address without rerunning Review**: per-round report copies. Status: done.
 6. **Package-only restart on the single-review path**: "Prepare package again". Status: done.
-7. **Code rewind in a container environment**: `git update-ref` and `git reset --hard` through `docker exec`. Status: open.
+7. **Code rewind in a container environment**: `git update-ref` and `git reset --hard` through `docker exec`. Status: done.
 8. **Stacked bypass on WebKit and a physical phone**. Status: open.
 
 ### 1. A real rewind end to end
@@ -117,22 +123,29 @@ Verify prompt.
 
 ### 7. Code rewind in a container environment
 
-**Problem.** The reset has only run against a fake `environmentGit` and on a local worktree, never inside a container.
+**Problem.** The reset had only run against a fake `environmentGit` and on a local worktree, never inside a container.
 
-**Context.** `createPipelineEnvironmentGit` (`apps/backend/src/core/commands-review.ts:209-219`) uses `createEnvironmentCommandRunner`, which for a container runs `docker exec -w /workspace <container> git …` (`commands-review.ts:250-260`). The worktree probe behind `headAtStart` uses the same runner (`commands-registry-terminal.ts:1109`).
+**Context.** `createPipelineEnvironmentGit` (`apps/backend/src/core/commands-review.ts`) uses `createEnvironmentCommandRunner`, which for a container runs `docker exec -w /workspace <container> git …`. The Git steps are in `workspace-code-rewind.ts` (`inspectCodeRewind`, `resetWorktreeToCommit`); the journaled reset is finished by `finishPendingCodeRewind` (`build-pipeline-context.ts`), which the supervisor retries every pass (`build-pipeline-service-supervisor.ts`, `advance`). The worktree probe behind `headAtStart` and the preview is `get_environment_uncommitted_paths` (`commands-registry-terminal.ts`), the same runner.
 
-**Investigation.** The claim in "Needs verification" is accurate: the runner is shared, but the reset sequence (`rev-parse`, `update-ref <ref> <head> ""`, `status --porcelain --untracked-files=all`, `reset --hard`, `build-pipeline-code-rewind.ts:183-199`) has not run in a container. Container environments already run `git -C /workspace reset --hard` through `docker exec` elsewhere (`reconcileContainerDelegationBase`, `apps/backend/src/core/commands-environment.ts:1109-1113`), so the risk is the new `update-ref` and its ref namespace, not `reset` itself. The live Docker suites are opt-in (`RUN_LIVE_DOCKER_TESTS=1` with `ORKESTRATOR_QUALIFICATION_IMAGE`, `apps/backend/tests/container-live-qualification.test.ts:28-30`).
+**Investigation.** Done on 2026-11-01. `apps/backend/tests/build-pipeline-code-rewind-docker.test.ts` boots the development image's real entrypoint (full network, labelled, private owner) on this machine's Docker and drives the service harness on fake providers, so no provider turn is taken. Git goes through the production `createPipelineEnvironmentGit` and a real `EnvironmentMutationFence`; the harness's probe answers are filled by running the `get_environment_uncommitted_paths` script in the container. Three cases, all passing:
 
-**Decisions.**
+- The happy path: the Build "agent" commits twice and pushes the first. The preview lists both commits and `origin/<branch>` with one dropped pushed commit; an untracked file blocks the preview and the rewind; after the confirmed rewind, in the container, `git rev-parse HEAD` equals the Build's `headAtStart`, the backup ref resolves to the old tip, the branch is still checked out, `git status` is clean, and the pipeline restarted from the Build on the rewound code. A repeat is a no-op, a retried reset proves the backup instead of moving anything, and the next Ship is told `--force-with-lease`.
+- A paused container: the rewind is refused and nothing changes.
+- A container paused just as the journaled reset writes the backup ref: nothing starts on the old code, and the reset finishes, and the Build starts on the rewound code, once the container answers.
 
-- **How to verify it?**
-  - **Use a container environment for the item 1 or item 2 run and do one "Rewind code to here" there (recommended).**
-    - Pros: no new code; the real backend path end to end.
-    - Cons: one-off evidence; waits on a live run.
-  - **Add an opt-in live Docker case that calls `resetWorktreeToCommit` through `createPipelineEnvironmentGit` against a real container.**
-    - Pros: repeatable; needs no provider or GitHub.
-    - Cons: new test code and a qualification image; it must follow the live Docker suites' labelled-resource cleanup.
-- **What counts as a pass?** Inside the container, `git rev-parse HEAD` equals the step's `headAtStart`, the backup ref resolves to the old tip, `git status` is clean, and the pipeline restarts from that step.
+`update-ref <ref> <head> ""` (the empty old value) passes through `docker exec` intact, and the reset also works with no Git identity configured (checked by hand in a throwaway container). The run found three faults, all in how failures read, none in the reset:
+
+1. A paused, stopped or removed container surfaced Docker's daemon text, naming the container ID ("Error response from daemon: Container <id> is paused, unpause the container before exec"), as the rewind's refusal.
+2. The same text came back from every action on the pipeline (pause, cancel, restart) while a journaled reset waited for the container, with nothing saying a rewind was outstanding; and the supervisor logged a warning every 1.5 s for as long as the container stayed down.
+3. Where a Git failure is read as an answer, an unreachable container would be read wrongly: as "the commit this step started from is no longer in the repository", as "no upstream" (the next Ship would then push without lease), or as "no backup yet". A retried reset whose backup ref was missing showed Git's `fatal: ambiguous argument` text.
+
+Fixed: `createPipelineEnvironmentGit` reads the container's state (`docker inspect`) after a failed, untimed-out command in a container environment and throws `EnvironmentUnavailableError` ("The environment's container is paused. Unpause it, then try again.", "…is not running. Start the environment, then try again.", "…could not be found…") instead of Docker's text; a running container's failure is passed on unchanged. `workspace-code-rewind.ts` lets that error through wherever it treated a Git failure as an answer, and says "The pending rewind's backup ref is missing." `finishPendingCodeRewind` prefixes "The code rewind to <commit> has not finished, so this build cannot continue yet." The supervisor logs each pending-rewind failure reason once per pipeline. Regression tests: "a container that cannot run Git is never read as a Git answer" (`build-pipeline-code-rewind.test.ts`), "says why a container environment cannot run Git, instead of Docker's text" (`commands-review.test.ts`), and "a journaled reset the container cannot run yet says so, logs once and finishes later" (`build-pipeline-service-rewind-follow-ups.test.ts`); each fails on the code before the fix.
+
+The live test is opt-in like the other live Docker suites (`RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image>`); the Linux Engine qualification workflow now runs it, and `docs/development/container-qualification.md` lists it.
+
+**Decisions.** Decisions 9 to 11 below. Deleting a pipeline whose journaled
+reset cannot finish is refused too; that is
+[2120](2120-build-pipeline-pending-code-rewind-blocks-delete.md).
 
 ### 8. Stacked bypass on WebKit and a physical phone
 
@@ -172,6 +185,13 @@ and refusal to complete while the PR stays closed. Browser fixtures cover retain
 validation actions and panel grouping at both viewport widths across reload.
 Live provider/GitHub qualification below remains separate from these controlled fixtures.
 
+Run on 2026-11-01 (item 7): "Rewind code to here" in a real container
+environment, through `docker exec`, by the opt-in live test
+`apps/backend/tests/build-pipeline-code-rewind-docker.test.ts` (fake providers,
+the production Git port and fence). An unreachable container is now refused
+with a readable reason, and a reset journaled before the container stopped
+says it is outstanding, logs once, and finishes when the container answers.
+
 Built on 2026-10-28 (items 3 to 6 below):
 
 - **Rewind code to here.** Every supervisor-started stage session records
@@ -210,6 +230,9 @@ two scenarios in `e2e/PipelineFlow.spec.ts` (`rewound-loop`, `code-rewind`).
 4. **Rewind the code to a step.** Built as described above; decisions 1 to 3.
 5. **Address without rerunning Review.** Built; decision 4.
 6. **Package-only restart on the single-review path.** Built; decision 6.
+7. **Code rewind in a container environment.** Run live on this machine's
+   Docker with fake providers; three failure-reporting faults fixed with
+   regression tests; decisions 9 to 11.
 
 ## Outstanding work
 
@@ -253,11 +276,12 @@ Known limits, by design:
   use the user's. Since then the user's approval of the saved Cursor key and a
   copied Pi login for disposable `dev:test` profiles (2026-09-27) has been
   noted under task 1; a GitHub repository is still needed for item 2.
-- `git reset --hard` and `git update-ref` through `docker exec` in a
-  containerized environment (the service tests use a fake `environmentGit`;
-  the local runner and the container runner are the same ones the existing
-  worktree probe uses, but the reset itself has not run in a container).
-  Task 7.
+- The container run (task 7) used the development image on Docker Engine on
+  Linux, on fake providers. Docker Desktop, rootless Docker and the egress
+  gateway topology were not run; the Git commands do not depend on the
+  network policy, but the qualification workflow's arm64 and amd64 runs are
+  the next evidence. A real provider session committing in the container is
+  covered by task 1 or 2 if either runs on a container environment.
 - The stacked bypass on WebKit and on a physical phone. Task 8.
 
 ## Assumptions and decisions
@@ -346,7 +370,48 @@ Decisions made on 2026-10-28 while building items 3 to 6.
    backend command, so a renderer cannot reset a branch around the pipeline's
    checks.
 
+Decisions made on 2026-11-01 while running item 7.
+
+9. **How to verify the container path.** Options: (a) do one "Rewind code to
+   here" during the item 1 or item 2 live run on a container environment;
+   (b) an opt-in live Docker test calling `resetWorktreeToCommit` alone;
+   (c) an opt-in live Docker test driving the service harness (fake
+   providers) through the production `createPipelineEnvironmentGit` and
+   fence. Chose (c). Pros: repeatable, needs no provider, login or GitHub;
+   covers the preview, the refusal, the journaled reset, the restart and the
+   lease rule, not only the Git commands; CI runs it on both Linux
+   architectures. Cons: the harness answers the worktree probe from its
+   controls, so the test fills them by running the probe's own script in the
+   container rather than through the backend command; the container runs the
+   image's entrypoint, but no workspace setup clone or bridges; a real agent
+   committing in the container is still only covered by (a).
+10. **How an unreachable container is reported.** Options: (a) leave Docker's
+    text; (b) wrap every rewind refusal in a generic "could not be rewound";
+    (c) classify in the Git port by reading the container's state after a
+    failed command, and let that error through the rewind's "a failure is an
+    answer" steps. Chose (c), in `createPipelineEnvironmentGit`, which every
+    workflow Git caller (pipelines, graph runs, the workflow result validator)
+    shares. Pros: a readable reason that says what to do; no parsing of
+    Docker's message (whose wording varies by version); never mistaken for a
+    missing commit, a missing upstream or a missing backup. Cons: one extra
+    `docker inspect` per failed command in a container environment (none on
+    success or timeout); a container that stops between the failed command
+    and the inspect is still reported as Git's own failure.
+11. **A journaled reset while the container is down.** Options: (a) keep
+    blocking every action until the reset finishes, saying why; (b) let
+    pause and cancel through without the reset; (c) abandon the intent after
+    some time. Chose (a), as before, with the reason stated and the
+    supervisor's warning logged once per reason instead of every 1.5 s.
+    Pros: nothing can run on the old code after the user confirmed the
+    rewind; recovery is automatic once the container is started. Cons: the
+    pipeline cannot be paused, cancelled or deleted until then (deletion
+    cancels an active pipeline first); a container whose workspace was lost,
+    not just stopped, leaves the reset refused for good ("the branch moved"),
+    and only deleting the environment clears it. Recorded as
+    [2120](2120-build-pipeline-pending-code-rewind-blocks-delete.md).
+
 ## Related
 
 - [build-pipeline-view.md](../../architecture/build-pipeline-view.md#restarting-a-step): the design
 - [0315-build-pipeline-flow-graph.md](0315-build-pipeline-flow-graph.md): the flow graph's own live qualification
+- [2120-build-pipeline-pending-code-rewind-blocks-delete.md](2120-build-pipeline-pending-code-rewind-blocks-delete.md): a reset that cannot finish blocks deleting its pipeline

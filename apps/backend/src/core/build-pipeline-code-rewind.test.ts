@@ -9,8 +9,10 @@ import {
   codeRewindStateBlocker,
   forcePushUpstream,
   inspectCodeRewind,
+  resetWorktreeToCommit,
   type EnvironmentGit,
 } from "./build-pipeline-code-rewind.js";
+import { EnvironmentUnavailableError } from "./workspace-code-rewind.js";
 
 const TARGET = "b".repeat(40);
 const HEAD = "c".repeat(40);
@@ -76,6 +78,56 @@ describe("code rewind rules", () => {
     expect(inspection.commits).toHaveLength(1);
     expect(inspection.commits[0]!.subject).toHaveLength(MAX_CODE_REWIND_COMMIT_SUBJECT_LENGTH);
     expect(inspection.commits[0]!.subject.endsWith("…")).toBe(true);
+  });
+
+  test("a container that cannot run Git is never read as a Git answer", async () => {
+    const paused = () => new EnvironmentUnavailableError("The environment's container is paused.");
+    // Not "the commit is gone".
+    const atAncestry: EnvironmentGit = async () => {
+      throw paused();
+    };
+    await expect(inspectCodeRewind(atAncestry, "env-1", TARGET)).rejects.toBeInstanceOf(
+      EnvironmentUnavailableError,
+    );
+    // Not "no upstream", which would let the next Ship push without lease.
+    const atUpstream: EnvironmentGit = async (_id, args) => {
+      if (args[0] === "rev-list") return "0\n";
+      if (args[0] === "log") return "";
+      throw paused();
+    };
+    await expect(inspectCodeRewind(atUpstream, "env-1", TARGET)).rejects.toThrow(
+      "The environment's container is paused.",
+    );
+
+    // Not "no backup yet": nothing is written.
+    const calls: string[][] = [];
+    const atBackup: EnvironmentGit = async (_id, args) => {
+      calls.push(args);
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return `${HEAD}\n`;
+      if (args[0] === "status") return "";
+      throw paused();
+    };
+    const reset = { from: HEAD, to: TARGET, backupRef: "refs/orkestrator/x/y" };
+    await expect(resetWorktreeToCommit(atBackup, "env-1", reset)).rejects.toBeInstanceOf(
+      EnvironmentUnavailableError,
+    );
+    expect(calls.map((call) => call[0])).toEqual(["rev-parse", "status", "rev-parse"]);
+
+    // An applied reset whose backup ref is missing says so, not Git's text.
+    let unavailable = false;
+    const applied: EnvironmentGit = async (_id, args) => {
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return `${TARGET}\n`;
+      if (args[0] === "status") return "";
+      if (unavailable) throw paused();
+      throw new Error("fatal: ambiguous argument 'refs/orkestrator/x/y': unknown revision");
+    };
+    await expect(resetWorktreeToCommit(applied, "env-1", reset)).rejects.toThrow(
+      "The pending rewind's backup ref is missing.",
+    );
+    unavailable = true;
+    await expect(resetWorktreeToCommit(applied, "env-1", reset)).rejects.toBeInstanceOf(
+      EnvironmentUnavailableError,
+    );
   });
 
   test("Ship force-pushes until a live Ship completes after the rewind", () => {

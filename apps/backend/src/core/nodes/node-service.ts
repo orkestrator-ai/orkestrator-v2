@@ -36,6 +36,7 @@ import {
   type RouteId,
 } from "@orkestrator/protocol/federation";
 import { checkBackendRoute } from "@orkestrator/protocol/node/node-link/backend-hello";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import {
   classifyRouteFailure,
   openRoute,
@@ -581,10 +582,7 @@ export class NodeService {
       } catch (error) {
         // A definitive capability refusal is distinct from delivery. Other
         // failures remain unsent, so the next sync can retry unchanged settings.
-        if (
-          error instanceof Error &&
-          error.message === `Unknown command: ${SYNC_CONTROLLER_SETTINGS_COMMAND}`
-        ) {
+        if (isUnknownCommandError(error, SYNC_CONTROLLER_SETTINGS_COMMAND)) {
           this.unsupportedSettings.set(link, epoch);
         }
         console.warn("[nodes] Could not send settings to a node:", errorCode(error));

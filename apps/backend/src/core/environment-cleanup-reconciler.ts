@@ -425,11 +425,9 @@ export type StrayWorkspaceSweepResult = {
  * Creation never allocates a path that already exists, and the age check
  * covers a worktree whose environment record is still being written.
  *
- * Folders the user chose for worktrees are swept too, but there a directory is
- * a candidate only when its name is one creation produces
- * (`<project>-<environment branch>`) and its environment namespace belongs to
- * no live or ledgered environment: the folder may hold the user's own empty
- * directories, which the content rule alone would not protect.
+ * Chosen folders are protected as roots, but their unknown children are never
+ * swept: a branch-style name cannot prove ownership in a mixed-use folder.
+ * Exact recorded paths are handled separately by ledger reconciliation.
  */
 export async function sweepStrayWorkspaceDirectories(
   context: CommandContext,
@@ -440,38 +438,18 @@ export async function sweepStrayWorkspaceDirectories(
   const result: StrayWorkspaceSweepResult = { removed: 0, keptWithContent: 0 };
   const baseDir = getWorktreeBaseDir(context);
   const chosenRoots = await chosenWorkspaceRoots(context, baseDir);
-  let owned: string[] | null = null;
-  let ownerNamespaces: Set<string> | null = null;
-  for (const root of [baseDir, ...chosenRoots]) {
-    const chosen = root !== baseDir;
-    let names: string[];
-    try {
-      names = (await readdir(root, { withFileTypes: true }))
-        .filter((dirent) => dirent.isDirectory())
-        .map((dirent) => dirent.name);
-    } catch (error) {
-      // A chosen folder may sit on a volume that is not mounted right now.
-      if (chosen || (error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw error;
-    }
-    if (chosen) {
-      ownerNamespaces ??= (await environmentBranchOwners(context)).namespaces;
-      const owners = ownerNamespaces;
-      names = names.filter((name) => {
-        // The worktree directory name ends in the branch name, so it carries
-        // the same namespace.
-        const namespace = parseEnvironmentBranchNamespace(name);
-        return namespace !== null && !owners.has(namespace);
-      });
-    }
-    if (names.length === 0) continue;
-    owned ??= await ownedWorkspacePaths(context, run, chosenRoots);
-    try {
-      await sweepStrayWorkspaceRoot(root, names, owned, now, result);
-    } catch (error) {
-      // A chosen folder that vanished mid-pass waits for the next pass.
-      if (!chosen) throw error;
-    }
+  let names: string[];
+  try {
+    names = (await readdir(baseDir, { withFileTypes: true }))
+      .filter((dirent) => dirent.isDirectory())
+      .map((dirent) => dirent.name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return result;
+    throw error;
+  }
+  if (names.length > 0) {
+    const owned = await ownedWorkspacePaths(context, run, chosenRoots);
+    await sweepStrayWorkspaceRoot(baseDir, names, owned, now, result);
   }
   return result;
 }

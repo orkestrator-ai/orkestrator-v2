@@ -62,7 +62,8 @@ export interface EnvironmentCleanupEntry {
   attempts: number;
   lastAttemptAt: string | null;
   /**
-   * Backend versions that have counted an attempt, oldest first. An entry at
+   * Backend versions ordered by most recent attempt, newest last (at most 16;
+   * least-recently seen versions are evicted). An entry at
    * the attempt cap gets one more retry cycle from a version not listed here.
    * Absent in entries written before versions were recorded.
    */

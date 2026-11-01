@@ -178,6 +178,36 @@ describe("environment cleanup reconciler", () => {
     expect(await exists(worktreePath)).toBe(true);
   });
 
+  test("does not rearm an exhausted entry while its environment is live", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    await storage.addEnvironment(environment("e1"));
+    const ledger = environmentCleanupLedger(dataDir);
+    await ledger.record(
+      entry({
+        environmentId: "e1",
+        pending: ["worktree"],
+        attempts: MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
+        attemptedVersions: ["1.0.0"],
+      }),
+    );
+    const before = await ledger.get("e1");
+    expect(
+      (await reconcileEnvironmentCleanup(context, { backendVersion: "1.1.0" })).attempted,
+    ).toBe(0);
+    expect(await ledger.get("e1")).toEqual(before);
+  });
+
+  test("removes an exact ledger-recorded path in a chosen folder", async () => {
+    const { context, dataDir } = await reconcileContext();
+    const chosen = await tempDir("ork-reconcile-chosen-");
+    const owned = await buildLogDirectory(chosen, "project-owned");
+    await environmentCleanupLedger(dataDir).record(
+      entry({ worktreePath: owned, worktreeRoot: chosen, pending: ["worktree"] }),
+    );
+    expect((await reconcileEnvironmentCleanup(context)).attempted).toBe(1);
+    expect(await exists(owned)).toBe(false);
+  });
+
   test("backs off after a recent attempt and reports when it becomes due", async () => {
     const { context, dataDir } = await reconcileContext();
     const now = new Date("2026-09-26T12:00:00.000Z");
@@ -812,12 +842,18 @@ describe("stray workspace directory sweep", () => {
     expect(await exists(stray)).toBe(true);
   });
 
-  test("in a folder an environment chose, removes only scheme-named strays it can prove", async () => {
+  test("preserves unproven children in a chosen folder, including scheme-matching names", async () => {
     const { context, storage, dataDir } = await reconcileContext();
     const chosen = await tempDir("ork-reconcile-chosen-");
     await storage.addEnvironment({ ...environment(randomUUID()), worktreeBaseDir: chosen });
     const stray = await buildLogDirectory(chosen, `project-${orphanBranch("fix")}`);
     // The user's own directories, empty or holding only build logs.
+    const matching: string[] = [];
+    for (const name of ["backup-deadbeef1234", "backup-202611011230", "notes-1b220104c2fe"]) {
+      const candidate = path.join(chosen, name);
+      await fs.mkdir(path.join(candidate, "empty"), { recursive: true });
+      matching.push(candidate);
+    }
     const unnamed = await buildLogDirectory(chosen, "photos");
     await fs.mkdir(path.join(chosen, "empty-project"));
     const withFile = await buildLogDirectory(chosen, `project-${orphanBranch("notes")}`);
@@ -840,17 +876,31 @@ describe("stray workspace directory sweep", () => {
     await age(chosen, ORPHANED_STATE_MIN_AGE_MS * 2);
 
     expect(await sweepStrayWorkspaceDirectories(context)).toEqual({
-      removed: 1,
-      keptWithContent: 1,
+      removed: 0,
+      keptWithContent: 0,
     });
-    expect(await exists(stray)).toBe(false);
-    for (const kept of [unnamed, path.join(chosen, "empty-project"), withFile, live, ledgered]) {
+    expect(await exists(stray)).toBe(true);
+    for (const kept of [
+      ...matching,
+      unnamed,
+      path.join(chosen, "empty-project"),
+      withFile,
+      live,
+      ledgered,
+    ]) {
       expect(await exists(kept)).toBe(true);
     }
     expect(await exists(chosen)).toBe(true);
+    // The same matching names also survive when their only files are Turbo logs.
+    for (const candidate of matching) {
+      await buildLogDirectory(chosen, path.basename(candidate));
+    }
+    await age(chosen, ORPHANED_STATE_MIN_AGE_MS * 2);
+    expect((await sweepStrayWorkspaceDirectories(context)).removed).toBe(0);
+    for (const candidate of matching) expect(await exists(candidate)).toBe(true);
   });
 
-  test("sweeps a folder only a ledger entry still records", async () => {
+  test("does not infer ownership of children from a ledger-recorded root", async () => {
     const { context, dataDir, worktreeDir } = await reconcileContext();
     const chosen = await tempDir("ork-reconcile-chosen-");
     const stray = await buildLogDirectory(chosen, `project-${orphanBranch("fix")}`);
@@ -865,11 +915,11 @@ describe("stray workspace directory sweep", () => {
     );
     await age(stray, ORPHANED_STATE_MIN_AGE_MS * 2);
 
-    expect((await sweepStrayWorkspaceDirectories(context)).removed).toBe(1);
-    expect(await exists(stray)).toBe(false);
+    expect((await sweepStrayWorkspaceDirectories(context)).removed).toBe(0);
+    expect(await exists(stray)).toBe(true);
   });
 
-  test("sweeps the Settings location only when this backend creates worktrees there", async () => {
+  test("preserves unproven children of the Settings location", async () => {
     const { context, storage } = await reconcileContext();
     const chosen = await tempDir("ork-reconcile-chosen-");
     const stray = await buildLogDirectory(chosen, `project-${orphanBranch("fix")}`);
@@ -884,8 +934,8 @@ describe("stray workspace directory sweep", () => {
     expect((await sweepStrayWorkspaceDirectories(context)).removed).toBe(0);
     expect(await exists(stray)).toBe(true);
     const unpinned = { ...context, worktreeDir: undefined } as CommandContext;
-    expect((await sweepStrayWorkspaceDirectories(unpinned)).removed).toBe(1);
-    expect(await exists(stray)).toBe(false);
+    expect((await sweepStrayWorkspaceDirectories(unpinned)).removed).toBe(0);
+    expect(await exists(stray)).toBe(true);
   });
 
   test("skips a recorded folder that is a symlink, a checkout, or missing", async () => {
@@ -912,6 +962,22 @@ describe("stray workspace directory sweep", () => {
     expect(await exists(strayInBase)).toBe(false);
     expect(await exists(inLink)).toBe(true);
     expect(await exists(inCheckout)).toBe(true);
+  });
+
+  test("an unreadable chosen folder does not stop the backend-root sweep", async () => {
+    const { context, storage, worktreeDir } = await reconcileContext();
+    const chosen = await tempDir("ork-reconcile-chosen-");
+    await storage.addEnvironment({ ...environment("live"), worktreeBaseDir: chosen });
+    const stray = await buildLogDirectory(worktreeDir, "project-gone");
+    await age(stray, ORPHANED_STATE_MIN_AGE_MS * 2);
+    await fs.chmod(chosen, 0);
+    try {
+      await expect(fs.readdir(chosen)).rejects.toMatchObject({ code: "EACCES" });
+      expect((await sweepStrayWorkspaceDirectories(context)).removed).toBe(1);
+      expect(await exists(stray)).toBe(false);
+    } finally {
+      await fs.chmod(chosen, 0o700);
+    }
   });
 
   test("never removes a chosen folder that lies inside the backend's root", async () => {

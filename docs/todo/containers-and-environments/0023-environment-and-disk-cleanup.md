@@ -15,7 +15,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 3. **Keychain item removed by `dev:reset` (Code 3)**: the code is done; the live macOS run is owed. Status: blocked (needs a macOS host).
 4. **Failing entry and namespace reuse (open question)**: should an exhausted ledger entry block re-creating an environment in the same namespace? Status: done (2026-11-01): no guard; the invariant is documented and pinned by a test (decision 9).
 5. **Retrying exhausted entries (open question)**: should an entry at the attempt cap ever be retried? Status: done (2026-11-01): one more cycle per backend version that never attempted it (decision 10).
-6. **Stray sweep of user-chosen folders (open question)**: should the stray-workspace sweep cover `worktreeBaseDir` folders? Status: done (2026-11-01): yes, but there only for directories named by Orkestrator's worktree scheme (decisions 11–13).
+6. **Stray sweep of user-chosen folders (open question)**: should the stray-workspace sweep cover `worktreeBaseDir` folders? Status: done (2026-11-01): defer external stray deletion until durable ownership proof exists (decision 14).
 
 The folder index row now says what remains: task 3's macOS run.
 
@@ -94,7 +94,7 @@ Rechecked 2026-11-01 at `93b99bfb`: every production `addEnvironment` caller (`c
 
 **Investigation.** The reconciler skips exhausted entries for good (`environment-cleanup-reconciler.ts:92-96`). The attempt counter starts at 0 only when an entry is created (`buildEnvironmentCleanupEntry`); `record()` keeps it across a retried deletion. (The `:514` cited earlier is the synthetic entry of the orphaned-branch sweep.) The running version is `APP_VERSION` (`constants.ts`): the launcher's `ORKESTRATOR_VERSION`, else the backend package version.
 
-**Outcome.** Built the recommended option, keyed on a list of versions rather than one stored version. Entries gain `attemptedVersions` (oldest first, at most 16), which `noteAttempt` appends to. When an exhausted entry is read by a backend whose version is not in that list, `EnvironmentCleanupLedger.rearmForVersion` resets `attempts` to 0 and records the version in the same transaction, the reconciler logs `Retrying cleanup for deleted environment <id> once under backend <version>` and runs the entry in the same pass. A failure the upgrade did not fix stops again after the usual eight attempts and logs the "still failing" line again. Going back to an older version that already tried does not re-arm it. Entries written before the field existed are re-armed once by the first backend that reads them. `disk:report` and its tests are unchanged: it reports the current state, and [disk-usage.md](../../development/disk-usage.md) now says a stopped entry may move back to retrying after an upgrade. Tests: four ledger tests (version list order, dedupe and bound; re-arm once per version, not by the exhausting or an older version; no re-arm below the cap or of a missing entry; legacy entries) and three reconciler tests (re-armed entry finishes; unfixed failure stops after exactly one more cycle with one re-arm line and one "still failing" line; the task 4 test).
+**Outcome.** Built the recommended option, keyed on a list of versions rather than one stored version. Entries gain `attemptedVersions` (ordered by most recent attempt, newest last, at most 16; least-recently seen versions are evicted), which `noteAttempt` appends to. When an exhausted entry is read by a backend whose version is not in that list, `EnvironmentCleanupLedger.rearmForVersion` resets `attempts` to 0 and records the version in the same transaction, the reconciler logs `Retrying cleanup for deleted environment <id> once under backend <version>` and runs the entry in the same pass. A failure the upgrade did not fix stops again after the usual eight attempts and logs the "still failing" line again. Going back to an older version that already tried does not re-arm it. Entries written before the field existed are re-armed once by the first backend that reads them. `disk:report` and its tests are unchanged: it reports the current state, and [disk-usage.md](../../development/disk-usage.md) now says a stopped entry may move back to retrying after an upgrade. Tests: four ledger tests (version list order, dedupe and bound; re-arm once per version, not by the exhausting or an older version; no re-arm below the cap or of a missing entry; legacy entries) and three reconciler tests (re-armed entry finishes; unfixed failure stops after exactly one more cycle with one re-arm line and one "still failing" line; the task 4 test).
 
 **Decisions.**
 
@@ -119,7 +119,7 @@ Rechecked 2026-11-01 at `93b99bfb`: every production `addEnvironment` caller (`c
 
 Rechecked 2026-11-01: the content rule treats empty directories as removable, so in a folder the user chose (say `~/Projects`) an empty directory the user made would pass every existing check. The recommended option's "the content rule becomes the whole safety margin" is therefore not enough to prove ownership there. Worktree directories are named `<project slug>-<branch>` (`createLocalWorktree`, `commands-environment.ts:2206`), and an environment branch ends in its 12-hex namespace, so the directory name matches `parseEnvironmentBranchNamespace`: the same name-based proof the branch sweep already relies on.
 
-**Outcome.** Built the recommended option with that extra rule. The sweep now also lists each live environment's `worktreeBaseDir`, each ledger entry's `worktreeRoot`, and the Settings > Disk usage environment location when the backend has no `--worktree-dir` (decision 12). In those folders a directory is a candidate only when its name parses as a scheme name and its namespace belongs to no live or ledgered environment; then the existing ownership, content and age rules apply. A recorded folder is skipped unless `validateWorktreeLocation` returns it unchanged (canonical, no symlinked ancestor, not the filesystem root, not inside a data directory), and skipped if it is inside a project checkout. A chosen folder that cannot be listed is skipped, not an error. Chosen folders also count as claimed paths, so a chosen folder inside the backend's root is never swept as a stray of that root. Tests: five new sweep tests (only the scheme-named, unowned, build-log-only directory goes, while a non-scheme build-log directory, an empty user directory, one with a file, and ones whose namespace a live environment or a ledger entry owns stay; a folder only a ledger entry records; the Settings location with and without `--worktree-dir`; symlinked, checkout and missing folders skipped while the backend root is still swept; a chosen folder inside the backend root kept). Removing any one of these rules makes at least one of them fail.
+**Outcome.** Review found that a branch-style name cannot prove ownership of a directory in a mixed-use folder. External stray deletion is deferred (decision 14). Validated live, ledger and applicable Settings roots remain protected from the backend-root sweep. Exact paths recorded in the cleanup ledger are still cleaned. Regression tests preserve aged matching-name user directories, both empty and build-log-only, remove an exact ledger-owned path, and verify an unreadable chosen folder cannot interrupt the backend-root sweep.
 
 **Decisions.**
 
@@ -141,8 +141,8 @@ pre-ledger sweeps, `disk:report`). The real-stack evidence was recorded on
 `dev:reset` now removes a profile's macOS Keychain item. On 2026-11-01 the
 three open questions were decided and built: no namespace guard, one more
 retry cycle for an exhausted entry per new backend version, and a stray sweep
-of user-chosen worktree folders limited to directories named by the worktree
-scheme. What remains is a live macOS run of the Keychain change.
+of user-chosen worktree folders deferred until durable ownership proof exists.
+What remains is a live macOS run of the Keychain change.
 
 ## Current state
 
@@ -178,9 +178,9 @@ scheme. What remains is a live macOS run of the Keychain change.
     stores.
   - `sweepPreLedgerDiskState` runs `sweepStrayWorkspaceDirectories`,
     `sweepOrphanedEnvironmentBranches` and `sweepAbandonedTempFiles`. Since
-    2026-11-01 the first also covers the worktree folders environments, ledger
-    entries and the Settings location recorded, for scheme-named directories
-    only.
+    2026-11-01 the first also protects validated worktree folders recorded by
+    environments, ledger entries and Settings. Unknown children in those
+    mixed-use folders are preserved, regardless of their names (decision 14).
 
   Per-project branch sweep times and cursors live in the store
   `environment-cleanup-sweeps`. `runStartupEnvironmentCleanup` starts it all.
@@ -312,7 +312,7 @@ scheme. What remains is a live macOS run of the Keychain change.
 5. ~~Decide whether an exhausted entry is ever retried.~~ Built 2026-11-01:
    once per new backend version (task 5, decision 10).
 6. ~~Decide whether the stray sweep covers user-chosen folders.~~ Built
-   2026-11-01: yes, for scheme-named directories (task 6, decisions 11–13).
+   2026-11-01: deferred until durable ownership proof exists (task 6, decision 14).
 
 ### Qualification
 
@@ -611,6 +611,15 @@ Decisions made on 2026-11-01 while working through tasks 4–6.
     makes a test fail. Cons: the startup wiring (`APP_VERSION` from the
     launcher, the hourly sweep in a running backend) is exercised only by the
     existing startup test, not by a live restart across two versions.
+
+14. **Review correction: ownership in chosen folders (task 6).** Options:
+    (a) keep name-only deletion: simple, but may delete unrelated user data;
+    (b) defer external stray deletion (recommended): preserves user data, but
+    leaves unrecorded external strays until durable provenance exists;
+    (c) add an ownership registry now: enables future cleanup, but needs a
+    separate creation and identity lifecycle. Chose (b). Exact ledger-recorded
+    worktree cleanup remains available. Tests also pin that live exhausted
+    entries are not rearmed by a new backend version.
 
 ## Related
 

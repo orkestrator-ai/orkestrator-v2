@@ -163,7 +163,7 @@ mutation. An entry records:
 | `stateDirectories` | Absolute paths from `environmentStateDirectories` |
 | `pending` | Steps still owed, from `ENVIRONMENT_CLEANUP_STEPS`: `container`, `volumes`, `network`, `worktree`, `branch`, `state-dirs` |
 | `attempts`, `lastAttemptAt`, `lastError` | Retry state; `lastError` is redacted to an errno code, exit status or fixed refusal text, never a path, command output or credential |
-| `attemptedVersions` | Backend versions that counted an attempt, oldest first, at most 16; absent in older entries |
+| `attemptedVersions` | Backend versions ordered by most recent attempt, newest last, at most 16; least-recently seen versions are evicted; absent in older entries |
 
 - `buildEnvironmentCleanupEntry` schedules only what applies: `container`
   when there is a runtime or recovery copy, `volumes` when the lifecycle record
@@ -279,18 +279,17 @@ shutdown admission and draining. Each fails alone and logs once per process.
   (`getWorktreeBaseDir`) that no live or deleting environment, ledger entry,
   project checkout, registered worktree or chosen worktree folder claims, and
   that hold nothing but directories and `**/.turbo/turbo-*.log`. It also
-  covers the folders Orkestrator chose for worktrees: each live environment's
+  protects the folders Orkestrator chose for worktrees: each live environment's
   `worktreeBaseDir`, each ledger entry's `worktreeRoot`, and the Settings >
   Disk usage environment location unless the backend was started with
   `--worktree-dir`. Such a folder is used only if it still passes
   `validateWorktreeLocation` unchanged (canonical, no symlinked ancestor, not
   the filesystem root or inside a data directory) and is not inside a project
-  checkout. Because it may hold the user's own empty directories, only
-  directories named as creation names them (`<project>-<branch>`, which
-  `parseEnvironmentBranchNamespace` accepts) whose namespace belongs to no
-  live or ledgered environment are candidates there; the other rules are the
-  same. A chosen folder that cannot be listed (an unmounted volume) is
-  skipped. The walk never follows symlinks and
+  checkout. Chosen folders are protected from the backend-root sweep, but
+  their unknown children are never swept: a matching name is not ownership
+  evidence. Exact recorded paths remain eligible for ledger cleanup. A future
+  external stray sweep needs durable path ownership with identity checks.
+  The walk in the backend root never follows symlinks and
   takes the newest mtime anywhere in the tree. Over 10,000 entries, or an
   unreadable tree, counts as content. A failed `git worktree list` for any
   project abandons the pass. Unowned directories kept for holding files are

@@ -18,6 +18,14 @@ import {
   resolveDesignDestination,
 } from "./exports.js";
 import { readDesignHostFile } from "./host-file.js";
+import {
+  discardIntent,
+  importIntents,
+  listIntents,
+  resumeIntent,
+  runIntent,
+  saveIntentDrafts,
+} from "./intents.js";
 import { designId, revision } from "./schemas.js";
 import { purge } from "./service-lifecycle.js";
 import type { DesignService } from "./service.js";
@@ -263,7 +271,7 @@ export function registerDesignCommandHandlers(
   register("design_capabilities", async (_args, context) =>
     typed(async () => {
       if (!context.design) throw new Error("Design service unavailable");
-      return context.design.capabilities();
+      return { ...context.design.capabilities(), intents: true };
     }),
   );
   register("design_readiness", async (args, context) =>
@@ -327,6 +335,68 @@ export function registerDesignCommandHandlers(
         designId.parse(args.canvasId),
         tokenSchema.parse(args.token),
       );
+    }),
+  );
+  // Backend-owned intent queue: any client lists, runs, resumes or discards.
+  register("design_intents", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      return listIntents(design, environmentId, designId.parse(args.canvasId));
+    }),
+  );
+  register("design_intent_save", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      return saveIntentDrafts(
+        design,
+        environmentId,
+        designId.parse(args.canvasId),
+        args.clientId,
+        args.drafts,
+      );
+    }),
+  );
+  register("design_intent_import", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      return importIntents(
+        design,
+        environmentId,
+        designId.parse(args.canvasId),
+        args.clientId,
+        args.intents,
+      );
+    }),
+  );
+  register("design_intent_run", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      return runIntent(
+        design,
+        environmentId,
+        designId.parse(args.canvasId),
+        args.intent,
+        z.number().int().min(0).max(60_000).optional().parse(args.waitMs),
+      );
+    }),
+  );
+  register("design_intent_resume", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      return resumeIntent(
+        design,
+        environmentId,
+        designId.parse(args.canvasId),
+        args.intentId,
+        args.clientId,
+        args.rebaseTo,
+      );
+    }),
+  );
+  register("design_intent_discard", async (args, context) =>
+    typed(async () => {
+      const { design, environmentId } = await authorized(args, context);
+      return discardIntent(design, environmentId, designId.parse(args.canvasId), args.intentId);
     }),
   );
   register("design_library", async (args, context) =>

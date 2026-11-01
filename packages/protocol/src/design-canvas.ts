@@ -42,6 +42,8 @@ export interface DesignChange {
   /** Content-free hint kind. Absent on legacy hints. */
   kind?: "document" | "status" | "deleted" | "restored";
   statusVersion?: number;
+  /** The document's intent queue changed; re-read it with `design_intents`. */
+  intents?: true;
 }
 export interface DesignChanges {
   generation: string;

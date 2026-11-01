@@ -65,6 +65,8 @@ export interface DesignCapabilities {
   sessions: boolean;
   validation: boolean;
   hierarchyPaging: boolean;
+  /** Backend-owned intent queue (`design_intent_*`); absent on older backends. */
+  intents?: boolean;
 }
 
 export type DesignFailureCode =
@@ -652,4 +654,155 @@ export interface DesignContextReference {
   element?: { selector: string; key?: string; tag: string; label: string };
   scope: "discuss" | "revise" | "implement";
   checkpointId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Durable edit intents
+// ---------------------------------------------------------------------------
+
+/**
+ * Bounds of a document's backend-owned intent queue: unsent drafts, edits in
+ * flight and failed edits awaiting review. Settled successes are kept briefly
+ * (not counted here) so a client that lost a response can still learn them.
+ */
+export const DESIGN_INTENT_LIMITS = {
+  perCanvas: 32,
+  perClient: 8,
+  bytes: 2 * 1024 * 1024,
+  settledSuccesses: 32,
+  settledRetentionMs: 2 * 60_000,
+  /** A `preparing` intent no live call owns falls back to a draft after this. */
+  preparingGraceMs: 60_000,
+} as const;
+
+/**
+ * `draft` was never prepared; `preparing` is being prepared now (its token, if
+ * any, is found by correlation id); `admitted` has a token whose outcome is not
+ * yet known; `settled` has an outcome.
+ */
+export type DesignStoredIntentPhase = "draft" | "preparing" | "admitted" | "settled";
+
+/** An edit the backend keeps for a document until it commits or is discarded. */
+export interface DesignStoredIntent {
+  id: string;
+  /** The client (browser tab) that owns the edit; Resume transfers it. */
+  clientId: string;
+  /** Frame id, or "canvas" for canvas-scoped operations. */
+  lane: string;
+  label: string;
+  createdAt: number;
+  updatedAt: number;
+  descriptor: DesignOperationDescriptor;
+  phase: DesignStoredIntentPhase;
+  token?: string;
+  outcome?: DesignOperationState;
+  failure?: DesignFailure;
+  result?: DesignOperationResult;
+  preview?: { frameId: string; patch: DesignFrameGeometryPatch };
+  gestureKey?: string;
+}
+
+/** What a client sends to save or run an intent. */
+export type DesignIntentDraft = Pick<
+  DesignStoredIntent,
+  "id" | "lane" | "label" | "createdAt" | "descriptor" | "preview" | "gestureKey"
+>;
+
+export interface DesignIntentList {
+  intents: DesignStoredIntent[];
+}
+
+export interface DesignIntentRunResult {
+  /** The stored intent after the run; absent once a success was recorded and pruned. */
+  intent?: DesignStoredIntent;
+  /** Execution status; absent when the edit was not executed by this call. */
+  status?: DesignOperationStatus;
+  /**
+   * Why preparing was refused. With retry `after-delay` the intent is a draft
+   * again and may be run later; otherwise it is settled `rejected`.
+   */
+  failure?: DesignFailure;
+}
+
+export interface DesignIntentResumeResult {
+  /** The intent after Resume: a draft to run, or a token still being reconciled. */
+  intent?: DesignStoredIntent;
+}
+
+export interface DesignIntentDiscardResult {
+  discarded: boolean;
+  /** The edit had already started; the backend may still finish it. */
+  mayStillFinish: boolean;
+}
+
+/** Outcomes proving an operation never ran: only these may be prepared again. */
+export const DESIGN_NOT_RUN_STATES: readonly DesignOperationState[] = [
+  "rejected",
+  "canceled",
+  "interrupted",
+  "expired",
+];
+
+/** The queue lane of an operation: its frame, or "canvas" for canvas-wide work. */
+export function designIntentLane(input: DesignOperationInput): string {
+  if (input.kind === "delete_frame" || input.kind === "duplicate_frame") return "canvas";
+  return "frameId" in input ? input.frameId : "canvas";
+}
+
+/** Current revisions the rebase must land on exactly; omit to trust the chain. */
+export interface DesignRebaseCurrent {
+  canvasRevision: number;
+  frames: ReadonlyMap<string, { revision: number; structureId?: string }>;
+}
+
+/**
+ * Rebases a precondition only over the same client's own committed operations:
+ * each proven step starts exactly where the previous own commit ended, so
+ * another writer's change breaks the chain and still surfaces as a conflict.
+ * With `current`, a chain that does not end at the current state is not used.
+ */
+export function rebaseOverOwnCommits(
+  descriptor: DesignOperationDescriptor,
+  commits: readonly DesignOperationStatus[],
+  current?: DesignRebaseCurrent,
+): DesignOperationDescriptor {
+  const clientId = descriptor.clientId;
+  if (!clientId) return descriptor;
+  const own = commits.filter(
+    (status) =>
+      status.state === "committed" &&
+      status.result &&
+      status.clientId === clientId &&
+      status.actor === "user",
+  );
+  if (!own.length) return descriptor;
+  const preconditions = { ...descriptor.preconditions };
+  const input = descriptor.input as { frameId?: string };
+  if (preconditions.frameRevision !== undefined && input.frameId) {
+    const produced = new Map<number, string | undefined>();
+    for (const status of own)
+      for (const frame of status.result!.frames)
+        if (frame.frameId === input.frameId && !frame.removed)
+          produced.set(frame.revision, frame.identity?.structureId);
+    let revision = preconditions.frameRevision;
+    while (produced.has(revision + 1)) {
+      const structure = produced.get(revision + 1);
+      if (preconditions.structureId !== undefined && structure !== preconditions.structureId) break;
+      revision++;
+    }
+    const now = current?.frames.get(input.frameId);
+    const lands =
+      !current ||
+      (now !== undefined &&
+        now.revision === revision &&
+        (preconditions.structureId === undefined || now.structureId === preconditions.structureId));
+    if (lands) preconditions.frameRevision = revision;
+  }
+  if (preconditions.canvasRevision !== undefined) {
+    const produced = new Set(own.map((status) => status.result!.canvasRevision));
+    let revision = preconditions.canvasRevision;
+    while (produced.has(revision + 1)) revision++;
+    if (!current || current.canvasRevision === revision) preconditions.canvasRevision = revision;
+  }
+  return { ...descriptor, preconditions };
 }

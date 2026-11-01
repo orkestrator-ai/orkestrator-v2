@@ -35,6 +35,7 @@ import {
   userDataDirectoryName,
 } from "./app-constants.js";
 import { desktopApplicationVersion } from "./app-version.js";
+import { aboutPanelIconPath, aboutPanelOptions } from "./about-panel.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import {
@@ -203,6 +204,17 @@ const runtimeFlavor = runtimeProfile?.flavor ?? (isDev ? "development" : "produc
 const productName = runtimeProfile?.electronTitle ?? PRODUCT_NAME;
 
 app.setName(productName);
+app.setAboutPanelOptions(
+  aboutPanelOptions({
+    productName,
+    version: desktopApplicationVersion(app),
+    iconPath: aboutPanelIconPath({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      dirname: __dirname,
+    }),
+  }),
+);
 for (const name of chromiumSwitchesForRuntime(runtimeFlavor, process.platform)) {
   app.commandLine.appendSwitch(name);
 }

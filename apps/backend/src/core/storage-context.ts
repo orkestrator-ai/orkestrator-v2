@@ -615,6 +615,17 @@ export class StorageContext {
   }
 
   /**
+   * Whether a database store is held whole rather than as rows, so an absent
+   * {@link loadStoreRow} answer may mean the value does not fit its layout at
+   * all, not that the key is missing.
+   */
+  storeHeldAsDocument(filePath: string): boolean {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("storeHeldAsDocument requires a database store");
+    return this.database.readStoreHeader(store)?.mode === "document";
+  }
+
+  /**
    * A database store's committed serialized rows without parsing them; see
    * {@link StorageDatabase.readStoreSerialized}. `undefined` inside an atomic
    * scope that buffers a write to the store, whose rows do not exist yet: the

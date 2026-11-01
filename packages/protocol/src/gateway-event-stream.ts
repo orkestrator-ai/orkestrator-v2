@@ -121,36 +121,54 @@ export function parseGatewayEventData(data: string): { event: string; payload: u
   return { event: parsed.event, payload: parsed.payload };
 }
 
-/**
- * UTF-8 length without allocating an encoded copy. A UTF-16 code unit never
- * encodes to fewer than one byte or more than three, so most checks are
- * answered from `length` alone.
- */
-function exceedsUtf8Bytes(value: string, maxBytes: number): boolean {
-  if (value.length > maxBytes) return true;
-  if (value.length * 3 <= maxBytes) return false;
+/** The longest boundary, `\r\n\r\n`, can leave this much of itself in one chunk. */
+const MAX_SPLIT_BOUNDARY_PREFIX = 3;
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** UTF-8 length without allocating an encoded copy; stops once past `limit`. */
+function utf8Bytes(value: string, limit = Number.POSITIVE_INFINITY): number {
   let bytes = 0;
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (code <= 0x7f) bytes += 1;
     else if (code <= 0x7ff) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length) {
-      const next = value.charCodeAt(index + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        bytes += 4;
-        index += 1;
-      } else {
-        bytes += 3;
-      }
+    else if (isHighSurrogate(code) && isLowSurrogate(value.charCodeAt(index + 1))) {
+      bytes += 4;
+      index += 1;
     } else bytes += 3;
-    if (bytes > maxBytes) return true;
+    if (bytes > limit) return bytes;
   }
-  return false;
+  return bytes;
+}
+
+/**
+ * A UTF-16 code unit never encodes to fewer than one byte or more than three,
+ * so most checks are answered from `length` alone.
+ */
+function exceedsUtf8Bytes(value: string, maxBytes: number): boolean {
+  if (value.length > maxBytes) return true;
+  if (value.length * 3 <= maxBytes) return false;
+  return utf8Bytes(value, maxBytes) > maxBytes;
 }
 
 /** Incremental SSE framing over decoded text chunks, with a per-frame bound. */
 export class SseFrameDecoder {
-  private pending = "";
+  /**
+   * The incomplete frame, joined only once a boundary arrives. Scanning or
+   * measuring the whole of it per chunk would make a large frame quadratic.
+   */
+  private chunks: string[] = [];
+  private pendingLength = 0;
+  private pendingBytes = 0;
+  /** The pending text's end, enough to find a boundary a chunk split. */
+  private tail = "";
 
   constructor(private readonly maxFrameBytes = MAX_GATEWAY_EVENT_FRAME_BYTES) {
     if (!Number.isSafeInteger(maxFrameBytes) || maxFrameBytes < 1) {
@@ -160,19 +178,41 @@ export class SseFrameDecoder {
 
   /** Returns every frame the chunk completed; throws once a frame is too large. */
   push(chunk: string): SseFrame[] {
-    this.pending += chunk;
+    if (!/\r?\n\r?\n/.test(this.tail + chunk)) {
+      this.pendingBytes += utf8Bytes(chunk);
+      // A surrogate pair split by the chunk counted as two lone units of 3.
+      if (isHighSurrogate(this.tail.charCodeAt(this.tail.length - 1))) {
+        if (isLowSurrogate(chunk.charCodeAt(0))) this.pendingBytes -= 2;
+      }
+      this.chunks.push(chunk);
+      this.pendingLength += chunk.length;
+      this.tail = (this.tail + chunk).slice(-MAX_SPLIT_BOUNDARY_PREFIX);
+      if (this.pendingBytes > this.maxFrameBytes) {
+        throw new GatewayEventFrameTooLargeError(this.maxFrameBytes);
+      }
+      return [];
+    }
+
+    const text = this.chunks.join("") + chunk;
+    const boundary = /\r?\n\r?\n/g;
+    // Anything earlier was already searched and held no boundary.
+    boundary.lastIndex = this.pendingLength - this.tail.length;
     const frames: SseFrame[] = [];
-    let boundary = /\r?\n\r?\n/.exec(this.pending);
-    while (boundary) {
-      const block = this.pending.slice(0, boundary.index);
-      this.pending = this.pending.slice(boundary.index + boundary[0].length);
+    let start = 0;
+    for (let match = boundary.exec(text); match; match = boundary.exec(text)) {
+      const block = text.slice(start, match.index);
+      start = match.index + match[0].length;
       if (exceedsUtf8Bytes(block, this.maxFrameBytes)) {
         throw new GatewayEventFrameTooLargeError(this.maxFrameBytes);
       }
       frames.push(parseSseBlock(block));
-      boundary = /\r?\n\r?\n/.exec(this.pending);
     }
-    if (exceedsUtf8Bytes(this.pending, this.maxFrameBytes)) {
+    const remainder = text.slice(start);
+    this.chunks = remainder ? [remainder] : [];
+    this.pendingLength = remainder.length;
+    this.pendingBytes = utf8Bytes(remainder);
+    this.tail = remainder.slice(-MAX_SPLIT_BOUNDARY_PREFIX);
+    if (this.pendingBytes > this.maxFrameBytes) {
       throw new GatewayEventFrameTooLargeError(this.maxFrameBytes);
     }
     return frames;

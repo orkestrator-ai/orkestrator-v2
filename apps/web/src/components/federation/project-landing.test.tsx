@@ -29,6 +29,12 @@ import { RemoteProjectGroup } from "./RemoteMachineTree";
 import { FederationProvider } from "./FederationProvider";
 import { useMachineViews } from "./useMachineViews";
 
+/** A project's header button, found through its "+" button, which names project and machine. */
+function projectHeading(project: string, machine: string): HTMLElement {
+  const add = screen.getByRole("button", { name: `New environment in ${project} on ${machine}` });
+  return add.parentElement!.querySelector("button")!;
+}
+
 const initialUI = useUIStore.getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 const initialMachines = useMachineViewStore.getState();
@@ -218,7 +224,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         />,
       );
       await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-      const project = screen.getByTitle("Open app on Machine A");
+      const project = projectHeading("app", "Machine A");
       fireEvent.click(project);
       await waitFor(() => expect(project.getAttribute("aria-current")).toBe("page"));
       const report = (environmentId: string | null) =>
@@ -277,7 +283,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       );
       await waitForRows(2);
 
-      fireEvent.click(screen.getByTitle("Open app on Machine A"));
+      fireEvent.click(projectHeading("app", "Machine A"));
       await waitFor(() =>
         expect(request()).toEqual({
           type: "select",

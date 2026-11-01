@@ -304,6 +304,21 @@ test("repository settings request waits for configuration after projects have lo
   );
 });
 
+test("a project home opened from another machine's sidebar lands on its Home tab", async () => {
+  nativeInvoke.mockImplementation(async (command: string) => {
+    if (command === "get_projects") return [project];
+    if (command === "get_environments" || command === "get_environment_snapshots") return [home];
+    return undefined;
+  });
+  happyDOM.setURL(
+    `http://localhost/?${realmSearchParams({ projectId: project.id, environmentId: home.id, boardTab: "home" })}`,
+  );
+  window.orkestratorWorkspaceTarget = { nodeId, nodeName: "Leaf", path: "relay" } as never;
+  render(<WorkspaceRealmHost />);
+  await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
+  expect(useUIStore.getState().projectBoardTab).toBe("home");
+});
+
 test("environment settings waits for its environment and selects without starting it", async () => {
   let finish!: (environments: Environment[]) => void;
   const snapshot = new Promise<Environment[]>((resolve) => {

@@ -62,6 +62,7 @@ import {
 } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
+import { useHydrateOncePerEnvironment } from "@/hooks/useHydrateOncePerEnvironment";
 import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
 import { useNotificationSoundService } from "@/hooks/useNotificationSoundService";
 import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
@@ -254,6 +255,14 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
   "bg-card",
 );
 
+function warnPromptQueueRestoreFailed(environmentId: string, error: unknown): void {
+  console.warn(`[App] Failed to restore prompt queues for ${environmentId}:`, error);
+}
+
+function warnMultiReviewRestoreFailed(environmentId: string, error: unknown): void {
+  console.warn(`[App] Failed to restore multi reviews for ${environmentId}:`, error);
+}
+
 function App() {
   // A browser or iOS realm boots on the grant its window keeps for it.
   if (isWorkspaceRealm() && !window.orkestrator?.isolatedViewState && !readStoredWorkspace()) {
@@ -350,24 +359,20 @@ function ConnectedApp() {
   }, []);
   // Renderer stores are projections of backend-owned queues.
   const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
-  useEffect(() => {
-    for (const environment of environments) {
-      void hydratePromptQueuesForEnvironment(environment.id, promptQueueSources).catch((error) => {
-        console.warn(`[App] Failed to restore prompt queues for ${environment.id}:`, error);
-      });
-    }
-  }, [environments, promptQueueSources]);
+  const hydratePromptQueues = useCallback(
+    (environmentId: string) => hydratePromptQueuesForEnvironment(environmentId, promptQueueSources),
+    [promptQueueSources],
+  );
+  useHydrateOncePerEnvironment(environments, hydratePromptQueues, warnPromptQueueRestoreFailed);
 
   // The single renderer-side hydration pass for backend-owned reviews. Resource
   // change events perform incremental refreshes; this closes the gap after a
   // renderer exit/remount, when the store starts empty.
-  useEffect(() => {
-    for (const environment of environments) {
-      void hydrateMultiReviewWorkflowsForEnvironment(environment.id).catch((error) => {
-        console.warn(`[App] Failed to restore multi reviews for ${environment.id}:`, error);
-      });
-    }
-  }, [environments]);
+  useHydrateOncePerEnvironment(
+    environments,
+    hydrateMultiReviewWorkflowsForEnvironment,
+    warnMultiReviewRestoreFailed,
+  );
 
   // Pipelines are stored per project, so restore once per project rather than
   // once per environment: a pipeline still in "creating-environment" has no

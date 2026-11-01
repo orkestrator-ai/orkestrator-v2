@@ -1,16 +1,7 @@
 import { useSidebarHydration } from "./useSidebarHydration";
 import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
-import {
-  lazy,
-  useState,
-  useEffect,
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  type ReactNode,
-} from "react";
+import { lazy, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -26,8 +17,6 @@ import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { Button } from "@/components/ui/button";
 import {
   ArrowUpDown,
-  Bell,
-  Boxes,
   Folder,
   Plus,
   FolderGit2,
@@ -37,6 +26,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { ProjectHomeActivity } from "./ProjectHomeActivity";
+import { ActivityEnvironmentList } from "./ActivityEnvironmentList";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 import { SidebarRootDropZone } from "./SidebarRootDropZone";
@@ -96,12 +86,13 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   EnvironmentItem,
   resolveEnvironmentAgentActivity,
 } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { withoutProjectHomes } from "@/lib/project-home";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
@@ -146,147 +137,37 @@ export type SidebarSelectionResult =
   | { type: "range"; ids: string[] }
   | { type: "single"; environmentId: string };
 
-function parseActivityTime(value: string | undefined): number {
-  if (!value) return Number.NEGATIVE_INFINITY;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
-}
-
-const ATTENTION_PRIORITY: Record<NonNullable<Environment["agentActivityState"]>, number> = {
-  waiting: 0,
-  working: 1,
-  idle: 2,
-};
-
 /**
- * "priority": unread work first, then waiting, working and idle, most recent
- * activity first within each. "newest"/"oldest": by activity time alone. The
- * existing project/environment order is a stable fallback in every order.
+ * This window's environments in the activity order every machine's rows
+ * share (`compareActivity`). Its machine ID is the same for every row, so
+ * ties fall to project order, environment order and ID.
  */
 export function sortEnvironmentsByActivity(
   environments: Environment[],
   projects: Project[],
   order: ActivitySortOrder = "priority",
+  activeBuildEnvironmentIds: ReadonlySet<string> = new Set(),
 ): Environment[] {
   const projectOrder = new Map(projects.map((project) => [project.id, project.order]));
-  return [...environments].sort((left, right) => {
-    if (order === "priority") {
-      const unreadDifference =
-        Number(right.hasUnreadWork === true) - Number(left.hasUnreadWork === true);
-      if (unreadDifference !== 0) return unreadDifference;
-      const stateDifference =
-        ATTENTION_PRIORITY[left.agentActivityState ?? "idle"] -
-        ATTENTION_PRIORITY[right.agentActivityState ?? "idle"];
-      if (stateDifference !== 0) return stateDifference;
-    }
-
-    const leftActivity = parseActivityTime(left.lastActivityAt);
-    const rightActivity = parseActivityTime(right.lastActivityAt);
-    if (leftActivity !== rightActivity) {
-      return order === "oldest" ? leftActivity - rightActivity : rightActivity - leftActivity;
-    }
-
-    const projectDifference =
-      (projectOrder.get(left.projectId) ?? Number.MAX_SAFE_INTEGER) -
-      (projectOrder.get(right.projectId) ?? Number.MAX_SAFE_INTEGER);
-    if (projectDifference !== 0) return projectDifference;
-    if (left.order !== right.order) return left.order - right.order;
-    return left.id.localeCompare(right.id);
+  const key = (environment: Environment): ActivitySortKey => ({
+    hasUnreadWork: environment.hasUnreadWork === true,
+    activity: activeBuildEnvironmentIds.has(environment.id)
+      ? "working"
+      : (environment.agentActivityState ?? "idle"),
+    activityUpdatedAt: environment.agentActivityUpdatedAt,
+    lastActivityAt: environment.lastActivityAt,
+    machineId: "",
+    projectOrder: projectOrder.get(environment.projectId),
+    order: environment.order,
+    id: environment.id,
   });
+  return environments
+    .map((environment) => ({ environment, key: key(environment) }))
+    .sort((left, right) => compareActivity(left.key, right.key, order))
+    .map(({ environment }) => environment);
 }
 
-export function measureActivityRowLayoutTop(element: HTMLElement): number {
-  const getOffsetTop = (node: HTMLElement | null): number => {
-    let top = 0;
-    let current = node;
-    while (current) {
-      top += current.offsetTop;
-      current = current.offsetParent as HTMLElement | null;
-    }
-    return top;
-  };
-  return getOffsetTop(element) - getOffsetTop(element.parentElement);
-}
-
-export function animateActivityRowMovement(
-  element: HTMLElement,
-  previousTop: number | null,
-  reduceMotion: boolean,
-): { top: number; animation: Animation | null } {
-  const nextTop = measureActivityRowLayoutTop(element);
-  const offset = previousTop === null ? 0 : previousTop - nextTop;
-  let animation: Animation | null = null;
-  if (offset !== 0 && !reduceMotion && typeof element.animate === "function") {
-    animation = element.animate(
-      [{ transform: `translateY(${offset}px)` }, { transform: "translateY(0)" }],
-      {
-        duration: 280,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      },
-    );
-  }
-  return { top: nextTop, animation };
-}
-
-function AnimatedActivityRow({
-  environmentId,
-  position,
-  className,
-  children,
-}: {
-  environmentId: string;
-  position: number;
-  className: string;
-  children: ReactNode;
-}) {
-  const rowRef = useRef<HTMLDivElement>(null);
-  const previousTopRef = useRef<number | null>(null);
-  const previousPositionRef = useRef(position);
-  const animationRef = useRef<Animation | null>(null);
-
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    if (!row) return;
-
-    // Activity, unread, and status updates all re-render the sidebar. Only run
-    // the FLIP animation when this row's actual list position changes so those
-    // unrelated updates cannot restart transforms across the whole list.
-    if (previousTopRef.current !== null && previousPositionRef.current === position) {
-      // A preceding row may have changed height without changing this row's
-      // numeric position. Refresh the transform-independent layout baseline,
-      // but leave any in-flight animation alone.
-      previousTopRef.current = measureActivityRowLayoutTop(row);
-      return;
-    }
-
-    let previousTop = previousTopRef.current;
-    const activeAnimation = animationRef.current;
-    if (activeAnimation && activeAnimation.playState === "running") {
-      // Preserve the row's current visual position when activity changes again
-      // before the prior movement finishes. Cancelling first would otherwise
-      // make the row jump to its new layout position.
-      const parentTop = row.parentElement?.getBoundingClientRect().top ?? 0;
-      const transformedTop = row.getBoundingClientRect().top - parentTop;
-      activeAnimation.cancel();
-      const layoutTop = row.getBoundingClientRect().top - parentTop;
-      previousTop = (previousTopRef.current ?? layoutTop) + (transformedTop - layoutTop);
-    }
-
-    const reduceMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const result = animateActivityRowMovement(row, previousTop, reduceMotion);
-    previousTopRef.current = result.top;
-    previousPositionRef.current = position;
-    animationRef.current = result.animation;
-  });
-
-  return (
-    <div ref={rowRef} data-environment-id={environmentId} className={className}>
-      {children}
-    </div>
-  );
-}
+export { animateActivityRowMovement, measureActivityRowLayoutTop } from "./ActivityEnvironmentList";
 
 export function resolveSidebarSelection(
   environmentId: string,
@@ -590,9 +471,18 @@ export function HierarchicalSidebar() {
       ),
     [allEnvironments, selectedEnvironmentId],
   );
+  const activeBuildEnvironmentIds = useBuildPipelineStore(
+    (state) => state.activeBuildEnvironmentIds,
+  );
   const activityEnvironments = useMemo(
-    () => sortEnvironmentsByActivity(sidebarEnvironments, projects, activitySortOrder),
-    [sidebarEnvironments, projects, activitySortOrder],
+    () =>
+      sortEnvironmentsByActivity(
+        sidebarEnvironments,
+        projects,
+        activitySortOrder,
+        activeBuildEnvironmentIds,
+      ),
+    [sidebarEnvironments, projects, activitySortOrder, activeBuildEnvironmentIds],
   );
   const defaultCloneDirectory = useMemo(
     () => suggestedCloneDirectory(projects.map((project) => project.localPath)),
@@ -1080,6 +970,7 @@ export function HierarchicalSidebar() {
       }
       label={mixed?.label}
       labelClassName={mixed?.labelClassName}
+      machineName={federation.enabled ? (boundMachineView?.name ?? "This machine") : undefined}
       project={project}
       environments={getProjectEnvironments(project.id)}
       home={allEnvironments.find(
@@ -1133,14 +1024,13 @@ export function HierarchicalSidebar() {
   const activeEnvironment =
     activeType === "environment" ? allEnvironments.find((e) => e.id === activeId) : null;
 
-  /** An activity row of this window's machine, also used among other machines' rows. */
-  const activityRowClassName = (environmentId: string) =>
-    cn(
-      "mx-1 flex items-center rounded-lg border border-transparent transition-colors",
-      selectedEnvironmentId === environmentId && !isMultiSelectMode
-        ? "relative overflow-hidden bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary"
-        : "hover:bg-environment-hover",
-    );
+  const renderActivityHome = (home: Environment) => (
+    <ProjectHomeActivity
+      key={home.id}
+      home={home}
+      projectName={projectsById.get(home.projectId)?.name ?? "Unknown project"}
+    />
+  );
 
   const renderActivityItem = (environment: Environment) => (
     <EnvironmentItem
@@ -1174,118 +1064,35 @@ export function HierarchicalSidebar() {
         </Button>
       </div>
     ) : environmentSortMode === "activity" ? (
-      <div data-testid="activity-environment-list">
-        <div
-          data-testid="activity-controls-bar"
-          className="sticky top-0 z-10 flex h-10 items-center border-b border-border/60 bg-sidebar/95 px-2 backdrop-blur-sm md:h-8"
-        >
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-zinc-400 hover:bg-zinc-800 hover:text-foreground"
-                aria-label="Create environment"
-                title="Create environment"
-              >
-                <Plus className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">
-                New environment in
-              </DropdownMenuLabel>
-              {projects.map((project) => (
-                <DropdownMenuItem
-                  key={project.id}
-                  onSelect={() => handleOpenCreateEnvDialog(project.id)}
-                >
-                  <FolderGit2 className="h-4 w-4" aria-hidden="true" />
-                  <span className="truncate">{project.name}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <div className="ml-auto flex items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div
-                  className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums text-zinc-400"
-                  aria-label={`${totalEnvironmentCount} ${
-                    totalEnvironmentCount === 1 ? "environment" : "environments"
-                  }`}
-                >
-                  <Boxes className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
-                  <span>{totalEnvironmentCount}</span>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={5}>
-                Environments
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div
-                  className={cn(
-                    "flex h-7 min-w-9 items-center justify-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums",
-                    waitingEnvironmentCount > 0
-                      ? "bg-amber-500/10 text-amber-400"
-                      : "text-zinc-600",
-                  )}
-                  aria-label={`${waitingEnvironmentCount} waiting ${
-                    waitingEnvironmentCount === 1 ? "environment" : "environments"
-                  }`}
-                >
-                  <Bell
-                    className={cn(
-                      "h-3.5 w-3.5",
-                      waitingEnvironmentCount > 0 && "fill-amber-400/20",
-                    )}
-                    aria-hidden="true"
-                  />
-                  <span>{waitingEnvironmentCount}</span>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={5}>
-                Waiting environments
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </div>
-        {sortEnvironmentsByActivity(allEnvironments, projects, activitySortOrder)
+      <ActivityEnvironmentList
+        testId="activity-environment-list"
+        createTargets={projects.map((project) => ({
+          key: project.id,
+          name: project.name,
+          onSelect: () => handleOpenCreateEnvDialog(project.id),
+        }))}
+        totalCount={totalEnvironmentCount}
+        waitingCount={waitingEnvironmentCount}
+        homes={sortEnvironmentsByActivity(
+          allEnvironments,
+          projects,
+          activitySortOrder,
+          activeBuildEnvironmentIds,
+        )
           .filter(
             (environment) =>
               environment.projectHome &&
               !environment.deletionRequestedAt &&
               environment.lifecycleOperation !== "deleting",
           )
-          .map((home) => (
-            <ProjectHomeActivity
-              key={home.id}
-              home={home}
-              projectName={projectsById.get(home.projectId)?.name ?? "Unknown project"}
-            />
-          ))}
-        {activityEnvironments.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No environments yet
-          </div>
-        ) : (
-          <div data-testid="activity-environment-rows" className="px-1 pt-2">
-            {activityEnvironments.map((environment, position) => (
-              <AnimatedActivityRow
-                key={environment.id}
-                environmentId={environment.id}
-                position={position}
-                className={cn(activityRowClassName(environment.id), "will-change-transform")}
-              >
-                <div className="min-w-0 flex-1 pl-2">{renderActivityItem(environment)}</div>
-              </AnimatedActivityRow>
-            ))}
-          </div>
-        )}
-      </div>
+          .map((home) => renderActivityHome(home))}
+        rows={activityEnvironments.map((environment) => ({
+          key: environment.id,
+          environmentId: environment.id,
+          selected: selectedEnvironmentId === environment.id && !isMultiSelectMode,
+          content: renderActivityItem(environment),
+        }))}
+      />
     ) : (
       <DndContext
         sensors={sensors}
@@ -1377,12 +1184,11 @@ export function HierarchicalSidebar() {
 
   const renderFederatedActivityRow = (environmentId: string) => {
     const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
-    if (!environment) return null;
-    return (
-      <div className={activityRowClassName(environment.id)}>
-        <div className="min-w-0 flex-1 pl-2">{renderActivityItem(environment)}</div>
-      </div>
-    );
+    return environment ? renderActivityItem(environment) : null;
+  };
+  const renderFederatedActivityHome = (environmentId: string) => {
+    const home = allEnvironments.find((entry) => entry.id === environmentId);
+    return home ? renderActivityHome(home) : null;
   };
 
   return (
@@ -1599,6 +1405,10 @@ export function HierarchicalSidebar() {
               machines={visibleMachines}
               order={activitySortOrder}
               renderBoundRow={renderFederatedActivityRow}
+              renderBoundHome={renderFederatedActivityHome}
+              boundSelectedId={isMultiSelectMode ? null : selectedEnvironmentId}
+              onCreateBound={handleOpenCreateEnvDialog}
+              boundWaitingCount={waitingEnvironmentCount}
             />
           ) : federatedMode === "project" || federatedMode === "repository" ? (
             <MergedProjectList

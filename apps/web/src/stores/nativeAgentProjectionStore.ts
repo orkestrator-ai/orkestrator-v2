@@ -158,12 +158,6 @@ function sameProgressiveEntry(
   return true;
 }
 
-function lastKey(map: ReadonlyMap<string, unknown>): string | undefined {
-  let last: string | undefined;
-  for (const key of map.keys()) last = key;
-  return last;
-}
-
 /** Renderer cache only; the backend projection remains authoritative. */
 export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>((set) => ({
   projections: new Map(),
@@ -247,14 +241,9 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
   setProgressiveCache: (sessionKey, cache) =>
     set((state) => {
       const previous = state.progressiveCaches.get(sessionKey);
-      if (
-        cache &&
-        previous &&
-        lastKey(state.progressiveCaches) === sessionKey &&
-        sameProgressiveEntry(previous, cache)
-      ) {
-        return state;
-      }
+      // No recency requirement: two visible sessions take turns being the last
+      // key written, so requiring it would republish every unchanged poll.
+      if (cache && previous && sameProgressiveEntry(previous, cache)) return state;
       const next = new Map(state.progressiveCaches);
       const nextBytes = new Map(state.progressiveCacheBytes);
       let retainedBytes = state.progressiveCacheBytesTotal - (nextBytes.get(sessionKey) ?? 0);

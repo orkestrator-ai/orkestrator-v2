@@ -279,6 +279,30 @@ export type StorageLayerTypes = [
 const MAX_PROJECT_REMOVAL_FENCES = 1_000;
 const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/i;
 
+/**
+ * One-release migration for records written before setupPhase existed. The
+ * backend remains authoritative even before the next mutation persists the
+ * normalized fields.
+ */
+function normalizeStoredEnvironment(environment: Environment): void {
+  environment.setupPhase ??= environment.setupScriptsComplete ? "ready" : "pending";
+  environment.setupOverride ??= false;
+  // Fold the five per-platform agent fields onto the shared tier shape. The
+  // legacy keys are deleted here rather than left beside the new block, so
+  // a stale value cannot be read back by anything that still remembers the
+  // old name and the two shapes cannot drift while both sit on disk.
+  const migrated = migrateEnvironmentAgentSettings(
+    environment as unknown as Record<string, unknown>,
+  );
+  // Absence already means "inherit everything", so an empty tier is not
+  // written back onto every environment record.
+  if (isEmptyAgentSettings(migrated)) delete environment.agentSettings;
+  else environment.agentSettings = migrated;
+  for (const key of LEGACY_ENVIRONMENT_AGENT_KEYS) {
+    delete (environment as unknown as Record<string, unknown>)[key];
+  }
+}
+
 /** A project still owns environments; removal would orphan them. */
 export class ProjectHasEnvironmentsError extends Error {
   constructor(
@@ -510,27 +534,7 @@ export class ProjectsRepository {
       this.files.environmentsFile(),
       () => [],
     );
-    // One-release migration for records written before setupPhase existed.
-    // The backend remains authoritative even before the next mutation persists
-    // the normalized fields.
-    for (const environment of environments) {
-      environment.setupPhase ??= environment.setupScriptsComplete ? "ready" : "pending";
-      environment.setupOverride ??= false;
-      // Fold the five per-platform agent fields onto the shared tier shape. The
-      // legacy keys are deleted here rather than left beside the new block, so
-      // a stale value cannot be read back by anything that still remembers the
-      // old name and the two shapes cannot drift while both sit on disk.
-      const migrated = migrateEnvironmentAgentSettings(
-        environment as unknown as Record<string, unknown>,
-      );
-      // Absence already means "inherit everything", so an empty tier is not
-      // written back onto every environment record.
-      if (isEmptyAgentSettings(migrated)) delete environment.agentSettings;
-      else environment.agentSettings = migrated;
-      for (const key of LEGACY_ENVIRONMENT_AGENT_KEYS) {
-        delete (environment as unknown as Record<string, unknown>)[key];
-      }
-    }
+    for (const environment of environments) normalizeStoredEnvironment(environment);
     return environments.sort((a, b) => a.order - b.order);
   }
 
@@ -573,10 +577,11 @@ export class ProjectsRepository {
   }
 
   async getEnvironment(environmentId: string): Promise<Environment | null> {
-    return (
-      (await this.loadEnvironments()).find((environment) => environment.id === environmentId) ??
-      null
-    );
+    const stored = this.context.loadStoreRow(this.files.environmentsFile(), environmentId);
+    if (!isRecord(stored) || stored.id !== environmentId) return null;
+    const environment = stored as unknown as Environment;
+    normalizeStoredEnvironment(environment);
+    return environment;
   }
 
   private projectRemovalFencesFile(): string {

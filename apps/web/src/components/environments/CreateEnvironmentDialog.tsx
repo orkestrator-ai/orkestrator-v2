@@ -38,7 +38,6 @@ import {
   Bot,
   ChevronDown,
   Container,
-  FileText,
   FolderOpen,
   Globe,
   Laptop,
@@ -77,6 +76,7 @@ import type {
 import type { AgentType } from "@/stores";
 import { useConfigStore } from "@/stores";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
+import { InitialPromptAttachmentPreviews } from "./InitialPromptAttachmentPreviews";
 import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
 import {
   defaultFastModeFor,
@@ -198,55 +198,6 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
   return btoa(binary);
-}
-
-function AttachmentPreviews({
-  attachments,
-  disabled,
-  onRemove,
-}: {
-  attachments: InitialPromptImageAttachment[];
-  disabled: boolean;
-  onRemove: (id: string) => void;
-}) {
-  if (attachments.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {attachments.map((attachment) => (
-        <div
-          key={attachment.id}
-          className={cn(
-            "group relative h-16 overflow-hidden rounded-md border border-border bg-muted",
-            attachment.type === "file" ? "flex w-40 items-center gap-2 px-2" : "w-16",
-          )}
-        >
-          {attachment.type === "file" ? (
-            <>
-              <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate pr-4 text-xs" title={attachment.name}>
-                {attachment.name}
-              </span>
-            </>
-          ) : (
-            <img
-              src={attachment.previewUrl}
-              alt={attachment.name}
-              className="h-full w-full object-cover"
-            />
-          )}
-          <button
-            type="button"
-            onClick={() => onRemove(attachment.id)}
-            disabled={disabled}
-            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-            aria-label={`Remove ${attachment.name}`}
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 export interface ClaudeOptions {
@@ -2112,7 +2063,7 @@ export function CreateEnvironmentDialog({
                         Drop images to attach them to the feature
                       </p>
                     )}
-                    <AttachmentPreviews
+                    <InitialPromptAttachmentPreviews
                       attachments={initialPromptAttachments.filter(
                         (attachment) => attachment.type !== "file",
                       )}
@@ -2155,7 +2106,7 @@ export function CreateEnvironmentDialog({
                             Drop files to attach them to the initial prompt
                           </p>
                         )}
-                        <AttachmentPreviews
+                        <InitialPromptAttachmentPreviews
                           attachments={initialPromptAttachments}
                           disabled={isLoading}
                           onRemove={removeInitialPromptAttachment}

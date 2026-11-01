@@ -185,7 +185,7 @@ export class PromptsRepository {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
-    return (await this.repos.promptQueues.loadPromptQueues())[queueKey] ?? null;
+    return this.repos.promptQueues.loadPromptQueue(queueKey);
   }
 
   async listPromptQueues(environmentId: string): Promise<PersistedPromptQueue[]> {

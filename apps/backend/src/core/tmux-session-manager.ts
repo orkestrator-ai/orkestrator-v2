@@ -11,6 +11,11 @@ import {
   FAST_MODE_SWITCH_TIMEOUT_MS,
   FAST_MODE_TMUX_OPTION,
   LIVENESS_CHECK_EVERY_TICKS,
+  TMUX_DISCOVERY_MAX_INTERVAL_MS,
+  TMUX_DISCOVERY_MIN_INTERVAL_MS,
+  TMUX_IDLE_AFTER_QUIET_TICKS,
+  TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS,
+  TMUX_IDLE_POLL_INTERVAL_MS,
   PERMISSION_MODE_POLL_MS,
   PERMISSION_MODE_SWITCH_TIMEOUT_MS,
   POLL_INTERVAL_MS,
@@ -589,23 +594,30 @@ export class TmuxSession {
     let tail: TranscriptTail | undefined;
 
     let tick = 0;
+    let quietTicks = 0;
+    let nextDiscoveryAt = 0;
+    let discoveryInterval = TMUX_DISCOVERY_MIN_INTERVAL_MS;
 
     void (async () => {
       try {
         while (!this.stopRequested) {
-          await this.pollTick(POLL_INTERVAL_MS);
+          const idle = !this.busy && quietTicks >= TMUX_IDLE_AFTER_QUIET_TICKS;
+          await this.pollTick(idle ? TMUX_IDLE_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
           if (this.stopRequested) break;
           tick += 1;
+          quietTicks += 1;
 
           // Discovered before the snapshot so the same round trip can carry the
           // transcript size.
-          if (!tail) {
+          if (!tail && Date.now() >= nextDiscoveryAt) {
             try {
               const transcriptPath = await this.discoverTranscriptPath();
               if (transcriptPath) tail = new TranscriptTail(transcriptPath);
             } catch (error) {
               console.warn("[tmux] transcript discovery failed", error);
             }
+            nextDiscoveryAt = Date.now() + discoveryInterval;
+            discoveryInterval = Math.min(discoveryInterval * 2, TMUX_DISCOVERY_MAX_INTERVAL_MS);
           }
 
           let snapshot: TmuxPollSnapshot | undefined;
@@ -616,6 +628,11 @@ export class TmuxSession {
           }
 
           if (snapshot) {
+            if (snapshot.pending.length > 0 || snapshot.timeouts.length > 0) {
+              quietTicks = 0;
+              nextDiscoveryAt = 0;
+              discoveryInterval = TMUX_DISCOVERY_MIN_INTERVAL_MS;
+            }
             try {
               const events = await drainPending(
                 this.backend,
@@ -652,6 +669,7 @@ export class TmuxSession {
             if (tail) {
               try {
                 const lines = await tail.readNew(this.backend, snapshot.transcriptSize);
+                if (lines.length > 0) quietTicks = 0;
                 for (const line of lines) {
                   const permissionMode = permissionModeFromTranscriptLine(line);
                   if (permissionMode) this.setPermissionMode(permissionMode, context);
@@ -698,7 +716,10 @@ export class TmuxSession {
           // Liveness is a whole extra process spawn (a `docker exec` in
           // container mode) and a session that ends stays ended, so it is
           // checked on a slower cadence than the hook and transcript reads.
-          if (tick % LIVENESS_CHECK_EVERY_TICKS !== 0) continue;
+          const livenessEvery = idle
+            ? TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS
+            : LIVENESS_CHECK_EVERY_TICKS;
+          if (tick % livenessEvery !== 0) continue;
           if (!(await this.tmuxAlive().catch(() => false))) {
             let removed = false;
             const sessions = context.runtime.tmux.sessions;

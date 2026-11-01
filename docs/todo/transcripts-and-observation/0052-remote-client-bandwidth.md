@@ -1,7 +1,7 @@
 # Remote client bandwidth
 
-Checked against `main` at `0658de64` (2026-11-01) for tasks 1, 3, 6 and 9; the
-other tasks were last checked at `863b5782` (2026-10-27).
+Checked against `main` at `0bd214ee` (2026-11-01) for tasks 1, 2, 3, 5, 6 and 9;
+the other tasks were last checked at `863b5782` (2026-10-27).
 
 ## Task analysis
 
@@ -10,11 +10,11 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 3 and 9 updated
 
 ### Tasks
 
-1. **Confirm the remote route**: decide which supported route the matrix targets, and whether Tailscale Serve buffers or re-encodes SSE. Status: partly done (route decided; source reading says Serve does neither; the live run needs a tailnet change, steps below).
-2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` through that route: `body`, `on` and the opt-in terminal WebSocket, at normal and constrained bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (its first step is task 1's live run).
-3. **`on`-mode streaming check**: prove that SSE gzip streams incrementally, directly and through the proxy, across reconnect, keepalives, idle, disconnect, non-gzip clients, and `Vary` and `Content-Encoding`. Status: partly done (proved directly, through test proxies and in real browsers; two proxied-stream bugs fixed; the one confirming run through real Serve is task 1's live run).
+1. **Confirm the remote route**: decide which supported route the matrix targets, and whether Tailscale Serve buffers or re-encodes SSE. Status: done (route decided; the live run on 2026-11-01 found no buffering or re-encoding, see "Live probe" under Measurements).
+2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` through that route: `body`, `on` and the opt-in terminal WebSocket, at normal and constrained bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (no longer blocks the compression default, see D14; it still decides the terminal transport and the wider-matrix questions).
+3. **`on`-mode streaming check**: prove that SSE gzip streams incrementally, directly and through the proxy, across reconnect, keepalives, idle, disconnect, non-gzip clients, and `Vary` and `Content-Encoding`. Status: done (proved directly, through test proxies, in real browsers and through real Serve; two proxied-stream bugs fixed).
 4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: partly done (most cases have tests; not mapped to the criteria).
-5. **One default change**: compression mode or terminal transport, decided from task 2's data. Status: blocked (on task 2).
+5. **One default change**: compression mode or terminal transport. Status: done for compression (`on` since 2026-11-01, D14); terminal transport unchanged.
 6. **Data-saving preference**: a client-local preference feeding `read-coordinator.ts`, a trial active cadence, wider quiet backoff and the approval budget. Status: built, and left as it is (see task 6's recommendation); its real-browser byte measurement is owed with task 2.
 7. **Hidden terminal subscriptions**: reduce or detach hidden terminal presentation subscriptions where exact recovery exists. Status: deferred (waits on task 2).
 8. **WebSocket `permessage-deflate`**: prototype only if task 2 shows large terminal WebSocket payloads. Status: deferred (waits on task 2).
@@ -258,24 +258,25 @@ slow client), and tests for incremental `on`-mode streaming, encoding
 negotiation, replay, keepalives and compressor release. No default changed.
 
 Done on 2026-11-01: the reference route is decided, gzip SSE is proved
-incremental directly, through test proxies and in real browsers, two proxied
-stream bugs are fixed, and `sse-route-probe.ts` is ready for the live run.
+incremental directly, through test proxies, in real browsers and through real
+Tailscale Serve, two proxied stream bugs are fixed, and the compression default
+is `on` (D14).
 
-What is left needs the real remote route: the probe through Tailscale Serve,
-the same matrix through the Tailscale listener and Serve, the data-saving byte
+What is left needs the real remote route: the matrix through the Tailscale
+listener and Serve, the data-saving byte
 measurement in a real browser, and the browser QA in the acceptance criteria.
 
 ## Current state
 
-- Gateway compression modes are `off`, `body` and `on`
+- Gateway compression modes are `off`, `body` and `on`, defaulting to `on`
   (`GATEWAY_COMPRESSION_MODES` in `apps/backend/src/gateway-support-core.ts`),
   set by `--compression` or `ORKESTRATOR_GATEWAY_COMPRESSION`
   (`apps/backend/src/options.ts`). `resolveGatewayCompressionMode` defaults to
-  `body`: eligible ordinary responses are compressed and SSE is not. The
-  control listener is always `off` (`compressionModeForListener`).
+  `on`; `body` compresses only eligible ordinary responses and is the rollback.
+  The control listener is always `off` (`compressionModeForListener`).
   `../../architecture/remote-gateway.md` now documents all three modes, the
   streaming ceiling, the control listener and the opt-in terminal WebSocket.
-- SSE gzip runs only in `on` mode. Direct `/events` streams use
+- SSE gzip runs in `on` mode. Direct `/events` streams use
   `GzipEventClientWriter` (`gateway-support-extra.ts`, wired in
   `gateway-handlers.ts`); proxied streams use `createSseGzipCompressor`
   (`gateway-proxy.ts`). Both flush synchronously. Streaming gzip contexts share
@@ -335,6 +336,28 @@ measurement in a real browser, and the browser QA in the acceptance criteria.
   [`plans/stream-efficience.md`](../../../plans/stream-efficience.md).
 
 ## Measurements
+
+### Live probe through Tailscale Serve, 2026-11-01
+
+`sse-route-probe.ts` at `0bd214ee4`. Server node `omarchy-hp` (Linux, Tailscale
+1.104.1), client a Mac on the same LAN over a direct tailnet path (Tailscale
+1.102.4). Each run sent 30 ticks at 1 s, a 60 s idle gap and one last tick, using
+a browser's `Accept-Encoding` unless stated. The node's existing Serve handler on
+443 was left alone; the probe used 8443 and removed it afterwards.
+
+| Run | Encoding | Missing / duplicates | Held ticks | Delay p50 / p95 / max ms | Keepalives | Client vs gateway bytes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Serve, HTTP/2 | gzip | 0 / 0 | 0 | 1 / 2 / 10 | 4 | 941 = 941 |
+| Serve, HTTP/1.1 | gzip | 0 / 0 | 0 | 1 / 2 / 64 | 5 | 976 = 976 |
+| Direct tailnet (control) | gzip | 0 / 0 | 0 | 2 / 53 / 68 | 4 | 940 = 940 |
+| Serve, `identity` | none | 0 / 0 | 0 | 1 / 48 / 53 | 5 | 4,260 = 4,260 |
+| Serve, reconnect after tick 10 | gzip | 0 / 0 | 0 | 1 / 35 / 83 | 5 | n/a across two connections |
+
+Findings: Serve neither holds nor re-encodes gzip SSE, a quiet stream survives
+the 60 s gap, and a reconnect replays with no loss or duplicate
+(`streamingActiveAfterClose` was 0 in every run). This workload is 4.5 times
+smaller with gzip. It is a slow synthetic stream on a good link, so it proves
+route behaviour, not bandwidth or CPU under load.
 
 ### In-process baseline, 2026-10-27
 
@@ -444,8 +467,9 @@ verification").
 
 ## Live run through Tailscale Serve
 
-This is the open half of tasks 1 and 3. Not run: it adds a Serve handler to a
-tailnet node, and this work must not change this machine's Tailscale setup. It
+Run on 2026-11-01; the results are under Measurements. Repeat it when Tailscale
+or the gateway's stream handling changes. It adds a Serve handler to a tailnet
+node, so never run it on a machine whose Tailscale setup must not change. It
 uses a synthetic gateway only, so no real data, token or provider is involved.
 It takes about ten minutes.
 
@@ -511,7 +535,6 @@ question to answer.
 
 ### Qualification
 
-- Run "Live run through Tailscale Serve" above, first.
 - Run the matrix above through the supported remote route at normal and
   constrained bandwidth: the harness's in-process gateway cannot sit behind
   Tailscale. Either point the same client side at a real gateway on another
@@ -529,8 +552,9 @@ question to answer.
 
 ### Code
 
-1. Change at most one default per decision. None changed (D1); revisit with
-   the remote baseline using the decision-record template.
+1. Change at most one default per decision. Compression changed to `on` (D14);
+   revisit the terminal transport with the remote baseline using the
+   decision-record template.
 2. Done: client-local data-saving preference (D2, D3).
 3. Done: 1 s responsive cadence and quiet backoff for the Files panel and
    reviewer tab under data saving, reset on checkpoints and status changes,
@@ -761,12 +785,20 @@ Decisions made on 2026-11-01 for tasks 1, 3 and 9.
     and some cases overlap.
   - Pros: no churn in tests that pass. Cons: some overlap.
 
+- **D14. Make `on` the compression default without waiting for task 2.**
+  - Options: (a) switch once the Serve probe passes; (b) wait for the full
+    remote matrix; (c) change nothing.
+  - Choice: (a), decided by the maintainer on 2026-11-01. D1's reason for waiting
+    was that Serve's handling of SSE was unknown, and the live probe has now
+    settled that.
+  - Pros: remote users get the 8 to 9 times reduction on redundant output now;
+    `--compression body` stays the rollback. Cons: 2 to 3 times the CPU of `body`
+    under bulk output; the eight-context pool still falls back to identity for a
+    fifth browser; CPU and bytes through Serve under real load are unmeasured
+    (task 2).
+
 ## Needs verification
 
-- The remote route. Serve is decided as the reference, and its source says it
-  neither buffers nor re-encodes SSE. Not yet measured: see "Live run through
-  Tailscale Serve". The probe's HTTP/2 path has run only against the HTTP/2 test
-  proxy's cleartext form, never against Serve's TLS.
 - A browser through a real proxy. The browser check ran over loopback HTTP/1.1,
   and the HTTP/2 hop was checked with the probe's client. Task 2's matrix should
   include a browser through Serve.

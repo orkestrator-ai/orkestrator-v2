@@ -96,9 +96,11 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
     expect(nameElement().classList).toContain("merge-ready-name");
     // The name keeps its own truncation and the row its accessible name.
     expect(nameElement().classList).toContain("truncate");
-    expect(description(row())).toBe("Ready to merge");
+    expect(description(row())).toContain("Ready to merge");
     // Hidden, so it never joins the row's name-from-content.
-    expect(document.getElementById(row().getAttribute("aria-describedby")!)?.hidden).toBe(true);
+    expect(
+      document.getElementById(row().getAttribute("aria-describedby")!.split(" ")[0]!)?.hidden,
+    ).toBe(true);
   });
 
   test("reduced motion gets a static indicator; the hover card says it in words", async () => {
@@ -134,7 +136,7 @@ describe("EnvironmentItem ready-to-merge shimmer", () => {
     );
     expect(nameElement().classList).not.toContain("text-shimmer");
     expect(screen.queryByTestId("merge-ready-indicator") === null).toBe(true);
-    expect(row().hasAttribute("aria-describedby")).toBe(false);
+    expect(description(row())).not.toContain("Ready to merge");
 
     view.rerender(
       <EnvironmentItem environment={readyEnvironment()} isSelected={false} {...callbacks} />,
@@ -207,7 +209,7 @@ describe("EnvironmentItem merge-conflicts and needs-answer shimmers", () => {
     expect(nameElement().classList).toContain("merge-conflicts-name");
     expect(nameElement().classList).not.toContain("merge-ready-name");
     expect(nameElement().getAttribute("data-name-signal")).toBe("merge-conflicts");
-    expect(description(row())).toBe("Merge conflicts to resolve");
+    expect(description(row())).toContain("Merge conflicts to resolve");
     expect(screen.getByTestId("merge-conflicts-indicator").classList).toContain(
       "motion-reduce:inline-block",
     );
@@ -248,7 +250,7 @@ describe("EnvironmentItem merge-conflicts and needs-answer shimmers", () => {
 
     expect(nameElement().classList).toContain("needs-answer-name");
     expect(nameElement().classList).not.toContain("merge-ready-name");
-    expect(description(row())).toBe("Waiting for your answer");
+    expect(description(row())).toContain("Waiting for your answer");
     fireEvent.mouseEnter(row());
     expect((await screen.findByTestId("environment-tooltip-needs-answer")).textContent).toBe(
       "Waiting for your answer",

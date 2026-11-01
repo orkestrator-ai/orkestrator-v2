@@ -10,9 +10,9 @@ incremental delivery, bounded memory, exact terminal recovery, or reliable
 background execution.
 
 The immediate goal is observability and bounded resource use. The gateway's
-default remains `body`, SSE gzip remains opt-in through compression mode `on`,
-and the terminal WebSocket transport remains opt-in until representative
-measurements justify changing either default.
+default was `body` until 2026-11-01 and is now `on` (todo 0052, D14). The
+terminal WebSocket transport remains opt-in until representative measurements
+justify changing that default.
 
 ## Completed foundation
 

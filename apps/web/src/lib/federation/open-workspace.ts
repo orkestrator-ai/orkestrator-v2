@@ -75,8 +75,11 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
     const ui = useUIStore.getState();
     if (!spec.projectId) return;
     if (spec.createEnvironment) requestCreateEnvironment(spec.projectId);
-    else if (spec.environmentId) ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId);
-    else {
+    else if (spec.environmentId) {
+      ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId);
+      // A project home opens on its Home tab, as its own sidebar opens it.
+      if (spec.boardTab) ui.setProjectBoardTab(spec.boardTab);
+    } else {
       ui.selectProject(spec.projectId);
       if (spec.boardTab) ui.setProjectBoardTab(spec.boardTab);
     }

@@ -16,6 +16,14 @@ import {
 import type { Environment, Project } from "@/types";
 import { HierarchicalSidebar } from "./HierarchicalSidebar";
 
+/** A project's header button, found through its "+" button, which names project and machine. */
+async function findProjectHeading(project: string, machine: string): Promise<HTMLElement> {
+  const add = await screen.findByRole("button", {
+    name: `New environment in ${project} on ${machine}`,
+  });
+  return add.parentElement!.querySelector("button")!;
+}
+
 const initialView = useMachineViewStore.getState();
 const initialUI = useUIStore.getState();
 const initialProjects = useProjectStore.getState();
@@ -101,7 +109,7 @@ test("a project row stays highlighted while its home is shown, on the command no
         <HierarchicalSidebar />
       </FederationProvider>,
     );
-    const leafRow = await screen.findByTitle("Open telegram-scraper on leaf");
+    const leafRow = await findProjectHeading("telegram-scraper", "leaf");
     const localRow = await screen.findByRole("button", { name: /^local-app/ });
     const highlighted = () => ({
       local: localRow.getAttribute("aria-current") === "page",

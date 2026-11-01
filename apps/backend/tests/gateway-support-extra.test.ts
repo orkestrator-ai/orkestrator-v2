@@ -72,7 +72,7 @@ describe("remote gateway", () => {
         ORKESTRATOR_GATEWAY_COMPRESSION: "body",
       }),
     ).toBe("body");
-    expect(resolveGatewayCompressionMode(undefined, {})).toBe("body");
+    expect(resolveGatewayCompressionMode(undefined, {})).toBe("on");
     expect(compressionModeForListener("on", "control")).toBe("off");
     expect(compressionModeForListener("on", "browser")).toBe("on");
   });
@@ -958,7 +958,7 @@ describe("remote gateway", () => {
     expect(JSON.stringify(sample)).not.toContain("private-value");
     expect(JSON.stringify(sample)).not.toContain("private-accept-value");
     expect(Object.keys(metrics.routes["proxy-loopback"]!.encodings)).toEqual(["other"]);
-    expect(metrics.compression.configuredMode).toBe("body");
+    expect(metrics.compression.configuredMode).toBe("on");
   });
 
   test("serializes invoke results once and keeps command metrics private and bounded", async () => {

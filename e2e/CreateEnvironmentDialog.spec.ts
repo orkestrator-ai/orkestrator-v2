@@ -363,3 +363,81 @@ for (const chord of ["Meta+Enter", "Control+Enter"]) {
     }
   });
 }
+
+/** Drops generated PNGs onto the dialog, as a file manager drag would. */
+async function dropImages(page: Page, images: { name: string; color: string }[]) {
+  await page.getByRole("dialog").evaluate(async (dialog, images) => {
+    const transfer = new DataTransfer();
+    for (const { name, color } of images) {
+      const canvas = new OffscreenCanvas(320, 200);
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = color;
+      context.fillRect(0, 0, 320, 200);
+      context.fillStyle = "#ffffff";
+      context.fillRect(40, 40, 120, 60);
+      const blob = await canvas.convertToBlob({ type: "image/png" });
+      transfer.items.add(new File([blob], name, { type: "image/png" }));
+    }
+    for (const type of ["dragenter", "dragover", "drop"]) {
+      dialog.dispatchEvent(
+        new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }),
+      );
+    }
+  }, images);
+}
+
+for (const intent of ["prompt", "feature"] as const) {
+  test(`${intent} attached images open in a preview modal over the dialog`, async ({
+    page,
+  }, testInfo) => {
+    await page.goto("/");
+    if (intent === "feature") {
+      await page
+        .getByRole("group", { name: "Build intent" })
+        .getByRole("button", { name: "A feature", exact: true })
+        .click();
+    }
+    const prompt =
+      intent === "feature"
+        ? page.getByLabel("Description", { exact: true })
+        : page.getByLabel("Initial Prompt (optional)");
+    await prompt.fill("Keep this staged brief");
+
+    await dropImages(page, [
+      { name: "first.png", color: "#2563eb" },
+      { name: "second.png", color: "#16a34a" },
+    ]);
+    const opener = page.getByRole("button", { name: "Preview second.png" });
+    await expect(opener).toBeVisible();
+    await expect(page.getByRole("button", { name: "Preview first.png" })).toBeVisible();
+
+    if (testInfo.project.name === "mobile-chromium") await opener.tap();
+    else await opener.click();
+    const preview = page.getByRole("dialog", { name: "Image preview: second.png" });
+    await expect(preview).toBeVisible();
+    await expect(preview.getByText(/2 of 2/)).toBeVisible();
+    await expect(preview.getByRole("img", { name: "second.png" })).toHaveAttribute(
+      "src",
+      /^data:image\/png;base64,/,
+    );
+
+    await preview.getByRole("button", { name: "Previous image" }).click();
+    await expect(page.getByRole("dialog", { name: "Image preview: first.png" })).toBeVisible();
+
+    // Touch users can dismiss with the visible control; desktop keeps Escape coverage.
+    if (testInfo.project.name === "mobile-chromium") {
+      await page
+        .getByRole("dialog", { name: "Image preview: first.png" })
+        .getByRole("button", { name: "Close image preview", exact: true })
+        .tap();
+    } else {
+      await page.keyboard.press("Escape");
+    }
+    await expect(page.getByRole("dialog", { name: /Image preview/ })).toHaveCount(0);
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toHaveValue("Keep this staged brief");
+    await expectNoHorizontalOverflow(page);
+    await expect(page.getByRole("button", { name: "Preview first.png" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Preview second.png" })).toBeVisible();
+  });
+}

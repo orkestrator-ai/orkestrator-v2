@@ -504,7 +504,7 @@ export function resolveGatewayCompressionMode(
       env.ORKESTRATOR_GATEWAY_COMPRESSION,
       "ORKESTRATOR_GATEWAY_COMPRESSION",
     ) ??
-    "body"
+    "on"
   );
 }
 

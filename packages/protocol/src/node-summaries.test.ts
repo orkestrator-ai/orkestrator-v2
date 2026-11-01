@@ -152,6 +152,31 @@ test("a node's PR monitor health travels only as a confirmed flag and a known pe
   }
 });
 
+test("a node's build pipeline and auto-merge markers travel only as true flags", () => {
+  const marked = toNodeEnvironmentSummary("bk_test" as never, {
+    id: "e",
+    projectId: "p",
+    buildPipelineId: "pipeline-1",
+    autoMerge: true,
+  })!;
+  expect(marked).toMatchObject({ buildPipeline: true, autoMerge: true });
+  expect(JSON.stringify(marked)).not.toContain("pipeline-1");
+
+  for (const raw of [
+    {},
+    { buildPipelineId: "", autoMerge: false },
+    { buildPipelineId: 7, autoMerge: "true" },
+  ]) {
+    const environment = toNodeEnvironmentSummary("bk_test" as never, {
+      id: "e",
+      projectId: "p",
+      ...raw,
+    })!;
+    expect(Object.keys(environment)).not.toContain("buildPipeline");
+    expect(Object.keys(environment)).not.toContain("autoMerge");
+  }
+});
+
 test("a project's icon is carried only as a bounded raster data URL", () => {
   const icon = "data:image/png;base64,iVBORw0KGgo=";
   expect(toNodeProjectSummary("bk_test" as never, { id: "p", icon }, 0)?.icon).toBe(icon);

@@ -692,6 +692,26 @@ describe("CL-05: machine identity visual rules", () => {
     expect(screen.getByText("app")).toBeTruthy();
   });
 
+  test("another machine's build pipeline and auto-merge rows carry their markers", () => {
+    const machine = machineView();
+    const plain = firstEnvironment(machine);
+    const { rerender } = render(<RemoteEnvironmentItem machine={machine} environment={plain} />);
+    const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
+    expect(row.querySelector("svg.lucide-pipe")).toBeNull();
+    expect(within(row).queryByTestId("environment-auto-merge-icon")).toBeNull();
+
+    rerender(
+      <RemoteEnvironmentItem
+        machine={machine}
+        environment={{ ...plain, name: "Build: feature", buildPipeline: true, autoMerge: true }}
+      />,
+    );
+    const built = screen.getByRole("button", { name: /^Build: feature, on Machine A,/ });
+    expect(built.querySelector("svg.lucide-pipe")).not.toBeNull();
+    expect(within(built).getByTestId("environment-auto-merge-icon")).toBeTruthy();
+    expect(within(built).getByText("feature")).toBeTruthy();
+  });
+
   test("another machine's clean PR stays plain without leaf monitor health", () => {
     const machine = machineView();
     const ready: FederatedEnvironment = {

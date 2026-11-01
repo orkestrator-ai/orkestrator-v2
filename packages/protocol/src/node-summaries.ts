@@ -90,6 +90,14 @@ export interface NodeEnvironmentSummary {
   deleting: boolean;
   isProjectHome: boolean;
   /**
+   * The environment belongs to a build pipeline (its record names one), so
+   * another machine's row can carry the same pipe marker as the node's own.
+   * Absent otherwise, and from nodes that predate it.
+   */
+  buildPipeline?: true;
+  /** The node will merge this environment's PR once it is ready. */
+  autoMerge?: true;
+  /**
    * The node's last PR reading, so a command node can decide "ready to merge"
    * (`pr-merge-readiness.ts`) for another machine's rows. States only, never
    * the PR URL. Absent from nodes that predate them, or without a PR.
@@ -268,6 +276,10 @@ export function toNodeEnvironmentSummary(
       raw.lifecycleOperation === "deleting" ||
       (typeof raw.deletionRequestedAt === "string" && raw.deletionRequestedAt.length > 0),
     isProjectHome: raw.projectHome === true,
+    ...(typeof raw.buildPipelineId === "string" && raw.buildPipelineId
+      ? { buildPipeline: true as const }
+      : {}),
+    ...(raw.autoMerge === true ? { autoMerge: true as const } : {}),
     ...(PR_STATES.has(raw.prState) ? { prState: raw.prState as PrState } : {}),
     ...(typeof raw.hasMergeConflicts === "boolean"
       ? { prHasMergeConflicts: raw.hasMergeConflicts }

@@ -17,10 +17,15 @@ export class CursorRunDiagnostics extends BridgeRunDiagnostics {
     now?: () => number,
     write?: (line: string) => void,
     intervalMs?: number,
+    active?: () => boolean,
   ) {
-    super("cursor", state, now, write, intervalMs);
-    this.sdk = new CursorSdkDiagnostics(state.id, now, write);
+    super("cursor", state, now, write, intervalMs, undefined, active);
+    this.sdk = new CursorSdkDiagnostics(state.id, now, write, active);
     this.sdk.report("send-started");
+  }
+  override syncActive(): void {
+    if (this.active()) this.sdk.installSeam();
+    super.syncActive();
   }
   follow<T>(work: () => T): T {
     return this.sdk.follow(work);
@@ -68,8 +73,10 @@ export class CursorRunDiagnostics extends BridgeRunDiagnostics {
     }
   }
 }
-export function createRunDiagnostics(state: SessionState): CursorRunDiagnostics | undefined {
-  return bridgeDebugEnabled("cursor") ? new CursorRunDiagnostics(state) : undefined;
+export function createRunDiagnostics(state: SessionState): CursorRunDiagnostics {
+  return new CursorRunDiagnostics(state, undefined, undefined, undefined, () =>
+    bridgeDebugEnabled("cursor"),
+  );
 }
 
 /** Bounded so one SDK error cannot write an unbounded diagnostic line. */

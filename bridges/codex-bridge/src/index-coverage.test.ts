@@ -502,7 +502,10 @@ describe("codex bridge private boundary coverage", () => {
       };
 
       process.env.ORKESTRATOR_BRIDGE_DEBUG = "0";
-      expect(__testing.createCodexProcessDiagnosticsForTesting(runtime as never)).toBeUndefined();
+      const quiet = __testing.createCodexProcessDiagnosticsForTesting(runtime as never);
+      quiet?.report("heartbeat");
+      quiet?.close();
+      expect(lines).toEqual([]);
 
       process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
       diagnostics = __testing.createCodexProcessDiagnosticsForTesting(runtime as never);

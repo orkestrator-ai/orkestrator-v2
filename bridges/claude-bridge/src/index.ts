@@ -150,11 +150,9 @@ app.use("*", async (c, next) => {
   }
   await next();
 });
-// Request logging is debug-only; see `createRequestLogger`.
-const requestLogger = createRequestLogger();
-if (requestLogger) {
-  app.use("*", requestLogger);
-}
+// Request logging is debug-only, and follows a change to that setting; see
+// `createRequestLogger`.
+app.use("*", createRequestLogger());
 app.use("/session/:id/messages", async (c, next) => {
   await next();
   c.res.headers.append("Vary", "Accept-Encoding");

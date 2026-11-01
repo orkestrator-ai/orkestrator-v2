@@ -28,7 +28,7 @@ describe("the upgrade from a single debug switch", () => {
   });
 
   test("a stored value wins over the switch, in both directions", () => {
-    const quiet = { level: "info", areaLevels: {} };
+    const quiet = { level: "info" as const, areaLevels: {} };
     expect(resolveLogDetail({ debugLogging: true, logDetail: quiet })).toEqual(quiet);
     expect(bridgeDebugEnvValue({ debugLogging: true, logDetail: quiet })).toBe("0");
     const detailed = { level: "info", areaLevels: { "bridge.diagnostics": "trace" } };

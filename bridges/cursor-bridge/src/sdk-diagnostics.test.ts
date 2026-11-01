@@ -126,6 +126,38 @@ describe("Cursor SDK boundary diagnostics", () => {
     h.scope.close();
   });
 
+  test("a transport already running when the seam installs is adopted at its next frame", async () => {
+    const lines: string[] = [];
+    const scope = new CursorSdkDiagnostics(
+      "session-1",
+      () => 1_000,
+      (line) => lines.push(line),
+    );
+    const prototype = { startTimer() {}, trackActivity() {} };
+    const detector = Object.create(prototype) as typeof prototype;
+    detector.startTimer();
+    const restore = instrumentSdk({
+      stallDetectorPrototype: prototype,
+      execControllerPrototype: { run() {} },
+    });
+    try {
+      // Outside the turn's scope nothing can say whose transport this is.
+      detector.trackActivity("inbound_message", "heartbeat");
+      scope.report("heartbeat");
+      expect(JSON.parse(lines[0]!.slice("[bridge-diagnostics] ".length)).transports).toEqual([]);
+
+      await scope.follow(async () => {
+        detector.trackActivity("inbound_message", "heartbeat");
+      });
+      scope.report("heartbeat");
+      const snapshot = JSON.parse(lines[1]!.slice("[bridge-diagnostics] ".length));
+      expect(snapshot.transports[0]).toMatchObject({ inboundCount: 1, heartbeatCount: 1 });
+    } finally {
+      restore();
+      scope.close();
+    }
+  });
+
   test("dispatch reaches the real patched detector and correlates it with the bridge run", async () => {
     const previous = process.env.ORKESTRATOR_BRIDGE_DEBUG;
     const lines: string[] = [];

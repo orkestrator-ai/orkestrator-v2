@@ -1976,10 +1976,9 @@ describe("interactive approvals", () => {
 
     expect(
       errors.some(
-        ([message, error]) =>
-          message === "[codex-bridge] Failed to cancel turn after approval response:" &&
-          error instanceof Error &&
-          error.message === "abort dispatch rejected",
+        ([line]) =>
+          String(line).startsWith("[bridge.codex] approval.cancel-failed") &&
+          String(line).includes("abort dispatch rejected"),
       ),
     ).toBe(true);
   });

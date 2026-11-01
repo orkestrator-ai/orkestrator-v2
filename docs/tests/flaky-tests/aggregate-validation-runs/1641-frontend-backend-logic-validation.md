@@ -100,3 +100,37 @@ mail, host maintenance and CLI UI visibility. The runner stopped and reset
 `/tmp/orkestrator-test-run.FlgawK/review-agent-browser-rerun.log.gz`. This full
 run remains incomplete; the new focused backend-state regression passed
 separately after extraction into its own spec.
+
+The exact component browser rerun with
+`ORKESTRATOR_VALIDATION_GRANTED_WORKERS=2` reached case 588 of 1,140 and began
+desktop cases before `test:logged` enforced its
+1,800,000 ms group deadline (1800.1 s, exit 1). Thirteen failure reports were
+observed in unchanged background-outcome, change-tracking, review-layout,
+sidebar-drag, transcript, folding, paging and agent-launch owners. The complete
+settings owner had already passed both projects separately. The public-site
+stage was not reached. Evidence:
+`/tmp/orkestrator-test-run.Gl0MVW/review-browser-rerun.log.gz`.
+
+In the final committed-version full rerun, the entire web package passed:
+11,083 passed, ten skipped, zero failed across 733 files (583.13 s). Root
+failures were the existing disk-report timing case and the bounded-DOM-
+diagnostics check against fourteen unchanged files. The ACP retained-child
+registry case failed again in bridges. Backend failures observed while the
+workspace group continued were the loginless coordinator Codex bridge, three
+Claude model-catalog cases, and raw-socket downstream backpressure. None of
+these files was changed by the review repairs.
+
+The final exact `mise run test:full` completed with exit 1 in 1773.6 s, including
+655.8 s waiting for the preceding aggregate. Backend finished with 15,604
+passed, 201 skipped and the five unchanged-file failures above across 999 files
+(855.51 s). No new legacy-draft, container-write, feature-plan, goal-check or
+ownership regression failed. Root and bridges failed as described above; the
+Codex protocol lockfile check passed. The complete failure artifacts are
+`/tmp/orkestrator-test-run.O2jWFK/`, with outer command evidence at
+`/tmp/orkestrator-test-run.Vs39nQ/review-full-rerun-final.log.gz`.
+
+All review-repair code and tests are committed (`e491ab280`, with the I/O
+assertion follow-up in `ca3f384fb`). No disposable browser profile was retained;
+the isolated runner's runtime directory was checked absent before handoff.
+The broad checks are deliberately reported as failed/incomplete, not as an
+all-green qualification.

@@ -1,3 +1,4 @@
+import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
 import { createHash } from "node:crypto";
 import type { StorageMigration } from "./storage-database.js";
 import {
@@ -181,6 +182,79 @@ export function restoreLegacyPromptQueueClaims(stored: unknown): unknown {
   }
   return upgraded ?? stored;
 }
+
+/**
+ * Every structured review report a pipeline snapshot carries, with
+ * `testResults.notRun` backfilled on reports written before it existed.
+ *
+ * The current writer always stores a parsed report, and `isBuildPipeline`
+ * requires the field, so a report without it would make every reader drop the
+ * whole pipeline. Used by the one-shot migration and by the legacy localStorage
+ * import, the only ways an old report can still arrive.
+ */
+export function backfillBuildPipelineReviewReports(snapshot: unknown): unknown {
+  if (!isRecord(snapshot)) return snapshot;
+  let upgraded: Record<string, unknown> = snapshot;
+  const set = (key: string, value: unknown) => {
+    if (value !== upgraded[key]) upgraded = { ...upgraded, [key]: value };
+  };
+  /** The same array when no entry changed, so an untouched record stays identical. */
+  const mapped = (entries: unknown[], map: (entry: unknown) => unknown): unknown[] => {
+    const next = entries.map(map);
+    return next.some((entry, index) => entry !== entries[index]) ? next : entries;
+  };
+  const withReport = (entry: unknown, key: string): unknown => {
+    if (!isRecord(entry) || entry[key] === undefined) return entry;
+    const report = backfillLegacyTestResults(entry[key]);
+    return report === entry[key] ? entry : { ...entry, [key]: report };
+  };
+  if (snapshot.structuredReview !== undefined) {
+    set("structuredReview", backfillLegacyTestResults(snapshot.structuredReview));
+  }
+  if (Array.isArray(snapshot.sessions)) {
+    set(
+      "sessions",
+      mapped(snapshot.sessions, (session) => withReport(session, "reviewReport")),
+    );
+  }
+  if (Array.isArray(snapshot.roundReviewReports)) {
+    set(
+      "roundReviewReports",
+      mapped(snapshot.roundReviewReports, (round) => withReport(round, "report")),
+    );
+  }
+  return upgraded;
+}
+
+/** The `build-pipelines` store with every record's reports backfilled. */
+export function upgradeBuildPipelineRecords(stored: unknown): unknown {
+  if (!isRecord(stored)) return stored;
+  let changed = false;
+  const upgraded: Record<string, unknown> = {};
+  for (const [key, record] of Object.entries(stored)) {
+    upgraded[key] = record;
+    if (!isRecord(record)) continue;
+    const snapshot = backfillBuildPipelineReviewReports(record.snapshot);
+    if (snapshot === record.snapshot) continue;
+    upgraded[key] = { ...record, snapshot };
+    changed = true;
+  }
+  return changed ? upgraded : stored;
+}
+
+export const BUILD_PIPELINE_REVIEW_REPORT_UPGRADE_VERSION = 6;
+
+export const buildPipelineReviewReportUpgradeMigration: StorageMigration = {
+  version: BUILD_PIPELINE_REVIEW_REPORT_UPGRADE_VERSION,
+  name: "backfill-build-pipeline-review-reports",
+  up({ database }) {
+    const current = database.readStoreValueInTransaction("build-pipelines");
+    // Absent or unreadable: nothing an older build wrote is left to upgrade.
+    if (!current) return;
+    const next = upgradeBuildPipelineRecords(current.value);
+    if (next !== current.value) database.writeStoreInTransaction("build-pipelines", next);
+  },
+};
 
 const RECORD_UPGRADES: ReadonlyArray<readonly [string, (stored: unknown) => unknown]> = [
   ["native-agent-sessions", upgradeNativeAgentSessionRecords],

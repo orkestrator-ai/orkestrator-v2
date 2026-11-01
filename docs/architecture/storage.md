@@ -439,6 +439,12 @@ to each runtime, requests abort, and removes an identity only after the provider
 confirms idle or missing. Unreachable and still-running turns remain queued for
 minute-by-minute retry and survive backend restarts.
 
+Version 6 (`backfill-build-pipeline-review-reports`,
+`storage-record-upgrades.ts`) fills `testResults.notRun` on the structured
+review reports a stored pipeline carries, written before the field existed. The
+current contract requires it, and the renderer no longer repairs a report it
+reads. The legacy localStorage import applies the same backfill.
+
 Every startup also extracts identities from stray `looped-reviews.json` files
 and their retained `legacy-json/` copies, including backups and interrupted
 writer temps, then immediately removes those retired copies. No review context,

@@ -96,6 +96,11 @@ async function launchNativeAgentJobInternal(
     throw new Error("literal must be true when given");
   }
   const literal = args.literal === true;
+  // Marks the tab the way the Review button does, so it offers Address all.
+  if (args.reviewTab !== undefined && args.reviewTab !== true) {
+    throw new Error("reviewTab must be true when given");
+  }
+  const reviewTab = args.reviewTab === true;
   const tabReuse = options.allowCompletionAction ? args.tabReuse : undefined;
   if (tabReuse !== undefined && !isNativeAgentJobTabReuse(tabReuse)) {
     throw new Error("tabReuse is invalid");
@@ -292,6 +297,7 @@ async function launchNativeAgentJobInternal(
       agent,
       title,
       activate: args.activateTab === true,
+      ...(reviewTab ? { isReviewTab: true } : {}),
       ...(completionAction ? { completionAction } : {}),
     });
     const session = await context.nativeAgents.ensureSession({

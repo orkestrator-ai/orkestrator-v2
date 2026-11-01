@@ -7,10 +7,7 @@
  * that renderer pulls in.
  */
 
-import type {
-  StructuredReviewFindings,
-  StructuredReviewReport,
-} from "@orkestrator/protocol/structured-review";
+import type { StructuredReviewFindings, StructuredReviewReport } from "./structured-review.js";
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;

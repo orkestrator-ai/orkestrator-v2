@@ -5,14 +5,15 @@ import {
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   MULTI_REVIEW_PLAN_TOOL_PROHIBITION,
-} from "@orkestrator/protocol/multi-review";
+  multiReviewCustomFixPrompt,
+} from "./multi-review";
 import {
   MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
   STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
   wrapSystemInstructions,
-} from "@orkestrator/protocol/review-evidence-frames";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
-import { ADDRESS_ALL_REVIEW_PROMPT, multiReviewCustomFixPrompt } from "./review-actions";
+} from "./review-evidence-frames";
+import type { StructuredReviewReport } from "./structured-review";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "./git-workflow-prompts";
 
 const report = {
   issues: [{ title: "Fix the session handoff", evidence: "Observed in source" }],

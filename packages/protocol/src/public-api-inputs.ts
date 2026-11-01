@@ -1498,6 +1498,24 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
       input: schema({ workflowId }, ["workflowId"]),
       examples: [{ workflowId: "review-1" }],
     },
+    "review.start": {
+      capability: "sessions.control",
+      confirmation: "never",
+      input: schema(
+        {
+          environmentId,
+          targetBranch: {
+            type: "string",
+            minLength: 1,
+            maxLength: 500,
+            description: "Branch to review against. Omitted: the project's PR base branch.",
+          },
+          ...actionAgentSelection,
+        },
+        ["environmentId"],
+      ),
+      examples: [{ environmentId: "env-1" }, { environmentId: "env-1", targetBranch: "develop" }],
+    },
     ...BUILD_ACTION_INPUTS,
     ...GRAPH_ACTION_INPUTS,
     "pr.create": {
@@ -1536,6 +1554,12 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         ["environmentId"],
       ),
       examples: [{ environmentId: "env-1" }],
+    },
+    "pr.push": {
+      capability: "sessions.control",
+      confirmation: "voice",
+      input: schema({ environmentId, ...actionAgentSelection }, ["environmentId"]),
+      examples: [{ environmentId: "env-1" }, { environmentId: "env-1", agent: "codex" }],
     },
     ...PR_ACTION_INPUTS,
     "attention.list": {

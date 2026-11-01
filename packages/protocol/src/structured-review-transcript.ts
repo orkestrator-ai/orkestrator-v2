@@ -1,16 +1,44 @@
-import { parseJsonPayload, type JsonPayload } from "@/lib/chat/json-payload";
+/**
+ * Which assistant text a transcript reader should show for a structured review
+ * turn: streamed JSON drafts, review-package plans and trailing payloads are
+ * withheld, and at most one accepted payload is retained.
+ *
+ * Pure and generic over the message shape, so every client that reads a
+ * transcript makes the same decision about the same rows. Every other property
+ * of a message or part is carried through untouched.
+ */
 import {
   isWithheldMachineOutput,
   jsonDocumentState,
   lastMachineJsonDocument,
-} from "@/lib/chat/machine-output-text";
-import type { NativeMessage } from "@/lib/chat/native-message-types";
+} from "./structured-output.js";
+import { parseJsonPayload, type JsonPayload } from "./transcript-json-payload.js";
+
+/** The fields these filters read; only `text` parts' `content` is ever classified. */
+export interface TranscriptMessageLike {
+  role: string;
+  content: string;
+  parts: ReadonlyArray<{ type: string; content?: unknown }>;
+}
+
+/** The text of a `text` part; anything else is carried through unread. */
+function textPartContent(part: TranscriptMessageLike["parts"][number]): string | null {
+  return part.type === "text" && typeof part.content === "string" ? part.content : null;
+}
+
+/** Concatenated visible text, the `content` fallback some persisted adapters derive. */
+function joinedText(parts: TranscriptMessageLike["parts"]): string {
+  return parts
+    .map(textPartContent)
+    .filter((text): text is string => text !== null)
+    .join("");
+}
 
 function isPayloadKind(value: string, kind: JsonPayload["kind"]): boolean {
   return parseJsonPayload(value)?.kind === kind;
 }
 
-function hasMessageContent(message: NativeMessage): boolean {
+function hasMessageContent(message: TranscriptMessageLike): boolean {
   return message.parts.length > 0 || message.content.length > 0;
 }
 
@@ -32,11 +60,11 @@ function matchingPayload(
 }
 
 /** Remove every matching payload, or retain only the last one as authoritative. */
-function showOnlyFinalPayloadMessage(
-  messages: NativeMessage[],
+function showOnlyFinalPayloadMessage<M extends TranscriptMessageLike>(
+  messages: M[],
   kind: JsonPayload["kind"],
   showFinal: boolean,
-): NativeMessage[] {
+): M[] {
   let final: PayloadPosition | undefined;
   const payloadParts = new Map<string, { replacement?: string }>();
   const payloadContentMessages = new Map<number, { replacement?: string }>();
@@ -45,8 +73,9 @@ function showOnlyFinalPayloadMessage(
     if (message.role !== "assistant") return;
     let foundPart = false;
     message.parts.forEach((part, partIndex) => {
-      if (part.type !== "text") return;
-      const match = matchingPayload(part.content, kind);
+      const text = textPartContent(part);
+      if (text === null) return;
+      const match = matchingPayload(text, kind);
       if (!match) return;
       foundPart = true;
       payloadParts.set(`${messageIndex}:${partIndex}`, match);
@@ -64,10 +93,10 @@ function showOnlyFinalPayloadMessage(
     }
   });
 
-  return messages.flatMap((message, messageIndex) => {
+  return messages.flatMap((message, messageIndex): M[] => {
     if (message.role !== "assistant") return [message];
     let partsChanged = false;
-    const parts = message.parts.flatMap((part, partIndex) => {
+    const parts: M["parts"][number][] = message.parts.flatMap((part, partIndex) => {
       const match = payloadParts.get(`${messageIndex}:${partIndex}`);
       if (!match) return [part];
       if (!(showFinal && final?.messageIndex === messageIndex && final.partIndex === partIndex)) {
@@ -96,12 +125,9 @@ function showOnlyFinalPayloadMessage(
       // part rather than mirroring only the final one. Once a provisional
       // payload part is removed or replaced, rebuild that fallback as well so
       // transcript search or a content-only renderer cannot recover hidden JSON.
-      content = parts
-        .filter((part) => part.type === "text")
-        .map((part) => part.content)
-        .join("");
+      content = joinedText(parts);
     }
-    const filtered = { ...message, content, parts };
+    const filtered = { ...message, content, parts } as M;
     return hasMessageContent(filtered) ? [filtered] : [];
   });
 }
@@ -129,8 +155,8 @@ function showOnlyFinalPayloadMessage(
  * other document, including arbitrary JSON that happens to parse, stays subject
  * to withholding: no filter claimed it, so nothing has vouched for it.
  */
-export function hideMachineOutputText(
-  messages: NativeMessage[],
+export function hideMachineOutputText<M extends TranscriptMessageLike>(
+  messages: M[],
   options: {
     retainPayloadKind?: JsonPayload["kind"];
     /** ACP-style providers can append the final dataset to a prose text part. */
@@ -143,7 +169,7 @@ export function hideMachineOutputText(
     /** Replace the default standalone-document withhold. */
     withholdStandaloneText?: (text: string) => boolean;
   } = {},
-): NativeMessage[] {
+): M[] {
   const { retainPayloadKind, stripTrailingPayload = false, withholdStandaloneText } = options;
   const trailingKeys = trailingPayloadRootKeySet(options.trailingPayloadRootKeys);
   const isWithheld = (text: string): boolean => {
@@ -155,17 +181,18 @@ export function hideMachineOutputText(
     if (isWithheld(text)) return "";
     return stripTrailingPayload ? withoutTrailingJsonPayload(text, trailingKeys) : text;
   };
-  return messages.flatMap((message) => {
+  return messages.flatMap((message): M[] => {
     if (message.role !== "assistant") return [message];
     let partsChanged = false;
-    const parts: NativeMessage["parts"] = [];
+    const parts: M["parts"][number][] = [];
     for (const part of message.parts) {
-      if (part.type !== "text") {
+      const text = textPartContent(part);
+      if (text === null) {
         parts.push(part);
         continue;
       }
-      const content = visibleText(part.content);
-      if (content === part.content) {
+      const content = visibleText(text);
+      if (content === text) {
         parts.push(part);
         continue;
       }
@@ -181,15 +208,12 @@ export function hideMachineOutputText(
       // `content`, so a prose update followed by machine output is neither a
       // standalone document nor safe to retain verbatim. Once a part was
       // withheld, rebuild this fallback from the surviving visible text.
-      content = parts
-        .filter((part) => part.type === "text")
-        .map((part) => part.content)
-        .join("");
+      content = joinedText(parts);
     }
     if (!partsChanged && content === message.content) {
       return [message];
     }
-    const filtered = { ...message, content, parts };
+    const filtered = { ...message, content, parts } as M;
     return hasMessageContent(filtered) ? [filtered] : [];
   });
 }
@@ -279,7 +303,7 @@ export function looksLikeReviewPackagePlanText(text: string): boolean {
  * Withhold review-package JSON without redacting earlier implementation dumps
  * on a reused build or fix transcript.
  */
-export function hideReviewPackagePlanText(messages: NativeMessage[]): NativeMessage[] {
+export function hideReviewPackagePlanText<M extends TranscriptMessageLike>(messages: M[]): M[] {
   return hideMachineOutputText(messages, {
     stripTrailingPayload: true,
     trailingPayloadRootKeys: REVIEW_PACKAGE_PLAN_ROOT_KEYS,
@@ -362,10 +386,10 @@ function withoutTrailingJsonPayload(
  * Retain only an accepted historical review's final structured report.
  * Current reports render through the dedicated pipeline-owned report view.
  */
-export function showOnlyFinalStructuredReviewMessage(
-  messages: NativeMessage[],
+export function showOnlyFinalStructuredReviewMessage<M extends TranscriptMessageLike>(
+  messages: M[],
   showFinal: boolean,
-): NativeMessage[] {
+): M[] {
   return showOnlyFinalPayloadMessage(messages, "structured-review", showFinal);
 }
 
@@ -379,9 +403,9 @@ export function showOnlyFinalStructuredReviewMessage(
  * also make a session idle. The caller shows the last payload only after the
  * backend has accepted that request's structured result.
  */
-export function showOnlyFinalVerificationMessage(
-  messages: NativeMessage[],
+export function showOnlyFinalVerificationMessage<M extends TranscriptMessageLike>(
+  messages: M[],
   showFinal: boolean,
-): NativeMessage[] {
+): M[] {
   return showOnlyFinalPayloadMessage(messages, "verification", showFinal);
 }

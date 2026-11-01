@@ -175,6 +175,8 @@ const PROMPT_RUN_ACTIONS: readonly PublicActionName[] = [
   "session.start",
   "pr.create",
   "pr.resolve",
+  "pr.push",
+  "review.start",
   "session.prompt",
   "session.command",
   "environment.launch",

@@ -126,8 +126,9 @@ import {
 } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
+import { STARTUP_AGENT_TAB_ID } from "@/lib/startup-agent-handoff";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
 import { findMultiReviewFixReport } from "@/lib/multi-review-fix-tab";
 import {
@@ -138,7 +139,7 @@ import {
   withResumeCleanupNotices,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import { hideMachineOutputText } from "@/lib/structured-review-messages";
+import { hideMachineOutputText } from "@orkestrator/protocol/structured-review-transcript";
 import {
   createPeerMailNativeMessagesFromCarrier,
   isPeerMailCarrierContent,
@@ -685,7 +686,7 @@ export function SharedNativeAgentController({
   });
   const classifyCommand = commandComposer.classify;
   const backendOwnsStartupPrompt =
-    tabId === "startup-agent" &&
+    tabId === STARTUP_AGENT_TAB_ID &&
     (environment?.pendingAgentLaunch === true || environment?.startupAgentSession !== undefined);
   const {
     favorites: allFavorites,

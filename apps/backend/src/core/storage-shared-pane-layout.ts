@@ -96,6 +96,7 @@ export function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
   return leaves;
 }
 
+/** The shared predicate the renderer also uses. */
 export function environmentIsReadyForSetupHandoff(environment: Environment): boolean {
   return isEnvironmentSetupSettled(environment);
 }

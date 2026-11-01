@@ -26,7 +26,7 @@ import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as backend from "@/lib/backend";
-import { hideReviewPackagePlanText } from "@/lib/structured-review-messages";
+import { hideReviewPackagePlanText } from "@orkestrator/protocol/structured-review-transcript";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { cn } from "@/lib/utils";
 import {

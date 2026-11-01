@@ -3,7 +3,7 @@ import {
   isWithheldMachineOutput,
   jsonDocumentState,
   lastMachineJsonDocument,
-} from "./machine-output-text";
+} from "./structured-output";
 
 describe("jsonDocumentState", () => {
   test("treats ordinary prose as prose", () => {

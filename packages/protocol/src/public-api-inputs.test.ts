@@ -235,6 +235,7 @@ describe("public action input contract", () => {
       "graph.launch": "voice",
       "pr.create": "voice",
       "pr.resolve": "voice",
+      "pr.push": "voice",
       // Each cannot be taken back, or speaks for the user on the remote.
       "pr.merge": "always",
       "pr.close": "always",

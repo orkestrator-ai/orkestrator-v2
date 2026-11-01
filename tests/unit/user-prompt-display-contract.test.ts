@@ -25,7 +25,10 @@ import {
   prependReviewHandoff,
 } from "../../apps/backend/src/core/build-pipeline-handoff";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
-import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+  multiReviewCustomFixPrompt,
+} from "@orkestrator/protocol/multi-review";
 import { createMultiReviewConsolidationPrompt } from "../../apps/backend/src/core/multi-review-prompts";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
 import {
@@ -33,7 +36,6 @@ import {
   userPromptPresentation,
 } from "../../apps/web/src/lib/chat/user-prompt-display";
 import { workflowResultInstruction } from "@orkestrator/protocol/workflow-results";
-import { multiReviewCustomFixPrompt } from "../../apps/web/src/lib/review-actions";
 
 const findings: StructuredReviewFindings = {
   issues: [

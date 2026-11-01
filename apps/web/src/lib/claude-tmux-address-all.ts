@@ -1,4 +1,4 @@
-import { ADDRESS_ALL_REVIEW_PROMPT } from "./review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 
 export async function submitClaudeTmuxAddressAll(input: {
   planMode: boolean;

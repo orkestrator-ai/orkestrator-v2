@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "./testing/structured-review-fixtures";
 import {
   hideMachineOutputText,
   hideReviewPackagePlanText,
   showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
-} from "./structured-review-messages";
+} from "./structured-review-transcript";
 
 describe("showOnlyFinalStructuredReviewMessage", () => {
   test("keeps only an accepted historical review's final report", () => {

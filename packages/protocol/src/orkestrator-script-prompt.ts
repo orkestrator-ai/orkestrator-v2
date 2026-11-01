@@ -1,5 +1,6 @@
 /**
- * Prompt for creating/updating the orkestrator-ai.json configuration file.
+ * Prompt for creating/updating the orkestrator-ai.json configuration file,
+ * shared by every client that launches the Run Script agent.
  */
 
 export function createOrkestratorScriptPrompt(isLocalEnvironment: boolean): string {

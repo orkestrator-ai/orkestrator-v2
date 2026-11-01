@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createForeignOwnerDecoys, DockerClient } from "./docker-decoys.js";
+import { startLossyProxy } from "./lossy-proxy.js";
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -605,6 +606,100 @@ export const SCENARIOS: ScenarioDefinition[] = [
         });
         expectThat(survivors.status === 1, "the command's process survived deletion");
       }
+    },
+  },
+  {
+    name: "lost-response",
+    description:
+      "A --wait start and exec whose responses are lost after admission are found by request key and settled; nothing is resubmitted or run twice.",
+    async run(context) {
+      await configureConnection(context);
+      const fixture = await addFixtureProject(context, "lost-response");
+      const environment = await createEnvironment(context, fixture.projectId, "lost-response-env");
+      // A second connection to the same backend through a proxy that loses the
+      // first start and exec answers after the backend has admitted them.
+      const proxy = await startLossyProxy({
+        upstream: context.backend.descriptor.url,
+        dropFirst: ["environment.start", "environment.exec"],
+      });
+      context.cleanup.push({ label: "stop lossy proxy", run: () => proxy.stop() });
+      await context.cli.ok(
+        [
+          "connection",
+          "add",
+          "lossy",
+          "--url",
+          proxy.url,
+          "--credential-file",
+          context.backend.descriptor.authFile,
+        ],
+        "connection add lossy",
+      );
+      const lossy = ["--connection", "lossy"];
+      const recovered = (envelope: CliResult["envelope"], action: string) => {
+        const warnings = envelope?.ok ? (envelope.warnings ?? []) : [];
+        expectThat(
+          warnings.some((warning) => warning.includes("found the operation by its request key")),
+          `${action} did not report a recovered lost response`,
+        );
+        expectThat(
+          proxy.dropped(action) === 1 && proxy.submissions(action) === 1,
+          `${action} was submitted ${proxy.submissions(action)} times with ${proxy.dropped(action)} lost answers; expected once and one`,
+        );
+      };
+
+      const start = await context.cli.ok(
+        [
+          ...lossy,
+          "environment",
+          "start",
+          environment.id,
+          "--wait",
+          "ready",
+          "--timeout",
+          "5m",
+          "--request-id",
+          "lost-response-start",
+        ],
+        "start, response lost",
+      );
+      recovered(start.envelope, "environment.start");
+
+      const exec = await context.cli.run(
+        [
+          "--json",
+          ...lossy,
+          "environment",
+          "exec",
+          environment.id,
+          "--wait",
+          "--exit-code",
+          "--timeout",
+          "5m",
+          "--request-id",
+          "lost-response-exec",
+          "--",
+          "sh",
+          "-c",
+          "echo ran >> lost-response-count; exit 3",
+        ],
+        { stage: "exec, response lost" },
+      );
+      expectThat(exec.code === 3, `recovered exec exited ${exec.code}, not the child's 3`);
+      recovered(exec.envelope, "environment.exec");
+      // The command ran exactly once.
+      const count = await context.cli.ok(
+        ["environment", "exec", environment.id, "--wait", "--", "cat", "lost-response-count"],
+        "count runs",
+      );
+      const output = await context.cli.ok<{ text: string }>(
+        ["run", "output", count.envelope.receipt!.operationId],
+        "count output",
+      );
+      expectThat(
+        output.result.text === "ran\n",
+        `the command ran ${JSON.stringify(output.result.text)}`,
+      );
     },
   },
   {

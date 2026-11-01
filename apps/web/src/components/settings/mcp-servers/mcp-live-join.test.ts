@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mcpScope } from "../../../../../../bridges/claude-bridge/src/services/mcp-runtime-status";
+import {
+  initMcpServerStatus,
+  mcpScope,
+} from "../../../../../../bridges/claude-bridge/src/services/mcp-runtime-status";
 
 import type { McpConfigSource } from "@orkestrator/protocol/mcp-management";
 
@@ -80,6 +83,32 @@ describe("joinLiveMcpServer", () => {
       expect(joinLiveMcpServer(rows, ref({ scope: mcpScope(sdkScope, "docs") }))).toMatchObject({
         kind: "saved",
         entryId,
+      });
+    }
+  });
+
+  test("native SSE local scope selects the local saved row despite a project duplicate", () => {
+    const localSource: McpConfigSource = {
+      ...userSource,
+      sourceId: "claude:local",
+      scope: "claude-local",
+      precedence: 20,
+    };
+    const rows = snapshot({
+      sources: [localSource, projectSource],
+      definitions: [
+        definition({ entryId: "local-docs", sourceId: localSource.sourceId, status: "shadowed" }),
+        definition({ entryId: "project-docs", sourceId: projectSource.sourceId }),
+      ],
+    });
+    const layers = new Map([["inline", "project"]] as const);
+    for (const scope of [
+      mcpScope("local", "docs", "local", layers),
+      initMcpServerStatus({ name: "docs", source: "local" }, layers).scope,
+    ]) {
+      expect(joinLiveMcpServer(rows, ref({ scope }))).toMatchObject({
+        kind: "saved",
+        entryId: "local-docs",
       });
     }
   });

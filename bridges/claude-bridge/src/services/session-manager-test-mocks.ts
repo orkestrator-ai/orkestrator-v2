@@ -379,6 +379,7 @@ export const mockGetMcpRuntimeConfig = mock(
   async (_cwd?: string, _env?: unknown, _connection?: unknown, _sources?: unknown) => ({
     servers: await mockGetMcpServersForSdk(),
     names: await mockGetMcpServerNames(),
+    layers: new Map<string, string>(),
     revision: MOCK_MCP_CONFIG_REVISION,
   }),
 );

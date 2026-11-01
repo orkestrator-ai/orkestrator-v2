@@ -3,16 +3,15 @@
 ## Task analysis
 
 Analysed 2026-10-31 against `main` at `931e5541`, on branch
-`todo-0039-mcp-management-d5f657bb2ee5`, while the Claude bridge's MCP
-configuration code (`mcp-config.ts`, `session-manager-prompt-mcp-sync.ts`) had
-uncommitted agent-account changes in the same worktree. Re-check the line
-references once those land.
+`todo-0039-mcp-management-d5f657bb2ee5`. Re-checked 2026-11-01 against `main` at
+`0658de646`: both problems were still there, reproduced in a real browser. Line
+references in the sections below describe the code before the fix.
 
 ### Tasks
 
-1. **Keep the session's inventory after a probe action**: a reconnect, enable or disable run through a probe updates only the row it acted on, not the whole list. Status: open.
-2. **Report the layer a session actually loaded a server from**: a project server should not read as `user` in the live panel. Status: open.
-3. **Real-browser regression**: extend `e2e/agent-testing/mcp-ui-matrix.spec.ts` to assert the injected `orkestrator` row and the layers survive a reconnect. Status: open; depends on 1 and 2.
+1. **Keep the session's inventory after a probe action**: a reconnect, enable or disable run through a probe updates only the row it acted on, not the whole list. Status: done (2026-11-01).
+2. **Report the layer a session actually loaded a server from**: a project server should not read as `user` in the live panel. Status: done (2026-11-01).
+3. **Real-browser regression**: extend `e2e/agent-testing/mcp-ui-matrix.spec.ts` to assert the injected `orkestrator` row and the layers survive a reconnect. Status: done (2026-11-01); the same flow on a running CLI is still unobserved (see Outstanding work).
 
 ### 1. Keep the session's inventory after a probe action
 
@@ -37,6 +36,8 @@ The reconnect went through the probe, since the refused turn's CLI had exited; t
     - Pros: the list only ever comes from the session.
     - Cons: the failed row stays "failed" after a successful reconnect until the next turn, which reads as the action not working.
 
+**Outcome (2026-11-01).** Merge, as recommended (`applyProbeMcpStatus` in `session-manager-catalog.ts`). Also decided: the row keeps the layer the session loaded it from; a name the session never listed is not added, because the list describes the session; a list not yet read is seeded from the init rows first; a live control's answer still replaces the whole list. Reconnecting `orkestrator` itself through a probe fails on the real CLI with `Server not found: orkestrator`, and the list stays as it was.
+
 ### 2. Report the layer a session actually loaded a server from
 
 **Problem.** After a turn, servers from the project `.mcp.json` read as `scope: "user"`; after a probe action the same servers read as `project`.
@@ -55,6 +56,8 @@ The reconnect went through the probe, since the refused turn's CLI had exited; t
     - Pros: honest; the join then falls back to effective-row precedence, which is correct for Claude.
     - Cons: loses the layer for display and for any future use.
 
+**Outcome (2026-11-01).** The launch tag, as recommended (`layers` from `getMcpRuntimeConfig`, kept as `session.mcpServerLayers`). A name takes the layer that won it in the bridge's merge. Servers the bridge injects are tagged `orkestrator`, which also stops `orkestrator-design` reading as `user`. The tag does not apply to a server whose source is `plugin`, `sdk` or `claudeai`. A server with no tag (an added account's own, a coordinator's research server) keeps the CLI's report. The two-layer case the investigation inferred is now observed: on the unfixed bridge the row read `user`, and with the fix the Config link opens the project row.
+
 ### 3. Real-browser regression
 
 **Problem.** Nothing guards the panel's contents across a probe action.
@@ -63,25 +66,36 @@ The reconnect went through the probe, since the refused turn's CLI had exited; t
 
 **Decisions.** Assert, after the reconnect and after the reload, that `orkestrator` is still listed and both fixture rows read `project`.
 
+**Outcome (2026-11-01).** Asserted after the turn, the reconnect and the reload, along with every row but the reconnected one being unchanged, the list surviving a reconnect of `orkestrator` itself, and a third fixture server, saved in both the user and the project file, opening its project row from Config.
+
+The spec on `main` no longer passed on an unloaded host. A refused CLI stops its MCP servers about 100 ms after starting them, so `mcpui-ok` stayed `connecting` for the full 60 s at load 4 (the 2026-10-31 run was at load 25–53). The case now writes a `UserPromptSubmit` hook to its own worktree that holds the CLI open for 8 s; the login check still ends the turn, with "Not logged in" and no model call. List checks retry through the panel's collapse on a projection refresh, which failed some runs under load before that. The frozen `connecting` state itself is [1240](1240-claude-frozen-connecting-mcp-rows.md).
+
+Results, all on a `dev:test --fixture --no-agent-credentials --agent-platforms claude` profile:
+
+| Bridge | Result |
+| --- | --- |
+| Unfixed (`0658de646`) | Fails at `after-turn`: `mcpui-*` read `user`. With that check made soft, `after-reconnect` also fails: `orkestrator` is gone. |
+| Fixed, old probe write-back put back | Fails at `after-reconnect`: `orkestrator` is gone. |
+| Fixed | Both cases pass, 3 of 3 at load 36–43: `mcpui-ok:connected:project, mcpui-late:connected:project, mcpui-both:connected:project, orkestrator:connected:orkestrator` after the reconnect and after the reload. |
+
 ## Assumptions and decisions
 
-- The loss is assumed to last only until the session's CLI runs again: a read while a live control exists replaces the list from that CLI (`session-manager-catalog.ts:280`). Not observed (the next turn needs a working login). It still misleads a user who reconnects a failed server and then sees Orkestrator's own tools vanish.
+- A read while a live control exists replaces the list from that CLI, so a merged row lasts only until the session's CLI runs again. Not observed: the next turn needs a working login. With the merge nothing is lost in the meantime, so this no longer misleads.
+- Accepted from the merge: rows other than the acted-on one stay as old as the session's last report, which can be `connecting` ([1240](1240-claude-frozen-connecting-mcp-rows.md)).
+- A probe reads the files by the CLI's own rules, so for a name in several layers it can reconnect a different entry from the one the session loaded. Inferred from the code, not observed. The row's result is then the probe's entry's, under the session's layer.
+- The bridge's inline merge puts `.mcp.json` above the private `projects[cwd]` entry, so the tag says `project` when both name a server. The tag follows what the bridge passes, not the CLI's own file precedence.
 
 ## Current state
 
-- Reconnect, enable and disable work without a running CLI through a probe, and the acted-on server's status is correct afterwards.
-- The list the probe writes back drops launch-injected servers and reports different layers from the session's own report.
+- Reconnect, enable and disable work without a running CLI through a probe, and only the acted-on row changes.
+- The live panel reports the layer each server was loaded from, on a running CLI's report and on the init rows alike.
+- Reconnect or disable on `orkestrator` with no CLI running is offered but fails with `Server not found: orkestrator`, which reads as if the server were missing. The list is unaffected.
 
 ## Outstanding work
 
-### Code
-
-1. Merge a probe action's result into the session's inventory instead of replacing it.
-2. Carry each server's source layer from the bridge's launch record into the live inventory.
-
 ### Qualification
 
-- `mcp-ui-matrix.spec.ts` live-panel case passes with the added assertions on a `--no-agent-credentials` profile.
+- Reconnect on a running CLI, and the next turn replacing a merged list, need a turn the provider accepts, so a working login. Unit tests cover the live path; a real CLI has not exercised it. This keeps the file open ([0039](0039-mcp-management.md) task 8 points here for it).
 
 ## Constraints and rationale
 
@@ -90,11 +104,13 @@ The reconnect went through the probe, since the refused turn's CLI had exited; t
 ## Open questions
 
 - Should the panel say when its list came from a probe rather than the session (for example "as of the last action")?
+- Should `orkestrator`'s reconnect and disable be withheld, or refused in clearer words, while no CLI is running?
 
 ## Related
 
 - [0039-mcp-management.md](0039-mcp-management.md) task 8 (real-browser UI matrix), where this was found
 - `e2e/agent-testing/mcp-ui-matrix.spec.ts`
+- [1240-claude-frozen-connecting-mcp-rows.md](1240-claude-frozen-connecting-mcp-rows.md), found while qualifying this
 
 ## Replaces
 

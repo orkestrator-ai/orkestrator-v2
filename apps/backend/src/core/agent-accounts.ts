@@ -199,7 +199,8 @@ function autoSwitchState(
   const stored = store.autoSwitch?.[platform];
   return {
     mode: !ticks?.enabled ? "off" : stored?.pin ? "pinned" : "automatic",
-    ...(ticks?.enabled && stored?.pin
+    // Kept while off too: ticking it again on this machine still has to end it.
+    ...(stored?.pin
       ? { pinnedAccountId: stored.pin.accountId, pinnedAt: stored.pin.pinnedAt }
       : {}),
     includedAccountIds: accounts
@@ -272,6 +273,7 @@ async function switchActiveAccount(
     const outgoing = accounts.planUsage.cache.lastOk(platform);
     const nowIso = new Date().toISOString();
     let pinned = false;
+    let gaveWay = false;
     const previous = await context.storage.agentAccounts.mutateAgentAccounts<string | undefined>(
       (store) => {
         const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
@@ -280,6 +282,7 @@ async function switchActiveAccount(
           automatic &&
           (current !== automatic.expectedActive || store.autoSwitch?.[platform]?.pin)
         ) {
+          gaveWay = true;
           return { store, result: undefined };
         }
         const machine = store.autoSwitch?.[platform];
@@ -317,6 +320,7 @@ async function switchActiveAccount(
       },
     );
     if (pinned) return true;
+    if (gaveWay) return false;
     // Readers take this same lock before selecting an account and before
     // publishing a result. No reader can observe a half-completed switch.
     bumpUsageGeneration(context, platform);

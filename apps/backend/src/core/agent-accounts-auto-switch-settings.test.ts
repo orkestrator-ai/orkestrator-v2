@@ -145,6 +145,17 @@ describe("a manual switch", () => {
     expect((await state()).mode).toBe("automatic");
   });
 
+  test("a pin left while the tick is off is still there to end when it comes back", async () => {
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    await setActiveAgentAccount(context, "codex", B);
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: false });
+    expect(await state()).toMatchObject({ mode: "off", pinnedAccountId: B });
+    await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    const resumed = await state();
+    expect(resumed.mode).toBe("automatic");
+    expect(resumed.pinnedAccountId).toBeUndefined();
+  });
+
   test("the other provider's tick is not touched", async () => {
     await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
     await setAgentAccountAutoSwitch(context, "claude", { enabled: true });
@@ -219,7 +230,8 @@ describe("the feature's own switch", () => {
 describe("the per-account ticks", () => {
   test("travel by email, and an account with no email stays out until ticked here", async () => {
     await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
-    expect((await state()).includedAccountIds.sort()).toEqual([A, B, "default"].sort());
+    // This profile's host login has no email, so it stays out like any other.
+    expect((await state()).includedAccountIds.sort()).toEqual([A, B].sort());
 
     await setAgentAccountAutoSwitch(context, "codex", {
       email: "B@example.com",

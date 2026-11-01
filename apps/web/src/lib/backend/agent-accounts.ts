@@ -7,7 +7,6 @@ import type {
   AgentAccountLoginProgress,
   AgentAccountPlatform,
   AgentAccountsSnapshot,
-  AgentAccountSummary,
   AgentSessionAccount,
   AgentSignInTerminal,
   HostAgentSignIns,
@@ -70,44 +69,48 @@ export async function setActiveAgentAccount(
 }
 
 /**
- * Change an automatic-switching tick, and show `machine` the result.
+ * The main automatic-switching tick, and what `machine` shows afterwards.
  *
- * The ticks that travel belong to the command node, which hands them to its
- * machines: the main tick, and an account's tick by its email. An account with no
- * email cannot be matched on another machine, so its tick stays on `machine`.
- * Ticking the main tick is also what ends a pin, and a pin belongs to the machine
- * it was set on. A machine that predates this never reports a pin to end.
+ * The tick belongs to the command node, which hands it to its machines. Ticking it
+ * is also what ends a pin, and a pin belongs to the machine it was set on. A
+ * machine that predates this never reports a pin to end.
  */
-export async function setAgentAccountAutoSwitch(
+export async function setAgentAccountAutoSwitchEnabled(
   platform: AgentAccountPlatform,
-  change:
-    | { enabled: boolean; pinned?: boolean }
-    | { account: Pick<AgentAccountSummary, "id" | "identity">; included: boolean },
+  enabled: boolean,
+  pinned: boolean,
   machine?: AccountMachine,
 ): Promise<AgentAccountsSnapshot> {
-  if ("enabled" in change) {
-    await invokeCommandNodeSetting("set_agent_account_auto_switch", {
-      platform,
-      enabled: change.enabled,
-    });
-    const onAnotherMachine =
-      machine === undefined
-        ? settingsOnCommandNode()
-        : machine !== null && machine !== portalStore.getState().selfId;
-    if (change.enabled && change.pinned && onAnotherMachine) {
-      await machineInvoke(machine, "resume_agent_account_auto_switch", { platform });
-    }
-  } else if (change.account.identity.email) {
-    await invokeCommandNodeSetting("set_agent_account_auto_switch", {
-      platform,
-      email: change.account.identity.email,
-      included: change.included,
-    });
+  await invokeCommandNodeSetting("set_agent_account_auto_switch", { platform, enabled });
+  const onAnotherMachine =
+    machine === undefined
+      ? settingsOnCommandNode()
+      : machine !== null && machine !== portalStore.getState().selfId;
+  if (enabled && pinned && onAnotherMachine) {
+    await machineInvoke(machine, "resume_agent_account_auto_switch", { platform });
+  }
+  return listAgentAccounts(machine);
+}
+
+/**
+ * One account's automatic-switching tick. By email it travels from the command
+ * node. An account with no email cannot be matched on another machine, so its tick
+ * stays on `machine`.
+ */
+export async function setAgentAccountAutoSwitchIncluded(
+  platform: AgentAccountPlatform,
+  accountId: string,
+  email: string | undefined,
+  included: boolean,
+  machine?: AccountMachine,
+): Promise<AgentAccountsSnapshot> {
+  if (email) {
+    await invokeCommandNodeSetting("set_agent_account_auto_switch", { platform, email, included });
   } else {
     await machineInvoke(machine, "set_agent_account_auto_switch", {
       platform,
-      accountId: change.account.id,
-      included: change.included,
+      accountId,
+      included,
     });
   }
   return listAgentAccounts(machine);

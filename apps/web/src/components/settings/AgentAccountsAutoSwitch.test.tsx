@@ -154,6 +154,6 @@ describe("automatic account switching in Settings", () => {
   test("a machine that predates it shows no ticks and keeps working", async () => {
     render(<AgentAccountsSection platform="codex" />);
     await screen.findByText("a@example.com");
-    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("checkbox") === null).toBe(true);
   });
 });

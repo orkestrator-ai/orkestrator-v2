@@ -27,7 +27,8 @@ import {
   removeAgentAccount,
   renameAgentAccount,
   setActiveAgentAccount,
-  setAgentAccountAutoSwitch,
+  setAgentAccountAutoSwitchEnabled,
+  setAgentAccountAutoSwitchIncluded,
   startAgentAccountLogin,
 } from "@/lib/backend";
 import type {
@@ -511,9 +512,10 @@ export function AgentAccountsSection({
           machineName={machineName}
           onChange={(enabled) =>
             void run(() =>
-              setAgentAccountAutoSwitch(
+              setAgentAccountAutoSwitchEnabled(
                 platform,
-                { enabled, pinned: autoSwitch.mode === "pinned" },
+                enabled,
+                autoSwitch.pinnedAccountId !== undefined,
                 machine,
               ),
             )
@@ -533,7 +535,15 @@ export function AgentAccountsSection({
                 ? { autoSwitchIncluded: autoSwitch.includedAccountIds.includes(account.id) }
                 : {})}
               onAutoSwitchIncluded={(included) =>
-                void run(() => setAgentAccountAutoSwitch(platform, { account, included }, machine))
+                void run(() =>
+                  setAgentAccountAutoSwitchIncluded(
+                    platform,
+                    account.id,
+                    account.identity.email,
+                    included,
+                    machine,
+                  ),
+                )
               }
               onUse={() =>
                 void run(() => setActiveAgentAccount(platform, account.id, machine), true)

@@ -37,6 +37,8 @@ const AUTO_SWITCH_EDGE_SPACING_MS = 60_000;
 export const USAGE_LIMIT_READ_WAIT_MS = 10 * 60_000;
 /** A stop waits this long for the other turns keeping its bridge on the old account. */
 export const USAGE_LIMIT_BRIDGE_WAIT_MS = 30 * 60_000;
+/** A workflow polls every few seconds; a waiting stop is decided again at this pace. */
+export const USAGE_LIMIT_RECHECK_MS = 15_000;
 /** One account running out stops several turns; they share one confirmation. */
 const CONFIRMATION_REUSE_MS = 2 * 60_000;
 /**
@@ -103,7 +105,7 @@ export class AgentAccountAutoSwitcher {
   /** The last move a confirmed limit caused, per provider. */
   private readonly recentMoves = new Map<AgentAccountPlatform, { to: string; at: number }>();
   /** When each stopped turn first had to wait. */
-  private readonly waitingSince = new Map<string, number>();
+  private readonly waitingSince = new Map<string, { since: number; checkedAt: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
 
@@ -195,6 +197,8 @@ export class AgentAccountAutoSwitcher {
 
   private async decideStop(input: UsageLimitStopInput): Promise<UsageLimitStopVerdict> {
     const { platform, environmentId, requestId } = input;
+    const waiting = this.waitingSince.get(requestId);
+    if (waiting && this.now() - waiting.checkedAt < USAGE_LIMIT_RECHECK_MS) return "wait";
     const state = await this.automaticState(platform);
     if (!state) return "stop";
     const session = await this.deps.sessionAccount(environmentId, platform);
@@ -232,16 +236,17 @@ export class AgentAccountAutoSwitcher {
 
   private waitFor(requestId: string, limitMs: number): UsageLimitStopVerdict {
     const now = this.now();
-    let since = this.waitingSince.get(requestId);
-    if (since === undefined) {
+    let waiting = this.waitingSince.get(requestId);
+    if (!waiting) {
       if (this.waitingSince.size >= MAX_TRACKED_STOPS) {
         const oldest = this.waitingSince.keys().next().value;
         if (oldest !== undefined) this.waitingSince.delete(oldest);
       }
-      since = now;
-      this.waitingSince.set(requestId, since);
+      waiting = { since: now, checkedAt: now };
+      this.waitingSince.set(requestId, waiting);
     }
-    return now - since < limitMs ? "wait" : "stop";
+    waiting.checkedAt = now;
+    return now - waiting.since < limitMs ? "wait" : "stop";
   }
 
   private async confirmUsedUp(

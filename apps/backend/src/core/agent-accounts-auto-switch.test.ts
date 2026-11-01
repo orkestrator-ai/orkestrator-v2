@@ -11,6 +11,7 @@ import {
   AgentAccountAutoSwitcher,
   USAGE_LIMIT_BRIDGE_WAIT_MS,
   USAGE_LIMIT_READ_WAIT_MS,
+  USAGE_LIMIT_RECHECK_MS,
   type AutoSwitchNotice,
 } from "./agent-accounts-auto-switch.js";
 
@@ -327,9 +328,27 @@ describe("a limit error mid-turn", () => {
     expect(h.state.active).toBe("a");
     h.advance(USAGE_LIMIT_READ_WAIT_MS - 1);
     expect(await h.stop()).toBe("wait");
-    h.advance(1);
+    h.advance(USAGE_LIMIT_RECHECK_MS);
     expect(await h.stop()).toBe("stop");
     expect(h.state.active).toBe("a");
+  });
+
+  test("a workflow polling a waiting stop does not read usage on every poll", async () => {
+    const h = harness({
+      active: "a",
+      accounts: {
+        a: usage({ used: 100, resetsInHours: 3, stale: true }),
+        b: usage({ used: 5, resetsInHours: 90 }),
+      },
+    });
+    expect(await h.stop()).toBe("wait");
+    const reads = h.reads.length;
+    h.advance(USAGE_LIMIT_RECHECK_MS - 1);
+    expect(await h.stop()).toBe("wait");
+    expect(h.reads.length).toBe(reads);
+    h.advance(1);
+    expect(await h.stop()).toBe("wait");
+    expect(h.reads.length).toBeGreaterThan(reads);
   });
 
   test("an unreadable account waits the same way", async () => {

@@ -344,7 +344,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
         if (
           enabled &&
           !machine.self &&
-          (await machineAccounts(machine)).autoSwitch?.[platform]?.mode === "pinned"
+          (await machineAccounts(machine)).autoSwitch?.[platform]?.pinnedAccountId
         ) {
           await machine.call("resume_agent_account_auto_switch", { platform });
         }

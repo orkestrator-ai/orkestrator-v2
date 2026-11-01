@@ -37,7 +37,10 @@ import {
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "@orkestrator/protocol/agent-account-auto-switch";
-import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
+import {
+  AGENT_ACCOUNT_PLATFORMS,
+  AGENT_ACCOUNTS_CHANGED_EVENT,
+} from "@orkestrator/protocol/agent-accounts";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
@@ -745,7 +748,11 @@ export class OrkestratorBackend {
         pickInheritedGlobalSettings((await storage.loadConfig()).global),
       onInheritedSettingsChanged: () => {
         storage.announceInheritedSettingsChanged();
-        for (const platform of AGENT_ACCOUNT_PLATFORMS) this.accountAutoSwitch?.nudge(platform);
+        for (const platform of AGENT_ACCOUNT_PLATFORMS) {
+          // The ticks may have arrived, and every view of them re-reads on this.
+          options.emit(AGENT_ACCOUNTS_CHANGED_EVENT, { platform });
+          this.accountAutoSwitch?.nudge(platform);
+        }
       },
     });
     context.machineLoad = this.machineLoad;

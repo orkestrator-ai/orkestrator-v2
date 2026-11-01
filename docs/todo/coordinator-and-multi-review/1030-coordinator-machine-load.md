@@ -2,14 +2,15 @@
 
 ## Task analysis
 
-Analysed 2026-10-31 against `main` at `931e55417`.
+Analysed 2026-10-31 against `main` at `931e55417`. Tasks 3 and 4 rechecked
+2026-11-01 against `main` at `93b99bfba`: both problems were still as described.
 
 ### Tasks
 
 1. **Rolling sampler, three windows, machine facts, `list_nodes`, coordinator guidance**: built. Status: done (2026-10-31).
 2. **Live check across two real machines**: `list_nodes` on a real command node with a real leaf, including a leaf on an older release. Status: open.
-3. **Native Linux and Windows check**: real OS strings and readings on those platforms. Status: open.
-4. **Older-node detection elsewhere matches the wrong wording**: two existing checks look for `Unknown command:`, while a real backend answers `Unknown backend command:`. Status: open.
+3. **Native Linux and Windows check**: real OS strings and readings on those platforms. Status: Linux done (2026-11-01); Windows open, as it cannot be run here.
+4. **Older-node detection elsewhere matches the wrong wording**: two existing checks look for `Unknown command:`, while a real backend answers `Unknown backend command:`. Status: done (2026-11-01).
 5. **Keep history across a backend restart**: decide once coordinators are seen using the 24-hour figure. Status: open (deferred).
 6. **Retire the older-node path**: remove it when the support window allows. Status: open.
 
@@ -42,15 +43,25 @@ Analysed 2026-10-31 against `main` at `931e55417`.
 
 ### 3. Native Linux and Windows check
 
-**Problem.** Only macOS was read on real hardware.
+**Problem.** Only macOS was read on real hardware. On Linux, beelink's whole `PRETTY_NAME` is `Omarchy`, so its OS read as `Omarchy`, with no version and nothing to say it is an Arch derivative.
 
 **Context.** On Linux the name comes from `/etc/os-release` and the figures from `os.cpus()` and `os.freemem()`. On Windows the name comes from `os.version()`.
 
-**Investigation.** A throwaway `oven/bun:1.4.4` container on this Mac showed `os.freemem()` equal to `MemAvailable` (and not `MemFree`) and read `Debian GNU/Linux 13 (trixie)` from os-release. That shows Linux needs no special RAM reader, as the title bar's does on a Mac, but it is a container on a Linux VM, not a Linux host. Windows was not run at all, so `os.version()` is known only from Node's documentation, and a Windows backend is not a supported target today. WSL reads as its distribution, family `linux`.
+**Investigation.** A throwaway `oven/bun:1.4.4` container on a Mac showed `os.freemem()` equal to `MemAvailable` (and not `MemFree`) and read `Debian GNU/Linux 13 (trixie)` from os-release, but that was a container on a Linux VM.
+
+On 2026-11-01 beelink (Omarchy 4.0.6, Arch-based, kernel 7.1.8, x86_64, 16 threads, 62.3 GiB, Bun 1.4.4) was checked directly:
+
+- **In process.** `os.cpus().length` 16, matching `/proc/cpuinfo`; `os.totalmem()` equal to `MemTotal`; `os.freemem()` equal to `MemAvailable` (not `MemFree`, which was a quarter of it). Two `MachineLoadSampler` readings 10 s apart gave 42.8 % CPU against 42.7 % from `/proc/stat` over the same 10 s.
+- **Live backend.** One backend from source, `--runtime-flavor agent-test`, with a disposable data directory, worktree directory and isolated `HOME` (the process environment `createBackendProcessEnvironment` gives a `dev:test` profile's backend, with no credential sources), on an ephemeral loopback port, asked `get_machine_load` over the gateway. Figures are null before the first reading and the first covers 15 s; each was within 0.4 points of `/proc/stat` CPU and 0.6 points of `MemAvailable`-based RAM over the same span (15, 75 and 135 s). The run removed its directory afterwards and left no process.
+- **Why not `mise run dev:test` itself.** It starts Electron, and this shell has `WAYLAND_DISPLAY` set, so the window would open on the user's live desktop. The Electron entry has no headless switch, and no headless compositor is installed. The backend Electron would spawn was run directly instead.
+
+The readings needed no change. The OS name did: it now adds `VERSION_ID` when the name has no number of its own and names `ID_LIKE`, so beelink reads as `Omarchy 4.0.6 (like arch)`, live over the gateway as well as in tests. Names that already carry a version (Debian, Ubuntu, Fedora, Alpine's `v3.20`) keep them as they are.
+
+Windows was not run: no Windows machine is reachable from here. `os.version()` is known only from Node's documentation, and a Windows backend is not a supported target today. WSL reads as its distribution, family `linux`.
 
 **Decisions.**
 - **What counts as enough?**
-  - **Check Linux on the next real Linux node, and Windows only if a Windows backend becomes a target (recommended).**
+  - **Check Linux on the next real Linux node, and Windows only if a Windows backend becomes a target (recommended; Linux done 2026-11-01 on beelink).**
     - Pros: spends effort where machines exist.
     - Cons: Windows wording stays unproved.
   - **Stand up a Windows VM now.**
@@ -61,13 +72,13 @@ Analysed 2026-10-31 against `main` at `931e55417`.
 
 **Problem.** Two existing checks test for the wording `Unknown command: <name>`, but a real backend answers `Unknown backend command: <name>`, and the node link passes that message on unchanged. So these branches are likely never taken against a real older node: `commands-registry-coordinator-nodes.ts:121` (the "runs an older Orkestrator" message) and `nodes/node-service.ts:586` (remembering that a node cannot take settings sync).
 
-**Context.** The test network in `nodes/node-network-test-support.ts:198` answers with the shorter wording, so their tests pass. `packages/protocol/src/view-sync.ts:277` matches the real wording. `readNodeMachineLoad` accepts both.
+**Context.** The test network in `nodes/node-network-test-support.ts:198` answers with the shorter wording, so their tests pass. `packages/protocol/src/view-sync.ts:277` matches the real wording. `readNodeMachineLoad` accepted both until 2026-11-01.
 
-**Investigation.** Read from the code only (`OrkestratorBackend.invoke`, `GatewayHandlers.handleInvoke`, `NodeLink.request`). Not reproduced against a real older node. Out of scope for this change, so nothing was altered.
+**Investigation.** Read from the code (`OrkestratorBackend.invoke`, `GatewayHandlers.handleInvoke`, `NodeLink.request`): the gateway sends the thrown message as the invoke error and `NodeLink.request` raises it unchanged. Git history agrees: every backend since #76 has thrown `Unknown backend command:`, and the shorter wording came in with #1211's checks and the test network, never from a backend. A third check of the same kind was found: `nodes/node-coordination.ts`, relaying a worker answer to an older node. A new test for each check failed against the old code and passes now. Not reproduced against a real older node (task 2).
 
 **Decisions.**
 - **How to fix it?**
-  - **One shared `isUnknownCommandError(error, command)` in the protocol package, used by all of these, and the test network switched to the real wording (recommended).**
+  - **One shared `isUnknownCommandError(error, command)` in the protocol package, used by all of these, and the test network switched to the real wording (recommended, done).**
     - Pros: one place to get right, and tests see what production sends.
     - Cons: the test network's change touches several test expectations.
   - **Add the second wording at each site.**
@@ -110,7 +121,7 @@ Analysed 2026-10-31 against `main` at `931e55417`.
 
 ## Current state
 
-`list_nodes` returns `machine` for this machine and every connected node. Each backend samples itself once a minute with no reader needed. Live evidence is limited to this Mac; see tasks 2 and 3.
+`list_nodes` returns `machine` for this machine and every connected node. Each backend samples itself once a minute with no reader needed. Live evidence covers one Mac and one Linux host (beelink); Windows and a real node link are unproved (tasks 2 and 3). Every older-node check uses `isUnknownCommandError` (`packages/protocol/src/unknown-command.ts`).
 
 ## Constraints and rationale
 
@@ -143,6 +154,18 @@ The old line said to work on this node unless the user names another, which left
 ### Task 1: last-known figures
 
 Never shown. An offline or timed-out node has `status: "unavailable"` and no figures, not even its OS, because a coordinator cannot place work there anyway and a cache would be another thing to keep honest.
+
+### Task 3: the Linux OS name (2026-11-01)
+
+`PRETTY_NAME` stays first, so names that already read well do not change. `VERSION_ID` is added only when that name has no digit at all: the version is the one fact a coordinator cannot guess, and a name with its own number (`Alpine Linux v3.20`) is not given a second one. `ID_LIKE` is shown as `(like arch)`, using the os-release identifiers as they are rather than a table of display names that would need keeping up. It costs a few characters on Ubuntu (`(like debian)`) for telling a coordinator what a niche derivative such as Omarchy or Pop!_OS installs packages with. Only identifier-shaped values are kept, and the 120-character limit on a node's answer still applies. The kernel version was left out: the family and distribution are what placement turns on.
+
+### Task 3: running a `dev:test` profile headless (2026-11-01)
+
+`mise run dev:test` starts Electron, and on beelink that would open a window on the user's desktop session. The check ran the same backend Electron would start, with the same `agent-test` flavour and isolated environment (`createBackendProcessEnvironment`), the way `scripts/qa-command-nodes.ts` starts its backends. The real data directory, logins and the reserved ports were not used. The throwaway script was not kept.
+
+### Task 4: only the real wording counts (2026-11-01)
+
+`isUnknownCommandError` accepts only `Unknown backend command: <name>`, with nothing name-like straight after it, so `get_machine_load_v2` is not `get_machine_load`. `readNodeMachineLoad` used to accept the shorter `Unknown command:` too. That was dropped, because no backend has sent it, and accepting it let the test network's wrong wording pass unnoticed. A peer that did send it gets reason `error`, which also fails nothing. `isUnknownViewCommandError` now delegates to the same function, so it no longer matches a longer command name either. The e2e fake host (`e2e/fixtures/close-retention-host.ts`) still answers `Unknown command:`. It was left alone because it feeds the web client's own handling, and changing what it sends is a separate change. `0395`'s note that an older leaf answers `Unknown command:` was corrected to match.
 
 ## Related
 

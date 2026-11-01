@@ -120,6 +120,11 @@ on `self` and on each node:
 }
 ```
 
+- **OS name.** `sw_vers` on a Mac (`macOS 27.0`). On Linux, `/etc/os-release`
+  (`PRETTY_NAME`, else `NAME`), with `VERSION_ID` added when the name has no
+  number of its own and `ID_LIKE` naming what a derivative follows: beelink's
+  `PRETTY_NAME` is only `Omarchy`, which reads as `Omarchy 4.0.6 (like arch)`.
+  On Windows, `os.version()` (not yet seen on a real Windows backend).
 - **Windows.** 5 minutes, 1 hour and 24 hours, named constants in
   `packages/protocol/src/machine-load.ts`. A worker runs for hours, so a
   one-minute figure is mostly noise. `os.loadavg()` is not the source: it is
@@ -146,7 +151,9 @@ on `self` and on each node:
   each is asked in parallel through `invoke_on_node` with a 2 s limit, and its
   `machine` is otherwise `{ "status": "unavailable", "reason", "detail" }` with
   no figures. Reasons: `offline` (not connected, so not asked), `timeout`,
-  `older-version` (it answered that it has no `get_machine_load`) and `error`.
+  `older-version` (it answered `Unknown backend command: get_machine_load`,
+  matched by `isUnknownCommandError` in
+  `packages/protocol/src/unknown-command.ts`) and `error`.
   Last-known figures are never shown. `detail` is fixed wording, so a node's
   error text does not reach the coordinator.
 - **Who sees it.** Read-only, for main coordinators and side agents

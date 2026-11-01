@@ -24,6 +24,7 @@ export const CHANGE_MEASUREMENT_SCHEMA_VERSION = 1 as const;
 export const MEASUREMENT_SCOPES = [
   "environment-net",
   "uncommitted-net",
+  "committed-net",
   "staged",
   "unstaged",
   "turn-net",

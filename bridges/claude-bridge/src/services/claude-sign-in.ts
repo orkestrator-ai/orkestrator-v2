@@ -101,6 +101,21 @@ export function normalizeClaudeAccount(account: AccountInfo): NativeAgentAuthSta
   };
 }
 
+/** What identifies an account for anything kept per account. Holds no credential. */
+export function claudeAccountKey(status: NativeAgentAuthStatus): string {
+  return JSON.stringify([status.state, status.account?.label, status.account?.plan]);
+}
+
+/**
+ * The account the last read saw, however old, or undefined when no read has
+ * answered. Never starts a read: `claudeAccountKey` of the answer, for a reader
+ * that must not spawn a CLI to learn whether the login has changed.
+ */
+export function claudeObservedAccountKey(): string | undefined {
+  const value = authCache?.value;
+  return value && value.state !== "unknown" ? claudeAccountKey(value) : undefined;
+}
+
 /**
  * The account a running CLI signed in with, read from its initialize answer.
  *

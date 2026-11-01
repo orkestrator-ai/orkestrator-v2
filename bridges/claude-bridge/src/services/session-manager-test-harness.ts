@@ -105,6 +105,7 @@ export async function blockClaudeConfigDir(home: string): Promise<void> {
 }
 
 import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
+import { resetClaudeModelCatalogForTesting } from "./claude-model-catalog.js";
 import {
   resetTerminalSlashCommandsForTesting,
   terminalSlashCommandWritesForTesting,
@@ -334,6 +335,7 @@ afterEach(async () => {
   resetSessionActivityProbeCacheForTesting();
   // The account read is bridge-wide; one test's "no login" must not lock the next.
   resetClaudeSignInForTesting();
+  resetClaudeModelCatalogForTesting();
   // Remembered terminal lists are bridge-wide, like the account read.
   resetTerminalSlashCommandsForTesting();
   installSdkModuleMock();

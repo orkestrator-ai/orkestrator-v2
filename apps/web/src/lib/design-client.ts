@@ -14,10 +14,16 @@ import type {
   DesignFailure,
   DesignFrameValidation,
   DesignHistoryPage,
+  DesignIntentDiscardResult,
+  DesignIntentDraft,
+  DesignIntentList,
+  DesignIntentResumeResult,
+  DesignIntentRunResult,
   DesignLibraryPage,
   DesignLibraryQuery,
   DesignOperationDescriptor,
   DesignOperationStatus,
+  DesignPreconditions,
   DesignPrepareResult,
   DesignReadiness,
   DesignSessionLink,
@@ -192,6 +198,61 @@ export const designApi = {
     }),
   cancel: (environmentId: string, canvasId: string, token: string) =>
     designCommand<DesignOperationStatus>("design_cancel", { environmentId, canvasId, token }),
+  /** The document's backend-owned intent queue, reconciled from backend state. */
+  intents: (environmentId: string, canvasId: string) =>
+    designCommand<DesignIntentList>("design_intents", { environmentId, canvasId }),
+  saveIntents: (
+    environmentId: string,
+    canvasId: string,
+    clientId: string,
+    drafts: DesignIntentDraft[],
+  ) =>
+    designCommand<{ saved: string[] }>("design_intent_save", {
+      environmentId,
+      canvasId,
+      clientId,
+      drafts,
+    }),
+  /** One-time import of this browser's legacy localStorage intents. */
+  importIntents: (environmentId: string, canvasId: string, clientId: string, intents: unknown[]) =>
+    designCommand<{ imported: number; skipped: number }>("design_intent_import", {
+      environmentId,
+      canvasId,
+      clientId,
+      intents,
+    }),
+  runIntent: (
+    environmentId: string,
+    canvasId: string,
+    intent: DesignIntentDraft,
+    waitMs?: number,
+  ) =>
+    designCommand<DesignIntentRunResult>("design_intent_run", {
+      environmentId,
+      canvasId,
+      intent,
+      waitMs,
+    }),
+  resumeIntent: (
+    environmentId: string,
+    canvasId: string,
+    intentId: string,
+    clientId: string,
+    rebaseTo?: DesignPreconditions,
+  ) =>
+    designCommand<DesignIntentResumeResult>("design_intent_resume", {
+      environmentId,
+      canvasId,
+      intentId,
+      clientId,
+      rebaseTo,
+    }),
+  discardIntent: (environmentId: string, canvasId: string, intentId: string) =>
+    designCommand<DesignIntentDiscardResult>("design_intent_discard", {
+      environmentId,
+      canvasId,
+      intentId,
+    }),
   library: (environmentId: string, query: DesignLibraryQuery) =>
     designCommand<DesignLibraryPage>("design_library", { environmentId, query }),
   purge: (environmentId: string, canvasId: string) =>

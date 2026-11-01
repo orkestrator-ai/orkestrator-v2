@@ -4,15 +4,20 @@ import {
   type DesignChange,
   type DesignFrame,
 } from "@orkestrator/protocol/design-canvas";
-import type {
-  DesignCapabilities,
-  DesignExportReceipt,
-  DesignFailure,
-  DesignOperationDescriptor,
-  DesignOperationStatus,
-  DesignSnapshotResult,
-  DesignSyncDelta,
-  DesignSyncResult,
+import {
+  DESIGN_INTENT_LIMITS,
+  DESIGN_NOT_RUN_STATES,
+  designIntentLane,
+  rebaseOverOwnCommits,
+  type DesignCapabilities,
+  type DesignExportReceipt,
+  type DesignFailure,
+  type DesignOperationDescriptor,
+  type DesignOperationStatus,
+  type DesignSnapshotResult,
+  type DesignIntentList,
+  type DesignSyncDelta,
+  type DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { createUuid } from "@/lib/uuid";
@@ -24,6 +29,7 @@ import {
   type DesignProjection,
 } from "@/stores/designStore";
 import {
+  DesignClientError,
   classifyTransportError,
   designAction,
   designApi,
@@ -33,7 +39,8 @@ import {
   getCapabilities,
   getChanges,
 } from "@/lib/design-client";
-import { loadDrafts, saveDrafts } from "./design-drafts";
+import { clearLegacyDrafts, readLegacyDrafts } from "./design-drafts";
+import { fromStoredIntent, mergeIntents, settledOk, toIntentDraft } from "./design-intent-merge";
 
 export const DESIGN_CANVAS_CURSOR_CHECK_MS = 3_000;
 const MAX_ACTIVE_LANES = 4;
@@ -42,6 +49,10 @@ const MAX_INACTIVE_BYTES = 32 * 1024 * 1024;
 const MAX_BACKOFF_MS = 30_000;
 const EXECUTE_WAIT_MS = 30_000;
 const RETRY_BASE_MS = 1000;
+/** Unsent drafts are saved to the backend after this pause (most run before it). */
+const DRAFT_SAVE_DELAY_MS = 400;
+/** Own commits kept for rebasing against a backend without an intent queue. */
+const MAX_OWN_COMMITS = 64;
 const TERMINAL = new Set([
   "committed",
   "no-op",
@@ -52,24 +63,7 @@ const TERMINAL = new Set([
   "unknown",
 ]);
 /** Terminal outcomes proving the operation never ran: only these may be re-prepared. */
-const NOT_RUN = new Set(["rejected", "canceled", "interrupted", "expired"]);
-
-declare module "@/stores/designStore" {
-  interface DesignIntent {
-    /**
-     * Prepared, but its token could not be saved locally (draft storage over
-     * bounds). It never executes automatically; only an explicit Resume sends it.
-     */
-    held?: boolean;
-  }
-}
-
-/** One own acknowledged commit of a frame, keyed by the frame revision it produced. */
-interface OwnCommit {
-  structureId?: string;
-  contentId?: string;
-  canvasRevision: number;
-}
+const NOT_RUN = new Set<string>(DESIGN_NOT_RUN_STATES);
 
 export interface DesignSubmitInput {
   descriptor: Omit<DesignOperationDescriptor, "canvasId" | "correlationId" | "clientId">;
@@ -78,18 +72,6 @@ export interface DesignSubmitInput {
   preview?: DesignIntent["preview"];
   /** Unsent samples sharing this key (same gesture and kind) collapse to the newest. */
   gestureKey?: string;
-}
-
-function laneOf(descriptor: DesignSubmitInput["descriptor"]): string {
-  const input = descriptor.input as { frameId?: string; kind: string };
-  if (input.kind === "delete_frame" || input.kind === "duplicate_frame") return "canvas";
-  return input.frameId ?? "canvas";
-}
-
-function settledOk(intent: DesignIntent) {
-  return (
-    intent.phase === "settled" && (intent.outcome === "committed" || intent.outcome === "no-op")
-  );
 }
 
 function jitter(ms: number) {
@@ -114,12 +96,13 @@ function designClientId() {
 
 /**
  * One projection, hint listener and intent queue per backend/environment/canvas.
- * Views subscribe and produce intents; accepted work is owned by the backend,
- * so releasing every view never cancels anything.
+ * Views subscribe and produce intents. The backend owns each document's
+ * durable intent queue (`design_intents`): every intent is recorded there
+ * before it is prepared, drafts are saved there, and any client lists,
+ * resumes or discards them. This window keeps only what it is sending now.
  */
 export class DesignCanvasController {
   readonly key: string;
-  readonly draftKey: string;
   private consumers = 0;
   private epoch = 0;
   private disposed = false;
@@ -139,10 +122,18 @@ export class DesignCanvasController {
   private readonly reconciling = new Set<string>();
   private unlisten: Array<() => void> = [];
   private readonly running = new Set<string>();
-  private readonly ownFrameCommits = new Map<string, Map<number, OwnCommit>>();
-  private readonly ownCanvasCommits = new Set<number>();
-  /** Generation in which the own commits above were recorded. */
-  private commitsGeneration: string | undefined;
+  /** Unsent drafts not yet saved to the backend, with a version per local change. */
+  private readonly unsaved = new Map<string, number>();
+  private saveTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Discarded here; a server copy listed before the discard landed is ignored. */
+  private readonly discarded = new Set<string>();
+  private migrated = false;
+  /**
+   * Own commits for rebasing against a backend without an intent queue (which
+   * rebases over its own receipts instead), and the generation they belong to.
+   */
+  private ownCommits: DesignOperationStatus[] = [];
+  private ownCommitsGeneration: string | undefined;
   private capabilities: DesignCapabilities | null | undefined;
   lastUsed = Date.now();
 
@@ -152,17 +143,9 @@ export class DesignCanvasController {
     readonly canvasId: string,
   ) {
     this.key = `${backend}|${environmentId}|${canvasId}`;
-    this.draftKey = `${this.key}|${designClientId()}`;
     const store = useDesignStore.getState();
-    if (!store.projections.has(this.key)) {
-      const owned = loadDrafts(this.draftKey);
-      const legacy = owned.length ? [] : loadDrafts(this.key);
-      if (legacy.length && saveDrafts(this.draftKey, legacy)) saveDrafts(this.key, []);
-      store.put({
-        ...emptyProjection(this.key, environmentId, canvasId),
-        intents: owned.length ? owned : legacy,
-      });
-    }
+    if (!store.projections.has(this.key))
+      store.put(emptyProjection(this.key, environmentId, canvasId));
   }
 
   get projection(): DesignProjection {
@@ -255,9 +238,17 @@ export class DesignCanvasController {
     for (const unlisten of this.unlisten.splice(0)) unlisten();
   }
 
-  /** Clean: nothing unsent, unknown or unreviewed would be lost by eviction. */
+  /**
+   * Clean: nothing unsent, unknown or unreviewed would be lost by eviction.
+   * A restored intent is the backend's, and is listed again on return.
+   */
   get clean() {
-    return this.projection.intents.every(settledOk) && this.running.size === 0;
+    return (
+      this.running.size === 0 &&
+      this.projection.intents.every(
+        (intent) => settledOk(intent) || (this.intentsEnabled && intent.restored),
+      )
+    );
   }
 
   approximateBytes() {
@@ -271,12 +262,16 @@ export class DesignCanvasController {
   }
 
   dispose() {
+    // Unsaved drafts are offered to the backend before the projection goes.
+    if (this.saveTimer !== undefined) void this.saveDrafts();
     this.disposed = true;
     this.epoch++;
     this.deactivate();
     clearTimeout(this.retryTimer);
     clearTimeout(this.pumpTimer);
+    clearTimeout(this.saveTimer);
     this.pumpTimer = undefined;
+    this.saveTimer = undefined;
     for (const waiter of this.waiters.splice(0)) waiter.resolve();
     useDesignStore.getState().remove(this.key);
   }
@@ -322,6 +317,11 @@ export class DesignCanvasController {
     return this.capabilities;
   }
 
+  /** The backend owns this document's intent queue (`design_intents`). */
+  private get intentsEnabled() {
+    return this.capabilities?.intents === true;
+  }
+
   private async syncOnce() {
     const epoch = this.epoch;
     const projection = this.projection;
@@ -361,6 +361,7 @@ export class DesignCanvasController {
         lastSyncedAt: Date.now(),
       }));
       this.prune();
+      if (caps?.intents) await this.syncIntents(epoch);
     } catch (error) {
       if (epoch !== this.epoch) return;
       const kind = classifyTransportError(error);
@@ -558,45 +559,128 @@ export class DesignCanvasController {
     return true;
   }
 
-  /**
-   * Drops own-commit proofs that no longer describe the installed frames: a new
-   * generation, a removed frame, a frame whose revision went back (recreated),
-   * or a frame whose identity at a recorded revision differs from ours.
-   * Projections older than a recorded commit are ignored (they predate it).
-   */
+  /** Own commits prove a chain only within the generation that recorded them. */
   private forgetStaleCommits() {
-    const projection = this.projection;
+    const generation = this.projection.generation;
     if (
-      this.commitsGeneration !== undefined &&
-      projection.generation !== undefined &&
-      projection.generation !== this.commitsGeneration
+      this.ownCommitsGeneration !== undefined &&
+      generation !== undefined &&
+      generation !== this.ownCommitsGeneration
     ) {
-      this.ownFrameCommits.clear();
-      this.ownCanvasCommits.clear();
-      this.commitsGeneration = undefined;
-      return;
+      this.ownCommits = [];
+      this.ownCommitsGeneration = undefined;
     }
-    const canvas = projection.canvas;
-    if (!canvas || !this.ownFrameCommits.size) return;
-    const frames = new Map(canvas.frames.map((frame) => [frame.id, frame]));
-    for (const [frameId, commits] of this.ownFrameCommits) {
-      let newest: [number, OwnCommit] | undefined;
-      for (const entry of commits) if (!newest || entry[0] > newest[0]) newest = entry;
-      if (!newest) {
-        this.ownFrameCommits.delete(frameId);
-        continue;
-      }
-      if (projection.revision < newest[1].canvasRevision) continue;
-      const frame = frames.get(frameId);
-      const meta = projection.workspace?.frames[frameId];
-      const recorded = frame ? commits.get(frame.revision) : undefined;
-      const identityChanged =
-        recorded !== undefined &&
-        meta !== undefined &&
-        ((recorded.contentId !== undefined && recorded.contentId !== meta.contentId) ||
-          (recorded.structureId !== undefined && recorded.structureId !== meta.structureId));
-      if (!frame || frame.revision < newest[0] || identityChanged)
-        this.ownFrameCommits.delete(frameId);
+  }
+
+  private recordOwnCommit(status: DesignOperationStatus) {
+    const generation = this.projection.generation;
+    if (generation !== undefined && this.ownCommitsGeneration !== generation) {
+      this.ownCommits = [];
+      this.ownCommitsGeneration = generation;
+    }
+    this.ownCommits.push(status);
+    if (this.ownCommits.length > MAX_OWN_COMMITS) this.ownCommits.shift();
+  }
+
+  // ---------------------------------------------------------------------------
+  // The backend's intent queue
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Re-reads the document's intent queue. The backend reconciles unknown
+   * outcomes from its own receipts while listing, so this is also how a lost
+   * response or a restart is recovered, from any client.
+   */
+  private async syncIntents(epoch: number) {
+    if (!this.migrated) await this.migrateLegacyDrafts();
+    let listed: DesignIntentList;
+    try {
+      listed = await designApi.intents(this.environmentId, this.canvasId);
+    } catch (error) {
+      if (error instanceof DesignClientError) return;
+      throw error;
+    }
+    if (epoch !== this.epoch) return;
+    this.applyServerIntents(listed);
+    // Drafts made before capabilities were known are saved now.
+    if (this.unsaved.size) this.persist();
+  }
+
+  private applyServerIntents(listed: DesignIntentList) {
+    const merged = mergeIntents(this.projection.intents, listed, {
+      environmentId: this.environmentId,
+      canvasId: this.canvasId,
+      clientId: designClientId(),
+      running: this.running,
+      unsaved: this.unsaved,
+      discarded: this.discarded,
+    });
+    for (const id of Array.from(this.discarded))
+      if (!listed.intents.some((intent) => intent.id === id)) this.discarded.delete(id);
+    if (merged.changed) this.update((projection) => ({ ...projection, intents: merged.intents }));
+    for (const id of merged.retry) this.deferRetry(id);
+    for (const label of merged.savedElsewhere)
+      this.notice(`${label} was saved in the workspace`, "success");
+    for (const intent of merged.failed)
+      this.notice(`${intent.label}: ${intent.failure?.message}`, "warning");
+    if (merged.changed) this.pump();
+  }
+
+  /** Imports this browser's pre-backend localStorage intents once, then forgets them. */
+  private async migrateLegacyDrafts() {
+    this.migrated = true;
+    const legacy = readLegacyDrafts(this.key);
+    if (!legacy.intents.length) return;
+    try {
+      await designApi.importIntents(
+        this.environmentId,
+        this.canvasId,
+        designClientId(),
+        legacy.intents,
+      );
+      clearLegacyDrafts(legacy.keys);
+    } catch (error) {
+      // Unreachable: try again on the next sync. A refusal keeps the entries.
+      if (!(error instanceof DesignClientError)) this.migrated = false;
+    }
+  }
+
+  /** Saves unsent drafts to the backend shortly; drafts that run first are never saved. */
+  private persist() {
+    if (this.disposed || !this.intentsEnabled || !this.unsaved.size) return;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => void this.saveDrafts(), DRAFT_SAVE_DELAY_MS);
+  }
+
+  private markUnsaved(id: string) {
+    this.unsaved.set(id, (this.unsaved.get(id) ?? 0) + 1);
+  }
+
+  private async saveDrafts() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    for (const [id] of Array.from(this.unsaved)) {
+      const intent = this.intent(id);
+      if (!intent || intent.phase !== "draft") this.unsaved.delete(id);
+    }
+    const drafts = this.projection.intents.filter(
+      (intent) => this.unsaved.has(intent.id) && !this.running.has(intent.id),
+    );
+    if (!drafts.length) return;
+    const versions = new Map(drafts.map((intent) => [intent.id, this.unsaved.get(intent.id)]));
+    try {
+      const { saved } = await designApi.saveIntents(
+        this.environmentId,
+        this.canvasId,
+        designClientId(),
+        drafts.slice(0, DESIGN_INTENT_LIMITS.perClient).map(toIntentDraft),
+      );
+      for (const id of saved)
+        if (this.unsaved.get(id) === versions.get(id)) this.unsaved.delete(id);
+    } catch (error) {
+      if (error instanceof DesignClientError && error.failure.code === "capacity")
+        this.notice("Too many unsaved edits are waiting; they will stay in this window", "warning");
+      // Unreachable: the next sync saves them.
     }
   }
 
@@ -605,7 +689,7 @@ export class DesignCanvasController {
   // ---------------------------------------------------------------------------
 
   submit(input: DesignSubmitInput): string {
-    const lane = input.lane ?? laneOf(input.descriptor);
+    const lane = input.lane ?? designIntentLane(input.descriptor.input);
     const projection = this.projection;
     if (input.gestureKey) {
       const existing = projection.intents.find(
@@ -625,6 +709,7 @@ export class DesignCanvasController {
           label: input.label,
           preview: input.preview,
         });
+        this.markUnsaved(existing.id);
         this.persist();
         return existing.id;
       }
@@ -648,9 +733,9 @@ export class DesignCanvasController {
       ...(input.gestureKey ? { gestureKey: input.gestureKey } : {}),
     };
     this.update((current) => ({ ...current, intents: [...current.intents, intent] }));
-    if (!this.persist())
-      this.notice("Too many unsaved edits are waiting; they will stay in this window", "warning");
+    this.markUnsaved(id);
     this.pump();
+    this.persist();
     return id;
   }
 
@@ -667,15 +752,10 @@ export class DesignCanvasController {
     return this.projection.intents.find((intent) => intent.id === id);
   }
 
-  private persist(): boolean {
-    return saveDrafts(this.draftKey, this.projection.intents);
-  }
-
   private runnable(intent: DesignIntent, index: number, intents: DesignIntent[]) {
     if (
       intent.phase !== "draft" ||
       intent.restored ||
-      intent.held ||
       intent.blocked ||
       this.running.has(intent.id)
     )
@@ -687,8 +767,8 @@ export class DesignCanvasController {
       // Settled work (successful or failed) never blocks: edits that depended on a
       // failed one were flagged `blocked` when it failed; newer edits are independent.
       if (other.phase === "settled") continue;
-      // Restored work from an earlier session waits for review or reconciliation;
-      // edits made in this session carry their own observed base and never wait on it.
+      // Restored work (another window's, or an earlier session's) waits for review
+      // or reconciliation; edits made here carry their own observed base.
       if (other.restored) continue;
       if (other.lane === intent.lane) return false;
       if (intent.lane === "canvas" || other.lane === "canvas") return false;
@@ -733,59 +813,27 @@ export class DesignCanvasController {
     }, next - now);
   }
 
-  /**
-   * Rebases a precondition only over this client's own acknowledged commits:
-   * each proven step starts exactly where the previous own commit ended.
-   * Another writer's change breaks the chain and surfaces as a conflict.
-   */
-  private rebase(descriptor: DesignOperationDescriptor): DesignOperationDescriptor {
-    const preconditions = { ...descriptor.preconditions };
-    const input = descriptor.input as { frameId?: string };
-    if (preconditions.frameRevision !== undefined && input.frameId) {
-      const commits = this.ownFrameCommits.get(input.frameId);
-      let revision = preconditions.frameRevision;
-      while (commits?.has(revision + 1)) {
-        const structure = commits.get(revision + 1)?.structureId;
-        if (preconditions.structureId !== undefined && structure !== preconditions.structureId)
-          break;
-        revision++;
-      }
-      preconditions.frameRevision = revision;
-    }
-    if (preconditions.canvasRevision !== undefined) {
-      let revision = preconditions.canvasRevision;
-      while (this.ownCanvasCommits.has(revision + 1)) revision++;
-      preconditions.canvasRevision = revision;
-    }
-    return { ...descriptor, preconditions };
-  }
-
   private async run(id: string) {
     const intent = this.intent(id);
     if (!intent) return;
     const epoch = this.epoch;
     try {
-      if (await this.caps().then((caps) => caps === null)) return await this.runLegacy(intent);
+      const caps = await this.caps();
+      if (caps === null) return await this.runLegacy(intent);
+      if (caps.intents) return await this.runOnBackend(id, intent);
+      // A backend without an intent queue: prepare and execute directly,
+      // rebasing over this window's own acknowledged commits.
       let token = intent.token;
       if (!token) {
         this.patchIntent(id, { phase: "preparing" });
         const prepared = await designApi.prepare(
           this.environmentId,
-          this.rebase(intent.descriptor),
+          rebaseOverOwnCommits(intent.descriptor, this.ownCommits),
         );
         token = prepared.token;
         this.retryAt.delete(id);
         this.prepareBackoffMs = 0;
-        // The token is persisted before execution; an unsaved token never runs automatically.
         this.patchIntent(id, { phase: "prepared", token });
-        if (!this.persist()) {
-          this.patchIntent(id, { held: true });
-          this.notice(
-            `${intent.label} could not be saved in this window; resume it to send`,
-            "warning",
-          );
-          return;
-        }
       }
       if (epoch !== this.epoch) return;
       this.patchIntent(id, { phase: "submitting" });
@@ -801,7 +849,12 @@ export class DesignCanvasController {
       if (!current) return;
       const kind = classifyTransportError(error);
       if (kind === "disconnected" || kind === "unauthorized") {
-        if (!current.token) {
+        if (this.intentsEnabled && !current.token) {
+          // The backend may have recorded and run it: its queue decides (see
+          // `mergeIntents`); an edit it never recorded is sent again.
+          this.patchIntent(id, { phase: "admitted", outcome: "unknown" });
+          void this.refresh();
+        } else if (!current.token) {
           // No execute was sent. Preparing again is idempotent by correlation id.
           // It stays unrunnable until its backoff elapses (see `runnable`).
           this.patchIntent(id, { phase: "draft" });
@@ -809,9 +862,21 @@ export class DesignCanvasController {
         } else {
           // Execution may or may not have been admitted: reconcile by status, never resend blindly.
           this.patchIntent(id, { phase: "admitted", outcome: "unknown" });
-          this.persist();
-          void this.reconcileToken(id);
+          if (this.intentsEnabled) void this.refresh();
+          else void this.reconcileToken(id);
         }
+        return;
+      }
+      // The queue is full or busy: nothing was recorded, so it is simply sent later.
+      if (
+        this.intentsEnabled &&
+        !current.token &&
+        error instanceof DesignClientError &&
+        error.failure.retry === "after-delay"
+      ) {
+        this.patchIntent(id, { phase: "draft" });
+        this.deferRetry(id);
+        this.notice(`${current.label}: ${error.failure.message}`, "warning");
         return;
       }
       this.settle(id, {
@@ -819,6 +884,43 @@ export class DesignCanvasController {
         outcome: current.token ? "unknown" : "rejected",
       });
     }
+  }
+
+  /**
+   * One backend call records the intent (rebased over this client's own
+   * commits by the backend), prepares and executes it, so a prepared token is
+   * always durable before it runs.
+   */
+  private async runOnBackend(id: string, intent: DesignIntent) {
+    this.patchIntent(id, { phase: "preparing" });
+    const result = await designApi.runIntent(
+      this.environmentId,
+      this.canvasId,
+      toIntentDraft(intent),
+      EXECUTE_WAIT_MS,
+    );
+    this.unsaved.delete(id);
+    if (result.status) {
+      // The backend answered: edits backing off from the same outage need not wait.
+      this.retryAt.clear();
+      this.prepareBackoffMs = 0;
+      this.patchIntent(id, { phase: "submitting", token: result.status.token });
+      return this.follow(id, result.status);
+    }
+    if (result.failure?.retry === "after-delay") {
+      this.patchIntent(id, { phase: "draft" });
+      this.deferRetry(id);
+      this.notice(`${intent.label}: ${result.failure.message}`, "warning");
+      return;
+    }
+    if (result.failure) return this.settle(id, { outcome: "rejected", failure: result.failure });
+    // Sent earlier (a retried run): the backend's queue reconciles its token.
+    this.patchIntent(
+      id,
+      result.intent
+        ? { ...fromStoredIntent(result.intent, this.environmentId, this.canvasId) }
+        : { phase: "admitted", outcome: "unknown" },
+    );
   }
 
   /** Bounded exponential backoff with jitter; the timer is armed by `pump()`. */
@@ -853,10 +955,11 @@ export class DesignCanvasController {
   }
 
   /**
-   * Resolves a token whose outcome is not known by status, with backoff. A
-   * `prepared` token is executed only when it is neither restored nor held; an
-   * `unknown` outcome keeps being checked and is never re-prepared.
-   * Stops while hidden; `activate()` and reconnects restart it.
+   * Without a backend intent queue: resolves a token whose outcome is not
+   * known by status, with backoff. A `prepared` token is executed only when it
+   * is not restored; an `unknown` outcome keeps being checked and is never
+   * re-prepared. Stops while hidden; `activate()` and reconnects restart it.
+   * With a queue, the backend reconciles while listing instead.
    */
   private async reconcileToken(id: string) {
     if (this.reconciling.has(id)) return;
@@ -880,7 +983,7 @@ export class DesignCanvasController {
           if (status.state !== "unknown" && TERMINAL.has(status.state))
             return this.settleStatus(id, status);
           if (status.state === "prepared") {
-            if (current.restored || current.held) return;
+            if (current.restored) return;
             const executed = await designApi.execute(
               this.environmentId,
               this.canvasId,
@@ -908,10 +1011,11 @@ export class DesignCanvasController {
     }
   }
 
-  /** Reconciles every token whose outcome is unresolved and that no run owns. */
+  /** Without a backend intent queue: reconciles every unresolved token no run owns. */
   private reconcilePending() {
+    if (this.intentsEnabled) return;
     for (const intent of this.projection.intents) {
-      if (!intent.token || intent.held || this.running.has(intent.id)) continue;
+      if (!intent.token || this.running.has(intent.id)) continue;
       const unresolved =
         intent.phase === "admitted" ||
         intent.phase === "submitting" ||
@@ -922,28 +1026,8 @@ export class DesignCanvasController {
   }
 
   private settleStatus(id: string, status: DesignOperationStatus) {
-    if (status.state === "committed" && status.result) {
-      const generation = this.projection.generation;
-      if (generation !== undefined && this.commitsGeneration !== generation) {
-        this.ownFrameCommits.clear();
-        this.ownCanvasCommits.clear();
-        this.commitsGeneration = generation;
-      }
-      for (const frame of status.result.frames) {
-        if (frame.removed) {
-          this.ownFrameCommits.delete(frame.frameId);
-          continue;
-        }
-        const commits = this.ownFrameCommits.get(frame.frameId) ?? new Map<number, OwnCommit>();
-        commits.set(frame.revision, {
-          structureId: frame.identity?.structureId,
-          contentId: frame.identity?.contentId,
-          canvasRevision: status.result.canvasRevision,
-        });
-        this.ownFrameCommits.set(frame.frameId, commits);
-      }
-      this.ownCanvasCommits.add(status.result.canvasRevision);
-    }
+    if (status.state === "committed" && status.result && !this.intentsEnabled)
+      this.recordOwnCommit(status);
     if (status.state === "committed" || status.state === "no-op") {
       const revision = status.result?.canvasRevision ?? this.projection.revision;
       this.patchIntent(id, {
@@ -953,14 +1037,13 @@ export class DesignCanvasController {
         awaitRevision: revision,
         failure: undefined,
       });
-      this.persist();
       void this.refresh();
       return;
     }
     this.settle(id, {
       outcome: status.state,
       failure: status.failure ?? {
-        code: status.state === "canceled" ? "unknown-outcome" : "unknown-outcome",
+        code: "unknown-outcome",
         message: `This edit was ${status.state}`,
         retry: "review",
       },
@@ -992,7 +1075,6 @@ export class DesignCanvasController {
         return candidate;
       }),
     }));
-    this.persist();
     this.notice(`${intent.label}: ${result.failure.message}`, "warning");
     void this.refresh();
   }
@@ -1007,10 +1089,7 @@ export class DesignCanvasController {
         (intent) => !(settledOk(intent) && (intent.awaitRevision ?? 0) <= revision),
       ),
     }));
-    if (this.projection.intents.length !== before) {
-      this.persist();
-      this.pump();
-    }
+    if (this.projection.intents.length !== before) this.pump();
   }
 
   /** Unblocks lane intents that no longer have an unreviewed failure ahead of them. */
@@ -1034,11 +1113,25 @@ export class DesignCanvasController {
     });
   }
 
-  /** Clears local intent. Accepted backend work is not claimed canceled. */
+  /**
+   * Discards an intent for every client. A token that has not started is
+   * canceled; accepted backend work is not claimed canceled.
+   */
   async discard(id: string) {
     const intent = this.intent(id);
     if (!intent) return;
-    if (
+    let mayStillFinish = intent.phase === "admitted";
+    if (this.intentsEnabled) {
+      this.discarded.add(id);
+      this.unsaved.delete(id);
+      try {
+        const result = await designApi.discardIntent(this.environmentId, this.canvasId, id);
+        if (result.discarded) mayStillFinish = result.mayStillFinish;
+      } catch {
+        // The backend still holds it, so the next listing shows it again.
+        this.discarded.delete(id);
+      }
+    } else if (
       intent.token &&
       (intent.phase === "prepared" || (intent.restored && intent.outcome === undefined))
     ) {
@@ -1052,9 +1145,8 @@ export class DesignCanvasController {
       intents: projection.intents.filter((candidate) => candidate.id !== id),
     }));
     this.unblockLane(intent.lane);
-    this.persist();
-    if (intent.phase === "admitted")
-      this.notice("Removed from this window. The backend may still finish that edit.", "info");
+    if (mayStillFinish)
+      this.notice("Removed from the queue. The backend may still finish that edit.", "info");
     this.pump();
   }
 
@@ -1073,21 +1165,55 @@ export class DesignCanvasController {
   }
 
   /**
-   * Explicitly resumes a draft, a held or restored token, or a retryable failure
-   * with its ORIGINAL base. `rebaseTo` supplies a reviewed replacement
-   * precondition (e.g. apply a geometry change to the current frame after the
-   * user confirmed it).
+   * Explicitly resumes a draft, a restored edit (another window's or an
+   * earlier session's), or a retryable failure with its ORIGINAL base.
+   * `rebaseTo` supplies a reviewed replacement precondition (e.g. apply a
+   * geometry change to the current frame after the user confirmed it).
    *
-   * A token is kept unless its outcome proves it never ran (rejected, canceled,
-   * interrupted, expired): an unknown or in-flight outcome keeps reconciling and
-   * is never prepared again.
+   * A token is kept unless its outcome proves it never ran (rejected,
+   * canceled, interrupted, expired): an unknown or in-flight outcome keeps
+   * reconciling and is never prepared again. With a backend intent queue the
+   * backend decides this and the resuming window takes the edit over.
    */
-  resume(id: string, rebaseTo?: DesignOperationDescriptor["preconditions"]) {
+  async resume(id: string, rebaseTo?: DesignOperationDescriptor["preconditions"]) {
     const intent = this.intent(id);
     if (!intent || settledOk(intent)) return;
     this.retryAt.delete(id);
+    if (this.intentsEnabled && !this.unsaved.has(id)) {
+      try {
+        const { intent: stored } = await designApi.resumeIntent(
+          this.environmentId,
+          this.canvasId,
+          id,
+          designClientId(),
+          rebaseTo,
+        );
+        if (!stored) {
+          this.update((projection) => ({
+            ...projection,
+            intents: projection.intents.filter((candidate) => candidate.id !== id),
+          }));
+        } else {
+          const next = fromStoredIntent(stored, this.environmentId, this.canvasId);
+          if (settledOk(next)) next.awaitRevision = stored.result?.canvasRevision;
+          this.update((projection) => ({
+            ...projection,
+            intents: projection.intents.map((candidate) =>
+              candidate.id === id ? next : candidate,
+            ),
+          }));
+        }
+        this.unblockLane(intent.lane);
+        this.pump();
+        return;
+      } catch (error) {
+        // Never recorded by the backend (an unsaved draft): resume it here.
+        if (!(error instanceof DesignClientError && error.failure.code === "not-found"))
+          return this.notice(failureOf(error).message, "warning");
+      }
+    }
     const notRun = intent.outcome !== undefined && NOT_RUN.has(intent.outcome);
-    const cleared = { failure: undefined, restored: false, held: false, blocked: false } as const;
+    const cleared = { failure: undefined, restored: false, blocked: false } as const;
     if (intent.token && !notRun) {
       const inFlight =
         intent.phase === "admitted" ||
@@ -1101,7 +1227,6 @@ export class DesignCanvasController {
           outcome: intent.outcome === "executing" ? "executing" : "unknown",
         });
         this.unblockLane(intent.lane);
-        this.persist();
         void this.reconcileToken(id);
         return;
       }
@@ -1122,9 +1247,10 @@ export class DesignCanvasController {
         outcome: undefined,
       });
     }
+    this.markUnsaved(id);
     this.unblockLane(intent.lane);
-    this.persist();
     this.pump();
+    this.persist();
   }
 
   private async runLegacy(intent: DesignIntent) {
@@ -1221,8 +1347,7 @@ export class DesignCanvasController {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const pending = this.projection.intents.some(
-        (intent) =>
-          intent.phase !== "settled" && !intent.restored && !intent.held && !intent.blocked,
+        (intent) => intent.phase !== "settled" && !intent.restored && !intent.blocked,
       );
       if (!pending) {
         await this.refresh();

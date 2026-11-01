@@ -44,7 +44,7 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       "designInvoke",
       async (command: string, args: Record<string, unknown>) => {
         if (command === "design_snapshot") snapshots++;
-        if (command === "design_prepare" && beforeNextPrepare) {
+        if (command === "design_intent_run" && beforeNextPrepare) {
           const landOtherEdit = beforeNextPrepare;
           beforeNextPrepare = null;
           await landOtherEdit();

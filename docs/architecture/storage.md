@@ -127,8 +127,8 @@ a primitive or a repository helper the facade does not expose use
   because it holds API keys.
 - Descriptor files other processes read: `backend-instance.json`,
   `control-mcp.json`, `gateway-auth.json`.
-- Design canvases (records, pending operations, history checkpoints, the
-  user-facing `.orkdes` exports and their backups): a record can be 6 MiB and
+- Design canvases (records, pending operations, intent queues, history
+  checkpoints, the user-facing `.orkdes` exports and their backups): a record can be 6 MiB and
   is rewritten per edit, which a synchronous database write would block on.
   Their cross-process correctness comes from database leases instead: a
   per-canvas lease around every edit, a per-process liveness lease that

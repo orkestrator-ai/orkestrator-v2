@@ -1,9 +1,14 @@
 import type { DesignCanvas, DesignFrame } from "@orkestrator/protocol/design-canvas";
-import type {
-  DesignOperationDescriptor,
-  DesignOperationStatus,
-  DesignSnapshotEnvelope,
-  DesignSyncResult,
+import {
+  DESIGN_NOT_RUN_STATES,
+  rebaseOverOwnCommits,
+  type DesignFailure,
+  type DesignIntentDraft,
+  type DesignOperationDescriptor,
+  type DesignOperationStatus,
+  type DesignSnapshotEnvelope,
+  type DesignStoredIntent,
+  type DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
 
 /** Test support: an in-memory protocol-v2 design backend with strict CAS. */
@@ -53,6 +58,16 @@ export class FakeBackend {
   history = { undoCount: 0, redoCount: 0 };
   /** When set, snapshots report a tombstone (even if no hint was delivered). */
   deleted = false;
+  /** Reports the backend-owned intent queue; false acts as an older v2 backend. */
+  intentsEnabled = true;
+  intents: DesignStoredIntent[] = [];
+  /** Refuses new intents once the queue holds this many. */
+  intentCapacity?: number;
+  /** Tokens actually minted (`prepareToken` seeds an earlier session's and is not counted). */
+  prepareCount = 0;
+  /** The backend's clock for `updatedAt` and listing. */
+  now = 1_000_000;
+  private readonly runningIntents = new Set<string>();
 
   constructor() {
     for (const id of [frameA, frameB]) {
@@ -220,6 +235,8 @@ export class FakeBackend {
       kind: descriptor.input.kind,
       actor: "user" as const,
       base: descriptor.preconditions,
+      ...(descriptor.clientId ? { clientId: descriptor.clientId } : {}),
+      ...(descriptor.correlationId ? { correlationId: descriptor.correlationId } : {}),
       preparedAt: "",
       updatedAt: "",
     };
@@ -292,12 +309,284 @@ export class FakeBackend {
     };
   }
 
+  private prepareDescriptor(
+    descriptor: DesignOperationDescriptor,
+  ): { token: string } | { failure: DesignFailure } {
+    const existing = descriptor.correlationId
+      ? this.correlation.get(descriptor.correlationId)
+      : undefined;
+    if (existing) {
+      if (JSON.stringify(this.pending.get(existing)?.descriptor) !== JSON.stringify(descriptor))
+        return {
+          failure: {
+            code: "invalid-input",
+            message: "This correlation id was already used for a different edit",
+            retry: "never",
+          },
+        };
+      return { token: existing };
+    }
+    const token = `op_${crypto.randomUUID()}`;
+    this.prepareCount++;
+    this.pending.set(token, { descriptor, executing: false });
+    if (descriptor.correlationId) this.correlation.set(descriptor.correlationId, token);
+    return { token };
+  }
+
+  private async executeToken(token: string): Promise<DesignOperationStatus> {
+    const receipt = this.receipts.get(token);
+    if (receipt) return receipt;
+    const entry = this.pending.get(token);
+    if (!entry) return this.statusOf(token);
+    entry.executing = true;
+    await this.executeBarrier?.(entry.descriptor);
+    const status = this.apply(token, entry.descriptor);
+    this.pending.delete(token);
+    this.receipts.set(token, status);
+    return status;
+  }
+
+  private statusOf(token: string): DesignOperationStatus {
+    const receipt = this.receipts.get(token);
+    if (receipt) return receipt;
+    const entry = this.pending.get(token);
+    return {
+      token,
+      canvasId,
+      kind: "update_frame",
+      actor: entry ? "user" : "system",
+      base: {},
+      preparedAt: "",
+      updatedAt: "",
+      state: entry ? (entry.executing ? "executing" : "prepared") : "unknown",
+    };
+  }
+
+  private current() {
+    return {
+      canvasRevision: this.revision,
+      frames: new Map(
+        Array.from(this.frames.values()).map((entry) => [
+          entry.frame.id,
+          { revision: entry.frame.revision, structureId: entry.structureId },
+        ]),
+      ),
+    };
+  }
+
+  /** The backend's rule: an authoritative status decides the stored intent. */
+  private applyStatus(intent: DesignStoredIntent, status: DesignOperationStatus) {
+    intent.token = status.token;
+    if (status.state === "prepared" || status.state === "executing") {
+      intent.phase = "admitted";
+      if (status.state === "executing") intent.outcome = "executing";
+      else delete intent.outcome;
+      return;
+    }
+    intent.phase = "settled";
+    intent.outcome = status.state;
+    if (status.result) intent.result = status.result;
+    if (status.state === "committed" || status.state === "no-op") delete intent.failure;
+    else
+      intent.failure = status.failure ?? {
+        code: "unknown-outcome",
+        message: `This edit was ${status.state}`,
+        retry: "review",
+      };
+  }
+
+  private async handleIntent(
+    command: string,
+    args: Record<string, unknown>,
+  ): Promise<{ ok: true; value: unknown } | { ok: false; failure: DesignFailure }> {
+    const ok = (value: unknown) => ({ ok: true as const, value });
+    const fail = (failure: DesignFailure) => ({ ok: false as const, failure });
+    const find = (id: unknown) => this.intents.find((intent) => intent.id === id);
+    const clone = (intent: DesignStoredIntent | undefined) => structuredClone(intent);
+    switch (command) {
+      case "design_intents": {
+        for (const intent of this.intents) {
+          if (this.runningIntents.has(intent.id)) continue;
+          if (intent.phase === "preparing") {
+            const token = this.correlation.get(intent.descriptor.correlationId ?? "");
+            if (!token) {
+              intent.phase = "draft";
+              continue;
+            }
+            intent.phase = "admitted";
+            intent.token = token;
+          }
+          const unresolved =
+            intent.phase === "admitted" ||
+            (intent.phase === "settled" && intent.outcome === "unknown");
+          if (intent.token && unresolved) this.applyStatus(intent, this.statusOf(intent.token));
+        }
+        return ok({
+          intents: structuredClone(this.intents),
+          sending: Array.from(this.runningIntents),
+          now: this.now,
+        });
+      }
+      case "design_intent_save": {
+        const clientId = String(args.clientId);
+        const saved: string[] = [];
+        for (const draft of args.drafts as DesignIntentDraft[]) {
+          const existing = find(draft.id);
+          if (existing && (existing.phase !== "draft" || existing.clientId !== clientId)) continue;
+          if (
+            !existing &&
+            this.intentCapacity !== undefined &&
+            this.intents.length >= this.intentCapacity
+          )
+            return fail({ code: "capacity", message: "Too many", retry: "after-delay" });
+          const intent: DesignStoredIntent = {
+            ...structuredClone(draft),
+            clientId,
+            phase: "draft",
+            updatedAt: this.now,
+          };
+          if (existing) this.intents[this.intents.indexOf(existing)] = intent;
+          else this.intents.push(intent);
+          saved.push(draft.id);
+        }
+        return ok({ saved });
+      }
+      case "design_intent_import": {
+        let imported = 0;
+        const entries = args.intents as Array<
+          Omit<DesignStoredIntent, "phase"> & {
+            phase: string;
+            environmentId?: string;
+            canvasId?: string;
+          }
+        >;
+        for (const entry of entries) {
+          if (find(entry.id)) continue;
+          const settled = entry.phase === "settled";
+          const { environmentId: _e, canvasId: _c, ...rest } = entry;
+          this.intents.push({
+            ...structuredClone(rest),
+            clientId: entry.descriptor.clientId ?? String(args.clientId),
+            phase: entry.token ? (settled ? "settled" : "admitted") : "draft",
+            ...(entry.token && !settled && entry.phase !== "prepared"
+              ? { outcome: "unknown" as const }
+              : {}),
+            updatedAt: this.now,
+          });
+          imported++;
+        }
+        return ok({ imported, skipped: entries.length - imported });
+      }
+      case "design_intent_run": {
+        const draft = args.intent as DesignIntentDraft;
+        const clientId = draft.descriptor.clientId!;
+        const existing = find(draft.id);
+        if (existing && existing.clientId !== clientId)
+          return fail({ code: "conflict", message: "Another window", retry: "never" });
+        if (existing && existing.phase !== "draft" && existing.phase !== "preparing")
+          return ok({ intent: clone(existing) });
+        if (
+          !existing &&
+          this.intentCapacity !== undefined &&
+          this.intents.length >= this.intentCapacity
+        )
+          return fail({ code: "capacity", message: "Too many", retry: "after-delay" });
+        const intent: DesignStoredIntent = {
+          ...structuredClone(draft),
+          clientId,
+          updatedAt: this.now,
+          phase: "preparing",
+          descriptor:
+            existing?.phase === "preparing"
+              ? existing.descriptor
+              : rebaseOverOwnCommits(
+                  { ...draft.descriptor, canvasId },
+                  Array.from(this.receipts.values()),
+                  this.current(),
+                ),
+        };
+        if (existing) this.intents[this.intents.indexOf(existing)] = intent;
+        else this.intents.push(intent);
+        this.runningIntents.add(draft.id);
+        try {
+          const prepared = this.prepareDescriptor(intent.descriptor);
+          if ("failure" in prepared) {
+            intent.phase = "settled";
+            intent.outcome = "rejected";
+            intent.failure = prepared.failure;
+            return ok({ intent: clone(intent), failure: prepared.failure });
+          }
+          const status = await this.executeToken(prepared.token);
+          if (find(draft.id) === intent) this.applyStatus(intent, status);
+          if (this.loseExecuteResponse.delete(prepared.token)) throw new Error("Failed to fetch");
+          return ok({ intent: clone(find(draft.id)), status });
+        } finally {
+          this.runningIntents.delete(draft.id);
+        }
+      }
+      case "design_intent_resume": {
+        const current = find(args.intentId);
+        if (!current)
+          return fail({ code: "not-found", message: "No longer pending", retry: "never" });
+        const clientId = String(args.clientId);
+        const notRun =
+          current.outcome !== undefined && DESIGN_NOT_RUN_STATES.includes(current.outcome);
+        current.clientId = clientId;
+        delete current.failure;
+        if (current.token && !notRun) {
+          current.phase = "admitted";
+          current.outcome = current.outcome === "executing" ? "executing" : "unknown";
+          const status = this.statusOf(current.token);
+          this.applyStatus(
+            current,
+            status.state === "prepared" ? await this.executeToken(current.token) : status,
+          );
+          return ok({ intent: clone(current) });
+        }
+        const rebaseTo = args.rebaseTo as DesignStoredIntent["descriptor"]["preconditions"];
+        current.descriptor = {
+          ...current.descriptor,
+          clientId,
+          correlationId: `i-${crypto.randomUUID()}`,
+          ...(rebaseTo ? { preconditions: rebaseTo } : {}),
+        };
+        current.phase = "draft";
+        delete current.token;
+        delete current.outcome;
+        delete current.result;
+        return ok({ intent: clone(current) });
+      }
+      case "design_intent_discard": {
+        const current = find(args.intentId);
+        if (!current) return ok({ discarded: false, mayStillFinish: false });
+        let mayStillFinish = this.runningIntents.has(current.id);
+        if (current.token && current.phase !== "settled") {
+          const entry = this.pending.get(current.token);
+          if (entry?.executing) mayStillFinish = true;
+          else if (entry) this.pending.delete(current.token);
+        }
+        this.intents.splice(this.intents.indexOf(current), 1);
+        return ok({ discarded: true, mayStillFinish });
+      }
+      default:
+        throw new Error(`Unknown backend command: ${command}`);
+    }
+  }
+
   async handle(command: string, args: Record<string, unknown>): Promise<unknown> {
     this.calls.push({ command, args });
     const ok = (value: unknown) => ({ ok: true, value });
+    if (command.startsWith("design_intent")) {
+      if (!this.intentsEnabled) throw new Error(`Unknown backend command: ${command}`);
+      return this.handleIntent(command, args);
+    }
     switch (command) {
       case "design_capabilities":
-        return ok({ protocolVersion: 2, responseVersion: 1 });
+        return ok({
+          protocolVersion: 2,
+          responseVersion: 1,
+          ...(this.intentsEnabled ? { intents: true } : {}),
+        });
       case "design_snapshot":
         return ok(this.deleted ? this.tombstone() : this.snapshot());
       case "design_sync": {
@@ -319,67 +608,18 @@ export class FakeBackend {
         return ok(this.snapshot());
       }
       case "design_prepare": {
-        const descriptor = args.descriptor as DesignOperationDescriptor;
-        const existing = descriptor.correlationId
-          ? this.correlation.get(descriptor.correlationId)
-          : undefined;
-        if (existing) {
-          if (JSON.stringify(this.pending.get(existing)?.descriptor) !== JSON.stringify(descriptor))
-            return {
-              ok: false,
-              failure: {
-                code: "invalid-input",
-                message: "This correlation id was already used for a different edit",
-                retry: "never",
-              },
-            };
-          return ok({ token: existing, canvasId, state: "prepared", expiresAt: "" });
-        }
-        const token = `op_${crypto.randomUUID()}`;
-        this.pending.set(token, { descriptor, executing: false });
-        if (descriptor.correlationId) this.correlation.set(descriptor.correlationId, token);
-        return ok({ token, canvasId, state: "prepared", expiresAt: "" });
+        const prepared = this.prepareDescriptor(args.descriptor as DesignOperationDescriptor);
+        if ("failure" in prepared) return { ok: false, failure: prepared.failure };
+        return ok({ token: prepared.token, canvasId, state: "prepared", expiresAt: "" });
       }
       case "design_execute": {
         const token = String(args.token);
-        const receipt = this.receipts.get(token);
-        if (receipt) return ok(receipt);
-        const entry = this.pending.get(token);
-        if (!entry)
-          return ok({
-            token,
-            canvasId,
-            state: "unknown",
-            kind: "update_frame",
-            actor: "system",
-            base: {},
-            preparedAt: "",
-            updatedAt: "",
-          });
-        entry.executing = true;
-        await this.executeBarrier?.(entry.descriptor);
-        const status = this.apply(token, entry.descriptor);
-        this.pending.delete(token);
-        this.receipts.set(token, status);
+        const status = await this.executeToken(token);
         if (this.loseExecuteResponse.delete(token)) throw new Error("Failed to fetch");
         return ok(status);
       }
-      case "design_operation_status": {
-        const token = String(args.token);
-        const receipt = this.receipts.get(token);
-        if (receipt) return ok(receipt);
-        const entry = this.pending.get(token);
-        return ok({
-          token,
-          canvasId,
-          kind: "update_frame",
-          actor: "user",
-          base: {},
-          preparedAt: "",
-          updatedAt: "",
-          state: entry ? (entry.executing ? "executing" : "prepared") : "unknown",
-        });
-      }
+      case "design_operation_status":
+        return ok(this.statusOf(String(args.token)));
       case "design_cancel": {
         const token = String(args.token);
         this.pending.delete(token);

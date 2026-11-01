@@ -512,10 +512,41 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         hydrateWorkflow={mock(async () => workflow)}
       />,
     );
-    expect(screen.getByTestId("multi-review-auto-pr-notice").textContent).toContain(
-      "PR tab was launched",
-    );
+    expect(screen.queryByTestId("multi-review-auto-pr-notice")).toBeNull();
+    expect(
+      screen.queryByText("The fix request was delivered. The fix session is ready to open."),
+    ).toBeNull();
+    selectFlowNode("Pull request,");
+    expect(inspector().getByText(/The fix completed, so a PR tab was launched/)).toBeTruthy();
   });
+
+  test.each(["pending", "failed", "skipped"] as const)(
+    "keeps the %s post-fix PR launch notice visible",
+    (state) => {
+      const launch = {
+        state,
+        requestId: "multi-review-pr:multi-1",
+        message: "A pull request already exists.",
+      };
+      const workflow: MultiReviewWorkflow = {
+        ...readyWorkflow(),
+        phase: "interactive",
+        autoPr: true,
+        autoPrLaunch: launch,
+      };
+      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />,
+      );
+      expect(screen.getByTestId("multi-review-auto-pr-notice").textContent).toContain(
+        autoPrLaunchNotice(launch).text,
+      );
+    },
+  );
 
   test.each(["ready", "interactive", "reviewing", "consolidating"] as const)(
     "hides a retained clean-review notice after moving to %s with findings",
@@ -1779,7 +1810,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     act(() => useMultiReviewStore.getState().replaceWorkflow(delivered));
 
-    expect(await screen.findByText(/fix session is ready to open/i)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Open fix session" })).toBeTruthy();
+    expect(screen.queryByText(/fix session is ready to open/i)).toBeNull();
     expect(createTab).not.toHaveBeenCalled();
 
     view.rerender(
@@ -1788,7 +1820,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         <MultiReviewTab {...props} isActive />
       </TerminalProvider>,
     );
-    await waitFor(() => expect(screen.getByText(/fix session is ready to open/i)).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Open fix session" })).toBeTruthy();
+    expect(screen.queryByText(/fix session is ready to open/i)).toBeNull();
     expect(createTab).not.toHaveBeenCalled();
   });
 
@@ -2251,7 +2284,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
     expect(await screen.findByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(await screen.findByText(/fix session is ready to open/i)).toBeTruthy();
+    expect(screen.queryByText(/fix session is ready to open/i)).toBeNull();
     expect(createTab).not.toHaveBeenCalled();
   });
 

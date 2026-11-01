@@ -1148,3 +1148,24 @@ test("touch resize captures the finger beyond the handle and prevents page panni
     await cdp.detach();
   }
 });
+
+test("omits redundant fix success bars while retaining PR details after reload", async ({
+  page,
+}) => {
+  await page.goto("/multi-review-flow?phase=interactive&reviewers=3&fixCompletedPr");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(pipeline(page)).toBeVisible();
+    await expect(
+      page.getByText("The fix request was delivered. The fix session is ready to open.", {
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("multi-review-auto-pr-notice")).toHaveCount(0);
+    await page.getByRole("tab", { name: /^Pull request,/ }).click();
+    await expect(page.getByTestId("multi-review-inspector")).toContainText(
+      "The fix completed, so a PR tab was launched",
+    );
+    await expect(page.getByRole("button", { name: "Open fix session", exact: true })).toBeVisible();
+  }
+});

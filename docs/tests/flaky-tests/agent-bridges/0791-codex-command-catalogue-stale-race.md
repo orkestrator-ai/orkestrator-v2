@@ -336,3 +336,9 @@ Evidence: `orkestrator-test-run.sdHQzL/bridges.log.gz` in the host temporary
 directory; the enclosing run is `orkestrator-test-run.2RPkIW`. The checkout
 fixes change no bridge source, assertion, deadline or skip. This is another
 intermittent observation, not proof of a root cause or a passing aggregate.
+
+## Notification-bar review — 2026-11-01
+
+Notification-bar review on 2026-11-01 repeated the first-answer timeout; the unchanged owner passed alone on the branch (1.4 s); detached origin/main also showed an armed-delay stale/ready mismatch. Preparation used `mise run test`; its captured output does not name the granted worker count. Evidence: `.orkestrator/review-artifacts/review-validation-eb40d1d2-656b-44f0-9a8f-1c2970a9e415/validation-04.stdout.txt`.
+
+Rerun: `mise run test:logged -- --name fix-codex-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`. Detached main at `b965aea44` used the same command with `--name baseline-codex-catalogue` and independent dependencies: 29 passed, one failed at line 293 (expected stale, received ready; 75.25 ms). Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.WIkxwY/baseline-codex-catalogue.log.gz`. Preparation timed out after 2076.62 ms at line 212. No bridge code changed.

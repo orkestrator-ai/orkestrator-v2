@@ -1472,7 +1472,14 @@ async function showRendererPreview(
   });
   await uiStore("selectProjectAndEnvironment", environment.projectId, s().environmentId);
   await expect(s().window.locator(PREVIEW_HOST)).toBeVisible({ timeout: 30_000 });
-  await expect.poll(async () => (await nativePreviewView())?.visible ?? false).toBe(true);
+  // Locator assertions run the startup-dismiss handler; a main-process poll
+  // alone cannot dismiss a notice that opened after the host became visible.
+  await expect
+    .poll(async () => {
+      await expect(s().window.getByRole("button", { name: /^Annotations, / })).toBeVisible();
+      return (await nativePreviewView())?.visible ?? false;
+    })
+    .toBe(true);
   await waitForFixturePage(ROUTE_VARIANTS.settings);
 }
 
@@ -1624,6 +1631,56 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
     // the host and never reaches under the column, its resize handle or a
     // focus ring inside it.
     await pressControl(notesButton);
+    // Force the late startup-notice race, using the production dialog and
+    // focus hook. The installed locator handler must dismiss it on the next
+    // assertion and return focus to Notes without another locator.focus().
+    await s().window.evaluate(async () => {
+      // Reuse the app's versioned Vite URLs so hooks use its React singleton.
+      const resources = performance.getEntriesByType("resource").map((entry) => entry.name);
+      const reactPath = resources.find((url) => url.includes("/deps/react.js?"))!;
+      const rootPath = resources.find((url) => url.includes("/deps/react-dom_client.js?"))!;
+      const dialogPath = "/src/components/ui/alert-dialog.tsx";
+      const focusPath = "/src/lib/dialog-focus.ts";
+      const { default: React } = await import(reactPath);
+      const { default: ReactDOM } = await import(rootPath);
+      const dialog = await import(dialogPath);
+      const { useDialogFocusReturn } = await import(focusPath);
+      const mount = document.createElement("div");
+      document.body.append(mount);
+      const root = ReactDOM.createRoot(mount);
+      function LateNotice() {
+        const [open, setOpen] = React.useState(true);
+        const focus = useDialogFocusReturn();
+        return React.createElement(
+          dialog.AlertDialog,
+          { open, onOpenChange: setOpen },
+          React.createElement(
+            dialog.AlertDialogContent,
+            { ...focus, "data-late-startup-notice": "" },
+            React.createElement(dialog.AlertDialogTitle, null, "GitHub CLI Not Found"),
+            React.createElement(dialog.AlertDialogDescription, null, "Forced late startup check"),
+            React.createElement(dialog.AlertDialogAction, null, "Continue Without GitHub CLI"),
+          ),
+        );
+      }
+      root.render(React.createElement(LateNotice));
+      window.addEventListener(
+        "cleanup-late-startup-notice",
+        () => {
+          root.unmount();
+          mount.remove();
+        },
+        { once: true },
+      );
+    });
+    await expect
+      .poll(() =>
+        s().window.evaluate(() => Boolean(document.querySelector("[data-late-startup-notice]"))),
+      )
+      .toBe(true);
+    await expect(notesButton).toBeFocused();
+    await expect(s().window.locator("[data-late-startup-notice]")).toHaveCount(0);
+    await s().window.evaluate(() => window.dispatchEvent(new Event("cleanup-late-startup-notice")));
     await expect(s().window.locator(NOTES_PANEL)).toBeVisible();
     for (const zoom of [100, 80, 125]) {
       await uiStore("setZoomLevel", zoom);
@@ -1709,6 +1766,7 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
     const reclosed = await expectViewOnHost(testInfo, "notes-reclosed");
     expect(Math.abs(reclosed.width - closed.width)).toBeLessThanOrEqual(1.5);
   } finally {
+    await s().window.evaluate(() => window.dispatchEvent(new Event("cleanup-late-startup-notice")));
     await restoreDirectPreview();
   }
 });

@@ -78,7 +78,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
-import { useDialogFocusReturn } from "@/lib/dialog-focus";
+import { useDialogFocusReturn, useDialogFocusReturnGroup } from "@/lib/dialog-focus";
 import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
@@ -402,12 +402,13 @@ function ConnectedApp() {
   const [githubReminderOptOut, setGithubReminderOptOut] = useState(false);
   const [claudeLoginNoticeDismissed, setClaudeLoginNoticeDismissed] = useState(false);
   // The startup notices open on their own, over whatever the user is doing,
-  // and have no trigger for Radix to return focus to. Each returns it to the
-  // control it took it from.
-  const dockerWarningFocus = useDialogFocusReturn();
-  const noAiCliFocus = useDialogFocusReturn();
-  const claudeLoginFocus = useDialogFocusReturn();
-  const githubWarningFocus = useDialogFocusReturn();
+  // and have no trigger for Radix to return focus to. Keep the original
+  // control until the last overlapping or chained notice closes.
+  const startupNoticeFocus = useDialogFocusReturnGroup();
+  const dockerWarningFocus = useDialogFocusReturn(startupNoticeFocus);
+  const noAiCliFocus = useDialogFocusReturn(startupNoticeFocus);
+  const claudeLoginFocus = useDialogFocusReturn(startupNoticeFocus);
+  const githubWarningFocus = useDialogFocusReturn(startupNoticeFocus);
   const [localBackendUnavailableMessage, setLocalBackendUnavailableMessage] = useState<
     string | null
   >(null);

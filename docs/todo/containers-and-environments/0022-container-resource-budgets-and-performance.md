@@ -4,13 +4,14 @@ Checked against `main` at `20f6de91` (2026-10-25).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Task 3 rechecked and done
+2026-11-01 against `main` at `93b99bfb`.
 
 ### Tasks
 
 1. **Built-in default budget (Code 1)**: choose and apply a default. Status: done.
 2. **Linux Engine arm64 benchmark numbers**: compare the CI report with the targets and record it. Status: done 2026-10-28 by [0729](0729-container-benchmark-target-misses.md) (recorded in `container-qualification.md`; the misses are attributed and either fixed or recorded there).
-3. **UI response under multi-environment load**: a real-stack latency measurement with several busy container environments. Status: open (no probe exists).
+3. **UI response under multi-environment load**: a real-stack latency measurement with several busy container environments. Status: done 2026-11-01. The probe is `e2e/perf/multi-environment-ui-perf.ts`, and its first run is recorded in `container-qualification.md`. That run was on a busy shared host, so it is a sample, not a reference figure. A run on a quiet reference host is still open (decision below).
 4. **Authenticated provider turns under the default**: one real turn through each bridge with the default applied. Status: open.
 5. **In-process tar hasher (deferred)**: replace the per-member `sha256sum` on the source side. Status: deferred (the condition is not met).
 6. **Aggregate diagnostic byte accounting (deferred)**: live per-environment log sizes. Status: deferred.
@@ -77,17 +78,42 @@ No todo records these misses, and the targets were set on a 12-CPU reference hos
 
 **Context.** It needs a real-stack `dev:test` profile with several busy container environments and a browser latency probe.
 
-**Investigation.** There is still no UI latency probe. `e2e/perf/design-canvas-perf.ts` and `e2e/perf/rich-transcripts-perf.ts` measure their own surfaces, and the efficiency harness counts work, not latency.
+**Investigation.** Still true at `93b99bfb`: there was no UI latency probe. `e2e/perf/design-canvas-perf.ts`, `rich-transcripts-perf.ts` and `hidden-resume-perf.ts` measure their own surfaces on fixture pages, not the real stack, and the efficiency harness counts work, not latency.
+
+Built 2026-11-01:
+- `e2e/perf/multi-environment-ui-perf.ts` attaches to a running profile. It adds busy and target container environments and loads the busy ones through label-checked `docker exec`. Per idle or busy phase, it times sidebar switches, frames, long tasks, timer lag, gateway round trips and how fast lifecycle status reaches the sidebar. Pure statistics are in `multi-environment-ui-stats.ts`, tested in `tests/unit/multi-environment-ui-stats.test.ts`. How to run it is in [container-qualification.md](../../development/container-qualification.md#ui-response-under-multi-environment-load).
+- `dev:test --headless-electron` (Linux): the profile's Electron runs on the headless Ozone platform with no display variables. Without it, the profile's window opened in the user's desktop session on this shared host.
+
+The first run is on beelink (16 CPUs) at `5616f272`. Its full table is in [container-qualification.md](../../development/container-qualification.md#ui-response-under-multi-environment-load-first-run-on-a-busy-host-2026-11-01). The host was 97.6–99.9% CPU busy from other builds (load average 59–66). On that host, three containers at about 190% CPU each changed nothing the renderer showed:
+- selection painted within a frame (median 5.3 ms idle and busy);
+- no long tasks and no frame stalls over 50 ms;
+- the sidebar trailed lifecycle replies by about 60 ms in every phase.
+
+The backend slowed: the `get_environments` round trip went from 12–13 ms to 18.7 ms (median) and `start_environment` from 4.2–4.3 s to 5.4 s. `<main>` settle times varied more between the two idle phases than between idle and busy. Every stop took about 10.5–11.6 s, which [2150](2150-container-environment-stop-takes-ten-seconds.md) follows up.
 
 **Decisions.**
 
-- **Build a probe, or reuse an existing perf harness?**
-  - **Extend the `e2e/perf` pattern with a small Playwright probe that times environment switching and sidebar status updates while N fixture containers run the workload harness (recommended).**
+- **Build a probe, or reuse an existing perf harness?** Decided: the probe (assumptions 12–17).
+  - **Extend the `e2e/perf` pattern with a small Playwright probe that times environment switching and sidebar status updates while N fixture containers run a load (chosen).**
     - Pros: reuses a known harness shape; produces a number that can be compared over time.
     - Cons: new harness work; needs Docker and an isolated profile with `--fixture-environments container`.
   - **Drop the item, since budgets do not cap CPU (decision 2).**
     - Pros: memory and PID limits do not slow the UI, and CPU is shared fairly.
     - Cons: decision 2 itself names a busy environment taking CPU from the backend on Linux as the cost, so it stays unmeasured.
+- **Is the busy-host sample enough, or is a quiet reference-host run needed?** Open.
+  - **Run it once more on a quiet reference host (Linux Engine amd64) before using the numbers for a decision (recommended).**
+    - Pros: separates the containers' cost from other builds' on a saturated host. Here the containers competed with load averages near 60, so the backend's slowdown may be overstated or understated.
+    - Cons: needs a quiet window on a shared machine.
+  - **Treat the busy-host run as enough.**
+    - Pros: no further runs. If the renderer stayed smooth on a saturated host, it will on a quiet one.
+    - Cons: the backend figures are not attributable, and nothing is measured on Docker Desktop, where containers share the VM's CPUs.
+- **Set targets for the probe?** Open.
+  - **Not yet; record runs only (recommended).**
+    - Pros: one sample on a noisy host is no basis for a target.
+    - Cons: a regression is found only by a person comparing reports.
+  - **Gate on the renderer figures now (selection within 2 frames, no stalls over 50 ms).**
+    - Pros: those held with margin even on a saturated host.
+    - Cons: the probe needs Docker and a profile, so it cannot run in the normal suites; a gate there would rarely run.
 
 ### 4. Authenticated provider turns under the default
 
@@ -155,9 +181,10 @@ memory 8 GiB capped at 75% of the daemon's memory, 4,096 PIDs. It was chosen
 from browser, build, provider-turn and combined workloads measured on Docker
 Desktop (arm64) and Linux Engine (amd64), with and without the experiment
 budget. The benchmark harness now runs under the default, and the deferred
-optimisations were measured against their stated conditions. What remains is
-a Linux arm64 benchmark run, UI response under multi-environment load, and
-authenticated provider turns.
+optimisations were measured against their stated conditions. Linux arm64
+benchmarks are recorded (0729). UI response under multi-environment load has a
+probe and a first run on a busy host (2026-11-01). Authenticated provider
+turns remain.
 
 ## Current state
 
@@ -195,6 +222,11 @@ authenticated provider turns.
   - `apps/backend/scripts/container-workload-budget.ts`, with
     `scripts/container-workload/`, is the workload harness
     ([container-qualification.md](../../development/container-qualification.md#workload-budgets)).
+  - `e2e/perf/multi-environment-ui-perf.ts` times the browser UI against a
+    running `dev:test` profile while container environments are busy
+    ([container-qualification.md](../../development/container-qualification.md#ui-response-under-multi-environment-load)).
+    `dev:test --headless-electron` keeps that profile's window out of the
+    desktop session on Linux.
 
 ## Outstanding work
 
@@ -220,10 +252,11 @@ authenticated provider turns.
   [0729](0729-container-benchmark-target-misses.md): the CI reports from
   `ubuntu-24.04-arm` (and x64) are recorded in
   [container-qualification.md](../../development/container-qualification.md#benchmarks-on-linux-engine-ci-and-the-call-and-start-time-misses-2026-10-28).
-- **Open:** UI response under multi-environment load. This needs a real-stack
-  `dev:test` profile with several busy container environments and a browser
-  latency probe. No such probe exists (the efficiency harness counts work,
-  not UI latency), and none was built in this pass.
+- ~~UI response under multi-environment load.~~ **Done 2026-11-01**: the
+  probe exists and one run is recorded
+  ([evidence](#evidence-2026-11-01)). That run was on a busy shared host.
+  Whether to repeat it on a quiet reference host is an open decision under
+  task 3.
 - **Open:** real provider and bridge authentication paths under a budget: an
   authenticated turn through each bridge (Claude, Codex, OpenCode, Cursor,
   Grok, Pi) with the default applied. They need provider logins, which this
@@ -379,6 +412,28 @@ run under the default on the same host met it. Both runs are recorded, not
 re-run until they pass. The reference host is Linux Engine amd64; the new
 CI step gives a clean comparison there.
 
+## Evidence (2026-11-01)
+
+UI response under multi-environment load, on beelink (Linux x86_64, 16 CPUs,
+62 GiB, Docker Engine 29.9.2 rootful) at `5616f272`. Other builds kept the
+host 97.6–99.9% CPU busy, with load averages of 58.7–66.1 at phase starts.
+None of that load was in Docker: all 10 running containers were the
+profile's. Three busy containers ran under the built-in default at about
+190% CPU each. There were no provider turns. The full table is in
+[container-qualification.md](../../development/container-qualification.md#ui-response-under-multi-environment-load-first-run-on-a-busy-host-2026-11-01).
+
+| Measure (median) | Idle 1 | Busy | Idle 2 |
+| --- | --- | --- | --- |
+| Row selected and painted | 5.3 ms | 5.3 ms | 7.4 ms |
+| Long tasks; frame stalls over 50 ms | 0; 0 | 0; 0 | 0; 0 |
+| `get_environments` round trip | 13.0 ms | 18.7 ms | 12.1 ms |
+| `start_environment` round trip | 4.3 s | 5.4 s | 4.2 s |
+| Sidebar after a lifecycle reply | 54–63 ms | 58–59 ms | 43–62 ms |
+
+An earlier run that day sent `get_environments` back to back, up to about
+300 a second, which loaded the backend itself. It was discarded, and the
+probe now sends one every 100 ms.
+
 ## Assumptions and decisions
 
 1. **Shape of the default.**
@@ -471,6 +526,60 @@ CI step gives a clean comparison there.
     - Why: Desktop met every target under the default, so per-platform
       targets would add a table without changing a decision.
     - Revisit if CI arm64 or Desktop misses repeatedly on a quiet host.
+12. **The UI probe's shape** (task 3).
+    - Options: a Playwright spec in the agent-testing browser config, gated
+      like the Docker fixture specs; a one-shot runner that also starts and
+      resets its own profile; or a standalone script in `e2e/perf` that
+      attaches to a running profile.
+    - Chosen: the standalone script.
+    - Why: it is a measurement with no pass or fail, like the other
+      `e2e/perf` probes. Attaching keeps the profile's start-up, including
+      any image build, out of the timed run.
+    - Cons: three manual steps (start, probe, stop and reset), and no
+      scheduler entry.
+13. **Which browser.**
+    - Options: drive the profile's Electron window; or drive a headless
+      Playwright Chromium through the browser gateway.
+    - Chosen: headless Chromium through the gateway.
+    - Why: the renderer code is the same, and nothing appears in a desktop
+      session.
+    - Cons: Electron's own compositor and IPC are not measured, and the
+      headless Electron renderer still runs alongside.
+14. **Keeping Electron out of the desktop session.**
+    - Options: accept the window on the user's display; a nested headless
+      compositor (would need a system install); or a `dev:test` flag that
+      starts Electron on Chromium's headless Ozone platform.
+    - Chosen: `--headless-electron`, Linux only, `dev:test` only.
+    - Why: the switch only works on Electron's command line. Appending it
+      from the main script is too late (checked with Electron 45).
+    - Cons: a new launcher flag. A headless profile cannot be used for
+      native-window, menu or clipboard QA.
+15. **The load.**
+    - Options: the workload harness's build, browser or provider workloads
+      inside each environment; commands typed into terminals through the UI;
+      or shell spin loops plus a once-a-second workspace file write through
+      `docker exec`.
+    - Chosen: spin loops (2 per container by default) and the file write,
+      with optional memory held by Node.
+    - Why: deterministic, bounded and offline, with no provider. It loads the
+      CPU, which is the axis decision 2 leaves uncapped, and the Git status
+      path.
+    - Cons: not an agent's load. There is no transcript streaming or
+      terminal output to the UI, so it understates the renderer's own work.
+16. **What counts as switched, settled and shown.**
+    - Chosen: the row's `text-foreground` class marks it selected. Settled is
+      300 ms with no change under `<main>`. Shown is the status marker's
+      `data-state`.
+    - Cons: the selection signal depends on a styling class. If that
+      changes, the probe reports missed samples rather than wrong numbers.
+      A frame's timestamp is when it starts, so selection times are accurate
+      to one frame and can be slightly negative.
+17. **How to record the first run.**
+    - Chosen: as a dated sample with the host load stated, bracketed by idle
+      phases before and after the busy one. It is not a reference figure.
+    - Why: other builds kept the host near full CPU, which the bracket makes
+      visible: the two idle phases' settle times differ more than idle and
+      busy do.
 
 ## Constraints and rationale
 
@@ -505,6 +614,7 @@ CI step gives a clean comparison there.
 - [Container lifecycle](../../architecture/container-lifecycle.md): "Resource
   budgets and usage", "Built-in default" and "Bounded logs".
 - [0729-container-benchmark-target-misses.md](0729-container-benchmark-target-misses.md): the CI benchmark misses (Docker calls, x64 warm start and fresh-to-ready) and the arm64 figures
+- [2150-container-environment-stop-takes-ten-seconds.md](2150-container-environment-stop-takes-ten-seconds.md): the 10 s stops the UI probe measured
 
 ## Replaces
 

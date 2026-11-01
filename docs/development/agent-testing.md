@@ -352,6 +352,14 @@ when Settings > Disk usage names a folder for new dev worktrees, so the browser
 suites see the same layout on every host. Pass `--use-dev-worktree-folder` to
 place them in that folder instead; `mise run dev` always uses it.
 
+On Linux, `--headless-electron` (also `dev:test` only) runs Electron on
+Chromium's headless Ozone platform without `DISPLAY` or `WAYLAND_DISPLAY`, so
+the profile opens no window in the desktop session that started it. Use it on
+a shared host when only the browser surface is under test; the renderer is
+still at `browserUrl`. Do not use it for native-window, menu or clipboard QA.
+The switch has to be on Electron's command line, so the launcher adds it;
+Electron's main script cannot apply it.
+
 The launcher prints what it seeded, what it could not seed, and what Electron
 will therefore download. A first run on a host without the pinned versions needs
 network access for that download, and it is the slow part of startup — narrowing

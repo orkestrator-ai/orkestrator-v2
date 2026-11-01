@@ -68,6 +68,16 @@ function install() {
         localStorage.setItem(`settings-machine:${owner}`, JSON.stringify(saved));
         return saved;
       }
+      case "patch_global_config": {
+        const current = read(owner);
+        const global = { ...current.global, ...(args.patch as Partial<GlobalConfig>) };
+        for (const key of (args.unset as string[] | undefined) ?? []) {
+          delete (global as unknown as Record<string, unknown>)[key];
+        }
+        const saved = { ...current, global };
+        localStorage.setItem(`settings-machine:${owner}`, JSON.stringify(saved));
+        return saved;
+      }
       case "get_backend_profile":
         return { revision: 1, displayName: "Leaf", colorToken: "blue", updatedAt: "" };
       case "get_node_status":

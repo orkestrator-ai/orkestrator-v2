@@ -28,6 +28,18 @@ function installGlobalSettingsFixture() {
           localStorage.setItem("global-settings-config", JSON.stringify(config));
           return config as T;
         }
+        case "patch_global_config": {
+          // Match the backend's merge of the changed keys onto current settings.
+          const current = readConfig();
+          const global = { ...current.global, ...(args!.patch as Partial<GlobalConfig>) };
+          for (const key of (args!.unset as string[] | undefined) ?? []) {
+            delete (global as unknown as Record<string, unknown>)[key];
+          }
+          const config = { ...current, global };
+          localStorage.setItem("global-settings-last-write", JSON.stringify(global));
+          localStorage.setItem("global-settings-config", JSON.stringify(config));
+          return config as T;
+        }
         case "get_app_version":
           return "2.34.4" as T;
         case "get_log_storage_stats":

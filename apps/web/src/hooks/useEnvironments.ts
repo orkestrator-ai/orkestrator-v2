@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import {
   createSessionKey,
   useBuildPipelineStore,
-  useClaudeOptionsStore,
   useEnvironmentStore,
   formatErrorContext,
   useErrorDialogStore,
@@ -358,16 +357,12 @@ export function reconcileEnvironmentLifecycleErrors(): void {
       continue;
     }
 
-    // The backend drops the durable launch intent when a start fails; mirror it
-    // and the transient renderer-side one, or a launch that can never happen
-    // auto-dispatches the original prompt the next time this env is started.
+    // The backend drops the durable launch intent when a start fails; mirror it,
+    // or a launch that can never happen auto-dispatches the original prompt the
+    // next time this env is started.
     store.updateEnvironment(environment.id, { pendingAgentLaunch: false });
     clearBuildPipelineTabActivation(environment.id);
     clearStartupAgentTabActivation(environment.id);
-    const claudeOptions = useClaudeOptionsStore.getState();
-    if (claudeOptions.pendingNativeLaunches[environment.id]) {
-      claudeOptions.clearPendingNativeLaunch(environment.id);
-    }
 
     const reported = reportedLifecycleErrorByEnvironment.get(environment.id);
     if (reported === message) {

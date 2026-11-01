@@ -5,7 +5,6 @@ describe("claudeOptionsStore", () => {
   beforeEach(() => {
     useClaudeOptionsStore.setState({
       options: {},
-      pendingNativeLaunches: {},
     });
   });
 
@@ -28,7 +27,7 @@ describe("claudeOptionsStore", () => {
     expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
   });
 
-  test("round-trips one-shot model and reasoning effort on both launch shapes", () => {
+  test("round-trips one-shot model and reasoning effort", () => {
     const store = useClaudeOptionsStore.getState();
     store.setOptions("env-1", {
       launchAgent: true,
@@ -72,36 +71,6 @@ describe("claudeOptionsStore", () => {
           base64Data: "QUJD",
         },
       ],
-    });
-  });
-
-  test("clearing transient options does not clear a pending native launch", () => {
-    useClaudeOptionsStore.getState().setOptions("env-1", {
-      launchAgent: true,
-      agentType: "opencode",
-      initialPrompt: "Start after setup",
-    });
-    useClaudeOptionsStore.setState({
-      pendingNativeLaunches: {
-        "env-1": {
-          containerId: "container-1",
-          environmentId: "env-1",
-          initialPrompt: "Start after setup",
-          targetPaneId: "default",
-          agentType: "opencode",
-        },
-      },
-    });
-
-    useClaudeOptionsStore.getState().clearOptions("env-1");
-
-    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-1")).toEqual({
-      containerId: "container-1",
-      environmentId: "env-1",
-      initialPrompt: "Start after setup",
-      targetPaneId: "default",
-      agentType: "opencode",
     });
   });
 });

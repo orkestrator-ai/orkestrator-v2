@@ -187,6 +187,20 @@ interface FeaturesViewProps {
   projectId: string;
 }
 
+/**
+ * A launch that claimed the plan and stopped before linking a pipeline, such as
+ * a backend restart mid-launch. The backend finishes it under the same ticket and
+ * serializes per plan, so pressing Build during a live launch only rejoins it.
+ */
+function featureBuildIsResumable(feature: FeaturePlan): boolean {
+  return !!feature.buildTaskId && !feature.buildPipelineId;
+}
+
+function featureBuildIsLocked(feature: FeaturePlan): boolean {
+  if (featureBuildIsResumable(feature)) return false;
+  return feature.status === "building" || !!feature.buildPipelineId;
+}
+
 export function FeaturesView({ projectId }: FeaturesViewProps) {
   const features = useFeaturePlanStore((state) => state.features);
   const isLoading = useFeaturePlanStore((state) => state.isLoading);
@@ -519,9 +533,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (
         buildingFeatureId ||
         hasBlockingConversation ||
-        feature.status === "building" ||
-        !!feature.buildTaskId ||
-        !!feature.buildPipelineId ||
+        featureBuildIsLocked(feature) ||
         feature.stories.length === 0
       )
         return;
@@ -687,21 +699,17 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   disabled={
                     buildingFeatureId === selectedFeature.id ||
                     hasBlockingConversation ||
-                    selectedFeature.status === "building" ||
-                    !!selectedFeature.buildTaskId ||
-                    !!selectedFeature.buildPipelineId
+                    featureBuildIsLocked(selectedFeature)
                   }
                   onClick={() => void handleBuildFeature(selectedFeature)}
                 >
                   {buildingFeatureId === selectedFeature.id ||
-                  selectedFeature.status === "building" ||
-                  !!selectedFeature.buildTaskId ||
-                  !!selectedFeature.buildPipelineId ? (
+                  featureBuildIsLocked(selectedFeature) ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Wrench className="h-3.5 w-3.5" />
                   )}
-                  Build
+                  {featureBuildIsResumable(selectedFeature) ? "Resume build" : "Build"}
                 </Button>
               )}
             </div>

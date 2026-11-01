@@ -524,7 +524,6 @@ function resetStores({
 
   useClaudeOptionsStore.setState({
     options: {},
-    pendingNativeLaunches: {},
   });
 
   usePaneLayoutStore.setState({
@@ -1130,34 +1129,6 @@ describe("App background processing mounts", () => {
 
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
     expect(screen.queryByTestId("terminal-env-sibling") === null).toBe(true);
-  });
-
-  test("does not mount off-screen environments for renderer launch projections", async () => {
-    resetStores({
-      environments: [
-        makeEnvironment("env-visible", "project-1"),
-        makeEnvironment("env-pending-launch", "project-2"),
-      ],
-      selectedProjectId: "project-1",
-      selectedEnvironmentId: "env-visible",
-    });
-
-    useClaudeOptionsStore.setState({
-      pendingNativeLaunches: {
-        "env-pending-launch": {
-          containerId: "container-env-pending-launch",
-          environmentId: "env-pending-launch",
-          initialPrompt: "Stand up the Codex session",
-          targetPaneId: "default",
-          agentType: "codex",
-        },
-      },
-    });
-
-    render(<App />);
-
-    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
-    expect(screen.queryByTestId("terminal-env-pending-launch") === null).toBe(true);
   });
 
   test("does not mount off-screen environments for durable launch intents", async () => {

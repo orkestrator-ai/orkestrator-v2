@@ -1888,14 +1888,10 @@ export function TerminalContainer({
   // Clear launch options after they've been applied to the first tab.
   useEffect(() => {
     if (hasAppliedClaudeOptions && claudeOptions) {
-      // Give pending native launches time to be converted into tabs. Once the
-      // tab exists, its initialPrompt lives in pane state until dispatched.
-      const timer = setTimeout(() => {
-        const pending = useClaudeOptionsStore.getState().getPendingNativeLaunch(environmentId);
-        if (!pending) {
-          clearOptions(environmentId);
-        }
-      }, 3000);
+      // The backend owns the startup tab and its prompt. These options only
+      // stop this mount adding a competing tab, so they need not outlive a
+      // short grace period.
+      const timer = setTimeout(() => clearOptions(environmentId), 3000);
       return () => clearTimeout(timer);
     }
   }, [hasAppliedClaudeOptions, claudeOptions, environmentId, clearOptions]);

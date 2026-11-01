@@ -479,7 +479,6 @@ describe("HierarchicalSidebar", () => {
 
     useClaudeOptionsStore.setState({
       options: {},
-      pendingNativeLaunches: {},
     });
     useUIStore.setState({
       projectBoardTab: "coordinator",

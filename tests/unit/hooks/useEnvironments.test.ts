@@ -179,7 +179,7 @@ describe("useEnvironments", () => {
     });
     useErrorDialogStore.setState({ error: null });
     useProjectStore.setState({ projects: [] });
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
     useConfigStore.setState({
       config: {
         version: "1.0",
@@ -1107,18 +1107,6 @@ describe("useEnvironments", () => {
     useEnvironmentStore.setState({
       environments: [environment],
     });
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {
-        [environment.id]: {
-          containerId: null,
-          environmentId: environment.id,
-          targetPaneId: "default",
-          agentType: "claude",
-          launchMode: "native",
-        } as any,
-      },
-    });
     mockGetEnvironmentSnapshots.mockImplementation(() => staleSnapshot.promise);
     const { result } = renderHook(() => useEnvironments(null));
 
@@ -1149,7 +1137,6 @@ describe("useEnvironments", () => {
       pendingAgentLaunch: true,
     });
     expect(state.getEnvironmentById(environment.id)?.setupPhase).not.toBe("ready");
-    expect(useClaudeOptionsStore.getState().pendingNativeLaunches[environment.id]).toBeDefined();
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
@@ -2142,18 +2129,6 @@ describe("useEnvironments", () => {
       pendingAgentLaunch: true,
     });
     useEnvironmentStore.setState({ environments: [environment] });
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {
-        [environment.id]: {
-          containerId: null,
-          environmentId: environment.id,
-          targetPaneId: "default",
-          agentType: "claude",
-          launchMode: "native",
-        } as any,
-      },
-    });
     mockGetEnvironment.mockResolvedValue({
       ...environment,
       status: "error",
@@ -2162,12 +2137,11 @@ describe("useEnvironments", () => {
 
     await reconcileEnvironmentSetupSnapshots();
 
-    // A launch that can never happen must not survive, in either store, or it
-    // auto-dispatches the original prompt the next time this env is started.
+    // A launch that can never happen must not survive, or it auto-dispatches
+    // the original prompt the next time this env is started.
     expect(
       useEnvironmentStore.getState().getEnvironmentById(environment.id)?.pendingAgentLaunch,
     ).toBe(false);
-    expect(useClaudeOptionsStore.getState().pendingNativeLaunches[environment.id]).toBeUndefined();
   });
 
   test("reports a lifecycle failure carried by a setup-started event", async () => {
@@ -2399,7 +2373,7 @@ describe("useEnvironments", () => {
     expect(mockGetEnvironment).not.toHaveBeenCalled();
   });
 
-  test("does not let a transient pending native launch select backend reconciliation work", async () => {
+  test("does not reconcile a running environment only because setup scripts are incomplete", async () => {
     const environment = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
@@ -2407,18 +2381,6 @@ describe("useEnvironments", () => {
       setupScriptsComplete: false,
     });
     useEnvironmentStore.setState({ environments: [environment] });
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {
-        "env-1": {
-          containerId: null,
-          environmentId: "env-1",
-          targetPaneId: "default",
-          agentType: "claude",
-          launchMode: "native",
-        } as any,
-      },
-    });
     await reconcileEnvironmentSetupSnapshots();
 
     expect(mockGetEnvironment).not.toHaveBeenCalled();

@@ -1785,6 +1785,41 @@ describe("FeaturesView build action", () => {
     expect(screen.getByRole("button", { name: "Build" })).toBeTruthy();
   });
 
+  test("offers to resume a claimed build that never linked a pipeline", async () => {
+    const started = {
+      featureId: "feature-1",
+      taskId: "task-existing",
+      reused: true,
+      pipeline: buildPipelineFixture({
+        id: "pipeline-resumed",
+        projectId: "project-1",
+        taskId: "task-existing",
+        environmentId: "env-feature",
+      }),
+    };
+    startFeaturePlanBuildMock.mockImplementation(async () => started);
+    seedStores(featureWithStories({ status: "building", buildTaskId: "task-existing" }));
+
+    render(<FeaturesView projectId="project-1" />);
+    const resume = screen.getByRole("button", { name: "Resume build" });
+    expect(resume.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(resume);
+
+    await waitFor(() =>
+      expect(startFeaturePlanBuildMock).toHaveBeenCalledWith({ featureId: "feature-1" }),
+    );
+    expect(addTaskMock).not.toHaveBeenCalled();
+    expect(claimFeatureBuildMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps Build disabled while a plan is building without a claimed ticket", () => {
+    seedStores(featureWithStories({ status: "building" }));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    expect(screen.getByRole("button", { name: "Build" }).hasAttribute("disabled")).toBe(true);
+  });
+
   test("keeps Build disabled after remount when the feature has a durable reservation", () => {
     seedStores(
       featureWithStories({

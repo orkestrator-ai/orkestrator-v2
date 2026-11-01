@@ -23,6 +23,10 @@ import type {
   WebClientStatus,
 } from "@/types";
 
+// What a save with nothing to clear sends beside its patch; toHaveBeenCalledWith
+// ignores the undefined `machine`, and any cleared key or machine would fail it.
+const SAVE_OPTIONS = { unset: [], machine: undefined };
+
 // As the backend does, merge the changed keys onto the current settings.
 const mockPatchGlobalConfig = mock(
   async (patch: Record<string, unknown>, options?: { unset?: string[] }) => {
@@ -464,7 +468,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
     });
   });
@@ -547,7 +551,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostClaudeCredentials: false }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
     view.rerender(<GlobalSettings activeSection="claude" />);
@@ -594,7 +598,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           codexMaxConcurrentThreads: 8,
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
     });
   });
@@ -673,7 +677,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => expect(mockPatchGlobalConfig).toHaveBeenCalledTimes(2));
     expect(mockPatchGlobalConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({ codexMaxConcurrentThreads: 11 }),
-      expect.anything(),
+      SAVE_OPTIONS,
     );
   });
 
@@ -701,7 +705,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ webClientEnabled: false }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
       expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
     });
@@ -1220,7 +1224,7 @@ describe("GlobalSettings", () => {
           expect.objectContaining({
             openCodeModelProviders: ["opencode", "opencode-go", "openrouter"],
           }),
-          expect.anything(),
+          SAVE_OPTIONS,
         );
       });
     });
@@ -1235,7 +1239,7 @@ describe("GlobalSettings", () => {
       await waitFor(() => {
         expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
           expect.objectContaining({ openCodeModelProviders: ["opencode"] }),
-          expect.anything(),
+          SAVE_OPTIONS,
         );
       });
     });
@@ -1273,7 +1277,7 @@ describe("GlobalSettings", () => {
       await waitFor(() => {
         expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
           expect.objectContaining({ openCodeModelProviders: [] }),
-          expect.anything(),
+          SAVE_OPTIONS,
         );
       });
     });
@@ -1370,7 +1374,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           reviewInstruction: "Review origin/{{targetBranch}}...HEAD for regressions.",
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
     });
   });
@@ -1496,7 +1500,7 @@ describe("GlobalSettings", () => {
       expect.objectContaining({
         reviewInstruction: "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH + 1),
       }),
-      expect.anything(),
+      SAVE_OPTIONS,
     );
 
     fireEvent.change(instruction, { target: { value: "Short review instruction." } });
@@ -1532,7 +1536,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ preferredEditor: "cursor" }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -1557,7 +1561,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -1589,7 +1593,7 @@ describe("GlobalSettings", () => {
           // is still enabled, rather than leaving a launch surface that is gone.
           agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -1634,7 +1638,7 @@ describe("GlobalSettings", () => {
             { name: "guides", url: "https://guides.example/mcp" },
           ],
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
     fireEvent.click(within(choices).getByRole("radio", { name: /Off/ }));
@@ -1643,7 +1647,7 @@ describe("GlobalSettings", () => {
       // The servers saved above are not sent again: only the mode changed.
       expect(mockPatchGlobalConfig).toHaveBeenLastCalledWith(
         { coordinatorWebResearch: "off" },
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
     expect(useConfigStore.getState().config.global.coordinatorResearchMcpServers).toEqual([
@@ -1670,7 +1674,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ coordinatorProviderTiers: "enforced" }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -1713,7 +1717,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ coordinatorProviderTiers: "advisory" }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -1862,7 +1866,7 @@ describe("GlobalSettings", () => {
             fontSize: 15,
           }),
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -2071,7 +2075,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostGitHubCredentials: false }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
@@ -2135,7 +2139,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ useHostGitHubCredentials: true }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
@@ -2236,7 +2240,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ debugLogging: true, debugLogRetentionDays: 30 }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
 
@@ -2358,7 +2362,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ debugLogRetentionDays: 30 }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -2411,7 +2415,7 @@ describe("GlobalSettings", () => {
           terminalAppearance: expect.objectContaining({ fontFamily: "JetBrains Mono" }),
           terminalScrollback: 5100,
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -2470,7 +2474,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -2494,7 +2498,7 @@ describe("GlobalSettings", () => {
             }),
           }),
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -2519,7 +2523,7 @@ describe("GlobalSettings", () => {
           // First spelling typed wins, in first-occurrence order.
           allowedDomains: ["Example.com", "api.example.com"],
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });
@@ -2551,7 +2555,7 @@ describe("GlobalSettings", () => {
             platforms: { claude: { model: "default" }, codex: { mode: "terminal" } },
           },
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
     });
   });
@@ -2588,7 +2592,7 @@ describe("GlobalSettings", () => {
               }),
             }),
           }),
-          expect.anything(),
+          SAVE_OPTIONS,
         );
       });
       unmount();
@@ -2809,7 +2813,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           experimentalCodexRawEventLogging: false,
         }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
     });
   });
@@ -2825,7 +2829,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ experimentalScheduling: true }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
     });
   });
@@ -2841,7 +2845,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ experimentalGraphs: true }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
     });
   });
@@ -2860,7 +2864,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ experimentalGraphs: false }),
-        expect.anything(),
+        SAVE_OPTIONS,
       );
       expect(useConfigStore.getState().config.global.experimentalGraphs).toBe(false);
     });
@@ -3012,7 +3016,7 @@ describe("GlobalSettings", () => {
     await waitFor(() =>
       expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({ envFilePatterns: [".env"] }),
-        expect.anything(),
+        SAVE_OPTIONS,
       ),
     );
   });

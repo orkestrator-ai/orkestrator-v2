@@ -623,7 +623,6 @@ describe("TerminalContainer", () => {
 
     useClaudeOptionsStore.setState({
       options: {},
-      pendingNativeLaunches: {},
     });
   });
 
@@ -745,7 +744,7 @@ describe("TerminalContainer", () => {
           : environment,
       ),
     }));
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
   }
 
   const renderHiddenTerminal = () =>
@@ -2946,7 +2945,6 @@ describe("TerminalContainer", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
     expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
   });
 
   test("leaves container initial prompt attachments for the backend", async () => {
@@ -2984,7 +2982,6 @@ describe("TerminalContainer", () => {
           ],
         },
       },
-      pendingNativeLaunches: {},
     });
 
     render(
@@ -3016,7 +3013,6 @@ describe("TerminalContainer", () => {
           initialPromptAttachments: [],
         },
       },
-      pendingNativeLaunches: {},
     });
 
     render(
@@ -3072,7 +3068,6 @@ describe("TerminalContainer", () => {
           ],
         },
       },
-      pendingNativeLaunches: {},
     });
     const originalWarn = console.warn;
     console.warn = mock(() => undefined);
@@ -3149,7 +3144,6 @@ describe("TerminalContainer", () => {
           ],
         },
       },
-      pendingNativeLaunches: {},
     });
 
     render(
@@ -3202,7 +3196,6 @@ describe("TerminalContainer", () => {
           initialPromptAttachments: attachments,
         },
       },
-      pendingNativeLaunches: {},
     });
 
     render(
@@ -3270,7 +3263,6 @@ describe("TerminalContainer", () => {
           initialPromptAttachments: attachments,
         },
       },
-      pendingNativeLaunches: {},
     });
 
     render(
@@ -3360,7 +3352,6 @@ describe("TerminalContainer", () => {
           ],
         },
       },
-      pendingNativeLaunches: {},
     });
 
     render(
@@ -3493,7 +3484,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
 
     render(
       <TerminalProvider>
@@ -3563,7 +3554,7 @@ describe("TerminalContainer", () => {
       terminalRunning: true,
       startedAt: "2026-09-14T00:00:00.000Z",
     });
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
 
     render(
       <TerminalProvider>
@@ -3621,7 +3612,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
 
     render(
       <TerminalProvider>
@@ -3673,7 +3664,7 @@ describe("TerminalContainer", () => {
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: false });
     armWindowStartupAgentActivation("env-hidden");
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
 
     render(
       <TerminalProvider>
@@ -3749,7 +3740,7 @@ describe("TerminalContainer", () => {
       terminalRunning: true,
       startedAt: "2026-09-14T00:00:00.000Z",
     });
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
 
     const firstMount = render(
       <TerminalProvider>
@@ -3822,7 +3813,7 @@ describe("TerminalContainer", () => {
       activeEnvironmentId: "env-hidden",
     } as never);
     seedStartupFocusHandoffEnvironment("env-hidden", { setupReady: true });
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
 
     render(
       <TerminalProvider>
@@ -3923,7 +3914,7 @@ describe("TerminalContainer", () => {
         },
       ],
     }));
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
 
     const { rerender } = render(
       <TerminalProvider>
@@ -3964,7 +3955,7 @@ describe("TerminalContainer", () => {
     );
   });
 
-  test("replaces a stale renderer launch with the backend running session", async () => {
+  test("keeps a single startup tab for the backend running session", async () => {
     setupDurableLaunchEnvironment({
       agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       pendingAgentLaunch: false,
@@ -4005,22 +3996,6 @@ describe("TerminalContainer", () => {
         containerId: "container-hidden",
       }),
     }));
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {
-        "env-hidden": {
-          containerId: "stale-container",
-          environmentId: "env-hidden",
-          initialPrompt: "stale prompt that must not be dispatched",
-          targetPaneId: "default",
-          agentType: "claude",
-          launchMode: "native",
-          providerSessionId: "stale-provider-session",
-          model: "stale-model",
-          reasoningEffort: "low",
-        },
-      },
-    });
 
     renderHiddenTerminal();
 
@@ -4231,7 +4206,6 @@ describe("TerminalContainer", () => {
       await Promise.resolve();
     });
 
-    expect(useClaudeOptionsStore.getState().pendingNativeLaunches["env-hidden"]).toBeUndefined();
     expect(
       usePaneLayoutStore
         .getState()
@@ -4371,7 +4345,6 @@ describe("TerminalContainer", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(useClaudeOptionsStore.getState().pendingNativeLaunches["env-hidden"]).toBeUndefined();
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
@@ -4466,40 +4439,6 @@ describe("TerminalContainer", () => {
       await Promise.resolve();
     });
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
-    expect(useClaudeOptionsStore.getState().pendingNativeLaunches["env-hidden"]).toBeUndefined();
-  });
-
-  test("does not consume legacy renderer launch state when the container stops", async () => {
-    useClaudeOptionsStore.setState({
-      pendingNativeLaunches: {
-        "env-hidden": {
-          containerId: "container-hidden",
-          environmentId: "env-hidden",
-          initialPrompt: "Do not launch after stop",
-          targetPaneId: "default",
-          agentType: "codex",
-        },
-      },
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning={false}
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toMatchObject({
-      initialPrompt: "Do not launch after stop",
-      agentType: "codex",
-    });
   });
 
   test("keeps the newly selected environment's panes when switching environments", async () => {
@@ -4534,22 +4473,6 @@ describe("TerminalContainer", () => {
           containerId: "container-visible",
         }),
     }));
-    // Setup is still running for env-visible, so the pending launch stays parked
-    // rather than being consumed by the launch effect the moment it is selected.
-    // Anything that clears it here is the reset, which is what is under test.
-    useEnvironmentStore.getState().updateEnvironment("env-visible", { setupPhase: "running" });
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {
-        "env-visible": {
-          containerId: "container-visible",
-          environmentId: "env-visible",
-          targetPaneId: "default",
-          agentType: "codex",
-          launchMode: "native",
-        },
-      },
-    });
 
     const { rerender } = render(
       <TerminalProvider>
@@ -4586,7 +4509,6 @@ describe("TerminalContainer", () => {
     expect(usePaneLayoutStore.getState().environments.get("env-visible")?.containerId).toBe(
       "container-visible",
     );
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-visible")).toBeDefined();
   });
 
   test("resets panes when the container id changes within one environment", async () => {
@@ -4653,7 +4575,6 @@ describe("TerminalContainer", () => {
     });
     useClaudeOptionsStore.setState({
       options: {},
-      pendingNativeLaunches: {},
     });
 
     render(
@@ -4700,7 +4621,6 @@ describe("TerminalContainer", () => {
 
     useClaudeOptionsStore.setState({
       options: {},
-      pendingNativeLaunches: {},
     });
 
     render(

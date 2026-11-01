@@ -136,7 +136,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       source: "host-cli",
       available: true,
     });
-    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
+    useClaudeOptionsStore.setState({ options: {} });
     useAgentModelCatalogStore.setState({ claudeModels: [] });
     useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
     useEnvironmentStore.setState({ environments: [] });

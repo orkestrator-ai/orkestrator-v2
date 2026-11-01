@@ -1386,7 +1386,9 @@ saved focus. The coordinator is told to set a lens only when the user asks for
 a focus.
 
 Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
-over the worker's model catalogue, mirroring the launch dialog: an unset or
+over the worker's model catalogue through `resolveLaunchSelection`
+(`packages/protocol/src/launch-selection.ts`), the resolver the launch dialogs
+call too, which documents the rules: an unset or
 stale saved model falls back to the connected model a tab with no model would
 start on (the catalogue row marked `sessionDefault`, which the Pi bridge sets
 on Pi's saved default), else to the first connected catalogue model, and an

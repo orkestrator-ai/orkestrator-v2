@@ -22,3 +22,21 @@ The first run took 1673.5 s and the second 455.3 s. Host load was not measured f
 ## Failures that were real, and fixed on the branch
 
 Not flakes; recorded so they are not mistaken for this case's list. In run 1, `version-drift`, the flake index test and `CreateEnvironmentDialog` pinned behaviour the branch moved. In run 2, two `web-annotation-rollout` `command gating` tests used a storage stub without the new patch method.
+
+## Third aggregate run
+
+`disk report`, `NativeResumeSessionDialog` and `root-change approval` failed again by timeout, at a host load average near 30. The last two passed alone straight after. `disk report` failed once alone at that load (5021.16 ms, case 0259) and had passed alone in 2.2 s earlier.
+
+## Component browser suite
+
+`mise run test:browser` hit its 1800000 ms group deadline at test 817 of 1140 with 45 failures, at the same load. Rerun in parts with `--workers=2` or `--workers=3` and `--timeout=120000`, these failed on the branch:
+
+| Test | Owning file | Also failed on base `102930928` |
+| --- | --- | --- |
+| `selects a native branch suggestion with the keyboard and confirms` | `e2e/AgentLaunchDialog.spec.ts` | yes, one worker |
+| `package validation and transcript fit a 1408px container` | `e2e/MultiReviewPackageLayout.spec.ts` | yes, one worker |
+| `a live group crossing the fold threshold folds into its line` | `e2e/ToolGroupFold.spec.ts` | yes, one worker |
+| `a live group growing below a released reader preserves their place` | `e2e/ToolGroupFold.spec.ts` | passed at one worker on both |
+| `native: paging before prose in a byte-bounded view holds the original tool position` | `e2e/TranscriptPaging.spec.ts` | passed at one worker on both |
+
+Base also failed `a waiting group that fits its cap follows appended calls` at one worker, which passed on the branch. The mobile project was not rerun in full, so its load-era failures outside the fixtures this branch changed are unconfirmed either way.

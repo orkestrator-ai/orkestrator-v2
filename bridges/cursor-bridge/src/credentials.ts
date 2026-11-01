@@ -30,9 +30,17 @@ type CursorAccount = Awaited<ReturnType<typeof Cursor.me>>;
 /**
  * The account lookup still in flight, shared by every read for the same key.
  * `Cursor.me` takes no signal, so a read that stops waiting cannot cancel it;
- * sharing keeps a hung API to one outstanding request instead of one per read.
+ * sharing limits retries to one request per cache window. Abandoned requests
+ * may overlap because the SDK cannot cancel them.
  */
-let accountLookup: { credential: string; result: Promise<CursorAccount | undefined> } | undefined;
+let accountLookup:
+  | {
+      credential: string;
+      expiresAt: number;
+      timedOut: boolean;
+      result: Promise<CursorAccount | undefined>;
+    }
+  | undefined;
 let accountLookupTimeoutMs = ACCOUNT_LOOKUP_TIMEOUT_MS;
 
 /**
@@ -170,8 +178,8 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
       : { kind: "browser-url" },
     signOut: !fromEnvironment,
   };
-  // A fallback after a missed bound is not cached, so the next read retries
-  // the lookup and the label recovers as soon as Cursor answers.
+  // A timeout fallback is not cached. The shared lookup retries after its
+  // bounded window, or sooner if the original request settles.
   if (credential && lookup.settled) {
     authCache = { credential, expiresAt: Date.now() + AUTH_CACHE_TTL_MS, value };
   }
@@ -181,7 +189,7 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
 /**
  * The account behind `credential`, or nothing if the lookup failed or did not
  * answer within `accountLookupTimeoutMs`. `settled` is false only for the
- * latter, which is the one outcome worth retrying on the next read.
+ * latter, which is retried after the shared entry expires.
  */
 async function lookUpAccount(
   credential: string,
@@ -189,9 +197,11 @@ async function lookUpAccount(
   const meFn = cursorMe;
   if (!meFn) return { settled: true, account: undefined };
   let entry = accountLookup;
-  if (!entry || entry.credential !== credential) {
+  if (!entry || entry.credential !== credential || entry.expiresAt <= Date.now()) {
     const started = {
       credential,
+      expiresAt: Date.now() + AUTH_CACHE_TTL_MS,
+      timedOut: false,
       result: meFn({ apiKey: credential }).catch(() => undefined),
     };
     void started.result.finally(() => {
@@ -199,16 +209,20 @@ async function lookUpAccount(
     });
     entry = accountLookup = started;
   }
+  // Avoid paying the full timeout on every poll while the same call is hung.
+  // Once the retry window expires, a later read can replace it even if it never settles.
+  if (entry.timedOut) return { settled: false, account: undefined };
+  const active = entry;
   const { result } = entry;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       result.then((account) => ({ settled: true, account })),
       new Promise<{ settled: boolean; account: undefined }>((resolve) => {
-        timer = setTimeout(
-          () => resolve({ settled: false, account: undefined }),
-          accountLookupTimeoutMs,
-        );
+        timer = setTimeout(() => {
+          active.timedOut = true;
+          resolve({ settled: false, account: undefined });
+        }, accountLookupTimeoutMs);
         timer.unref();
       }),
     ]);

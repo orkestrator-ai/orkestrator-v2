@@ -10,7 +10,7 @@
  * The credential runtime is injected directly so this owner never mutates
  * Bun's process-wide module registry or reaches the developer's Cursor store.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as realCursorSdk from "@cursor/sdk";
 import {
   authStatus,
@@ -243,6 +243,107 @@ describe("authStatus", () => {
       expect(await authStatus()).toMatchObject({ account: { label: "Recovered account" } });
       expect(lookups).toBe(2);
     } finally {
+      restore();
+    }
+  });
+
+  test("retries an expired hung lookup without waiting for the original to settle", async () => {
+    stored = { apiKey: "stale-key", email: "fallback@example.com" };
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    let calls = 0;
+    const restore = useCursorCredentialRuntimeForTests({
+      store: new FakeCredentialStore(),
+      auth: {} as typeof realCursorSdk.Cursor.auth,
+      me: (() => {
+        calls += 1;
+        return calls === 1
+          ? new Promise(() => undefined)
+          : Promise.resolve({ apiKeyName: "Recovered account" });
+      }) as typeof realCursorSdk.Cursor.me,
+      meTimeoutMs: 20,
+    });
+    try {
+      expect(await authStatus()).toMatchObject({ account: { label: "fallback@example.com" } });
+      // A repeated read should complete in microtasks, without another timeout.
+      const repeated = authStatus();
+      let answered = false;
+      void repeated.then(() => {
+        answered = true;
+      });
+      await Bun.sleep(0);
+      expect(answered).toBe(true);
+      await repeated;
+      expect(calls).toBe(1);
+      now += 15_001;
+      const recovered = await Promise.all([authStatus(), authStatus()]);
+      for (const status of recovered) {
+        expect(status).toMatchObject({ account: { label: "Recovered account" } });
+      }
+      expect(calls).toBe(2);
+    } finally {
+      clock.mockRestore();
+      restore();
+    }
+  });
+
+  for (const reset of ["logout", "credential change"] as const) {
+    test(`${reset} discards the shared pending lookup`, async () => {
+      stored = { apiKey: "original-key" };
+      const keys: string[] = [];
+      const restore = useCursorCredentialRuntimeForTests({
+        store: new FakeCredentialStore(),
+        auth: {
+          logout: async () => {
+            stored = undefined;
+          },
+        } as unknown as typeof realCursorSdk.Cursor.auth,
+        me: ((options: { apiKey: string }) => {
+          keys.push(options.apiKey);
+          return keys.length === 1
+            ? new Promise(() => undefined)
+            : Promise.resolve({ apiKeyName: "Fresh account" });
+        }) as typeof realCursorSdk.Cursor.me,
+        meTimeoutMs: 20,
+      });
+      try {
+        const pending = authStatus();
+        await Bun.sleep(0);
+        expect(keys).toEqual(["original-key"]);
+        if (reset === "logout") await logout();
+        stored = { apiKey: reset === "logout" ? "original-key" : "new-key" };
+        expect(await authStatus()).toMatchObject({ account: { label: "Fresh account" } });
+        expect(keys).toEqual(["original-key", stored.apiKey]);
+        await pending;
+      } finally {
+        restore();
+      }
+    });
+  }
+
+  test("caches a fast lookup rejection until the auth cache expires", async () => {
+    stored = { apiKey: "rejected-key", email: "fallback@example.com" };
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    let calls = 0;
+    const restore = useCursorCredentialRuntimeForTests({
+      store: new FakeCredentialStore(),
+      auth: {} as typeof realCursorSdk.Cursor.auth,
+      me: (async () => {
+        calls += 1;
+        throw new Error("unavailable");
+      }) as typeof realCursorSdk.Cursor.me,
+    });
+    try {
+      expect(await authStatus()).toMatchObject({ account: { label: "fallback@example.com" } });
+      now += 14_999;
+      await authStatus();
+      expect(calls).toBe(1);
+      now += 2;
+      await authStatus();
+      expect(calls).toBe(2);
+    } finally {
+      clock.mockRestore();
       restore();
     }
   });

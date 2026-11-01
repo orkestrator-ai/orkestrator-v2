@@ -278,8 +278,11 @@ the tab without a send.
   (3 s) for it (`bridges/cursor-bridge/src/credentials.ts`). A lookup that
   misses the bound leaves the session signed in and ready, labelled with the
   stored email or "Cursor account". That fallback is not cached, so the label
-  returns on a later read. Reads share one outstanding lookup, because
-  `Cursor.me` takes no abort signal. The backend gives the status request
+  can recover on a later read. Reads share a lookup for up to 15 s. After
+  its first timeout, reads return the fallback immediately until that window
+  expires or the lookup settles. A later read can then start a fresh lookup.
+  `Cursor.me` takes no abort signal, so abandoned requests may overlap; the
+  retry window limits new requests to one per 15 s for the same credential. The backend gives the status request
   30 s.
 - Grok's ACP `authenticate` does not fail without a login: it waits on an
   interactive sign-in. The bridge refuses before asking, and a session created

@@ -48,9 +48,12 @@ stubbed the credential runtime (0182's section of 2026-10-31).
 **Outcome (2026-11-01).** Rechecked on `main` at `93b99bfba`: still
 unbounded. `authStatus` now waits at most `ACCOUNT_LOOKUP_TIMEOUT_MS` (3 s,
 `config.ts`) for the label. Every read for the same key shares the one
-outstanding lookup, because `Cursor.me` takes no signal and a hung request
-cannot be cancelled. A missed bound is not cached; a lookup that answers, or
-fails, within the bound is cached for `AUTH_CACHE_TTL_MS` as before. Tests:
+lookup for at most 15 s. After a timeout, further reads return the fallback
+immediately until that window expires or the lookup settles. A later read
+can start a new lookup even if the old one never settles. `Cursor.me` takes
+no signal, so abandoned requests may overlap, with at most one new attempt
+per 15 s for the same credential. A missed bound is not cached; a lookup that
+answers, or fails, within the bound is cached for `AUTH_CACHE_TTL_MS` as before. Tests:
 `credentials.test.ts` ("a lookup that never answers…") and `http.test.ts`
 ("a hung account lookup neither holds status nor signs the session out").
 Both fail without the fix: the first hits Bun's 5 s test timeout, the second
@@ -90,13 +93,18 @@ check below is left.
   It is a constant, not an environment setting; tests shorten it through
   `useCursorCredentialRuntimeForTests({ meTimeoutMs })`.
 - 2026-11-01: concurrent reads share one in-flight lookup, so a hung API
-  holds one request, not one per status poll. The shared lookup is dropped
-  on logout and when the test runtime is swapped.
+  starts at most one request per 15 s window for the same credential. The
+  shared lookup is dropped on logout and when the test runtime is swapped.
 - 2026-11-01: only a missed bound goes uncached. A lookup that fails fast is
   still cached for 15 s, as before, so an API that is down and refusing is
   not asked on every read.
 - 2026-11-01: the file stays open (Finished: No, re-rated Low) for the live
   check, rather than being deleted now that the code item is done.
+
+- 2026-11-01 review repair: expire shared lookups after 15 s and avoid repeated
+  timeout waits within that window. Added regression coverage for recovery
+  while the original lookup never settles, logout and credential replacement,
+  and caching fast rejection for the 15 s auth TTL.
 
 ## Open questions
 

@@ -535,7 +535,9 @@ Design export from a real running container (the shipped helper over
 `docker exec -i`, `/workspace` on a `volume-nocopy` named volume, interrupted
 by killing the client, stopping or restarting the container and emptying the
 workspace) is skipped unless its image variable is set. The container and
-volume carry a throwaway owner label and are removed by id.
+volume carry a throwaway owner label and are removed by id. The Linux Engine
+qualification workflow (`container-live-qualification.yml`) runs it on amd64
+and arm64 with each job's own image.
 
 ```bash
 ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE=orkestrator-v2:latest \

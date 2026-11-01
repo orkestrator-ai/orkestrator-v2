@@ -1770,22 +1770,6 @@ function MultiReviewOverviewTab({
       </div>,
     );
   }
-  if (
-    workflow.phase === "interactive" &&
-    workflow.addressPromptPending !== true &&
-    workflow.fixSession?.providerSessionId &&
-    !presentationNotice &&
-    !workflow.presentationError
-  ) {
-    notices.push(
-      <div
-        key="fix-ready"
-        className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground"
-      >
-        The fix request was delivered. The fix session is ready to open.
-      </div>,
-    );
-  }
   if (workflow.addressPromptPending === true && !workflow.error) {
     notices.push(
       <div
@@ -1798,6 +1782,8 @@ function MultiReviewOverviewTab({
   }
   if (
     workflow.autoPrLaunch &&
+    (workflow.autoPrLaunch.state !== "launched" ||
+      workflow.autoPrLaunch.basis === "clean-review") &&
     (workflow.autoPrLaunch.basis !== "clean-review" ||
       (workflow.phase === "ready" &&
         workflow.consolidatedReport?.issues.length === 0 &&

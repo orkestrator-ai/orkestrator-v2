@@ -1,18 +1,13 @@
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
-import type { ModelInfo as SdkModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import { controlOnlyQuery } from "./control-only-query.js";
-import { liveInitializationResult, readFromLiveClaude } from "./live-claude-control.js";
 import type {
-  ModelInfo,
   QuestionRequest,
   PlanApprovalRequest,
   ClaudeInteractionRequest,
   ClaudeInteractionResponse,
   SessionInitData,
 } from "../types/index.js";
-import { CLAUDE_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/claude-model-catalog";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import { readFile } from "node:fs/promises";
@@ -21,7 +16,6 @@ import { interactionKey } from "./session-manager-interaction-budget.js";
 import { isValidMcpFormContent } from "@orkestrator/protocol/mcp-elicitation-form";
 import * as lifecycle from "./session-manager-lifecycle.js";
 import {
-  claudeExecutableOptions,
   execFileText,
   interactionResolvers,
   pendingInteractions,
@@ -32,6 +26,8 @@ import {
   sessions,
 } from "./session-manager-core.js";
 import { isPendingInteractionFor } from "./session-manager-lifecycle.js";
+
+export { getAvailableModelCatalog, getAvailableModels } from "./claude-model-catalog.js";
 /**
  * Answer a pending question
  * @param requestId - The question request ID
@@ -219,97 +215,6 @@ export function getPendingInteractions(sessionId?: string): ClaudeInteractionReq
 export function getSessionInitData(sessionId: string): SessionInitData | undefined {
   const session = sessions.get(sessionId);
   return session?.initData;
-}
-
-function catalogModels(models: readonly SdkModelInfo[]): ModelInfo[] {
-  return models.map((model) => ({
-    id: model.value,
-    resolvedModel: model.resolvedModel,
-    name: model.displayName,
-    description: model.description,
-    supportsFastMode: model.supportsFastMode,
-    supportsEffort: model.supportsEffort,
-    supportedEffortLevels: model.supportedEffortLevels,
-    supportsAdaptiveThinking: model.supportsAdaptiveThinking,
-    supportsAutoMode: model.supportsAutoMode,
-  }));
-}
-
-/**
- * The models a running CLI listed in its initialize answer, if one is running.
- *
- * An empty or malformed list is no answer: the probe decides then. The list
- * is the one that CLI started with, so a sign-in since it launched shows up
- * once it is released or a probe reads again.
- */
-function liveModels(): Promise<SdkModelInfo[] | undefined> {
-  return readFromLiveClaude((control) =>
-    liveInitializationResult(control)?.then((result) =>
-      Array.isArray(result?.models) && result.models.length > 0
-        ? (result.models as SdkModelInfo[])
-        : undefined,
-    ),
-  );
-}
-
-/**
- * Get available models from the Claude Agent SDK: from a CLI already running
- * on this bridge when there is one, else through a control-only query (see
- * control-only-query.ts), which spawns a CLI for the answer.
- */
-export async function getAvailableModelCatalog(): Promise<{
-  models: ModelInfo[];
-  source: "sdk" | "fallback";
-}> {
-  const live = await liveModels();
-  if (live) {
-    debugLog("[session-manager] Supported models read from a running CLI", {
-      count: live.length,
-    });
-    return { source: "sdk", models: catalogModels(live) };
-  }
-  let q: ReturnType<typeof controlOnlyQuery> | undefined;
-  try {
-    const cwd = process.env.CWD || process.cwd();
-    debugLog("[session-manager] Fetching supported models", { cwd });
-    // A control-only query: supportedModels() without running a turn.
-    q = controlOnlyQuery({
-      cwd,
-      env: { ...process.env },
-      ...claudeExecutableOptions(),
-    });
-
-    // Get supported models from the query object
-    const models = await q.supportedModels();
-    debugLog("[session-manager] Supported models fetched", { count: models.length });
-
-    return { source: "sdk", models: catalogModels(models) };
-  } catch (error) {
-    console.error("[session-manager] Error fetching supported models:", error);
-    // Return the shared fallback if SDK discovery fails. The renderer projects
-    // the same protocol constant into its local ClaudeModel shape.
-    return {
-      source: "fallback",
-      models: CLAUDE_FALLBACK_MODEL_CATALOG.map((model) => ({
-        ...model,
-        ...(model.supportedEffortLevels
-          ? { supportedEffortLevels: [...model.supportedEffortLevels] }
-          : {}),
-      })),
-    };
-  } finally {
-    if (q?.return) {
-      try {
-        await q.return();
-      } catch (error) {
-        debugLog("[session-manager] Failed to clean up model query:", error);
-      }
-    }
-  }
-}
-
-export async function getAvailableModels(): Promise<ModelInfo[]> {
-  return (await getAvailableModelCatalog()).models;
 }
 
 export async function getClaudeRuntimeVersions(): Promise<{

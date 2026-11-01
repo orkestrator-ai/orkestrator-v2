@@ -504,13 +504,12 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - `permissions.blockWritesOutsideWorkingDirectories` (Agent SDK 0.3.314).
     A possible worktree-confinement policy; needs a product decision, and it
     also removes EnterWorktree/ExitWorktree.
-  - `prewarm()` in `/core` and `claim()` deciding `.mcp.json` servers and
-    plugins (0.3.312–0.3.314): a spare-process lifecycle change that would
-    revisit 0005's warm-CLI decision.
   - `initializationResult()` is adopted: a running CLI's held answer serves the
     model catalogue and the account (`live-claude-control.ts`). `startup()` /
-    `WarmQuery` were measured and not adopted; the decision is in
+    `WarmQuery` and `prewarm()` / `claim()` were measured and not adopted at
+    0.3.314; the decision and what would reopen it are in
     [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md).
+    Recheck on a bump whether `claim()` takes `resume` or inline MCP servers.
     `getSubagentMessages()` and message rewind are tracked in
     [0006-session-titles-and-history.md](0006-session-titles-and-history.md).
 - Codex (`bridges/codex-bridge`):

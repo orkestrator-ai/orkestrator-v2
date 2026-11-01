@@ -28,6 +28,7 @@
  * under an invented `/skill:<name>` spelling.
  */
 import { randomUUID } from "node:crypto";
+import { invalidateClaudeModelCatalog } from "./claude-model-catalog.js";
 import { controlOnlyQuery } from "./control-only-query.js";
 import type { Query, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -700,6 +701,7 @@ export async function refreshClaudeCommandCatalogue(
 
 /** `POST /global/refresh-catalog`: bounded fan-out over held sessions. */
 export async function refreshClaudeCatalogs(): Promise<void> {
+  invalidateClaudeModelCatalog();
   const sessionIds = Array.from(sessions.keys()).slice(0, 128);
   let next = 0;
   await Promise.allSettled(

@@ -23,6 +23,7 @@ import {
   sessionOperationError,
   sessions,
 } from "./session-manager-core.js";
+import { resetClaudeModelCatalogForTesting } from "./claude-model-catalog.js";
 import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
 import { claudePermissionMode, claudeTurnPolicy } from "./claude-query-config.js";
 import { eventEmitter } from "./event-emitter.js";
@@ -41,6 +42,7 @@ export { readClaudeAuthStatus } from "./claude-sign-in.js";
 
 export function resetClaudeCatalogCachesForTesting(): void {
   resetClaudeSignInForTesting();
+  resetClaudeModelCatalogForTesting();
 }
 
 /**

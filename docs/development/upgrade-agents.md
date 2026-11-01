@@ -630,6 +630,20 @@ union, so a bump that adds a row id fails the typecheck until it is placed.
    plugins" in `docs/architecture/mcp-management.md`; re-derive it from the
    binary and update `packages/protocol/src/node/claude-plugin-set.ts`.
 
+   Re-prove what a parked spare does and refuses, which is why the bridge does
+   not use `prewarm()`: no model call while parked, a `sessionId` kept, a
+   `resume` refused, a slow MCP server not connected ahead of the claim. This
+   runs the real CLI and bridge in a temporary home, with no credentials and a
+   scripted model:
+
+   ```bash
+   mise run verify:claude:first-turn-live
+   ```
+
+   A failure means that decision in
+   `docs/todo/agent-engines/0005-mid-turn-steer-and-interrupt.md` is worth
+   reopening, not that the bridge is broken.
+
    Re-check the Linux command sandbox on a Linux host. The probe in
    `packages/protocol/src/node/claude-linux-sandbox.ts` models how the CLI
    runs a command (bubblewrap, then its `apply-seccomp` helper nesting a user

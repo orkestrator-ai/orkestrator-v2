@@ -44,7 +44,14 @@ writers on one `.jsonl`. When touching the prompt path:
   open runtime first (`live-claude-control.ts`) and probes only when none
   answers: models and account come from its held initialize answer, which
   sends nothing, and only a signed-in account counts, because that answer
-  predates any login since.
+  predates any login since. The model catalogue (`claude-model-catalog.ts`) then
+  reuses its last signed-in answer until the CLI file or the account changes
+  and shares one bounded probe; the static catalogue answers only a failed probe
+  and is never kept.
+- **A first turn starts cold on purpose.** `prewarm()` cannot resume, and it fixes
+  at spawn the MCP servers, tools, hooks and environment a prompt decides. Do not
+  park a CLI ahead of a prompt without re-reading the decision and its numbers
+  in [0005](../../docs/todo/agent-engines/0005-mid-turn-steer-and-interrupt.md).
 - **The newest turn owns the root conversation.** Root frames, results, hooks
   and continuations go to `runtime.latestTurn`; only a subagent's frames go to
   the turn whose row holds its call (`routeClaudeFrame`). A superseded turn
@@ -177,7 +184,7 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   succeeded. Every other error still propagates; do not widen that match.
 - **The no-control fallback costs a process.** `createProbe()` spawns a whole
   Claude CLI, so `commandInventory` caches the catalogue the way `mcpInventory`
-  already did. The backend re-reads both on every session projection
+  already did, and the model catalogue keeps its own answer. The backend re-reads both on every session projection
   (`native-agent-transcript-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
 - **Every SDK frame has a declared fate.** `HANDLED_SDK_MESSAGE_TYPES` and

@@ -123,9 +123,9 @@ describe("command gating", () => {
       storage: {
         getEnvironment: async (id: string) => ({ id }),
         loadConfig: async () => structuredClone(config),
-        updateGlobalConfig: async (global: Record<string, unknown>) => {
-          config.global = global;
-          persisted = global.webAnnotations;
+        patchGlobalConfig: async (patch: Record<string, unknown>) => {
+          config.global = { ...config.global, ...patch };
+          persisted = config.global.webAnnotations;
           return config;
         },
       },

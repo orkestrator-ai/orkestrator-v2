@@ -1113,6 +1113,51 @@ describe("live session read paths", () => {
     });
   }, 20_000);
 
+  test("a replacement poller logs a fresh snapshot failure under the same tab", async () => {
+    const ticks = pollTickStepper();
+    const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "tab-replacement-fault", environmentId: environment.id };
+      const logs = captureLogs();
+      const scopes: unknown[] = [];
+      try {
+        for (let lifetime = 0; lifetime < 2; lifetime += 1) {
+          const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+            session_id: string;
+          };
+          const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+          await fs.mkdir(pendingDir, { recursive: true });
+          await fs.chmod(pendingDir, 0o000);
+          try {
+            await ticks.step();
+            await ticks.step();
+            const faults = logs
+              .records()
+              .filter((record) => record.event === "poll.snapshot-failed");
+            expect(faults).toHaveLength(lifetime + 1);
+            scopes.push(faults.at(-1)?.fields?.scope);
+          } finally {
+            await fs.chmod(pendingDir, 0o755);
+            await invoke(handlers, "claude_tmux_stop", args, context);
+            await ticks.release();
+          }
+        }
+        expect(scopes[0]).not.toBe(scopes[1]);
+        expect(
+          logs.records().filter((record) => record.event === "throttle.recovered"),
+        ).toHaveLength(0);
+      } finally {
+        logs.restore();
+      }
+    });
+  }, 20_000);
+
   test("bounds informational hook snapshots and rehydrates Unicode-safe messages", async () => {
     const ticks = pollTickStepper();
     const handlers = createHandlers({ sessionTiming: { pollTick: ticks.pollTick } });

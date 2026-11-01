@@ -75,6 +75,9 @@ try {
 
 - **First occurrence:** written in full, with `kind` and your `fields`. Repeats do
   not build `fields`, so detail only ever appears on this line.
+- **Idle keys:** after five minutes without that kind failing, its next failure
+  is written in full as a new incident. A replacement tmux poller has its own
+  lifetime scope, even when it reuses the same tab.
 - **Repeats:** only counted. One `throttle.suppressed` line per 60-second window,
   written by the next call after the window ends.
 - **A new kind of error** on the same site is a new key, and is written at once
@@ -379,3 +382,8 @@ record what was observed at the time and are left as they are.
   `MAX_ENTRY_BYTES` there is the existing limit to reconcile.
 - **Command failures** lose their message. A backend site that needs stderr to be
   diagnosable has to log a classified reason, because a raw tail is not available.
+
+Backend jobs, annotation reconciliation and certificate refresh scopes include a
+content-free owner UUID so separate backend instances cannot clear each other.
+Kept-branch notices use a bounded per-storage deduplication set and plain info
+logging; they consume no shared fault keys.

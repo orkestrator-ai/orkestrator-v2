@@ -114,6 +114,7 @@ function readForm(request: IncomingMessage): Promise<URLSearchParams> {
  * publication stays unavailable and desktop transport is unaffected.
  */
 export class PreviewPublicationManager implements PreviewPublicationPort {
+  private readonly logScope = crypto.randomUUID();
   private server: Server | null = null;
   private settings: PreviewSettings["publication"] | null = null;
   private certificate: { cert: string; key: string; validTo: string; coversHosts: boolean } | null =
@@ -350,20 +351,24 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
         this.options.runtime.publication = null;
       }
       log.throttled("warn", "certificate.refresh-failed", {
+        scope: this.logScope,
         error,
         fields: () => ({ error: formatLogError(error, { stack: false }) }),
       });
       return;
     }
-    log.recovered("certificate.refresh-failed");
+    log.recovered("certificate.refresh-failed", this.logScope);
     const renewed =
       this.certificate.cert !== previous.cert || this.certificate.key !== previous.key;
     if (renewed && !this.certificate.coversHosts) {
       this.certificate = previous;
-      log.throttled("warn", "certificate.renewal-refused", { kind: "hosts-not-covered" });
+      log.throttled("warn", "certificate.renewal-refused", {
+        kind: "hosts-not-covered",
+        scope: this.logScope,
+      });
       return;
     }
-    log.recovered("certificate.renewal-refused");
+    log.recovered("certificate.renewal-refused", this.logScope);
     if (renewed) {
       // Bun's HTTPS server supports neither setSecureContext nor SNICallback,
       // so renewal re-binds only this listener on the same address and port.

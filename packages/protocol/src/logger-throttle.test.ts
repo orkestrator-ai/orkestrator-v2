@@ -125,7 +125,7 @@ describe("the window", () => {
 
   test("a window with no repeats writes nothing", () => {
     fail(coded("EACCES"));
-    at(LOG_THROTTLE_WINDOW_MS * 5);
+    at(LOG_THROTTLE_WINDOW_MS * 4);
     fail(coded("EACCES"));
     expect(outputs).toHaveLength(1);
   });
@@ -496,5 +496,46 @@ describe("what reaches the log", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("review regressions", () => {
+  test("rejected event text is never retained, evaluated or emitted by lifecycle lines", () => {
+    const secret = "private user text";
+    const fields = mock(() => ({ note: secret }));
+    for (const elapsed of [0, 1, LOG_THROTTLE_WINDOW_MS, 2 * LOG_THROTTLE_WINDOW_MS]) {
+      at(elapsed);
+      log.throttled("warn", secret as never, { kind: "Error", fields });
+    }
+    log.recovered(secret as never);
+    for (let n = 0; n < LOG_THROTTLE_MAX_KEYS; n += 1) fail(coded("EACCES"), `safe-${n}`);
+    expect(events().filter((event) => event === "throttle.evicted")).toHaveLength(0);
+    expect(events().filter((event) => event === "throttle.recovered")).toHaveLength(0);
+    expect(fields).not.toHaveBeenCalled();
+    expect(lines().join("\n")).not.toContain(secret);
+  });
+
+  test("a hot kind cannot protect stale sibling kinds from global eviction", () => {
+    for (let n = 0; n < LOG_THROTTLE_MAX_KEYS - 1; n += 1) {
+      log.throttled("warn", EVENT, { kind: `kind-${n}` });
+    }
+    log.throttled("warn", OTHER_EVENT, { kind: "recent" });
+    log.throttled("warn", EVENT, { kind: "kind-510" });
+    outputs.length = 0;
+    log.throttled("warn", OTHER_EVENT, { kind: "new" });
+    expect(records()[0]?.fields).toMatchObject({ site: EVENT, kind: "kind-0" });
+    log.throttled("warn", OTHER_EVENT, { kind: "recent" });
+    log.throttled("warn", OTHER_EVENT, { kind: "new" });
+    expect(events()).toEqual(["throttle.evicted", OTHER_EVENT]);
+  });
+
+  test("a failure after five idle windows includes its new diagnostic", () => {
+    fail(coded("EACCES", "old detail"));
+    at(5 * LOG_THROTTLE_WINDOW_MS);
+    fail(coded("EACCES", "new detail"));
+    expect(events()).toEqual([EVENT, EVENT]);
+    expect(lines().at(-1)).toContain("new detail");
+    log.recovered(EVENT);
+    expect(records().at(-1)?.fields).toMatchObject({ failures: 1 });
   });
 });

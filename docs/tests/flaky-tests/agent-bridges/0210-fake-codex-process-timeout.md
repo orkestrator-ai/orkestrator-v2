@@ -205,3 +205,16 @@ mise run test:logged -- --name codex-timeout-isolated -- bun test --cwd bridges/
 
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/bridges.log.gz`.
 - **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.
+
+## Recurrence — 2026-11-01 (throttled logger review)
+
+Preparation's `mise run test` failed this unchanged owner (5000.07 ms; isolated owner passed in 0.1 s).
+The aggregate runs bounded concurrent workspace, root, bridge and protocol groups;
+its exact granted worker counts were not included in the review package.
+The captured cross-suite totals are lower bounds: 31,617 passes, seven failures
+(including four browser failures), and 310 not run. No timeout was changed.
+
+`mise run test:logged -- --name recorded-codex-owner -- bun test --cwd bridges/codex-bridge ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged. The same owner also passed
+alone on detached `origin/main` at `9eca79311b06e624e8799feb069052a7009eeeef`.
+This isolated pass confirms intermittency, not a load-related root cause.
+Original failure evidence: `.orkestrator/review-artifacts/review-validation-2b4eea63-cf5c-4639-ad6f-82564be561bf/validation-04.stdout.txt`.

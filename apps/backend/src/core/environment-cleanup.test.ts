@@ -337,6 +337,28 @@ describe("environment cleanup steps", () => {
     }
   });
 
+  test("513 kept-branch notices do not consume shared fault keys", async () => {
+    const { context, dataDir } = await cleanupContext();
+    const { projectPath } = await project();
+    const logs = captureLogs();
+    try {
+      for (let n = 0; n < 513; n += 1) {
+        const cleanup = entry({
+          environmentId: `kept-${n}`,
+          projectPath,
+          branch: "invalid..ref",
+          pending: ["branch"],
+        });
+        await environmentCleanupLedger(dataDir).record(cleanup);
+        expect(await runEnvironmentCleanupStep(cleanup, "branch", context)).toBe(true);
+      }
+      expect(logs.records()).toHaveLength(513);
+      expect(logs.records().every((record) => record.event === "cleanup.branch-kept")).toBe(true);
+    } finally {
+      logs.restore();
+    }
+  });
+
   test("removes a registered worktree and records completion", async () => {
     const { context, dataDir, worktreeDir } = await cleanupContext();
     const { projectPath, base } = await project();

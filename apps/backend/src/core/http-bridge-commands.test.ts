@@ -193,6 +193,30 @@ describe("HTTP bridge command transport", () => {
     }
   });
 
+  test("a legacy session success does not recover another session's outdated-bridge fault", async () => {
+    resetLogger();
+    const logs = captureLogs();
+    const { provider } = httpProvider(
+      (url) =>
+        url.endsWith("/session/missing/commands")
+          ? new Response(null, { status: 404 })
+          : Response.json({ commands: [] }),
+      codexConnection,
+    );
+    try {
+      for (let n = 0; n < 4; n += 1) {
+        await expect(provider.commandCatalogue!("missing")).rejects.toMatchObject({
+          catalogueErrorCode: "outdated-bridge",
+        });
+        await provider.commandCatalogue!("present");
+      }
+      expect(logs.records().map((record) => record.event)).toEqual(["catalogue.outdated-bridge"]);
+    } finally {
+      logs.restore();
+      resetOutdatedBridgeCatalogueReadCounts();
+    }
+  });
+
   test("a bridge upgraded in place reports recovery, and another bridge's success does not", async () => {
     resetLogger();
     const logs = captureLogs();

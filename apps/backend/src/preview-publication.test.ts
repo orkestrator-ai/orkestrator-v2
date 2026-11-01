@@ -366,6 +366,12 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     const leaf = join(dir, "leaf.pem");
     const original = await readFile(leaf, "utf8");
     const before = manager.status().certificate!.validTo;
+    const healthy = new PreviewPublicationManager({
+      runtime: harness.runtime,
+      logger: { info() {}, warn() {} },
+      certificateCheckMs: 60_000,
+    });
+    await healthy.start();
     try {
       await rm(leaf);
       await until(() => events().includes("certificate.refresh-failed"));
@@ -374,10 +380,19 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       expect(logs.records()[0]?.fields).toMatchObject({ kind: "ENOENT" });
       expect(manager.status().certificate!.validTo).toBe(before);
 
+      clearInterval(
+        (manager as unknown as { certificateTimer: ReturnType<typeof setInterval> })
+          .certificateTimer,
+      );
       await writeFile(leaf, original);
+      await (healthy as unknown as { refreshCertificate(): Promise<void> }).refreshCertificate();
+      // The healthy manager must not clear the first owner's still-tracked fault.
+      expect(events()).toEqual(["certificate.refresh-failed"]);
+      await (manager as unknown as { refreshCertificate(): Promise<void> }).refreshCertificate();
       await until(() => events().includes("throttle.recovered"));
       expect(logs.records().at(-1)?.fields).toMatchObject({ site: "certificate.refresh-failed" });
     } finally {
+      await healthy.dispose();
       logs.restore();
     }
   });

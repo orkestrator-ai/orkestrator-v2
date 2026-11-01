@@ -755,6 +755,7 @@ describe("web annotation environment deletion", () => {
 
   test("a lasting reconcile failure logs its type once and reports recovery", async () => {
     harness = await createHarness();
+    const healthy = await createHarness();
     const logs = captureLogs();
     const reconciler = harness.service as unknown as {
       storage: { loadedEnvironmentIds: () => string[] };
@@ -767,10 +768,14 @@ describe("web annotation environment deletion", () => {
     };
     const events = () => logs.records().map((record) => record.event);
     try {
+      healthy.service.startReconciler(5);
       harness.service.startReconciler(5);
       while (passes < 4) await Bun.sleep(5);
       expect(events()).toEqual(["reconcile.failed"]);
-      expect(logs.records()[0]?.fields).toEqual({ kind: "TypeError" });
+      expect(logs.records()[0]?.fields).toMatchObject({
+        kind: "TypeError",
+        scope: expect.any(String),
+      });
 
       reconciler.storage.loadedEnvironmentIds = loaded;
       while (events().length < 2) await Bun.sleep(5);
@@ -778,6 +783,7 @@ describe("web annotation environment deletion", () => {
       expect(logs.lines.join("\n")).not.toContain("request text");
     } finally {
       harness.service.stopReconciler();
+      await healthy.cleanup();
       logs.restore();
     }
   });

@@ -91,9 +91,9 @@ import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal } from "./claude-state-signal.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
-/** Former activity-bundle cadence, per named job. */
 const activityLog = createLogger("backend.activity");
 
+/** Former activity-bundle cadence, per named job. */
 const ACTIVITY_JOB_MS = 2_000;
 /** Elapsed maintenance deadline (coordinator repair, retention, tab cleanup). */
 const MAINTENANCE_JOB_MS = 60_000;
@@ -255,6 +255,7 @@ function observeSweepStep(kind: RecurringJobKind, run: () => unknown): Promise<u
 }
 
 export class OrkestratorBackend {
+  private readonly logScope = crypto.randomUUID();
   private readonly commands = createCommandRegistry();
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
@@ -2247,12 +2248,12 @@ export class OrkestratorBackend {
       const jobLog = (name: string) => ({
         onError: (error: unknown) => {
           activityLog.throttled("warn", "job.failed", {
-            scope: name,
+            scope: `${this.logScope}:${name}`,
             error,
             fields: () => ({ error: formatLogError(error, { stack: false }) }),
           });
         },
-        onSuccess: () => activityLog.recovered("job.failed", name),
+        onSuccess: () => activityLog.recovered("job.failed", `${this.logScope}:${name}`),
       });
       const jobs: BackendActivityJob[] = [
         {

@@ -119,6 +119,7 @@ function isInteractionId(value: unknown): value is string {
 }
 
 export class WebAnnotationRequests {
+  private readonly logScope = crypto.randomUUID();
   private readonly preparations = new Map<string, PreparationCandidate>();
   private preparing = 0;
   private readonly driving = new Map<string, Promise<void>>();
@@ -1363,10 +1364,10 @@ export class WebAnnotationRequests {
     if (this.reconcileTimer || this.stopped) return;
     this.reconcileTimer = setInterval(() => {
       void this.reconcileOnce()
-        .then(() => log.recovered("reconcile.failed"))
+        .then(() => log.recovered("reconcile.failed", this.logScope))
         .catch((error: unknown) => {
           // Only the error's type: a request's text can reach its message.
-          log.throttled("warn", "reconcile.failed", { error });
+          log.throttled("warn", "reconcile.failed", { error, scope: this.logScope });
         });
     }, intervalMs);
     this.reconcileTimer.unref?.();

@@ -162,9 +162,9 @@ export const LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS = 2 * 60_000;
 /** A gap this long starts a new run of failed health checks. */
 export const LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS = 30_000;
 
-/** Deletion drains briefly: the container is removed right after. */
 const log = createLogger("local-server");
 
+/** Deletion drains briefly: the container is removed right after. */
 const DELETION_DRAIN_GRACE_SECONDS = 5;
 
 /**
@@ -1324,6 +1324,7 @@ async function startLocalServerAttempt(
     } finally {
       releaseOpenCodeHostStart();
     }
+    log.recovered("bridge.not-answering", key);
     if (kind === "opencode" && authToken && agentToolConnection) {
       localServers.openCodeAgentTools.recordLaunchConnection(
         `local:${environmentId}`,

@@ -368,11 +368,15 @@ function buildRecord(
 export const LOG_THROTTLE_WINDOW_MS = 60_000;
 /** Keys tracked across the process (AGENTS.md invariant 11). */
 export const LOG_THROTTLE_MAX_KEYS = 512;
+/** A stopped loop must not hide the next incident behind an old key. */
+export const LOG_THROTTLE_IDLE_MS = 5 * LOG_THROTTLE_WINDOW_MS;
 
 interface ThrottledKey {
   /** Repeats counted since the last line that reported them. */
   pending: number;
   windowStart: number;
+  lastFailureAt: number;
+  recency: number;
 }
 
 /** One site and scope. Its keys are the error kinds seen since it last recovered. */
@@ -386,9 +390,10 @@ interface ThrottledSite {
   keys: Map<string, ThrottledKey>;
 }
 
-// Map order is least recently failing first, at both levels.
+// Each kind carries its own recency; a busy sibling kind cannot protect it.
 const throttledSites = new Map<string, ThrottledSite>();
 let throttledKeyCount = 0;
+let throttleRecency = 0;
 let throttleGeneration = generation;
 let nextThrottleFlushAt = 0;
 
@@ -458,16 +463,17 @@ function flushDueThrottleWindows(now: number): void {
  * occurrence, so the limit can cost extra lines but never hides a failure.
  */
 function evictOldestThrottleKey(): void {
-  const oldest = throttledSites.entries().next().value;
-  if (!oldest) return;
-  const [siteKey, site] = oldest;
-  const entry = site.keys.entries().next().value;
-  if (entry) {
-    const [kind, key] = entry;
-    writeThrottleLine(site, "throttle.evicted", { kind, suppressed: key.pending });
-    site.keys.delete(kind);
-    throttledKeyCount -= 1;
+  let oldest: { siteKey: string; site: ThrottledSite; kind: string; key: ThrottledKey } | undefined;
+  for (const [siteKey, site] of throttledSites) {
+    for (const [kind, key] of site.keys) {
+      if (!oldest || key.recency < oldest.key.recency) oldest = { siteKey, site, kind, key };
+    }
   }
+  if (!oldest) return;
+  const { siteKey, site, kind, key } = oldest;
+  writeThrottleLine(site, "throttle.evicted", { kind, suppressed: key.pending });
+  site.keys.delete(kind);
+  throttledKeyCount -= 1;
   if (site.keys.size === 0) throttledSites.delete(siteKey);
 }
 
@@ -487,7 +493,16 @@ function noteThrottledFailure(
   flushDueThrottleWindows(now);
   const siteKey = throttleSiteKey(area, event, scope);
   let site = throttledSites.get(siteKey);
-  const known = site?.keys.get(kind);
+  let known = site?.keys.get(kind);
+  if (known && now - known.lastFailureAt >= LOG_THROTTLE_IDLE_MS) {
+    site!.keys.delete(kind);
+    throttledKeyCount -= 1;
+    if (site!.keys.size === 0) {
+      throttledSites.delete(siteKey);
+      site = undefined;
+    }
+    known = undefined;
+  }
   if (!known && throttledKeyCount >= LOG_THROTTLE_MAX_KEYS) {
     evictOldestThrottleKey();
     site = throttledSites.get(siteKey);
@@ -500,11 +515,18 @@ function noteThrottledFailure(
   if (known) {
     rollThrottleWindow(site, kind, known, now);
     known.pending += 1;
+    known.lastFailureAt = now;
+    known.recency = ++throttleRecency;
     site.keys.delete(kind);
     site.keys.set(kind, known);
     return false;
   }
-  site.keys.set(kind, { pending: 0, windowStart: now });
+  site.keys.set(kind, {
+    pending: 0,
+    windowStart: now,
+    lastFailureAt: now,
+    recency: ++throttleRecency,
+  });
   throttledKeyCount += 1;
   return true;
 }
@@ -581,6 +603,22 @@ export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventO
       syncThrottleLevels();
       // While the level is off a call counts nothing and builds nothing.
       if (!enabled(level)) return;
+      if (
+        !spec ||
+        !Object.hasOwn(spec.events, event) ||
+        event.startsWith("throttle.") ||
+        !Object.hasOwn(spec.events, "throttle.recovered")
+      ) {
+        deliver(
+          buildRecord(
+            level,
+            spec ? area : "logging",
+            spec ? "invalid-event" : "unknown-area",
+            undefined,
+          ),
+        );
+        return;
+      }
       const kind = throttleKind(options);
       const scope = options.scope?.slice(0, MAX_THROTTLE_SCOPE_CHARS);
       if (!noteThrottledFailure(area, level, event, scope, kind)) return;

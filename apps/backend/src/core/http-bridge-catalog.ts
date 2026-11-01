@@ -101,7 +101,6 @@ export class HttpBridgeCatalogAdapter {
       });
     }
     assertOk(response, `${this.agent} slash command list`);
-    log.recovered("catalogue.outdated-bridge", this.logScope);
     const payload = asRecord(
       await boundedJson(response, `${this.agent} slash command list`, {
         remaining: COMMAND_CATALOGUE_LIMITS.maxWireBytes,
@@ -113,6 +112,7 @@ export class HttpBridgeCatalogAdapter {
       });
     }
     const normalized = normalizeCommandCataloguePayload(payload);
+    if (normalized.enhanced) log.recovered("catalogue.outdated-bridge", this.logScope);
     return {
       enhanced: normalized.enhanced,
       commands: normalized.commands,

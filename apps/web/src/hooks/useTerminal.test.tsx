@@ -2732,6 +2732,37 @@ describe("useTerminal reconnect behavior", () => {
     });
   });
 
+  it("reports a no-session fault once and recovers after a connected write", async () => {
+    resetLogger();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const { result } = renderHook(() =>
+      useTerminal({ containerId: "container-1", persistSession: true }),
+    );
+    try {
+      await act(async () => {
+        await result.current.write("x");
+        await result.current.write("x");
+      });
+      expect(warn.mock.calls.map(([line]) => line)).toEqual([
+        "[terminal] input.undelivered scope=container-1 kind=no-session",
+      ]);
+      expect(writeTerminalMock).not.toHaveBeenCalled();
+      await act(async () => {
+        await result.current.connect();
+        await result.current.write("x");
+      });
+      expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
+        "[terminal] input.undelivered scope=container-1 kind=no-session",
+        expect.stringContaining(
+          "throttle.recovered site=input.undelivered scope=container-1 failures=2 kinds=1 suppressed=1",
+        ),
+      ]);
+    } finally {
+      warn.mockRestore();
+      resetLogger();
+    }
+  });
+
   it("keeps one warning for a dead terminal however many keystrokes, in the console only", async () => {
     resetLogger();
     const warn = spyOn(console, "warn").mockImplementation(() => undefined);

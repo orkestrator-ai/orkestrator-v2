@@ -199,6 +199,44 @@ describe("local bridge reuse under load", () => {
     logs.restore();
   });
 
+  test("successful replacement clears a warned child without needing a peek", async () => {
+    const { commands, context, environmentId, first } = await startControllableBridge(
+      "env-bridge-replacement-log",
+      () => true,
+    );
+    const logs = captureLogs();
+    const events = () =>
+      logs
+        .records()
+        .filter((record) => record.area === "local-server")
+        .map((record) => record.event);
+    try {
+      await requestOk(first.port, "/stall");
+      await expect(
+        commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+      ).rejects.toMatchObject({ retryable: true });
+      markLocalServerUnresponsiveSince(context, `codex:${environmentId}`, Date.now() - 3 * 60_000);
+      const replacement = (await commands.get("start_local_codex_server_cmd")!(
+        { environmentId },
+        context,
+      )) as Started;
+      expect(replacement.wasRunning).toBe(false);
+      expect(replacement.pid).not.toBe(first.pid);
+      expect(events()).toEqual(["bridge.not-answering", "throttle.recovered"]);
+      await requestOk(replacement.port, "/stall");
+      await expect(
+        commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+      ).rejects.toMatchObject({ retryable: true });
+      expect(events()).toEqual([
+        "bridge.not-answering",
+        "throttle.recovered",
+        "bridge.not-answering",
+      ]);
+    } finally {
+      logs.restore();
+    }
+  });
+
   test("keeps the bridge while a provider send has not yet produced an activity observation", async () => {
     const { commands, context, environmentId, first } = await startControllableBridge(
       "env-1",
@@ -247,9 +285,17 @@ describe("local bridge reuse under load", () => {
     ).rejects.toMatchObject({ retryable: true });
     markLocalServerUnresponsiveSince(context, `codex:${environmentId}`, Date.now() - 3 * 60_000);
     await expect(requestOk(first.port, "/recover")).resolves.toBe(true);
-    await expect(
-      commands.get("peek_local_agent_bridge")?.({ environmentId, agent: "codex" }, context),
-    ).resolves.toMatchObject({ port: first.port });
+    const logs = captureLogs();
+    try {
+      await expect(
+        commands.get("peek_local_agent_bridge")?.({ environmentId, agent: "codex" }, context),
+      ).resolves.toMatchObject({ port: first.port });
+      expect(logs.records().filter((record) => record.event === "throttle.recovered")).toHaveLength(
+        1,
+      );
+    } finally {
+      logs.restore();
+    }
     await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
     await expect(
       commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),

@@ -48,6 +48,11 @@ export type CleanupStepOptions = {
   containerOwnershipVerified?: boolean;
 };
 
+// Kept branches are state notices, not faults. Keep retry deduplication bounded
+// and local to each storage owner without consuming shared fault keys.
+const keptBranches = new WeakMap<EnvironmentCleanupContext["storage"], Set<string>>();
+const MAX_KEPT_BRANCH_NOTICES = 512;
+
 const GIT_TIMEOUT_MS = 30_000;
 const DOCKER_TIMEOUT_MS = 60_000;
 
@@ -515,12 +520,14 @@ export async function runEnvironmentCleanupStep(
     } else if (step === "worktree") await cleanupWorktree(entry, context, run);
     else if (step === "branch") {
       const outcome = await cleanupEnvironmentBranch(entry, run);
-      // Throttled rather than plain: a step whose ledger write failed runs again.
       if (outcome === "kept") {
-        log.throttled("info", "cleanup.branch-kept", {
-          scope: entry.environmentId,
-          kind: "may-hold-unmerged-work",
-        });
+        let seen = keptBranches.get(context.storage);
+        if (!seen) keptBranches.set(context.storage, (seen = new Set()));
+        if (!seen.has(entry.environmentId)) {
+          if (seen.size >= MAX_KEPT_BRANCH_NOTICES) seen.delete(seen.values().next().value!);
+          seen.add(entry.environmentId);
+          log.info("cleanup.branch-kept", { scope: entry.environmentId });
+        }
       }
     } else await cleanupStateDirectories(entry, context);
   } catch (error) {

@@ -38,7 +38,6 @@ interface ClaudeOptionsState {
   setOptions: (environmentId: string, options: ClaudeOptions) => void;
   getOptions: (environmentId: string) => ClaudeOptions | undefined;
   clearOptions: (environmentId: string) => void;
-  setPendingNativeLaunch: (environmentId: string, launch: PendingNativeAgentLaunch) => void;
   getPendingNativeLaunch: (environmentId: string) => PendingNativeAgentLaunch | undefined;
   clearPendingNativeLaunch: (environmentId: string) => void;
 }
@@ -59,14 +58,6 @@ export const useClaudeOptionsStore = create<ClaudeOptionsState>()((set, get) => 
       const { [environmentId]: _, ...rest } = state.options;
       return { options: rest };
     }),
-
-  setPendingNativeLaunch: (environmentId, launch) =>
-    set((state) => ({
-      pendingNativeLaunches: {
-        ...state.pendingNativeLaunches,
-        [environmentId]: launch,
-      },
-    })),
 
   getPendingNativeLaunch: (environmentId) => get().pendingNativeLaunches[environmentId],
 

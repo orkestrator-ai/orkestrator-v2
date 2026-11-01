@@ -1142,12 +1142,16 @@ describe("App background processing mounts", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    useClaudeOptionsStore.getState().setPendingNativeLaunch("env-pending-launch", {
-      containerId: "container-env-pending-launch",
-      environmentId: "env-pending-launch",
-      initialPrompt: "Stand up the Codex session",
-      targetPaneId: "default",
-      agentType: "codex",
+    useClaudeOptionsStore.setState({
+      pendingNativeLaunches: {
+        "env-pending-launch": {
+          containerId: "container-env-pending-launch",
+          environmentId: "env-pending-launch",
+          initialPrompt: "Stand up the Codex session",
+          targetPaneId: "default",
+          agentType: "codex",
+        },
+      },
     });
 
     render(<App />);

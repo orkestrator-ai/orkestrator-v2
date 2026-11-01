@@ -188,6 +188,7 @@ const {
   useNativeAgentSession,
   resetNativeAgentSyncCapabilityForTests,
   IDLE_PROJECTION_REFRESH_MS,
+  HELD_HISTORY_RECONCILE_INTERVAL_MS,
 } = await import("./useNativeAgentSession");
 
 afterAll(() => {
@@ -3106,7 +3107,7 @@ describe("useNativeAgentSession progressive view", () => {
   });
 });
 
-test("revised-row overflow while inactive invalidates held history, stays stable on unchanged, and re-pages whole rows", async () => {
+test("revised-row overflow while inactive keeps held history on screen and re-reads it on return", async () => {
   const old = Array.from({ length: 40 }, (_, i) => message(`older-${i}`, `old-${i}`));
   const tail = [message("live-a"), message("live-b")];
   transcriptUpdates = [() => transcriptSnapshot("initial", [...old, ...tail])];
@@ -3146,25 +3147,15 @@ test("revised-row overflow while inactive invalidates held history, stays stable
       }),
   ];
   stateUpdates = [() => stateSnapshot("state-2")];
+  messagePages = [() => ({ ...historyPage(updated), historyEpoch: "epoch-1" })];
   session.rerender({ active: true });
   await waitFor(() =>
-    expect(session.result.current.projection?.messages.map((row) => row.id)).toEqual([
-      "live-a",
-      "live-b",
-    ]),
+    expect(session.result.current.projection?.messages.slice(0, 40).map((row) => row.text)).toEqual(
+      updated.map((row) => row.text),
+    ),
   );
-  // Unchanged polling must not resurrect the stale retained prefix.
-  await act(async () => {
-    await session.result.current.refresh();
-  });
-  expect(session.result.current.projection?.messages).toHaveLength(2);
-  messagePages = [() => ({ ...historyPage(updated), historyEpoch: "epoch-1" })];
-  await act(async () => {
-    await session.result.current.loadEarlierMessages();
-  });
-  expect(session.result.current.projection?.messages.slice(0, 40).map((row) => row.text)).toEqual(
-    updated.map((row) => row.text),
-  );
+  expect(session.result.current.projection?.messages).toHaveLength(42);
+  expect(messagePageCalls).toEqual([{ before: "recover-before-live" }]);
   session.unmount();
   transcriptUpdates = [
     () =>
@@ -3182,7 +3173,7 @@ test("revised-row overflow while inactive invalidates held history, stays stable
   ).toBe(false);
 });
 
-test("an overflow delta trims a remount's reconstructed held view before accepting its revision", async () => {
+test("an overflow delta keeps a remount's reconstructed held view and re-reads it", async () => {
   const old = Array.from({ length: 40 }, (_, i) => message(`old-${i}`, "stale"));
   const tail = [message("live-a"), message("live-b")];
   transcriptUpdates = [() => transcriptSnapshot("initial", [...old, ...tail])];
@@ -3217,14 +3208,170 @@ test("an overflow delta trims a remount's reconstructed held view before accepti
     }),
   ];
   stateUpdates = [() => stateSnapshot("state-2")];
+  messagePages = [
+    () => ({
+      ...historyPage(old.map((row) => message(row.id, "fresh"))),
+      historyEpoch: "epoch-1",
+    }),
+  ];
   const remount = renderSession();
-  await waitFor(() =>
-    expect(remount.result.current.projection?.messages.map((row) => row.id)).toEqual([
-      "live-a",
-      "live-b",
-    ]),
-  );
-  expect(remount.result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  await waitFor(() => expect(remount.result.current.projection?.messages[0]?.text).toBe("fresh"));
+  expect(remount.result.current.projection?.messages).toHaveLength(42);
+});
+
+describe("a held row too large to travel as a revision keeps changing", () => {
+  const older = [message("launch", "seven running agents"), message("before-launch")];
+  const tail = [message("seven-workers")];
+  const tailAt = (token: string, reconciliation?: string, extras = {}) =>
+    truncatedTail(token, tail, {
+      historyCursor: "before-tail",
+      historyPaging: "direct",
+      ...(reconciliation ? { historyReconciliationToken: reconciliation } : {}),
+      ...extras,
+    });
+  const startWithPagedHistory = async () => {
+    transcriptUpdates = [() => tailAt("t0")];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    messagePages = [() => ({ ...historyPage(older), historyEpoch: "epoch-1" })];
+    const session = renderSession();
+    await waitFor(() => expect(session.result.current.sessionStateAvailability).toBe("current"));
+    await act(async () => {
+      await session.result.current.loadEarlierMessages();
+    });
+    expect(session.result.current.projection?.messages).toHaveLength(3);
+    messagePageCalls = [];
+    return session;
+  };
+
+  test("no poll takes the paged history off screen", async () => {
+    const session = await startWithPagedHistory();
+    const seen: number[] = [];
+    const unsubscribe = useNativeAgentProjectionStore.subscribe((state) => {
+      const projection = [...state.projections.values()][0];
+      if (projection) seen.push(projection.messages.length);
+    });
+    try {
+      messagePages = [
+        () => ({
+          ...historyPage([message("launch", "agents at tool 1"), message("before-launch")]),
+          historyEpoch: "epoch-1",
+        }),
+      ];
+      for (let change = 1; change <= 5; change += 1) {
+        transcriptUpdates = [() => tailAt(`t${change}`, `row-digest-${change}`)];
+        await act(async () => {
+          await session.result.current.refresh();
+        });
+      }
+      await waitFor(() =>
+        expect(session.result.current.projection?.messages[0]?.text).toBe("agents at tool 1"),
+      );
+    } finally {
+      unsubscribe();
+    }
+    expect(seen.length).toBeGreaterThan(0);
+    expect(Math.min(...seen)).toBe(3);
+    expect(session.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "launch",
+      "before-launch",
+      "seven-workers",
+    ]);
+    // Five changes in a burst cost one re-read, not five.
+    expect(messagePageCalls).toEqual([{ before: "before-tail" }]);
+    // Paging carries on from where it was, not from the tail.
+    expect(session.result.current.projection?.messageWindow?.canLoadEarlier).not.toBe(false);
+  });
+
+  test("the row settling is picked up by the next re-read", async () => {
+    const session = await startWithPagedHistory();
+    messagePages = [
+      () => ({
+        ...historyPage([message("launch", "still running"), message("before-launch")]),
+        historyEpoch: "epoch-1",
+      }),
+    ];
+    transcriptUpdates = [() => tailAt("t1", "digest-1")];
+    await act(async () => {
+      await session.result.current.refresh();
+    });
+    await waitFor(() =>
+      expect(session.result.current.projection?.messages[0]?.text).toBe("still running"),
+    );
+
+    const realNow = Date.now;
+    Date.now = () => realNow() + HELD_HISTORY_RECONCILE_INTERVAL_MS + 1;
+    try {
+      messagePages = [
+        () => ({
+          ...historyPage([message("launch", "all finished"), message("before-launch")]),
+          historyEpoch: "epoch-1",
+        }),
+      ];
+      transcriptUpdates = [() => tailAt("t2", "digest-2")];
+      await act(async () => {
+        await session.result.current.refresh();
+      });
+      await waitFor(() =>
+        expect(session.result.current.projection?.messages[0]?.text).toBe("all finished"),
+      );
+      expect(session.result.current.projection?.messages).toHaveLength(3);
+
+      // Settled at this token: a quiet poll reads nothing more.
+      messagePageCalls = [];
+      transcriptUpdates = [() => tailAt("t3", "digest-2")];
+      await act(async () => {
+        await session.result.current.refresh();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+      expect(messagePageCalls).toEqual([]);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test("a failed re-read keeps the rows and the debt", async () => {
+    const session = await startWithPagedHistory();
+    messagePages = [
+      () => {
+        throw new Error("bridge restarting");
+      },
+    ];
+    transcriptUpdates = [() => tailAt("t1", "digest-1")];
+    await act(async () => {
+      await session.result.current.refresh();
+    });
+    await waitFor(() => expect(messagePageCalls).toHaveLength(1));
+    expect(session.result.current.projection?.messages).toHaveLength(3);
+    expect(session.result.current.projection?.messages[0]?.text).toBe("seven running agents");
+  });
+
+  test("a rewritten history still drops the rows at once", async () => {
+    const session = await startWithPagedHistory();
+    transcriptUpdates = [() => tailAt("t1", "digest-1", { historyEpoch: "epoch-2" })];
+    await act(async () => {
+      await session.result.current.refresh();
+    });
+    expect(session.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "seven-workers",
+    ]);
+    expect(messagePageCalls).toEqual([]);
+  });
+
+  test("with no direct cursor to re-read from, the stale rows drop", async () => {
+    const session = await startWithPagedHistory();
+    transcriptUpdates = [
+      () => tailAt("t1", "digest-1", { historyCursor: undefined, historyPaging: undefined }),
+    ];
+    await act(async () => {
+      await session.result.current.refresh();
+    });
+    expect(session.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "seven-workers",
+    ]);
+    expect(messagePageCalls).toEqual([]);
+  });
 });
 
 /**

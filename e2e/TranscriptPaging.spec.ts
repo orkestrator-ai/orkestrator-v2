@@ -444,6 +444,58 @@ test("native: history pages in without a click, opening with a page and paging n
   ).toHaveCount(0);
 });
 
+test("native: a held row that keeps changing past the revision budget does not flicker", async ({
+  page,
+}) => {
+  await page.goto("/transcript-paging?auto=1&mixed=1&stops=300&paged=20&churn=1");
+  const list = page.locator("[data-transcript-scroller]");
+  await expect(list).toBeVisible();
+  const fixture = () =>
+    page.evaluate(() => {
+      const paging = window as unknown as {
+        pagingFixtureRequests: string[];
+        pagingFixtureRowCount: () => number;
+      };
+      return { requests: paging.pagingFixtureRequests, rows: paging.pagingFixtureRowCount() };
+    });
+  // The opening page: the 100-row tail, its closing answer, and 20 earlier rows.
+  await expect.poll(async () => (await fixture()).rows, { timeout: 15_000 }).toBe(121);
+  const before = (await fixture()).requests.length;
+
+  await page.evaluate(() => {
+    const probe = { loadingFrames: 0, fewestRows: Number.MAX_SAFE_INTEGER, frames: 0 };
+    (window as unknown as { flickerProbe: typeof probe }).flickerProbe = probe;
+    const sample = () => {
+      probe.frames += 1;
+      probe.fewestRows = Math.min(
+        probe.fewestRows,
+        (window as unknown as { pagingFixtureRowCount: () => number }).pagingFixtureRowCount(),
+      );
+      const loading = [...document.querySelectorAll("button")].some(
+        (button) => button.textContent === "Loading…",
+      );
+      if (loading) probe.loadingFrames += 1;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  // Polls land every 1.5 s when idle, and each one moves the token here.
+  await page.waitForTimeout(9_000);
+  const probe = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          flickerProbe: { loadingFrames: number; fewestRows: number; frames: number };
+        }
+      ).flickerProbe,
+  );
+  expect(probe.frames).toBeGreaterThan(0);
+  expect(probe.fewestRows).toBe(121);
+  expect(probe.loadingFrames).toBe(0);
+  // Six token changes cost at most the one re-read the interval allows.
+  expect((await fixture()).requests.length - before).toBeLessThanOrEqual(1);
+});
+
 test("native: the automatic opening page keeps following subsequent live rows", async ({
   page,
 }) => {

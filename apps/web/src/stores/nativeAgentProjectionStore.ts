@@ -61,6 +61,8 @@ export interface NativeAgentProgressiveCacheEntry {
    * describes the messages the cache is holding, not the mount that read them.
    */
   transcriptHistoryEpoch?: string;
+  /** Rows before the live tail still await a re-read; a remount owes it too. */
+  heldHistoryReconcileOwed?: boolean;
   stateToken?: string;
   discoveryToken?: string;
   transcriptAvailability: "unavailable" | "cached" | "current" | "empty";

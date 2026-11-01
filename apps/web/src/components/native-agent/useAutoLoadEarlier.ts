@@ -18,8 +18,10 @@ export function disableAutoLoadEarlier(): void {
   automaticPagingDisabled = true;
 }
 
-/** Automatic pages that may leave the head unchanged before paging stops. */
+/** Automatic pages that may be requested from one head before paging stops. */
 export const AUTO_LOAD_EARLIER_MAX_MISSES = 2;
+/** Heads remembered per session; only a head the list keeps returning to matters. */
+const AUTO_LOAD_EARLIER_MAX_HEADS = 64;
 
 export interface AutoLoadEarlierInput {
   /** The conversation; a new one gets its own opening page. */
@@ -51,8 +53,13 @@ export interface AutoLoadEarlierInput {
  *
  * A page can come back with nothing new: a poll that lands while it is in
  * flight supersedes it, or it fails. One retry covers the first; after a
- * second miss at the same head automatic paging stops until the head changes
+ * second page from the same head automatic paging stops until the head changes
  * some other way (a clicked page), and the button stays for that case.
+ *
+ * Pages from a head count for as long as the session lasts, even if the head
+ * moved in between. A transcript that keeps collapsing back to its live tail
+ * returns to the same head each time, and restarting the count there would
+ * load the page and lose it again, forever, in front of the reader.
  */
 export function useAutoLoadEarlier({
   sessionKey,
@@ -80,19 +87,16 @@ export function useAutoLoadEarlier({
       lifecycleRef.current = null;
     };
   }, [sessionKey, isActive]);
-  /** Where the last automatic pages were requested from, once they settled. */
+  /** Where automatic pages were requested from, once they settled. */
   const [finished, setFinished] = useState<{
     sessionKey: string;
-    headId: string | undefined;
-    /** Settled pages requested from this same head. */
-    count: number;
+    /** Settled pages requested from each head, least recent first. */
+    pagesByHead: ReadonlyMap<string | undefined, number>;
   } | null>(null);
-  // Settled pages that left the head where it was brought nothing (or failed).
   const stalled =
     !loading &&
     finished?.sessionKey === sessionKey &&
-    finished.headId === headId &&
-    finished.count >= AUTO_LOAD_EARLIER_MAX_MISSES;
+    (finished.pagesByHead.get(headId) ?? 0) >= AUTO_LOAD_EARLIER_MAX_MISSES;
 
   useEffect(() => {
     if (!sentinel || typeof IntersectionObserver === "undefined") return;
@@ -118,18 +122,22 @@ export function useAutoLoadEarlier({
       return;
     }
     inFlightRef.current = true;
-    const requested = { sessionKey, headId };
     const lifecycle = lifecycleRef.current;
     const finish = () => {
       if (lifecycleRef.current !== lifecycle) return;
       inFlightRef.current = false;
-      setFinished((previous) => ({
-        ...requested,
-        count:
-          previous?.sessionKey === requested.sessionKey && previous.headId === requested.headId
-            ? previous.count + 1
-            : 1,
-      }));
+      setFinished((previous) => {
+        const pagesByHead = new Map(
+          previous?.sessionKey === sessionKey ? previous.pagesByHead : undefined,
+        );
+        const pages = (pagesByHead.get(headId) ?? 0) + 1;
+        pagesByHead.delete(headId);
+        pagesByHead.set(headId, pages);
+        if (pagesByHead.size > AUTO_LOAD_EARLIER_MAX_HEADS) {
+          pagesByHead.delete(pagesByHead.keys().next().value);
+        }
+        return { sessionKey, pagesByHead };
+      });
     };
     // A failure needs no report here: the button is still there to retry by hand.
     void load(sentinel?.closest<HTMLElement>("[data-virtuoso-scroller]") ?? null).then(

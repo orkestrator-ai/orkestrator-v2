@@ -158,7 +158,7 @@ describe("remediation", () => {
       outcomes: ["timeout"],
     });
     expect(remediation.commands).toEqual([
-      "sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment 'Orkestrator agent tools'",
+      'sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment "Orkestrator agent tools"',
     ]);
     const steps = remediation.steps.join(" ");
     expect(steps).toContain("ufw");
@@ -175,8 +175,7 @@ describe("remediation", () => {
       hostAddresses: ["172.20.5.10"],
     });
     expect(remediation.commands).toEqual([
-      "sudo ufw allow proto tcp from 172.17.0.0/16 to any port 38179 comment 'Orkestrator agent tools'",
-      "sudo ufw allow proto tcp from 192.168.64.0/20 to any port 38179 comment 'Orkestrator agent tools'",
+      `sudo sh -c 'for net in 172.17.0.0/16 192.168.64.0/20; do ufw allow proto tcp from $net to any port 38179 comment "Orkestrator agent tools" || exit 1; done'`,
     ]);
     const steps = remediation.steps.join(" ");
     expect(steps).not.toContain("172.16.0.0/12");
@@ -191,8 +190,7 @@ describe("remediation", () => {
       outcomes: ["timeout"],
     });
     expect(firewalld.commands).toEqual([
-      `sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="172.16.0.0/12" port port="4567" protocol="tcp" accept'`,
-      "sudo firewall-cmd --reload",
+      `sudo firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=172.16.0.0/12 port port=4567 protocol=tcp accept" && sudo firewall-cmd --reload`,
     ]);
     const unknown = buildContainerHostRemediation({
       firewall: "unknown",
@@ -360,7 +358,7 @@ describe("ContainerHostReachabilityService.check", () => {
     expect(result.summary).toContain("port 38179");
     expect(result.summary).toContain("firewall");
     expect(result.remediation?.commands).toEqual([
-      "sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment 'Orkestrator agent tools'",
+      'sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment "Orkestrator agent tools"',
     ]);
     expect(containerHostReachabilityNeedsAttention(result)).toBe(true);
     expect(events.map((event) => event.status)).toEqual(["checking", "blocked"]);
@@ -500,7 +498,8 @@ describe("ContainerHostReachabilityService.check", () => {
     const { svc } = service({ runner, readTextFile: async () => null });
     const result = await svc.check("manual");
     expect(result.firewall.kind).toBe("firewalld");
-    expect(result.remediation?.commands.at(-1)).toBe("sudo firewall-cmd --reload");
+    expect(result.remediation?.commands).toHaveLength(1);
+    expect(result.remediation?.commands[0]).toEndWith("&& sudo firewall-cmd --reload");
   });
 });
 
@@ -538,7 +537,7 @@ describe("environment container probes and workflow preflight", () => {
     expect(message).toContain("http://host.docker.internal:38179/mcp");
     expect(message).toContain("timed out");
     expect(message).toContain(
-      "sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment 'Orkestrator agent tools'",
+      'sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment "Orkestrator agent tools"',
     );
     expect(message).toContain("retry this stage");
     expect(prepared).toEqual([environment.containerId]);

@@ -1069,7 +1069,10 @@ Subnets in Docker's primary pool widen to it (for example
 environment networks are covered, unless one of the host's own non-Docker
 interface addresses is in that pool; then, and for subnets in `192.168.0.0/16`
 or `10.0.0.0/8` (common LAN ranges, never widened to), the rules name Docker's
-exact subnets. Probe containers and the temporary network
+exact subnets. The fix is always one pasteable line: several subnets become
+`sudo sh -c 'for net in ...; do ufw allow ... || exit 1; done'`, because
+pasting one `sudo` line per rule lets the password prompt read the next line
+as the password. Probe containers and the temporary network
 carry the owner and `host-reachability-probe` role labels (not the `app`
 label, so cleanup inventories never see them) and are removed after each
 check; leftovers are reaped by the next one. Every step is logged with the

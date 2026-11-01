@@ -274,6 +274,24 @@ export function firewallDisplayName(kind: HostFirewallKind): string {
   }
 }
 
+/**
+ * One pasteable line that applies `rule` to every source under a single
+ * `sudo`. Pasting several `sudo` lines lets the password prompt swallow the
+ * next line as the password. `rule` and `then` must not contain single quotes:
+ * with more than one source they run inside `sh -c '...'`.
+ */
+function sudoForEachSource(
+  sources: readonly string[],
+  rule: (source: string) => string,
+  then?: string,
+): string {
+  if (sources.length === 1) {
+    return [`sudo ${rule(sources[0]!)}`, ...(then ? [`sudo ${then}`] : [])].join(" && ");
+  }
+  const loop = `for net in ${sources.join(" ")}; do ${rule("$net")} || exit 1; done`;
+  return `sudo sh -c '${loop}${then ? ` && ${then}` : ""}'`;
+}
+
 export function buildContainerHostRemediation(input: {
   firewall: HostFirewallKind;
   port: number;
@@ -317,21 +335,25 @@ export function buildContainerHostRemediation(input: {
       return {
         title: "Allow Docker containers through ufw",
         steps: [intro, scope, after],
-        commands: cidrs.map(
-          (cidr) =>
-            `sudo ufw allow proto tcp from ${cidr} to any port ${port} comment 'Orkestrator agent tools'`,
-        ),
+        commands: [
+          sudoForEachSource(
+            cidrs,
+            (source) =>
+              `ufw allow proto tcp from ${source} to any port ${port} comment "Orkestrator agent tools"`,
+          ),
+        ],
       };
     case "firewalld":
       return {
         title: "Allow Docker containers through firewalld",
         steps: [intro, scope, after],
         commands: [
-          ...cidrs.map(
-            (cidr) =>
-              `sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="${cidr}" port port="${port}" protocol="tcp" accept'`,
+          sudoForEachSource(
+            cidrs,
+            (source) =>
+              `firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${source} port port=${port} protocol=tcp accept"`,
+            "firewall-cmd --reload",
           ),
-          "sudo firewall-cmd --reload",
         ],
       };
     default:
@@ -343,9 +365,12 @@ export function buildContainerHostRemediation(input: {
           "These iptables rules take effect immediately but are lost on reboot. Add the same rule to your firewall's saved configuration to keep it.",
           after,
         ],
-        commands: cidrs.map(
-          (cidr) => `sudo iptables -I INPUT -p tcp -s ${cidr} --dport ${port} -j ACCEPT`,
-        ),
+        commands: [
+          sudoForEachSource(
+            cidrs,
+            (source) => `iptables -I INPUT -p tcp -s ${source} --dport ${port} -j ACCEPT`,
+          ),
+        ],
       };
   }
 }
@@ -369,10 +394,12 @@ export function buildRootlessHostRemediation(port: number): ContainerHostRemedia
       `Then press “Check again”. New containers reach Orkestrator through RootlessKit's host address (${ROOTLESSKIT_HOST_LOOPBACK_ADDRESS}); rebuild existing environments so their network policy includes it.`,
     ],
     commands: [
-      "mkdir -p ~/.config/systemd/user/docker.service.d",
-      `printf '[Service]\nEnvironment="DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false"\n' > ${ROOTLESS_HOST_LOOPBACK_DROP_IN}`,
-      "systemctl --user daemon-reload",
-      "systemctl --user restart docker",
+      [
+        "mkdir -p ~/.config/systemd/user/docker.service.d",
+        `printf '[Service]\nEnvironment="DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false"\n' > ${ROOTLESS_HOST_LOOPBACK_DROP_IN}`,
+        "systemctl --user daemon-reload",
+        "systemctl --user restart docker",
+      ].join(" && "),
     ],
   };
 }

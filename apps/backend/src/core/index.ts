@@ -1,6 +1,6 @@
 import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
-import { LogPolicyService } from "./log-policy-service.js";
+import { startLogPolicyService } from "./log-policy-service.js";
 import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
 import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
@@ -2691,16 +2691,12 @@ export class OrkestratorBackend {
   }
 
   private startLogPolicy(): void {
-    const logPolicy = new LogPolicyService({
-      dataDir: this.context.storage.getDataDir(),
+    const policy = startLogPolicyService(this.context.storage, {
       logging: this.applicationLogging,
-      listRunningBridges: () => listRunningBridgeTargets(this.context),
+      listRunningBridges: (onTarget) => listRunningBridgeTargets(this.context, onTarget),
     });
-    this.runtime.logPolicy = logPolicy;
-    logPolicy.start();
-    this.stopLogPolicyListener = this.context.storage.addResourceChangeListener((change) => {
-      if (change.resource === "config") logPolicy.configChanged();
-    });
+    this.runtime.logPolicy = policy.service;
+    this.stopLogPolicyListener = policy.stop;
   }
 
   async shutdown(): Promise<void> {

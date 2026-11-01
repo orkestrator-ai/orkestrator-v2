@@ -1,4 +1,4 @@
-import { configureLogger } from "../logger.js";
+import { applyLogDetail } from "./log-policy.js";
 import { logDetailEnablesBridgeDiagnostics, parseBridgeLogPolicy } from "../log-policy.js";
 import { setLiveBridgeDiagnostics } from "./bridge-diagnostics.js";
 
@@ -21,15 +21,18 @@ let appliedSeq = -1;
  * A retried request is applied again and answered the same. An older one is
  * refused in band: the sender re-sends past the sequence it is told about.
  */
-export function applyBridgeLogPolicy(value: unknown): BridgeLogPolicyAnswer {
+export function applyBridgeLogPolicy(
+  value: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): BridgeLogPolicyAnswer {
   const policy = parseBridgeLogPolicy(value);
   if (!policy) return { status: 400, body: { error: "Invalid log policy" } };
   if (policy.seq < appliedSeq) {
     return { status: 200, body: { applied: false, stale: true, seq: appliedSeq } };
   }
   appliedSeq = policy.seq;
-  configureLogger({ level: policy.level, areaLevels: policy.areaLevels });
-  const diagnostics = logDetailEnablesBridgeDiagnostics(policy);
+  const effective = applyLogDetail(policy, env);
+  const diagnostics = logDetailEnablesBridgeDiagnostics(effective);
   setLiveBridgeDiagnostics(diagnostics);
   return { status: 200, body: { applied: true, seq: policy.seq, diagnostics } };
 }

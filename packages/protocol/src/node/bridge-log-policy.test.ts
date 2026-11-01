@@ -34,6 +34,23 @@ describe("applyBridgeLogPolicy", () => {
     expect(bridgeDebugEnabled("claude")).toBe(false);
   });
 
+  test("the receiving bridge applies its own environment over stored settings", () => {
+    expect(
+      applyBridgeLogPolicy(
+        { seq: 1, level: "error", areaLevels: {} },
+        { ORKESTRATOR_LOG_LEVEL: "debug" },
+      ).body,
+    ).toMatchObject({ diagnostics: true });
+    expect(createLogger("updater").isEnabled("debug")).toBe(true);
+    expect(
+      applyBridgeLogPolicy(
+        { seq: 2, level: "debug", areaLevels: {} },
+        { ORKESTRATOR_LOG_LEVEL: "error" },
+      ).body,
+    ).toMatchObject({ diagnostics: false });
+    expect(createLogger("updater").isEnabled("info")).toBe(false);
+  });
+
   test("a delayed older policy cannot undo a newer one", () => {
     applyBridgeLogPolicy({ seq: 5, level: "debug", areaLevels: {} });
     expect(applyBridgeLogPolicy({ seq: 4, level: "error", areaLevels: {} })).toEqual({

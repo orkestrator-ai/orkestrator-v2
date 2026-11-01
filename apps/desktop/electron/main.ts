@@ -159,7 +159,6 @@ import {
 import {
   installProductionApplicationLogging,
   readApplicationLogPolicy,
-  readStoredApplicationLogPolicy,
   registerApplicationLoggingShutdown,
 } from "./application-logging.js";
 import {
@@ -193,8 +192,8 @@ import { DesktopWindowContexts, emitToContents } from "./desktop-window-contexts
 import { installSocketTypeOfServiceGuard } from "./socket-tos-guard.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logger-environment";
-import { applyApplicationLogPolicy, applyLogDetail } from "@orkestrator/protocol/node/log-policy";
-import { RESOURCE_CHANGED_EVENT, type ResourceChange } from "@orkestrator/protocol/resource-events";
+import { applyLogDetail } from "@orkestrator/protocol/node/log-policy";
+import { createLiveLogPolicy } from "./live-log-policy.js";
 import { createUpdaterLibraryLogger } from "./updater-log.js";
 
 configureLoggerFromEnvironment(process.env);
@@ -249,35 +248,12 @@ const applicationLogging =
     ? installProductionApplicationLogging({ dataDir: app.getPath("userData") })
     : null;
 
-const LOG_POLICY_CHECK_DELAY_MS = 2_000;
-
-function isConfigResourceChange(event: string, payload: unknown): boolean {
-  return (
-    event === RESOURCE_CHANGED_EVENT && (payload as ResourceChange | null)?.resource === "config"
-  );
-}
-
-/**
- * The audit line on stdout is the prompt path, and keeps its order against saving.
- * This one follows later so it cannot overtake that line and stop the writer first;
- * it only matters when the backend's bounded console dropped the line under pressure.
- */
-let logPolicyCheck: ReturnType<typeof setTimeout> | null = null;
-function scheduleLogPolicyCheck(): void {
-  if (logPolicyCheck) clearTimeout(logPolicyCheck);
-  logPolicyCheck = setTimeout(() => {
-    logPolicyCheck = null;
-    applyStoredLogPolicy();
-  }, LOG_POLICY_CHECK_DELAY_MS);
-  logPolicyCheck.unref();
-}
-
-/** Re-reads `config.json`. A file it cannot read leaves the settings as they are. */
-function applyStoredLogPolicy(audit?: () => void): void {
-  const policy = readStoredApplicationLogPolicy(app.getPath("userData"));
-  if (policy) applyApplicationLogPolicy(policy, applicationLogging, audit);
-  else audit?.();
-}
+const liveLogPolicy = createLiveLogPolicy({
+  dataDir: app.getPath("userData"),
+  logging: applicationLogging,
+});
+const applyStoredLogPolicy = liveLogPolicy.apply;
+app.on("will-quit", () => liveLogPolicy.dispose());
 
 // Must follow the `userData` override above: the lock is scoped to that path.
 const isPrimaryInstance = claimSingleInstanceLock(app);
@@ -1500,7 +1476,7 @@ async function startApplication(): Promise<void> {
       onLogPolicyChanged: applyStoredLogPolicy,
       onEvent: (event, payload) => {
         hostUpdates?.handleEvent(event, payload);
-        if (isConfigResourceChange(event, payload)) scheduleLogPolicyCheck();
+        liveLogPolicy.onEvent(event, payload);
         if (connectionManager) connectionManager.handleLocalEvent(event, payload);
       },
       onUnexpectedExit: (error) => {

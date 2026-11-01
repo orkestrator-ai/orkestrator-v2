@@ -1,3 +1,4 @@
+import type { StorageService } from "./storage.js";
 import { createHash } from "node:crypto";
 import { createLogger, emitLogRecord } from "@orkestrator/protocol/logger";
 import {
@@ -13,7 +14,6 @@ import {
 } from "@orkestrator/protocol/node/application-logging";
 import {
   applyApplicationLogPolicy,
-  effectiveLogDetail,
   logPolicyChangedRecord,
   logPolicyKey,
 } from "@orkestrator/protocol/node/log-policy";
@@ -24,7 +24,7 @@ const REQUEST_TIMEOUT_MS = 5_000;
 // A bridge can be busy without being gone: its event loop is exactly what a
 // stuck turn may be holding up. After these, its next start resends.
 const RETRY_DELAYS_MS = [2_000, 10_000];
-const TARGET_LIST_CONCURRENCY = 8;
+const REQUEST_CONCURRENCY = 8;
 // A full push prunes these to the bridges still running; between pushes, each
 // replaced bridge adds an entry.
 const MAX_TRACKED_BRIDGES = 1_024;
@@ -41,7 +41,9 @@ export interface LogPolicyServiceOptions {
   /** This process's own file writer; null when the desktop records this process. */
   logging: Pick<InstalledApplicationLogging, "updateSettings"> | null;
   /** Every bridge running now, without starting one or touching its sessions. */
-  listRunningBridges: () => Promise<BridgeLogPolicyTarget[]>;
+  listRunningBridges: (
+    onTarget?: (target: BridgeLogPolicyTarget) => void,
+  ) => Promise<BridgeLogPolicyTarget[]>;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   now?: () => number;
@@ -110,6 +112,8 @@ export class LogPolicyService {
   private readonly delivered = new Map<string, number>();
   /** One delivery loop per bridge; a newer policy is picked up by the running loop. */
   private readonly delivering = new Set<string>();
+  private activeRequests = 0;
+  private readonly requestWaiters: Array<() => void> = [];
   private readonly reportedFailures = new Map<string, number>();
 
   constructor(private readonly options: LogPolicyServiceOptions) {
@@ -124,7 +128,7 @@ export class LogPolicyService {
   start(): void {
     const policy = readApplicationLogPolicy(this.options.dataDir);
     this.policyKey = logPolicyKey(policy);
-    this.setDetail(effectiveLogDetail(policy.detail, this.env));
+    this.setDetail(policy.detail);
     applyApplicationLogPolicy(policy, this.options.logging, undefined, this.env);
     // Container bridges outlive a backend restart and may hold an older policy.
     this.pushInBackground();
@@ -144,9 +148,8 @@ export class LogPolicyService {
       (changed) => emitLogRecord(logPolicyChangedRecord(changed)),
       this.env,
     );
-    const effective = effectiveLogDetail(policy.detail, this.env);
-    if (bridgeDetailKey(effective) === this.detailKey) return;
-    this.setDetail(effective);
+    if (bridgeDetailKey(policy.detail) === this.detailKey) return;
+    this.setDetail(policy.detail);
     this.pushInBackground();
   }
 
@@ -175,13 +178,23 @@ export class LogPolicyService {
 
   private async pushToRunningBridges(): Promise<void> {
     let targets: BridgeLogPolicyTarget[];
+    const deliveries: Promise<void>[] = [];
+    const seen = new Set<string>();
+    const deliver = (target: BridgeLogPolicyTarget) => {
+      const id = targetIdentity(target);
+      if (seen.has(id) || seen.size >= MAX_TRACKED_BRIDGES) return;
+      seen.add(id);
+      deliveries.push(this.deliver(target));
+    };
     try {
-      targets = await this.options.listRunningBridges();
+      targets = await this.options.listRunningBridges(deliver);
     } catch {
       // Each bridge still takes the setting when it next starts.
       log.warn("policy.push-failed", { agent: "all", reason: "list-failed" });
+      await Promise.all(deliveries);
       return;
     }
+    for (const target of targets) deliver(target);
     const live = new Set(targets.map(targetIdentity));
     for (const id of Array.from(this.delivered.keys())) {
       if (!live.has(id)) this.delivered.delete(id);
@@ -189,22 +202,25 @@ export class LogPolicyService {
     for (const id of Array.from(this.reportedFailures.keys())) {
       if (!live.has(id)) this.reportedFailures.delete(id);
     }
-    for (let index = 0; index < targets.length; index += TARGET_LIST_CONCURRENCY) {
-      await Promise.all(
-        targets.slice(index, index + TARGET_LIST_CONCURRENCY).map((target) => this.deliver(target)),
-      );
-    }
+    await Promise.all(deliveries);
   }
 
   private async deliver(target: BridgeLogPolicyTarget): Promise<void> {
     const id = targetIdentity(target);
-    if (this.delivering.has(id)) return;
+    if (this.delivering.has(id) || this.delivering.size >= MAX_TRACKED_BRIDGES) return;
     this.delivering.add(id);
     try {
       let failures = 0;
+      let retrySeq = this.seq;
       while (!this.stopped && this.delivered.get(id) !== this.seq) {
         const seq = this.seq;
-        const outcome = await this.post(target, seq);
+        if (retrySeq !== seq) {
+          failures = 0;
+          retrySeq = seq;
+        }
+        const outcome = await this.post(target, seq, this.detail);
+        // A failed final attempt must not strand a policy that arrived in flight.
+        if (seq !== this.seq) continue;
         if (outcome.kind === "applied") {
           track(this.delivered, id, seq);
           this.reportedFailures.delete(id);
@@ -238,8 +254,34 @@ export class LogPolicyService {
     }
   }
 
-  private async post(target: BridgeLogPolicyTarget, seq: number): Promise<PostOutcome> {
-    const body: BridgeLogPolicy = { seq, ...this.detail };
+  private async post(
+    target: BridgeLogPolicyTarget,
+    seq: number,
+    detail: LogDetail,
+  ): Promise<PostOutcome> {
+    // Limit HTTP work, not delivery loops: retry sleeps never occupy a slot.
+    // deliver() bounds the number of loops and therefore this FIFO as well.
+    if (this.activeRequests >= REQUEST_CONCURRENCY) {
+      await new Promise<void>((resolve) => this.requestWaiters.push(resolve));
+    } else {
+      this.activeRequests += 1;
+    }
+    try {
+      if (this.stopped) return { kind: "failed", reason: "stopped" };
+      return await this.postRequest(target, seq, detail);
+    } finally {
+      const next = this.requestWaiters.shift();
+      if (next) next();
+      else this.activeRequests -= 1;
+    }
+  }
+
+  private async postRequest(
+    target: BridgeLogPolicyTarget,
+    seq: number,
+    detail: LogDetail,
+  ): Promise<PostOutcome> {
+    const body: BridgeLogPolicy = { seq, ...detail };
     let response: Response;
     try {
       response = await this.fetchImpl(`${target.baseUrl}${BRIDGE_LOG_POLICY_ROUTE}`, {
@@ -276,4 +318,23 @@ export class LogPolicyService {
     }
     return { kind: "failed", reason: "malformed-answer" };
   }
+}
+
+/** The backend lifecycle owns the config listener as well as the service. */
+export function startLogPolicyService(
+  storage: Pick<StorageService, "getDataDir" | "addResourceChangeListener">,
+  options: Omit<LogPolicyServiceOptions, "dataDir">,
+): { service: LogPolicyService; stop: () => void } {
+  const service = new LogPolicyService({ ...options, dataDir: storage.getDataDir() });
+  const removeListener = storage.addResourceChangeListener((change) => {
+    if (change.resource === "config") service.configChanged();
+  });
+  service.start();
+  return {
+    service,
+    stop: () => {
+      removeListener();
+      service.stop();
+    },
+  };
 }

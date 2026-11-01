@@ -1,3 +1,4 @@
+import { MODEL_LOG_AREAS } from "./models.js";
 import { DESKTOP_LOG_AREAS } from "./desktop.js";
 import { GATEWAY_LOG_AREAS } from "./gateway.js";
 import { LOGGING_LOG_AREAS } from "./logging.js";
@@ -16,6 +17,7 @@ export const LOG_VOCABULARY = {
   ...DESKTOP_LOG_AREAS,
   ...GATEWAY_LOG_AREAS,
   ...LOGGING_LOG_AREAS,
+  ...MODEL_LOG_AREAS,
   ...PREVIEW_LOG_AREAS,
   ...UPDATER_LOG_AREAS,
 } as const;

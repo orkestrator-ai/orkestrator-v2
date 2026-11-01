@@ -31,7 +31,10 @@ export function parseNetworkModeOwner(networkMode: string): string | null {
  * container that owns its own network. A container's network mode never
  * changes, so a successful answer is cached.
  */
-export async function egressGatewayOf(containerId: string): Promise<string | null> {
+export async function egressGatewayOf(
+  containerId: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
   const cached = networkOwners.get(containerId);
   if (cached !== undefined) return cached === containerId ? null : cached;
   // Only successful inspection proves absence. Daemon/transport failures
@@ -39,7 +42,7 @@ export async function egressGatewayOf(containerId: string): Promise<string | nul
   const { stdout } = await runCommand(
     "docker",
     ["inspect", "--type", "container", "--format", "{{.HostConfig.NetworkMode}}", containerId],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, signal },
   );
   const gateway = parseNetworkModeOwner(stdout);
   rememberNetworkOwner(containerId, gateway);
@@ -63,8 +66,11 @@ export function rememberNetworkOwner(containerId: string, gatewayId: string | nu
  * The container whose namespace holds a runtime's firewall, published ports
  * and network endpoint: its egress gateway, or the runtime itself.
  */
-export async function networkOwnerContainer(containerId: string): Promise<string> {
-  return (await egressGatewayOf(containerId)) ?? containerId;
+export async function networkOwnerContainer(
+  containerId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return (await egressGatewayOf(containerId, signal)) ?? containerId;
 }
 
 /** Drops a removed container's cached answer. */

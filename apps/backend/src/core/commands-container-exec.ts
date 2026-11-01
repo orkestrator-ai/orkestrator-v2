@@ -64,12 +64,14 @@ export async function getHostPort(
   containerId: string,
   containerPort: number,
   protocol = "tcp",
+  signal?: AbortSignal,
 ): Promise<number | null> {
   try {
     // A runtime behind an egress gateway publishes through the gateway.
-    const owner = await networkOwnerContainer(containerId);
+    const owner = await networkOwnerContainer(containerId, signal);
     const { stdout } = await runCommand("docker", ["port", owner, `${containerPort}/${protocol}`], {
       timeoutMs: 10_000,
+      signal,
     });
     const line = stdout.split("\n").find(Boolean);
     if (!line) return null;

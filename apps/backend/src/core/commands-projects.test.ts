@@ -1,3 +1,4 @@
+import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
 import { describe, expect, mock, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
 import { refreshClaudeModelCatalog } from "./commands-projects.js";
@@ -66,5 +67,28 @@ describe("refreshClaudeModelCatalog", () => {
       claudeModelCatalog: snapshot,
     });
     expect(emitted).toContainEqual(["claude-model-catalog-updated", snapshot]);
+    const logged: LogOutput[] = [];
+    configureLogger({ sink: (output) => logged.push(output) });
+    cacheAgentModelCatalog.mockRejectedValueOnce(new Error("cache unavailable"));
+    try {
+      const next = await refreshClaudeModelCatalog("docker-env", context, {
+        enqueueContainerBridgeOperation: async (
+          _context: unknown,
+          _agent: "claude",
+          _containerId: string,
+          operation: () => Promise<unknown>,
+        ) => operation(),
+        startContainerClaudeServer: startContainer,
+        startLocalServer: async () => {
+          throw new Error("unexpected local start");
+        },
+        fetchClaudeBridgeModelCatalog: fetchCatalog,
+      } as never);
+      expect(next.source).toBe("sdk");
+      expect(logged.map((output) => output.record?.event)).toEqual(["cache.write-failed"]);
+      expect(logged[0]!.record!.fields?.agent).toBe("claude");
+    } finally {
+      resetLogger();
+    }
   });
 });

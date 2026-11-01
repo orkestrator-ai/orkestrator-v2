@@ -11,6 +11,13 @@ import type { BridgeLogPolicyTarget } from "./log-policy-service.js";
 /** OpenCode has no bridge of ours to carry the route. */
 const LOG_POLICY_BRIDGES: readonly LocalServerKind[] = ["claude", "codex", "cursor", "grok", "pi"];
 const CONTAINER_LOOKUP_CONCURRENCY = 4;
+const CONTAINER_LOOKUP_TIMEOUT_MS = 3_000;
+
+type DiscoveryDependencies = Pick<
+  typeof import("./commands-container-exec.js"),
+  "getHostPort" | "dockerExec"
+>;
+const defaultDependencies: DiscoveryDependencies = { getHostPort, dockerExec };
 
 async function localTargets(context: CommandContext): Promise<BridgeLogPolicyTarget[]> {
   const localServers = context.runtime.localServers;
@@ -35,11 +42,21 @@ async function localTargets(context: CommandContext): Promise<BridgeLogPolicyTar
 async function containerTarget(
   containerId: string,
   agent: LocalServerKind,
+  dependencies: DiscoveryDependencies,
 ): Promise<BridgeLogPolicyTarget | null> {
   const { containerPort, tokenFile } = CONTAINER_BRIDGE_PEEK[agent];
-  const hostPort = await getHostPort(containerId, containerPort);
+  const signal = AbortSignal.timeout(CONTAINER_LOOKUP_TIMEOUT_MS);
+  const hostPort = await dependencies.getHostPort(containerId, containerPort, "tcp", signal);
   if (!hostPort) return null;
-  const authToken = (await dockerExec(containerId, `cat ${tokenFile} 2>/dev/null || true`)).trim();
+  const authToken = (
+    await dependencies.dockerExec(
+      containerId,
+      `cat ${tokenFile} 2>/dev/null || true`,
+      CONTAINER_LOOKUP_TIMEOUT_MS,
+      undefined,
+      signal,
+    )
+  ).trim();
   if (!BRIDGE_TOKEN_PATTERN.test(authToken)) return null;
   return { agent, baseUrl: `http://127.0.0.1:${hostPort}`, authToken };
 }
@@ -53,8 +70,11 @@ async function containerTarget(
  */
 export async function listRunningBridgeTargets(
   context: CommandContext,
+  onTarget?: (target: BridgeLogPolicyTarget) => void,
+  dependencies: DiscoveryDependencies = defaultDependencies,
 ): Promise<BridgeLogPolicyTarget[]> {
   const targets = await localTargets(context);
+  for (const target of targets) onTarget?.(target);
   const environments = await context.storage.loadEnvironments();
   const containerIds = Array.from(
     new Set(
@@ -67,15 +87,21 @@ export async function listRunningBridgeTargets(
       ),
     ),
   );
-  for (let index = 0; index < containerIds.length; index += CONTAINER_LOOKUP_CONCURRENCY) {
-    const found = await Promise.all(
-      containerIds
-        .slice(index, index + CONTAINER_LOOKUP_CONCURRENCY)
-        .flatMap((containerId) =>
-          LOG_POLICY_BRIDGES.map((agent) => containerTarget(containerId, agent).catch(() => null)),
-        ),
-    );
-    for (const target of found) if (target) targets.push(target);
-  }
+  const lookups = containerIds.flatMap((containerId) =>
+    LOG_POLICY_BRIDGES.map((agent) => ({ containerId, agent })),
+  );
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONTAINER_LOOKUP_CONCURRENCY, lookups.length) }, async () => {
+      while (next < lookups.length) {
+        const { containerId, agent } = lookups[next++]!;
+        const target = await containerTarget(containerId, agent, dependencies).catch(() => null);
+        if (target) {
+          targets.push(target);
+          onTarget?.(target);
+        }
+      }
+    }),
+  );
   return targets;
 }

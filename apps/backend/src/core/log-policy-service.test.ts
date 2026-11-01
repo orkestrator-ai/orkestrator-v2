@@ -31,6 +31,11 @@ async function harness(
     global?: Record<string, unknown>;
     targets?: BridgeLogPolicyTarget[];
     answers?: Answer[];
+    env?: NodeJS.ProcessEnv;
+    sleep?: (delay: number) => Promise<void>;
+    listRunningBridges?: (
+      onTarget?: (target: BridgeLogPolicyTarget) => void,
+    ) => Promise<BridgeLogPolicyTarget[]>;
   } = {},
 ) {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "log-policy-service-"));
@@ -47,13 +52,13 @@ async function harness(
   const service = new LogPolicyService({
     dataDir,
     logging: { updateSettings: (next) => writer.push(next) },
-    listRunningBridges: async () => {
+    listRunningBridges: async (onTarget) => {
       listCalls += 1;
-      return options.targets ?? [target];
+      return options.listRunningBridges?.(onTarget) ?? options.targets ?? [target];
     },
-    env: {},
+    env: options.env ?? {},
     now: () => 1_000,
-    sleep: async () => undefined,
+    sleep: options.sleep ?? (async () => undefined),
     retryDelaysMs: [1],
     fetch: (async (url: string, init: RequestInit) => {
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
@@ -252,6 +257,99 @@ describe("LogPolicyService", () => {
     expect(h.requests[1]!.body.level).toBe("debug");
   });
 
+  test("a superseded final failure gives the new sequence a fresh retry budget", async () => {
+    const held = Promise.withResolvers<Response>();
+    const failed = () => new Response("", { status: 500 });
+    const h = await harness({
+      answers: [failed(), () => held.promise, failed(), Response.json({ applied: true })],
+    });
+    h.service.start();
+    await h.settle();
+    expect(h.requests).toHaveLength(2);
+    await h.writeGlobal({ logDetail: { level: "debug", areaLevels: {} } });
+    h.service.configChanged();
+    await h.settle();
+    held.resolve(failed());
+    await h.settle();
+    expect(h.requests.map((request) => request.body.level)).toEqual([
+      "info",
+      "info",
+      "debug",
+      "debug",
+    ]);
+    expect(h.requests[2]!.body.seq).toBe(h.requests[3]!.body.seq);
+    expect(h.requests[2]!.body.seq).toBeGreaterThan(h.requests[1]!.body.seq as number);
+    expect(h.logged.filter((output) => output.record?.event === "policy.push-failed")).toHaveLength(
+      0,
+    );
+  });
+
+  test("later targets get first attempts while an earlier target sleeps between retries", async () => {
+    const retry = Promise.withResolvers<void>();
+    const targets = Array.from({ length: 10 }, (_, index) => ({
+      ...target,
+      baseUrl: `http://127.0.0.1:${5000 + index}`,
+    }));
+    const h = await harness({
+      targets,
+      answers: [new Response("", { status: 500 })],
+      sleep: () => retry.promise,
+    });
+    h.service.start();
+    await h.settle();
+    expect(new Set(h.requests.map((request) => request.url)).size).toBe(10);
+    retry.resolve();
+    await h.settle();
+    expect(h.requests).toHaveLength(11);
+  });
+
+  test("HTTP concurrency stays bounded even with more than eight ready targets", async () => {
+    const held = Promise.withResolvers<Response>();
+    const targets = Array.from({ length: 12 }, (_, index) => ({
+      ...target,
+      authToken: `token-${index}`,
+    }));
+    const h = await harness({
+      targets,
+      answers: Array.from({ length: 8 }, () => async () => (await held.promise).clone()),
+    });
+    h.service.start();
+    await h.settle();
+    expect(h.requests).toHaveLength(8);
+    held.resolve(Response.json({ applied: true }));
+    await h.settle();
+    expect(h.requests).toHaveLength(12);
+  });
+
+  test("streams discovered targets before the remaining discovery finishes", async () => {
+    const discovery = Promise.withResolvers<BridgeLogPolicyTarget[]>();
+    const h = await harness({
+      listRunningBridges: async (onTarget) => {
+        onTarget?.(target);
+        return discovery.promise;
+      },
+    });
+    h.service.start();
+    await h.settle();
+    expect(h.requests).toHaveLength(1);
+    discovery.resolve([target]);
+    await h.settle();
+    expect(h.requests).toHaveLength(1);
+  });
+
+  test("backend environment overrides stay local and do not mask stored bridge changes", async () => {
+    const h = await harness({ env: { ORKESTRATOR_LOG_LEVEL: "debug" } });
+    h.service.start();
+    await h.settle();
+    expect(createLogger("updater").isEnabled("debug")).toBe(true);
+    expect(h.requests[0]!.body.level).toBe("info");
+    await h.writeGlobal({ logDetail: { level: "error", areaLevels: {} } });
+    h.service.configChanged();
+    await h.settle();
+    expect(createLogger("updater").isEnabled("debug")).toBe(true);
+    expect(h.requests.at(-1)!.body.level).toBe("error");
+  });
+
   test("a failed bridge listing costs one warning and nothing else", async () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "log-policy-service-"));
     directories.push(dataDir);
@@ -281,4 +379,44 @@ describe("LogPolicyService", () => {
     expect(h.requests).toHaveLength(requests);
     expect(h.audits()).toHaveLength(0);
   });
+});
+
+test("backend lifecycle wires a real config save and removes its listener on shutdown", async () => {
+  const { StorageService } = await import("./storage.js");
+  const { startLogPolicyService } = await import("./log-policy-service.js");
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "log-policy-wiring-"));
+  directories.push(dataDir);
+  const storage = new StorageService(dataDir, { snapshots: false });
+  await storage.init();
+  const writes: boolean[] = [];
+  let reads = 0;
+  const lifecycle = startLogPolicyService(
+    {
+      getDataDir: () => dataDir,
+      addResourceChangeListener: (listener) =>
+        storage.addResourceChangeListener((change) => {
+          reads++;
+          listener(change);
+        }),
+    },
+    {
+      logging: { updateSettings: (settings) => writes.push(settings.enabled) },
+      listRunningBridges: async () => [],
+      env: {},
+    },
+  );
+  try {
+    const config = await storage.loadConfig();
+    await storage.saveConfig({ ...config, global: { ...config.global, debugLogging: true } });
+    expect(reads).toBeGreaterThan(0);
+    expect(writes.at(-1)).toBe(true);
+    lifecycle.stop();
+    const count = reads;
+    await storage.saveConfig({ ...config, global: { ...config.global, debugLogging: false } });
+    expect(reads).toBe(count);
+    expect(writes.at(-1)).toBe(true);
+  } finally {
+    lifecycle.stop();
+    storage.close();
+  }
 });

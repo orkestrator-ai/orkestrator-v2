@@ -198,10 +198,19 @@ flowchart LR
   backend). A save from a client that predates `logDetail` keeps the stored value.
 - **`ORKESTRATOR_LOG_LEVEL` stays on top.** It takes a default, areas, or both:
   `warn`, `updater=debug` or `warn,updater=debug,desktop.dialog=trace`. Whoever set
-  it asked for those levels, so a settings save does not undo them, and the backend
-  sends the combined result to bridges. Unset, the settings are the whole answer.
+  it asked for those levels, so a settings save does not undo them. The backend
+  sends stored settings to bridges; each process applies its own override locally.
+  Unset, the settings are the whole answer.
 - **Renderer logs are not part of this.** See [What stays out of the persistent
   log](#what-stays-out-of-the-persistent-log).
+
+Live bridge delivery sends stored levels; each receiving process applies its own
+`ORKESTRATOR_LOG_LEVEL` override. A backend-only override does not change other
+processes. Local targets are delivered before Docker discovery completes;
+container lookups share a three-second deadline across port and token reads and
+publish targets as they finish. HTTP requests are limited to eight at once, with
+retry sleeps outside that limit. Each new policy gets a fresh retry budget,
+including when it supersedes a failed final attempt.
 
 ### The bridge route
 

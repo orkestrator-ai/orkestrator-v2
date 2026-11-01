@@ -1361,6 +1361,13 @@ export class StorageService {
     return this.repos.buildPipelines.listAllBuildPipelines();
   }
 
+  listBuildPipelinesForEnvironment(
+    projectId: string,
+    environmentId: string,
+  ): Promise<PersistedBuildPipeline[]> {
+    return this.repos.buildPipelines.listBuildPipelinesForEnvironment(projectId, environmentId);
+  }
+
   saveBuildPipeline(
     pipelineId: string,
     projectId: string,

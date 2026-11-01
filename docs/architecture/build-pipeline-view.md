@@ -6,7 +6,8 @@ node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
 2026-10-28), the shared review routing (2026-10-29), read-only reviewers
 with the Git guard (2026-10-29), per-stage instructions (2026-10-29),
-reviewer lenses (2026-10-29), and the CLI's `build launch` (2026-10-29).
+reviewer lenses (2026-10-29), the CLI's `build launch` (2026-10-29), and the
+header's key information panel (2026-11-01).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -279,6 +280,64 @@ other step and `normalizeReviewPreparation` from the preparation step.
   Review card) has a Focus select (`ReviewLensField.tsx`): no focus, a saved
   preset, or custom text. It opens on the position's saved focus; an
   incomplete custom focus disables Start build.
+
+## Header and key information
+
+The tab header names the ticket and, under it, the phase and build agent. On
+its right sit the pipeline controls (retry, restart, pause, resume, cancel),
+then the **Key information** button, then the pipeline toolbar at the top
+right: the graph's collapse toggle, "N of M steps" and the elapsed time.
+`PipelineFlowView` still computes the toolbar and renders it through a portal
+into the header (`toolbarSlot`); a review pass opened as its own tab has no
+pipeline header and keeps the toolbar inline above its graph. There is no
+banner pointing at the review report: a review's outcome is on its node, in
+its inspector, and in the key information.
+
+Key information is the running brief a reader opens instead of reading the
+transcripts. It is `BuildPipeline.keyInformation`
+(`@orkestrator/protocol/build-pipeline-key-information`), and the button opens
+it as a panel floating over the tab (`PipelineKeyInformation.tsx`; Escape, the
+close button or a click outside closes it). Its sections, each shown only once
+written:
+
+- **Problem** or **Objective**: `framing` is `problem` by default, `objective`
+  when the ticket adds or changes something that was not broken.
+- **Context**, **Solution**, **What was done**.
+- **Decisions**: each decision with every option, its pros and cons, the
+  option chosen and why.
+- **Not done or needs further work**, **Tests** (each with its result).
+- **Review issues**: each round's issues, how each was handled, and its status.
+- **Verification**: each round's verdict and checks, with what failed.
+
+Stage agents keep it through two agent tools, `get_key_information` and
+`update_key_information` (`build-pipeline-key-information-tools.ts`). They are
+listed only to a credential whose environment a build pipeline owns, on the
+general agent server and on a stage turn's workflow-result server, so a stage
+reaches them on whichever connection its turn runs. Codex approves them
+without asking, as it does the mail and artifact tools: they write only the
+pipeline record. An update names the sections it replaces; `issues` and
+`verification` replace the current round's entries only. The backend records
+it as the running stage and round, under the pipeline lock, and refuses one
+that waits more than 30 seconds behind a supervisor pass (never applying it
+later). Once admitted under the lock, the tool awaits the persistence result;
+the wait timeout cannot report a committed write as failed. The Build, Fix, Address and Verify prompts end with stage-specific
+guidance on what to record (`keyInformationInstruction`); Review and the PR
+stages do not keep it.
+
+The backend also writes two sections itself, so they are never empty because
+a stage skipped the tool: an accepted review records its round's issues as
+open (a repeated review replaces them only while none has been worked on), and
+a Verify verdict sets its round's `passed`, keeping Verify's own summary and
+checks or deriving them from the criterion results. A restart that rewinds to
+an earlier round drops what later rounds recorded and the verification of the
+round it reruns. Restarting at or before Review, or explicitly retrying Review,
+also discards that round's superseded issues; restarting Address or a later
+stage preserves the round's issues and resolutions. On any rewind or review
+retry, narrative sections and update history are cleared conservatively:
+they have no per-attempt snapshots to restore, so stages rebuild the brief
+instead of showing superseded work as current. Every field is bounded
+(`KEY_INFORMATION_LIMITS`, about 200 KB at worst) and checked by
+`isBuildPipeline`.
 
 ## Inspector and actions
 

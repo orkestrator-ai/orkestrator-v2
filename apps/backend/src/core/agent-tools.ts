@@ -41,6 +41,8 @@ import {
 } from "./workflow-result-tools.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
 import type { GraphActivationToolHost } from "./graph-agent-tools.js";
+import type { BuildPipelineKeyInformationHost } from "./build-pipeline-key-information.js";
+import { registerKeyInformationTools } from "./build-pipeline-key-information-tools.js";
 import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
 import {
@@ -624,12 +626,15 @@ async function createAgentToolServer(
     instructions = true,
     graphTools = null,
     goalTools = null,
+    keyInformation = null,
   }: {
     instructions?: boolean;
     graphTools?: GraphActivationToolHost | null;
     goalTools?: GoalToolHost | null;
+    keyInformation?: BuildPipelineKeyInformationHost | null;
   } = {},
 ): Promise<McpServer> {
+  const pipelineScope = { environmentId: scope.environmentId, projectId: scope.projectId };
   if (scope.workflowResultBroker) {
     const server = new McpServer(
       { name: WORKFLOW_RESULT_MCP_SERVER_NAME, version: "1.0.0" },
@@ -666,6 +671,7 @@ async function createAgentToolServer(
           : null;
       },
     );
+    if (keyInformation) await registerKeyInformationTools(server, keyInformation, pipelineScope);
     return server;
   }
   if (scope.workflowResultKey) {
@@ -694,6 +700,11 @@ async function createAgentToolServer(
       },
       provisionalFindings,
     );
+    // A Build Pipeline stage turn runs on this server alone, so it carries the
+    // key information tools the stage prompts ask for.
+    if (keyInformation && binding.kind !== "graph-output") {
+      await registerKeyInformationTools(server, keyInformation, pipelineScope);
+    }
     if (binding.kind === "graph-output") {
       await registerGraphActivationTools(
         server,
@@ -821,6 +832,8 @@ async function createAgentToolServer(
 
   if (goalTools) registerGoalTools(server, goalTools, scope);
 
+  if (keyInformation) await registerKeyInformationTools(server, keyInformation, pipelineScope);
+
   return server;
 }
 
@@ -883,6 +896,7 @@ export class AgentToolsServer {
   private transcriptArtifactToolHost: TranscriptArtifactToolHost | null = null;
   private scheduledJobs: ScheduledJobService | null = null;
   private graphActivationToolHost: GraphActivationToolHost | null = null;
+  private keyInformationHost: BuildPipelineKeyInformationHost | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -1133,6 +1147,15 @@ export class AgentToolsServer {
    */
   setGraphActivationToolHost(host: GraphActivationToolHost | null): void {
     this.graphActivationToolHost = host;
+  }
+
+  /**
+   * Installs (or removes, with null) the build pipelines' key information
+   * host. The tools are listed only to credentials of an environment a
+   * pipeline owns.
+   */
+  setKeyInformationToolHost(host: BuildPipelineKeyInformationHost | null): void {
+    this.keyInformationHost = host;
   }
 
   /** Installs the scheduler behind the agents' schedule tools. */
@@ -1423,6 +1446,7 @@ export class AgentToolsServer {
                   instructions: agentMcpAnnounces(body),
                   graphTools: this.graphActivationToolHost,
                   goalTools: this.goalToolHost,
+                  keyInformation: this.keyInformationHost,
                 },
               ),
         { legacy: "stateless" },

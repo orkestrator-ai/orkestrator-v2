@@ -41,6 +41,10 @@ import { BuildPipelineInteractions } from "./build-pipeline-service-interactions
 import { BuildPipelineLifecycle } from "./build-pipeline-service-lifecycle.js";
 import { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
+import {
+  createBuildPipelineKeyInformationHost,
+  type BuildPipelineKeyInformationHost,
+} from "./build-pipeline-key-information.js";
 import type { StorageService } from "./storage.js";
 import { WorkflowTranscriptArtifacts } from "./workflow-transcript-artifacts.js";
 import type {
@@ -205,6 +209,21 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
 
   retryCompletionComment(pipelineId: string): Promise<BuildPipeline> {
     return this.lifecycle.retryCompletionComment(pipelineId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Key information
+
+  /**
+   * Where the stage agents' key information tools read and write: the
+   * pipeline that owns the caller's environment, updated under its lock.
+   */
+  keyInformationHost(): BuildPipelineKeyInformationHost {
+    return createBuildPipelineKeyInformationHost({
+      listPipelines: (scope) =>
+        this.context.storage.listBuildPipelinesForEnvironment(scope.projectId, scope.environmentId),
+      mutate: (pipelineId, mutation) => this.context.mutate(pipelineId, mutation),
+    });
   }
 
   // -------------------------------------------------------------------------

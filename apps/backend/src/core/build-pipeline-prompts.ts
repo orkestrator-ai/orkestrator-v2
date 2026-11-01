@@ -3,7 +3,11 @@ import { usesPackagePreparationSession } from "./build-pipeline-stages.js";
 import { TICKET_SECTION_LIMITS } from "@orkestrator/protocol/ticket-sections";
 import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
 import { createHash } from "node:crypto";
-import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
+import type {
+  BuildPipeline,
+  PipelineSessionPhase,
+  TaskSnapshot,
+} from "@orkestrator/protocol/build-pipeline";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import {
   REVIEW_MAX_CONTEXT_BYTES,
@@ -955,4 +959,29 @@ export function resolveConflictsPrompt(targetBranch: string): string {
  */
 export function resolveConflictsLocallyPrompt(targetBranch: string): string {
   return `Fetch origin, merge origin/${targetBranch}, and resolve every merge conflict correctly. ${MERGE_RESOLUTION_VALIDATION_INSTRUCTION} Commit the merge resolution locally without bypassing hooks. Do not push the branch: a system step pushes it after this turn. Do not ask questions.`;
+}
+
+const KEY_INFORMATION_PREAMBLE =
+  "**Key information**: the user follows this pipeline through its key information, a short brief shown in the pipeline header. Call the Orkestrator `get_key_information` tool first to see what earlier stages recorded, then call `update_key_information` before you finish. Each field you pass replaces that whole section, so keep the earlier entries that still hold. Write for a reader who has not seen this transcript: short, specific and accurate.";
+
+const KEY_INFORMATION_CLOSING =
+  "These tools write only to Orkestrator's record of the pipeline, never to the workspace, and they do not replace this stage's result. If they are not available, continue without them.";
+
+const KEY_INFORMATION_STAGE_GUIDANCE: Partial<Record<PipelineSessionPhase, string>> = {
+  build:
+    "Record: `framing` (`problem` when the ticket fixes something that is wrong, which is the default, or `objective` when it adds or changes something that was not broken); `statement` (the problem or the objective); `context`; `solution`; `workDone` (what you did); `decisions` (each decision you made, every option you considered with its pros and cons, and the option you took and why); `notDone` (what was not done or needs further work); and `tests` (each test or check you ran and its result).",
+  fix: "Update the sections your fix changes: `solution`, `workDone`, `decisions`, `notDone` and `tests`, adding what this round did to the entries that still hold.",
+  address:
+    "Record `issues`: every issue the review reported for this round, how you solved it (or why you did not) and its status. Update `workDone`, `decisions`, `notDone` and `tests` where your changes affect them.",
+  verify:
+    "Record `verification` for this round: each check you made with whether it passed and, for a failure, what failed; set `passed` to your verdict. Leave the other sections alone unless one is now wrong.",
+};
+
+/**
+ * The key information instruction for a stage that keeps the brief, or "" for
+ * one that does not (Review, Ship and conflict resolution).
+ */
+export function keyInformationInstruction(phase: PipelineSessionPhase): string {
+  const guidance = KEY_INFORMATION_STAGE_GUIDANCE[phase];
+  return guidance ? `${KEY_INFORMATION_PREAMBLE} ${guidance} ${KEY_INFORMATION_CLOSING}` : "";
 }

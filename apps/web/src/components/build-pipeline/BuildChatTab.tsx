@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { PipelineFlowView } from "./PipelineFlowView";
+import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
 import { usePipelineControls } from "./usePipelineControls";
 
 interface BuildChatTabProps {
@@ -102,6 +103,8 @@ export function BuildChatTab({
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const controls = usePipelineControls(pipeline, () => setPinnedId(null));
   const hydrationAttemptedFor = useRef<string | null>(null);
+  // The flow view renders its toolbar (graph toggle, steps, elapsed time) here.
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLDivElement | null>(null);
 
   // The store is a cache of a backend-owned record, and the only other loader
   // is App's one-shot per-project hydration. If that failed or has not run for
@@ -207,7 +210,7 @@ export function BuildChatTab({
       <div
         data-testid="build-pipeline-header"
         className={cn(
-          "flex items-center gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3",
+          "relative z-20 flex items-center gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3",
           isMobile && "gap-2 px-3 py-2",
         )}
       >
@@ -253,6 +256,12 @@ export function BuildChatTab({
             ))}
           </div>
         )}
+        <PipelineKeyInformationButton keyInformation={pipeline.keyInformation} compact={isMobile} />
+        <div
+          ref={setToolbarSlot}
+          data-testid="build-pipeline-header-toolbar"
+          className="flex min-w-0 shrink items-center"
+        />
       </div>
 
       <PipelineFlowView
@@ -264,6 +273,7 @@ export function BuildChatTab({
         pinnedId={pinnedId}
         onPin={setPinnedId}
         layout={layout}
+        toolbarSlot={toolbarSlot}
         visibleError={interactionFailure ? undefined : pipeline.error}
         notices={
           <>

@@ -76,6 +76,7 @@ import {
   supersedeSessionsFrom,
   verificationFeedbackBefore,
 } from "./build-pipeline-rewind.js";
+import { pruneKeyInformationAfterRewind } from "./build-pipeline-key-information.js";
 import {
   codeRewindBackupRef,
   codeRewindRecord,
@@ -954,6 +955,7 @@ export class BuildPipelineLifecycle {
         return;
       }
       candidate.reviewRetryRequested = true;
+      pruneKeyInformationAfterRewind(candidate, candidate.iteration, false, false);
       discardSessionReviewReports(candidate);
       delete candidate.reviewPackage;
       delete candidate.structuredReview;
@@ -1418,6 +1420,13 @@ export class BuildPipelineLifecycle {
         at,
       );
       pruneRoundReviewReports(candidate);
+      pruneKeyInformationAfterRewind(
+        candidate,
+        iteration,
+        restart.kind === "session" &&
+          (restart.phase === "pr" || restart.phase === "resolve-conflicts"),
+        selectedOrder > 2,
+      );
       if (
         supersededSessions > 0 ||
         code ||

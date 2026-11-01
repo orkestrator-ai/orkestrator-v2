@@ -453,6 +453,22 @@ export class BuildPipelinesRepository {
     return record ? structuredClone(record) : null;
   }
 
+  /**
+   * The records of one environment in one project. Only those are copied, so
+   * a caller that asks for every agent tool request stays cheap when the
+   * environment has none.
+   */
+  async listBuildPipelinesForEnvironment(
+    projectId: string,
+    environmentId: string,
+  ): Promise<PersistedBuildPipeline[]> {
+    return Object.values(await this.loadBuildPipelines())
+      .filter(
+        (pipeline) => pipeline.projectId === projectId && pipeline.environmentId === environmentId,
+      )
+      .map((record) => structuredClone(record));
+  }
+
   async listBuildPipelines(projectId: string): Promise<PersistedBuildPipeline[]> {
     if (!isNonBlankString(projectId)) {
       throw new Error("Build pipeline project ID must not be blank");

@@ -135,6 +135,7 @@ import {
 } from "./workflow-artifact-turns.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-information.js";
 import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard";
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
@@ -1283,6 +1284,7 @@ export class BuildPipelineReviewFanout {
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = provenance.report;
     retainRoundReviewReport(pipeline, session, provenance.report);
+    recordReviewIssuesInKeyInformation(pipeline, session, provenance.report);
     pipeline.structuredReviewRequestId = consolidation.requestId;
     if (consolidation.resultTransport === "tool-v1") {
       pipeline.pendingResultConsumptions = Array.from(

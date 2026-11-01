@@ -1318,6 +1318,9 @@ describe("BuildPipelineService addressing stage", () => {
       const addressing = await snapshot(storage, built.id);
       expect(addressing.phase).toBe("addressing");
       expect(addressing.structuredReview?.issues).toHaveLength(1);
+      expect(addressing.keyInformation?.issues).toMatchObject([
+        { round: 0, issue: reviewWithIssues.issues[0]!.title, status: "open" },
+      ]);
       expect(addressing.sessions).toHaveLength(reviewing.sessions.length + 1);
       const addressSession = addressing.sessions.at(-1)!;
       expect(addressSession).toMatchObject({
@@ -1341,6 +1344,10 @@ describe("BuildPipelineService addressing stage", () => {
       provider.structuredResult = "absent";
       await service.advanceNow(built.id);
       expect((await snapshot(storage, built.id)).phase).toBe("verifying");
+      await service.advanceNow(built.id);
+      expect((await snapshot(storage, built.id)).keyInformation?.verifications).toMatchObject([
+        { round: 0, passed: true, summary: "All criteria pass." },
+      ]);
     });
   });
 
@@ -1963,6 +1970,12 @@ describe("BuildPipelineService retry review", () => {
       const sessionCount = verifying.sessions.length;
       const originalHead = verifying.reviewPackage?.headRef;
 
+      await service
+        .keyInformationHost()
+        .update(
+          { environmentId: verifying.environmentId!, projectId: verifying.projectId },
+          { issues: [{ issue: "A", status: "resolved", resolution: "Fixed A" }] },
+        );
       await service.retryReview(built.id);
       await service.advanceNow(built.id);
 
@@ -1982,6 +1995,17 @@ describe("BuildPipelineService retry review", () => {
       expect(provider.sent.at(-1)?.prompt).toContain("pins the exact committed range");
       expect(packageGeneration.count).toBe(2);
       expect(retried.reviewPackage?.headRef).not.toBe(originalHead);
+      expect(retried.keyInformation?.issues).toEqual([]);
+      provider.structuredResult = {
+        ok: true,
+        provider: "claude",
+        requestId: retried.structuredReviewRequestId!,
+        value: reviewWithIssues,
+      };
+      await service.advanceNow(built.id);
+      expect((await snapshot(storage, built.id)).keyInformation?.issues).toMatchObject([
+        { issue: reviewWithIssues.issues[0]!.title, status: "open" },
+      ]);
       expect(provider.sent.at(-1)?.prompt).toContain(
         ".orkestrator/review-artifacts/review-package-build-",
       );

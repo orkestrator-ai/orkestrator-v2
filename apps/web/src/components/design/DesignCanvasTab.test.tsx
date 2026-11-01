@@ -2,6 +2,7 @@ import { DESIGN_KEYBOARD_SHORTCUTS, KEYBOARD_SHORTCUT_GROUPS } from "@/lib/keybo
 import { afterEach, beforeEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { DesignElement } from "@orkestrator/protocol/design-canvas";
+import type { DesignOperationDescriptor } from "@orkestrator/protocol/design-operations";
 import { invoke } from "@/lib/native/backend";
 import { useDesignStore } from "@/stores/designStore";
 import { designController, resetDesignControllers } from "./design-controller";
@@ -15,12 +16,16 @@ const originalOrkestrator = window.orkestrator;
 const originalResizeObserver = globalThis.ResizeObserver;
 let backend: FakeBackend;
 
+/** Edits this client sent to the backend's intent queue, by operation kind. */
 function prepared(kind: string) {
-  return backend.calls.filter(
-    (call) =>
-      call.command === "design_prepare" &&
-      (call.args.descriptor as { input: { kind: string } }).input.kind === kind,
-  );
+  return backend.calls
+    .filter((call) => call.command === "design_intent_run")
+    .map((call) => ({
+      args: {
+        descriptor: (call.args.intent as { descriptor: DesignOperationDescriptor }).descriptor,
+      },
+    }))
+    .filter((call) => call.args.descriptor.input.kind === kind);
 }
 
 describe("DesignCanvasTab", () => {

@@ -277,7 +277,7 @@ describe("design canvas controller", () => {
     await until(() => controller.projection.intents.length === 0, 5000);
     expect(backend.executions).toHaveLength(1);
     expect(backend.frames.get(frameA)!.frame).toMatchObject({ x: 42, revision: 2 });
-    expect(backend.calls.filter((call) => call.command === "design_prepare")).toHaveLength(1);
+    expect(backend.prepareCount).toBe(1);
     release();
   });
 
@@ -320,7 +320,7 @@ describe("design canvas controller", () => {
     const intent = controller.projection.intents[0]!;
     expect(intent.restored).toBe(true);
     // An explicit Resume executes the same token once.
-    controller.resume(intent.id);
+    await controller.resume(intent.id);
     await until(() => backend.frames.get(frameA)!.frame.x === 9);
     expect(backend.executions).toHaveLength(1);
     release();
@@ -467,7 +467,7 @@ function seedRestored(intents: Array<Partial<DesignIntent> & { id: string; token
 }
 
 function prepares() {
-  return backend.calls.filter((call) => call.command === "design_prepare").length;
+  return backend.prepareCount;
 }
 
 function byGesture(controller: ReturnType<typeof designController>, gestureId: string) {
@@ -509,7 +509,7 @@ describe("design canvas controller regressions", () => {
     let attempts = 0;
     let offline = true;
     invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
-      if (command === "design_prepare") {
+      if (command === "design_intent_run") {
         attempts++;
         // Parks a runaway retry loop so a regression fails instead of hanging the run.
         if (attempts > 20) return new Promise(() => {});
@@ -528,18 +528,17 @@ describe("design canvas controller regressions", () => {
     release();
   });
 
-  test("a gesture sample after an uncertain prepare gets a new intent", async () => {
+  test("a gesture sample after a run that never arrived gets a new intent", async () => {
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
     let lost = false;
     invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
-      const response = await backend.handle(command, args ?? {});
-      if (command === "design_prepare" && !lost) {
+      if (command === "design_intent_run" && !lost) {
         lost = true;
         throw new Error("Failed to fetch");
       }
-      return response;
+      return backend.handle(command, args ?? {});
     });
     const first = controller.submit(geometry(frameA, 1, { x: 7 }, "keys"));
     await until(
@@ -559,6 +558,27 @@ describe("design canvas controller regressions", () => {
     release();
   });
 
+  test("a lost run response is recovered from the backend's queue, never sent again", async () => {
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    await controller.refresh();
+    let lost = false;
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      const response = await backend.handle(command, args ?? {});
+      if (command === "design_intent_run" && !lost) {
+        lost = true;
+        throw new Error("Failed to fetch");
+      }
+      return response;
+    });
+    controller.submit(geometry(frameA, 1, { x: 7 }, "lost"));
+    await until(() => lost && controller.projection.intents.length === 0, 4000);
+    expect(backend.executions).toHaveLength(1);
+    expect(backend.prepareCount).toBe(1);
+    expect(backend.frames.get(frameA)!.frame).toMatchObject({ x: 7, revision: 2 });
+    release();
+  });
+
   test("nine offline drafts resume without holding prepared tokens", async () => {
     const ids = Array.from({ length: 9 }, () => crypto.randomUUID());
     for (const id of ids) backend.addFrame(id);
@@ -567,7 +587,7 @@ describe("design canvas controller regressions", () => {
     await controller.refresh();
     let offline = true;
     invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
-      if (command === "design_prepare" && offline) throw new Error("Failed to fetch");
+      if (command === "design_intent_run" && offline) throw new Error("Failed to fetch");
       return backend.handle(command, args ?? {});
     });
     for (const [index, id] of ids.entries())
@@ -577,7 +597,7 @@ describe("design canvas controller regressions", () => {
     );
     offline = false;
     await until(() => backend.executions.length === 9, 5000);
-    expect(controller.projection.intents.some((item) => item.held)).toBe(false);
+    await until(() => controller.projection.intents.length === 0, 5000);
     release();
   });
 
@@ -607,38 +627,115 @@ describe("design canvas controller regressions", () => {
     release();
   });
 
-  test("a prepared token that cannot be saved locally is held until an explicit Resume", async () => {
-    // Other canvases already use the whole per-client draft budget.
-    window.localStorage.setItem(
-      DRAFTS_KEY,
-      JSON.stringify(
-        Object.fromEntries(
-          Array.from({ length: 4 }, (_, canvas) => [
-            `other|env-1|${canvas}`,
-            Array.from({ length: 8 }, (_, index) => ({
-              id: `i-${canvas}-${index}`,
-              lane: "canvas",
-              descriptor: {},
-            })),
-          ]),
-        ),
-      ),
-    );
+  test("unsent drafts are saved to the backend, and a draft that does not fit warns and stays", async () => {
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
-    controller.submit(geometry(frameA, 1, { x: 5 }, "held"));
-    await until(() => controller.projection.intents[0]?.held === true);
-    await sleep(50);
-    const intent = controller.projection.intents[0]!;
-    expect(intent.phase).toBe("prepared");
-    expect(intent.token).toBeDefined();
+    const gate = deferred();
+    backend.executeBarrier = () => gate.promise;
+    controller.submit(geometry(frameA, 1, { x: 1 }, "blocking"));
+    const queued = controller.submit(geometry(frameA, 1, { y: 2 }, "queued"));
+    await until(() => backend.intents.some((item) => item.id === queued));
+    const saved = backend.intents.find((item) => item.id === queued)!;
+    expect(saved.phase).toBe("draft");
+    expect(saved.clientId).toBe(saved.descriptor.clientId!);
+    backend.intentCapacity = backend.intents.length;
+    const refused = controller.submit(geometry(frameB, 1, { x: 3 }, "too-many"));
+    await until(() => controller.projection.notice?.tone === "warning");
+    expect(controller.projection.intents.some((item) => item.id === refused)).toBe(true);
+    backend.intentCapacity = undefined;
+    gate.resolve();
+    await until(() => controller.projection.intents.length === 0, 4000);
+    expect(backend.frames.get(frameA)!.frame).toMatchObject({ x: 1, y: 2 });
+    expect(backend.frames.get(frameB)!.frame.x).toBe(3);
+    release();
+  });
+
+  test("another window's failed edit is listed for review; Resume takes it over and runs it", async () => {
+    backend.intents.push({
+      id: "i-other",
+      clientId: "c-other-window",
+      lane: frameA,
+      label: "Move A",
+      createdAt: 1,
+      updatedAt: 1,
+      phase: "settled",
+      outcome: "rejected",
+      failure: { code: "capacity", message: "Busy", retry: "after-delay" },
+      descriptor: {
+        canvasId,
+        input: { kind: "update_frame", frameId: frameA, patch: { x: 21 } },
+        preconditions: { frameRevision: 1 },
+        clientId: "c-other-window",
+        correlationId: "i-other",
+      },
+    });
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    await controller.refresh();
+    const listed = controller.projection.intents.find((intent) => intent.id === "i-other")!;
+    expect(listed).toMatchObject({ restored: true, outcome: "rejected" });
+    await sleep(30);
     expect(backend.executions).toHaveLength(0);
-    expect(controller.projection.notice?.tone).toBe("warning");
-    controller.resume(intent.id);
-    await until(() => backend.frames.get(frameA)!.frame.x === 5);
-    expect(backend.executions).toHaveLength(1);
-    expect(prepares()).toBe(1);
+    await controller.resume("i-other");
+    await until(() => backend.frames.get(frameA)!.frame.x === 21);
+    expect(backend.executions[0]!.clientId).not.toBe("c-other-window");
+    release();
+  });
+
+  test("a queued draft another window discarded leaves this window too", async () => {
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    await controller.refresh();
+    const gate = deferred();
+    backend.executeBarrier = () => gate.promise;
+    controller.submit(geometry(frameA, 1, { x: 1 }, "blocking"));
+    const queued = controller.submit(geometry(frameA, 1, { y: 2 }, "queued"));
+    await until(() => backend.intents.some((item) => item.id === queued));
+    await sleep(30);
+    await backend.handle("design_intent_discard", { intentId: queued });
+    await controller.refresh();
+    expect(controller.projection.intents.some((item) => item.id === queued)).toBe(false);
+    gate.resolve();
+    await until(() => controller.projection.intents.length === 0);
+    expect(backend.frames.get(frameA)!.frame.y).toBe(0);
+    release();
+  });
+
+  test("legacy localStorage intents are imported once, then localStorage is not used", async () => {
+    seedRestored([{ id: "i-legacy", phase: "draft", token: undefined }]);
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    await controller.refresh();
+    expect(backend.intents.map((item) => item.id)).toEqual(["i-legacy"]);
+    expect(controller.projection.intents[0]).toMatchObject({ id: "i-legacy", restored: true });
+    expect(window.localStorage.getItem(DRAFTS_KEY)).toBeNull();
+    await controller.refresh();
+    expect(backend.calls.filter((call) => call.command === "design_intent_import")).toHaveLength(1);
+    expect(backend.executions).toHaveLength(0);
+    release();
+  });
+
+  test("a backend without an intent queue still runs and rebases edits, keeping nothing in localStorage", async () => {
+    backend.intentsEnabled = false;
+    const controller = designController("env-1", canvasId);
+    const release = controller.acquire();
+    await controller.refresh();
+    const gate = deferred();
+    let first = true;
+    backend.executeBarrier = async () => {
+      if (first) {
+        first = false;
+        await gate.promise;
+      }
+    };
+    controller.submit(geometry(frameA, 1, { x: 1 }, "one"));
+    controller.submit(geometry(frameA, 1, { y: 2 }, "two"));
+    gate.resolve();
+    await until(() => controller.projection.intents.length === 0, 5000);
+    expect(backend.frames.get(frameA)!.frame).toMatchObject({ x: 1, y: 2, revision: 3 });
+    expect(backend.calls.some((call) => call.command.startsWith("design_intent_"))).toBe(false);
+    expect(window.localStorage.getItem(DRAFTS_KEY)).toBeNull();
     release();
   });
 
@@ -657,15 +754,16 @@ describe("design canvas controller regressions", () => {
     controller.submit(geometry(frameA, 1, { y: 4 }, "new"));
     await until(() => backend.frames.get(frameA)!.frame.y === 4);
     // Resume keeps the token: an in-flight outcome is never prepared again.
-    controller.resume("i-restored");
+    await controller.resume("i-restored");
     const resumed = controller.projection.intents.find((intent) => intent.id === "i-restored")!;
     expect(resumed.token).toBe(token);
     expect(resumed.phase).toBe("admitted");
     backend.completePending(token);
+    await controller.refresh();
     await until(
       () =>
-        controller.projection.intents.find((intent) => intent.id === "i-restored")?.phase ===
-        "settled",
+        controller.projection.intents.find((intent) => intent.id === "i-restored")?.phase !==
+        "admitted",
       4000,
     );
     expect(prepares()).toBe(1);
@@ -704,15 +802,16 @@ describe("design canvas controller regressions", () => {
     const controller = designController("env-1", canvasId);
     const release = controller.acquire();
     await controller.refresh();
-    controller.resume("i-unknown");
+    await controller.resume("i-unknown");
     expect(controller.projection.intents.find((intent) => intent.id === "i-unknown")?.token).toBe(
       unknownToken,
     );
-    controller.resume("i-rejected");
+    await controller.resume("i-rejected");
     await until(() => backend.frames.get(frameB)!.frame.x === 6);
     expect(prepares()).toBe(1);
     backend.completePending(unknownToken);
     await until(() => backend.frames.get(frameA)!.frame.x === 9);
+    await controller.refresh();
     await until(() => controller.projection.intents.length === 0, 4000);
     expect(prepares()).toBe(1);
     release();
@@ -766,7 +865,7 @@ describe("design canvas controller regressions", () => {
     gate.resolve();
     await until(() => byGesture(controller, "f1")?.outcome === "rejected");
     expect(byGesture(controller, "dep")!.blocked).toBe(true);
-    controller.resume(byGesture(controller, "f2")!.id);
+    await controller.resume(byGesture(controller, "f2")!.id);
     await until(() => byGesture(controller, "f2")?.outcome === "rejected");
     await controller.discard(byGesture(controller, "f2")!.id);
     await sleep(50);

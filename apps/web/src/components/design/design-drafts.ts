@@ -1,14 +1,14 @@
-import type { DesignIntent } from "@/stores/designStore";
-
 /**
- * Per-client persistence for unsettled design intents: drafts that were never
- * sent, operation tokens whose outcome is not yet known, and rejected edits the
- * user has not reviewed. Restored intents never run without an explicit Resume.
+ * One-time migration of the per-browser intent store this client used before
+ * the backend owned each document's intent queue (`design_intents`). Entries
+ * are read once, imported into the backend, and removed; nothing else reads
+ * localStorage for design intents.
  */
 const STORAGE_KEY = "orkestrator.design.intents.v1";
-export const DRAFT_LIMITS = { perCanvas: 8, perClient: 32, bytes: 2 * 1024 * 1024 } as const;
+/** The legacy store's own bound; anything larger was never written by it. */
+const MAX_LEGACY_BYTES = 4 * 1024 * 1024;
 
-type Stored = Record<string, Array<Omit<DesignIntent, "restored" | "blocked">>>;
+type Stored = Record<string, unknown[]>;
 
 function storage(): Storage | undefined {
   try {
@@ -21,7 +21,7 @@ function storage(): Storage | undefined {
 function readAll(): Stored {
   try {
     const raw = storage()?.getItem(STORAGE_KEY);
-    if (!raw || raw.length > DRAFT_LIMITS.bytes * 2) return {};
+    if (!raw || raw.length > MAX_LEGACY_BYTES) return {};
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Stored) : {};
   } catch {
@@ -29,62 +29,29 @@ function readAll(): Stored {
   }
 }
 
-/** Persistable: anything whose outcome is not a verified success or deliberate discard. */
-export function isPersistable(intent: DesignIntent): boolean {
-  if (intent.phase !== "settled") return true;
-  return (
-    intent.outcome !== "committed" && intent.outcome !== "no-op" && intent.outcome !== "canceled"
-  );
-}
-
-export function loadDrafts(key: string): DesignIntent[] {
-  const entries = readAll()[key];
-  if (!Array.isArray(entries)) return [];
-  return entries
-    .filter(
-      (entry) =>
-        entry && typeof entry.id === "string" && entry.descriptor && typeof entry.lane === "string",
-    )
-    .slice(0, DRAFT_LIMITS.perCanvas)
-    .map((entry) => ({ ...entry, restored: true }));
-}
-
 /**
- * Saves a canvas's unsettled intents. Returns false (keeping the previous
- * stored set) when accepted work would exceed bounds. Tokenless drafts are
- * best-effort; leaving them out never strands a prepared backend operation.
+ * Legacy entries of one canvas: the shared `${backend}|${env}|${canvas}` key
+ * and every per-tab `${backend}|${env}|${canvas}|${clientId}` key.
  */
-export function saveDrafts(key: string, intents: DesignIntent[]): boolean {
-  const target = storage();
-  if (!target) return false;
+export function readLegacyDrafts(canvasKey: string): { keys: string[]; intents: unknown[] } {
   const all = readAll();
-  const unsettled = intents.filter(isPersistable);
-  const accepted = unsettled.filter((intent) => intent.token || intent.outcome === "unknown");
-  if (accepted.length > DRAFT_LIMITS.perCanvas) return false;
-  const available = DRAFT_LIMITS.perCanvas - accepted.length;
-  const persisted = [
-    ...accepted,
-    ...unsettled.filter((intent) => !accepted.includes(intent)).slice(0, available),
-  ].map(({ restored: _restored, blocked: _blocked, ...rest }) => rest);
-  if (persisted.length) all[key] = persisted;
-  else delete all[key];
-  const total = Object.values(all).reduce((count, entries) => count + entries.length, 0);
-  if (total > DRAFT_LIMITS.perClient) {
-    const otherCount = total - persisted.length;
-    if (otherCount + accepted.length > DRAFT_LIMITS.perClient) return false;
-    all[key] = persisted.slice(0, DRAFT_LIMITS.perClient - otherCount);
-  }
-  const serialized = JSON.stringify(all);
-  if (serialized.length > DRAFT_LIMITS.bytes) return false;
-  try {
-    if (Object.keys(all).length) target.setItem(STORAGE_KEY, serialized);
-    else target.removeItem(STORAGE_KEY);
-    return true;
-  } catch {
-    return false;
-  }
+  const keys = Object.keys(all).filter(
+    (key) => key === canvasKey || key.startsWith(`${canvasKey}|`),
+  );
+  const intents = keys.flatMap((key) => (Array.isArray(all[key]) ? all[key] : []));
+  return { keys, intents };
 }
 
-export function draftKeys(): string[] {
-  return Object.keys(readAll());
+/** Removes migrated keys; the store itself goes once it is empty. */
+export function clearLegacyDrafts(keys: string[]): void {
+  const target = storage();
+  if (!target || !keys.length) return;
+  const all = readAll();
+  for (const key of keys) delete all[key];
+  try {
+    if (Object.keys(all).length) target.setItem(STORAGE_KEY, JSON.stringify(all));
+    else target.removeItem(STORAGE_KEY);
+  } catch {
+    /* A full or blocked store keeps the entries; the backend skips duplicates. */
+  }
 }

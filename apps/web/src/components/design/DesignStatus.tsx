@@ -19,7 +19,6 @@ export function saveStateOf(projection: DesignProjection | undefined): DesignSav
 export function needsReview(intent: DesignIntent): boolean {
   return (
     Boolean(intent.restored && intent.phase !== "settled") ||
-    Boolean(intent.held) ||
     Boolean(intent.blocked) ||
     (intent.phase === "settled" && intent.outcome !== "committed" && intent.outcome !== "no-op") ||
     (intent.phase === "admitted" && intent.outcome === "unknown")
@@ -33,9 +32,11 @@ function retryable(failure: DesignFailure | undefined) {
   );
 }
 
-/** Never sent: a held token or a restored draft/prepared edit waiting for an explicit Resume. */
+/**
+ * Never sent: a restored draft (an earlier session's, or another window's,
+ * kept by the backend) waiting for an explicit Resume.
+ */
 function awaitingResume(intent: DesignIntent) {
-  if (intent.held) return true;
   return (
     Boolean(intent.restored) &&
     !intent.failure &&
@@ -50,8 +51,7 @@ function unresolved(intent: DesignIntent) {
 
 function reviewMessage(intent: DesignIntent) {
   if (intent.blocked) return "waiting for the edit before it";
-  if (intent.held) return "could not be saved in this window; not sent yet";
-  if (awaitingResume(intent)) return "not sent before the app closed";
+  if (awaitingResume(intent)) return "not sent yet";
   if (intent.outcome === "executing") return "still running in the workspace";
   if (intent.outcome === "unknown" || intent.phase === "admitted" || intent.phase === "submitting")
     return "outcome unknown; checking the backend";
@@ -102,9 +102,9 @@ export function DesignReviewList({
                   size="sm"
                   variant="outline"
                   className="h-6 px-2 text-xs"
-                  onClick={() => controller.resume(intent.id)}
+                  onClick={() => void controller.resume(intent.id)}
                 >
-                  {intent.held ? "Resume" : "Resume draft"}
+                  Resume draft
                 </Button>
               )}
               {intent.phase === "settled" && unresolved(intent) && (
@@ -112,7 +112,7 @@ export function DesignReviewList({
                   size="sm"
                   variant="outline"
                   className="h-6 px-2 text-xs"
-                  onClick={() => controller.resume(intent.id)}
+                  onClick={() => void controller.resume(intent.id)}
                 >
                   Check again
                 </Button>
@@ -122,7 +122,7 @@ export function DesignReviewList({
                   size="sm"
                   variant="outline"
                   className="h-6 px-2 text-xs"
-                  onClick={() => controller.resume(intent.id)}
+                  onClick={() => void controller.resume(intent.id)}
                 >
                   Retry
                 </Button>
@@ -132,7 +132,9 @@ export function DesignReviewList({
                   size="sm"
                   variant="outline"
                   className="h-6 px-2 text-xs"
-                  onClick={() => controller.resume(intent.id, { frameRevision: current.revision })}
+                  onClick={() =>
+                    void controller.resume(intent.id, { frameRevision: current.revision })
+                  }
                 >
                   Apply to current frame
                 </Button>

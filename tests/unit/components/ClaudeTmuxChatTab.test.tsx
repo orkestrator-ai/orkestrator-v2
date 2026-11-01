@@ -2355,6 +2355,15 @@ Running 1 Explore agent...
         tab_id: "tab-1",
         environment_id: "env-1",
         session_id: "session-1",
+        event_id: "prompt",
+        event_kind: "UserPromptSubmit",
+        payload: {},
+      });
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
         event_id: "failure",
         event_kind: "StopFailure",
         payload: { message: "API Error: 400 fake refusal" },

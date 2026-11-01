@@ -9,6 +9,7 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import {
   blockingHookHold,
+  drainPending,
   hooksBlock,
   parseBlockingHookTiming,
   requestHookHold,
@@ -472,4 +473,29 @@ describe("generated hook script pause", () => {
       pollLoopHeld.resolve();
     });
   });
+});
+
+test("draining orders multiple turns by occurrence rather than event kind", async () => {
+  const backend = {
+    readBoundedFile: async () => ({ content: "{}", truncated: false }),
+    removeFile: async () => undefined,
+  } as unknown as TmuxBackend;
+  const paths = { pendingDir: "/pending" } as SessionHookPaths;
+  const events = await drainPending(
+    backend,
+    paths,
+    [
+      "UserPromptSubmit-1700000000000000003-10.json",
+      "StopFailure-1700000000000000002-10.json",
+      "UserPromptSubmit-1700000000000000001-10.json",
+      "Stop-1700000000000000004-10.json",
+    ],
+    new Set(),
+  );
+  expect(events.map((event) => event.kind)).toEqual([
+    "UserPromptSubmit",
+    "StopFailure",
+    "UserPromptSubmit",
+    "Stop",
+  ]);
 });

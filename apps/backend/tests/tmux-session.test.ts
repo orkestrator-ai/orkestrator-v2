@@ -1541,70 +1541,88 @@ describe("live session read paths", () => {
       });
     }, 20_000);
 
-    test("a StopFailure hook rings agent_failed, once, and ends the turn", async () => {
-      const { ticks, handlers } = bellHandlers();
-      await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
-        const { context, writes, completions, emitted } = bellContext(environment);
-        const args = { tabId: "tab-failure-bell", environmentId: environment.id };
-        const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
-          session_id: string;
-          busy: boolean;
-        };
-        const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
-        await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-t1.json"), "{}");
-        await ticks.step();
-        await waitFor(() => writes.at(-1)?.state === "working");
-        await fs.writeFile(
-          path.join(pendingDir, "StopFailure-t1.json"),
-          JSON.stringify({
-            hook_event_name: "StopFailure",
-            error: "unknown",
-            last_assistant_message: "API Error: 400 fake refusal",
-          }),
-        );
-        await ticks.step();
-        await waitFor(() => writes.at(-1)?.state === "idle");
-        expect(writes.at(-1)).toEqual({ state: "idle", options: { completionOutcome: "none" } });
-        expect(completions).toEqual([
-          { reason: "agent_failed", key: `claude-tmux:${status.session_id}:t1` },
-        ]);
-        const after = (await invoke(handlers, "claude_tmux_status", args, context)) as {
-          busy: boolean;
-          info_events: Array<{ kind: string; message: string }>;
-        };
-        expect(after.busy).toBe(false);
-        expect(after.info_events.at(-1)).toMatchObject({
-          kind: "StopFailure",
-          message: "API Error: 400 fake refusal",
+    test.each([false, true])(
+      "batched StopFailure clears busy, including reattach (%s)",
+      async (reattach) => {
+        const { ticks, handlers } = bellHandlers();
+        await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+          if (reattach)
+            environment.agentActivitySources = {
+              "claude-tmux": { state: "working", updatedAt: new Date(0).toISOString() },
+            };
+          const { context, writes, completions, emitted } = bellContext(environment);
+          const args = { tabId: "tab-failure-bell", environmentId: environment.id };
+          const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+            session_id: string;
+            busy: boolean;
+          };
+          const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+          await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-t1.json"), "{}");
+          await fs.writeFile(
+            path.join(pendingDir, "StopFailure-t1.json"),
+            JSON.stringify({
+              hook_event_name: "StopFailure",
+              error: "unknown",
+              last_assistant_message: "API Error: 400 fake refusal",
+            }),
+          );
+          await ticks.step();
+          await waitFor(() => completions.length === 1);
+          await waitFor(() => writes.at(-1)?.state === "idle");
+          const hookKinds = emitted
+            .filter((entry) => (entry.payload as { kind?: string }).kind === "hook")
+            .map((entry) => (entry.payload as { event_kind?: string }).event_kind);
+          expect(hookKinds.indexOf("UserPromptSubmit")).toBeLessThan(
+            hookKinds.indexOf("StopFailure"),
+          );
+          expect(writes.at(-1)).toEqual({ state: "idle", options: { completionOutcome: "none" } });
+          expect(completions).toEqual([
+            { reason: "agent_failed", key: `claude-tmux:${status.session_id}:t1` },
+          ]);
+          const after = (await invoke(handlers, "claude_tmux_status", args, context)) as {
+            busy: boolean;
+            info_events: Array<{ kind: string; message: string }>;
+          };
+          expect(after.busy).toBe(false);
+          expect(after.info_events.at(-1)).toMatchObject({
+            kind: "StopFailure",
+            message: "API Error: 400 fake refusal",
+          });
+          expect(
+            emitted.some(
+              (entry) => (entry.payload as { event_kind?: string }).event_kind === "StopFailure",
+            ),
+          ).toBe(true);
+          await invoke(handlers, "claude_tmux_stop", args, context);
+          await ticks.release();
         });
-        expect(
-          emitted.some(
-            (entry) => (entry.payload as { event_kind?: string }).event_kind === "StopFailure",
-          ),
-        ).toBe(true);
-        await invoke(handlers, "claude_tmux_stop", args, context);
-        await ticks.release();
-      });
-    }, 20_000);
+      },
+      20_000,
+    );
 
-    test("a tab stopped mid-turn says nothing about how the turn ended", async () => {
-      const { ticks, handlers } = bellHandlers();
-      await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
-        const { context, writes, completions } = bellContext(environment);
-        const args = { tabId: "tab-stopped-bell", environmentId: environment.id };
-        const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
-          session_id: string;
-        };
-        const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
-        await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-t1.json"), "{}");
-        await ticks.step();
-        await waitFor(() => writes.at(-1)?.state === "working");
-        await invoke(handlers, "claude_tmux_stop", args, context);
-        expect(writes.at(-1)).toEqual({ state: "idle", options: { completionOutcome: "none" } });
-        expect(completions).toEqual([]);
-        await ticks.release();
-      });
-    }, 20_000);
+    test.each(["claude_tmux_stop", "claude_tmux_interrupt"])(
+      "%s mid-turn stays quiet",
+      async (command) => {
+        const { ticks, handlers } = bellHandlers();
+        await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+          const { context, writes, completions } = bellContext(environment);
+          const args = { tabId: "tab-stopped-bell", environmentId: environment.id };
+          const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+            session_id: string;
+          };
+          const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+          await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-t1.json"), "{}");
+          await ticks.step();
+          await waitFor(() => writes.at(-1)?.state === "working");
+          await invoke(handlers, command, args, context);
+          expect(writes.at(-1)).toEqual({ state: "idle", options: { completionOutcome: "none" } });
+          expect(completions).toEqual([]);
+          await invoke(handlers, "claude_tmux_stop", args, context);
+          await ticks.release();
+        });
+      },
+      20_000,
+    );
 
     test("a re-attached session rings once when its turn's Stop arrives", async () => {
       const { ticks, handlers } = bellHandlers();

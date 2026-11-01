@@ -184,6 +184,27 @@ describe("what a graph run's end rings", () => {
     expect(environment.unreadReason).toBe(reason);
   });
 
+  test("restart reconciles a failure that occurred while the backend was away", async () => {
+    const { storage, root } = await store();
+    const run = await storage.graphRuns.createGraphRun(
+      humanRun("e1", "p1", { status: "running", activations: [] }),
+    );
+    await new GraphRunAttention(storage, { timers: NO_TIMERS }).observeRun(run.id);
+    await storage.graphRuns.saveGraphRun(
+      { ...run, status: "failed", finishedAt: new Date().toISOString() },
+      run.revision,
+    );
+    const restarted = (await store(root)).storage;
+    const attention = new GraphRunAttention(restarted, { timers: NO_TIMERS });
+    await attention.start();
+    attention.stop();
+    expect(await restarted.getEnvironment("e1")).toMatchObject({
+      agentActivityState: "idle",
+      hasUnreadWork: true,
+      unreadReason: "agent_failed",
+    });
+  });
+
   test("a failure rings while a sibling source keeps the environment working", async () => {
     const { storage, attention, run } = await runningRun();
     await storage.setEnvironmentAgentActivity(

@@ -98,3 +98,81 @@ describe("tmux runtime shutdown", () => {
     });
   }
 });
+
+describe("tmux completion attention across tabs and restart", () => {
+  async function fixture() {
+    const { promises: fs } = await import("node:fs");
+    const os = await import("node:os");
+    const { StorageService } = await import("./storage.js");
+    const { graphEnvironmentFixture } = await import("./graph-run-test-support.js");
+    const root = await fs.mkdtemp(`${os.tmpdir()}/tmux-attention-`);
+    const storage = new StorageService(root);
+    await storage.init();
+    await storage.addEnvironment(graphEnvironmentFixture());
+    const runtime = new BackendRuntime({ emit: () => undefined });
+    const context = { storage, runtime } as unknown as CommandContext;
+    return { storage, runtime, context, root, fs, StorageService };
+  }
+
+  test("one tab succeeds while another works, then the sibling stops quietly", async () => {
+    const { storage, runtime, context, root, fs } = await fixture();
+    const activity = spyOn(runtime.tmux.sessions, "activityState").mockReturnValue("working");
+    try {
+      await runtime.tmux.persistEnvironmentActivity(context, "e1");
+      await runtime.tmux.noteTurnFinished(context, "e1");
+      expect(await storage.getEnvironment("e1")).toMatchObject({
+        agentActivityState: "working",
+        hasUnreadWork: true,
+        unreadReason: "agent_finished",
+      });
+      activity.mockReturnValue("idle");
+      await runtime.tmux.persistEnvironmentActivity(context, "e1");
+      expect(await storage.getEnvironment("e1")).toMatchObject({
+        agentActivityState: "idle",
+        hasUnreadWork: true,
+        unreadReason: "agent_finished",
+      });
+    } finally {
+      activity.mockRestore();
+      runtime.shutdown();
+      storage.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("failure drained after reattach stays deduplicated after another storage restart", async () => {
+    const { storage, runtime, context, root, fs, StorageService } = await fixture();
+    const activity = spyOn(runtime.tmux.sessions, "activityState").mockReturnValue("idle");
+    let restarted: InstanceType<typeof StorageService> | undefined;
+    try {
+      await storage.setEnvironmentAgentActivity(
+        "e1",
+        "working",
+        new Date().toISOString(),
+        "claude-tmux",
+      );
+      await runtime.tmux.persistEnvironmentActivity(context, "e1");
+      await runtime.tmux.noteTurnFailed(context, "e1", "claude-tmux:session:failure");
+      expect(await storage.getEnvironment("e1")).toMatchObject({
+        agentActivityState: "idle",
+        hasUnreadWork: true,
+        unreadReason: "agent_failed",
+      });
+      await storage.setEnvironmentUnread("e1", false);
+      restarted = new StorageService(root);
+      await restarted.init();
+      await runtime.tmux.noteTurnFailed(
+        { ...context, storage: restarted },
+        "e1",
+        "claude-tmux:session:failure",
+      );
+      expect((await restarted.getEnvironment("e1"))!.hasUnreadWork).toBe(false);
+    } finally {
+      activity.mockRestore();
+      runtime.shutdown();
+      restarted?.close();
+      storage.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

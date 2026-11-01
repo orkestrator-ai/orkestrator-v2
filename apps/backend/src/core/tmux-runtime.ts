@@ -119,6 +119,14 @@ export class TmuxRuntime {
         const environment = await storage.getEnvironment!(environmentId);
         const persisted = environment?.agentActivitySources?.["claude-tmux"];
         const finished = this.finishedTurns.delete(environmentId);
+        // Another tab can keep this source working after a proven Stop. Its
+        // eventual quiet end must not swallow this tab's successful turn.
+        if (finished && state === "working") {
+          await storage.recordEnvironmentSessionCompletion?.(
+            environmentId,
+            new Date().toISOString(),
+          );
+        }
         if (persisted?.state === state) {
           // The Stop of a turn that ended while the backend was away, drained
           // after the re-attach already wrote idle: there is no edge left.

@@ -208,6 +208,26 @@ describe("Electron StorageService", () => {
     }
     const end = { idle: "idle", source: "multi-review" } as const;
 
+    test("a success survives a sibling ending quietly", async () => {
+      const { storage, id, next } = await working();
+      await storage.setEnvironmentAgentActivity(id, "working", next(), "claude-tmux");
+      const success = await storage.setEnvironmentAgentActivity(id, "idle", next(), "multi-review");
+      expect(success.agentActivityState).toBe("working");
+      expect(success.unreadReason).toBe("agent_finished");
+      const end = await storage.setEnvironmentAgentActivity(
+        id,
+        "idle",
+        next(),
+        "claude-tmux",
+        undefined,
+        false,
+        { completionOutcome: "none" },
+      );
+      expect(end.agentActivityState).toBe("idle");
+      expect(end.hasUnreadWork).toBe(true);
+      expect(end.unreadReason).toBe("agent_finished");
+    });
+
     test("no outcome keeps the aggregate's finished bell", async () => {
       const { storage, id, next } = await working();
       await expect(

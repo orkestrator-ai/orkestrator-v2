@@ -1518,12 +1518,19 @@ export class ProjectsRepository {
       // Native reconciliation owns exact per-session attention edges. Its
       // aggregate can later go idle when a detached shell exits, after the
       // root completion was already announced and read.
+      // A sibling may end quietly later. Announce known success on this
+      // source's own edge so that later idle write cannot swallow it.
+      const successfulEnd =
+        previousSource?.state === "working" &&
+        state === "idle" &&
+        options.completionOutcome === undefined;
       const completionTransition =
         options.completionAttention !== false &&
-        previousAggregate === "working" &&
-        ((nextAggregate === "idle" && options.completionOutcome !== "none") ||
-          nextAggregate === "waiting");
-      if (activityTransition || failedEnd) {
+        (successfulEnd ||
+          (previousAggregate === "working" &&
+            ((nextAggregate === "idle" && options.completionOutcome !== "none") ||
+              nextAggregate === "waiting")));
+      if (activityTransition || failedEnd || completionTransition) {
         const previousLastActivityAt = Date.parse(environment.lastActivityAt ?? "");
         environment.lastActivityAt = new Date(
           Math.max(

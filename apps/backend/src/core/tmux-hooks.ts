@@ -289,7 +289,14 @@ TIMING_DIR="$SESSION_DIR/timing"
 HOLD_DIR="$SESSION_DIR/hold"
 mkdir -p "$PENDING_DIR" "$RESPONSE_DIR" "$TIMEOUT_DIR" "$TIMING_DIR" "$HOLD_DIR" 2>/dev/null || true
 
-ID="$(date +%s)-$$-\${RANDOM}-\${RANDOM}"
+# Sortable occurrence time, independent of event kind. Nanoseconds distinguish
+# fast prompt/error hooks within a single polling tick.
+if command -v python3 >/dev/null 2>&1; then
+  OCCURRED="$(python3 -c 'import time; print(time.time_ns())')"
+else
+  OCCURRED="$(date +%s)000000000"
+fi
+ID="\${OCCURRED}-$$-\${RANDOM}-\${RANDOM}"
 PENDING_FILE="$PENDING_DIR/\${EVENT_KIND}-\${ID}.json"
 RESPONSE_FILE="$RESPONSE_DIR/\${EVENT_KIND}-\${ID}.json"
 TIMEOUT_FILE="$TIMEOUT_DIR/\${EVENT_KIND}-\${ID}.json"
@@ -628,7 +635,21 @@ export async function drainPending(
   pendingNames: string[],
   alreadyEmitted: Set<string>,
 ): Promise<PendingHookEvent[]> {
-  const names = pendingNames.filter((name) => name.endsWith(".json")).sort();
+  const names = pendingNames
+    .filter((name) => name.endsWith(".json"))
+    .sort((a, b) => {
+      const left = parseEventFilename(a);
+      const right = parseEventFilename(b);
+      // Older installations used seconds. Normalize both formats before comparing.
+      const time = (id: string) => /^(\d{10,19})-/.exec(id)?.[1]?.padEnd(19, "0") ?? "";
+      const order = time(left.id).localeCompare(time(right.id));
+      if (order) return order;
+      // Legacy files can share a second (or have no timestamp). Start the turn
+      // before applying its terminal event, never alphabetically by hook kind.
+      const phase = (kind: string) =>
+        kind === "UserPromptSubmit" ? 0 : kind === "Stop" || kind === "StopFailure" ? 2 : 1;
+      return phase(left.kind) - phase(right.kind) || left.id.localeCompare(right.id);
+    });
   const stillPresent = new Set(names.map((name) => parseEventFilename(name).id));
   for (const id of Array.from(alreadyEmitted)) {
     if (!stillPresent.has(id)) alreadyEmitted.delete(id);

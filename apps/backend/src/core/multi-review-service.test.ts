@@ -9004,7 +9004,7 @@ test("MultiReviewService pauses and resumes preparation in the retained provider
   await withService(
     "env-pause-preparation",
     provider,
-    async ({ service, start, snapshot }) => {
+    async ({ service, storage, start, snapshot }) => {
       const started = await start();
       await waitUntil(async () => {
         await service.advanceNow(started.id);
@@ -9015,12 +9015,18 @@ test("MultiReviewService pauses and resumes preparation in the retained provider
       const requestId = running.activeRequest!.requestId;
       const providerSessionId = (running.reviewSession ?? running.fixSession)!.providerSessionId;
 
+      await storage.setEnvironmentUnread(started.environmentId, false);
       const paused = await service.pauseStep(started.id, "prepare");
       expect(paused).toMatchObject({
         phase: "paused",
         pausedFromPhase: "preparing",
         pausedStep: "prepare",
       });
+      expect(await storage.getEnvironment(started.environmentId)).toMatchObject({
+        hasUnreadWork: false,
+        agentActivityState: "idle",
+      });
+      expect((await storage.getEnvironment(started.environmentId))!.unreadReason).toBeUndefined();
       expect(paused.activeRequest).toBeUndefined();
       expect((paused.reviewSession ?? paused.fixSession)?.status).toBe("idle");
       expect(provider.aborted).toContain(providerSessionId);

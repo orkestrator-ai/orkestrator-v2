@@ -109,7 +109,7 @@ export function cursorPromptText(
 ): string {
   const parts = [
     cursorAppliedPolicy(state).id === "coordinator-read-only" ? "" : agentSystemInstructions(),
-    repositoryInstructions ?? "",
+    cursorAppliedPolicy(state).id === "coordinator-read-only" ? "" : (repositoryInstructions ?? ""),
   ].filter((part) => part.length > 0);
   return [
     input.prompt,
@@ -123,13 +123,20 @@ export function cursorPromptText(
 /**
  * The checkout's AGENTS.md for this prompt, when the attached agent does not
  * load it itself and has not been sent it yet; undefined otherwise. Every
- * Orkestrator session reads AGENTS.md, read-only coordinators included.
+ * Writable sessions read AGENTS.md; read-only sessions exclude branch instructions.
  */
 export async function repositoryInstructionsFor(
-  state: Pick<SessionState, "agentId" | "loadsProjectRules" | "repositoryInstructionsAgentId">,
+  state: Pick<
+    SessionState,
+    "agentId" | "loadsProjectRules" | "repositoryInstructionsAgentId" | "policy" | "readOnly"
+  >,
   cwd: string = workingDirectory,
 ): Promise<string | undefined> {
-  if (state.loadsProjectRules || state.repositoryInstructionsAgentId === state.agentId) {
+  if (
+    cursorAppliedPolicy(state).id === "coordinator-read-only" ||
+    state.loadsProjectRules ||
+    state.repositoryInstructionsAgentId === state.agentId
+  ) {
     return undefined;
   }
   return readRepositoryInstructions(cwd);

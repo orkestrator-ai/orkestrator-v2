@@ -133,10 +133,13 @@ export async function resolveQueryPlan(
   session.commandDiscoveryInputs.includeLocalSettings = settingSources.includes("local");
   // The CLI reads the checkout's CLAUDE.md or AGENTS.md only with the
   // `project` source, which also loads its hooks and settings. Without it the
-  // repository's AGENTS.md is appended instead, coordinators included.
-  const repositoryInstructions = settingSources.includes("project")
-    ? undefined
-    : await readRepositoryInstructions(cwd);
+  // repository's AGENTS.md is appended for writable sessions only.
+  const repositoryInstructions =
+    options?.readOnly ||
+    policy?.id === "coordinator-read-only" ||
+    settingSources.includes("project")
+      ? undefined
+      : await readRepositoryInstructions(cwd);
   // A read-only turn asks for the CLI's sandbox only where it can run; where
   // it cannot, the hook is the boundary and the turn says so.
   const readOnlyCommandSandbox = isCoordinatorReadOnlyPolicy(policy)

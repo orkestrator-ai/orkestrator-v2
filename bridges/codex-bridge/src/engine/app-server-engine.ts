@@ -1776,7 +1776,7 @@ export class AppServerEngine implements CodexEngine {
    * coordinator, which delegates every file it would write), then the
    * repository's AGENTS.md when the thread does not load the checkout itself
    * (project resources off pins it untrusted, which drops AGENTS.md with the
-   * rest; coordinators included), then any `developer_instructions` the user
+   * rest; read-only sessions excluded), then any `developer_instructions` the user
    * configured. The thread parameter replaces the configured value rather
    * than adding to it, so the configured text is read back and kept. A
    * project layer is read only when the thread loads the checkout's own
@@ -1792,7 +1792,11 @@ export class AppServerEngine implements CodexEngine {
     const cwd = config.cwd ?? this.options.cwd;
     const ours = [
       ...(config.policy?.id === "coordinator-read-only" ? [] : [agentSystemInstructions()]),
-      ...(loadsProject ? [] : [await readRepositoryInstructions(cwd)]),
+      ...(loadsProject ||
+      config.sandbox === "read-only" ||
+      config.policy?.id === "coordinator-read-only"
+        ? []
+        : [await readRepositoryInstructions(cwd)]),
     ].filter((part): part is string => Boolean(part));
     // Nothing of Orkestrator's: leave the configured instructions to Codex.
     if (ours.length === 0) return undefined;

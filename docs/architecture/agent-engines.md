@@ -296,8 +296,9 @@ coordinator policy, so a read-only review there gets none either.
 
 ### The repository's AGENTS.md
 
-Every session on every provider reads the repository's AGENTS.md, read-only
-coordinators and reviews included. Loading it never trusts the checkout's
+Writable sessions read the repository's AGENTS.md. Claude, Codex, Pi, Grok
+and Cursor exclude it from read-only coordinators and reviews so a branch
+cannot supply instructions to its reviewer. Loading it never trusts the checkout's
 executable configuration (hooks, MCP servers, settings, extensions), which
 stays behind the session's project-resources setting (see
 [Execution policy](#execution-policy)). Where a provider loads AGENTS.md only
@@ -308,10 +309,10 @@ a link that leaves the working directory is not followed) and sends it as a
 
 | Provider | Loads it natively when | Otherwise |
 | --- | --- | --- |
-| Claude | The `project` setting source is on (CLAUDE.md, or AGENTS.md where there is none) | Appended to the system prompt on every turn, coordinators included |
+| Claude | The `project` setting source is on (CLAUDE.md, or AGENTS.md where there is none) | Appended to the system prompt; an idle CLI is relaunched when the text changes |
 | Codex | The thread loads project resources (an untrusted pin drops AGENTS.md) | Added to the developer instructions on every start, resume and fork |
 | OpenCode | Always | — |
-| Pi | Always: context files load in every session (`noContextFiles: false`), read-only ones included | — |
+| Pi | Writable sessions (`noContextFiles: false`); disabled for read-only sessions | — |
 | Grok | The session trusts the checkout (`GROK_FOLDER_TRUST=0`) | Added to `_meta.rules` on `session/new`. A checkout the user trusted in Grok itself may load it twice |
 | Cursor | The `project` setting source is on | Added to the prompt frame once per Cursor agent (`repositoryInstructionsFor`), and again after a replacement agent or a compaction. It is too large to repeat on every prompt |
 

@@ -38,16 +38,14 @@ describe("cursorPromptText", () => {
     expect(cursorPromptText(state, { prompt: "inspect" })).toBe("inspect");
   });
 
-  test("puts the repository's AGENTS.md in the same frame, read-only sessions included", () => {
+  test("puts the repository's AGENTS.md in the same frame, excluding read-only sessions", () => {
     const writable = cursorPromptText(newSessionState(), { prompt: "go" }, "REPO RULES");
     expect(writable).toBe(
       `go\n\n${wrapSystemInstructions(agentSystemInstructions(), "REPO RULES")}`,
     );
     const state = newSessionState();
     state.readOnly = true;
-    expect(cursorPromptText(state, { prompt: "inspect" }, "REPO RULES")).toBe(
-      `inspect\n\n${wrapSystemInstructions("REPO RULES")}`,
-    );
+    expect(cursorPromptText(state, { prompt: "inspect" }, "REPO RULES")).toBe("inspect");
   });
 });
 
@@ -76,6 +74,12 @@ describe("repositoryInstructionsFor", () => {
     expect(await repositoryInstructionsFor(state, workspace)).toContain(
       "# Repository instructions (AGENTS.md)",
     );
+  });
+
+  test("excludes branch instructions from read-only sessions", async () => {
+    const state = newSessionState();
+    state.readOnly = true;
+    expect(await repositoryInstructionsFor(state, workspace)).toBeUndefined();
   });
 
   test("leaves AGENTS.md to an agent that loads the project", async () => {

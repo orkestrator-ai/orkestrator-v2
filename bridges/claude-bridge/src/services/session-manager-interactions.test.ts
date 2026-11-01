@@ -95,6 +95,28 @@ describe("session system prompt", () => {
     }
   });
 
+  test("a read-only coordinator excludes project sources and repository instructions", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "claude-review-rules-"));
+    const previous = process.env.CWD;
+    process.env.CWD = workspace;
+    try {
+      await writeFile(join(workspace, "AGENTS.md"), "BRANCH CONTROLLED RULES");
+      const session = createSession("review-rules");
+      track(session.id);
+      const prompt = sendPrompt(session.id, "inspect", { readOnly: true });
+      const call = await nextQueryCall();
+      expect(call.options.settingSources).toEqual([]);
+      expect(JSON.stringify(call.options.systemPrompt)).not.toContain("BRANCH CONTROLLED RULES");
+      call.push({ type: "result", subtype: "success", is_error: false, result: "" });
+      call.finish();
+      await prompt;
+    } finally {
+      if (previous === undefined) delete process.env.CWD;
+      else process.env.CWD = previous;
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("states the background command ceiling the CLI is launched with", async () => {
     const previous = process.env.BASH_MAX_TIMEOUT_MS;
     process.env.BASH_MAX_TIMEOUT_MS = String(12 * 3_600_000);

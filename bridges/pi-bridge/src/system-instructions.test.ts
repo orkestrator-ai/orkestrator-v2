@@ -131,7 +131,7 @@ describe("Pi appended system prompt", () => {
     ]);
   });
 
-  test("a read-only coordinator still reads the repository's AGENTS.md", async () => {
+  test("a read-only coordinator excludes the repository's AGENTS.md", async () => {
     const root = await tempRoot();
     const cwd = join(root, "checkout");
     const agentDir = join(root, "agent");
@@ -148,6 +148,6 @@ describe("Pi appended system prompt", () => {
     });
     expect(
       services.resourceLoader.getAgentsFiles().agentsFiles.map((file) => file.content),
-    ).toContain("Always show visual changes as images.");
+    ).not.toContain("Always show visual changes as images.");
   });
 });

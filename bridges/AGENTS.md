@@ -203,7 +203,8 @@ delivers it through its own channel
 Never add such a rule to one bridge's prompt alone: add it to the general
 block, and keep a bridge's own lines for what only that provider needs. A
 new bridge must deliver the block too, and not to a read-only coordinator.
-Every session also reads the repository's AGENTS.md, coordinators included:
+Writable sessions also read the repository's AGENTS.md. Read-only sessions
+(including coordinators and reviews) exclude branch-controlled instructions:
 where the provider loads it only together with the checkout's executable
 configuration, the bridge sends `readRepositoryInstructions` itself rather
 than trusting that configuration.

@@ -39,10 +39,9 @@ describe("sessionInstructions", () => {
     );
   });
 
-  test("a read-only coordinator gets AGENTS.md alone", async () => {
+  test("a read-only coordinator excludes repository instructions", async () => {
     const text = await sessionInstructions(policy({ id: "coordinator-read-only" }), workspace);
-    expect(text).toStartWith("# Repository instructions (AGENTS.md)");
-    expect(text).not.toContain(agentSystemInstructions());
+    expect(text).toBeUndefined();
   });
 });
 

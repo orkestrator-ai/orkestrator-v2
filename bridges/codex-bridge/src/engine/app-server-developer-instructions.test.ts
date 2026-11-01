@@ -166,12 +166,11 @@ describe("the repository's AGENTS.md on Codex threads", () => {
     expect(await instructionsFor({ projectResources: true })).toBe(agentSystemInstructions());
   });
 
-  test("a read-only coordinator carries it without the shared instructions", async () => {
+  test("a read-only coordinator excludes repository instructions", async () => {
     const instructions = await instructionsFor({
       id: "coordinator-read-only",
       projectResources: false,
     });
-    expect(instructions).toStartWith("# Repository instructions (AGENTS.md)");
-    expect(instructions).not.toContain(agentSystemInstructions());
+    expect(instructions).toBeUndefined();
   });
 });

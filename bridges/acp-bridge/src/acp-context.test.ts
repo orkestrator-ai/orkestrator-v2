@@ -94,9 +94,10 @@ describe("ACP bridge", () => {
         .split("\n")
         .map((line) => JSON.parse(line) as { method: string; meta?: { rules?: string } });
       const rules = requests.find((request) => request.method === "session/new")?.meta?.rules;
-      expect(rules).toContain("Always show visual changes as images.");
-      // A read-only session runs under the coordinator policy: AGENTS.md only.
-      expect(rules?.includes(agentSystemInstructions())).toBe(!readOnly);
+      if (readOnly) expect(rules).toBeUndefined();
+      else expect(rules).toContain("Always show visual changes as images.");
+      // Read-only sessions exclude branch-controlled system instructions.
+      expect(rules?.includes(agentSystemInstructions()) ?? false).toBe(!readOnly);
     });
   }
 

@@ -859,10 +859,8 @@ export function projectResourceDiscoveryOptions(
     noExtensions: !discoverProjectResources,
     noSkills: !discoverProjectResources,
     noPromptTemplates: !discoverProjectResources,
-    // Context files (AGENTS.md) are instructions, not executable resources,
-    // and every Orkestrator session reads the repository's AGENTS.md on every
-    // provider, read-only coordinators and reviews included.
-    noContextFiles: false,
+    // Branch-controlled instructions must not steer a read-only review.
+    noContextFiles: readOnly,
   };
 }
 

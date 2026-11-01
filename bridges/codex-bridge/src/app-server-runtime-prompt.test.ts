@@ -3834,8 +3834,7 @@ describe("composed approval settings", () => {
         );
         if (approvalMode !== "never") expect(server.tools).toBeDefined();
         if (index > 0) {
-          const resumeIndex = requests.lastIndexOf(thread);
-          expect(requests[resumeIndex - 1]?.method).toBe("thread/unsubscribe");
+          expect(methodBefore(requests, thread)).toBe("thread/unsubscribe");
         }
         const narrowed =
           sandbox === "none" && (approvalMode === "on-request" || approvalMode === "auto-review");

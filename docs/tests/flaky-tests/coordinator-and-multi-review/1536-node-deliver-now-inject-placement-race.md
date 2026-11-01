@@ -21,3 +21,14 @@
   established. Next step: wait for the inject's completion signal (or poll the
   placement) instead of reading once, after confirming that production
   completes the inject on that edge. Load was 9 / 26 / 34 (1, 5, 15 min) just after the run. No assertion, timeout or skip changed.
+
+## Further sightings
+
+- **2026-11-01**, branch `visual-change-image-05b2937be199-r1` (shared agent
+  instructions across providers; no change near node coordination):
+  aggregate `mise run test`, all four groups together. The same assertion at
+  `:348` read `placement: "pending-inject"` instead of `"injected"` (30.53 ms);
+  it was the only failure in the run. Artifact:
+  `/tmp/orkestrator-test-run.7fBsxT/` (workspace log). Isolated rerun
+  `bun test ./src/core/nodes/node-coordination.test.ts` from `apps/backend`,
+  three times: 24 pass, 0 fail each.

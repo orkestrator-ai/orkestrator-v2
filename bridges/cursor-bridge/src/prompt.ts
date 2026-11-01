@@ -6,6 +6,9 @@
  * journal of every request id it has taken and refuses to reuse one whose
  * outcome a previous bridge process could not record.
  */
+import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
+import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import type {
   NativeAgentPricingTier,
@@ -21,10 +24,12 @@ import {
   MAX_STRUCTURED_RESULT_BYTES,
   PROMPT_TIMEOUT_MS,
   PROVIDER,
+  workingDirectory,
 } from "./config.js";
 import { randomUUID } from "node:crypto";
 import { trackTurnEvidence, type TurnEvidence } from "./change-evidence.js";
 import { trackCommandChanges } from "./command-changes.js";
+import { cursorAppliedPolicy } from "./execution-policy.js";
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
 import { setStructuredResult } from "./structured-results.js";
@@ -82,6 +87,62 @@ export interface DispatchHandle {
 }
 
 /**
+ * The text a turn sends: the user's prompt, then Orkestrator's instructions in
+ * a system-instructions frame, then a structured turn's schema contract.
+ *
+ * Cursor's SDK has nothing that adds to its system prompt: `systemPrompt`
+ * replaces Cursor's whole harness prompt and is enabled per account. So the
+ * frame carries the instructions every provider receives on every prompt
+ * (not for a read-only session, which delegates every file it would write),
+ * because a failed resume quietly creates a new agent and a compaction may
+ * summarise the first prompt away. `repositoryInstructions` is the checkout's
+ * AGENTS.md for an agent that does not load it itself; it is large, so the
+ * caller sends it once per agent (`repositoryInstructionsFor`). The frame
+ * follows the user's words so they still lead the message. The live row
+ * stores the prompt alone, and a history reload strips the frame
+ * (`historicUserTexts`).
+ */
+export function cursorPromptText(
+  state: Pick<SessionState, "policy" | "readOnly">,
+  input: Pick<DispatchInput, "prompt" | "schema">,
+  repositoryInstructions?: string,
+): string {
+  const parts = [
+    cursorAppliedPolicy(state).id === "coordinator-read-only" ? "" : agentSystemInstructions(),
+    cursorAppliedPolicy(state).id === "coordinator-read-only" ? "" : (repositoryInstructions ?? ""),
+  ].filter((part) => part.length > 0);
+  return [
+    input.prompt,
+    parts.length > 0 ? wrapSystemInstructions(...parts) : "",
+    input.schema ? structuredPromptInstruction(input.schema) : "",
+  ]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+}
+
+/**
+ * The checkout's AGENTS.md for this prompt, when the attached agent does not
+ * load it itself and has not been sent it yet; undefined otherwise. Every
+ * Writable sessions read AGENTS.md; read-only sessions exclude branch instructions.
+ */
+export async function repositoryInstructionsFor(
+  state: Pick<
+    SessionState,
+    "agentId" | "loadsProjectRules" | "repositoryInstructionsAgentId" | "policy" | "readOnly"
+  >,
+  cwd: string = workingDirectory,
+): Promise<string | undefined> {
+  if (
+    cursorAppliedPolicy(state).id === "coordinator-read-only" ||
+    state.loadsProjectRules ||
+    state.repositoryInstructionsAgentId === state.agentId
+  ) {
+    return undefined;
+  }
+  return readRepositoryInstructions(cwd);
+}
+
+/**
  * Hand the turn to the SDK and follow it to completion.
  *
  * Resolves as soon as the run has been *started*, handing back the rest of the
@@ -95,9 +156,8 @@ export async function dispatchPrompt(
   agent: SDKAgent,
   input: DispatchInput,
 ): Promise<DispatchHandle> {
-  const text = input.schema
-    ? `${input.prompt}\n\n${structuredPromptInstruction(input.schema)}`
-    : input.prompt;
+  const repositoryInstructions = await repositoryInstructionsFor(state);
+  const text = cursorPromptText(state, input, repositoryInstructions);
   const images: SDKImage[] = input.images.map((image) => ({
     data: image.data,
     mimeType: image.mimeType,
@@ -165,6 +225,9 @@ export async function dispatchPrompt(
     throw error;
   });
   diagnostics?.sent(run.id);
+  // Sent (or there was none to send): this agent has the repository's
+  // AGENTS.md until it is replaced or compacted.
+  if (!state.loadsProjectRules) state.repositoryInstructionsAgentId = state.agentId;
 
   if (input.userMessageId) {
     const userMessage = state.messages.find((message) => message.id === input.userMessageId);
@@ -196,6 +259,8 @@ export async function dispatchCompaction(
 ): Promise<DispatchHandle> {
   const promptSequence = state.promptSequence;
   const diagnostics = createRunDiagnostics(state);
+  // A summary may drop the AGENTS.md the first prompt carried; send it again.
+  state.repositoryInstructionsAgentId = undefined;
   const start = () => agent.summarize();
   const run = await (diagnostics ? diagnostics.follow(start) : start()).catch((error) => {
     diagnostics?.close("send-failed");

@@ -857,6 +857,10 @@ function recordSessionRequest(message: JsonObject): void {
   const params = isObject(message.params) ? message.params : {};
   appendFileSync(
     path,
-    `${JSON.stringify({ method: message.method, mcpServers: params.mcpServers })}\n`,
+    `${JSON.stringify({
+      method: message.method,
+      mcpServers: params.mcpServers,
+      ...(isObject(params._meta) ? { meta: params._meta } : {}),
+    })}\n`,
   );
 }

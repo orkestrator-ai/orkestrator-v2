@@ -1,5 +1,6 @@
+import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { describe, expect, jest, spyOn, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
@@ -51,9 +52,69 @@ describe("session system prompt", () => {
       "Project-home checkouts are excluded from host preview reads, even when they are the working directory",
     );
     expect(systemPrompt.append).toContain("cannot be previewed from a local Markdown path");
+    expect(systemPrompt.append).toContain("rather than as a Claude Doc or claude.ai artifact");
+    expect(systemPrompt.append?.startsWith(agentSystemInstructions())).toBe(true);
     call.push({ type: "result", subtype: "success", is_error: false, result: "" });
     call.finish();
     await promptPromise.catch(() => undefined);
+  });
+
+  test("appends the repository's AGENTS.md only when the CLI does not load the project", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "claude-agents-md-"));
+    await writeFile(join(workspace, "AGENTS.md"), "Always show visual changes as images.\n");
+    const previousCwd = process.env.CWD;
+    process.env.CWD = workspace;
+    try {
+      const appendFor = async (projectResources: boolean, id: string) => {
+        const session = createSession(id);
+        track(session.id);
+        session.executionPolicy = {
+          id: "interactive-host",
+          sandbox: "none",
+          approvals: "auto-approve",
+          projectResources,
+          networkAccess: "full",
+        };
+        const promptPromise = sendPrompt(session.id, "hello");
+        const call = await nextQueryCall();
+        const append = (call.options.systemPrompt as { append?: string }).append ?? "";
+        call.push({ type: "result", subtype: "success", is_error: false, result: "" });
+        call.finish();
+        await promptPromise.catch(() => undefined);
+        return append;
+      };
+      const withoutProject = await appendFor(false, "agents-md-host");
+      expect(withoutProject).toContain("# Repository instructions (AGENTS.md)");
+      expect(withoutProject).toContain("Always show visual changes as images.");
+      // The `project` source makes the CLI load it itself.
+      expect(await appendFor(true, "agents-md-project")).not.toContain("Repository instructions");
+    } finally {
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("a read-only coordinator excludes project sources and repository instructions", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "claude-review-rules-"));
+    const previous = process.env.CWD;
+    process.env.CWD = workspace;
+    try {
+      await writeFile(join(workspace, "AGENTS.md"), "BRANCH CONTROLLED RULES");
+      const session = createSession("review-rules");
+      track(session.id);
+      const prompt = sendPrompt(session.id, "inspect", { readOnly: true });
+      const call = await nextQueryCall();
+      expect(call.options.settingSources).toEqual([]);
+      expect(JSON.stringify(call.options.systemPrompt)).not.toContain("BRANCH CONTROLLED RULES");
+      call.push({ type: "result", subtype: "success", is_error: false, result: "" });
+      call.finish();
+      await prompt;
+    } finally {
+      if (previous === undefined) delete process.env.CWD;
+      else process.env.CWD = previous;
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   test("states the background command ceiling the CLI is launched with", async () => {

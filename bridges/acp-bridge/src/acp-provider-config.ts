@@ -167,6 +167,34 @@ const PROJECT_TRUST: Readonly<
 };
 
 /**
+ * Where a provider takes system-level instructions for one session: the
+ * instructions every Orkestrator provider receives and, when it does not load
+ * the checkout itself, the repository's AGENTS.md (`sessionInstructions`).
+ *
+ * Grok reads `_meta.rules` on `session/new` ("Extra rules appended to the
+ * system prompt") and keeps them with the session, so a `session/load` in a
+ * new process still has them. Both verified live on 1.0.70. Its `--rules`
+ * flag is not an alternative: under `agent stdio` it is ignored (also
+ * verified live), and a command-line argument could not hold a large
+ * AGENTS.md anyway. ACP itself has no such field, so a provider without an
+ * entry here gets none.
+ *
+ * Keyed by provider id for the same reason as `NETWORK_DENIED_ARGUMENTS`.
+ */
+const SESSION_RULES_META_FIELD: Readonly<Record<string, string>> = {
+  grok: "rules",
+};
+
+/** The `_meta` a `session/new` carries for these instructions, if the provider takes them. */
+export function sessionInstructionsMeta(
+  config: AcpProviderConfig,
+  instructions: string | undefined,
+): { _meta: Record<string, string> } | Record<string, never> {
+  if (!instructions || !Object.hasOwn(SESSION_RULES_META_FIELD, config.id)) return {};
+  return { _meta: { [SESSION_RULES_META_FIELD[config.id]!]: instructions } };
+}
+
+/**
  * Environment every child of a provider gets, whatever the session's policy.
  *
  * Grok 1.0.67 lets a git worktree use its main checkout's saved "always allow"

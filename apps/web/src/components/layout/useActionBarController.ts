@@ -186,6 +186,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     environmentName: string;
     isMerged: boolean;
   } | null>(null);
+  const cleanupTargetRef = useRef(cleanupTarget);
+  cleanupTargetRef.current = cleanupTarget;
   const [deletingEnvironmentId, setDeletingEnvironmentId] = useState<string | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
@@ -581,10 +583,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // The object test only narrows the type: no environment means no
   // cleanupAfterMergeError, so `!error` already covers that case. Depending on
   // the whole environment would re-open a dismissed dialog on any field change.
+  // Deletion completion must not re-open the same persisted error either; only
+  // selection/error changes should trigger this effect, guarded while deleting.
   /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     const error = selectedEnvironment?.cleanupAfterMergeError;
-    if (!selectedEnvironment || !error) return;
+    if (!selectedEnvironment || !error || deletingEnvironmentId === selectedEnvironment.id) return;
     setCleanupTarget({
       environmentId: selectedEnvironment.id,
       environmentName: selectedEnvironment.name,
@@ -2014,7 +2018,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [selectProject, selectedEnvironment?.projectId, selectedProjectId, setProjectCollapsed],
   );
 
-  // Handler for cleaning up (deleting) an environment after PR is merged/closed
+  // Handler for cleaning up (deleting) an environment after PR is merged/closed.
+  // The dialog closes as soon as the deletion starts so it never blocks the
+  // rest of the app while a container or worktree is torn down; the project
+  // takes focus and deleteEnvironment reports a failure as a toast.
   const handleCleanup = useCallback(async () => {
     const operationEnvironmentId = cleanupTarget?.environmentId ?? selectedEnvironmentId;
     if (!operationEnvironmentId || deletingEnvironmentId === operationEnvironmentId) return;
@@ -2022,14 +2029,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     activateProjectForCleanup(operationEnvironmentId);
     setDeletingEnvironmentId(operationEnvironmentId);
     setCleanupError(null);
+    setCleanupDialogOpen(false);
+    setCleanupTarget(null);
     try {
       await deleteEnvironment(operationEnvironmentId);
-      setCleanupDialogOpen(false);
-      setCleanupTarget(null);
+      // The user may have reopened cleanup while teardown was running. Close
+      // that obsolete dialog, but preserve one opened for another environment.
+      if (cleanupTargetRef.current?.environmentId === operationEnvironmentId) {
+        setCleanupDialogOpen(false);
+        setCleanupTarget(null);
+        setCleanupError(null);
+      }
     } catch (err) {
       console.error("[ActionBar] Failed to delete environment:", err);
-      const message = err instanceof Error ? err.message : "An unexpected error occurred";
-      setCleanupError(message);
     } finally {
       setDeletingEnvironmentId((current) => (current === operationEnvironmentId ? null : current));
     }

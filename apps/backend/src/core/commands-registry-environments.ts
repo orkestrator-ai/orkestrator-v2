@@ -29,6 +29,8 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
+import { environmentMailMarkers, isWorkingPipelineRecord } from "./nodes/index.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { createEnvironment, defaultEnvironmentName, sanitizeEnvironmentName } from "./storage.js";
 import { discoverAgentExtensions } from "./extension-discovery.js";
@@ -178,15 +180,22 @@ export function registerEnvironmentCommands(
     const announced = runtime.prMonitor.announcedStates();
     // Match the local sidebar's pipeline.environmentId membership. Persisted
     // buildPipelineId can outlive deletion and is also copied onto forks.
-    const buildEnvironmentIds = new Set(
-      (await storage.listBuildPipelines(asString(args.projectId, "projectId"))).map(
-        (pipeline) => pipeline.environmentId,
-      ),
+    const pipelines = await storage.listBuildPipelines(asString(args.projectId, "projectId"));
+    const buildEnvironmentIds = new Set(pipelines.map((pipeline) => pipeline.environmentId));
+    const activeBuildEnvironmentIds = new Set(
+      pipelines.filter(isWorkingPipelineRecord).map((pipeline) => pipeline.environmentId),
     );
+    // The row's agent-mail badge, counted as this machine's own sidebar counts it.
+    const mail = normalizeAgentMessagingSettings((await storage.loadConfig()).global.agentMessaging)
+      .enabled
+      ? environmentMailMarkers(await storage.getAgentMailSummary())
+      : new Map();
     return environments.map((environment) => ({
       ...environment,
       ...runtime.prMonitor.relayedHealth(environment, announced),
       ...(buildEnvironmentIds.has(environment.id) ? { buildPipeline: true as const } : {}),
+      ...(activeBuildEnvironmentIds.has(environment.id) ? { buildActive: true as const } : {}),
+      ...mail.get(environment.id),
     }));
   });
   /**

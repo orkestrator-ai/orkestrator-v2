@@ -191,6 +191,8 @@ export function WorkspaceRealmHost() {
     appliedSeq.current = request.seq;
     ui.setProjectCollapsed(environment.projectId, false);
     ui.selectProjectAndEnvironment(environment.projectId, environment.id);
+    // A project home opens on its Home tab, as its own sidebar opens it.
+    if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
     if (request.dialog) {
       // Opening its settings is not a request to start it.
       openDialog(request.dialog, environment.projectId, environment.id);

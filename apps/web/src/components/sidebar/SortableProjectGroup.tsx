@@ -1,36 +1,17 @@
 import { ProjectHomeActivity } from "./ProjectHomeActivity";
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { useSortable } from "@dnd-kit/sortable";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Button } from "@/components/ui/button";
-import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import {
-  Copy,
-  FolderInput,
-  FolderMinus,
-  Trash2,
-  ChevronRight,
-  Plus,
-  Settings2,
-  LayoutGrid,
-} from "lucide-react";
-import { GithubIcon } from "@/components/icons/GithubIcon";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import type { Project, Environment, EnvironmentType } from "@/types";
 import { cn } from "@/lib/utils";
 import { openInBrowser } from "@/lib/backend";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { SortableEnvironmentItem } from "./SortableEnvironmentItem";
+import { ProjectGroupHeader } from "./ProjectGroupHeader";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
 
@@ -73,6 +54,8 @@ interface SortableProjectGroupProps {
   /** Shown instead of the project name (a repository group names the machine). */
   label?: string;
   labelClassName?: string;
+  /** This window's machine, where the sidebar names machines. */
+  machineName?: string;
 }
 
 export function SortableProjectGroup({
@@ -102,11 +85,9 @@ export function SortableProjectGroup({
   machineIcon,
   label = project.name,
   labelClassName,
+  machineName,
 }: SortableProjectGroupProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
-  const projectTooltipAnchorRef = useRef<HTMLButtonElement>(null);
-  const projectTooltip = useHoverTooltip();
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId ?? project.id,
@@ -117,12 +98,6 @@ export function SortableProjectGroup({
     transition,
   };
   const githubRepositoryUrl = getGitHubRepositoryUrl(project.gitUrl);
-
-  const handleAddEnvironment = (e: React.MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    e.currentTarget.blur();
-    onCreateEnvironment();
-  };
 
   // Count running environments
   const runningCount = environments.filter((e) => e.status === "running").length;
@@ -145,178 +120,62 @@ export function SortableProjectGroup({
       ),
   );
 
-  // The name is also the drag handle, and dnd-kit's keyboard sensor owns Enter
-  // and Space there. This chevron carries no drag listeners, so it is the
-  // control a keyboard user can actually expand the project with — and it
-  // needs its own label, because nothing inside it is text. It sits last, as
-  // on folder and repository headings.
-  const chevron = (
-    <CollapsibleTrigger
-      className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
-      aria-label={
-        isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
-      }
-      onClick={(e) => e.stopPropagation()}
-    >
-      <ChevronRight
-        aria-hidden="true"
-        className={cn(
-          "h-4 w-4 text-muted-foreground transition-transform duration-200",
-          !isCollapsed && "rotate-90",
-        )}
-      />
-    </CollapsibleTrigger>
-  );
-
   return (
     <>
       <div ref={setNodeRef} style={style} className={cn("px-2", isDragging && "opacity-50 z-50")}>
         <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
-          {/* Project Header with Context Menu */}
-          <div
-            className={cn(
-              "relative mx-1 flex items-center group/project rounded-lg border transition-colors",
-              isSelected
-                ? "border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground"
-                : "border-transparent hover:bg-hover",
-            )}
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
-          >
-            <ContextMenu>
-              <ContextMenuTrigger className="contents">
-                <button
-                  {...attributes}
-                  {...listeners}
-                  ref={projectTooltipAnchorRef}
-                  type="button"
-                  aria-current={isSelected ? "page" : undefined}
-                  className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelectProject();
-                  }}
-                  onMouseEnter={projectTooltip.show}
-                  onMouseLeave={projectTooltip.hide}
-                  onFocus={projectTooltip.show}
-                  onBlur={projectTooltip.hide}
-                >
-                  {machineIcon}
-                  <span className={cn("truncate font-medium", labelClassName)}>{label}</span>
-                  {environments.length > 0 && (
-                    <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
-                      {environments.length}
-                    </span>
-                  )}
-                  {unreadMail > 0 && (
-                    <span
-                      className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-cyan-400/90 px-1 font-mono text-[9px] text-zinc-950"
-                      aria-label={`${unreadMail} unread agent messages`}
-                    >
-                      {unreadMail > 99 ? "99+" : unreadMail}
-                    </span>
-                  )}
-                  {hasFailedMail && (
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full bg-amber-400"
-                      aria-label="Agent message delivery failed"
-                    />
-                  )}
-                </button>
-              </ContextMenuTrigger>
-              <HoverTooltipContent
-                anchorRef={projectTooltipAnchorRef}
-                open={projectTooltip.open}
-                side="right"
-                align="center"
-                onMouseEnter={projectTooltip.show}
-                onMouseLeave={projectTooltip.hide}
-              >
-                <p className="font-mono text-xs">{project.gitUrl}</p>
-                {project.localPath && (
-                  <p className="text-xs text-muted-foreground">{project.localPath}</p>
-                )}
-                <p className="text-xs text-muted-foreground mt-1">
-                  {environments.length} environment
-                  {environments.length !== 1 && "s"}
-                  {runningCount > 0 && ` (${runningCount} running)`}
-                </p>
-                <p className="text-xs text-muted-foreground">Click to open board</p>
-              </HoverTooltipContent>
-              <ContextMenuContent>
-                <ContextMenuItem onClick={onSelectProject}>
-                  <LayoutGrid className="h-4 w-4 mr-2" />
-                  Open Board
-                </ContextMenuItem>
-                {githubRepositoryUrl && (
-                  <ContextMenuItem
-                    onClick={() => {
+          <ProjectGroupHeader
+            projectName={project.name}
+            label={label}
+            labelClassName={labelClassName}
+            icon={machineIcon}
+            card={{
+              repository: project.gitUrl,
+              ...(project.localPath ? { path: project.localPath } : {}),
+              environmentCount: environments.length,
+              runningCount,
+              openHint: "Click to open board",
+            }}
+            unreadMail={unreadMail}
+            failedMail={hasFailedMail}
+            highlighted={isSelected}
+            ariaCurrent={isSelected ? "page" : undefined}
+            sortable
+            dragAttributes={attributes}
+            dragListeners={listeners}
+            isCollapsed={isCollapsed}
+            onOpen={onSelectProject}
+            writable
+            menu={{
+              openBoard: onSelectProject,
+              ...(githubRepositoryUrl
+                ? {
+                    openGithub: () => {
                       void openInBrowser(githubRepositoryUrl).catch(() => {
                         toast.error("Could not open repository in browser.");
                       });
-                    }}
-                  >
-                    <GithubIcon className="h-4 w-4 mr-2" />
-                    Open Repo on GitHub
-                  </ContextMenuItem>
-                )}
-                <ContextMenuSeparator />
-                <ContextMenuItem onClick={onOpenSettings}>
-                  <Settings2 className="h-4 w-4 mr-2" />
-                  Repository Settings
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem onClick={onCreateEnvironment}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Environment
-                </ContextMenuItem>
-                {onCopyToMachine && (
-                  <ContextMenuItem onClick={onCopyToMachine}>
-                    <Copy className="h-4 w-4 mr-2" />
-                    Copy to Machine…
-                  </ContextMenuItem>
-                )}
-                {onAddToFolder && (
-                  <>
-                    <ContextMenuSeparator />
-                    <ContextMenuItem onClick={onAddToFolder}>
-                      <FolderInput className="h-4 w-4 mr-2" />
-                      Add to Folder
-                    </ContextMenuItem>
-                    {onRemoveFromFolder && (
-                      <ContextMenuItem onClick={onRemoveFromFolder}>
-                        <FolderMinus className="h-4 w-4 mr-2" />
-                        Remove from Folder
-                      </ContextMenuItem>
-                    )}
-                  </>
-                )}
-                <ContextMenuSeparator />
-                <ContextMenuItem variant="destructive" onClick={() => setShowDeleteDialog(true)}>
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete Project
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-
-            {home && <ProjectHomeActivity home={home} projectName={project.name} compact />}
-
-            {/* Add button - visible on compact layouts and revealed on desktop hover */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "h-6 w-6 text-muted-foreground opacity-100 transition-opacity hover:text-foreground md:opacity-0",
-                isHovered && "md:opacity-100",
-              )}
-              onClick={handleAddEnvironment}
-              title="Create environment"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-            {chevron}
-          </div>
+                    },
+                  }
+                : {}),
+              openSettings: onOpenSettings,
+              newEnvironment: onCreateEnvironment,
+              ...(onCopyToMachine ? { copyToMachine: onCopyToMachine } : {}),
+              ...(onAddToFolder ? { addToFolder: onAddToFolder } : {}),
+              ...(onRemoveFromFolder ? { removeFromFolder: onRemoveFromFolder } : {}),
+              deleteProject: () => setShowDeleteDialog(true),
+            }}
+            homeActivity={
+              home && <ProjectHomeActivity home={home} projectName={project.name} compact />
+            }
+            newEnvironment={
+              machineName
+                ? {
+                    label: `New environment in ${project.name} on ${machineName}`,
+                    title: `New environment on ${machineName}`,
+                  }
+                : { label: `New environment in ${project.name}`, title: "Create environment" }
+            }
+          />
 
           {/* Environments List */}
           <CollapsibleContent>

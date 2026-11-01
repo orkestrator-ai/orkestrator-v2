@@ -145,8 +145,8 @@ for (const mode of ["activity", "project", "repository"] as const) {
     await expect(sidebar.locator('[data-revealed="true"]')).toHaveCount(0);
     const projectButton = sidebar.locator(
       mode === "activity"
-        ? 'button[title="Open telegram-scraper on mbp3"]'
-        : 'button[title="Open orkestrator-v2 on mini"]',
+        ? 'button[aria-label="Open telegram-scraper on mbp3"]'
+        : 'button[aria-label="Open orkestrator-v2 on mini"]',
     );
     await expect(projectButton).not.toHaveAttribute("aria-current");
   });
@@ -163,10 +163,9 @@ test("a connected project opens and stays selected in repository view", async ({
   await expect(page.getByRole("combobox", { name: "Sidebar view", exact: true })).toHaveValue(
     "repository",
   );
-  await expect(page.getByTitle("Open telegram-scraper on mbp3", { exact: true })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  await expect(
+    page.getByRole("button", { name: "Open telegram-scraper on mbp3", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("opened-selection")).toHaveText(
     JSON.stringify({
       nodeId: "bk_mbp3",

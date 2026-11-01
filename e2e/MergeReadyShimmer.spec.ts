@@ -40,9 +40,9 @@ for (const [signal, label] of [
     expect(moving.color).toBe(resting.color);
     expect(moving.textOverflow).toBe("ellipsis");
     // The reduced-motion indicator stays out of the way while the sweep runs.
-    const row = page.getByRole("button", { name: "p-env-1", exact: true });
+    const row = page.getByRole("button", { name: /^p-env-1(?:, on |$)/ });
     await expect(row.getByTestId(`${signal}-indicator`)).toBeHidden();
-    await expect(row).toHaveAccessibleDescription(label);
+    await expect(row).toHaveAccessibleDescription(new RegExp(label));
     await page.screenshot({ path: testInfo.outputPath(`${signal}-moving.png`) });
 
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -75,7 +75,7 @@ test("another machine's clean PR stays plain without leaf monitor health", async
   await expect(name).not.toHaveAttribute("data-merge-ready", "true");
   expect((await paint(name)).animationName).toBe("none");
   const row = page.getByRole("button", { name: /^b, on Remote/ });
-  await expect(row).not.toHaveAccessibleDescription("Ready to merge");
+  await expect(row).not.toHaveAccessibleDescription(/Ready to merge/);
   await expect(row.getByTestId("merge-ready-indicator")).toHaveCount(0);
 
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -97,13 +97,13 @@ test("another machine's rows shimmer once its own monitor vouches for the readin
   await expect(ready).toHaveAttribute("data-merge-ready", "true");
   expect((await paint(ready)).animationName).toBe("text-shimmer");
   await expect(page.getByRole("button", { name: /^b, on Remote/ })).toHaveAccessibleDescription(
-    "Ready to merge",
+    /Ready to merge/,
   );
 
   const conflicted = page.getByText("c", { exact: true });
   await expect(conflicted).toHaveAttribute("data-name-signal", "merge-conflicts");
   await expect(page.getByRole("button", { name: /^c, on Remote/ })).toHaveAccessibleDescription(
-    "Merge conflicts to resolve",
+    /Merge conflicts to resolve/,
   );
 });
 

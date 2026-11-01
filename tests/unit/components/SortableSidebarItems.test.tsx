@@ -233,18 +233,14 @@ describe("sortable sidebar items", () => {
     expect(screen.getByText("1").className).toContain("bg-white/[0.07]");
     expect(screen.getByTestId("sortable-context")).toBeTruthy();
 
+    // Visible on compact layouts; on desktop the header's hover (or focus)
+    // reveals it, by the same CSS rule another machine's header uses.
     const addEnvironmentButton = screen.getByTitle("Create environment");
     expect(addEnvironmentButton.className).toContain("opacity-100");
     expect(addEnvironmentButton.className).toContain("md:opacity-0");
-    expect(addEnvironmentButton.className).not.toContain("md:opacity-100");
-
-    fireEvent.mouseEnter(projectHeader);
-    expect(addEnvironmentButton.className).toContain("md:opacity-100");
-    expect(addEnvironmentButton.className).not.toContain("md:opacity-0");
-
-    fireEvent.mouseLeave(projectHeader);
-    expect(addEnvironmentButton.className).toContain("md:opacity-0");
-    expect(addEnvironmentButton.className).not.toContain("md:opacity-100");
+    expect(addEnvironmentButton.className).toContain("md:group-hover/project:opacity-100");
+    expect(addEnvironmentButton.className).toContain("md:focus-visible:opacity-100");
+    expect(projectHeader.className).toContain("group/project");
 
     fireEvent.click(addEnvironmentButton);
     expect(onCreateEnvironment).toHaveBeenCalled();

@@ -8,7 +8,7 @@ import {
   parseCpuPercent,
   parseProcStat,
   percentile,
-} from "./multi-environment-ui-stats";
+} from "../../e2e/perf/multi-environment-ui-stats";
 
 describe("multi-environment UI probe statistics", () => {
   test("percentile uses the nearest rank and is null without samples", () => {

@@ -117,6 +117,61 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## UI response under multi-environment load, first run on a busy host (2026-11-01)
+
+Todo [0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md)
+task 3, with the [probe](#ui-response-under-multi-environment-load) at
+`5616f272`. This is a first sample on a busy shared host, not a reference
+figure.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, 16 CPUs, 62 GiB),
+  Docker Engine 29.9.2 rootful. Other builds were running on the host
+  throughout. The load average was 58.7, 66.1 and 62.7 at the start of the
+  three phases, and the host CPU was 97.6–99.9% busy in every phase. All 10
+  running containers were this profile's, so the competing load was not in
+  Docker.
+- **Profile:** `dev:test --fixture-environments container
+  --no-agent-credentials --agent-platforms claude --headless-electron`.
+  Three busy environments, one target, and the profile's own
+  `fixture-container`, all restricted, all under the built-in default (no
+  CPU cap, 8 GiB, 4,096 PIDs). There were no provider turns. Default
+  options: 2 spin loops per busy container, 20 switches, 3 stop and start
+  cycles and a 20 s watch per phase. Headless Chromium at 1440 × 900.
+- **Load:** each busy container used 189–193% CPU in the busy phase and
+  2–3% in the idle phases.
+
+Medians with p95 in brackets, in milliseconds unless stated:
+
+| Measure | Idle 1 | Busy | Idle 2 |
+| --- | --- | --- | --- |
+| Row selected and painted | 5.3 (13.8) | 5.3 (13.3) | 7.4 (13.4) |
+| `<main>` settled after a switch | 589 (1,067) | 594 (1,015) | 317 (706) |
+| Frame interval; stalls over 50 ms | 16.7 (16.7), max 16.8; 0 | 16.7 (16.7), max 33.4; 0 | 16.7 (16.7), max 33.3; 0 |
+| Long tasks; slow events | 0; 0 | 0; 0 | 0; 0 |
+| Timer lag (250 ms timer) | 0.3 (3.1) | 1.3 (6.6) | 0.3 (3.8) |
+| `get_environments` round trip | 13.0 (38.2) | 18.7 (64.8) | 12.1 (31.3) |
+| `stop_environment` round trip | 10.9 s (11.2 s) | 11.1 s (11.6 s) | 10.7 s (11.5 s) |
+| `start_environment` round trip | 4.3 s (4.4 s) | 5.4 s (5.9 s) | 4.2 s (4.5 s) |
+| Sidebar after the stop reply | 63 (64) | 59 (82) | 62 (68) |
+| Sidebar after the start reply | 54 (61) | 58 (58) | 43 (49) |
+
+The first visit to each environment, before the phases: selected in
+13.4 ms and settled in 115 ms (medians of 4). There were no failures, missed
+signals or renderer reloads. The dialogs dismissed were "Docker containers
+can't reach Orkestrator", which the host firewall triggers and which was left
+unchanged.
+
+On this host, about 5.7 CPUs of container load changed nothing the renderer
+showed. Selection painted within a frame, with no long tasks and no stalls.
+The sidebar trailed lifecycle replies by about 60 ms in every phase. The
+backend slowed against either idle phase: the `get_environments` round trip
+rose 1.4–1.5× (p95 1.7–2.1×) and `start_environment` 1.24–1.27×. `<main>` settle times varied
+more between the two idle phases (589 against 317 ms) than between idle and
+busy, so this sample cannot attribute them to the load. Every stop took
+10.5–11.6 s with or without load, against 0.1–0.6 s for the benchmark's bare
+`docker stop`; that is recorded in
+[2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md).
+
 ## Egress gateway conditions on Linux Engine (2026-10-31)
 
 Todo [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)
@@ -942,6 +997,59 @@ Engine amd64. Their results are in
 [0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md#evidence-2026-10-25).
 Rerun them when a workload grows (a new browser default, a heavier build),
 before you change the default.
+
+### UI response under multi-environment load
+
+`e2e/perf/multi-environment-ui-perf.ts` times the browser UI while several
+container environments are busy. It is a probe, not a test: it has no
+targets and fails only when it cannot run. It attaches to a running
+disposable profile with container fixtures and never starts an agent
+session.
+
+```bash
+# In its own long-lived terminal; --headless-electron keeps the profile's
+# window out of the desktop session on Linux.
+mise run dev:test --profile ui-load --fixture-environments container \
+  --no-agent-credentials --agent-platforms claude --headless-electron
+# Once `mise run dev:status --profile ui-load --json` reports ready:
+mise exec -- bun e2e/perf/multi-environment-ui-perf.ts --profile ui-load \
+  [--environments 3] [--workers 2] [--memory-mib 0] [--phases idle,busy,idle] \
+  [--switches 20] [--status-cycles 3] [--watch-seconds 20] [--settle-seconds 10]
+# Afterwards:
+mise run dev:stop --profile ui-load && mise run dev:reset --profile ui-load
+```
+
+It adds `--environments` container environments (`ui-load-busy-N`) and a
+`ui-load-target` to the fixture project, and signs a headless Chromium in
+through `dev:login`. Startup dialogs such as "Claude Code Is Not Logged In"
+are dismissed for that page only. In each `busy` phase, every
+`ui-load-busy-N` container runs a load through `docker exec`, and only after
+its `environment-id` label has been checked. The load is `--workers` shell
+spin loops (one CPU each), a workspace file rewritten every second, and an
+optional `--memory-mib` held by Node. The containers keep the budget the
+backend gave them. `idle` phases measure with the same environments running
+and no load. Each phase records:
+
+- **watch:** animation-frame intervals, long tasks, slow events (16 ms or
+  more), the lag of a 250 ms timer, and the `get_environments` round trip
+  from the page, one every 100 ms.
+- **switch:** time from `pointerdown` on a sidebar row to the first frame in
+  which the row is selected (`selectMs`). The frame time is when the frame
+  starts, so this is accurate to one frame and can be slightly negative.
+  `settledMs` runs to the last change under `<main>` before 300 ms of quiet.
+- **status:** `stop_environment` and `start_environment` on `ui-load-target`,
+  sent from the page. Each records its round trip and when the sidebar marker
+  showed the result. `stopLagMs` and `startLagMs` are that time minus the
+  round trip, so they measure how far the UI trails the reply.
+- **host:** load average, host CPU busy from `/proc/stat`, the probe
+  containers' `docker stats` CPU and the number of running containers.
+
+Every environment is visited once before the first phase, so phases compare
+warm switches; the cold visits are reported separately. The report under
+`output/benchmarks/multi-environment-ui/` holds numbers and dialog titles
+only, no tokens, paths or contents. The probe deletes its environments, also
+on failure. A run is a sample of one host at one time; record the host load
+with it.
 
 ### Exec cost and container change signals
 

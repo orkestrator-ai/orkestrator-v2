@@ -448,7 +448,7 @@ test("native: a held row that keeps changing past the revision budget does not f
   page,
 }) => {
   await page.clock.install();
-  await page.goto("/transcript-paging?auto=1&mixed=1&stops=300&paged=20&churn=1");
+  await page.goto("/transcript-paging?auto=1&mixed=1&stops=300&paged=20");
   const list = page.locator("[data-transcript-scroller]");
   await expect(list).toBeVisible();
   const fixture = () =>
@@ -461,6 +461,7 @@ test("native: a held row that keeps changing past the revision budget does not f
     });
   // The opening page: the 100-row tail, its closing answer, and 20 earlier rows.
   await expect.poll(async () => (await fixture()).rows, { timeout: 15_000 }).toBe(121);
+  await expect(page.getByRole("button", { name: "Loading…", exact: true })).toHaveCount(0);
   const before = (await fixture()).requests.length;
 
   await page.evaluate(() => {
@@ -479,6 +480,7 @@ test("native: a held row that keeps changing past the revision budget does not f
       requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
+    (window as unknown as { startPagingFixtureChurn: () => void }).startPagingFixtureChurn();
   });
   // The first changed token starts a reread immediately. Subsequent polls
   // must retain the rows until the 30-second interval permits another read.

@@ -3362,7 +3362,8 @@ describe("a held row too large to travel as a revision keeps changing", () => {
     token = "digest-1",
     extras = {},
   ) => {
-    transcriptUpdates = [() => tailAt(`t-${token}`, token, extras)];
+    const transcriptToken = `t-${token}-${transcriptCalls.length}`;
+    transcriptUpdates = [() => tailAt(transcriptToken, token, extras)];
     await act(async () => {
       await session.result.current.refresh();
     });
@@ -3379,7 +3380,7 @@ describe("a held row too large to travel as a revision keeps changing", () => {
   };
 
   test.each([false, true])(
-    "an in-flight page respects a newer poll (token moved: %s)",
+    "an in-flight page respects a newer poll (reconciliation token moved: %s)",
     async (moved) => {
       const session = await startWithPagedHistory();
       const deferred = Promise.withResolvers<NativeAgentMessagePage<TestMessage>>();
@@ -3528,12 +3529,21 @@ describe("a held row too large to travel as a revision keeps changing", () => {
       });
       expect(session.result.current.projection?.messages).toEqual(tail);
       messagePageCalls = [];
-      messagePages = [() => page(heldRows)];
+      const recovered = grown[grown.length - 1]!;
+      messagePages = [() => page([recovered], "recover-older")];
       await act(async () => {
         await session.result.current.loadEarlierMessages();
       });
       expect(messagePageCalls).toEqual([{ before: "before-tail" }]);
-      expect(session.result.current.projection?.messages).toEqual([...heldRows, ...tail]);
+      expect(session.result.current.projection?.messages).toEqual([recovered, ...tail]);
+      const recoveredState = useNativeAgentProjectionStore.getState();
+      expect(recoveredState.syncCaches.get(identity.logicalSessionKey)?.historyCursor).toBe(
+        "recover-older",
+      );
+      expect(
+        recoveredState.syncCaches.get(identity.logicalSessionKey)?.historyBytes,
+      ).toBeLessThanOrEqual(8 * 1024 * 1024);
+      expect(recoveredState.historyBytesTotal).toBeLessThanOrEqual(32 * 1024 * 1024);
     },
   );
 

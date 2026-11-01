@@ -27,7 +27,7 @@ const short = query.has("short");
 const bounded = query.has("bounded");
 // `churn` moves the reconciliation token on every read, as a held row too large
 // to travel as a revision does while its subagents run.
-const churn = query.has("churn");
+let churn = query.has("churn");
 let transcriptReads = 0;
 // The native tab pages history in by itself as the reader nears the top.
 // Without `auto` that is off, so a test can drive the button.
@@ -160,6 +160,10 @@ const pageRequests: string[] = [];
 (window as unknown as { pagingFixtureRowCount: () => number }).pagingFixtureRowCount = () =>
   useNativeAgentProjectionStore.getState().projections.get(identity.logicalSessionKey)?.messages
     .length ?? 0;
+/** Starts revision overflow after the test has installed its frame probe. */
+(window as unknown as { startPagingFixtureChurn: () => void }).startPagingFixtureChurn = () => {
+  churn = true;
+};
 /** Appends live rows without focusing a control or changing the reader's intent. */
 (window as unknown as { appendPagingFixtureRows: () => void }).appendPagingFixtureRows = () => {
   const store = useNativeAgentProjectionStore.getState();

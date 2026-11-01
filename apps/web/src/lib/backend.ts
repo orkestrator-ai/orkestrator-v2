@@ -26,3 +26,4 @@ export * from "./backend/bug-report";
 export * from "./backend/graph-runs";
 export * from "./backend/graph-templates";
 export * from "./backend/graph-template-sharing";
+export * from "./backend/agent-handoffs";

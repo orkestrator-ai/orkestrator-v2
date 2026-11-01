@@ -84,33 +84,11 @@ const EMPTY_DRAFT: NativeComposeDraft = {
   mode: "build",
 };
 
-/**
- * The last prompt this renderer dispatched for a session, exactly as sent.
- *
- * Kept so a prompt Claude refused for a missing login can be sent again once
- * the user signs in. The transcript cannot rebuild it: Claude records an
- * attached image as inline data, not the path it was sent from. Memory only,
- * one per session, and never persisted: after a restart the user resends.
- */
-export interface NativeSentPrompt {
-  /** Absent only until this tab's first dispatch creates its provider session. */
-  providerSessionId?: string;
-  /** Raw composer content, before transport references, annotations and handoff history. */
-  draft: Pick<NativeComposeDraft, "text" | "mentions" | "annotations">;
-  prompt: string;
-  attachments: WorkspaceAttachment[];
-  /** Transcript rows visible when it was sent; its own row is the next user row. */
-  priorMessageIds: ReadonlySet<string>;
-}
-
 interface NativeComposeState {
   drafts: Map<string, NativeComposeDraft>;
-  sentPrompts: Map<string, NativeSentPrompt>;
   updateDraft: (sessionKey: string, update: Partial<NativeComposeDraft>) => void;
   clearDraft: (sessionKey: string) => void;
   clearSession: (sessionKey: string) => void;
-  clearSentPromptsForEnvironment: (environmentId: string) => void;
-  recordSentPrompt: (sessionKey: string, sent: NativeSentPrompt | undefined) => void;
   consumeBrowserAnnotations: (environmentId: string, annotationIds: readonly string[]) => void;
 }
 
@@ -341,7 +319,6 @@ export function nativeComposeDraft(
 
 export const useNativeComposeStore = create<NativeComposeState>()((set, get) => ({
   drafts: new Map(),
-  sentPrompts: new Map(),
   updateDraft: (sessionKey, update) =>
     set((state) => {
       const drafts = new Map(state.drafts);
@@ -386,24 +363,7 @@ export const useNativeComposeStore = create<NativeComposeState>()((set, get) => 
     }),
   clearSession: (sessionKey) => {
     get().clearDraft(sessionKey);
-    get().recordSentPrompt(sessionKey, undefined);
   },
-  clearSentPromptsForEnvironment: (environmentId) =>
-    set((state) => {
-      const sentPrompts = new Map(state.sentPrompts);
-      for (const key of sentPrompts.keys()) {
-        if (getEnvironmentIdFromSessionKey(key) === environmentId) sentPrompts.delete(key);
-      }
-      return sentPrompts.size === state.sentPrompts.size ? state : { sentPrompts };
-    }),
-  recordSentPrompt: (sessionKey, sent) =>
-    set((state) => {
-      if (!sent && !state.sentPrompts.has(sessionKey)) return state;
-      const sentPrompts = new Map(state.sentPrompts);
-      if (sent) sentPrompts.set(sessionKey, sent);
-      else sentPrompts.delete(sessionKey);
-      return { sentPrompts };
-    }),
   consumeBrowserAnnotations: (environmentId, annotationIds) =>
     set((state) => {
       if (annotationIds.length === 0) return state;

@@ -1,5 +1,4 @@
 import { AgentInfoPermissionRules } from "./AgentInfoPermissionRules";
-import { resolveAgentHandoffChangeSummaries } from "@/lib/changes/handoff";
 import {
   useCallback,
   useEffect,
@@ -37,16 +36,12 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
 import {
   AGENT_PROVIDER_LABELS,
-  composeAgentHandoffTransferMessages,
-  createAgentHandoffSnapshot,
+  createAgentHandoff,
   forgetAgentHandoff,
-  loadAgentHandoff,
-  persistAgentHandoff,
   type AgentProvider,
 } from "@/lib/agent-handoff";
 import {
   adoptNativeAgentSession,
-  deleteAgentHandoff,
   beginNativeAgentSignIn,
   cancelNativeAgentSignIn,
   forkNativeAgentSession,
@@ -798,40 +793,6 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     setOpen(false);
   };
 
-  const readAuthoritativeHandoffMessages = async (
-    sourceSession: ActiveNativeSession,
-    sourceSessionId: string,
-  ): Promise<NativeMessage[]> => {
-    const identity = {
-      environmentId: sourceSession.environmentId,
-      agent: sourceSession.provider,
-      logicalSessionKey: sourceSession.sessionKey,
-    } as const;
-    const before = await getNativeAgentProjection(identity);
-    if (!before || before.sessionId !== sourceSessionId) {
-      throw new Error(`${sourceSession.providerLabel} session is unavailable`);
-    }
-    if (before.turn.phase !== "idle" && before.turn.phase !== "error") {
-      throw new Error(
-        `Wait for ${sourceSession.providerLabel} to finish before continuing in another agent`,
-      );
-    }
-    const messages = normalizeNativeMessages(before.messages as NativeMessage[]);
-    const after = await getNativeAgentProjection(identity);
-    if (
-      !after ||
-      after.sessionId !== sourceSessionId ||
-      after.turn.phase !== before.turn.phase ||
-      after.generation !== before.generation ||
-      after.revision !== before.revision
-    ) {
-      throw new Error(
-        `${sourceSession.providerLabel} conversation changed while it was being transferred`,
-      );
-    }
-    return messages;
-  };
-
   const runAction = async (
     name: string,
     action: (scope: { isCurrent: () => boolean; sessionIdentity: string }) => Promise<void>,
@@ -873,58 +834,23 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     sourceSessionId: string,
   ) =>
     runAction(`continue-${destination}`, async ({ isCurrent }) => {
-      const providerMessages = await readAuthoritativeHandoffMessages(
-        sourceSession,
-        sourceSessionId,
-      );
-      if (!isCurrent()) return;
-      const priorHandoff = activeTab?.agentHandoffId
-        ? await loadAgentHandoff(activeTab.agentHandoffId)
-        : null;
-      if (activeTab?.agentHandoffId && !priorHandoff) {
-        throw new Error("The previous conversation transfer could not be loaded");
-      }
-      if (
-        priorHandoff &&
-        (priorHandoff.environmentId !== sourceSession.environmentId ||
-          priorHandoff.destinationProvider !== sourceSession.provider)
-      ) {
-        throw new Error("The previous conversation transfer does not belong to this session");
-      }
-      if (!isCurrent()) return;
-      const messages = composeAgentHandoffTransferMessages(priorHandoff, providerMessages);
-      if (messages.length === 0) {
-        throw new Error("This conversation has no history to transfer");
-      }
-      // Change counts in the handoff are written by the backend from its
-      // selected measurements; unmeasured calls say so instead of "+0/-0".
-      const changeSummaries = await resolveAgentHandoffChangeSummaries(
-        {
-          environmentId: sourceSession.environmentId,
-          provider: sourceSession.provider,
-          conversationId: sourceSessionId,
-        },
-        messages,
-      ).catch(() => ({}));
-      if (!isCurrent()) return;
-      const handoff = createAgentHandoffSnapshot({
-        id: createUuid(),
+      // The backend reads the whole transcript, measures the changes and stores
+      // the result; the source tab only names what it is looking at.
+      const handoff = await createAgentHandoff({
+        handoffId: createUuid(),
         environmentId: sourceSession.environmentId,
-        sourceProvider: sourceSession.provider,
-        destinationProvider: destination,
+        sourceAgent: sourceSession.provider,
+        logicalSessionKey: sourceSession.sessionKey,
         sourceSessionId,
-        sourceTitle: neutralProjection?.title,
-        sourceModel: modelId,
-        messages,
-        changeSummaries,
+        destinationProvider: destination,
+        ...(activeTab?.agentHandoffId ? { priorHandoffId: activeTab.agentHandoffId } : {}),
+        ...(neutralProjection?.title ? { sourceTitle: neutralProjection.title } : {}),
+        ...(modelId ? { sourceModel: modelId } : {}),
       });
-      await persistAgentHandoff(handoff);
       if (!isCurrent()) {
-        // The source tab changed while persistence was in flight, so no
-        // destination tab will own this sensitive snapshot. Remove it instead
-        // of leaving an unreachable handoff in durable storage.
+        // The source tab changed while this ran, so no destination tab will own
+        // the snapshot. The backend reclaims an unreferenced handoff itself.
         forgetAgentHandoff(handoff.id);
-        await deleteAgentHandoff(handoff.id, handoff.environmentId);
         return;
       }
       openHandoffTab(sourceSession.provider, destination, handoff.id);

@@ -223,7 +223,12 @@ const setNativeAgentResumableSessionArchivedMock = mock(
   }),
 );
 const getAgentHandoffMock = mock(async (_handoffId: string): Promise<unknown> => null);
-const deleteAgentHandoffMock = mock(async (_handoffId: string, _environmentId: string) => true);
+const getAgentHandoffCapabilitiesMock = mock(async () => ({
+  create: false,
+  delivery: false,
+  pruning: false,
+}));
+const getNativeAgentSignInResendMock = mock(async () => ({ pending: false }));
 const performNativeAgentSessionActionMock = mock(
   async (_input: { agent: string; action: { kind: string; text?: string } }) => ({
     outcome: "applied" as const,
@@ -430,7 +435,8 @@ mock.module("@/lib/backend", () => ({
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
   setNativeAgentResumableSessionArchived: setNativeAgentResumableSessionArchivedMock,
   getAgentHandoff: getAgentHandoffMock,
-  deleteAgentHandoff: deleteAgentHandoffMock,
+  getAgentHandoffCapabilities: getAgentHandoffCapabilitiesMock,
+  getNativeAgentSignInResend: getNativeAgentSignInResendMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
   retryNativeAgentDispatch: retryNativeAgentDispatchMock,
   discardNativeAgentDispatch: discardNativeAgentDispatchMock,
@@ -600,8 +606,14 @@ afterEach(() => {
   setNativeAgentResumableSessionArchivedMock.mockClear();
   getAgentHandoffMock.mockReset();
   getAgentHandoffMock.mockResolvedValue(null);
-  deleteAgentHandoffMock.mockReset();
-  deleteAgentHandoffMock.mockResolvedValue(true);
+  getAgentHandoffCapabilitiesMock.mockReset();
+  getAgentHandoffCapabilitiesMock.mockResolvedValue({
+    create: false,
+    delivery: false,
+    pruning: false,
+  });
+  getNativeAgentSignInResendMock.mockReset();
+  getNativeAgentSignInResendMock.mockResolvedValue({ pending: false });
   resetAgentHandoffCache();
   dispatchNativeAgentIntentMock.mockClear();
   retryNativeAgentDispatchMock.mockClear();
@@ -641,7 +653,7 @@ afterEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
+  useNativeComposeStore.setState({ drafts: new Map() });
   useNativeAgentProjectionStore.getState().reset();
   useNativeNoticeDismissalStore.getState().clear();
   useMultiReviewStore.setState({ workflows: new Map() });
@@ -1444,356 +1456,82 @@ describe("AgentNativeTab", () => {
 
   describe("after Claude refuses a prompt with its not-logged-in notice", () => {
     const notice = "Not logged in · Please run /login";
-
-    const image = {
-      id: "image-1",
-      type: "image" as const,
-      path: "/workspace/screen.png",
-      name: "screen.png",
-      previewUrl: "data:image/png;base64,cG5n",
-    };
-    const annotation = { id: "annotation-1", text: "Original answer", comment: "Please fix" };
-    function setRecoveryProjection(
-      sessionKey: string,
-      update: Partial<NativeAgentSessionProjection<NativeMessage>>,
-    ) {
-      const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
-      const next = {
-        ...current,
-        revision: current.revision + 1,
-        ...update,
-      } as NativeAgentSessionProjection<NativeMessage>;
-      getNativeAgentProjectionMock.mockResolvedValue(next);
-      act(() => useNativeAgentProjectionStore.getState().setProjection(sessionKey, next));
-    }
-    function completeSignIn() {
-      accountLoginProgress = {
-        state: "succeeded",
-        platform: "claude",
-        mode: "reauthenticate",
-        completedAt: "2026-10-31T00:24:00.000Z",
-      };
-    }
-    async function sendRefusedPrompt(
-      tabId: string,
-      options: { attachments?: boolean; launcher?: boolean; terminal?: boolean } = {},
-    ) {
+    function answerWithRefusal() {
       accountLoginProgress = { state: "idle" };
-      const sessionKey = createSessionKey("env-1", tabId);
-      if (options.launcher) {
-        seedUnassignedDefaultCatalog();
-        useConfigStore.getState().updateGlobalConfig({ agentSettings: { defaultAgent: "claude" } });
-        seedEnvTab({
-          id: tabId,
-          type: "agent-native",
-          nativeAgentData: { environmentId: "env-1", containerId: "container-1" },
-        });
-        render(<PaneBackedAgentNativeTab tabId={tabId} />);
-        await screen.findByTestId("unassigned-native-compose-bar");
-      } else {
-        render(
-          <TerminalProvider>
-            <TerminalTabHarness createTab={mock(() => true)}>
-              <AgentNativeTab
-                tabId={tabId}
-                data={{
-                  ...identity("claude"),
-                  ...(options.terminal &&
-                  (useConfigStore.getState().config.global.useHostClaudeCredentials ?? true)
-                    ? { containerId: undefined }
-                    : {}),
-                }}
-                isActive
-              />
-            </TerminalTabHarness>
-          </TerminalProvider>,
-        );
-        await screen.findByTestId("shared-native-compose-bar");
-      }
-      act(() => {
-        useNativeComposeStore.getState().updateDraft(sessionKey, {
-          text: "Fix the garbled text",
-          ...(options.attachments ? { attachments: [image], annotations: [annotation] } : {}),
-        });
-      });
-      fireEvent.click(await screen.findByTitle(options.launcher ? "Start agent" : "Send"));
-      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
-      await waitFor(() =>
-        expect(nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).text).toBe(""),
-      );
-      await screen.findByTestId("shared-native-compose-bar");
-      // Claude runs nothing: it answers with the notice.
-      setRecoveryProjection(sessionKey, {
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input as never)),
         messages: [
           {
             id: "user-1",
-            role: "user",
+            role: "user" as const,
             content: "Fix the garbled text",
             createdAt: "2026-10-31T00:23:00.000Z",
-            parts: [{ type: "text", content: "Fix the garbled text" }],
+            parts: [{ type: "text" as const, content: "Fix the garbled text" }],
           },
           {
             id: "assistant-1",
-            role: "assistant",
+            role: "assistant" as const,
             content: notice,
             createdAt: "2026-10-31T00:23:01.000Z",
-            parts: [{ type: "text", content: notice }],
+            parts: [{ type: "text" as const, content: notice }],
           },
         ],
-      });
-      if (!options.terminal) {
-        fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
-        await screen.findByLabelText("Sign-in code");
-      }
-      return sessionKey;
+      }));
     }
 
-    test("sends the prompt again once the user signs in", async () => {
-      await sendRefusedPrompt("tab-resend-after-sign-in");
-      expect(screen.getByText(/Your message is sent again once you sign in\./)).toBeTruthy();
+    test("says the prompt goes out again when the backend holds it, and sends nothing itself", async () => {
+      answerWithRefusal();
+      getNativeAgentSignInResendMock.mockResolvedValue({ pending: true });
+      const tabId = "tab-backend-holds-prompt";
+      render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
 
+      expect(await screen.findByText(/Your message is sent again once you sign in\./)).toBeTruthy();
+      expect(getNativeAgentSignInResendMock).toHaveBeenCalledWith({
+        environmentId: "env-1",
+        agent: "claude",
+        logicalSessionKey: createSessionKey("env-1", tabId),
+      });
+
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+      await screen.findByLabelText("Sign-in code");
       accountLoginProgress = {
         state: "succeeded",
         platform: "claude",
         mode: "reauthenticate",
-        completedAt: "2026-10-31T00:24:00.000Z",
-      };
-      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2), {
-        timeout: 4_000,
-      });
-      const [first, resent] = dispatchNativeAgentIntentMock.mock.calls.map(([input]) => input);
-      expect(resent).toMatchObject({ agent: "claude", prompt: first!.prompt });
-      // A new request: the refused one already ran.
-      expect(resent!.requestId).not.toBe(first!.requestId);
-      expect(screen.getByText("Signed in. Sending your message again…")).toBeTruthy();
-    });
-
-    test("recovers a launcher-first prompt after adopting its created session", async () => {
-      const key = await sendRefusedPrompt("launcher-recovery", { launcher: true });
-      expect(useNativeComposeStore.getState().sentPrompts.get(key)?.providerSessionId).toBe(
-        "claude-session",
-      );
-      completeSignIn();
-      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2), {
-        timeout: 4000,
-      });
-      expect(dispatchNativeAgentIntentMock.mock.calls[1]![0].prompt).toBe(
-        dispatchNativeAgentIntentMock.mock.calls[0]![0].prompt,
-      );
-    });
-
-    test("resends original attachment-bearing payload exactly once", async () => {
-      await sendRefusedPrompt("image-recovery", { attachments: true });
-      completeSignIn();
-      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2), {
-        timeout: 4000,
-      });
-      const [first, second] = dispatchNativeAgentIntentMock.mock.calls.map(([input]) => input!);
-      expect(second!.prompt).toBe(first!.prompt);
-      expect(second!.attachments).toEqual([
-        { type: "image", path: image.path, filename: image.name },
-      ]);
-      expect(extractMarkedAttachmentReferences(second!.prompt).attachments).toHaveLength(1);
-      expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
-    });
-
-    test.each(["rejected", "unknown"] as const)(
-      "restores raw content after a %s replay without repeating it",
-      async (outcome) => {
-        const key = await sendRefusedPrompt(`recovery-${outcome}`, { attachments: true });
-        dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
-          outcome,
-          requestId: input.requestId,
-          error: "Delivery failed",
-          ...(outcome === "unknown"
-            ? { origin: "transport" as const }
-            : { requestIdRetired: true }),
-        }));
-        completeSignIn();
-        await waitFor(
-          () =>
-            expect(nativeComposeDraft(useNativeComposeStore.getState(), key).text).toBe(
-              "Fix the garbled text",
-            ),
-          { timeout: 4000 },
-        );
-        const draft = nativeComposeDraft(useNativeComposeStore.getState(), key);
-        expect(draft.attachments).toEqual([image]);
-        expect(draft.annotations).toEqual([annotation]);
-        expect(extractMarkedAttachmentReferences(draft.text).attachments).toHaveLength(0);
-        expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
-        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2);
-        expect(screen.getByText("Signed in. Resend your message to continue.")).toBeTruthy();
-        fireEvent.click(await screen.findByTitle("Send"));
-        await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(3));
-        expect(
-          extractMarkedAttachmentReferences(dispatchNativeAgentIntentMock.mock.calls[2]![0].prompt)
-            .attachments,
-        ).toHaveLength(1);
-      },
-    );
-
-    test("does not replay a retained prompt into a different resumed conversation", async () => {
-      const key = await sendRefusedPrompt("recovery-resume");
-      const current = useNativeAgentProjectionStore.getState().projections.get(key)!;
-      // One exchange with unrelated ids used to satisfy the old transcript-only checks.
-      setRecoveryProjection(key, {
-        sessionId: "session-b",
-        messages: (current.messages as NativeMessage[]).map((row) => ({
-          ...row,
-          id: `b-${row.id}`,
-        })),
-      });
-      completeSignIn();
-      await screen.findByText("Signed in. Resend your message to continue.", undefined, {
-        timeout: 4000,
-      });
-      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
-      expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
-    });
-
-    test.each(["new-turn", "new-refusal", "resume"] as const)(
-      "cancels a locked replay after remote %s",
-      async (change) => {
-        const key = await sendRefusedPrompt(`recovery-remote-${change}`);
-        setRecoveryProjection(key, {
-          readiness: { state: "authentication-required", message: "Sign in" },
-        });
-        completeSignIn();
-        await screen.findByText("Signed in. Sending your message again…", undefined, {
-          timeout: 4000,
-        });
-        const current = useNativeAgentProjectionStore.getState().projections.get(key)!;
-        setRecoveryProjection(key, {
-          ...(change === "resume" ? { sessionId: "session-b" } : {}),
-          messages:
-            change === "resume"
-              ? (current.messages as NativeMessage[])
-              : [
-                  ...(current.messages as NativeMessage[]),
-                  {
-                    id: "remote-user",
-                    role: "user",
-                    content: "A later prompt",
-                    createdAt: "2026-10-31T00:25:00Z",
-                    parts: [{ type: "text", content: "A later prompt" }],
-                  },
-                  ...(change === "new-refusal"
-                    ? [
-                        {
-                          id: "remote-refusal",
-                          role: "assistant" as const,
-                          content: notice,
-                          createdAt: "2026-10-31T00:25:01Z",
-                          parts: [{ type: "text" as const, content: notice }],
-                        },
-                      ]
-                    : []),
-                ],
-        });
-        setRecoveryProjection(key, { readiness: { state: "ready" } });
-        await act(async () => {
-          await Promise.resolve();
-        });
-        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
-        expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
-        expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
-      },
-    );
-
-    test("restores an image-bearing prompt when the auth lock exceeds 30 seconds", async () => {
-      const key = await sendRefusedPrompt("recovery-timeout", { attachments: true });
-      setRecoveryProjection(key, {
-        readiness: { state: "authentication-required", message: "Sign in" },
-      });
-      const now = spyOn(Date, "now").mockReturnValue(Date.now());
-      const timeout = installControlledTimeout(30_000, { label: "auth replay timeout" });
-      try {
-        completeSignIn();
-        await waitFor(() => expect(timeout.pendingCount()).toBe(1), { timeout: 4000 });
-        act(() => {
-          expect(timeout.advance()).toBe(1);
-        });
-        expect(nativeComposeDraft(useNativeComposeStore.getState(), key)).toMatchObject({
-          text: "Fix the garbled text",
-          attachments: [image],
-          annotations: [annotation],
-        });
-        expect(screen.getByText("Signed in. Resend your message to continue.")).toBeTruthy();
-        setRecoveryProjection(key, { readiness: { state: "ready" } });
-        await act(async () => {
-          await Promise.resolve();
-        });
-        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
-        expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
-        timeout.assertDrained();
-      } finally {
-        timeout.restore();
-        now.mockRestore();
-      }
-    });
-
-    test("falls back to the raw draft when refreshing auth fails", async () => {
-      const key = await sendRefusedPrompt("recovery-refresh-failure", { attachments: true });
-      setRecoveryProjection(key, {
-        readiness: { state: "authentication-required", message: "Sign in" },
-      });
-      getNativeAgentProjectionMock.mockRejectedValue(new Error("Auth refresh failed"));
-      completeSignIn();
-      await waitFor(
-        () =>
-          expect(nativeComposeDraft(useNativeComposeStore.getState(), key).text).toBe(
-            "Fix the garbled text",
-          ),
-        { timeout: 4000 },
-      );
-      expect(nativeComposeDraft(useNativeComposeStore.getState(), key).attachments).toEqual([
-        image,
-      ]);
-      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
-      expect(useNativeComposeStore.getState().sentPrompts.has(key)).toBe(false);
-    });
-
-    test.each(["isolated", "terminal"] as const)(
-      "keeps manual resend guidance for %s sign-in",
-      async (path) => {
-        if (path === "isolated")
-          useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
-        await sendRefusedPrompt(`recovery-${path}`, { terminal: true });
-        fireEvent.click(
-          await screen.findByRole("button", {
-            name: path === "isolated" ? "Sign in to Claude" : "Use a terminal instead",
-          }),
-        );
-        expect(
-          screen.getByText(/After signing in, return here and resend your message/),
-        ).toBeTruthy();
-        expect(screen.queryByText(/Your message is sent again once you sign in/)).toBeNull();
-        completeSignIn();
-        await act(async () => {
-          await Promise.resolve();
-        });
-        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
-      },
-    );
-
-    test("leaves the resend to the user once they have started another message", async () => {
-      const sessionKey = await sendRefusedPrompt("tab-no-resend-over-draft");
-      act(() => {
-        useNativeComposeStore.getState().updateDraft(sessionKey, { text: "Something else" });
-      });
-      accountLoginProgress = {
-        state: "succeeded",
-        platform: "claude",
-        mode: "reauthenticate",
-        completedAt: "2026-10-31T00:24:00.000Z",
+        completedAt: new Date().toISOString(),
       };
       expect(
-        await screen.findByText("Signed in. Resend your message to continue.", undefined, {
+        await screen.findByText("Signed in. Sending your message again…", undefined, {
           timeout: 4_000,
         }),
       ).toBeTruthy();
-      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+      // The backend re-dispatches: this client neither holds nor sends the prompt.
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ["answers that it holds nothing", async () => ({ pending: false })],
+      [
+        "predates the feature",
+        async (): Promise<{ pending: boolean }> => {
+          throw new Error("Unknown backend command: get_native_agent_sign_in_resend");
+        },
+      ],
+    ] as const)("asks the user to resend when the backend %s", async (label, answer) => {
+      answerWithRefusal();
+      getNativeAgentSignInResendMock.mockImplementation(answer);
+      render(
+        <AgentNativeTab
+          tabId={`tab-resend-by-hand-${label.length}`}
+          data={identity("claude")}
+          isActive
+        />,
+      );
+
+      expect(
+        await screen.findByText(/After signing in, return here and resend your message/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/Your message is sent again once you sign in/)).toBeNull();
     });
   });
 
@@ -2764,7 +2502,7 @@ describe("AgentNativeTab", () => {
       await waitFor(() => expect(composeDraftRecords.get(draftKey)?.revision).toBeGreaterThan(1));
       const savedRevision = composeDraftRecords.get(draftKey)!.revision;
       first.unmount();
-      useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
+      useNativeComposeStore.setState({ drafts: new Map() });
 
       const remounted = render(<AgentNativeTab tabId={tabId} data={identity("grok")} isActive />);
       expect(await screen.findByRole("button", { name: "Remove layout.png" })).toBeTruthy();
@@ -5101,7 +4839,7 @@ describe("AgentNativeTab", () => {
     );
     expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
     first.unmount();
-    useNativeComposeStore.setState({ drafts: new Map(), sentPrompts: new Map() });
+    useNativeComposeStore.setState({ drafts: new Map() });
 
     const remounted = render(<PaneBackedAgentNativeTab tabId={tabId} />);
     await waitFor(() =>
@@ -7697,6 +7435,60 @@ describe("AgentNativeTab", () => {
     expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
   });
 
+  test("leaves delivery to a backend that does it, even for a queued prompt", async () => {
+    renderVirtualizedMessages = true;
+    getAgentHandoffCapabilitiesMock.mockResolvedValue({
+      create: true,
+      delivery: true,
+      pruning: true,
+    });
+    const snapshot = grokToCursorHandoff("handoff-backend-delivers");
+    getAgentHandoffMock.mockResolvedValue({
+      id: snapshot.id,
+      environmentId: snapshot.environmentId,
+      version: AGENT_HANDOFF_VERSION,
+      snapshot,
+    });
+
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        capabilities: { ...projection.capabilities, queue: true },
+        turn: { phase: "running" as const },
+        messages: [],
+      };
+    });
+    const tabId = "tab-backend-delivers";
+    seedEnvTab({
+      id: tabId,
+      type: "agent-native",
+      agentHandoffId: snapshot.id,
+      nativeAgentData: identity("cursor"),
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    expect(await screen.findByText("Investigate the layout")).toBeTruthy();
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "First instruction" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // Plain text: the backend adds the carrier when the queue reaches it.
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        `cursor\0${createSessionKey("env-1", tabId)}`,
+        "env-1",
+        expect.objectContaining({ text: "First instruction" }),
+      ),
+    );
+    // Only the backend marks it consumed: enqueueing delivers nothing yet, and
+    // marking it here would have the backend drop the history at dispatch.
+    const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+    expect(tab?.agentHandoffId).toBe(snapshot.id);
+    expect(tab?.consumedAgentHandoffId).toBeUndefined();
+  });
+
   test("consumes and retains a first handoff after enqueueing on a running turn", async () => {
     renderVirtualizedMessages = true;
     const snapshot = grokToCursorHandoff("handoff-queue-cursor");
@@ -7787,7 +7579,6 @@ describe("AgentNativeTab", () => {
     await waitFor(() =>
       expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBeUndefined(),
     );
-    expect(deleteAgentHandoffMock).toHaveBeenCalledWith(snapshot.id, "env-1");
     await waitFor(() => {
       expect(screen.queryByText("Investigate the layout") === null).toBe(true);
       expect(screen.queryByText("I found three concrete gaps") === null).toBe(true);
@@ -7897,7 +7688,6 @@ describe("AgentNativeTab", () => {
     await waitFor(() =>
       expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBeUndefined(),
     );
-    expect(deleteAgentHandoffMock).toHaveBeenCalledWith(snapshot.id, "env-1");
     expect(await screen.findByText("Resumed earlier work")).toBeTruthy();
     expect(screen.queryByText("Investigate the layout") === null).toBe(true);
     expect(screen.queryByText((text) => text.includes("orkestrator-handoff")) === null).toBe(true);
@@ -7946,7 +7736,6 @@ describe("AgentNativeTab", () => {
     const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
     fireEvent.click(within(dialog).getByRole("button", { name: /Current destination/ }));
     await waitFor(() => expect(resumeNativeAgentSessionMock).toHaveBeenCalledTimes(1));
-    expect(deleteAgentHandoffMock).not.toHaveBeenCalled();
     expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBe(snapshot.id);
   });
 
@@ -13268,7 +13057,6 @@ describe("AgentNativeTab", () => {
           usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId,
         ).toBeUndefined(),
       );
-      expect(deleteAgentHandoffMock).toHaveBeenCalledWith(snapshot.id, "env-1");
       expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId).toBe(
         snapshot.id,
       );
@@ -13314,7 +13102,6 @@ describe("AgentNativeTab", () => {
         true,
       );
       expect(within(dialog).getByText("Earlier work")).toBeTruthy();
-      expect(deleteAgentHandoffMock).not.toHaveBeenCalled();
       expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
         agentHandoffId: snapshot.id,
         consumedAgentHandoffId: snapshot.id,
@@ -13356,7 +13143,6 @@ describe("AgentNativeTab", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
 
       await waitFor(() => expect(mockToastError).toHaveBeenCalled());
-      expect(deleteAgentHandoffMock).not.toHaveBeenCalled();
       expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
         agentHandoffId: snapshot.id,
         consumedAgentHandoffId: snapshot.id,

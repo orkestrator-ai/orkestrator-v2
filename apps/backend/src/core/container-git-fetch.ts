@@ -308,8 +308,8 @@ export class ContainerGitFetchPolicy {
    * A ref the latest scan of this clone classified as `commit` is skipped:
    * the action resolves it locally, and it names the same commit forever.
    * Every container created since `createdFromCommit` compares against such
-   * a commit, so before this check each revert spent a `docker exec` and an
-   * admission slot on `git fetch origin <sha>`.
+   * a commit, so this check saves the fetch `docker exec` and its admission
+   * time. The action still probes clone identity with a separate exec.
    *
    * Like {@link recover}, call it inside the container's admission slot.
    */
@@ -327,7 +327,8 @@ export class ContainerGitFetchPolicy {
 
   /**
    * The clone identity the latest status scan of this container generation
-   * reported, so an action can key its fetch without probing again.
+   * reported, for diagnostics and tests only. Actions must probe identity
+   * again: a workspace can be replaced without an intervening status scan.
    */
   knownRepoId(containerId: string): string | undefined {
     const scope = this.scopes.get(containerId);

@@ -351,6 +351,30 @@ describe("container status and fetch scripts against a local remote", () => {
     expect(box.fetchCalls).toEqual([creationCommit]);
   }, 30_000);
 
+  test("a failed identity probe skips refresh and still reverts from local refs", async () => {
+    const box = container();
+    const original = git(workspace, "show", "origin/main:base.txt") + "\n";
+    await fs.writeFile(path.join(workspace, "base.txt"), "local edit\n");
+    let calls = 0;
+    let refreshCalls = 0;
+    await revertContainerFile(box.id, "base.txt", "main", {
+      exec: async (_containerId, script) => {
+        calls += 1;
+        if (calls === 1) throw new Error("identity probe unavailable");
+        return shell(workspace, script.replaceAll("cd /workspace", "cd ."));
+      },
+      fetches: {
+        refreshForAction: async () => {
+          refreshCalls += 1;
+          return true;
+        },
+      },
+    });
+    expect(calls).toBe(2);
+    expect(refreshCalls).toBe(0);
+    expect(await fs.readFile(path.join(workspace, "base.txt"), "utf8")).toBe(original);
+  }, 30_000);
+
   test("a revert resolves the same base the old inline fetch did", async () => {
     const box = container();
     // The revert script's own `cd /workspace` is the container's clone.

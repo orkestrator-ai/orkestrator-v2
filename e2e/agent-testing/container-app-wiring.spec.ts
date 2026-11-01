@@ -110,24 +110,6 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
     .split(/\s+/)[0]!
     .trim();
 
-  // The pull request: one commit on the environment branch, pushed to origin.
-  inContainer(
-    containerId,
-    [
-      `echo merged > ${file}`,
-      `git add ${file}`,
-      `git -c user.name=QA -c user.email=qa@invalid.local commit -q -m "QA merge ${run}"`,
-      "git push -q origin HEAD",
-      `mkdir -p ${FAKE_GH_DIR}`,
-      `echo ${prUrl} > ${FAKE_GH_DIR}/url`,
-      `echo ${branch} > ${FAKE_GH_DIR}/branch`,
-    ].join(" && "),
-  );
-  inContainer(containerId, "cat > /usr/local/bin/gh && chmod 755 /usr/local/bin/gh", {
-    user: "root",
-    input: FAKE_GH,
-  });
-  expect(inContainer(containerId, "command -v gh").trim()).toBe("/usr/local/bin/gh");
   const cleanup = async () => {
     await invoke("clear_environment_pr", { environmentId: container.id }).catch(() => undefined);
     inContainer(containerId, "rm -f /usr/local/bin/gh", { user: "root" });
@@ -142,9 +124,28 @@ test("Docker fixture container merge from the UI reaches the origin and every vi
     );
   };
 
-  await page.setViewportSize({ width: 1400, height: 900 });
-  await login(page, testInfo);
   try {
+    // The pull request: one commit on the environment branch, pushed to origin.
+    inContainer(
+      containerId,
+      [
+        `echo merged > ${file}`,
+        `git add ${file}`,
+        `git -c user.name=QA -c user.email=qa@invalid.local commit -q -m "QA merge ${run}"`,
+        "git push -q origin HEAD",
+        `mkdir -p ${FAKE_GH_DIR}`,
+        `echo ${prUrl} > ${FAKE_GH_DIR}/url`,
+        `echo ${branch} > ${FAKE_GH_DIR}/branch`,
+      ].join(" && "),
+    );
+    inContainer(containerId, "cat > /usr/local/bin/gh && chmod 755 /usr/local/bin/gh", {
+      user: "root",
+      input: FAKE_GH,
+    });
+    expect(inContainer(containerId, "command -v gh").trim()).toBe("/usr/local/bin/gh");
+
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await login(page, testInfo);
     await test.step("the PR monitor reads the container's PR and offers the merge", async () => {
       // Mergeability unknown, as a freshly recorded PR is: only the monitor's
       // read through the container's `gh` can enable the merge button.

@@ -307,7 +307,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
     {
       title: "Change automatic account switching",
       description:
-        "Turn automatic account switching on or off for a provider, or change whether one account is included. When on, the backend keeps the machine on the included signed-in account whose general weekly limit resets soonest, moves on at 98% of that limit or when a fresh reading confirms a limit error used it up, and resends the work the weekly limit stopped. The ticks apply on every machine this one controls, matched by email; an account with no email has its tick on its own machine only and stays out until ticked. With enabled true it also ends this machine's pin, or the pin on nodeId, left by a manual switch. list_provider_accounts shows the state. Only when the user asked for it.",
+        "Turn automatic account switching on or off for a provider, or change whether one account is included. When on, the backend keeps the machine on the included signed-in account whose general weekly limit resets soonest, moves on at 98% of that limit or when a fresh reading confirms a limit error used it up, and resends the work the weekly limit stopped. The ticks apply on every machine this one controls, matched by email; an account with no email has its tick on its own machine only and stays out until ticked. With enabled true it also ends this machine's pin, or the pin on nodeId, left by a manual switch, and no other machine's. A machine with a command node takes the shared ticks from it and refuses to change them, but can still end its own pin and change the tick of an account with no email. list_provider_accounts shows the state. Only when the user asked for it.",
       inputSchema: z.object({
         platform: z.enum(AGENT_ACCOUNT_PLATFORMS),
         enabled: z.boolean().optional().describe("The provider's main tick."),
@@ -339,13 +339,15 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       }
       const machine = await machineFor(invoke, nodeId);
       if (enabled !== undefined) {
-        await invoke("set_agent_account_auto_switch", { platform, enabled });
+        // Already as asked, this only ends a pin. A leaf can do that, but not set the
+        // tick its command node holds.
+        const here = parseAgentAccountsSnapshot(await invoke<unknown>("list_agent_accounts"))
+          ?.autoSwitch?.[platform];
+        if (!here || (here.mode !== "off") !== enabled) {
+          await invoke("set_agent_account_auto_switch", { platform, enabled });
+        }
         // A machine that predates this reports no state, so has no pin to end.
-        if (
-          enabled &&
-          !machine.self &&
-          (await machineAccounts(machine)).autoSwitch?.[platform]?.pinnedAccountId
-        ) {
+        if (enabled && (await machineAccounts(machine)).autoSwitch?.[platform]?.pinnedAccountId) {
           await machine.call("resume_agent_account_auto_switch", { platform });
         }
       }

@@ -102,7 +102,7 @@ provider, so none can run in CI.
 
 **Context.** Tests assert the prompt, session and request id at the provider boundary. The bridge replacement itself is `localBridgeIsOnActiveAccount`, unchanged.
 
-**Investigation.** Claude keeps a warm CLI per session, so a bridge that is not replaced would answer on the old login: the resend waits for the bridge to go idle and each workflow drops its cached provider. A workflow's cached provider otherwise stays on its old bridge after any switch, until it stops answering, so the next stage after a between-turns switch can hit the limit once on the old account and then move through this same path.
+**Investigation.** Claude keeps a warm CLI per session, so a bridge that is not replaced would answer on the old login: the resend waits for the bridge to go idle and each workflow drops its cached provider. A workflow's cached provider otherwise stays on its old bridge after any switch, until it stops answering, so the next stage after a between-turns switch can hit the limit once on the old account and then move through this same path; see [A workflow's next turn after a between-turns move](#a-workflows-next-turn-after-a-between-turns-move).
 
 **Decisions.**
 
@@ -202,6 +202,39 @@ provider, so none can run in CI.
     - Pros: simplest.
     - Cons: a long stage that uses up its second account fails with a third unused.
 - **Chosen:** three (`MAX_USAGE_LIMIT_RESENDS`). The id or record carries the count, so a restart cannot reset it.
+
+### Whose stop it is when the session already reads the new account
+
+- **Options.**
+  - **Count it only if the turn was running before the last move, is not a resend, comes within five minutes, and a fresh reading of the account left shows its week used up (chosen).**
+    - Pros: two turns stopped together both resend, even when the first's resend already replaced their bridge; a Fable or 5-hour refusal on the new account stays stopped, as the ticket asks.
+    - Cons: a turn refused so quickly no sweep saw it running can read as sent after the move, and stays stopped.
+  - **Treat any stop within five minutes of a move as the old account's.**
+    - Pros: simplest; never loses a sibling's resend.
+    - Cons: resends a model-specific refusal on the new account up to three times, including a prompt the user just typed. This was the first build, and a review found it.
+- **Chosen:** the first.
+
+### A workflow's next turn after a between-turns move
+
+- **Options.**
+  - **Leave a workflow on its cached provider until the limit stops it, then move through the limit path (chosen for now).**
+    - Pros: no change at any workflow's dispatch; a confirmed stop already moves and resends, so no work is lost; the same rule as any switch today.
+    - Cons: the old account is spent past 98% until refused, and the soonest-reset move only reaches a long pipeline when it is refused. If a reading can lag behind a refusal (task 4), that stage fails with room on another account.
+  - **Drop the cached provider before each new turn when its bridge is on an account that is no longer active and none of its turns are running.**
+    - Pros: between-turns switching then means the same thing for workflows as for native tabs.
+    - Cons: a change at four dispatch paths, and each turn's reconnect could replace a bridge another owner is using, so it needs the next decision settled first.
+- **Recommendation:** decide after task 4. If a reading can lag behind a refusal, build the second.
+
+### A bridge shared by owners that cannot see each other
+
+- **Options.**
+  - **Count what each workflow's own polls see on its provider, and leave other owners as they are (chosen for now).**
+    - Pros: covers the common case, reviewers of one harness sharing a bridge, with a small change at one seam; two turns stopped together never wait on each other.
+    - Cons: a native tab beside a Multi Review, or a pipeline beside a Multi Review, in one environment can still have the other's running turn killed when a bridge is replaced. That is true of any switch on `main` too: `hasObservedLiveWork` has only ever seen native turns. The killed turn takes the restart continuation, once. A turn dispatched since the last poll is not seen either.
+  - **Teach `hasObservedLiveWork` about every workflow's running turns.**
+    - Pros: closes it for every bridge replacement, not only this feature's.
+    - Cons: durable state cannot tell a running turn from a stopped one awaiting its verdict, so it needs a shared live-turn registry fed from every workflow, and it changes when bridges are replaced everywhere.
+- **Recommendation:** the second as its own to-do, if real use shows it. It predates this feature.
 
 ### Stale and unknown readings
 

@@ -822,6 +822,12 @@ export class ConfigRepository {
     ) => NonNullable<AppConfig["global"]["agentAccountAutoSwitch"]>,
   ): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
+      // A leaf's copy stays overridden, so a write here would look done and change nothing.
+      if (this.inheritedGlobalSettings?.()) {
+        throw new Error(
+          "This machine takes its automatic switching ticks from its command node; change them there.",
+        );
+      }
       const config = await this.loadOwnConfig();
       const next = update(config.global.agentAccountAutoSwitch);
       if (Object.keys(next).length > 0) config.global.agentAccountAutoSwitch = next;

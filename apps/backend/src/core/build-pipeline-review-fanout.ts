@@ -1157,6 +1157,7 @@ export class BuildPipelineReviewFanout {
         requestId: consolidation.requestId,
         error: statusDetail,
         resends: consolidation.usageLimitResends ?? 0,
+        turnStartedAt: consolidation.createdAt,
       });
       if (verdict === "wait") return { kind: "working" };
       usageLimitResend = verdict === "resend";

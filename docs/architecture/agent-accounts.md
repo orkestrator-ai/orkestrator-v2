@@ -715,11 +715,20 @@ make the machine flap. Three things can move it:
   account's usage (cached for two minutes, as for Settings) and move to the top of
   the order. That is a move when the active limit reaches 98% used, and also when
   another included account simply resets sooner, or the active account's own tick
-  is off. A running turn finishes on the old account, as with any switch.
+  is off. A running turn finishes on the old account, as with any switch. A native
+  tab's next turn moves over. A workflow's cached provider does not until it is
+  dropped, so its next stage can still run on the old account, reach the limit and
+  move through the path below (see
+  [1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-workflows-next-turn-after-a-between-turns-move)).
 - **A limit error mid-turn.** The turn's error has to read as a usage limit, and
   then a forced read of the account the turn ran on has to show the general weekly
   limit at 100%. Anything less and the turn stays stopped, with nothing moved
-  (`handleLimitStop`). Stops seen within two minutes share one confirmation.
+  (`handleLimitStop`). Stops seen within two minutes share one confirmation. The
+  session can already read the new account, when another stop's resend replaced a
+  bridge they shared. Such a stop counts only if the turn was running before the
+  last move, is not itself a resend, is seen within five minutes of the move, and a
+  fresh reading of the account left shows its weekly limit used up. A turn sent after
+  the move ran on the new account, so whatever stopped it, it stays stopped.
 - **A tick changing**, here or from the command node.
 
 With every included account out, nothing moves: work stops at the limit and
@@ -770,7 +779,12 @@ continuation in the same session rather than the prompt again: it cannot run the
 prompt twice, and a turn that got partway continues rather than restarts. A bridge
 keeps its account until idle, so a resend waits (bounded, 30 minutes) for other
 turns holding that bridge, and a workflow drops its cached provider so that its
-next dispatch reconnects, which is what moves the bridge.
+next dispatch reconnects, which is what moves the bridge. Activity observation
+(`hasObservedLiveWork`) only sees native turns, so a workflow also counts the turns
+its own polls last saw running on the provider its reviewers share
+(`trackRunningTurns`). Owners that share a bridge but not a provider, such as a
+native tab beside a Multi Review, still cannot see each other's turns (see
+[1250](../todo/agent-engines/1250-automatic-account-switching-live-checks.md#a-bridge-shared-by-owners-that-cannot-see-each-other)).
 
 - **Native tabs** (`native-agent-usage-limit-resend.ts`) work from the activity
   sweep's turn-end edges. The request id is derived from the stopped request
@@ -805,7 +819,9 @@ planning, the goal verifier and graph describe sessions are not resent.
 agent panel, the Machines overview and a coordinator. While the tick is on it pins
 the account in the same write as the switch (`autoSwitch.<platform>.pin` in
 `agent-accounts.json`), and automatic switching stays off on that machine until the
-user ticks it again, which ends the pin. The feature's own switch
+user ticks it again. The tick is shared and the pin is one machine's, so ticking it
+ends the pin only on the machine being shown (`resume_agent_account_auto_switch`),
+and another machine's pin stays until the user ticks it there. The feature's own switch
 (`applyAutomaticAccountSwitch`) never pins, and gives way when a pin or another
 active account got in first. The state is on `AgentAccountsSnapshot.autoSwitch` as
 `off`, `automatic` or `pinned`, with `lastSwitch`, and shows in the account settings,
@@ -820,6 +836,8 @@ accounts it has. A whole-config save never writes them
 (`updateAgentAccountAutoSwitchSettings` is the one writer), so a settings form or a
 coordinator cannot undo the other. Pins stay on their machine, as does each
 machine's own decision to move: nothing here makes machines use the same account.
+A leaf refuses a change to the ticks its command node holds rather than saving a copy
+that stays overridden, so a client sends them to the command node.
 
 - **An account with no email** cannot be matched across machines. It starts unticked,
   its tick is kept in that machine's `agent-accounts.json`, and it never travels.
@@ -834,8 +852,11 @@ machine's own decision to move: nothing here makes machines use the same account
 
 `list_provider_accounts` shows each provider's state and each account's
 `autoSwitchIncluded`, and `set_account_auto_switch` changes the ticks, without an
-approval because it is a setting rather than a switch. A coordinator's own
-`switch_provider_account` still needs one, and pins like any other. Each automatic
+approval because it is a setting rather than a switch. On a leaf the tool says the
+shared ticks belong to the command node, which it cannot reach from there, and can
+still end that leaf's pin and change the tick of an account with no email. A
+coordinator's own `switch_provider_account` still needs an approval, and pins like
+any other. Each automatic
 switch sends every main coordinator on the machine a workflow notice through the
 mail store, and a leaf's switch also reaches its command node's main coordinators
 (`AGENT_ACCOUNT_AUTO_SWITCHED_EVENT`). A link that is down when it happens loses

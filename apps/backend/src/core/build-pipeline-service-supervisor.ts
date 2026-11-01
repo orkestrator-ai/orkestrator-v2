@@ -687,6 +687,7 @@ export class BuildPipelineSupervisor {
           session.sdkSessionId,
         error: statusDetail,
         resends: session.usageLimitResends ?? 0,
+        ...(session.turnStartedAt ? { turnStartedAt: session.turnStartedAt } : {}),
       });
       if (verdict === "wait") return;
       if (verdict === "resend") {

@@ -52,6 +52,8 @@ export interface UsageLimitStops {
     requestId: string;
     error: string | undefined;
     resends: number;
+    turnStartedAt?: string;
+    siblingTurnRunning?: () => boolean;
   }): Promise<UsageLimitStopVerdict>;
 }
 
@@ -91,6 +93,8 @@ export class NativeAgentUsageLimitResend {
   private readonly tasks = new Map<string, Promise<void>>();
   /** The newest request seen per session: a turn refused between two sweeps shows no busy state. */
   private readonly seenRequests = new Map<string, string>();
+  /** When each session's newest request was first seen, in any state. */
+  private readonly turnsSeen = new Map<string, { requestId: string; at: number }>();
 
   constructor(private readonly deps: NativeAgentUsageLimitResendDependencies) {}
 
@@ -120,6 +124,7 @@ export class NativeAgentUsageLimitResend {
   clear(): void {
     this.candidates.clear();
     this.seenRequests.clear();
+    this.turnsSeen.clear();
   }
 
   noteActivity(
@@ -132,11 +137,18 @@ export class NativeAgentUsageLimitResend {
     const turnEnded = isAgentTurnEndTransition({ previousState: previous, state });
     if (turnEnded) stops.noteTurnEnded(session.agent);
     if (!this.appliesTo(session)) return;
+    const requestId = session.dispatchedRequestIds?.at(-1);
+    if (requestId && this.turnsSeen.get(session.key)?.requestId !== requestId) {
+      if (!this.turnsSeen.has(session.key) && this.turnsSeen.size >= MAX_TRACKED_SESSIONS) {
+        const oldest = this.turnsSeen.keys().next().value;
+        if (oldest !== undefined) this.turnsSeen.delete(oldest);
+      }
+      this.turnsSeen.set(session.key, { requestId, at: this.deps.now() });
+    }
     if (state !== "idle") {
       this.candidates.delete(session.key);
       return;
     }
-    const requestId = session.dispatchedRequestIds?.at(-1);
     const seen = this.seenRequests.get(session.key);
     if (requestId) {
       if (!seen && this.seenRequests.size >= MAX_TRACKED_SESSIONS) {
@@ -227,12 +239,14 @@ export class NativeAgentUsageLimitResend {
     if (outcome.outcome === "pending") return "retry";
     if (outcome.outcome !== "failed") return "done";
 
+    const turn = this.turnsSeen.get(session.key);
     const verdict = await stops.handleLimitStop({
       platform,
       environmentId: session.environmentId,
       requestId,
       error: outcome.error,
       resends: usageLimitResendCount(requestId),
+      ...(turn?.requestId === requestId ? { turnStartedAt: new Date(turn.at).toISOString() } : {}),
     });
     if (verdict === "stop") return "done";
     if (verdict === "wait") return "retry";

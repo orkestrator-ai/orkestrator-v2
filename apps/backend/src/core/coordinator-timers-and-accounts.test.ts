@@ -707,12 +707,12 @@ describe("automatic switching", () => {
   });
 
   test("changes the main tick here without asking for approval", async () => {
-    autoSwitch[SELF] = { mode: "automatic", includedAccountIds: [] };
+    autoSwitch[SELF] = { mode: "off", includedAccountIds: [] };
     const result = await call("main", "set_account_auto_switch", {
       platform: "claude",
       enabled: true,
     });
-    expect(result.structuredContent).toMatchObject({ autoSwitch: { mode: "automatic" } });
+    expect(result.structuredContent).toMatchObject({ autoSwitch: { mode: "off" } });
     expect(tickCalls).toEqual([
       {
         machine: SELF,
@@ -733,7 +733,38 @@ describe("automatic switching", () => {
     expect(tickCalls.map((entry) => entry.machine)).toEqual([SELF]);
   });
 
-  test("ticking with a machine named ends that machine's pin, keeping the ticks here", async () => {
+  test("ticking again here ends this machine's pin and no other's", async () => {
+    autoSwitch[SELF] = { mode: "off", pinnedAccountId: "default", includedAccountIds: [] };
+    autoSwitch[LEAF] = { mode: "pinned", pinnedAccountId: "default", includedAccountIds: [] };
+    await call("main", "set_account_auto_switch", { platform: "claude", enabled: true });
+    expect(tickCalls).toEqual([
+      {
+        machine: SELF,
+        command: "set_agent_account_auto_switch",
+        args: { platform: "claude", enabled: true },
+      },
+      {
+        machine: SELF,
+        command: "resume_agent_account_auto_switch",
+        args: { platform: "claude" },
+      },
+    ]);
+  });
+
+  test("with the tick already on, as on a leaf, it only ends the pin", async () => {
+    autoSwitch[SELF] = { mode: "pinned", pinnedAccountId: "default", includedAccountIds: [] };
+    await call("main", "set_account_auto_switch", { platform: "claude", enabled: true });
+    expect(tickCalls).toEqual([
+      {
+        machine: SELF,
+        command: "resume_agent_account_auto_switch",
+        args: { platform: "claude" },
+      },
+    ]);
+  });
+
+  test("ticking with a machine named ends that machine's pin, keeping the ticks and this machine's pin", async () => {
+    autoSwitch[SELF] = { mode: "off", pinnedAccountId: "default", includedAccountIds: [] };
     autoSwitch[LEAF] = { mode: "pinned", pinnedAccountId: "default", includedAccountIds: [] };
     await call("main", "set_account_auto_switch", {
       platform: "claude",

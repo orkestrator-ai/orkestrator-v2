@@ -336,10 +336,11 @@ async function switchActiveAccount(
 }
 
 /**
- * Change this machine's own copy of the ticks. On a machine with a command node
- * they stay overridden, so a client sends them to the command node. Ticking the
- * main tick also ends this machine's pin, because that is what "tick it again"
- * means. An account with no email has its tick here and nowhere else.
+ * Change this machine's own copy of the ticks. A machine with a command node
+ * refuses, because its copy stays overridden: a client sends them to the command
+ * node. An account with no email has its tick here and nowhere else. A pin is not
+ * touched: the tick is shared and a pin belongs to one machine, so ticking it again
+ * also calls `resumeAgentAccountAutoSwitch` on the machine that shows the pin.
  */
 export async function setAgentAccountAutoSwitch(
   context: CommandContext,
@@ -351,13 +352,12 @@ export async function setAgentAccountAutoSwitch(
       withAutoSwitchTicks(normalizeAgentAccountAutoSwitchSettings(current), platform, change),
     );
   }
-  if (change.enabled === true || change.accountId !== undefined) {
+  if (change.accountId !== undefined && change.included !== undefined) {
+    const { accountId, included } = change;
     await mutateMachineAutoSwitch(context, platform, (machine) => {
-      if (change.enabled === true) delete machine.pin;
-      if (change.accountId === undefined || change.included === undefined) return;
       const ids = new Set(machine.includedAccountIds ?? []);
-      if (change.included) ids.add(change.accountId);
-      else ids.delete(change.accountId);
+      if (included) ids.add(accountId);
+      else ids.delete(accountId);
       if (ids.size) machine.includedAccountIds = [...ids];
       else delete machine.includedAccountIds;
     });
@@ -366,7 +366,7 @@ export async function setAgentAccountAutoSwitch(
   return listAgentAccounts(context);
 }
 
-/** The tick came back on another machine: end this one's pin, leaving its own ticks alone. */
+/** The tick came back: end this machine's pin, leaving its own ticks alone. */
 export async function resumeAgentAccountAutoSwitch(
   context: CommandContext,
   platform: AgentAccountPlatform,

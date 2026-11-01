@@ -144,6 +144,27 @@ describe("automatic switching ticks", () => {
     expect(workspace).toHaveBeenCalledWith("list_agent_accounts", {});
   });
 
+  test("for the machine shown only that machine's pin ends", async () => {
+    portal.mockImplementation(async () => ({ outcome: "ok", result: {} }));
+    await setAgentAccountAutoSwitchEnabled("claude", true, true, "node-b");
+    expect(portal).toHaveBeenCalledWith("set_agent_account_auto_switch", {
+      platform: "claude",
+      enabled: true,
+    });
+    expect(portal.mock.calls.map(([command]) => command)).not.toContain(
+      "resume_agent_account_auto_switch",
+    );
+    expect(nodeCalls()).toContain("resume_agent_account_auto_switch");
+  });
+
+  test("on the command node itself its own pin ends", async () => {
+    portal.mockImplementation(async () => ({}));
+    await setAgentAccountAutoSwitchEnabled("claude", true, true, null);
+    expect(portal).toHaveBeenCalledWith("resume_agent_account_auto_switch", {
+      platform: "claude",
+    });
+  });
+
   test("with nothing pinned, or turning it off, no pin is touched", async () => {
     workspace.mockImplementation(async () => ({}));
     await setAgentAccountAutoSwitchEnabled("claude", true, false);

@@ -1118,8 +1118,9 @@ the main coordinator has four tools (capability `accounts`, plus
   of a self-timer that carries the user's permission it switches at once.
   Either way it pins the account if automatic switching is on.
 - `set_account_auto_switch` changes the automatic-switching ticks, with no
-  approval, because the backend then does the switching. Each automatic switch
-  sends the main coordinator a notice. See
+  approval, because the backend then does the switching. On a leaf it refuses the
+  shared ticks, which its command node holds, and can still end that leaf's pin. Each
+  automatic switch sends the main coordinator a notice. See
   [agent-accounts.md](agent-accounts.md#automatic-switching).
 
 A self-timer carries that permission only when the main coordinator sets it

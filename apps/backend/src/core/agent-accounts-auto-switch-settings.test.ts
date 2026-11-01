@@ -122,7 +122,10 @@ describe("a manual switch", () => {
     const snapshot = await setActiveAgentAccount(context, "codex", B);
     expect(snapshot.active.codex).toBe(B);
     expect(snapshot.autoSwitch?.codex).toMatchObject({ mode: "pinned", pinnedAccountId: B });
+    // The tick is shared and the pin is this machine's, so setting it does not end the pin.
     await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    expect((await state()).mode).toBe("pinned");
+    await resumeAgentAccountAutoSwitch(context, "codex");
     const resumed = await state();
     expect(resumed.mode).toBe("automatic");
     expect(resumed.pinnedAccountId).toBeUndefined();
@@ -151,6 +154,7 @@ describe("a manual switch", () => {
     await setAgentAccountAutoSwitch(context, "codex", { enabled: false });
     expect(await state()).toMatchObject({ mode: "off", pinnedAccountId: B });
     await setAgentAccountAutoSwitch(context, "codex", { enabled: true });
+    await resumeAgentAccountAutoSwitch(context, "codex");
     const resumed = await state();
     expect(resumed.mode).toBe("automatic");
     expect(resumed.pinnedAccountId).toBeUndefined();
@@ -275,6 +279,21 @@ describe("settings from a command node", () => {
     // The command node sending its unchanged ticks again does not resume it.
     storage.inheritedGlobalSettings = () => ({ agentAccountAutoSwitch: { ...ticks } });
     expect((await state()).mode).toBe("pinned");
+  });
+
+  test("a leaf refuses the ticks its command node holds, but keeps what is its own", async () => {
+    storage.inheritedGlobalSettings = () => ({ agentAccountAutoSwitch: ticks });
+    await setActiveAgentAccount(context, "codex", B);
+    for (const change of [{ enabled: false }, { email: "a@example.com", included: false }]) {
+      await expect(setAgentAccountAutoSwitch(context, "codex", change)).rejects.toThrow(
+        "from its command node",
+      );
+    }
+    expect((await storage.loadOwnConfig()).global.agentAccountAutoSwitch).toBeUndefined();
+    await setAgentAccountAutoSwitch(context, "codex", { accountId: NO_EMAIL, included: true });
+    expect((await state()).includedAccountIds).toContain(NO_EMAIL);
+    await resumeAgentAccountAutoSwitch(context, "codex");
+    expect((await state()).mode).toBe("automatic");
   });
 
   test("an older command node sends no ticks, which reads as off on a newer leaf", async () => {

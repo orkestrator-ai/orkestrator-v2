@@ -2,7 +2,7 @@ import { invoke } from "@/lib/native/backend";
 import { portalInvoke } from "@/lib/portal/portal-transport";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { portalStore } from "@/lib/portal/portal-store";
-import { invokeCommandNodeSetting, settingsOnCommandNode } from "@/lib/portal/command-node-config";
+import { invokeCommandNodeSetting } from "@/lib/portal/command-node-config";
 import type {
   AgentAccountLoginProgress,
   AgentAccountPlatform,
@@ -72,8 +72,8 @@ export async function setActiveAgentAccount(
  * The main automatic-switching tick, and what `machine` shows afterwards.
  *
  * The tick belongs to the command node, which hands it to its machines. Ticking it
- * is also what ends a pin, and a pin belongs to the machine it was set on. A
- * machine that predates this never reports a pin to end.
+ * is also what ends a pin, and a pin belongs to the machine it was set on, so only
+ * `machine`'s ends. A machine that predates this never reports a pin to end.
  */
 export async function setAgentAccountAutoSwitchEnabled(
   platform: AgentAccountPlatform,
@@ -82,11 +82,7 @@ export async function setAgentAccountAutoSwitchEnabled(
   machine?: AccountMachine,
 ): Promise<AgentAccountsSnapshot> {
   await invokeCommandNodeSetting("set_agent_account_auto_switch", { platform, enabled });
-  const onAnotherMachine =
-    machine === undefined
-      ? settingsOnCommandNode()
-      : machine !== null && machine !== portalStore.getState().selfId;
-  if (enabled && pinned && onAnotherMachine) {
+  if (enabled && pinned) {
     await machineInvoke(machine, "resume_agent_account_auto_switch", { platform });
   }
   return listAgentAccounts(machine);

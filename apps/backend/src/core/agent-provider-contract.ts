@@ -713,6 +713,8 @@ export interface AgentSessionProvider {
     requestId: string;
     error: string | undefined;
     resends: number;
+    /** When the turn is known to have been running by; see `UsageLimitStopInput`. */
+    turnStartedAt?: string;
   }): Promise<import("@orkestrator/protocol/agent-account-auto-switch").UsageLimitStopVerdict>;
   /**
    * Register a session restored from durable workflow state. Providers that

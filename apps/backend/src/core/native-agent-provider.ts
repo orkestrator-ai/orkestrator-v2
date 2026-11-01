@@ -81,6 +81,47 @@ export type ProviderDependencies = HttpBridgeProviderDependencies &
     usageLimitStops?: Pick<UsageLimitStops, "handleLimitStop">;
   };
 
+/** A workflow polls its turns every few seconds; one not looked at for this long is not counted. */
+const RUNNING_TURN_SEEN_MS = 2 * 60_000;
+
+/**
+ * Which turns on this provider's bridge its workflow last saw running. Reviewers
+ * of one harness share a provider and a bridge, and replacing that bridge to move
+ * one of them onto a new account would kill the others. Native activity
+ * observation does not see these turns, so they are read from the workflow's own
+ * polls. A turn that stopped reads as not running on the poll that reports it, so
+ * two stopped turns never wait on each other.
+ */
+export function trackRunningTurns(provider: NativeAgentRuntimeProvider): () => boolean {
+  const seen = new Map<string, number>();
+  const note = (sessionId: string, status: string) => {
+    if (status === "running" || status === "blocked") seen.set(sessionId, Date.now());
+    else seen.delete(sessionId);
+  };
+  const status = provider.status.bind(provider);
+  provider.status = async (sessionId) => {
+    const current = await status(sessionId);
+    note(sessionId, current);
+    return current;
+  };
+  const observeSession = provider.observeSession?.bind(provider);
+  if (observeSession) {
+    provider.observeSession = async (sessionId) => {
+      const observation = await observeSession(sessionId);
+      note(sessionId, observation.status);
+      return observation;
+    };
+  }
+  return () => {
+    const horizon = Date.now() - RUNNING_TURN_SEEN_MS;
+    for (const [sessionId, at] of seen) {
+      if (at >= horizon) return true;
+      seen.delete(sessionId);
+    }
+    return false;
+  };
+}
+
 export function createNativeAgentProvider(
   connection: BridgeConnection,
   dependencies: ProviderDependencies = {},
@@ -101,7 +142,9 @@ export function createNativeAgentProvider(
   const { usageLimitStops } = dependencies;
   if (usageLimitStops && isAgentAccountPlatform(connection.agent)) {
     const platform = connection.agent;
-    provider.usageLimitStop = (input) => usageLimitStops.handleLimitStop({ ...input, platform });
+    const siblingTurnRunning = trackRunningTurns(provider);
+    provider.usageLimitStop = (input) =>
+      usageLimitStops.handleLimitStop({ ...input, platform, siblingTurnRunning });
   }
   // Codex runs the model its session was created with; the other bridges carry
   // the model on each prompt and keep the configured one.

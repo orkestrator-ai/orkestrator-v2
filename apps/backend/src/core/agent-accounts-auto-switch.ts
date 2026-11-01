@@ -42,8 +42,8 @@ export const USAGE_LIMIT_RECHECK_MS = 15_000;
 /** One account running out stops several turns; they share one confirmation. */
 const CONFIRMATION_REUSE_MS = 2 * 60_000;
 /**
- * A stop seen this soon after a confirmed move belongs to the account just left,
- * even when its bridge has already been replaced and can no longer say so.
+ * A stop seen this soon after a move may belong to the account just left, when
+ * its bridge has already been replaced and can no longer say so.
  */
 const RECENT_MOVE_MS = 5 * 60_000;
 const MAX_TRACKED_STOPS = 256;
@@ -89,6 +89,10 @@ export interface UsageLimitStopInput {
   error: string | undefined;
   /** How many times this work has already been resent. */
   resends: number;
+  /** When the turn is known to have been running by. Absent says nothing about its account. */
+  turnStartedAt?: string;
+  /** Whether a sibling turn this machine's bridge view cannot see is still running on the bridge. */
+  siblingTurnRunning?: () => boolean;
 }
 
 function label(snapshot: AgentAccountsSnapshot, platform: string, id: string): string {
@@ -102,8 +106,11 @@ export class AgentAccountAutoSwitcher {
   private readonly lastEvaluated = new Map<AgentAccountPlatform, number>();
   /** Accounts a fresh reading proved used up, keyed `<platform>:<id>`. */
   private readonly confirmed = new Map<string, number>();
-  /** The last move a confirmed limit caused, per provider. */
-  private readonly recentMoves = new Map<AgentAccountPlatform, { to: string; at: number }>();
+  /** The last move, per provider. */
+  private readonly recentMoves = new Map<
+    AgentAccountPlatform,
+    { from: string; to: string; at: number }
+  >();
   /** When each stopped turn first had to wait. */
   private readonly waitingSince = new Map<string, { since: number; checkedAt: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -210,13 +217,24 @@ export class AgentAccountAutoSwitcher {
       return this.waitFor(requestId, USAGE_LIMIT_READ_WAIT_MS);
     }
     if (confirmation === "room") {
+      // The session now reads the account just moved to, which has room. Only a
+      // turn already running before the move can have run on the account left,
+      // and only that account's own fresh reading can say which limit stopped it.
+      // A turn sent after the move ran here, so its limit is some other one, and a
+      // resend is always sent after a move.
       const move = this.recentMoves.get(platform);
-      const justMovedHere =
-        move?.to === ranOn && this.now() - move.at < RECENT_MOVE_MS && state.activeId === ranOn;
-      if (!justMovedHere) return "stop";
-      return (await this.deps.bridgeBusy(environmentId, platform))
-        ? this.waitFor(requestId, USAGE_LIMIT_BRIDGE_WAIT_MS)
-        : "resend";
+      if (
+        move?.to !== ranOn ||
+        this.now() - move.at >= RECENT_MOVE_MS ||
+        state.activeId !== ranOn ||
+        input.resends > 0 ||
+        !(Date.parse(input.turnStartedAt ?? "") < move.at)
+      ) {
+        return "stop";
+      }
+      const left = await this.confirmUsedUp(platform, move.from);
+      if (left === "unreadable") return this.waitFor(requestId, USAGE_LIMIT_READ_WAIT_MS);
+      return left === "used-up" ? this.resendOnceBridgeIsFree(input) : "stop";
     }
 
     const accounts = await this.readings(platform, state, new Set([ranOn]), false);
@@ -229,9 +247,14 @@ export class AgentAccountAutoSwitcher {
       });
       if (!moved) return "stop";
     }
-    return (await this.deps.bridgeBusy(environmentId, platform))
-      ? this.waitFor(requestId, USAGE_LIMIT_BRIDGE_WAIT_MS)
-      : "resend";
+    return this.resendOnceBridgeIsFree(input);
+  }
+
+  private async resendOnceBridgeIsFree(input: UsageLimitStopInput): Promise<UsageLimitStopVerdict> {
+    const held =
+      input.siblingTurnRunning?.() === true ||
+      (await this.deps.bridgeBusy(input.environmentId, input.platform));
+    return held ? this.waitFor(input.requestId, USAGE_LIMIT_BRIDGE_WAIT_MS) : "resend";
   }
 
   private waitFor(requestId: string, limitMs: number): UsageLimitStopVerdict {
@@ -286,9 +309,7 @@ export class AgentAccountAutoSwitcher {
       reason: target.reason,
     });
     if (!moved) return false;
-    if (target.reason === "limit" || target.reason === "threshold") {
-      this.recentMoves.set(platform, { to: target.accountId, at: this.now() });
-    }
+    this.recentMoves.set(platform, { from: activeId, to: target.accountId, at: this.now() });
     try {
       await this.deps.notify({
         platform,

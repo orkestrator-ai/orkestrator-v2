@@ -84,6 +84,17 @@ function harness(
 }
 
 describe("a native tab the weekly limit stopped", () => {
+  test("says when the turn was first seen running, not when it stopped", async () => {
+    const h = harness();
+    h.resend.noteActivity(h.state.session, "working", "idle");
+    h.advance(60_000);
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.handleLimitStop.mock.calls[0]?.[0]).toMatchObject({
+      turnStartedAt: new Date(1_000).toISOString(),
+    });
+  });
+
   test("resends once on the new account, continuing rather than repeating the prompt", async () => {
     const h = harness();
     h.resend.noteActivity(h.state.session, "idle", "working");
@@ -101,6 +112,7 @@ describe("a native tab the weekly limit stopped", () => {
       requestId: "request-1",
       error: LIMIT,
       resends: 0,
+      turnStartedAt: new Date(1_000).toISOString(),
     });
     expect(h.resend.hasCandidate("session-key")).toBe(false);
 

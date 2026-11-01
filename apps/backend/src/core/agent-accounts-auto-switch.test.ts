@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { AgentAccountAutoSwitchMode } from "@orkestrator/protocol/agent-account-auto-switch";
 import type {
   AgentAccountPlatform,
@@ -7,6 +7,7 @@ import type {
   AgentSessionAccount,
 } from "@orkestrator/protocol/agent-accounts";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
+import type { NativeAgentRuntimeProvider, ProviderStatus } from "./agent-provider-contract.js";
 import {
   AgentAccountAutoSwitcher,
   USAGE_LIMIT_BRIDGE_WAIT_MS,
@@ -460,6 +461,62 @@ describe("a limit error mid-turn", () => {
     expect(h.state.active).toBe("b");
   });
 
+  describe("a stop seen right after a move, whose session now reads the new account", () => {
+    const before = new Date(NOW - 1_000).toISOString();
+    const after = new Date(NOW + 1_000).toISOString();
+    const movedOff = (used = 100) =>
+      harness({
+        active: "a",
+        accounts: {
+          a: usage({ used, resetsInHours: 90 }),
+          b: usage({ used: 5, resetsInHours: 3 }),
+        },
+      });
+
+    test("a turn sent after the move ran there, so its limit is another one and it stays stopped", async () => {
+      const h = movedOff();
+      expect(await h.stop({ requestId: "first" })).toBe("resend");
+      expect(h.state.active).toBe("b");
+      expect(await h.stop({ requestId: "fable", turnStartedAt: after })).toBe("stop");
+      expect(h.switchAccount).toHaveBeenCalledTimes(1);
+    });
+
+    test("nothing known about when the turn ran stays stopped", async () => {
+      const h = movedOff();
+      expect(await h.stop({ requestId: "first" })).toBe("resend");
+      expect(await h.stop({ requestId: "second" })).toBe("stop");
+      expect(await h.stop({ requestId: "third", turnStartedAt: "not a date" })).toBe("stop");
+    });
+
+    test("a resend was sent after a move, whatever its turn's start says", async () => {
+      const h = movedOff();
+      expect(await h.stop({ requestId: "first" })).toBe("resend");
+      expect(await h.stop({ requestId: "second", resends: 1, turnStartedAt: before })).toBe("stop");
+    });
+
+    test("a turn from before the move resends when the account left reads used up", async () => {
+      const h = movedOff();
+      expect(await h.stop({ requestId: "first" })).toBe("resend");
+      expect(await h.stop({ requestId: "sibling", turnStartedAt: before })).toBe("resend");
+      expect(h.switchAccount).toHaveBeenCalledTimes(1);
+    });
+
+    test("a turn from before the move stays stopped when the account left has room", async () => {
+      const h = movedOff(40);
+      await h.switcher.evaluate("claude");
+      expect(h.state.active).toBe("b");
+      expect(await h.stop({ requestId: "five-hour", turnStartedAt: before })).toBe("stop");
+      expect(h.reads).toContainEqual({ accountId: "a", force: true });
+    });
+
+    test("past the window it says nothing, even for a turn from before", async () => {
+      const h = movedOff();
+      expect(await h.stop({ requestId: "first" })).toBe("resend");
+      h.advance(10 * 60_000);
+      expect(await h.stop({ requestId: "late", turnStartedAt: before })).toBe("stop");
+    });
+  });
+
   test("a second tab stopped by the same limit shares the move and its confirmation", async () => {
     const h = harness({
       active: "a",
@@ -501,10 +558,31 @@ describe("a limit error mid-turn", () => {
         b: usage({ used: 5, resetsInHours: 90 }),
       },
     });
-    expect(await h.stop()).toBe("wait");
+    const turn = { turnStartedAt: new Date(NOW - 1_000).toISOString() };
+    expect(await h.stop(turn)).toBe("wait");
     expect(h.state.active).toBe("b");
     h.advance(USAGE_LIMIT_BRIDGE_WAIT_MS);
-    expect(await h.stop()).toBe("stop");
+    expect(await h.stop(turn)).toBe("stop");
+  });
+
+  test("a sibling turn only the workflow can see holds the bridge too", async () => {
+    const h = harness({
+      active: "a",
+      accounts: {
+        a: usage({ used: 100, resetsInHours: 3 }),
+        b: usage({ used: 5, resetsInHours: 90 }),
+      },
+    });
+    let running = true;
+    const turn = {
+      turnStartedAt: new Date(NOW - 1_000).toISOString(),
+      siblingTurnRunning: () => running,
+    };
+    expect(await h.stop(turn)).toBe("wait");
+    expect(h.state.active).toBe("b");
+    running = false;
+    h.advance(USAGE_LIMIT_RECHECK_MS);
+    expect(await h.stop(turn)).toBe("resend");
   });
 
   test("a notice that fails leaves the switch standing", async () => {
@@ -558,6 +636,7 @@ describe("the provider a workflow holds", () => {
       requestId: "request-1",
       error: LIMIT_ERROR,
       resends: 1,
+      siblingTurnRunning: expect.any(Function),
     });
     expect(
       createNativeAgentProvider(
@@ -568,5 +647,37 @@ describe("the provider a workflow holds", () => {
     expect(
       createNativeAgentProvider({ ...connection, agent: "codex" }).usageLimitStop,
     ).toBeUndefined();
+  });
+
+  test("knows which of its turns its polls last saw running", async () => {
+    const { trackRunningTurns } = await import("./native-agent-provider.js");
+    const statuses: Record<string, ProviderStatus> = { r1: "running", r2: "blocked" };
+    const provider = {
+      status: async (sessionId: string) => statuses[sessionId]!,
+      observeSession: async (sessionId: string) => ({ status: statuses[sessionId]! }),
+    } as unknown as NativeAgentRuntimeProvider;
+    const running = trackRunningTurns(provider);
+    expect(running()).toBe(false);
+
+    await provider.status("r1");
+    await provider.observeSession?.("r2");
+    expect(running()).toBe(true);
+
+    // Two turns stopped by one limit must not wait on each other.
+    statuses.r1 = "error";
+    statuses.r2 = "idle";
+    await provider.observeSession?.("r1");
+    await provider.status("r2");
+    expect(running()).toBe(false);
+
+    // A turn nobody polls any more, such as a cancelled workflow's, holds nothing.
+    statuses.r1 = "running";
+    await provider.status("r1");
+    const now = spyOn(Date, "now").mockReturnValue(Date.now() + 3 * 60_000);
+    try {
+      expect(running()).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

@@ -4365,6 +4365,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         requestId: request.requestId,
         error: statusDetail,
         resends: request.usageLimitResends ?? 0,
+        turnStartedAt: request.createdAt,
       });
       await this.assertFence(workflow.id, token);
       if (verdict === "wait") return;

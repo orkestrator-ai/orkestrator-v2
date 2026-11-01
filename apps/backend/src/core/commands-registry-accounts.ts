@@ -149,7 +149,7 @@ export function registerAgentAccountCommands(
     context.accountAutoSwitch?.nudge(platform);
     return snapshot;
   });
-  /** Ends this machine's pin. Its own copy of the ticks is left alone. */
+  /** Ends this machine's pin, and only this machine's. Its own copy of the ticks is left alone. */
   register("resume_agent_account_auto_switch", async (args, context) => {
     assertOnlyKeys(args, ["platform"], "arguments");
     const platform = asAccountPlatform(args.platform);

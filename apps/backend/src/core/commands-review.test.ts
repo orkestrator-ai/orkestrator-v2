@@ -20,6 +20,7 @@ import {
   writeEnvironmentReviewPackage,
 } from "./commands-review.js";
 import { StorageService } from "./storage.js";
+import { EnvironmentUnavailableError } from "./workspace-code-rewind.js";
 import * as shell from "./shell.js";
 
 const temporaryDirectories: string[] = [];
@@ -723,6 +724,78 @@ describe("pipeline environment Git wiring", () => {
       expect(events.at(-1)).toBe("release");
     },
   );
+
+  test("says why a container environment cannot run Git, instead of Docker's text", async () => {
+    const container = {
+      id: "git-env",
+      environmentType: "containerized",
+      worktreePath: "/tmp/pipeline-worktree",
+      containerId: "container-git",
+    } as Awaited<ReturnType<StorageService["getEnvironment"]>>;
+    const local = { ...container!, environmentType: "local" as const };
+    const refusal = new shell.CommandFailedError(
+      "Error response from daemon: Container 0123abcd is paused, unpause the container before exec",
+      { exitCode: 1 },
+    );
+    const timeout = new shell.CommandFailedError("", { timedOut: true });
+    let failure: Error = refusal;
+    let status: () => Promise<string> = async () => "paused";
+    const readStatus = mock((id: string) => {
+      expect(id).toBe("container-git");
+      return status();
+    });
+    const gitFor = (environment: typeof container) =>
+      createPipelineEnvironmentGit(
+        { getEnvironment: async () => environment },
+        { beginMutation: () => () => {} },
+        (env, guard) =>
+          createEnvironmentCommandRunner(env, guard, undefined, async () => {
+            throw failure;
+          }),
+        readStatus,
+      );
+    const git = gitFor(container);
+
+    const paused = await git("git-env", ["rev-parse", "HEAD"]).catch((error: unknown) => error);
+    expect(paused).toBeInstanceOf(EnvironmentUnavailableError);
+    expect((paused as Error).message).toBe(
+      "The environment's container is paused. Unpause it, then try again.",
+    );
+    expect((paused as Error).cause).toBe(refusal);
+    for (const state of ["exited", "created", "dead", "restarting"]) {
+      status = async () => state;
+      await expect(git("git-env", ["status"])).rejects.toThrow(
+        "The environment's container is not running. Start the environment, then try again.",
+      );
+    }
+    for (const inspectFailure of [
+      new shell.CommandFailedError("", { timedOut: true }),
+      new shell.CommandFailedError("Cannot connect to the Docker daemon", { exitCode: 1 }),
+      new shell.CommandFailedError("Error: No such object: container-git", { exitCode: 1 }),
+    ]) {
+      status = async () => {
+        throw inspectFailure;
+      };
+      const unavailable = await git("git-env", ["status"]).catch((error: unknown) => error);
+      expect(unavailable).toBeInstanceOf(EnvironmentUnavailableError);
+      expect((unavailable as Error).message).toBe(
+        "The environment's container status could not be checked. Check that Docker is running and the environment is available, then try again.",
+      );
+      expect((unavailable as Error).message).not.toContain("could not be found");
+      expect((unavailable as Error).cause).toBe(refusal);
+    }
+
+    // A running container's failure is Git's own answer, kept as it is.
+    status = async () => "running";
+    await expect(git("git-env", ["status"])).rejects.toBe(refusal);
+    // A timeout or a local worktree never asks Docker.
+    readStatus.mockClear();
+    failure = timeout;
+    await expect(git("git-env", ["status"])).rejects.toBe(timeout);
+    failure = refusal;
+    await expect(gitFor(local)("git-env", ["status"])).rejects.toBe(refusal);
+    expect(readStatus).not.toHaveBeenCalled();
+  });
 
   test("refuses a missing environment before creating a runner", async () => {
     const runner = mock(createGitEnvironmentCommandRunner);

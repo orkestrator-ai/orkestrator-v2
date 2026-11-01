@@ -14,6 +14,7 @@ on:
       - ".github/workflows/container-live-qualification.yml"
       - "apps/backend/tests/container-live-*.test.ts"
       - "apps/backend/tests/container-benchmarks.test.ts"
+      - "apps/backend/tests/build-pipeline-code-rewind-docker.test.ts"
       - "apps/backend/tests/container-lifecycle-fixtures.ts"
       - "apps/backend/tests/container-live-rebuild-*.ts"
       - "apps/backend/tests/container-live-workspace.ts"
@@ -146,6 +147,12 @@ jobs:
       - name: Live rebuild faults (C15)
         if: ${{ !cancelled() }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-rebuild-faults.test.ts --parallel=1
+
+      # The build pipeline's "Rewind code to here" through `docker exec`,
+      # on fake providers (to-do 0405, task 7).
+      - name: Live build pipeline code rewind
+        if: ${{ !cancelled() }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/build-pipeline-code-rewind-docker.test.ts --parallel=1
 
       # The container-side change signals: the image's own hook and watcher
       # commands ring the production routes through Linux Engine's

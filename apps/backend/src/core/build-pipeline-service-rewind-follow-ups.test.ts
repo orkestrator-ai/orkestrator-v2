@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   isBuildPipeline,
   REVIEW_PACKAGE_SESSION_LABEL,
@@ -10,6 +10,7 @@ import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import { EnvironmentUnavailableError } from "./workspace-code-rewind.js";
 import { TEST_FIX_RESULT, TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
 import {
   cleanReview,
@@ -646,6 +647,54 @@ describe("rewinding the code to a step", () => {
       );
     });
   }
+
+  test("a journaled reset the container cannot run yet says so, logs once and finishes later", async () => {
+    const fake = fakeGit();
+    let unavailable = false;
+    const git: EnvironmentGit = async (id, args) => {
+      if (unavailable && args[0] === "update-ref") {
+        throw new EnvironmentUnavailableError(
+          "The environment's container is not running. Start the environment, then try again.",
+        );
+      }
+      return fake.git(id, args);
+    };
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await withService(
+        async (service, storage, provider, _invocations, controls) => {
+          fake.worktree.controls = controls;
+          const { started, build } = await completedOnC3(service, storage, controls);
+          const created = provider.created.length;
+          unavailable = true;
+          const waiting = `The code rewind to ${C0.slice(0, 12)} has not finished, so this build cannot continue yet. The environment's container is not running.`;
+          await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(
+            waiting,
+          );
+          expect((await pipeline(storage, started.id)).rewinds?.at(-1)?.code?.pending).toBe(true);
+          await expect(service.pause(started.id)).rejects.toThrow(waiting);
+          for (let pass = 0; pass < 3; pass += 1) await service.advanceNow(started.id);
+          const logged = () =>
+            warn.mock.calls.filter((call) => String(call[0]).includes("Pending code rewind"));
+          expect(logged()).toHaveLength(1);
+          expect(String(logged()[0]![1])).toStartWith(waiting);
+          expect(provider.created.length).toBe(created);
+          expect(controls.currentHead).toBe(C3);
+
+          unavailable = false;
+          await service.advanceNow(started.id);
+          expect(controls.currentHead).toBe(C0);
+          expect(fake.refs.size).toBe(1);
+          await service.advanceNow(started.id);
+          expect(provider.created.slice(created).map((entry) => entry.phase)).toEqual(["build"]);
+          expect(logged()).toHaveLength(1);
+        },
+        { environmentGit: git },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   test("workflow closure failure happens before any Git mutation", async () => {
     const fake = fakeGit();

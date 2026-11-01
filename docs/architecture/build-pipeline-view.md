@@ -444,10 +444,20 @@ action.
    preview read (`expectedHead`); a branch that moved since is refused. Inside
    the pipeline lock, before any state changes, the backend checks again,
    keeps the old tip at `refs/orkestrator/build-pipeline-rewinds/<pipeline>/<rewind>`
-   (`git update-ref`), and runs `git reset --hard <target>`. A refused or failed
-   reset leaves the record untouched. The rewind then records `code` (from, to,
-   dropped commits, backup ref, upstream and its dropped count), and a repeat of
-   the same request is a no-op like any restart.
+   (`git update-ref`), and runs `git reset --hard <target>`. A refused request
+   leaves the record untouched. An admitted one journals the rewind's `code`
+   (from, to, dropped commits, backup ref, upstream and its dropped count) with
+   `pending` before Git changes, and nothing else runs on the pipeline until
+   the reset finishes; a repeat of the same request is a no-op like any
+   restart.
+   In a container environment every Git command runs as
+   `docker exec -w /workspace <container> git …`. When the container is
+   paused, stopped or gone, the refusal says so (`EnvironmentUnavailableError`
+   from `createPipelineEnvironmentGit`, which reads the container's state
+   rather than passing on Docker's text). A reset already journaled is
+   retried on every supervisor pass, logged once per reason, and each control
+   in the meantime says the rewind has not finished; the reset completes, and
+   the step starts, once the container answers again.
 4. **Pushed commits and the pull request.** When the upstream had commits the
    reset dropped, every Ship until a live Ship completes after the rewind is
    told to push with `git push --force-with-lease` (never plain `--force`, never

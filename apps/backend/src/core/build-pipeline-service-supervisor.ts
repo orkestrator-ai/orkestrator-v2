@@ -156,12 +156,18 @@ type StageOverride = {
   settings?: BuildStepSelection;
 };
 
-/** Pipelines whose current wait for a graph run was logged; cleared past this. */
+/** Pipelines whose current wait (graph run, pending rewind) was logged; cleared past this. */
 const MAX_WORKSPACE_WAITS_NOTED = 256;
 
 export class BuildPipelineSupervisor {
   /** The wait last logged per pipeline (one line per wait, not per pass). */
   private readonly workspaceWaits = new Map<string, WorkspaceBusyError["reason"]>();
+  /**
+   * The reason a pending code rewind last could not finish, per pipeline.
+   * Every pass retries it (a stopped container can take hours to come back),
+   * so each reason is logged once rather than every 1.5 s.
+   */
+  private readonly pendingRewindFailures = new Map<string, string>();
   /**
    * Progress clocks for the reviewer fan-out.
    *
@@ -332,12 +338,17 @@ export class BuildPipelineSupervisor {
     if (pipeline.rewinds?.at(-1)?.code?.pending) {
       try {
         await this.ctx.finishPendingCodeRewind(pipeline);
+        this.pendingRewindFailures.delete(pipeline.id);
       } catch (error) {
         // Keep the durable intent and restart target intact for retry/startup.
-        console.warn(
-          `[build-pipeline] Pending code rewind for ${pipeline.id}:`,
-          errorMessage(error),
-        );
+        const reason = errorMessage(error);
+        if (this.pendingRewindFailures.get(pipeline.id) !== reason) {
+          if (this.pendingRewindFailures.size >= MAX_WORKSPACE_WAITS_NOTED) {
+            this.pendingRewindFailures.clear();
+          }
+          this.pendingRewindFailures.set(pipeline.id, reason);
+          console.warn(`[build-pipeline] Pending code rewind for ${pipeline.id}:`, reason);
+        }
       }
       return;
     }

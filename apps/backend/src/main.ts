@@ -31,11 +31,18 @@ import {
 } from "./standalone-logging.js";
 import { installBoundedConsole } from "./bounded-console.js";
 import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
+import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/node/application-logging";
+import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logger-environment";
 
 assertSupportedPlatform();
 // First, before anything logs: Bun's console writes to a stalled stdout reader
 // block this whole process (see bounded-console.ts).
 const boundedConsole = installBoundedConsole();
+// Before standalone logging clears the flag: the desktop reads this process's
+// stdio and needs each logger entry's level (docs/architecture/logging.md).
+configureLoggerFromEnvironment(process.env, {
+  relayToSupervisor: process.env[DESKTOP_SUPERVISED_ENV] === "1",
+});
 startEventLoopStallMonitor();
 // Before any other startup work: a rejection thrown while the backend is still
 // coming up would otherwise be fatal too, and this process is what the desktop

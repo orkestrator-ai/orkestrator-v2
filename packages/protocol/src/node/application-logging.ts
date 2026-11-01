@@ -4,6 +4,14 @@ import path from "node:path";
 import { formatWithOptions } from "node:util";
 
 import { normalizeDebugLogRetentionDays } from "../debug-logging.js";
+import {
+  createLogger,
+  formatLogError,
+  getLogFormat,
+  LOG_RECORD_PREFIX,
+  parseLogRecordLine,
+  renderLogLine,
+} from "../logger.js";
 
 /** Electron's own log. A standalone backend writes beside it under its own prefix. */
 export const DESKTOP_LOG_FILE_PREFIX = "orkestrator-ai-";
@@ -271,6 +279,31 @@ async function fileSize(target: string): Promise<number | null> {
   return metadata ? metadata.size : null;
 }
 
+/**
+ * One JSON line for the file. A logger's record is already one; any other
+ * console call (an unmigrated site, relayed process output) is wrapped without
+ * an area or event, so every line of the file still parses.
+ */
+function jsonEntry(
+  timestamp: string,
+  level: string,
+  args: unknown[],
+  formatted: string,
+  maxEntryBytes: number,
+): Buffer {
+  const only = args.length === 1 && typeof args[0] === "string" ? args[0] : null;
+  const wrap = (message: string, truncated: boolean) =>
+    Buffer.from(
+      `${LOG_RECORD_PREFIX}${JSON.stringify({ ts: timestamp, level, message, ...(truncated ? { truncated } : {}) }).slice(1)}\n`,
+    );
+  const whole =
+    only !== null && parseLogRecordLine(only) ? Buffer.from(`${only}\n`) : wrap(formatted, false);
+  if (whole.byteLength <= maxEntryBytes) return whole;
+  // Cutting the bytes would leave a line that does not parse. The eighth allows
+  // for JSON escapes; the marker says the entry is incomplete.
+  return wrap(formatted.slice(0, Math.floor(maxEntryBytes / 8)), true);
+}
+
 function boundedEntry(value: string, maxEntryBytes: number): Buffer {
   const encoded = Buffer.from(value);
   if (encoded.byteLength <= maxEntryBytes) return encoded;
@@ -309,7 +342,10 @@ export function installProductionApplicationLogging(options: {
   let active: { base: string; index: number; bytes: number } | null = null;
 
   const reportWriteFailure = (error: unknown) => {
-    originalMethods.error.call(console, "[ApplicationLogging] Failed to write log:", error);
+    originalMethods.error.call(
+      console,
+      renderLogLine("error", "logging", "write.failed", { error: formatLogError(error) }),
+    );
   };
 
   /**
@@ -345,10 +381,12 @@ export function installProductionApplicationLogging(options: {
 
   const dropMarker = (timestamp: string): Buffer | null => {
     if (droppedEntries === 0) return null;
-    const plural = droppedEntries === 1 ? "entry" : "entries";
-    return Buffer.from(
-      `${timestamp} WARN [ApplicationLogging] ${droppedEntries} ${plural} (${droppedBytes} bytes) dropped: log queue full\n`,
-    );
+    const line = renderLogLine("warn", "logging", "entries.dropped", {
+      entries: droppedEntries,
+      bytes: droppedBytes,
+      reason: "queue-full",
+    });
+    return Buffer.from(getLogFormat() === "json" ? `${line}\n` : `${timestamp} WARN ${line}\n`);
   };
 
   const write = (payload: Buffer) => {
@@ -371,10 +409,10 @@ export function installProductionApplicationLogging(options: {
       { colors: false, depth: 5, maxArrayLength: 100, maxStringLength: 10_000 },
       ...args,
     );
-    const entry = boundedEntry(
-      `${timestamp} ${level.toUpperCase()} ${formatted}\n`,
-      bounds.maxEntryBytes,
-    );
+    const entry =
+      getLogFormat() === "json"
+        ? jsonEntry(timestamp, level, args, formatted, bounds.maxEntryBytes)
+        : boundedEntry(`${timestamp} ${level.toUpperCase()} ${formatted}\n`, bounds.maxEntryBytes);
     const marker = dropMarker(timestamp);
     const payload = marker ? Buffer.concat([marker, entry]) : entry;
     if (pendingBytes + payload.byteLength > bounds.maxPendingBytes) {
@@ -401,15 +439,19 @@ export function installProductionApplicationLogging(options: {
   const prune = () =>
     pruneExpiredApplicationLogs(logDirectory, settings.retentionDays, Date.now(), bounds).catch(
       (error) => {
-        originalMethods.error.call(console, "[ApplicationLogging] Failed to prune logs:", error);
+        originalMethods.error.call(
+          console,
+          renderLogLine("error", "logging", "prune.failed", { error: formatLogError(error) }),
+        );
       },
     );
   void prune();
   const cleanupTimer = setInterval(prune, options.cleanupIntervalMs ?? LOG_CLEANUP_INTERVAL_MS);
   cleanupTimer.unref();
-  console.info(
-    `[ApplicationLogging] Saving logs to ${logDirectory}; retaining ${settings.retentionDays} day(s).`,
-  );
+  createLogger("logging").info("capture.started", {
+    directory: logDirectory,
+    retentionDays: settings.retentionDays,
+  });
 
   return {
     logDirectory,

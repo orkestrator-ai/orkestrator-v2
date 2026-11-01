@@ -1,3 +1,4 @@
+import { configureLogger, createLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmod,
@@ -116,8 +117,77 @@ describe("production application log writing", () => {
       path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
       "utf8",
     );
-    expect(contents).toContain("Saving logs to");
+    expect(contents).toContain("[logging] capture.started directory=");
     expect(contents).toContain("WARN diagnostic { code: 42 }");
+  });
+
+  test("writes valid JSON lines in JSON mode, including console output and drop markers", async () => {
+    const dataDir = await enabledDataDir();
+    configureLogger({ format: "json" });
+    try {
+      const logger = installProductionApplicationLogging({
+        dataDir,
+        now: () => new Date("2026-08-25T18:00:00.000Z"),
+        bounds: { maxPendingBytes: 700 },
+      });
+      createLogger("updater").warn("check.failed", { attempt: 2 });
+      console.error("[Backend] unmigrated\nsecond line");
+      console.log("z".repeat(800));
+      await logger?.stop();
+
+      const contents = await readFile(
+        path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
+        "utf8",
+      );
+      const entries = contents
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(entries.every((entry) => entry.orklog === 1)).toBe(true);
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "updater",
+          event: "check.failed",
+          fields: { attempt: 2 },
+        }),
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({ level: "error", message: "[Backend] unmigrated\nsecond line" }),
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          area: "logging",
+          event: "entries.dropped",
+          fields: expect.objectContaining({ entries: 1 }),
+        }),
+      );
+    } finally {
+      resetLogger();
+    }
+  });
+
+  test("keeps a JSON line parseable when the entry bound cuts it", async () => {
+    const dataDir = await enabledDataDir();
+    configureLogger({ format: "json" });
+    try {
+      const logger = installProductionApplicationLogging({
+        dataDir,
+        now: () => new Date("2026-08-25T18:00:00.000Z"),
+        bounds: { maxEntryBytes: 400 },
+      });
+      console.log("x".repeat(4000));
+      await logger?.stop();
+      const contents = await readFile(
+        path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
+        "utf8",
+      );
+      const last = JSON.parse(contents.trim().split("\n").at(-1)!) as Record<string, unknown>;
+      expect(last.truncated).toBe(true);
+      expect(Buffer.byteLength(contents.trim().split("\n").at(-1)!)).toBeLessThanOrEqual(400);
+    } finally {
+      resetLogger();
+    }
   });
 
   test("truncates an entry past the per-entry byte bound", async () => {
@@ -161,8 +231,9 @@ describe("production application log writing", () => {
       path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
       "utf8",
     );
-    expect(contents).toContain("2 entries (");
-    expect(contents).toContain("dropped: log queue full");
+    expect(contents).toMatch(
+      /WARN \[logging\] entries\.dropped entries=2 bytes=\d+ reason=queue-full/,
+    );
     expect(contents).toContain("kept");
     expect(logger?.dropStats()).toEqual({ droppedEntries: 0, droppedBytes: 0 });
   });
@@ -181,8 +252,9 @@ describe("production application log writing", () => {
       path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
       "utf8",
     );
-    expect(contents).toContain("1 entry (");
-    expect(contents).toContain("dropped: log queue full");
+    expect(contents).toMatch(
+      /WARN \[logging\] entries\.dropped entries=1 bytes=\d+ reason=queue-full/,
+    );
   });
 
   test("rolls over to a numbered file once one passes the per-file bound", async () => {

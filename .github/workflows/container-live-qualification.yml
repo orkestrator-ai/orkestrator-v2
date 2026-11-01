@@ -25,6 +25,9 @@ on:
       - "apps/backend/tests/container-start-docker.test.ts"
       - "apps/backend/tests/staged-input-relay-docker.test.ts"
       - "apps/backend/src/core/container-start.ts"
+      - "apps/backend/src/core/design/export-container.test.ts"
+      - "apps/backend/src/core/design/export-writer.ts"
+      - "apps/backend/src/core/design/exports.ts"
       - "apps/backend/scripts/container-exec-cost.ts"
       - "docker/orkestrator-state-signal.sh"
       - "docker/orkestrator-worktree-signal.sh"
@@ -168,6 +171,15 @@ jobs:
         env:
           ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}
         run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-worktree-signal-docker.test.ts --parallel=1
+
+      # Design export through real `docker exec` into the run's image: client
+      # kills, the daemon closing the helper's stdin, and digest reconciliation
+      # (todo 0036 task 2).
+      - name: Live design export
+        if: ${{ !cancelled() }}
+        env:
+          ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}
+        run: bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/design/export-container.test.ts --parallel=1
 
       # Numbers only, compared by hand with the Docker Desktop figures
       # (container-qualification.md, "Exec cost and container change signals").

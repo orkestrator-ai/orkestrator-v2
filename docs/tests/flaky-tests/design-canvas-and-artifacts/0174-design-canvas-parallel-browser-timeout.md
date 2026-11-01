@@ -1,7 +1,7 @@
 # Design canvas times out in the parallel browser suite
 
 - **ID:** 0174
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-28
 - **Test:** `canvas edits, script isolation, missed events, conflict and reload`
 - **File:** `e2e/DesignCanvas.spec.ts:16`
@@ -15,7 +15,6 @@
 ## Current assessment
 
 The design canvas test appears sensitive to the suite's six-worker parallel load. The design canvas code did not change in this task; investigate the timeout under controlled parallel load.
-
 
 ## Mobile layout follow-up main merge recurrence — 2026-10-16
 
@@ -83,7 +82,6 @@ case at 30000 ms (335 passed, 80 skipped, five failures across 420 cases).
 then passed the owning file in 27.2 seconds. Browser reruns ran sequentially.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iMEuX0/browser.log.gz`.
 
-
 ## Public landing-page review recurrence — 2026-10-18
 
 The desktop `canvas edits, script isolation, missed events, conflict and reload`
@@ -107,7 +105,6 @@ one worker and separate output directories: `e2e/AgentUsage.spec.ts` in 27.5 s
 `mise run test:logged -- --name <label> -- bunx playwright test --config e2e/playwright.config.ts <owning-file> --workers=1 --output=<directory>`.
 These ENOENT failures were caused by the overlapping validation commands,
 not evidence of intermittent product behavior.
-
 
 ## Landing-page main merge recurrence — 2026-10-18
 
@@ -172,7 +169,6 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 - `mise run test:logged -- --name merge-canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the complete unchanged owner, exit 0 in 14.0 s.
 - Evidence: `orkestrator-test-run.mgE8Fb/merge-browser.log.gz` under the host temporary directory. No assertion, deadline or skip changed; host contention remains a hypothesis.
 
-
 ## Repository-sidebar review validation — 2026-10-22
 
 - **Original command:** `mise run test:logged -- --name browser-suite -- mise run test:browser`, nine workers alongside repository validation on the shared host. The component suite reported 437 passed, 85 skipped and four failed in 9.4 minutes. Both unchanged canvas viewport cases exceeded the 30-second test deadline. The other failures were Monaco startup and a new sidebar test's reload synchronization, corrected in the same change.
@@ -180,20 +176,17 @@ Branch `todo-0036-design-canvas-qualification-1477f37ca3cf` from `b83ae534`, on 
 - **Evidence:** host temporary directory `orkestrator-test-run.QC9tF3/browser-suite.log.gz`; original traces under `output/playwright/test-results/DesignCanvas-*`. The sidebar fixes are commit `6d6f9b83f`; its final focused browser rerun passed all 30 cases.
 - **Assessment:** confirmed intermittent recurrence. Host or fixture contention remains a hypothesis. No canvas implementation, assertion, timeout or skip changed; the original aggregate remains failed.
 
-
 ## Leaf coordinator review validation — 2026-10-24
 
 - `mise run test:logged -- --name browser-tests -- mise run test:browser` ran nine workers alongside repository checks: 537 passed, 101 skipped and four failed (282.4 s). The unchanged mobile canvas case could not find Element inspector at line 98 within five seconds. The other failures were mobile design history and both native branch-suggestion cases; see [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md).
 - The complete unchanged owner passed both viewport cases alone: `ORKESTRATOR_E2E_PORT=14373 mise run test:logged -- --name canvas-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/playwright/canvas-owner` (exit 0, 16.3 s).
 - Evidence: host temporary artifact `orkestrator-test-run.E4tM8D/browser-tests.log.gz`. No canvas implementation, assertion, timeout or skip changed. Shared-host or fixture contention remains a hypothesis; the original aggregate remains failed.
 
-
 ## Leaf grouping main merge — 2026-10-24
 
 - `ORKESTRATOR_E2E_PORT=53444 ORKESTRATOR_PUBLIC_E2E_PORT=53445 mise run test:logged -- --name merge-browser -- mise run test:browser` ran nine workers alongside repository validation on the shared host: 544 passed, 102 skipped and six failed in 9.4 minutes. Both canvas viewport cases exceeded the 30-second deadline; mobile was waiting to click Close inspector.
 - `ORKESTRATOR_E2E_PORT=59580 mise run test:logged -- --name merge-design-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/agent-testing/merge-design-owner` passed the complete unchanged owner, exit 0 in 34.3 s.
 - Evidence: host temporary artifact `orkestrator-test-run.EtTM9R/merge-browser.log.gz`; original traces under `output/playwright/test-results/`. No implementation, assertion, timeout or skip changed. The original aggregate remains failed; see [0493](../aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md) for the other owners.
-
 
 ## Mixed-version compatibility main merge — 2026-10-24
 
@@ -274,11 +267,9 @@ suite's and were not chased. A quiet nine-worker `mise run test:browser` run
 to confirm no recurrence is listed in
 [0036](../../../todo/design-canvas/0036-design-canvas-qualification.md).
 
-
 ## Shared Codex state review fixes — 2026-10-26
 
 Reopened for a recurrence after the 2026-10-25 fix. Both viewport cases reached their deadlines in the nine-worker component browser suite on `74841142b`; the mobile case was waiting for the replacement iframe element's `display: inline-block`. The complete unchanged owner passed both viewport cases with one worker in 60.6 s: `ORKESTRATOR_E2E_PORT=62459 mise run test:logged -- --name codex-auth-owner-designcanvas -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output output/playwright/codex-auth-owner-designcanvas`. This does not establish that the earlier Apply styles race returned; the new stall's cause remains unknown. The original command and broader results are in [0995](../aggregate-validation-runs/0995-agent-accounts-sign-in-0003-qualification.md). No implementation, assertion, timeout or skip changed in this owner.
-
 
 ## Uniform app shortcuts review recurrence — 2026-10-28
 
@@ -305,6 +296,56 @@ run (147 passed, three skipped, two unrelated AgentLaunchDialog failures).
 This was a combined owner run, not a new standalone qualification. No assertion,
 deadline or implementation changed. Exact commands and evidence are recorded in
 [session history validation](../aggregate-validation-runs/1166-session-titles-0006-validation.md#structured-review-fixes--2026-10-31).
+
+## Linux reproduction and fix — 2026-11-01
+
+Host: beelink, Linux 7.1.8, Intel Core Ultra 9 285H (16 logical CPUs),
+Playwright 1.64.0 with Chromium 156, shared with other builds throughout
+(load averages 3–77; see each run). Base `93b99bfb`. Port 52741.
+
+- **Throttle, one worker** (`ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE`,
+  `--workers=1 --repeat-each=5 --timeout=120000`, both projects):
+  - rate 4: 10 of 10 passed (2.1 min in total; load 4.7–5.3).
+  - rate 8: 9 of 10 passed in 21.9–25.1 s each. The failure (desktop, line
+    210, heading not found 5 s after `page.reload()`) had a Vite module
+    request aborted with `net::ERR_NETWORK_CHANGED`: host Docker churn, see
+    [2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md),
+    not a design stall.
+  - Neither rate stalled at **Apply styles** or at the replacement element's
+    `display`.
+- **Eight workers, unchanged file** (`--workers=8 --repeat-each=8`, default
+  30 s, load 48–77): 16 of 16 hit the 30 s deadline, at lines 210, 220 and
+  224 (the reloaded heading, the second **Apply styles**, the conflict
+  alert). The traces show uniform slowness, not a stall: `page.goto` took
+  8.6–10.0 s and `page.reload()` 5.2–5.8 s, together 14–16 s of the 30 s,
+  and no other step took longer than 1.4 s. No trace had a network-change
+  error. This matches every recorded recurrence: the step that fails varies
+  because the deadline lands on whichever step comes next.
+- **Cause.** The journey makes two full loads of the component fixture from
+  the Vite dev server. Under parallel load those loads alone can spend half
+  the budget, leaving too little for about 80 steps. The 2026-10-26 "display
+  empty rather than `inline-block`" recurrence fits: `toHaveCSS` was still
+  polling the re-rendering frame when the deadline landed. (**Close
+  inspector** clears the selection, so the nudge cannot have hit a stale
+  selection.)
+- **Fix (test only, every assertion kept).** `pageLoad()` in
+  `e2e/DesignCanvas.spec.ts` runs `page.goto` and `page.reload()` under the
+  deadline, then adds their duration back with `test.info().setTimeout()`.
+  The steps keep the whole 30 s, so a step that stalls still fails at it,
+  and a page load that hangs still fails at the deadline.
+- **After the fix**, same command:
+  - mobile 8 of 8 passed (36.2–40.3 s wall time; load 58–73);
+  - desktop 7 of 8 failed within 8–12 s, every one with 4–340 module
+    requests aborted by `ERR_NETWORK_CHANGED` (2340); a desktop-only rerun
+    after 15 s with no interface events lost all 8 the same way (46–227
+    aborts each). The one desktop run without aborts passed (17.1 s). The
+    desktop project was therefore not cleanly confirmed under parallel load
+    on this host.
+  - one worker, both projects, three runs: 6 of 6 passed (16.2–22.5 s;
+    load 44–62).
+- **Not run:** a nine-worker `mise run test:browser`. On this host Docker
+  churn from other builds aborts dev-server loads in any long browser run
+  (2340), so it would not have shown whether this owner recurs.
 
 ## Reviewer start failure (todo 1090) — 2026-11-01
 

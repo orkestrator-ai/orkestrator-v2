@@ -434,6 +434,33 @@ export function electronReadinessTimeoutMs(flavor: "development" | "agent-test")
   return flavor === "agent-test" ? ELECTRON_READINESS_TIMEOUT_MS : null;
 }
 
+/** Set to `1` to start an agent-test profile's Electron without any display (Linux only). */
+export const AGENT_TEST_HEADLESS_ELECTRON_ENV = "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON";
+
+/**
+ * Chromium switches and display variables for the profile's Electron.
+ *
+ * On a shared Linux host the inherited `DISPLAY` and `WAYLAND_DISPLAY` belong
+ * to whoever is signed in, so an agent-test window would open on their
+ * desktop. With the opt-in, Electron runs on Chromium's headless Ozone
+ * platform with the GPU off and never sees those variables; the browser
+ * suites drive the gateway, not this window. Other flavors and platforms are
+ * unchanged, so a variable left in a shell cannot hide `mise run dev`.
+ */
+export function electronLaunchForRuntime(
+  flavor: "development" | "agent-test",
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): { switches: string[]; env: NodeJS.ProcessEnv } {
+  const headless =
+    flavor === "agent-test" &&
+    platform === "linux" &&
+    env[AGENT_TEST_HEADLESS_ELECTRON_ENV] === "1";
+  const launch = electronLaunch(headless, platform, env);
+  if (headless) launch.switches.push("--disable-gpu");
+  return launch;
+}
+
 /**
  * Check that Electron announced everything this particular run depends on.
  *
@@ -711,11 +738,10 @@ export async function startDevelopment(
     });
     await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
 
-    const launch = electronLaunch(
-      args.headlessElectron === true,
-      dependencies.platform ?? process.platform,
-      process.env,
-    );
+    const platform = dependencies.platform ?? process.platform;
+    const launch = args.headlessElectron
+      ? electronLaunch(true, platform, process.env)
+      : electronLaunchForRuntime(flavor, platform, process.env);
     const electronEnv = launch.env;
     electron = (dependencies.spawn ?? spawn)(
       electronExecutable,

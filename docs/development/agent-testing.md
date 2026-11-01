@@ -205,16 +205,36 @@ container shows through the 5 s poll, across an inactive-environment switch, a
 hidden document, a reload and a second window, and a revert from the panel
 restores the file without starting a container fetch. It also checks that a
 tree revision announced while the document was hidden still shows on a local
-worktree after return, and that the Coordinator tab opens beside container
-environments. Its tests are named "Docker fixture", so `mise run
-test:agent:docker` runs them. Results are recorded in
+worktree after return.
+
+`e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
+container UI on the same profile:
+
+- **Merge from the UI.** Every `gh` call for a container runs inside it, so the
+  spec installs a stand-in `gh` in the container
+  (`e2e/agent-testing/container-fake-gh.sh`), which merges with plain Git into
+  the fixture's bare origin. The PR monitor, the toolbar, the merge dialog,
+  `merge_environment_pr` and the merged state in a second window, after an
+  environment switch and after a reload are the real app. GitHub itself is
+  not covered.
+- **Validation output.** Real commands run in the container through the
+  validation worker. A pipeline record naming that run is imported, and the
+  Build tab's Tests view reads each command's output back from the container.
+- **The coordinator view.** Delegations to the container and the local
+  environment, a repository context change, and the delegations closing when
+  their environments stop. Each is checked across an environment switch, a
+  hidden document, a reload and a second window. The coordinator test stops
+  and restarts both fixture environments.
+
+Both specs' tests are named "Docker fixture", so `mise run test:agent:docker`
+runs them. Results are recorded in
 [0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
 
 ```bash
 mise run dev:test --profile container-wiring-qa --fixture --fixture-environments local,container \
   --no-agent-credentials --agent-platforms codex
 # In another terminal:
-ORKESTRATOR_AGENT_TEST_PROFILE=container-wiring-qa ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name container-wiring -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-files-wiring.spec.ts --workers=1
+ORKESTRATOR_AGENT_TEST_PROFILE=container-wiring-qa ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name container-wiring -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-files-wiring.spec.ts container-app-wiring.spec.ts --workers=1
 mise run dev:stop --profile container-wiring-qa
 mise run dev:reset --profile container-wiring-qa
 ```

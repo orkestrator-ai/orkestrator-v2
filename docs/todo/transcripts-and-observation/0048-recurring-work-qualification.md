@@ -4,8 +4,9 @@ Checked against `main` at `00a0cb82` (2026-10-25); tasks 3 and 4 rechecked
 against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
 2026-10-22 and 2026-10-25, and from Linux on 2026-11-01; see
 [Live evidence](#live-evidence-2026-10-22-macos),
-[Live soak](#live-soak-2026-10-25-macos) and
-[Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux).
+[Live soak](#live-soak-2026-10-25-macos),
+[Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux)
+and [its follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
 
 ## Task analysis
 
@@ -16,7 +17,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: open.
 2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: open.
 3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
-4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: open (partial evidence only: Files-panel cases and coordinator smoke have live results; hidden-return rerun now observes the revision while hidden. UI merge, validation output and deeper coordinator qualification remain open; decision 19).
+4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: done (2026-11-01: every case checked in a real browser on Linux, decisions 19 to 23; GitHub's own merge behaviour stays with task 5 and real-model validation plans with 0049; a build-tab selection bug found and fixed, decision 23).
 5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown. Status: open.
 6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: partly done (the `dev:test` save-detection run passed).
@@ -133,7 +134,17 @@ passed against a fresh `--fixture-environments local,container
 Merge from the UI needs a pull request (`merge_environment_pr` and
 `merge_pr_local` both require `prUrl` and run `gh pr merge`), and validation
 output only appears in Multi Review and build pipelines, whose plans come from
-a model turn. Both stay open (decision 16).
+a model turn. The first pass left both open (decision 16). The follow-up
+(decisions 20 to 22) checks them in a second spec,
+`e2e/agent-testing/container-app-wiring.spec.ts`, without GitHub or a model:
+every `gh` call for a container runs inside it, so a stand-in `gh` there
+covers the merge; and the validation worker runs real commands from a
+hand-written plan that a pipeline record then names. The same spec replaces
+the coordinator smoke check with delegations, a repository context change and
+their closing, each across a switch, a hidden document, a reload and a second
+window. It found that a Build tab the backend selects in a build-only layout
+lost the selection to a seeded terminal; fixed (decision 23). See
+[Container app wiring, follow-up](#container-app-wiring-follow-up-2026-11-01-linux).
 
 ### 5. Live GitHub
 
@@ -689,6 +700,41 @@ event-driven change projection, which applied the save while the document was
 hidden. So the missed-final-invalidation case was moved to the All files tree,
 which re-reads on announced revisions and skips one while hidden.
 
+### Container app wiring, follow-up (2026-11-01, Linux)
+
+Same host and harness as above (headless Electron, no provider turn, no
+GitHub, no agent credentials). Profile `q48m`, started once with `mise run
+dev:test --profile q48m --fixture --fixture-environments local,container
+--no-agent-credentials --agent-platforms codex` and reset before the recorded
+run. Recorded run: `ORKESTRATOR_AGENT_TEST_PROFILE=q48m
+ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name
+container-wiring-full -- bunx playwright test --config
+e2e/agent-testing/playwright.browser.config.ts container-files-wiring.spec.ts
+container-app-wiring.spec.ts --workers=1`: all 5 tests passed on the fresh
+profile. Afterwards the container had its own `gh` back, origin `main` at the
+fixture commit, no leftover branch or validation artifacts, and both fixture
+environments running. The profile's store held no native agent session.
+
+| Case | What was checked | Result |
+| --- | --- | --- |
+| Merge: PR state | `set_environment_pr` with mergeability unknown; the PR monitor's `gh pr view` inside the container turns it mergeable and enables "Merge PR" | Passed |
+| Merge: from the UI | "Merge PR", then the dialog's "Merge PR": `gh pr merge <url> --squash --delete-branch` ran in the container, origin `main` holds the file, the branch is gone, "Branch merged", "PR Merged" and "Clean Up" show, `prState` is `merged` | Passed |
+| Merge: inactive, second window, reload | A second window on `fixture-local` during the merge shows "PR Merged" on return; a reload shows it too | Passed |
+| Merge: failure | First attempt, before the stand-in's clone was fixed: the dialog stayed open with "Failed to merge PR: …" and git's message | Seen once (not a spec step) |
+| Validation output | Two real commands through `start_review_validation` in the container (one passes with stdout, one fails with stderr and exit 3); a pipeline record naming the run; Build tab, Prepare node, Tests: each command's terminal output dialog shows its own stream and status | Passed |
+| Validation output: switch, second window, reload | The same output after a switch to `fixture-local` and back, in a second window, and after a reload | Passed |
+| Build tab in a build-only layout | No persisted layout, then the layout `ensureBuildPipelineTab` writes for an existing environment: the seeded terminal joins the Build tab, which stays selected in the view and in the persisted layout | Failed before the fix (the terminal took the selection and it was persisted); passed after (decision 23) |
+| Coordinator: inactive | A delegation to `fixture-container` opened while that environment was shown appears as "Waiting on 1 worker", naming it, when the Coordinator tab returns | Passed |
+| Coordinator: hidden | A delegation to `fixture-local` opened while the document was hidden stays out of the count for 6 s, then appears after return | Passed |
+| Coordinator: reload, second window, context | Both delegations after a reload and in a second window; a branch switch in the project checkout shows `Context r<n+1>` and "Repository context changed to …" in both windows | Passed |
+| Coordinator: closing | Stopping `fixture-local`, then `fixture-container`, closes each delegation within the 60 s sweep; the second window, on another environment meanwhile, shows none on return; the main conversation still has no agent | Passed |
+| Files panel, local tree | `container-files-wiring.spec.ts`, as in the table above | Passed |
+
+Hidden-document coverage for merge and validation output: not separately
+checked. The merge state reaches the view through environment events, which
+the inactive and second-window steps cover. The output dialog polls only
+while a command is queued or running, and these runs had finished.
+
 ## Outstanding work
 
 ### Qualification
@@ -715,10 +761,9 @@ credentials or a platform CI lacks are batched in
     on a legacy record, all on a real container (see
     [Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux));
     the routine policy stays (decision 11);
-  - container app wiring: the Files panel open on a container and an
-    inactive-environment switch are done (2026-11-01). A merge from the UI is
-    still owed and needs a GitHub pull request, so it belongs with live GitHub
-    below.
+  - ~~container app wiring~~. Done 2026-11-01 on Linux, including a merge
+    from the UI against a stand-in `gh` (decision 20). The same merge against
+    real GitHub belongs with live GitHub below.
 - Live GitHub: terminal discovery cadence, replacement and reopen discovery,
   admission queue delay under real `gh` latency, and rate-limit cooldown.
 - Live providers: see [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md).
@@ -741,13 +786,13 @@ credentials or a platform CI lacks are batched in
   no diagnostics gauge).
 - Two clients with one disconnected; backend and bridge restarts at durable
   transition boundaries; an older backend.
-- Real-browser QA of the Files panel (inactive-environment switch, two
-  windows, hidden document, reload, missed final invalidation), the
-  coordinator view and hidden-document reconcile: partial evidence from 2026-11-01
-  (`container-files-wiring.spec.ts`); coordinator coverage is smoke-only and
-  hidden-return passed with revision observation on the repair rerun. Validation output is still owed: it
-  needs a Multi Review or build pipeline with model turns, so it belongs with
-  the live provider runs (0049, batched in 0031).
+- ~~Real-browser QA of the Files panel, the coordinator view, validation
+  output and hidden-document reconcile~~. Done 2026-11-01
+  (`container-files-wiring.spec.ts` and `container-app-wiring.spec.ts`; see
+  [Container app wiring, follow-up](#container-app-wiring-follow-up-2026-11-01-linux)).
+  Still owed elsewhere: a validation plan written by a real model turn and a
+  live running-output stream in a pipeline (the live provider runs, 0049,
+  batched in 0031), and real timer throttling in a backgrounded tab (task 8).
 
 ### Measured candidates
 
@@ -1098,6 +1143,8 @@ Recorded 2026-11-01 by the worker that ran tasks 3 and 4 live on Linux.
     provider runs (0049, batched in 0031). Why: both UI paths need state only
     a real PR or a model-planned review creates, and a fake would qualify the
     fake. Pros: no test-only product surface. Cons: task 4 stays partly open.
+    Superseded by decisions 20 and 21: review did not accept leaving them
+    open.
 17. **The two harness problems this run hit.** A `--fixture` restart orphans
     the previous start's environments, and `dev:test` opens Electron on the
     Linux desktop. Options: fix them here; or record them. Chosen: record them
@@ -1110,7 +1157,8 @@ Recorded 2026-11-01 by the worker that ran tasks 3 and 4 live on Linux.
     container environments, across a switch and a reload. Options: run a
     coordinator delegation (provider turns); or accept the smoke check.
     Chosen: the smoke check. The delegation path is covered by
-    `coordinator-live.spec.ts`, which needs credentials.
+    `coordinator-live.spec.ts`, which needs credentials. Superseded by
+    decision 22.
 
 ### 19. Task 4 acceptance after review
 
@@ -1136,6 +1184,8 @@ Options: keep the task open with these explicit evidence limits (recommended:
 accurate acceptance, but needs later live runs), or claim completion from smoke
 coverage (less work, but does not establish the required behavior). Chosen:
 keep it open and narrow this repair's acceptance to the regressions above.
+Closed by the follow-up below (decisions 20 to 23), which checks the three
+remaining cases in a real browser.
 
 Deterministic repair validation also completed: the policy and real-Git caller
 files passed, targeted backend and agent-spec type checks passed, and
@@ -1144,6 +1194,72 @@ passed all four default-tier groups in 190.3 s (exit 0). The documented
 concurrent opt-in was used after cancelling an exclusively queued attempt;
 no other worktree's processes were stopped. Separate rerun output is at
 `/tmp/ork-review-fix-tests-concurrent.log`; original review artifacts are unchanged.
+
+Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
+
+20. **Merge from the UI without GitHub.** Options: wait for live GitHub
+    (task 5); a fake `gh` on the host; or a stand-in `gh` inside the test
+    container. Chosen: the stand-in in the container
+    (`e2e/agent-testing/container-fake-gh.sh`, installed in `/usr/local/bin`
+    for the test and removed after). Why: for a container every `gh` call (PR
+    monitor, merge, state read) runs inside it through `docker exec`, so the
+    host binary never takes part, and the app path from the PR monitor to the
+    toolbar, dialog, `merge_environment_pr`, stored state and other views is
+    unchanged. The stand-in merges with plain Git into the fixture's bare
+    origin, so the effect is real too. Pros: no product change and no test
+    side door in the app; it runs in `test:agent:docker`. Cons: GitHub's own
+    behaviour (mergeability, rate limits, auth, latency) is not covered, and
+    the stand-in answers only the calls the app makes today, so a new call
+    fails the spec until the stand-in learns it. Real GitHub stays with
+    task 5. Merge & Cleanup was not clicked: it deletes the fixture
+    environment.
+21. **Validation output without a model turn.** Options: wait for the live
+    provider runs; seed a Multi Review row in SQLite with the backend
+    stopped; or run real commands through `start_review_validation` and
+    import a pipeline record naming the run (`import_legacy_build_pipelines`,
+    in the `failed` phase so no supervisor pass starts a turn), adding its
+    Build tab through `save_pane_layout` as `ensureBuildPipelineTab` would.
+    Chosen: the last. Why: the output is real (written by the worker in the
+    container, read back through `get_review_validation_output`), and both
+    commands are supported entry points; a hand-written database row would
+    bypass leases and change notifications. Pros: the UI path from the Build
+    tab to the output dialog is the real one. Cons: the plan is
+    hand-written, the run had finished before the UI saw it (so the live
+    append while a command runs is not covered here; the component suite
+    covers it with a mocked reader), and the Multi Review tab, which renders
+    the same component, is not separately opened.
+22. **Coordinator depth without a turn.** Options: keep the smoke check; run
+    a credentialed delegation; or drive the state a delegation creates
+    through owner commands (`open_coordinator_delegation` with a worker tab
+    that has no session, a branch switch plus `get_project_git_status`, and
+    stopping the workers). Chosen: the commands. Why: they change exactly
+    what the view shows (the awaiting-workers badge, the context revision and
+    notice) through the backend's own storage and events, so the view's
+    inactive, hidden, reload and two-window paths are tested for real. The
+    main conversation never gets an agent, and a closing delegation's notice
+    is only stored. Pros: credential-free and repeatable. Cons: mail tiles,
+    worker prompts and the conversation itself need a turn and stay with
+    `coordinator-live.spec.ts`. The test stops and restarts both fixture
+    environments, and counts delegations an interrupted earlier run left
+    open.
+23. **Build tab losing the selection to the seeded terminal (bug, fixed).**
+    A pipeline started on an existing environment that has no persisted
+    layout (a renderer persists one only on a change, so a container whose
+    tabs were never rearranged has none) gets one holding only its Build tab,
+    selected. The renderer then seeds its default terminal, which selected
+    itself and was persisted, so the user, and every other window, landed on
+    a new terminal instead of the pipeline. Options: select the build tab
+    again after seeding; or let `addTab` add a tab without selecting it and
+    seed that way when the pane's selected tab is a build tab. Chosen: the
+    latter (`addTab(…, { activate: false })` in `paneLayoutStore.ts`, used by
+    `TerminalContainer.view.tsx`). Why: one store write, so no window sees or
+    persists the wrong selection in between. Pros: the backend's selection
+    survives; other seeding paths are unchanged. Cons: one more option on
+    `addTab`. Tests: `TerminalContainer.view.test.tsx` ("keeps a restored
+    build-only layout's build tab selected while seeding the terminal", which
+    fails without the fix), `paneLayoutStore.test.ts`, and the validation
+    case of `container-app-wiring.spec.ts`, which starts from no persisted
+    layout and checks the persisted selection.
 
 ## Related
 

@@ -197,6 +197,34 @@ mise run dev:stop --profile grok-login-qa
 mise run dev:reset --profile grok-login-qa
 ```
 
+## Container app wiring qualification
+
+`e2e/agent-testing/container-files-wiring.spec.ts` checks the Files panel on a
+container in a real browser with no provider turns: a change written in the
+container shows through the 5 s poll, across an inactive-environment switch, a
+hidden document, a reload and a second window, and a revert from the panel
+restores the file without starting a container fetch. It also checks that a
+tree revision announced while the document was hidden still shows on a local
+worktree after return, and that the Coordinator tab opens beside container
+environments. Its tests are named "Docker fixture", so `mise run
+test:agent:docker` runs them. Results are recorded in
+[0048](../todo/transcripts-and-observation/0048-recurring-work-qualification.md).
+
+```bash
+mise run dev:test --profile container-wiring-qa --fixture --fixture-environments local,container \
+  --no-agent-credentials --agent-platforms codex
+# In another terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=container-wiring-qa ORKESTRATOR_AGENT_TEST_DOCKER=1 mise run test:logged -- --name container-wiring -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts container-files-wiring.spec.ts --workers=1
+mise run dev:stop --profile container-wiring-qa
+mise run dev:reset --profile container-wiring-qa
+```
+
+Start the profile once with `--fixture`: a restart with `--fixture` leaves the
+previous start's environments broken under the same names
+([2180](../todo/cross-cutting/2180-fixture-restart-orphans-earlier-environments.md)).
+`ORKESTRATOR_AGENT_TEST_CONTAINER_ENV` and `ORKESTRATOR_AGENT_TEST_LOCAL_ENV`
+name other environments when needed.
+
 ## Start or reuse a profile manually
 
 `dev:test` is a **foreground supervisor**. After printing `ready`, it stays

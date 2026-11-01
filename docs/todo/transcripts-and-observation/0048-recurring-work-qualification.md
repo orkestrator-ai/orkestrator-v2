@@ -1,9 +1,11 @@
 # Recurring work qualification
 
-Checked against `main` at `00a0cb82` (2026-10-25). Live evidence from macOS
-on 2026-10-22 and 2026-10-25; see
-[Live evidence](#live-evidence-2026-10-22-macos) and
-[Live soak](#live-soak-2026-10-25-macos).
+Checked against `main` at `00a0cb82` (2026-10-25); tasks 3 and 4 rechecked
+against `main` at `93b99bfba` (2026-11-01). Live evidence from macOS on
+2026-10-22 and 2026-10-25, and from Linux on 2026-11-01; see
+[Live evidence](#live-evidence-2026-10-22-macos),
+[Live soak](#live-soak-2026-10-25-macos) and
+[Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux).
 
 ## Task analysis
 
@@ -13,8 +15,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 1. **Busy live profile**: 10 environments, 0 to 2 browser clients, bursts, an active turn, an approval, a queued prompt, a workflow completion, an outage and a client resume. Status: open.
 2. **Client-side change-to-visible latency**: measure every latency-budget row as a client sees it, not at backend detection. Status: open.
-3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: open.
-4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: open.
+3. **Container fetch policy live**: recovery fetch, explicit refresh and the routine policy on an environment without `createdFromCommit`, then keep or remove the routine policy. Status: done (2026-11-01: all three ran live on Linux; the routine policy stays, decision 11; a wasted revert fetch found and fixed).
+4. **Container app wiring and real-browser QA**: Files panel on a container, merge from the UI, inactive switch, two windows, hidden document, reload, missed final invalidation, coordinator view, validation output. Status: partly done (2026-11-01: every case except merge from the UI and validation output passed in a real browser, `container-files-wiring.spec.ts`; those two need GitHub and provider turns, decision 16).
 5. **Live GitHub**: terminal discovery cadence, replacement and reopen, admission delay under real `gh` latency, rate-limit cooldown. Status: open.
 6. **Live providers**: delegated to 0049. Status: open (tracked in 0049).
 7. **macOS watcher paths**: packaged Electron app, plus the burst-overflow and failure-to-polling paths. Status: partly done (the `dev:test` save-detection run passed).
@@ -22,7 +24,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 9. **Real host suspend and resume**: `HostSuspendDetector` against a real sleep. Status: open.
 10. **Long soak and cache gauges**: 50 or more cycles over an hour or more with agent sessions open, and gauges for caches the footprint cannot see. Status: partly done (driver and a 10-cycle soak exist).
 11. **Multi-client, restarts and an older backend**: two clients with one disconnected, backend and bridge restarts at durable transition boundaries, an older backend. Status: open.
-12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: blocked (on tasks 1, 3, 5 and 10); the feature-planning row read is done.
+12. **Measured candidates**: 12 cadence and limit candidates to decide from live data. Status: blocked (on tasks 1, 5 and 10); the feature-planning row read is done, and the container fetch failure ladder is decided (keep 5 to 30 min, decision 11).
 13. **Remove the rollback drivers**: `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` and its whole-store drivers, `WorkflowDueScheduler`, and `ORKESTRATOR_NATIVE_OBSERVATION_SHARING`, updating the catalogue. Status: blocked (on tasks 1, 5 and 10).
 14. **Metrics switch decision**: keep `ORKESTRATOR_RECURRING_METRICS` as a permanent kill switch. Status: done (one stale comment left).
 15. **Provenance comments**: "recurring-processes step NN" comments pointing at deleted plans. Status: deferred (decided: leave them).
@@ -91,6 +93,19 @@ Analysed 2026-10-27 against `main` at `863b5782`.
     - Pros: every environment converges on the commit baseline.
     - Cons: a migration that guesses a baseline for old records could change their diffs.
 
+**Outcome (2026-11-01).** Rechecked on `93b99bfba`: the references above
+hold (`establishCreatedFromCommit` is now at `:88`). A start whose capture fails cannot leave a running
+environment without `createdFromCommit`: `prepareEnvironmentForSetup`
+(`commands-environment.ts`) throws and the start fails. So the routine
+policy's only population is a containerized record whose setup completed
+before the field existed (`ensureCreatedFromCommitBeforeSetup` skips a record
+with `setupScriptsComplete`). All three cases ran live on a disposable Linux
+profile; see
+[Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux).
+The routine policy stays (decision 11). The run found that a Files-panel
+revert fetched the environment's creation commit on every revert; fixed
+(decision 13).
+
 ### 4. Container app wiring and real-browser QA
 
 **Problem.** The Files panel, coordinator view, validation output and hidden-document reconcile are covered only by deterministic tests. An inactive-environment or two-window regression would show stale data to users.
@@ -108,6 +123,17 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **A manual pass recorded here.**
     - Pros: cheap, done once.
     - Cons: no regression guard.
+
+**Outcome (2026-11-01).** The recommended spec exists:
+`e2e/agent-testing/container-files-wiring.spec.ts`, picked up by
+`mise run test:agent:docker` (its test names start with "Docker fixture"). It
+passed against a fresh `--fixture-environments local,container
+--no-agent-credentials` profile; see
+[Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux).
+Merge from the UI needs a pull request (`merge_environment_pr` and
+`merge_pr_local` both require `prUrl` and run `gh pr merge`), and validation
+output only appears in Multi Review and build pipelines, whose plans come from
+a model turn. Both stay open (decision 16).
 
 ### 5. Live GitHub
 
@@ -446,9 +472,13 @@ and the decisions below were recorded.
   (`packages/protocol/src/diff-stats.ts`) prefers that commit. A container's
   diff baseline is therefore a full commit SHA, which the status script
   classifies as `commit` and the policy never fetches. The routine fetch
-  policy reaches only environments with no `createdFromCommit` (older records,
-  or a start whose capture failed). Missing-baseline recovery and explicit
-  refreshes still fetch.
+  policy reaches only environments with no `createdFromCommit`: records whose
+  setup completed before the field existed. (A start whose capture fails does
+  not count: the start fails.) Missing-baseline recovery and explicit
+  refreshes still fetch. Since 2026-11-01 a Files-panel revert no longer
+  fetches a ref the latest scan of that clone classified as `commit`
+  (`refreshForAction`); before, every revert on a new container ran
+  `git fetch origin <creation commit>`.
 
 ### Harness effect (2026-10-25)
 
@@ -581,6 +611,84 @@ mise exec -- bun scripts/recurring-live-ab.ts --arms candidate --repeats 1 \
   numbers are unaffected. If it recurs it needs its own todo against
   `dev:stop`.
 
+### Container fetch policy and app wiring (2026-11-01, Linux)
+
+Host: Linux (Arch, kernel 7.1), native Docker, Bun 1.4.4, a `dev:test` build
+of this branch on a host shared with other builds, so no timing here is a
+reference figure. Profile `q48`, started with `mise run dev:test --profile q48
+--fixture --fixture-environments local,container --no-agent-credentials
+--agent-platforms codex`. No provider turn ran. Electron ran headless (see
+[2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md)).
+Fetch counts come from `get_recurring_work_diagnostics`
+(`fetchPolicies[0].status` and `metrics.kinds["git-fetch-container"]`). The
+fixture's origin is a bare repository on the host, bind-mounted into the
+container, so every fetch was a real `git fetch`.
+
+- **New containers never fetch.** With both fixture containers polled by the
+  diff badges, the policy held 0 records and 2 containers: the creation
+  commit is classified `commit`.
+- **Missing-baseline recovery.** A branch `qa-recover` pushed to origin after
+  the container was created, then `get_git_status` with that target: one
+  fetch inside the scan (`started` +1, `completed` +1), the baseline resolved,
+  and the rescan's consultation was a cache hit. The panel listed the
+  branch's file. A second read 16 s later did not fetch. On a container whose
+  origin bind was dangling (below), recovery failed as `no-remote`, the read
+  returned "Target ref is not present in the container: qa-recover", and the
+  next read did not retry (failure cooldown).
+- **Explicit refresh.** After 16 s, a new commit pushed to `qa-recover`; a
+  plain read was a cache hit and still showed the old base. A read with
+  `refresh: true` answered from local refs, marked the key dirty and started
+  one background fetch (`inFlight` 1, then `completed` +1). The next read
+  showed the new upstream file.
+- **Routine policy on a legacy record.** The profile was stopped,
+  `createdFromCommit` removed from one container environment's row in the
+  profile's own `orkestrator.sqlite` (setup already complete, as an old
+  record has), and restarted without `--fixture`. Its badge compared against
+  `main`. The first scan fetched at 02:53:20.4. A commit pushed to origin
+  `main` at 02:53:36. Scans every 15 s were cache hits (`requested` +2 per
+  30 s, `started` unchanged). The second fetch ran at 02:58:20.9, 5 min after
+  the first, moved `origin/main`, and the badge's diff stats were recomputed
+  in the same second (0 to 1 file): change-to-visible 4 min 44 s, inside the
+  cooldown plus one scan.
+- **Revert from the Files panel fetched the creation commit (fixed).**
+  `revert_container_file` on a new container passed its creation commit to
+  `refreshForAction`, which ran `git fetch origin <sha>`: `started` and
+  `records` each +1 per revert. Git skips the transport when the commit is
+  already local, so it cost a `docker exec` and an interactive admission slot
+  rather than a network round trip; with the commit missing it would have
+  fetched. After the fix, the browser spec's revert step asserts that
+  `started` does not move.
+- **Fixture restart.** The first start was stopped and started again with
+  `--fixture`, which deletes and recreates `fixtures/origin.git` and
+  `fixtures/test-project`. The first start's container kept a bind to the
+  deleted origin (empty inside, `does not appear to be a git repository`),
+  and its local worktree's `.git` pointed at a deleted repository. Recorded as
+  [2180](../cross-cutting/2180-fixture-restart-orphans-earlier-environments.md);
+  the run above used the second start's container.
+
+Real-browser QA, on a fresh profile after `dev:reset` (headless Chromium, run
+with `ORKESTRATOR_AGENT_TEST_PROFILE=q48 ORKESTRATOR_AGENT_TEST_DOCKER=1 bunx
+playwright test --config e2e/agent-testing/playwright.browser.config.ts
+container-files-wiring.spec.ts --workers=1`): 3 passed.
+
+| Case | What was checked | Result |
+| --- | --- | --- |
+| Files panel on a container | A file written in the container appears in the Changes tab through the 5 s poll | Passed |
+| Inactive switch | A file written while `fixture-local` was open appears on return to the container | Passed |
+| Hidden document | With `visibilityState` hidden for 12 s, a new file does not appear; it appears after return | Passed; about 3 s after return |
+| Reload | All three files still listed after a reload | Passed |
+| Two windows | A second window on the same container; a file written and then removed shows and clears in both | Passed |
+| Revert from the panel | Right-click, Revert, confirm: "File reverted", the row clears, `git status` clean, no fetch started | Passed |
+| Missed final invalidation | Local worktree, All files tab: a file saved while hidden (its tree announcement skipped) appears after return | Passed; about 3 s after return |
+| Coordinator view | The project's Coordinator tab opens with container environments present, before and after selecting the container and after a reload; never "Coordinator unavailable" | Passed (smoke: it lists nothing environment-specific without a delegation) |
+| Merge from the UI | Needs a pull request and `gh` | Not run |
+| Validation output | Needs a Multi Review or build pipeline plan from a model turn | Not run |
+
+On a current backend the Changes tab of a local environment is the
+event-driven change projection, which applied the save while the document was
+hidden. So the missed-final-invalidation case was moved to the All files tree,
+which re-reads on announced revisions and skips one while hidden.
+
 ## Outstanding work
 
 ### Qualification
@@ -602,16 +710,15 @@ credentials or a platform CI lacks are batched in
     have;
   - change-to-visible as a client sees it (the script stops at backend
     detection), for every row of the latency budgets;
-  - the container fetch policy live. Narrowed 2026-10-25: a "branch-baseline
-    container" cannot come from normal creation, because every new container
-    records its creation commit and compares against it (see "Container fetch
-    reach" above). What is still owed: a missing-baseline recovery fetch and an
-    explicit refresh on a real container, and the routine policy on an
-    environment without `createdFromCommit` (an older record, or a start
-    whose capture failed). Whether the routine policy should stay at all is a
-    decision for that run (see "Assumptions and decisions");
-  - container app wiring: the Files panel open on a container, a merge from
-    the UI and an inactive-environment switch.
+  - ~~the container fetch policy live~~. Done 2026-11-01 on Linux: a
+    missing-baseline recovery fetch, an explicit refresh and the routine policy
+    on a legacy record, all on a real container (see
+    [Container fetch policy and app wiring](#container-fetch-policy-and-app-wiring-2026-11-01-linux));
+    the routine policy stays (decision 11);
+  - container app wiring: the Files panel open on a container and an
+    inactive-environment switch are done (2026-11-01). A merge from the UI is
+    still owed and needs a GitHub pull request, so it belongs with live GitHub
+    below.
 - Live GitHub: terminal discovery cadence, replacement and reopen discovery,
   admission queue delay under real `gh` latency, and rate-limit cooldown.
 - Live providers: see [0049-native-agent-idle-observation.md](0049-native-agent-idle-observation.md).
@@ -636,7 +743,10 @@ credentials or a platform CI lacks are batched in
   transition boundaries; an older backend.
 - Real-browser QA of the Files panel (inactive-environment switch, two
   windows, hidden document, reload, missed final invalidation), the
-  coordinator view, validation output and hidden-document reconcile.
+  coordinator view and hidden-document reconcile: done 2026-11-01
+  (`container-files-wiring.spec.ts`). Validation output is still owed: it
+  needs a Multi Review or build pipeline with model turns, so it belongs with
+  the live provider runs (0049, batched in 0031).
 
 ### Measured candidates
 
@@ -647,13 +757,16 @@ and no interactive terminal, so every candidate below except the
 feature-planning row read (decided from the deterministic harness on
 2026-10-25) is still open. The container fetch failure ladder needs the
 routine policy to run first, which new containers never do (see "Container
-fetch reach").
+fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
 
 - Settled check-rollup backoff (`pr-check-rollup`, 60 s).
 - A container-scoped PR cooldown. It is per entry today because container
   credential scope cannot be proven from the backend.
-- The container fetch failure ladder (5 to 30 min), tuned from
-  `git-fetch-container` metrics.
+- ~~The container fetch failure ladder (5 to 30 min), tuned from
+  `git-fetch-container` metrics.~~ Decided 2026-11-01: keep it unchanged. It
+  also rate-limits missing-baseline recovery, which every container can
+  reach, and the routine fetches it would tune only run for legacy records
+  (decision 11).
 - The admission pool limits.
 - Raising the priority of a queued discovery scan when an interactive read
   joins it; `WorkAdmissionPool` has no re-prioritisation.
@@ -923,6 +1036,80 @@ Recorded 2026-10-25 by the worker that implemented this file's code items.
     in the files this change already touched. Why: they are harmless, and a
     cross-area sweep collides with parallel work for no behaviour change.
     Pros: a small, reviewable diff. Cons: the drift stays.
+
+Recorded 2026-11-01 by the worker that ran tasks 3 and 4 live on Linux.
+
+11. **Keep or remove the routine container fetch policy.** Options: remove it
+    (the recommendation, unless a pre-capture record turned up); keep it and
+    qualify it on a legacy record; backfill `createdFromCommit` by migration,
+    then remove it. Chosen: keep it unchanged, and keep the failure ladder
+    (5 to 30 min) as it is. Why: it ran live as designed (one fetch per 5 min
+    per legacy container, cache hits in between, the badge followed a moved
+    base in 4 min 44 s), and new containers never reach it (0 records). Removal
+    saves almost no code: explicit refresh, merge invalidation and recovery
+    share its records, admission and cooldown. Recovery's rate limit *is* the
+    failure ladder, and every container can reach recovery. What removal would
+    take away is one clause (a key is due again once the cooldown passes), and
+    with it a legacy environment's badge would silently stop following its
+    base branch until a manual refresh. Whether such records exist in real
+    installs could not be checked: this run may not read the real data
+    directory. Pros: no behaviour change for legacy records; nothing to
+    migrate. Cons: a path that only legacy records reach stays, and it needs
+    a hand-made record to test live. The backfill was rejected because a
+    guessed baseline could change an old environment's diffs.
+12. **Making the legacy record.** Options: a fixture flag that clears
+    `createdFromCommit` (decision 6 rejected that); or edit the disposable
+    profile's database by hand with the backend stopped. Chosen: the hand
+    edit, recorded in the live evidence. Why: it adds no test-only surface to
+    the product, and the record it makes is the real legacy shape
+    (`setupScriptsComplete` set, no `createdFromCommit`). Pros: no code. Cons:
+    not repeatable by a spec; the next qualification repeats the edit.
+13. **Where to skip the revert fetch.** Options: in `revertContainerFile`
+    (skip when the target is a full SHA); or in the policy's
+    `refreshForAction` (skip when the latest scan of the same container
+    generation and clone classified the ref as `commit`). Chosen: the policy.
+    Why: the policy already owns "a commit baseline never fetches", and only
+    it knows the commit is present in this clone. A SHA alone does not prove
+    that: a recreated clone may lack it, and then the fetch is still worth
+    one try. Pros: one owner for the rule; any later action caller gets it.
+    Cons: an action before the first scan of a container still fetches once
+    (the Files panel always scans first, so a revert never does).
+14. **Hidden-document emulation.** Options: background the tab for real (a
+    headless browser has no window to hide); or override
+    `document.visibilityState` and dispatch `visibilitychange`, which is
+    exactly what the read coordinator and `useFilesPanel` read. Chosen: the
+    override. Pros: deterministic, and it works headless. Cons: a real hidden
+    tab also throttles timers; the spec does not cover that throttling (the
+    0051 and iOS runs, task 8, do).
+15. **Missed final invalidation.** A tree revision announced while hidden is
+    skipped and never announced again; recovery is the coordinator's resume
+    reconcile (it resets quiet backoff to the 5 s cadence) and the next poll.
+    Options: mark the panel's read dirty when it skips an announcement, so
+    return reads at once; or keep the bounded poll recovery. Chosen: no code
+    change. Why: it measured about 3 s after return, within one 5 s poll, and
+    the Changes tab of a current backend is the event-driven projection,
+    which does not skip. Pros: no new state in the panel. Cons: up to one
+    poll interval of staleness on return for the tree and for containers.
+16. **Merge from the UI and validation output.** Options: build fakes (a
+    fake `gh`, or a seeded validation record) to drive them here; or leave
+    them to the runs that have the real dependencies. Chosen: leave them.
+    Merge goes with live GitHub (task 5) and validation output with the live
+    provider runs (0049, batched in 0031). Why: both UI paths need state only
+    a real PR or a model-planned review creates, and a fake would qualify the
+    fake. Pros: no test-only product surface. Cons: task 4 stays partly open.
+17. **The two harness problems this run hit.** A `--fixture` restart orphans
+    the previous start's environments, and `dev:test` opens Electron on the
+    Linux desktop. Options: fix them here; or record them. Chosen: record them
+    as [2180](../cross-cutting/2180-fixture-restart-orphans-earlier-environments.md)
+    and [2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md).
+    Why: both change behaviour every browser suite relies on and are outside
+    this file's scope. The workarounds used here are in those files.
+18. **Coordinator view depth.** Without a delegation the Coordinator tab lists
+    nothing per environment, so the spec only proves it opens beside
+    container environments, across a switch and a reload. Options: run a
+    coordinator delegation (provider turns); or accept the smoke check.
+    Chosen: the smoke check. The delegation path is covered by
+    `coordinator-live.spec.ts`, which needs credentials.
 
 ## Related
 

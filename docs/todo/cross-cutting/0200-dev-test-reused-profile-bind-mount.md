@@ -147,7 +147,10 @@ B and C are the two consecutive passing cycles. D and E show that the old behavi
 - Can the fixture origin bind (`-v <profile>/fixtures/origin.git`) hit the same
   stale entry, since `origin.git` is recreated at the same path on every start?
   Not seen in 5 starts; if it is, the symptom would be a workspace clone failure,
-  not a bind error.
+  not a bind error. On native Docker (Linux, 2026-11-01) a related failure was seen: a
+  container still running from the previous start keeps the deleted
+  `origin.git` and its fetches fail. That is a running bind, not a stale cache;
+  see [2180](2180-fixture-restart-orphans-earlier-environments.md).
 
 ## Related
 

@@ -115,6 +115,9 @@ export function graphAgentBranch(
           ...(session.restartContinuationSent !== undefined
             ? { restartContinuationSent: session.restartContinuationSent }
             : {}),
+          ...(session.usageLimitResends !== undefined
+            ? { usageLimitResends: session.usageLimitResends }
+            : {}),
           ...(session.idlePolls !== undefined ? { idleResultPolls: session.idlePolls } : {}),
           ...(session.progressAt !== undefined ? { progressAt: session.progressAt } : {}),
           ...(session.progressDigest !== undefined
@@ -132,6 +135,7 @@ export function graphAgentBranch(
             ? { commandSandboxOff: session.commandSandboxOff }
             : {}),
           ...(session.startedAt !== undefined ? { startedAt: session.startedAt } : {}),
+          ...(session.turnStartedAt !== undefined ? { turnStartedAt: session.turnStartedAt } : {}),
         }
       : {}),
   };
@@ -164,6 +168,7 @@ export function graphAgentSession(
     ...(extras.continuedFrom !== undefined ? { continuedFrom: extras.continuedFrom } : {}),
     ...(extras.turnMode !== undefined ? { turnMode: extras.turnMode } : {}),
     ...(branch.startedAt !== undefined ? { startedAt: branch.startedAt } : {}),
+    ...(branch.turnStartedAt !== undefined ? { turnStartedAt: branch.turnStartedAt } : {}),
     ...(branch.resultSubmission !== undefined ? { resultSubmission: branch.resultSubmission } : {}),
     ...(branch.schemaRepairAttempts !== undefined
       ? { repairAttempts: branch.schemaRepairAttempts }
@@ -175,6 +180,9 @@ export function graphAgentSession(
     ...(branch.resultReminderSent !== undefined ? { reminderSent: branch.resultReminderSent } : {}),
     ...(branch.restartContinuationSent !== undefined
       ? { restartContinuationSent: branch.restartContinuationSent }
+      : {}),
+    ...(branch.usageLimitResends !== undefined
+      ? { usageLimitResends: branch.usageLimitResends }
       : {}),
     ...(branch.idleResultPolls !== undefined ? { idlePolls: branch.idleResultPolls } : {}),
     ...(branch.usageFinalizationPolls !== undefined

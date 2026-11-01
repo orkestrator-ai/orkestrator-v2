@@ -22,6 +22,7 @@ import {
   DEFAULT_AGENT_MESSAGING_SETTINGS,
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
+import { normalizeAgentAccountAutoSwitchSettings } from "@orkestrator/protocol/agent-account-auto-switch";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
 import { sanitizeReviewLensPresets } from "@orkestrator/protocol/review-lens";
@@ -234,6 +235,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       ? { ...DEFAULT_AGENT_MESSAGING_SETTINGS }
       : { ...DEFAULT_AGENT_MESSAGING_SETTINGS, enabled: false },
   );
+  const agentAccountAutoSwitch = normalizeAgentAccountAutoSwitchSettings(
+    global.agentAccountAutoSwitch,
+  );
   const hasExplicitGitHubCredentialSource = typeof global.useHostGitHubCredentials === "boolean";
   const hasLegacyGitHubToken =
     typeof global.githubToken === "string" && global.githubToken.trim().length > 0;
@@ -357,6 +361,8 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     JSON.stringify(global.openCodeModelProviders) === JSON.stringify(openCodeModelProviders) &&
     JSON.stringify(global.agentSettings) === JSON.stringify(agentSettings) &&
     JSON.stringify(global.agentMessaging) === JSON.stringify(agentMessaging) &&
+    JSON.stringify(global.agentAccountAutoSwitch ?? {}) ===
+      JSON.stringify(agentAccountAutoSwitch) &&
     JSON.stringify(global.notificationSounds) === JSON.stringify(notificationSounds) &&
     JSON.stringify(global.reviewLensPresets) === JSON.stringify(reviewLensPresets) &&
     global.coordinatorProviderTiers === coordinatorProviderTiers &&
@@ -388,6 +394,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       openCodeModelProviders,
       agentMessaging,
       notificationSounds,
+      ...(Object.keys(agentAccountAutoSwitch).length > 0 ? { agentAccountAutoSwitch } : {}),
       ...(reviewLensPresets === undefined ? {} : { reviewLensPresets }),
     } as unknown as AppConfig["global"],
   };

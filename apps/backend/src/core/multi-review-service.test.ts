@@ -4822,6 +4822,76 @@ test("MultiReviewService continues a consolidation a provider restart cut short"
   );
 });
 
+test("a step the weekly limit stopped continues on the new account, then the budget ends it", async () => {
+  const provider = new Provider(false);
+  const environmentId = "env-consolidation-usage-limit";
+  const scope = { environmentId, projectId: "project-1" };
+  const limit = "You've hit your usage limit.";
+  const verdicts = ["wait", "resend", "stop"];
+  const calls: Array<{ environmentId: string; resends: number; error?: string }> = [];
+  Object.assign(provider, {
+    usageLimitStop: async (input: { environmentId: string; resends: number; error?: string }) => {
+      calls.push(input);
+      return verdicts.shift() ?? "stop";
+    },
+  });
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const codex = { agent: "codex" as const, model: "default" };
+      const started = await start([codex], codex);
+      const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+        Boolean(workflow.reviewers[0]?.requestId),
+      );
+      await workflowResults!.submit(scope, reviewing.reviewers[0]!.requestId!, cleanReport);
+      const consolidating = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.activeRequest?.kind === "consolidate" && workflow.activeRequest.state === "sent",
+      );
+      const firstRequestId = consolidating.activeRequest!.requestId;
+      const sessionId = (consolidating.reviewSession ?? consolidating.fixSession)!
+        .providerSessionId;
+
+      provider.sessionFailures.set(sessionId, limit);
+      // Waiting on the verdict neither fails the step nor sends anything.
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.activeRequest?.requestId).toBe(firstRequestId);
+
+      await service.advanceNow(started.id);
+      const queued = (await snapshot(started.id))!;
+      expect(queued.phase).toBe("consolidating");
+      expect(queued.activeRequest).toMatchObject({
+        kind: "consolidate",
+        state: "prepared",
+        usageLimitResends: 1,
+      });
+      expect(queued.activeRequest?.restartContinuationSent).toBeUndefined();
+      expect(queued.activeRequest?.requestId).not.toBe(firstRequestId);
+      expect(calls[0]).toMatchObject({ environmentId, resends: 0 });
+      expect(calls[0]?.error).toContain(limit);
+
+      provider.sessionFailures.delete(sessionId);
+      await service.advanceNow(started.id);
+      const continuationRequestId = queued.activeRequest!.requestId;
+      const continuation = provider.sends.get(continuationRequestId)!;
+      expect(continuation.prompt).toContain("weekly usage limit ran out");
+      expect(continuation.prompt).toContain("submit_consolidated_review");
+      expect(continuation.prompt).not.toContain("<multi-review-reports-json>");
+
+      // The new account refuses too and the verdict is to stop: the step fails.
+      provider.sessionFailures.set(sessionId, limit);
+      await service.advanceNow(started.id);
+      expect(calls.at(-1)?.resends).toBe(1);
+      expect((await snapshot(started.id))?.phase).toBe("failed");
+    },
+    { toolMode: true },
+  );
+});
+
 test("a second restart during a step's continuation fails the step", async () => {
   const provider = new Provider(false);
   const environmentId = "env-consolidation-second-restart";

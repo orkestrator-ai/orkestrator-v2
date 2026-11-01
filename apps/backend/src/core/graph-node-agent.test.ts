@@ -251,6 +251,37 @@ describe("graph agent node executor", () => {
     expect(turns[1]!.prompt).toContain("Orkestrator restarted while you were working");
   });
 
+  test("a turn the weekly limit stopped continues in its session on the new account", async () => {
+    const { world, run } = await launched(
+      {},
+      {
+        script: async (turn, tools, provider) =>
+          turn.index === 1 ? "error" : submittingScript()(turn, tools, provider),
+      },
+    );
+    const calls: number[] = [];
+    world.provider.usageLimitStop = async (input) => {
+      calls.push(input.resends);
+      return "resend";
+    };
+    const done = await world.drive(run.id);
+    expect(done.status).toBe("complete");
+    expect(calls).toEqual([0]);
+    const turns = world.provider.turns();
+    expect(turns).toHaveLength(2);
+    expect(turns[1]!.sessionId).toBe(turns[0]!.sessionId);
+    expect(turns[1]!.requestId).not.toBe(turns[0]!.requestId);
+    expect(turns[1]!.prompt).toContain("weekly usage limit ran out");
+  });
+
+  test("a turn that cannot move fails the step, without a second turn", async () => {
+    const { world, run } = await launched({}, { script: async () => "error" });
+    world.provider.usageLimitStop = async () => "stop";
+    const done = await world.drive(run.id);
+    expect(activationOf(done).errorCause).toBe("provider-error");
+    expect(world.provider.turns()).toHaveLength(1);
+  });
+
   test("a session failure fails the step as a provider error", async () => {
     const { world, run } = await launched({}, { script: async () => "error" });
     const done = await world.drive(run.id);

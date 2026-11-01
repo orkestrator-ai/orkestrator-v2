@@ -20,6 +20,13 @@ describe("the live panel's MCP layer", () => {
     expect(mcpScope(undefined, "orkestrator", "plugin")).toBe("orkestrator");
   });
 
+  test("native SSE rows retain the CLI's local layer in live and init status", () => {
+    // A duplicate project SSE definition is omitted inline, so has no override.
+    const layers = new Map([["inline", "project"]] as const);
+    expect(mcpScope("local", "remote", "local", layers)).toBe("local");
+    expect(initMcpServerStatus({ name: "remote", source: "local" }, layers).scope).toBe("local");
+  });
+
   test("the session's launch record decides over the CLI's report", () => {
     const layers = new Map([
       ["db", "project"],

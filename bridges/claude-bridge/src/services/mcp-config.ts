@@ -551,7 +551,7 @@ export async function getMcpRuntimeConfig(
 ): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
-  /** The layer each server came from, for the live panel. No credentials. */
+  /** Authoritative layers for servers passed inline. No credentials. */
   layers: McpServerLayers;
   revision: McpConfigRevision;
 }> {
@@ -562,12 +562,14 @@ export async function getMcpRuntimeConfig(
   const configs = allowConfigured
     ? Object.fromEntries(Object.entries(scoped.configs).filter(([name]) => allowConfigured(name)))
     : scoped.configs;
+  const servers = toSdkServers(configs);
+  // Native-only entries (for example SSE) use the CLI's own precedence.
+  // Only inline servers can authoritatively override its reported scope.
   const layers = new Map<string, NonNullable<NativeAgentMcpServer["scope"]>>(
-    Array.from(scoped.layers).filter(([name]) => Object.hasOwn(configs, name)),
+    Array.from(scoped.layers).filter(([name]) => Object.hasOwn(servers, name)),
   );
   const agentServer =
     getOrkestratorAgentMcpServerFromConnection(connection) ?? getOrkestratorAgentMcpServer(env);
-  const servers = toSdkServers(configs);
   // Backend-provided credentials are authoritative for this reserved name.
   // A project-local config must not be able to redirect the trusted ticket
   // tools (or capture their bearer token) by claiming the same server name.

@@ -18,6 +18,7 @@ import {
 import { setClaudeHomeForTesting } from "./claude-home.js";
 import { claudeArtifactServerTools } from "./claude-workflow-result-tools.js";
 import { clearJsonFileCache } from "./json-file-cache.js";
+import { initMcpServerStatus, mcpScope } from "./mcp-runtime-status.js";
 
 describe("configToSdkFormat", () => {
   test("converts an http server config", () => {
@@ -328,7 +329,11 @@ describe("mcp config resolution", () => {
         },
         projects: {
           [cwd]: {
-            mcpServers: { userThenLocal: { command: "d" }, localThenProject: { command: "e" } },
+            mcpServers: {
+              userThenLocal: { command: "d" },
+              localThenProject: { command: "e" },
+              remote: { type: "sse", url: "http://127.0.0.1:2/local" },
+            },
           },
         },
       });
@@ -349,10 +354,11 @@ describe("mcp config resolution", () => {
         userThenLocal: "local",
         userThenProject: "project",
         localThenProject: "project",
-        // Not passed inline, but the CLI loads it from that same layer.
-        remote: "project",
       });
       expect(servers.remote).toBeUndefined();
+      expect(layers.has("remote")).toBe(false);
+      expect(mcpScope("local", "remote", "local", layers)).toBe("local");
+      expect(initMcpServerStatus({ name: "remote", source: "local" }, layers).scope).toBe("local");
     });
 
     test("tags injected servers as Orkestrator's, over a file claiming their names", async () => {

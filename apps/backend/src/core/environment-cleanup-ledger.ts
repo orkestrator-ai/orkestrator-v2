@@ -180,6 +180,11 @@ interface LedgerConnection {
   ino: number;
 }
 
+/**
+ * Process-wide on purpose, as are `ledgers` and `sweepStates`: each is keyed by
+ * a resolved data directory, so two backends share an entry only when they
+ * share a data directory, and then they share its database too.
+ */
 const connections = new Map<string, LedgerConnection>();
 
 function sameDatabaseFile(connection: LedgerConnection): boolean {

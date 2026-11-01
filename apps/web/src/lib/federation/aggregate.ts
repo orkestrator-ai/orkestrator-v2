@@ -77,7 +77,7 @@ export function activityRows(
           environment,
           key: {
             hasUnreadWork: environment.hasUnreadWork,
-            activity: environment.activity,
+            activity: environment.buildActive ? "working" : environment.activity,
             activityUpdatedAt: environment.activityUpdatedAt,
             lastActivityAt: environment.lastActivityAt,
             machineId: machine.backendId,

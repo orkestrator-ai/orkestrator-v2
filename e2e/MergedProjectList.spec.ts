@@ -143,8 +143,15 @@ test("a project over a repository header has no join highlight and its drop is r
   await page
     .getByRole("button", { name: "Collapse folder team-b/shared/app", exact: true })
     .click();
-  await hoverDrag(page, page.getByTitle("Open p on Remote"), folder(page, hintB));
-  await expect(page.getByTitle("Open p on Remote")).toHaveAttribute("aria-pressed", "true");
+  await hoverDrag(
+    page,
+    page.getByRole("button", { name: "Open p on Remote", exact: true }),
+    folder(page, hintB),
+  );
+  await expect(page.getByRole("button", { name: "Open p on Remote", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await expect(heading(page, "team-b/shared/app", "Remote").locator("..")).not.toHaveClass(
     /border-primary\/70|bg-primary\/10/,
   );
@@ -161,7 +168,11 @@ for (const mode of ["project", "repository"] as const) {
   test(`${mode} project and group drags ignore expanded environment rows`, async ({ page }) => {
     await page.goto(`/merged-project-list?mode=${mode}`);
     await expect(page.getByTestId("federated-environment-row")).toHaveCount(8);
-    await hoverDrag(page, page.getByTitle("Open q on Remote"), project(page, "p"));
+    await hoverDrag(
+      page,
+      page.getByRole("button", { name: "Open q on Remote", exact: true }),
+      project(page, "p"),
+    );
     await page.mouse.up();
     await expect(project(page, "q")).toHaveAttribute("data-project", key("q"));
     await expect(page.getByTestId("federated-project").first()).toHaveAttribute(
@@ -201,7 +212,7 @@ for (const mode of ["project", "repository"] as const) {
 
 test("project mode accepts root drops with expanded environment rows", async ({ page }) => {
   await page.goto("/merged-project-list?mode=project");
-  const handle = page.getByTitle("Open p on Remote");
+  const handle = page.getByRole("button", { name: "Open p on Remote", exact: true });
   const grip = (await handle.boundingBox())!;
   await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
   await page.mouse.down();

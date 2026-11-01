@@ -59,6 +59,7 @@ export interface ProjectCardDetails {
  */
 export function ProjectGroupHeader({
   projectName,
+  accessibleLabel,
   label,
   labelClassName,
   icon,
@@ -79,6 +80,7 @@ export function ProjectGroupHeader({
   newEnvironment,
 }: {
   projectName: string;
+  accessibleLabel?: string;
   label: string;
   labelClassName?: string;
   /** The machine home or project icon before the name. */
@@ -121,6 +123,7 @@ export function ProjectGroupHeader({
             ref={anchorRef}
             type="button"
             aria-current={ariaCurrent}
+            aria-label={accessibleLabel}
             className={cn(
               "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
               sortable && "cursor-grab active:cursor-grabbing",

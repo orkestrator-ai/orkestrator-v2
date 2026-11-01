@@ -475,6 +475,7 @@ export function RemoteProjectGroup({
       <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
         <ProjectGroupHeader
           projectName={project.name}
+          accessibleLabel={`Open ${project.name} on ${machine.name}`}
           label={label}
           labelClassName={labelClassName}
           icon={
@@ -620,9 +621,10 @@ export function RemoteEnvironmentItem({
   // through the command node and kept current by the machine's relayed events.
   const changeProjection = useNodeEnvironmentChangeProjection(environment.ref);
   // The hover card reads the full record and agent summary from the machine
-  // only while it is open; until then it shows what the summary carries.
+  // while it or the delete dialog is open; until then it shows the summary.
   const tooltip = useHoverTooltip();
-  const details = useNodeEnvironment(environment.ref, tooltip.open);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const details = useNodeEnvironment(environment.ref, tooltip.open || deleteOpen);
   const live = machine.transport === "connected";
   const facts = nodeEnvironmentRowFacts(machine, environment, actions);
 
@@ -645,6 +647,7 @@ export function RemoteEnvironmentItem({
       changes={changeProjection ? { kind: "projection", projection: changeProjection } : null}
       tooltip={tooltip}
       tooltipDetails={details ?? nodeEnvironmentTooltipDetails(environment)}
+      onDeleteOpenChange={setDeleteOpen}
       agentSummary={
         live ? (
           <EnvironmentAgentSummary

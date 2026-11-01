@@ -174,7 +174,7 @@ for (const merged of [false, true]) {
       page,
       page
         .locator(".group\\/sortable")
-        .filter({ has: page.getByRole("button", { name: "p-env-1", exact: true }) })
+        .filter({ has: page.getByRole("button", { name: /^p-env-1(?:, on |$)/ }) })
         .getByRole("button")
         .first(),
       page.getByText("q-env-2", { exact: true }),

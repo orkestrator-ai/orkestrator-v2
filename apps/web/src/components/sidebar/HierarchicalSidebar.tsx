@@ -91,6 +91,7 @@ import {
   resolveEnvironmentAgentActivity,
 } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { withoutProjectHomes } from "@/lib/project-home";
@@ -145,11 +146,14 @@ export function sortEnvironmentsByActivity(
   environments: Environment[],
   projects: Project[],
   order: ActivitySortOrder = "priority",
+  activeBuildEnvironmentIds: ReadonlySet<string> = new Set(),
 ): Environment[] {
   const projectOrder = new Map(projects.map((project) => [project.id, project.order]));
   const key = (environment: Environment): ActivitySortKey => ({
     hasUnreadWork: environment.hasUnreadWork === true,
-    activity: environment.agentActivityState ?? "idle",
+    activity: activeBuildEnvironmentIds.has(environment.id)
+      ? "working"
+      : (environment.agentActivityState ?? "idle"),
     activityUpdatedAt: environment.agentActivityUpdatedAt,
     lastActivityAt: environment.lastActivityAt,
     machineId: "",
@@ -467,9 +471,18 @@ export function HierarchicalSidebar() {
       ),
     [allEnvironments, selectedEnvironmentId],
   );
+  const activeBuildEnvironmentIds = useBuildPipelineStore(
+    (state) => state.activeBuildEnvironmentIds,
+  );
   const activityEnvironments = useMemo(
-    () => sortEnvironmentsByActivity(sidebarEnvironments, projects, activitySortOrder),
-    [sidebarEnvironments, projects, activitySortOrder],
+    () =>
+      sortEnvironmentsByActivity(
+        sidebarEnvironments,
+        projects,
+        activitySortOrder,
+        activeBuildEnvironmentIds,
+      ),
+    [sidebarEnvironments, projects, activitySortOrder, activeBuildEnvironmentIds],
   );
   const defaultCloneDirectory = useMemo(
     () => suggestedCloneDirectory(projects.map((project) => project.localPath)),
@@ -1060,7 +1073,12 @@ export function HierarchicalSidebar() {
         }))}
         totalCount={totalEnvironmentCount}
         waitingCount={waitingEnvironmentCount}
-        homes={sortEnvironmentsByActivity(allEnvironments, projects, activitySortOrder)
+        homes={sortEnvironmentsByActivity(
+          allEnvironments,
+          projects,
+          activitySortOrder,
+          activeBuildEnvironmentIds,
+        )
           .filter(
             (environment) =>
               environment.projectHome &&

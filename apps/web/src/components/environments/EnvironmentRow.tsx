@@ -386,6 +386,7 @@ export interface EnvironmentRowProps {
   /** The adapter owns it, so it can read details only while the card is open. */
   tooltip: ReturnType<typeof useHoverTooltip>;
   tooltipDetails: EnvironmentTooltipDetails;
+  onDeleteOpenChange?: (open: boolean) => void;
   agentSummary: ReactNode;
   /** Extra notes for the delete confirmation, rendered while it is open. */
   deleteNotice?: (open: boolean) => ReactNode;
@@ -407,11 +408,16 @@ export function EnvironmentRow({
   changes,
   tooltip,
   tooltipDetails,
+  onDeleteOpenChange,
   agentSummary,
   deleteNotice,
 }: EnvironmentRowProps) {
   const model = environmentRowModel(facts);
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteOpen, setDeleteOpenState] = useState(false);
+  const setDeleteOpen = (open: boolean) => {
+    setDeleteOpenState(open);
+    onDeleteOpenChange?.(open);
+  };
   const tooltipAnchorRef = useRef<HTMLDivElement>(null);
   // Touch devices have no right-click, so the actions live behind an explicit
   // button there. Gating on the query (rather than a `md:hidden` class) keeps
@@ -419,6 +425,18 @@ export function EnvironmentRow({
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   const nameId = useId();
   const signalDescriptionId = useId();
+  const stateDescriptionId = useId();
+  const changesDescriptionId = useId();
+  const stateDescription = [
+    facts.hasUnreadWork && "New completed activity",
+    facts.unreadMail > 0 && `${facts.unreadMail} unread agent messages`,
+    facts.failedMail && "Agent message delivery failed",
+    facts.prState && `Pull request ${facts.prState}`,
+    facts.autoMerge && "Auto-merge enabled",
+    subtitle,
+  ]
+    .filter(Boolean)
+    .join(". ");
   const multiSelectActive = multiSelect?.active === true;
   const menuItems = environmentRowMenuItems(model, actions, () => setDeleteOpen(true));
 
@@ -468,7 +486,15 @@ export function EnvironmentRow({
               onFocus={tooltip.show}
               onBlur={tooltip.hide}
               aria-label={model.accessibleLabel}
-              aria-describedby={model.nameSignal ? signalDescriptionId : undefined}
+              aria-describedby={
+                [
+                  model.nameSignal && signalDescriptionId,
+                  stateDescription && stateDescriptionId,
+                  changes && changesDescriptionId,
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
               aria-current={selected && !multiSelectActive ? "true" : undefined}
               className={cn(
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
@@ -541,11 +567,19 @@ export function EnvironmentRow({
               </span>
               {changes && (
                 // Last known while the machine is away.
-                <span className={cn("contents", !facts.live && "[&>*]:opacity-60")}>
+                <span
+                  id={changesDescriptionId}
+                  className={cn("contents", !facts.live && "[&>*]:opacity-60")}
+                >
                   <RowChangeBadge changes={changes} />
                 </span>
               )}
             </div>
+            {stateDescription && (
+              <span id={stateDescriptionId} className="sr-only">
+                {stateDescription}
+              </span>
+            )}
             {isMobile && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

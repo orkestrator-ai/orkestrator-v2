@@ -638,7 +638,9 @@ export function FederatedActivityList({
       testId="federated-activity-list"
       createTargets={createTargets}
       totalCount={rows.length}
-      waitingCount={boundWaitingCount + remoteWaiting}
+      waitingCount={
+        (machines.some((machine) => machine.bound) ? boundWaitingCount : 0) + remoteWaiting
+      }
       homes={homes.map(({ machine, environment, project }) =>
         machine.bound ? (
           <div key={environment.key}>{renderBoundHome(environment.ref.environmentId)}</div>
@@ -714,7 +716,7 @@ function activitySortKey(
 ): ActivitySortKey {
   return {
     hasUnreadWork: environment.hasUnreadWork,
-    activity: environment.activity,
+    activity: environment.buildActive ? "working" : environment.activity,
     activityUpdatedAt: environment.activityUpdatedAt,
     lastActivityAt: environment.lastActivityAt,
     machineId: machine.backendId,
@@ -739,7 +741,7 @@ function RemoteActivityHome({
       ? projectHomeStatus({
           deleting: environment.deleting,
           buildActive: environment.buildActive === true,
-          activity: environment.activity,
+          activity: environment.buildActive ? "working" : environment.activity,
           hasUnreadWork: environment.hasUnreadWork,
         })
       : null;

@@ -1,7 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const rows = (page: Page) =>
-  page.getByTestId("federated-environment-row").locator("button[aria-label*=', on Remote,']");
+  page
+    .getByTestId("federated-environment-row")
+    .locator("[role=button][aria-label*=', on Remote,']");
 async function expectRows(page: Page, ids: string[]) {
   await expect(rows(page)).toHaveText(ids);
 }
@@ -113,8 +115,12 @@ test("dragging a project writes the new project order to its own machine", async
   const projects = page.getByTestId("federated-project");
   await expect(projects).toHaveCount(2);
   // Aim at the expanded project's header, above its environment rows.
-  const handle = (await page.getByTitle("Open q on Remote").boundingBox())!;
-  const target = (await page.getByTitle("Open p on Remote").boundingBox())!;
+  const handle = (await page
+    .getByRole("button", { name: "Open q on Remote", exact: true })
+    .boundingBox())!;
+  const target = (await page
+    .getByRole("button", { name: "Open p on Remote", exact: true })
+    .boundingBox())!;
   await page.mouse.move(handle.x + 10, handle.y + handle.height / 2);
   await page.mouse.down();
   await page.mouse.move(handle.x + 20, handle.y + handle.height / 2, { steps: 3 });
@@ -125,4 +131,25 @@ test("dragging a project writes the new project order to its own machine", async
   );
   await expect(projects.first()).toContainText("q");
   await expect(page.getByTestId("calls")).toHaveText("[]");
+});
+
+test("row accessibility retains badges and deleting without hover warns about its PR", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/remote-machine-tree?accessible-state=1");
+  const row = page.getByRole("button", { name: "b, on Remote, Idle", exact: true });
+  await expect(row).toHaveAccessibleDescription(
+    /New completed activity.*2 unread agent messages.*Pull request open/,
+  );
+  expect(await row.ariaSnapshot()).toContain('button "b, on Remote, Idle"');
+  const preview = `${process.cwd()}/output/visual-previews`;
+  await page.screenshot({ path: `${preview}/review-row-${testInfo.project.name}.png` });
+  // Dispatch directly: no pointer movement over the row, hence no prior hover read.
+  await row.dispatchEvent("contextmenu", { button: 2 });
+  await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText(
+    "This environment has an associated PR that will remain open.",
+  );
+  await page.screenshot({ path: `${preview}/review-delete-pr-${testInfo.project.name}.png` });
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
 });

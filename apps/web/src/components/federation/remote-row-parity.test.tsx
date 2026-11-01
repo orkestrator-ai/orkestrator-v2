@@ -16,6 +16,9 @@ import {
 } from "@orkestrator/protocol/federation";
 import type { MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
+import { EnvironmentRow } from "@/components/environments/EnvironmentRow";
+import { nodeEnvironmentRowFacts } from "@/components/environments/environment-row-facts";
+import { useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -176,4 +179,127 @@ test("the cross-machine activity list has the controls bar and home rows this wi
   // A working build pipeline on the home reads as working, as on its own machine.
   expect(within(list).getByRole("button", { name: "app Home working" })).toBeTruthy();
   expect(within(list).getAllByTestId("federated-environment-row")).toHaveLength(2);
+});
+
+for (const scope of ["remote", "bound", "mixed"] as const) {
+  test(`waiting count includes only ${scope} machines`, async () => {
+    const remote = machineView([environment("waiting", { hasUnreadWork: true })]);
+    const bound = { ...machineView([]), connectionId: "self", bound: true };
+    renderWithFederation(
+      <FederatedActivityList
+        machines={scope === "remote" ? [remote] : scope === "bound" ? [bound] : [bound, remote]}
+        boundWaitingCount={3}
+        renderBoundRow={() => null}
+      />,
+    );
+    await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
+    const count = scope === "remote" ? 1 : scope === "bound" ? 3 : 4;
+    expect(
+      screen.getByLabelText(`${count} waiting environment${count === 1 ? "" : "s"}`),
+    ).toBeTruthy();
+  });
+}
+
+test("the row's computed description retains work, mail, PR and activity subtitle", () => {
+  const row = environment("feature", {
+    hasUnreadWork: true,
+    agentMailUnread: 2,
+    agentMailFailed: true,
+    prState: "open",
+  });
+  render(
+    <RemoteEnvironmentItem
+      machine={machineView([row])}
+      environment={row}
+      subtitle="app activity"
+    />,
+  );
+  const button = screen.getByRole("button", { name: "feature, on Machine A, Idle" });
+  const description = button
+    .getAttribute("aria-describedby")!
+    .split(" ")
+    .map((id) => document.getElementById(id)!.textContent)
+    .join(" ");
+  for (const state of [
+    "New completed activity",
+    "2 unread agent messages",
+    "Agent message delivery failed",
+    "Pull request open",
+    "app activity",
+  ]) {
+    expect(description).toContain(state);
+  }
+});
+
+test("deleting without hovering reads remote details and warns about the open PR", async () => {
+  const calls: string[] = [];
+  installDesktopFake({
+    list: connectionList([remoteConnection("a", "Machine A", "teal")]),
+    datasets: { a: sharedIdDataset("working") },
+    respond: (call) => {
+      calls.push(call.command);
+      if (call.command === "get_environment")
+        return {
+          id: "feature",
+          name: "feature",
+          prUrl: "https://github.com/o/r/pull/1",
+        };
+    },
+  });
+  const row = environment("feature");
+  render(
+    <FederationProvider>
+      <RemoteEnvironmentItem machine={machineView([row])} environment={row} />
+    </FederationProvider>,
+  );
+  await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
+  expect(calls).not.toContain("get_environment");
+  fireEvent.contextMenu(screen.getByRole("button", { name: "feature, on Machine A, Idle" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Delete/ }));
+  await screen.findByRole("alertdialog");
+  await waitFor(() => expect(calls).toContain("get_environment"));
+  await screen.findByText("This environment has an associated PR that will remain open.");
+});
+
+test("a machine-qualified row describes change counts along with unread work and PR state", () => {
+  function Row() {
+    const tooltip = useHoverTooltip();
+    const row = environment("feature", {
+      hasUnreadWork: true,
+      agentMailUnread: 2,
+      prState: "open",
+    });
+    return (
+      <EnvironmentRow
+        facts={nodeEnvironmentRowFacts(machineView([row]), row, { busy: false, writable: true })}
+        selected={false}
+        subtitle="app activity"
+        onActivate={() => {}}
+        actions={{
+          openSettings: () => {},
+          fork: () => {},
+          start: () => {},
+          stop: () => {},
+          restart: () => {},
+          confirmDelete: () => {},
+        }}
+        tooltip={tooltip}
+        tooltipDetails={{}}
+        agentSummary={null}
+        changes={{
+          kind: "legacy",
+          stats: { additions: 7, deletions: 3, filesChanged: 2, truncated: false },
+          freshness: null,
+        }}
+      />
+    );
+  }
+  render(<Row />);
+  expect(
+    screen.getByRole("button", {
+      name: "feature, on Machine A, Idle",
+      description:
+        /New completed activity.*2 unread agent messages.*Pull request open.*app activity.*\+7.*-3/,
+    }),
+  ).toBeTruthy();
 });

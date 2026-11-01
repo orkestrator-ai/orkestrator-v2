@@ -224,3 +224,41 @@ describe("an environment row looks the same on its own machine and through a com
     });
   }
 });
+
+test("offline, busy and unwritable node facts disable mutations and retain last-known activity", () => {
+  const summary = toNodeEnvironmentSummary(NODE, { ...base, agentActivityState: "working" })!;
+  for (const [transport, busy, writable] of [
+    ["unreachable", false, false],
+    ["connected", true, true],
+    ["connected", false, false],
+  ] as const) {
+    const facts = nodeEnvironmentRowFacts({ ...machine, transport }, summary, { busy, writable });
+    const model = environmentRowModel(facts);
+    expect(model.menu.deleteDisabled).toBe(true);
+    expect(model.menu.forkContainerDisabled).toBe(true);
+    expect(model.menu.powerDisabled).toBe(true);
+    expect(model.markerState).toBe(transport === "connected" ? "working" : "inactive");
+    expect(model.spinner).toBe(busy ? "transition" : null);
+  }
+});
+
+test("Docker unavailable blocks container actions while local worktree actions remain usable", () => {
+  const facts = localEnvironmentRowFacts(base, {
+    deleting: false,
+    activity: "idle",
+    running: true,
+    buildPipeline: false,
+    unreadMail: 0,
+    failedMail: false,
+    prMergeState: null,
+    machine: null,
+    dockerAvailable: false,
+    localCheckoutAvailable: true,
+  });
+  const model = environmentRowModel(facts);
+  expect(model.menu.forkContainerDisabled).toBe(true);
+  expect(model.menu.powerDisabled).toBe(true);
+  expect(model.menu.restartDisabled).toBe(true);
+  expect(model.menu.forkLocalDisabled).toBe(false);
+  expect(model.menu.deleteDisabled).toBe(false);
+});

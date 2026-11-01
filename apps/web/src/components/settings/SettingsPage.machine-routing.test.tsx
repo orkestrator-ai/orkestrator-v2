@@ -43,6 +43,17 @@ function answer(owner: string, command: string, args: Record<string, unknown> = 
     configs[owner] = { ...configs[owner]!, global: args.global as AppConfig["global"] };
     return configs[owner];
   }
+  if (command === "patch_global_config") {
+    // As the backend does: merge onto the owner's own stored settings.
+    const global = { ...configs[owner]!.global, ...(args.patch as object) } as Record<
+      string,
+      unknown
+    >;
+    for (const key of (args.unset as string[] | undefined) ?? []) delete global[key];
+    writes.push({ owner, global: global as unknown as AppConfig["global"] });
+    configs[owner] = { ...configs[owner]!, global: global as unknown as AppConfig["global"] };
+    return configs[owner];
+  }
   if (command === "get_backend_profile")
     return {
       revision: 1,

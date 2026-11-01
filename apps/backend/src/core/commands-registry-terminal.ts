@@ -30,6 +30,14 @@ import {
   runContainerPathCheck,
 } from "./web-annotation-source-checks.js";
 import { isSafeRelativePath } from "@orkestrator/protocol/web-annotations-validation";
+import { parseFileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
+import {
+  CONTAINER_WRITE_CONFLICT_EXIT,
+  assertLocalFileUnchanged,
+  containerFileWriteScript,
+  fileWriteConflictError,
+  serializeFileWrite,
+} from "./file-write-precondition.js";
 import path from "node:path";
 import {
   pathExists,
@@ -929,29 +937,42 @@ export function registerTerminalCommands(
       environment.worktreePath!,
     ]);
   });
-  register("write_local_file", async ({ worktreePath, filePath, base64Data }, context) => {
-    const root = asString(worktreePath, "worktreePath");
-    const release = context.runtime.environments.fence.beginWorktreeMutation(root);
-    try {
-      const canonical = canonicalWorktreePath(root);
-      const environments = (await context.storage.loadEnvironments?.()) ?? [];
-      const environment = environments.find(
-        (candidate) =>
-          candidate.worktreePath && canonicalWorktreePath(candidate.worktreePath) === canonical,
-      );
-      const write = () =>
-        writeFileBase64(root, asString(filePath, "filePath"), asString(base64Data, "base64Data"));
-      // Coordinator worktrees and compatibility callers use the raw-path API.
-      if (!environment) return await write();
-      return await withLocalFileMutation(context, environment.id, async (current) => {
-        if (canonicalWorktreePath(current.worktreePath!) !== canonical)
-          throw new Error("The worktree moved; refresh before saving");
-        return write();
-      });
-    } finally {
-      release();
-    }
-  });
+  // `expected` (optional) is the editor's precondition: the write happens
+  // only while the file still has the content it loaded. Older clients omit it.
+  register(
+    "write_local_file",
+    async ({ worktreePath, filePath, base64Data, expected }, context) => {
+      const root = asString(worktreePath, "worktreePath");
+      const precondition = parseFileWritePrecondition(expected);
+      const release = context.runtime.environments.fence.beginWorktreeMutation(root);
+      try {
+        const canonical = canonicalWorktreePath(root);
+        const environments = (await context.storage.loadEnvironments?.()) ?? [];
+        const environment = environments.find(
+          (candidate) =>
+            candidate.worktreePath && canonicalWorktreePath(candidate.worktreePath) === canonical,
+        );
+        const relativePath = asString(filePath, "filePath");
+        const data = asString(base64Data, "base64Data");
+        const write = () =>
+          precondition
+            ? serializeFileWrite(`local:${canonical}:${relativePath}`, async () => {
+                await assertLocalFileUnchanged(root, relativePath, precondition);
+                return writeFileBase64(root, relativePath, data);
+              })
+            : writeFileBase64(root, relativePath, data);
+        // Coordinator worktrees and compatibility callers use the raw-path API.
+        if (!environment) return await write();
+        return await withLocalFileMutation(context, environment.id, async (current) => {
+          if (canonicalWorktreePath(current.worktreePath!) !== canonical)
+            throw new Error("The worktree moved; refresh before saving");
+          return write();
+        });
+      } finally {
+        release();
+      }
+    },
+  );
   register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
     const id = asString(environmentId, "environmentId");
     return withLocalFileMutation(context, id, async (environment) => {
@@ -1216,9 +1237,10 @@ export function registerTerminalCommands(
       )
     ).trim();
   });
-  register("write_container_file", async ({ containerId, filePath, base64Data }) => {
+  register("write_container_file", async ({ containerId, filePath, base64Data, expected }) => {
     const id = asString(containerId, "containerId");
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
+    const precondition = parseFileWritePrecondition(expected);
     const fullPath = workspaceFilePath(target);
     const directory = path.posix.dirname(fullPath);
     const data = asString(base64Data, "base64Data");
@@ -1235,24 +1257,36 @@ export function registerTerminalCommands(
       );
       return fullPath;
     }
-    await dockerExec(id, `mkdir -p ${quoteShell(directory)}`);
-    const child = spawnCommand("docker", [
-      "exec",
-      "-i",
-      id,
-      "bash",
-      "-lc",
-      `base64 -d > ${quoteShell(fullPath)}`,
-    ]);
-    child.stdin.write(data);
-    child.stdin.end();
-    await new Promise<void>((resolve, reject) => {
-      child.once("exit", (code) =>
-        code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)),
-      );
-      child.once("error", reject);
-    });
-    return fullPath;
+    const write = async () => {
+      await dockerExec(id, `mkdir -p ${quoteShell(directory)}`);
+      const child = spawnCommand("docker", [
+        "exec",
+        "-i",
+        id,
+        "bash",
+        "-lc",
+        containerFileWriteScript(fullPath, precondition),
+      ]);
+      // A refused precondition exits before reading stdin; the broken pipe that
+      // leaves behind is expected and must not surface as an unhandled error.
+      child.stdin.on("error", () => undefined);
+      child.stdin.write(data);
+      child.stdin.end();
+      await new Promise<void>((resolve, reject) => {
+        child.once("exit", (code) =>
+          code === 0
+            ? resolve()
+            : reject(
+                code === CONTAINER_WRITE_CONFLICT_EXIT
+                  ? fileWriteConflictError()
+                  : new Error(`docker exec exited with ${code}`),
+              ),
+        );
+        child.once("error", reject);
+      });
+      return fullPath;
+    };
+    return precondition ? serializeFileWrite(`container:${id}:${fullPath}`, write) : write();
   });
   // Containment and existence of agent-reported paths in a container
   // workspace (web annotation file checks). Runs `stat` only, inside the

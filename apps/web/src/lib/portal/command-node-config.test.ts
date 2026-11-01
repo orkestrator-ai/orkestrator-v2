@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import { getConfig, updateGlobalConfig, updateRepositoryConfig } from "@/lib/backend";
+import {
+  getConfig,
+  patchGlobalConfig,
+  updateGlobalConfig,
+  updateRepositoryConfig,
+} from "@/lib/backend";
 import { portalStore } from "@/lib/portal/portal-store";
 import type { AppConfig, GlobalConfig, RepositoryConfig } from "@/types";
 
@@ -215,5 +220,82 @@ describe("Settings edits a machine picked in its header", () => {
     expect((await getConfig(null)).global.allowedDomains).toEqual(["command.test"]);
     expect((await getConfig("bk_command")).global.allowedDomains).toEqual(["command.test"]);
     expect(invokeMock).not.toHaveBeenCalledWith("invoke_on_node", expect.anything());
+  });
+});
+
+describe("patching global settings", () => {
+  test("a plain window sends only the changed keys to its own backend", async () => {
+    invokeMock.mockImplementation(async () => config("command"));
+    await patchGlobalConfig({ terminalScrollback: 7_000 }, { unset: ["reviewInstruction"] });
+    expect(invokeMock).toHaveBeenCalledWith("patch_global_config", {
+      patch: { terminalScrollback: 7_000 },
+      unset: ["reviewInstruction"],
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("update_global_config", expect.anything());
+  });
+
+  test("an older backend gets a read-merge-write of the whole object instead", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "patch_global_config") {
+        throw new Error("Unknown command: patch_global_config");
+      }
+      return config("leaf");
+    });
+    await patchGlobalConfig({ terminalScrollback: 7_000 }, { unset: ["reviewInstruction"] });
+    const write = invokeMock.mock.calls.find(([command]) => command === "update_global_config");
+    expect(write?.[1].global).toMatchObject({
+      terminalScrollback: 7_000,
+      allowedDomains: ["leaf.test"],
+    });
+    expect("reviewInstruction" in write![1].global).toBe(false);
+  });
+
+  test("other failures are not retried as a whole-object write", async () => {
+    invokeMock.mockImplementation(async () => {
+      throw new Error("Select at least one agent platform");
+    });
+    await expect(patchGlobalConfig({ enabledAgentPlatforms: [] })).rejects.toThrow(
+      "Select at least one agent platform",
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith("update_global_config", expect.anything());
+  });
+
+  test("a leaf window routes inherited keys to the command node and the rest to the leaf", async () => {
+    const portal = installLeafWindow();
+    await patchGlobalConfig(
+      { terminalScrollback: 7_000, allowedDomains: ["edited.test"] },
+      { unset: ["reviewInstruction", "sshAgentSocketPath"] },
+    );
+    expect(portal.invoke).toHaveBeenCalledWith("patch_global_config", {
+      patch: { terminalScrollback: 7_000 },
+      unset: ["reviewInstruction"],
+    });
+    expect(invokeMock).toHaveBeenCalledWith("patch_global_config", {
+      patch: { allowedDomains: ["edited.test"] },
+      unset: ["sshAgentSocketPath"],
+    });
+  });
+
+  test("a leaf window writes nothing to a node with no changed keys", async () => {
+    const portal = installLeafWindow();
+    await patchGlobalConfig({ allowedDomains: ["edited.test"] });
+    expect(portal.invoke).not.toHaveBeenCalledWith("patch_global_config", expect.anything());
+    expect(portal.invoke).toHaveBeenCalledWith("get_config", undefined);
+  });
+
+  test("an unchanged leaf-coerced default agent keeps the command node's", async () => {
+    const portal = installLeafWindow();
+    const loaded = await getConfig();
+    await patchGlobalConfig({
+      agentSettings: { ...loaded.global.agentSettings, platforms: { claude: { mode: "native" } } },
+    });
+    expect(portal.invoke).toHaveBeenCalledWith("patch_global_config", {
+      patch: {
+        agentSettings: expect.objectContaining({
+          defaultAgent: "codex",
+          platforms: { claude: { mode: "native" } },
+        }),
+      },
+    });
   });
 });

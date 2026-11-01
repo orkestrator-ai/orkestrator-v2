@@ -59,8 +59,11 @@ describe("useAgentModelFavorites", () => {
     cleanup();
     invokeMock.mockReset();
     mockToastError.mockClear();
-    invokeMock.mockImplementation((_command: string, args: { global: unknown }) =>
-      Promise.resolve({ ...useConfigStore.getState().config, global: args.global }),
+    invokeMock.mockImplementation((_command: string, args: { patch: object }) =>
+      Promise.resolve({
+        ...useConfigStore.getState().config,
+        global: { ...useConfigStore.getState().config.global, ...args.patch },
+      }),
     );
     useConfigStore.setState((state) => ({
       config: {
@@ -110,7 +113,7 @@ describe("useAgentModelFavorites", () => {
     expect(hook.current.enabledPlatforms).toEqual(["claude", "codex", "opencode"]);
   });
 
-  test("adds a favorite optimistically and persists the whole global config", async () => {
+  test("adds a favorite optimistically and persists only the favourite list", async () => {
     const hook = renderHook();
 
     await act(async () => {
@@ -118,10 +121,8 @@ describe("useAgentModelFavorites", () => {
     });
 
     expect(globalConfig().favoriteModels).toEqual([{ platform: "claude", modelId: "claude-opus" }]);
-    expect(invokeMock).toHaveBeenCalledWith("update_global_config", {
-      global: expect.objectContaining({
-        favoriteModels: [{ platform: "claude", modelId: "claude-opus" }],
-      }),
+    expect(invokeMock).toHaveBeenCalledWith("patch_global_config", {
+      patch: { favoriteModels: [{ platform: "claude", modelId: "claude-opus" }] },
     });
     expect(mockToastError).not.toHaveBeenCalled();
   });
@@ -246,8 +247,8 @@ describe("useAgentModelFavorites", () => {
     });
 
     expect(globalConfig().favoriteModels).toEqual([codex, claude, grok]);
-    expect(invokeMock).toHaveBeenCalledWith("update_global_config", {
-      global: expect.objectContaining({ favoriteModels: [codex, claude, grok] }),
+    expect(invokeMock).toHaveBeenCalledWith("patch_global_config", {
+      patch: { favoriteModels: [codex, claude, grok] },
     });
   });
 

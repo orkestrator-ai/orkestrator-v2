@@ -61,6 +61,7 @@ import type { PendingAgentMailInject } from "./storage-agent-mail-injects.js";
 import type { AgentMailSender } from "./storage-agent-mail-store.js";
 import type { AgentMailRepository } from "./storage-agent-mail.js";
 import type { ConfigRepository } from "./storage-config.js";
+import type { ProjectsRepository } from "./storage-projects.js";
 import type {
   AgentActivitySource,
   AgentActivityState,
@@ -363,6 +364,12 @@ export class StorageService {
     return this.repos.projects.arrangeProjects(projectIds, folders);
   }
 
+  arrangeProjectsByIntent(
+    ...args: Parameters<ProjectsRepository["arrangeProjectsByIntent"]>
+  ): Promise<Project[]> {
+    return this.repos.projects.arrangeProjectsByIntent(...args);
+  }
+
   loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
     return this.repos.projects.loadEnvironmentIdsForCleanup();
   }
@@ -644,6 +651,18 @@ export class StorageService {
     options: { preserveCredentials?: boolean; preserveInheritedSettings?: boolean } = {},
   ): Promise<AppConfig> {
     return this.repos.config.updateGlobalConfig(globalConfig, options);
+  }
+
+  patchGlobalConfig(
+    ...args: Parameters<ConfigRepository["patchGlobalConfig"]>
+  ): Promise<AppConfig> {
+    return this.repos.config.patchGlobalConfig(...args);
+  }
+
+  patchRepositorySettings(
+    ...args: Parameters<ConfigRepository["patchRepositorySettings"]>
+  ): Promise<AppConfig> {
+    return this.repos.config.patchRepositorySettings(...args);
   }
 
   updateWorktreeLocations(

@@ -1,5 +1,10 @@
 import { invoke } from "@/lib/native/backend";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
+import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
+import type {
+  ProjectArrangement,
+  ProjectArrangementIntent,
+} from "@orkestrator/protocol/project-arrangement";
 import type {
   ContainerLifecycleSnapshot,
   RebuildPreview,
@@ -156,6 +161,23 @@ export async function arrangeProjects(
   folders: Record<string, string | null> = {},
 ): Promise<Project[]> {
   return invoke<Project[]>("arrange_projects", { projectIds, folders });
+}
+
+/**
+ * Sends a sidebar gesture for the backend to resolve against its current
+ * projects. `preview` is what this client resolved locally; it is written as a
+ * whole arrangement only to a backend that predates the command.
+ */
+export async function arrangeProjectsByIntent(
+  intent: ProjectArrangementIntent,
+  preview: ProjectArrangement,
+): Promise<Project[]> {
+  try {
+    return await invoke<Project[]>("arrange_projects_by_intent", { intent });
+  } catch (error) {
+    if (!isUnknownBackendCommand(error, "arrange_projects_by_intent")) throw error;
+    return arrangeProjects(preview.projectIds, preview.folders);
+  }
 }
 
 // --- Environment Commands ---

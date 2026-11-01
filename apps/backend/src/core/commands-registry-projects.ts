@@ -2,6 +2,7 @@ import { boundSummaryIcons } from "./nodes/index.js";
 import nodePath from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
+import { parseProjectArrangementIntent } from "@orkestrator/protocol/project-arrangement";
 import {
   isResourceChange,
   type ResourceChange,
@@ -120,6 +121,23 @@ async function waitForFirstUseSeed(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** Bounds the `unset` list of a settings patch: a few dozen top-level keys at most. */
+const MAX_CONFIG_UNSET_KEYS = 128;
+
+/** The keys a settings patch removes; absent means none. */
+export function parseConfigUnsetKeys(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_CONFIG_UNSET_KEYS) {
+    throw new Error(`unset must be an array of at most ${MAX_CONFIG_UNSET_KEYS} keys`);
+  }
+  return value.map((key) => {
+    if (typeof key !== "string" || !key || key.length > 128) {
+      throw new Error("unset must contain setting names");
+    }
+    return key;
+  });
 }
 
 function reasoningOptions(ids: readonly string[]): AgentReasoningOption[] {
@@ -508,6 +526,13 @@ export function registerProjectCommands(
   register("reorder_projects", ({ projectIds }, { storage }) =>
     storage.reorderProjects(asStringArray(projectIds)),
   );
+  // The gesture rather than its result: resolved against the current projects
+  // under the store lock, so a client's stale copy cannot undo another's work.
+  register("arrange_projects_by_intent", async (args, { storage }) => {
+    assertOnlyKeys(args, ["intent"], "arrange_projects_by_intent argument");
+    return storage.arrangeProjectsByIntent(parseProjectArrangementIntent(args.intent));
+  });
+  // Kept for older clients and nodes; current clients send the intent above.
   // One command rather than a reorder plus N updates: the sidebar derives a
   // folder's position from its first member, so a half-applied arrangement is
   // a visibly wrong tree rather than a slightly stale one.
@@ -995,6 +1020,19 @@ export function registerProjectCommands(
     const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
     return planUsageReader(context, platform, { force });
   });
+  const afterGlobalConfigSaved = async (updated: AppConfig, context: CommandContext) => {
+    context.runtime.terminals.history.configureRetention({
+      enabled: updated.global.terminalHistoryEnabled,
+      sessionMb: updated.global.terminalHistoryRetentionMb,
+      globalMb: updated.global.terminalHistoryGlobalRetentionMb,
+      days: updated.global.terminalHistoryRetentionDays,
+    });
+    await context.runtime.terminals.history.pruneStorage(context.storage.getDataDir());
+    context.scheduledJobs?.wake();
+    return redactAppConfig(updated);
+  };
+  // Whole-object replace: kept for older clients. Current clients send only
+  // the fields they changed through `patch_global_config`.
   register("update_global_config", async ({ global, preserveInheritedSettings }, context) => {
     const { storage } = context;
     const updated = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
@@ -1010,15 +1048,18 @@ export function registerProjectCommands(
             }),
       }),
     );
-    context.runtime.terminals.history.configureRetention({
-      enabled: updated.global.terminalHistoryEnabled,
-      sessionMb: updated.global.terminalHistoryRetentionMb,
-      globalMb: updated.global.terminalHistoryGlobalRetentionMb,
-      days: updated.global.terminalHistoryRetentionDays,
-    });
-    await context.runtime.terminals.history.pruneStorage(storage.getDataDir());
-    context.scheduledJobs?.wake();
-    return redactAppConfig(updated);
+    return afterGlobalConfigSaved(updated, context);
+  });
+  // Merge the supplied top-level keys onto the stored global under the config
+  // lock, so a save cannot replace what another client changed meanwhile.
+  register("patch_global_config", async (args, context) => {
+    assertOnlyKeys(args, ["patch", "unset"], "patch_global_config argument");
+    const patch = stripRendererCredentials(asRecord(args.patch, "patch"));
+    const unset = parseConfigUnsetKeys(args.unset);
+    const updated = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+      context.storage.patchGlobalConfig(patch, { unset, preserveCredentials: true }),
+    );
+    return afterGlobalConfigSaved(updated, context);
   });
   register("update_notification_sound_settings", async ({ settings }, { storage }) =>
     redactAppConfig(await storage.updateNotificationSoundSettings(settings)),
@@ -1109,6 +1150,17 @@ export function registerProjectCommands(
     // edit here retargets every environment in the project. Reconciling now
     // rather than waiting for the next environment poll means the badge follows
     // the setting the user just changed.
+    void context.runtime.diffStats.sync(context).catch(() => undefined);
+    return redactAppConfig(updated);
+  });
+  register("patch_repository_settings", async (args, context) => {
+    assertOnlyKeys(args, ["projectId", "updates", "unset"], "patch_repository_settings argument");
+    const updated = await context.storage.patchRepositorySettings(
+      asString(args.projectId, "projectId"),
+      asRecord(args.updates ?? {}, "updates") as never,
+      parseConfigUnsetKeys(args.unset),
+    );
+    // Same as `update_repository_config`: the PR base branch may have moved.
     void context.runtime.diffStats.sync(context).catch(() => undefined);
     return redactAppConfig(updated);
   });

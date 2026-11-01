@@ -14,6 +14,7 @@ import { invoke } from "@/lib/native/backend";
 import type { AppConfig, GlobalConfig } from "@/types";
 import { portalStore } from "./portal-store";
 import { portalInvoke, workspaceTarget } from "./portal-transport";
+import { isUnknownBackendCommand } from "./unknown-command";
 
 type ConfigInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -54,8 +55,11 @@ export async function invokeGlobalConfigCommand(
   args?: Record<string, unknown>,
   machine?: string | null,
 ): Promise<AppConfig> {
+  const patching = command === PATCH_GLOBAL_CONFIG;
   if (machine === null || machine === portalStore.getState().selfId) {
-    return portalInvoke<AppConfig>(command, args);
+    return patching
+      ? patchGlobalOnNode(portalInvoke, args?.patch, args?.unset, false)
+      : portalInvoke<AppConfig>(command, args);
   }
   if (machine !== undefined) {
     const node = machine as BackendId;
@@ -63,8 +67,94 @@ export async function invokeGlobalConfigCommand(
       portalStore.invokeOnNode(node, nodeCommand, nodeArgs ?? {}),
     );
   }
-  if (!settingsOnCommandNode()) return workspaceInvoke<AppConfig>(command, args);
+  if (!settingsOnCommandNode()) {
+    return patching
+      ? patchGlobalOnNode(workspaceInvoke, args?.patch, args?.unset, false)
+      : workspaceInvoke<AppConfig>(command, args);
+  }
   return splitConfigCommand(command, args, workspaceInvoke);
+}
+
+const PATCH_GLOBAL_CONFIG = "patch_global_config";
+
+/**
+ * Patch one node's global settings. A node on an older release has no patch
+ * command; it gets the previous behaviour instead: read its config, apply the
+ * patch, write the whole object back.
+ */
+async function patchGlobalOnNode(
+  nodeInvoke: ConfigInvoke,
+  patchValue: unknown,
+  unsetValue: unknown,
+  preserveInheritedSettings: boolean,
+): Promise<AppConfig> {
+  const patch = (patchValue ?? {}) as Partial<GlobalConfig>;
+  const unset = Array.isArray(unsetValue) ? (unsetValue as string[]) : [];
+  if (Object.keys(patch).length === 0 && unset.length === 0) {
+    return nodeInvoke<AppConfig>("get_config");
+  }
+  try {
+    return await nodeInvoke<AppConfig>(PATCH_GLOBAL_CONFIG, {
+      patch,
+      ...(unset.length > 0 ? { unset } : {}),
+    });
+  } catch (error) {
+    if (!isUnknownBackendCommand(error, PATCH_GLOBAL_CONFIG)) throw error;
+    const current = await nodeInvoke<AppConfig>("get_config");
+    const global = { ...current.global, ...patch } as Record<string, unknown>;
+    for (const key of unset) delete global[key];
+    return nodeInvoke<AppConfig>("update_global_config", {
+      global,
+      ...(preserveInheritedSettings ? { preserveInheritedSettings: true } : {}),
+    });
+  }
+}
+
+/**
+ * Route a patch: inherited preferences go to the command node, everything
+ * else to this workspace. Only the keys the user changed travel, so neither
+ * node's other settings are rewritten from this window's copy.
+ */
+async function splitGlobalPatch(
+  args: Record<string, unknown> | undefined,
+  workspaceInvoke: ConfigInvoke,
+): Promise<AppConfig> {
+  const patch = { ...(args?.patch as Partial<GlobalConfig> | undefined) };
+  const unset = Array.isArray(args?.unset) ? (args.unset as string[]) : [];
+  const inherited = new Set<string>(INHERITED_GLOBAL_SETTING_KEYS);
+  const commandPatch: Record<string, unknown> = {};
+  const workspacePatch: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    (inherited.has(key) ? commandPatch : workspacePatch)[key] = value;
+  }
+  if (patch.agentSettings) {
+    // The form shows the default agent coerced to one enabled on this
+    // workspace. Echoing that coerced value must not move the command node's.
+    const [commandNode, workspace] = await Promise.all([
+      portalInvoke<AppConfig>("get_config"),
+      workspaceInvoke<AppConfig>("get_config"),
+    ]);
+    const effective = workspaceConfig(workspace, commandNode).global;
+    if (patch.agentSettings.defaultAgent === effective.agentSettings?.defaultAgent) {
+      commandPatch.agentSettings = {
+        ...patch.agentSettings,
+        defaultAgent: commandNode.global.agentSettings?.defaultAgent,
+      };
+    }
+  }
+  const savedCommand = await patchGlobalOnNode(
+    portalInvoke,
+    commandPatch,
+    unset.filter((key) => inherited.has(key)),
+    false,
+  );
+  const savedWorkspace = await patchGlobalOnNode(
+    workspaceInvoke,
+    workspacePatch,
+    unset.filter((key) => !inherited.has(key)),
+    true,
+  );
+  return workspaceConfig(savedWorkspace, savedCommand);
 }
 
 async function splitConfigCommand(
@@ -72,6 +162,7 @@ async function splitConfigCommand(
   args: Record<string, unknown> | undefined,
   workspaceInvoke: ConfigInvoke,
 ): Promise<AppConfig> {
+  if (command === PATCH_GLOBAL_CONFIG) return splitGlobalPatch(args, workspaceInvoke);
   if (command === "update_global_config") {
     // Read before writing: a failed paired read must not leave a partial save.
     const [commandNode, workspace] = await Promise.all([

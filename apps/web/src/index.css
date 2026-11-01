@@ -537,11 +537,11 @@ body[data-orkestrator-dev-profile]::before {
 
 @keyframes text-shimmer {
   from {
-    background-position: 125% 50%;
+    background-position: var(--text-shimmer-travel) 50%;
   }
 
   to {
-    background-position: -125% 50%;
+    background-position: calc(var(--text-shimmer-travel) * -1) 50%;
   }
 }
 
@@ -553,7 +553,14 @@ body[data-orkestrator-dev-profile]::before {
  * `-webkit-text-fill-color` rather than `color: transparent`: `currentColor`
  * must stay the real colour for the gradient to use it.
  *
- * Presets set the two custom properties: `.agent-thinking-shimmer` (the
+ * The gradient tiles, so the loop only joins up if one iteration moves it by
+ * exactly one tile. For a tile of `size` that is a position change of
+ * `size / (size - 100%)`, which `--text-shimmer-travel` holds half of: stopping
+ * anywhere else leaves the next tile's band part-way across when the animation
+ * restarts, and it vanishes. The sizes are percentages of the element, so this
+ * holds at any name length.
+ *
+ * Presets set the custom properties: `.agent-thinking-shimmer` (the
  * transcript's "is thinking" status) and the environment name signals
  * (`EnvironmentNameShimmer`): `.needs-answer-name` (an agent waits for the
  * user), `.merge-conflicts-name` (its pull request has conflicts) and
@@ -563,18 +570,22 @@ body[data-orkestrator-dev-profile]::before {
 .agent-thinking-shimmer {
   --text-shimmer-base: currentColor;
   --text-shimmer-highlight: var(--color-foreground);
-  --text-shimmer-duration: 1.8s;
+  --text-shimmer-duration: 1.2s;
+  --text-shimmer-size: 250%;
+  --text-shimmer-travel: 83.333%;
+  --text-shimmer-band-start: 36%;
+  --text-shimmer-band-end: 64%;
   -webkit-text-fill-color: transparent;
   background-image: linear-gradient(
     100deg,
     var(--text-shimmer-base) 0%,
-    var(--text-shimmer-base) 36%,
+    var(--text-shimmer-base) var(--text-shimmer-band-start),
     var(--text-shimmer-highlight) 50%,
-    var(--text-shimmer-base) 64%,
+    var(--text-shimmer-base) var(--text-shimmer-band-end),
     var(--text-shimmer-base) 100%
   );
-  background-position: 125% 50%;
-  background-size: 250% 100%;
+  background-position: var(--text-shimmer-travel) 50%;
+  background-size: var(--text-shimmer-size) 100%;
   background-clip: text;
   -webkit-background-clip: text;
   animation: text-shimmer var(--text-shimmer-duration) linear infinite;
@@ -598,11 +609,18 @@ body[data-orkestrator-dev-profile]::before {
  * stay well above the name's current contrast on the dark surfaces. The names
  * sweep more slowly than the thinking status: they can sit in the sidebar for
  * a long time, so the band should read as a calm cue rather than activity.
+ *
+ * A name is never without a band: the tile is short enough, and the band wide
+ * enough, that the next one enters as the last one leaves.
  */
 .merge-ready-name,
 .merge-conflicts-name,
 .needs-answer-name {
-  --text-shimmer-duration: 5s;
+  --text-shimmer-duration: 1.9s;
+  --text-shimmer-size: 140%;
+  --text-shimmer-travel: 175%;
+  --text-shimmer-band-start: 25%;
+  --text-shimmer-band-end: 75%;
 }
 
 .merge-ready-name {

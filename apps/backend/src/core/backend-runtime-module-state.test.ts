@@ -3,6 +3,7 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { AgentsMdPrResult } from "./agents-md-pr.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
+import { startEnvironmentSetupOnce } from "./commands-environment.js";
 import {
   assertContainerNotDraining,
   assertEnvironmentNotDraining,
@@ -147,6 +148,50 @@ describe("two BackendRuntimes in one process (todo 1070)", () => {
     });
     expect(() => assertEnvironmentNotDraining(first.environments, "env-1")).not.toThrow();
     expect(() => assertContainerNotDraining("container-1")).not.toThrow();
+  });
+
+  test("setup refuses a container being drained by another backend before publishing work", async () => {
+    const first = createRuntime();
+    const second = createRuntime();
+    const environment: Environment = {
+      ...createEnvironment(project.id),
+      id: "env-1",
+      containerId: "container-1",
+    };
+    let storageReads = 0;
+    let storageWrites = 0;
+    let events = 0;
+    const context: CommandContext = {
+      ...receiptContext(second),
+      storage: {
+        getEnvironment: async () => {
+          storageReads++;
+          return environment;
+        },
+        updateEnvironment: async () => {
+          storageWrites++;
+          throw new Error("Setup must not publish work while draining");
+        },
+      } as unknown as StorageService,
+      emit: () => {
+        events++;
+      },
+    };
+
+    await withEnvironmentDraining(
+      first.environments,
+      environment.id,
+      environment.containerId!,
+      async () => {
+        expect(second.environments.isDraining(environment.id)).toBe(false);
+        await expect(startEnvironmentSetupOnce(environment, context)).rejects.toThrow(
+          "The environment is stopping",
+        );
+        expect(storageReads).toBe(0);
+        expect(storageWrites).toBe(0);
+        expect(events).toBe(0);
+      },
+    );
   });
 
   test("a replacement cancellation reaches only its own backend", () => {

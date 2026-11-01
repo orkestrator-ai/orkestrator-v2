@@ -30,6 +30,7 @@ import {
 } from "./container-storage.js";
 import {
   ContainerInitializationError,
+  assertContainerNotDraining,
   assertEnvironmentNotDraining,
   containerStopWasForced,
   drainContainerProcesses,
@@ -871,6 +872,7 @@ export async function startEnvironmentSetupOnce(
   context: CommandContext,
 ): Promise<EnvironmentSetupStartResult> {
   assertEnvironmentNotDraining(context.runtime.environments, environment.id);
+  if (environment.containerId) assertContainerNotDraining(environment.containerId);
   const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
   if (isProjectHomeEnvironment(current)) {
     // Setup scripts provision disposable workspaces; the user's checkout is

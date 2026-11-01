@@ -79,6 +79,7 @@
     "./docker-availability": "./src/docker-availability.ts",
     "./feature-build": "./src/feature-build.ts",
     "./federation": "./src/federation.ts",
+    "./file-write-precondition": "./src/file-write-precondition.ts",
     "./feature-planning": "./src/feature-planning.ts",
     "./fatal-rejections": "./src/fatal-rejections.ts",
     "./gateway-event-stream": "./src/gateway-event-stream.ts",

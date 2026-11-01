@@ -292,12 +292,30 @@ export function FileViewerTab({
     showDiff,
     hasDiffData: hasDiffTarget,
   });
+  // Bumped to re-read the file after the user chose to drop their edits.
+  const [reloadGeneration, setReloadGeneration] = useState(0);
+  const reloadFromDisk = useCallback(() => {
+    void (async () => {
+      // Discard the persisted draft first, or the reload would restore it.
+      if (environmentId) {
+        await discardFileDraft(environmentId, filePath, getFileDraftRevisionState(tabId)).catch(
+          (draftError: unknown) => {
+            console.warn("[FileViewerTab] Failed to discard file draft on reload:", draftError);
+          },
+        );
+      }
+      lastDraftFlushRef.current = null;
+      useFileDirtyStore.getState().clearDirty(tabId);
+      setReloadGeneration((generation) => generation + 1);
+    })();
+  }, [environmentId, filePath, tabId]);
   const { saveFile, isSaving } = useFileSave({
     tabId,
     filePath,
     containerId,
     worktreePath,
     isLocalEnvironment,
+    onReloadFromDisk: reloadFromDisk,
   });
 
   const reportFileDraftError = useCallback(function reportFileDraftError(
@@ -524,6 +542,7 @@ export function FileViewerTab({
     environmentId,
     hydrateDraft,
     setOriginalContent,
+    reloadGeneration,
   ]);
 
   // Write through after a short debounce. The persistence helper serializes

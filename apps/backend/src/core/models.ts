@@ -1105,6 +1105,12 @@ export interface AppConfig {
     /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
     sshAgentSocketPath?: string;
     /**
+     * Auto-merge waits for failing or pending checks GitHub does not require.
+     * True or absent waits for all checks; false merges once GitHub allows it.
+     * Required checks still block. Read by `PrAutoMergeController` on this machine.
+     */
+    autoMergeRequireChecks?: boolean;
+    /**
      * Absolute directory new projects are cloned into on this machine, for
      * example when a project is copied here from another machine. Absent
      * means the most common parent of the existing projects, else `~/Projects`.

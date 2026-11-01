@@ -125,6 +125,7 @@ interface CoreFieldsSnapshot {
   allowedDomains: string[];
   useHostGitHubCredentials: boolean;
   sshAgentSocketPath: string;
+  autoMergeRequireChecks: boolean;
   defaultProjectsDirectory: string;
   useHostClaudeCredentials: boolean;
   preferredEditor: PreferredEditor;
@@ -168,6 +169,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     allowedDomains: normalizeAllowedDomainsInput(global.allowedDomains ?? []),
     useHostGitHubCredentials: global.useHostGitHubCredentials ?? true,
     sshAgentSocketPath: global.sshAgentSocketPath ?? "",
+    autoMergeRequireChecks: global.autoMergeRequireChecks ?? true,
     defaultProjectsDirectory: global.defaultProjectsDirectory ?? "",
     useHostClaudeCredentials: global.useHostClaudeCredentials ?? true,
     preferredEditor: global.preferredEditor ?? "vscode",
@@ -263,6 +265,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.envFilePatterns,
     global.useHostGitHubCredentials ?? true,
     global.sshAgentSocketPath ?? "",
+    global.autoMergeRequireChecks ?? true,
     global.defaultProjectsDirectory ?? "",
     global.useHostClaudeCredentials ?? true,
     global.allowedDomains ?? [],
@@ -319,6 +322,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     global.useHostGitHubCredentials ?? true,
   );
   const [sshAgentSocketPath, setSshAgentSocketPath] = useState(global.sshAgentSocketPath ?? "");
+  const [autoMergeRequireChecks, setAutoMergeRequireChecks] = useState(
+    global.autoMergeRequireChecks ?? true,
+  );
   const [defaultProjectsDirectory, setDefaultProjectsDirectory] = useState(
     global.defaultProjectsDirectory ?? "",
   );
@@ -461,6 +467,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     // typed keeps a rejected secret retryable across an unrelated store write.
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
+    setAutoMergeRequireChecks(global.autoMergeRequireChecks ?? true);
     setDefaultProjectsDirectory(global.defaultProjectsDirectory ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
@@ -656,6 +663,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       allowedDomains: normalizeAllowedDomainsInput(allowedDomains),
       useHostGitHubCredentials,
       sshAgentSocketPath: sshAgentSocketPathForSave(sshAgentSocketPath) ?? "",
+      autoMergeRequireChecks,
       defaultProjectsDirectory: defaultProjectsDirectory.trim(),
       useHostClaudeCredentials,
       preferredEditor,
@@ -695,6 +703,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       allowedDomains,
       useHostGitHubCredentials,
       sshAgentSocketPath,
+      autoMergeRequireChecks,
       defaultProjectsDirectory,
       useHostClaudeCredentials,
       preferredEditor,
@@ -871,6 +880,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         allowedDomains: string[];
         useHostGitHubCredentials: boolean;
         sshAgentSocketPath?: string;
+        autoMergeRequireChecks: boolean;
         defaultProjectsDirectory?: string;
         useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
@@ -906,6 +916,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         allowedDomains: domains,
         useHostGitHubCredentials,
         ...(savedSshAgentSocketPath ? { sshAgentSocketPath: savedSshAgentSocketPath } : {}),
+        autoMergeRequireChecks,
         ...(savedDefaultProjectsDirectory
           ? { defaultProjectsDirectory: savedDefaultProjectsDirectory }
           : {}),
@@ -1156,6 +1167,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     sshAgentSocketPath,
     setSshAgentSocketPath,
     sshAgentSocketPathValidationError,
+    autoMergeRequireChecks,
+    setAutoMergeRequireChecks,
     defaultProjectsDirectory,
     setDefaultProjectsDirectory,
     defaultProjectsDirectoryValidationError,
@@ -1326,7 +1339,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       blockers.push({ section: "review", message: reviewerLensValidationError });
     }
     if (sshAgentSocketPathValidationError) {
-      blockers.push({ section: "general", message: sshAgentSocketPathValidationError });
+      blockers.push({ section: "version-control", message: sshAgentSocketPathValidationError });
     }
     if (defaultProjectsDirectoryValidationError) {
       blockers.push({ section: "general", message: defaultProjectsDirectoryValidationError });
@@ -1384,6 +1397,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     debug: "Debug",
     review: "Review",
     general: "General",
+    "version-control": "Version control",
   };
   const saveStatus = saveBlocker
     ? {

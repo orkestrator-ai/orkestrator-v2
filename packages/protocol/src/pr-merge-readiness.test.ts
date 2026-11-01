@@ -107,6 +107,35 @@ describe("evaluatePrMergeReadiness", () => {
       evaluatePrMergeReadiness(ready({ checkSummary: { passed: 1, total: 3, pending: 1 } })),
     ).toEqual({ ready: false, reason: "checks-failing" });
   });
+
+  test("without required checks, failing and pending non-required checks do not block", () => {
+    const relaxed = { requireChecks: false } as const;
+    expect(isPrReadyToMerge(ready({ ...relaxed, mergeability: "unstable" }))).toBe(true);
+    expect(
+      isPrReadyToMerge(ready({ ...relaxed, checkSummary: { passed: 1, total: 3, pending: 1 } })),
+    ).toBe(true);
+    // Only an explicit `false` relaxes the rule.
+    expect(evaluatePrMergeReadiness(ready({ mergeability: "unstable" }))).toEqual({
+      ready: false,
+      reason: "checks-not-passing",
+    });
+  });
+
+  test("without required checks, GitHub's own blocks still apply", () => {
+    const relaxed = { requireChecks: false } as const;
+    expect(evaluatePrMergeReadiness(ready({ ...relaxed, mergeability: "blocked" }))).toEqual({
+      ready: false,
+      reason: "blocked",
+    });
+    expect(evaluatePrMergeReadiness(ready({ ...relaxed, hasMergeConflicts: true }))).toEqual({
+      ready: false,
+      reason: "conflicts",
+    });
+    expect(evaluatePrMergeReadiness(ready({ ...relaxed, viewerCanMerge: false }))).toEqual({
+      ready: false,
+      reason: "no-merge-permission",
+    });
+  });
 });
 
 describe("mergeabilityFromMergeStateStatus", () => {

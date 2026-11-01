@@ -1318,6 +1318,9 @@ describe("GlobalSettings", () => {
   test("renders every settings section", () => {
     const { rerender } = render(<GlobalSettings activeSection="general" />);
     expect(screen.getByText("Preferred Editor")).toBeTruthy();
+    rerender(<GlobalSettings activeSection="version-control" />);
+    expect(screen.getByText("GitHub authentication")).toBeTruthy();
+    expect(screen.getByText("Auto-merge")).toBeTruthy();
     rerender(<GlobalSettings activeSection="review" />);
     expect(screen.getByText("Code review instruction")).toBeTruthy();
     rerender(<GlobalSettings activeSection="claude" />);
@@ -1884,7 +1887,7 @@ describe("GlobalSettings", () => {
       expect(mockSetCursorApiKey).toHaveBeenCalledWith("test-cursor-key", undefined),
     );
 
-    rerender(<GlobalSettings activeSection="general" />);
+    rerender(<GlobalSettings activeSection="version-control" />);
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
     expect(githubInput.type).toBe("password");
@@ -2008,7 +2011,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
@@ -2036,7 +2039,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear stored token" }));
@@ -2050,7 +2053,7 @@ describe("GlobalSettings", () => {
   });
 
   test("switches from host credentials to PAT mode without writing an empty token", async () => {
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
 
     const hostCredentials = screen.getByRole("switch", {
       name: "Use host GitHub CLI credentials",
@@ -2077,8 +2080,9 @@ describe("GlobalSettings", () => {
     console.error = mock(() => undefined);
     mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
     try {
-      render(<GlobalSettings activeSection="general" />);
+      const { rerender } = render(<GlobalSettings activeSection="version-control" />);
       fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+      rerender(<GlobalSettings activeSection="general" />);
       fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
         target: { value: ".env.local" },
       });
@@ -2087,6 +2091,7 @@ describe("GlobalSettings", () => {
       expect(useConfigStore.getState().config.global.envFilePatterns).toEqual([".env.local"]);
       expect(useConfigStore.getState().config.global.useHostGitHubCredentials).toBe(false);
 
+      rerender(<GlobalSettings activeSection="version-control" />);
       const token = screen.getByLabelText("GitHub token") as HTMLInputElement;
       fireEvent.change(token, { target: { value: "replacement-token" } });
       fireEvent.blur(token);
@@ -2117,7 +2122,7 @@ describe("GlobalSettings", () => {
         },
       },
     }));
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
 
     const hostCredentials = screen.getByRole("switch", {
       name: "Use host GitHub CLI credentials",
@@ -2661,7 +2666,7 @@ describe("GlobalSettings", () => {
       updated: ["container-1"],
       failed: [],
     });
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const token = screen.getByLabelText("GitHub token");
@@ -2680,7 +2685,7 @@ describe("GlobalSettings", () => {
     mockPropagateGithubCredentialsToContainers.mockRejectedValueOnce(
       new Error("container unavailable"),
     );
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     await flushAutoSave();
@@ -2699,7 +2704,7 @@ describe("GlobalSettings", () => {
       updated: ["environment-1"],
       failed: [["environment-2", "container unavailable"]],
     });
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     await flushAutoSave();
@@ -2725,7 +2730,7 @@ describe("GlobalSettings", () => {
         ["environment-5", "failed five"],
       ],
     });
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     await flushAutoSave();
 
@@ -2752,7 +2757,7 @@ describe("GlobalSettings", () => {
       updated: ["environment-1", "environment-2"],
       failed: [],
     });
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     await flushAutoSave();
@@ -3016,7 +3021,7 @@ describe("GlobalSettings", () => {
       updated: [],
       failed: [["environment-1", "container unavailable"]],
     });
-    render(<GlobalSettings activeSection="general" />);
+    render(<GlobalSettings activeSection="version-control" />);
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
 
     // The source change propagates once; each failure keeps the form dirty and
@@ -3045,7 +3050,7 @@ describe("GlobalSettings", () => {
     console.error = mock(() => undefined);
     mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
     try {
-      render(<GlobalSettings activeSection="general" />);
+      render(<GlobalSettings activeSection="version-control" />);
       fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
       await flushAutoSave();
 

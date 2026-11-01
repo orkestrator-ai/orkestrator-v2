@@ -66,7 +66,7 @@ test("real monitor wakes auto-merge when mergeability is the only changed observ
     storage: {
       getEnvironment: async () => environment,
       loadEnvironments: async () => [environment],
-      loadConfig: async () => ({}) as never,
+      loadConfig: async () => ({ global: {} }) as never,
       getRepositoryConfig: async () => ({}) as never,
       updateEnvironment: async () => environment,
     },

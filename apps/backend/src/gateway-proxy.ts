@@ -60,10 +60,12 @@ import type { StaticContentEncoding } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 
 export function createSseGzipCompressor(): Gzip {
+  // No `finishFlush`: a proxied stream can end cleanly when its upstream does,
+  // and it needs the gzip trailer then. Without one a strict decoder (`fetch`
+  // outside a browser, for one) fails the whole response at the end of the body.
   return createGzip({
     level: DYNAMIC_GZIP_LEVEL,
     flush: zlibConstants.Z_SYNC_FLUSH,
-    finishFlush: zlibConstants.Z_SYNC_FLUSH,
     chunkSize: SSE_COMPRESSION_CHUNK_BYTES,
   });
 }
@@ -87,6 +89,8 @@ export function startProxiedEventStreamGzip(options: {
     stripTransformedRepresentationHeaders(options.responseHeaders);
     options.responseHeaders["content-encoding"] = "gzip";
     options.response.writeHead(options.responseStatus, options.responseHeaders);
+    // The compressor emits nothing until the first upstream frame.
+    options.response.flushHeaders();
   } catch (error) {
     compressor.destroy();
     throw error;
@@ -601,6 +605,9 @@ export class GatewayProxy {
           }
 
           response.writeHead(responseStatus, responseHeaders);
+          // A quiet event stream has no first write to carry the headers, and a
+          // client waiting on them cannot tell an open stream from a dead link.
+          if (isEventStream) response.flushHeaders();
           pipeline(proxyResponse, response, (error) => {
             if (error) {
               proxyRequest.destroy(error);

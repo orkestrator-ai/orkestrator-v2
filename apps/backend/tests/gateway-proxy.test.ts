@@ -1534,7 +1534,7 @@ describe("remote gateway", () => {
     const downstream = new PassThrough();
     source.on("error", () => undefined);
     downstream.on("error", () => undefined);
-    Object.assign(downstream, { writeHead: () => undefined });
+    Object.assign(downstream, { writeHead: () => undefined, flushHeaders: () => undefined });
     const failures: Error[] = [];
     const pipelineErrors: Error[] = [];
 
@@ -1575,7 +1575,10 @@ describe("remote gateway", () => {
     const failingDownstream = new PassThrough();
     failingSource.on("error", () => undefined);
     failingDownstream.on("error", () => undefined);
-    Object.assign(failingDownstream, { writeHead: () => undefined });
+    Object.assign(failingDownstream, {
+      writeHead: () => undefined,
+      flushHeaders: () => undefined,
+    });
     const failingCompressor = startProxiedEventStreamGzip({
       proxyResponse: failingSource,
       response: failingDownstream as unknown as ServerResponse,

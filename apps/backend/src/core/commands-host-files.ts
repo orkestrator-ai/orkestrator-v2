@@ -234,6 +234,184 @@ export async function createHostDirectory(parent: string, name: string): Promise
   return { path: target };
 }
 
+/** Largest image the icon picker reads from the host; it is scaled down to a small icon client-side. */
+export const MAX_HOST_IMAGE_BYTES = 5 * 1024 * 1024;
+const HOST_IMAGE_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".bmp": "image/bmp",
+  ".avif": "image/avif",
+};
+
+/**
+ * Where projects usually keep their icon, relative to a project (or monorepo
+ * package) root, best first: scalable or large images before `.ico` favicons,
+ * which are often only 16 or 32 pixels.
+ */
+export const PROJECT_ICON_CANDIDATES: readonly string[] = [
+  // Web apps: Vite, CRA, Next.js `public/`, SvelteKit and Hugo `static/`.
+  ...["public", "static", ""].flatMap((dir) =>
+    [
+      "favicon.svg",
+      "icon.svg",
+      "logo.svg",
+      "apple-touch-icon.png",
+      "icon.png",
+      "logo.png",
+      "favicon.png",
+      "favicon.ico",
+    ].map((file) => (dir ? `${dir}/${file}` : file)),
+  ),
+  // Next.js app router file conventions.
+  ...["app", "src/app"].flatMap((dir) =>
+    ["icon.svg", "icon.png", "apple-icon.png", "favicon.ico"].map((file) => `${dir}/${file}`),
+  ),
+  // Angular and other `src/`-rooted apps.
+  "src/favicon.svg",
+  "src/favicon.png",
+  "src/favicon.ico",
+  "src/assets/icon.svg",
+  "src/assets/icon.png",
+  "src/assets/logo.svg",
+  "src/assets/logo.png",
+  "assets/icon.svg",
+  "assets/icon.png",
+  "assets/logo.svg",
+  "assets/logo.png",
+  "assets/favicon.ico",
+  // Desktop app icons: Electron, electron-builder, Tauri.
+  "electron/resources/icon.png",
+  "resources/icon.png",
+  "build/icon.png",
+  "src-tauri/icons/icon.png",
+  "src-tauri/icons/128x128.png",
+  // Docs sites and README art.
+  "docs/public/favicon.svg",
+  "docs/public/logo.svg",
+  "docs/public/favicon.ico",
+  ".github/logo.svg",
+  ".github/logo.png",
+  "docs/logo.svg",
+  "docs/logo.png",
+  "logos/logo.svg",
+  "logos/logo.png",
+];
+
+/** Folders whose children are themselves apps in a monorepo, searched after the root. */
+const PROJECT_ICON_PACKAGE_DIRECTORIES = ["apps", "packages"];
+/** Single-app subfolders common in full-stack repositories. */
+const PROJECT_ICON_APP_DIRECTORIES = ["web", "frontend", "client", "site", "www", "ui"];
+/** How many matches to return; the client takes the first one it can decode. */
+const MAX_PROJECT_ICON_MATCHES = 8;
+
+function resolveHostPath(requested: string, name: string): string {
+  const trimmed = requested.trim();
+  if (!trimmed) throw new Error(`${name} is required`);
+  if (trimmed.length > MAX_HOST_PATH_LENGTH) throw new Error("path is too long");
+  const expanded = expandHome(trimmed);
+  if (!path.isAbsolute(expanded)) throw new Error("path must be absolute or start with ~");
+  return path.resolve(expanded);
+}
+
+async function isReadableImage(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile() && stat.size > 0 && stat.size <= MAX_HOST_IMAGE_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+async function childDirectories(directory: string): Promise<string[]> {
+  try {
+    const dirents = await fs.readdir(directory, { withFileTypes: true });
+    return dirents
+      .filter((dirent) => dirent.isDirectory() && !dirent.name.startsWith("."))
+      .map((dirent) => dirent.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+      .map((name) => path.join(directory, name));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Finds images in the places a project usually keeps its icon or favicon:
+ * the root first, then common app subfolders and monorepo packages. Returns
+ * absolute paths, best first; an empty list when nothing is found or the
+ * root is missing.
+ */
+export async function findProjectIcons(root: string): Promise<string[]> {
+  const directory = resolveHostPath(root, "root");
+  const bases = [
+    directory,
+    ...PROJECT_ICON_APP_DIRECTORIES.map((name) => path.join(directory, name)),
+    ...(
+      await Promise.all(
+        PROJECT_ICON_PACKAGE_DIRECTORIES.map((name) =>
+          childDirectories(path.join(directory, name)),
+        ),
+      )
+    ).flat(),
+  ];
+  const matches: string[] = [];
+  for (const base of bases) {
+    const found = await Promise.all(
+      PROJECT_ICON_CANDIDATES.map(async (candidate) => {
+        const filePath = path.join(base, candidate);
+        return (await isReadableImage(filePath)) ? filePath : null;
+      }),
+    );
+    for (const filePath of found) {
+      if (!filePath) continue;
+      matches.push(filePath);
+      if (matches.length >= MAX_PROJECT_ICON_MATCHES) return matches;
+    }
+  }
+  return matches;
+}
+
+export type HostImageFile = {
+  path: string;
+  name: string;
+  mimeType: string;
+  base64: string;
+};
+
+/**
+ * Reads one image file from the backend host so the client can turn it into
+ * a project icon. Only image extensions under MAX_HOST_IMAGE_BYTES are read.
+ */
+export async function readHostImageFile(requested: string): Promise<HostImageFile> {
+  const filePath = resolveHostPath(requested, "path");
+  const mimeType = HOST_IMAGE_MIME_TYPES[path.extname(filePath).toLowerCase()];
+  if (!mimeType) throw new Error("Choose an image file");
+  let stat;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") throw new Error(`${filePath} does not exist`);
+    if (code === "EACCES" || code === "EPERM")
+      throw new Error(`Permission denied reading ${filePath}`);
+    throw error;
+  }
+  if (!stat.isFile()) throw new Error(`${filePath} is not a file`);
+  if (stat.size > MAX_HOST_IMAGE_BYTES) throw new Error("The image is larger than 5 MB");
+  const data = await fs.readFile(filePath);
+  return {
+    path: filePath,
+    name: path.basename(filePath),
+    mimeType,
+    base64: data.toString("base64"),
+  };
+}
+
 export function registerHostFileCommands(register: CommandRegistrar): void {
   register("list_host_directory", async (args) => {
     assertOnlyKeys(args, ["path", "includeFiles", "showHidden"], "arguments");
@@ -252,5 +430,15 @@ export function registerHostFileCommands(register: CommandRegistrar): void {
   register("create_host_directory", async (args) => {
     assertOnlyKeys(args, ["parent", "name"], "arguments");
     return createHostDirectory(asString(args.parent, "parent"), asString(args.name, "name"));
+  });
+
+  register("find_project_icons", async (args) => {
+    assertOnlyKeys(args, ["root"], "arguments");
+    return findProjectIcons(asString(args.root, "root"));
+  });
+
+  register("read_host_image_file", async (args) => {
+    assertOnlyKeys(args, ["path"], "arguments");
+    return readHostImageFile(asString(args.path, "path"));
   });
 }

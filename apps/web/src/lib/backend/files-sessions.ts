@@ -886,3 +886,24 @@ export async function listHostDirectory(
 export async function createHostDirectory(parent: string, name: string): Promise<{ path: string }> {
   return invoke<{ path: string }>("create_host_directory", { parent, name });
 }
+
+/**
+ * Absolute paths of images on the backend host where a project usually keeps
+ * its icon or favicon (`public/favicon.svg`, `app/icon.png`, ...), best first.
+ */
+export async function findProjectIcons(root: string): Promise<string[]> {
+  return invoke<string[]>("find_project_icons", { root });
+}
+
+/** An image file read from the backend host. */
+export interface HostImageFile {
+  path: string;
+  name: string;
+  mimeType: string;
+  base64: string;
+}
+
+/** Reads one image file (at most 5 MB) from the backend host. */
+export async function readHostImageFile(path: string): Promise<HostImageFile> {
+  return invoke<HostImageFile>("read_host_image_file", { path });
+}

@@ -2,12 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { codexRuleEntries } from "@orkestrator/protocol/permission-rules";
 import type { CommandContext } from "../commands-context.js";
-import {
-  claudeAllowEntries,
-  codexRuleEntries,
-  listExternalPermissionRules,
-} from "./external-rules.js";
+import { claudeAllowEntries, listExternalPermissionRules } from "./external-rules.js";
 
 const directories: string[] = [];
 const savedEnv = {
@@ -38,6 +35,16 @@ describe("parsers", () => {
         '# saved by codex\n\nprefix_rule(pattern=["npm", "test"], decision="allow")\n  \n',
       ),
     ).toEqual(['prefix_rule(pattern=["npm", "test"], decision="allow")']);
+  });
+
+  test("Codex 0.166.0's saved command and network rules are each one entry", () => {
+    // Exactly as the pinned binary wrote them (todo 0160, task 2).
+    const lines = [
+      'prefix_rule(pattern=["touch", "probe-file.txt"], decision="allow")',
+      'network_rule(host="probe-host.example.test", protocol="http", decision="allow", justification="Allow http access to probe-host.example.test")',
+      'network_rule(host="blocked.example.test", protocol="http", decision="deny", justification="Deny http access to blocked.example.test")',
+    ];
+    expect(codexRuleEntries(`${lines.join("\n")}\n`)).toEqual(lines);
   });
 
   test("Claude allow entries are read from permissions.allow only", () => {

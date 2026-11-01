@@ -17,6 +17,7 @@ import {
 } from "./intents.js";
 import {
   createDesignHarness,
+  deferred,
   trackUnhandledRejections,
   type DesignHarness,
 } from "./test-support.js";
@@ -283,6 +284,100 @@ describe("design intents: the backend-owned edit queue", () => {
       phase: "settled",
       outcome: "committed",
     });
+  });
+
+  test("Resume is the consent a prepared token waits for; listing alone never runs it", async () => {
+    const { canvasId, frameId } = await setup();
+    const draft = move(canvasId, frameId, 1, 55);
+    const prepared = await service().prepare("env-1", "user", draft.descriptor);
+    await importIntents(service(), "env-1", canvasId, "client-a", [
+      { ...draft, phase: "prepared", token: prepared.token },
+    ]);
+    const listed = await byId(canvasId, draft.id);
+    expect(listed).toMatchObject({ phase: "admitted", token: prepared.token });
+    expect(listed?.outcome).toBeUndefined();
+    expect((await service().status("env-1", canvasId, prepared.token)).state).toBe("prepared");
+    const resumed = await resumeIntent(
+      service(),
+      "env-1",
+      canvasId,
+      draft.id,
+      "client-b",
+      undefined,
+    );
+    expect(resumed.intent).toMatchObject({
+      phase: "settled",
+      outcome: "committed",
+      clientId: "client-b",
+    });
+    expect((await service().status("env-1", canvasId, prepared.token)).state).toBe("committed");
+  });
+
+  test("a run in flight is listed as sending, and its intent cannot be resumed away", async () => {
+    const { canvasId, frameId } = await setup();
+    const hold = deferred();
+    harness.renderer.block = (job) => (job.priority === "interactive" ? hold.promise : undefined);
+    const draft: DesignIntentDraft = {
+      ...move(canvasId, frameId, 1, 0),
+      descriptor: {
+        canvasId,
+        input: { kind: "set_element_styles", frameId, selector: "h1", styles: { color: "red" } },
+        preconditions: { frameRevision: 1 },
+        clientId: "client-a",
+        correlationId: "i-styled",
+      },
+      id: "i-styled",
+    };
+    const interactive = (job: { priority: string }) => job.priority === "interactive";
+    const earlier = harness.renderer.jobs.filter(interactive).length;
+    const running = runIntent(service(), "env-1", canvasId, draft, 5000);
+    await harness.renderer.started(interactive, earlier + 1);
+    expect((await listIntents(service(), "env-1", canvasId)).sending).toEqual([draft.id]);
+    await expect(
+      resumeIntent(service(), "env-1", canvasId, draft.id, "client-b", undefined),
+    ).rejects.toMatchObject({ failure: { code: "conflict" } });
+    // A repeated run joins nothing: it reports the intent and never prepares a second token.
+    expect(await runIntent(service(), "env-1", canvasId, draft, 5000)).toMatchObject({
+      intent: { id: draft.id },
+    });
+    hold.resolve();
+    expect((await running).status?.state).toBe("committed");
+    expect((await listIntents(service(), "env-1", canvasId)).sending).toEqual([]);
+  });
+
+  test("another environment cannot see or disturb this document's queue", async () => {
+    const { canvasId, frameId } = await setup();
+    const draft = move(canvasId, frameId, 1, 1);
+    const denied = { failure: { code: "not-found" } };
+    await saveIntentDrafts(service(), "env-1", canvasId, "client-a", [draft]);
+    await expect(runIntent(service(), "env-2", canvasId, draft, 0)).rejects.toMatchObject(denied);
+    await expect(
+      saveIntentDrafts(service(), "env-2", canvasId, "client-a", [draft]),
+    ).rejects.toMatchObject(denied);
+    await expect(discardIntent(service(), "env-2", canvasId, draft.id)).rejects.toMatchObject(
+      denied,
+    );
+    await expect(
+      resumeIntent(service(), "env-2", canvasId, draft.id, "client-a", undefined),
+    ).rejects.toMatchObject(denied);
+    expect((await byId(canvasId, draft.id))?.phase).toBe("draft");
+  });
+
+  test("a rerun of an edit an unobserved run already prepared never prepares again", async () => {
+    const { canvasId, frameId } = await setup();
+    const draft = move(canvasId, frameId, 1, 10);
+    const prepared = await service().prepare("env-1", "user", draft.descriptor);
+    const file = service().store.intentsFile(canvasId);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify([{ ...draft, clientId: "client-a", updatedAt: clock, phase: "preparing" }]),
+    );
+    const rerun = await runIntent(service(), "env-1", canvasId, draft, 5000);
+    expect(rerun.status).toBeUndefined();
+    expect(rerun.intent).toMatchObject({ phase: "admitted", token: prepared.token });
+    expect(await service().store.readPending(canvasId)).toHaveLength(1);
+    expect((await service().status("env-1", canvasId, prepared.token)).state).toBe("prepared");
   });
 
   test("after a restart, an edit caught mid-prepare is recovered from backend state", async () => {

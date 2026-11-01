@@ -18,12 +18,7 @@ import {
 } from "@orkestrator/protocol/design-operations";
 import { DesignError, toDesignFailure } from "./errors.js";
 import { readBounded, writeAtomically, type DesignPrivateRecord } from "./records.js";
-import {
-  descriptorSchema,
-  geometryPatchSchema,
-  operationToken,
-  preconditionsSchema,
-} from "./schemas.js";
+import { descriptorSchema, operationToken, preconditionsSchema } from "./schemas.js";
 import type { DesignService } from "./service.js";
 
 /**
@@ -42,8 +37,12 @@ const opaqueId = z
   .max(100)
   .regex(/^[a-zA-Z0-9._:-]+$/);
 
+/** Presentation only: bounded, but never a reason to refuse the edit it decorates. */
 const previewSchema = z
-  .object({ frameId: z.string().min(1).max(100), patch: geometryPatchSchema })
+  .object({
+    frameId: z.string().min(1).max(100),
+    patch: z.record(z.string().max(20), z.union([z.number(), z.string().max(200)])),
+  })
   .strict();
 
 export const intentDraftSchema = z
@@ -87,6 +86,8 @@ const legacySchema = z.object({
   preview: previewSchema.optional(),
   gestureKey: z.string().max(200).optional(),
 });
+
+const RESUME_WAIT_MS = 30_000;
 
 /** Intent ids this process is running now; reconciliation leaves them alone. */
 const runningByService = new WeakMap<DesignService, Set<string>>();
@@ -238,11 +239,12 @@ function withStatus(
 ): DesignStoredIntent {
   let next: DesignStoredIntent;
   if (status.state === "prepared" || status.state === "executing") {
+    // No outcome on an admitted intent means prepared and not started.
     next = compact({
       ...intent,
       phase: "admitted",
       token: status.token,
-      outcome: status.state === "executing" ? "executing" : intent.outcome,
+      outcome: status.state === "executing" ? ("executing" as const) : undefined,
       updatedAt: now,
     });
   } else {
@@ -324,16 +326,23 @@ export async function listIntents(
   await service.loadFor(canvasId, environmentId, { allowDeleted: true });
   const now = service.now().getTime();
   const stored = await readIntents(service, canvasId);
+  const listing = (intents: DesignStoredIntent[]): DesignIntentList => ({
+    intents,
+    sending: intents
+      .filter((intent) => running(service).has(runKey(canvasId, intent.id)))
+      .map((intent) => intent.id),
+    now,
+  });
   const quiet =
     !stored.some((intent) => needsReconcile(service, canvasId, intent)) &&
     pruneSuccesses(stored, now).length === stored.length;
-  if (quiet) return { intents: stored };
+  if (quiet) return listing(stored);
   return mutate(service, environmentId, canvasId, async (intents, record) => {
     const next: DesignStoredIntent[] = [];
     for (const intent of intents)
       next.push(await reconcile(service, environmentId, canvasId, record, intent, now));
     const pruned = pruneSuccesses(next, now);
-    return { intents: pruned, value: { intents: pruned } };
+    return { intents: pruned, value: listing(pruned) };
   });
 }
 
@@ -412,7 +421,12 @@ export async function importIntents(
         ...(entry.token
           ? settled
             ? { phase: "settled" as const, token: entry.token, outcome, failure }
-            : { phase: "admitted" as const, token: entry.token, outcome: "unknown" as const }
+            : {
+                phase: "admitted" as const,
+                token: entry.token,
+                // A token this browser never sent is prepared; anything else is unknown.
+                ...(entry.phase === "prepared" ? {} : { outcome: "unknown" as const }),
+              }
           : settled && outcome && DESIGN_NOT_RUN_STATES.includes(outcome)
             ? { phase: "settled" as const, outcome, failure }
             : { phase: "draft" as const }),
@@ -491,6 +505,8 @@ export async function runIntent(
   const key = runKey(canvasId, draft.id);
   const owned = running(service);
   await service.initialize();
+  // Authorizes before anything looks at this canvas's queue.
+  await service.loadFor(canvasId, environmentId, { allowDeleted: true });
   if (owned.has(key))
     return {
       intent: (await readIntents(service, canvasId)).find((entry) => entry.id === draft.id),
@@ -507,6 +523,27 @@ export async function runIntent(
       // Sent before: its token is reconciled, never prepared again.
       if (existing && existing.phase !== "draft" && existing.phase !== "preparing")
         return { value: { sent: existing } };
+      // A run that ended unobserved may have prepared it under this correlation id.
+      if (existing?.phase === "preparing") {
+        const token = await tokenByCorrelation(
+          service,
+          record,
+          canvasId,
+          existing.descriptor.correlationId,
+        );
+        if (token) {
+          const sent: DesignStoredIntent = {
+            ...existing,
+            phase: "admitted",
+            token,
+            updatedAt: service.now().getTime(),
+          };
+          return {
+            intents: intents.map((candidate) => (candidate === existing ? sent : candidate)),
+            value: { sent },
+          };
+        }
+      }
       const now = service.now().getTime();
       const intent: DesignStoredIntent = compact({
         ...draft,
@@ -639,6 +676,20 @@ export async function resumeIntent(
     return { intents: intents.map((intent) => (intent === current ? next : intent)), value: next };
   });
   if (resumed.phase !== "admitted") return { intent: resumed };
+  // Resume is the consent a prepared token was waiting for; listing never executes.
+  if (resumed.token) {
+    const token = resumed.token;
+    const status = await service.status(environmentId, canvasId, token);
+    if (status.state === "prepared") {
+      const executed = await service.execute(environmentId, canvasId, token, {
+        waitMs: RESUME_WAIT_MS,
+      });
+      const intent = await updateOne(service, environmentId, canvasId, id, clientId, (current) =>
+        withStatus(current, executed, service.now().getTime()),
+      );
+      return { intent };
+    }
+  }
   const listed = await listIntents(service, environmentId, canvasId);
   return { intent: listed.intents.find((intent) => intent.id === id) };
 }

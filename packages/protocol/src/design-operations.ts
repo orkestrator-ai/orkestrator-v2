@@ -673,6 +673,8 @@ export const DESIGN_INTENT_LIMITS = {
   settledRetentionMs: 2 * 60_000,
   /** A `preparing` intent no live call owns falls back to a draft after this. */
   preparingGraceMs: 60_000,
+  /** Another window's draft younger than this is probably about to run: not for review. */
+  foreignDraftQuietMs: 15_000,
 } as const;
 
 /**
@@ -710,6 +712,10 @@ export type DesignIntentDraft = Pick<
 
 export interface DesignIntentList {
   intents: DesignStoredIntent[];
+  /** Intents a backend call is sending right now; not for another window to review. */
+  sending: string[];
+  /** The backend's clock, which `updatedAt` is measured on. */
+  now: number;
 }
 
 export interface DesignIntentRunResult {

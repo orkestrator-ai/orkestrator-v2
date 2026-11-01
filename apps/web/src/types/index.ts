@@ -623,10 +623,12 @@ export interface GlobalConfig {
   experimentalScheduling?: boolean;
   /** Experimental: graphs (the action bar's Graphs and Run graph… buttons, a ticket's Run graph…) */
   experimentalGraphs?: boolean;
-  /** Enable debug logging to disk (requires app restart) */
+  /** "Save logs to disk": whether application logs are written. Applies live. */
   debugLogging?: boolean;
-  /** Number of days production application logs remain on disk */
+  /** Number of days production application logs remain on disk. Applies live. */
   debugLogRetentionDays?: number;
+  /** "Log detail": levels for every process, running bridges included. Applies live. */
+  logDetail?: import("@orkestrator/protocol/log-policy").LogDetail;
   /** Serve the app to authenticated browsers on the host's Tailscale network */
   webClientEnabled?: boolean;
   /** Audible cues for background events that need the user's attention. */

@@ -5,6 +5,7 @@ import type {
   CoordinatorResearchMcpServer,
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
+import type { LogDetail } from "@orkestrator/protocol/log-policy";
 import type { MultiReviewEngine } from "@orkestrator/protocol/multi-review";
 import {
   isShippedReviewLensPresetList,
@@ -53,6 +54,7 @@ export interface CoreFieldsSnapshot {
   experimentalGraphs: boolean;
   debugLogging: boolean;
   debugLogRetentionDays: number;
+  logDetail: LogDetail;
   webClientEnabled: boolean;
   reviewInstruction: string;
   /** Resolved: the shipped five when none are stored. */
@@ -88,6 +90,7 @@ const STORED_AS_IS = [
   "experimentalGraphs",
   "debugLogging",
   "debugLogRetentionDays",
+  "logDetail",
   "webClientEnabled",
   "multiReviewEngine",
 ] as const satisfies readonly (keyof CoreFieldsSnapshot & keyof GlobalConfig)[];

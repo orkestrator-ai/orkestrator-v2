@@ -41,6 +41,7 @@ import {
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
 import { resolveClaudeBackgroundCommandLimitHours } from "@orkestrator/protocol/claude-background-commands";
 import { resolveSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
+import { resolveLogDetail } from "@orkestrator/protocol/log-policy";
 import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
@@ -151,6 +152,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     experimentalGraphs: global.experimentalGraphs ?? false,
     debugLogging: global.debugLogging ?? false,
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
+    logDetail: resolveLogDetail(global),
     webClientEnabled: global.webClientEnabled ?? true,
     reviewInstruction: getSavedReviewInstruction(global.reviewInstruction),
     reviewLensPresets: resolveReviewLensPresets(global.reviewLensPresets),
@@ -237,6 +239,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.experimentalGraphs ?? false,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
+    resolveLogDetail(global),
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
     resolveReviewLensPresets(global.reviewLensPresets),
@@ -350,6 +353,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
   );
+  const [logDetail, setLogDetail] = useState(resolveLogDetail(global));
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [reviewInstruction, setReviewInstruction] = useState(
     getSavedReviewInstruction(global.reviewInstruction),
@@ -459,6 +463,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setExperimentalGraphs(global.experimentalGraphs ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
+    setLogDetail(resolveLogDetail(global));
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
     setReviewLensPresets(resolveReviewLensPresets(global.reviewLensPresets));
@@ -641,6 +646,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       experimentalGraphs,
       debugLogging,
       debugLogRetentionDays,
+      logDetail,
       webClientEnabled,
       reviewInstruction,
       reviewLensPresets,
@@ -679,6 +685,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       experimentalGraphs,
       debugLogging,
       debugLogRetentionDays,
+      logDetail,
       webClientEnabled,
       reviewInstruction,
       reviewLensPresets,
@@ -1088,6 +1095,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setDebugLogging,
     debugLogRetentionDays,
     setDebugLogRetentionDays,
+    logDetail,
+    setLogDetail,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,

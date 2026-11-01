@@ -49,11 +49,11 @@ for (const width of [390, 1680]) {
 
 test("related Debug controls and notes use section spacing", async ({ page }) => {
   await page.goto("/global-settings?section=debug");
-  const heading = page.getByRole("heading", { name: "Save Logs for Debugging" });
+  const heading = page.getByRole("heading", { name: "Save Logs to Disk" });
   const group = heading.locator("../..");
   await expect(group.getByLabel("Log retention days")).toBeVisible();
   await expect(group.getByText("Stored logs", { exact: true })).toBeVisible();
-  await expect(group.getByText(/requires an app restart/)).toBeVisible();
+  await expect(group.getByText(/apply straight away/)).toBeVisible();
   const gaps = await group.evaluate((node) =>
     Array.from(node.children)
       .slice(1)

@@ -52,6 +52,24 @@ describe("prepare-environment", () => {
     expect(w.commands.calls).toEqual([]);
   });
 
+  test("held setup identifies the approval decision needed", async () => {
+    const w = await world({ status: "running", setupScriptsComplete: false });
+    w.commands.onCommand = (command, args) =>
+      command === "run_environment_setup"
+        ? w.storage
+            .updateEnvironment(args.environmentId as string, {
+              setupPhase: "failed",
+              setupApprovalRequired: true,
+              lifecycleError: "Review and approve setup commands",
+            })
+            .then(() => null)
+        : undefined;
+    expect(await w.executor().start(w.context(w.activation("setup")))).toMatchObject({
+      state: "failed",
+      error: "Review and approve setup commands",
+    });
+  });
+
   test("a failed setup fails the node", async () => {
     const w = await world({ status: "running", setupScriptsComplete: false });
     w.commands.onCommand = (command, args) =>

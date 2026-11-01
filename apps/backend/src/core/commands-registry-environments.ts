@@ -80,6 +80,12 @@ import { ensureProjectHomeEnvironment, readCheckoutBranch } from "./project-home
 import { resolveProjectGitRoot } from "./project-git-service.js";
 import { validateWorktreeLocation } from "./worktree-locations.js";
 import { moveEnvironmentTask } from "./environment-move.js";
+import {
+  describeEnvironmentSetupApproval,
+  localSetupWorktree,
+  readSetupLocalCommands,
+  setupCommandsHash,
+} from "./setup-approval.js";
 
 /**
  * A validated environment tier, or `undefined` when it expresses no opinion.
@@ -798,6 +804,7 @@ export function registerEnvironmentCommands(
       setupScriptsComplete: true,
       setupPhase: "ready",
       setupOverride: true,
+      setupApprovalRequired: false,
       setupCompletedAt: new Date().toISOString(),
       lifecycleError: null,
     });
@@ -815,6 +822,43 @@ export function registerEnvironmentCommands(
       environment: toClientEnvironment(environment),
     });
     return toClientEnvironment(environment);
+  });
+  // Setup approval (`setup-approval.ts`). None of these is reachable by an
+  // agent: no Control MCP tool or public action names them, coordinators are
+  // denied them outright, and the node-link-only and command-node-only ones
+  // are classified in `nodes/node-routing.ts`.
+  register("get_environment_setup_approval", async ({ environmentId }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    return describeEnvironmentSetupApproval(environment, context);
+  });
+  register("approve_environment_setup", async ({ environmentId, hash, remember }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const approvedHash = asString(hash, "hash");
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    // The hash names the commands the user was shown; anything else is a
+    // different decision.
+    const commands = await readSetupLocalCommands(localSetupWorktree(environment));
+    if (setupCommandsHash(commands) !== approvedHash) {
+      throw new Error("The setup commands changed since they were shown. Review them again.");
+    }
+    if (remember === true) {
+      context.storage.setupApprovals.approveSetupCommands(environment.projectId, approvedHash);
+    }
+    const result = await startEnvironmentSetup(environment, context, {
+      approvedSetupHash: approvedHash,
+    });
+    return toClientEnvironment(result.environment);
+  });
+  // Node link only: the command node's "approve on every machine" writes each
+  // node's own record through this.
+  register("approve_project_setup_commands", async ({ projectId, hash }, context) => {
+    const id = asString(projectId, "projectId");
+    if (!(await context.storage.getProject(id))) throw new Error(`Project not found: ${id}`);
+    context.storage.setupApprovals.approveSetupCommands(id, asString(hash, "hash"));
+    return { approved: true };
   });
   register("run_environment_setup", async ({ environmentId }, context) => {
     return toClientEnvironment(

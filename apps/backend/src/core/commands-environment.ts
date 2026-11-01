@@ -69,12 +69,7 @@ import { promises as fs } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { spawnPty } from "./pty.js";
-import {
-  DOCKER_LABEL_APP,
-  DOCKER_LABEL_APP_VALUE,
-  DOCKER_LABEL_OWNER,
-  ORKESTRATOR_PROJECT_CONFIG,
-} from "./constants.js";
+import { DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER } from "./constants.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { pathExists, runCommand } from "./shell.js";
@@ -94,6 +89,12 @@ import {
   parseDockerStatus,
 } from "./commands-container-exec.js";
 import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
+import {
+  evaluateEnvironmentSetupTrust,
+  holdEnvironmentSetupForApproval,
+  readSetupLocalCommands,
+  SETUP_APPROVAL_MESSAGE,
+} from "./setup-approval.js";
 import { readSeedManifest, seedFilesDir } from "./nodes/index.js";
 import {
   isProjectHomeEnvironment,
@@ -436,18 +437,17 @@ export async function syncStoredEnvironmentStatus(
 
 export { getWorktreeBaseDir };
 
-export async function readSetupLocalCommands(worktreePath: string): Promise<string[]> {
-  const configPath = path.join(worktreePath, ORKESTRATOR_PROJECT_CONFIG);
-  if (!(await pathExists(configPath))) return [];
+export { readSetupLocalCommands };
 
-  const parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as { setupLocal?: unknown };
-  if (typeof parsed.setupLocal === "string")
-    return parsed.setupLocal.trim() ? [parsed.setupLocal] : [];
-  if (Array.isArray(parsed.setupLocal))
-    return parsed.setupLocal.filter(
-      (item): item is string => typeof item === "string" && item.trim().length > 0,
-    );
-  return [];
+/** Whether anything, a dangling link included, is at `target`. */
+async function pathEntryExists(target: string): Promise<boolean> {
+  return fs.lstat(target).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    },
+  );
 }
 
 export async function readEnvironmentSetupCommands(environment: Environment): Promise<string[]> {
@@ -868,9 +868,18 @@ export async function failEnvironmentSetupBeforeAttempt(
   });
 }
 
+export interface EnvironmentSetupStartOptions {
+  /**
+   * The hash of the `setupLocal` commands the user just approved for this run
+   * (`approve_environment_setup`). Admits exactly those commands, once.
+   */
+  approvedSetupHash?: string;
+}
+
 export async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
+  options: EnvironmentSetupStartOptions = {},
 ): Promise<EnvironmentSetupStartResult> {
   assertEnvironmentNotDraining(context.runtime.environments, environment.id);
   if (environment.containerId) assertContainerNotDraining(environment.containerId);
@@ -912,6 +921,7 @@ export async function startEnvironmentSetupOnce(
     setupScriptsComplete: false,
     setupPhase: "running",
     setupOverride: false,
+    setupApprovalRequired: false,
     setupSessionId,
     setupStartedAt: new Date().toISOString(),
     setupCompletedAt: undefined,
@@ -921,7 +931,12 @@ export async function startEnvironmentSetupOnce(
     ? undefined
     : beginSetupPreparationSession(running, context);
   try {
-    return await startEnvironmentSetupAfterPreparation(running, context, preparationSessionId);
+    return await startEnvironmentSetupAfterPreparation(
+      running,
+      context,
+      preparationSessionId,
+      options,
+    );
   } catch (error) {
     // Both a preparation continuation and a retry with an existing baseline can
     // publish a logical setup session before the PTY is available. Any startup
@@ -942,6 +957,7 @@ export async function startEnvironmentSetupAfterPreparation(
   environment: Environment,
   context: CommandContext,
   preparationSessionId: string | undefined,
+  options: EnvironmentSetupStartOptions = {},
 ): Promise<EnvironmentSetupStartResult> {
   const current = await prepareEnvironmentForSetup(environment, context, (chunk) => {
     if (preparationSessionId && chunk) {
@@ -985,6 +1001,34 @@ export async function startEnvironmentSetupAfterPreparation(
     };
   }
 
+  // A local environment's commands come from its own branch and run on the
+  // host, so they run unasked only when this machine already trusts them.
+  if (current.environmentType === "local") {
+    const trust = await evaluateEnvironmentSetupTrust(
+      current,
+      commands,
+      context,
+      options.approvedSetupHash,
+    );
+    if (!trust.trusted) {
+      logSetupTerminal("setup held for approval", {
+        environmentId: current.id,
+        environmentName: current.name,
+      });
+      if (preparationSessionId) {
+        context.runtime.terminals.emitOutput(
+          preparationSessionId,
+          `\r\n[orkestrator] ${SETUP_APPROVAL_MESSAGE}\r\n`,
+          context.emit,
+        );
+      }
+      return {
+        setupStarted: false,
+        environment: await holdEnvironmentSetupForApproval(current, trust.hash, context),
+      };
+    }
+  }
+
   const { sessionId, completion } = await spawnSetupTerminal(current, commands, context, {
     continuesPreparationSession: preparationSessionId !== undefined,
   });
@@ -1014,9 +1058,10 @@ export async function startEnvironmentSetupAfterPreparation(
 export function startEnvironmentSetup(
   environment: Environment,
   context: CommandContext,
+  options: EnvironmentSetupStartOptions = {},
 ): Promise<EnvironmentSetupStartResult> {
   return context.runtime.environments.joinSetupStart(environment.id, () =>
-    startEnvironmentSetupOnce(environment, context),
+    startEnvironmentSetupOnce(environment, context, options),
   );
 }
 
@@ -2235,7 +2280,10 @@ export async function createLocalWorktree(
 
     for (const envFile of [".env", ".env.local"]) {
       const destination = path.join(worktreePath, envFile);
-      if (await pathExists(destination)) continue;
+      // `lstat`, not `pathExists`: a branch can commit `.env` as a link to a
+      // path that does not exist yet, and following it would write the
+      // user's real `.env` wherever the link points.
+      if (await pathEntryExists(destination)) continue;
       // The node's own copy wins; a staged seed copy only fills a gap.
       const own = path.join(projectPath, envFile);
       const seeded = seedRoot ? path.join(seedRoot, envFile) : null;

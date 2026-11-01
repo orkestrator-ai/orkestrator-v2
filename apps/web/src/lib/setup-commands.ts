@@ -32,6 +32,27 @@ export async function retrySetupRuntime(environmentId: string): Promise<Environm
   return updated;
 }
 
+/**
+ * Run a held setup's reviewed commands; `remember` approves them for the
+ * project on this machine too.
+ */
+export async function approveSetupRuntime(
+  environmentId: string,
+  hash: string,
+  remember: boolean,
+): Promise<Environment | undefined> {
+  const store = useEnvironmentStore.getState();
+  if (!store.getEnvironmentById(environmentId)) {
+    console.warn("[setup-commands] approveSetupRuntime: unknown environment", {
+      environmentId,
+    });
+    return undefined;
+  }
+  const updated = await backend.approveEnvironmentSetup(environmentId, hash, remember);
+  store.updateEnvironment(environmentId, updated);
+  return updated;
+}
+
 export function isSetupPending(params: { setupPhase?: Environment["setupPhase"] }): boolean {
   return (
     params.setupPhase === undefined ||

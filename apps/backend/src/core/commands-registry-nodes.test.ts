@@ -61,3 +61,18 @@ test("portal layout read rejects unexpected arguments", async () => {
   expect(getPortalLayout).not.toHaveBeenCalled();
   expect(await handlers.get("get_portal_layout")!({}, context)).toEqual(layout);
 });
+
+test("setup fan-out validates arguments before accessing the portal", async () => {
+  const { handlers, context } = setup();
+  for (const input of [
+    {},
+    { nodeId: 1, projectId: "p", hash: "a".repeat(64) },
+    { nodeId: "bk_a", projectId: false, hash: "a".repeat(64) },
+    { nodeId: "bk_a", projectId: "p", hash: null },
+    { nodeId: "bk_a", projectId: "p", hash: "a".repeat(64), extra: true },
+  ]) {
+    await expect(
+      handlers.get("approve_setup_commands_on_nodes")!(input, context),
+    ).rejects.toThrow();
+  }
+});

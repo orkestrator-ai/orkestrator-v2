@@ -660,6 +660,9 @@ remain and use the same paths.
   its git remote), they are copied from the command node's project root as
   part of environment setup, using the same per-project file selection.
 - If both have a selected file, **the leaf's copy wins**.
+- Setup commands a branch changes need approval on the machine that runs
+  them; the approval panel can record it on every machine with the project
+  ([setup-approval.md](setup-approval.md#several-machines)).
 - File contents are never written to logs, receipts or transcripts.
 
 ### Comparing and updating project files across leaves

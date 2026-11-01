@@ -163,6 +163,11 @@ describe("storage-backed command delegation", () => {
         return config;
       }),
       getRepositoryConfig: mock(async () => repositoryConfig),
+      // Setup commands count as approved here; `setup-approval.test.ts` covers the gate.
+      setupApprovals: {
+        isSetupCommandsApproved: mock(() => true),
+        approveSetupCommands: mock(() => undefined),
+      },
       updateRepositoryConfig: mock(async (id: string, value: RepositoryConfig) => {
         config = { ...config, repositories: { ...config.repositories, [id]: value } };
         return config;

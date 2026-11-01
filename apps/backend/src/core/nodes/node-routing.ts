@@ -30,6 +30,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "create_client_grant",
   "renew_client_grant",
   "revoke_client_grant",
+  // The command node's own fan-out of a user's setup approval: run where the
+  // user is, never on their behalf through a link, grant or relay.
+  "approve_setup_commands_on_nodes",
   // A subordinate's suspended registry is never reachable through it.
   "list_nodes",
   "add_node",
@@ -133,6 +136,8 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       "apply_env_keys",
       "fingerprint_project_files",
       "get_project_seed_files",
+      // Written only by the command node's "approve on every machine".
+      "approve_project_setup_commands",
       // A command node's coordinator acts through these: a delegation's
       // framing and presentation are its to give, not a workspace client's.
       "create_controller_environment",

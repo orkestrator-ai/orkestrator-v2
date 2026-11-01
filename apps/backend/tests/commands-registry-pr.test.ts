@@ -46,6 +46,43 @@ describe("Electron backend command registry", () => {
   // Seeding both with the same payload keeps these tests asserting the same thing
   // on every platform instead of silently depending on the developer's OS.
 
+  shimTest(
+    "PR readiness names a setup approval hold and can be retried after skipping",
+    async () => {
+      const environment = createEnvironment({
+        environmentType: "local",
+        status: "running",
+        setupPhase: "failed",
+        setupApprovalRequired: true,
+        lifecycleError: "Setup needs your approval",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const args = { environmentId: environment.id, agent: "codex", timeoutMs: 1000 };
+      expect(await commands.get("await_bridge_ready")!(args, context)).toMatchObject({
+        status: "failed",
+        error: { message: "Setup needs your approval", retryable: true },
+      });
+      await context.storage.updateEnvironment(environment.id, {
+        setupPhase: "ready",
+        setupApprovalRequired: false,
+        setupOverride: true,
+      });
+      const start = commands.get("start_local_codex_server_cmd")!;
+      commands.set("start_local_codex_server_cmd", async () => ({
+        port: 12345,
+        authToken: "test-only",
+      }));
+      try {
+        expect(await commands.get("await_bridge_ready")!(args, context)).toMatchObject({
+          status: "ready",
+        });
+      } finally {
+        commands.set("start_local_codex_server_cmd", start);
+      }
+    },
+  );
+
   shimTest("detects local PRs by listing all PRs for the environment branch", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-worktree-");
     const environment = createEnvironment({ worktreePath, branch: "feature/pr" });

@@ -622,6 +622,10 @@ export class ControlMcpServer {
         "answer_project_worker_question",
         "answer_controller_worker_question",
         "resolve_native_agent_interaction",
+        // Setup commands run on the host; only the user approves them.
+        "approve_environment_setup",
+        "approve_project_setup_commands",
+        "approve_setup_commands_on_nodes",
       ]);
       if (denied.has(command)) throw new Error("Coordinator capability denied");
       // A command routed to a connected node is held to the same list, so a

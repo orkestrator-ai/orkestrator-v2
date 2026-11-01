@@ -474,6 +474,9 @@ async function finishLogin(context: CommandContext, entry: AgentAccountLogin): P
         void seedHostModelCatalogIfMissing(context, platform, refreshHostModelCatalog).catch(
           () => undefined,
         );
+        // Whichever client signed in, prompts refused for want of this login
+        // go out now. Tracked and bounded by the service; never fails a sign-in.
+        context.nativeAgents?.signInResends.resendAll();
       }
       announceAccountsChanged(context, platform);
       return;

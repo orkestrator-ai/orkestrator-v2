@@ -188,6 +188,12 @@ import {
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { beginChangeTrackingTurn } from "./native-agent-change-tracking.js";
 import {
+  NativeAgentHandoffs,
+  pendingHandoffCommandRefusal,
+  promptWithPendingAgentHandoff,
+} from "./native-agent-handoffs.js";
+import { NativeAgentSignInResends } from "./native-agent-sign-in-resend.js";
+import {
   beginArtifactDispatchTurn,
   settleArtifactDispatchTurn,
 } from "./workflow-artifact-turns.js";
@@ -344,6 +350,10 @@ export class NativeAgentService {
   readonly goals: NativeAgentGoalService;
   /** Stop, resume, fork, session actions, sign-in, controls and interaction answers. */
   private readonly sessionOperations: NativeAgentSessionOperations;
+  /** "Continue in…": the source transcript read and delivery at first dispatch. */
+  readonly handoffs: NativeAgentHandoffs;
+  /** Prompts Claude refused for want of a login, sent again after a sign-in. */
+  readonly signInResends: NativeAgentSignInResends;
   sessionActivitySnapshot(
     environmentId: string,
     agent: BuildPipelineAgent,
@@ -820,6 +830,18 @@ export class NativeAgentService {
       getProjection: (input) => this.getProjection(input),
       performProjectionSteer: (input, resolved, action) =>
         this.performProjectionSteer(input, resolved, action),
+    });
+    this.handoffs = new NativeAgentHandoffs({
+      storage,
+      provider: (input) => this.provider(input),
+    });
+    this.signInResends = new NativeAgentSignInResends({
+      storage,
+      now: () => this.now(),
+      provider: (input) => this.provider(input),
+      observeProvider: (input) => this.observeProvider(input),
+      dispatch: (input) => this.dispatchPromptInternal(input, undefined, true),
+      trackScan: (task) => this.trackScan(task),
     });
     /*
      * Durable session mutations wake the affected provider group. Only a
@@ -2851,6 +2873,7 @@ export class NativeAgentService {
       }
     }
     this.settleArtifactTurn(session, requestId);
+    this.signInResends.noteTurnEnded(session);
     try {
       await this.storage.recordNativeAgentTurnOutcome(session.key, session.providerSessionId, {
         requestId,
@@ -3315,6 +3338,10 @@ export class NativeAgentService {
        */
       const commandPlan = await this.planDispatchCommand(input, session, provider);
       if (commandPlan.kind === "rejected") throw new PromptRejectedError(commandPlan.message);
+      // A "Continue in…" handoff travels with whatever reaches this tab first.
+      const pendingHandoff = recovery ? undefined : await this.handoffs.pending(session, provider);
+      const handoffRefusal = pendingHandoff && pendingHandoffCommandRefusal(commandPlan);
+      if (handoffRefusal) throw new PromptRejectedError(handoffRefusal);
       if (commandPlan.kind === "goal") {
         try {
           await this.goals.command(session, commandPlan.arguments, {
@@ -3481,54 +3508,57 @@ export class NativeAgentService {
             const artifactGrant = this.beginArtifactTurn(durable, input.requestId);
             const groupKey = nativeAgentObservationGroupKey(durable.environmentId, durable.agent);
             const releaseDispatchFence = this.observations.beginDispatch(durable.key, groupKey);
+            // The journal is re-read under this lease, so a delivery another
+            // request settled while this one waited is not sent again.
+            const outgoing = promptWithPendingAgentHandoff(
+              insertUserCommandContext(preparation.prompt ?? input.prompt, commandContextBlock),
+              pendingHandoff,
+              durable,
+            );
             try {
-              await provider.send(
-                durable.providerSessionId,
-                insertUserCommandContext(preparation.prompt ?? input.prompt, commandContextBlock),
-                {
-                  requestId: input.requestId,
-                  // Only a person typing into the composer can mean "run this
-                  // command"; workflow-authored prompts are literal text. The plan
-                  // above already applied that default and resolved any command.
-                  allowProviderCommands: commandPlan.allowProviderCommands,
-                  ...(commandPlan.command ? { command: commandPlan.command } : {}),
-                  images: input.images,
-                  attachments: input.attachments,
-                  schema: input.schema,
-                  // Resolve inheritance under the session lease: Claude's
-                  // permission payload treats an omitted mode as Build.
-                  mode: input.mode ?? durable.controls?.mode,
-                  fastMode: input.fastMode,
-                  subAgent: input.subAgent,
-                  executionAgent:
-                    preparation.executionAgent ??
-                    input.executionAgent ??
-                    (input.mode === undefined
-                      ? (durable.controls?.executionProfileId ?? undefined)
-                      : undefined),
-                  includeLocalSettings: input.includeLocalSettings,
-                  promptSuggestions: input.promptSuggestions,
-                  model: preparation.model ?? input.model,
-                  effort:
-                    durable.agent === "claude"
-                      ? claudeReasoningSelection(
-                          preparation.effort ??
-                            input.reasoningEffort ??
-                            durable.controls?.reasoningId,
-                          durable.controls?.parameterValues,
-                        )
-                      : (preparation.effort ?? input.reasoningEffort),
-                  parameterValues: durable.controls?.parameterValues,
-                  persistDefaults: durable.controls?.persistDefaults,
-                  approvalMode: resolveNativeAgentApprovalMode(
-                    durable.agent,
-                    durable.policy,
-                    durable.controls?.approvalMode,
-                  ),
-                  agentMcp,
-                  ...(artifactGrant ? { artifactGrant } : {}),
-                },
-              );
+              await provider.send(durable.providerSessionId, outgoing.prompt, {
+                requestId: input.requestId,
+                // Only a person typing into the composer can mean "run this
+                // command"; workflow-authored prompts are literal text. The plan
+                // above already applied that default and resolved any command.
+                allowProviderCommands: commandPlan.allowProviderCommands,
+                ...(commandPlan.command ? { command: commandPlan.command } : {}),
+                images: input.images,
+                attachments: input.attachments,
+                schema: input.schema,
+                // Resolve inheritance under the session lease: Claude's
+                // permission payload treats an omitted mode as Build.
+                mode: input.mode ?? durable.controls?.mode,
+                fastMode: input.fastMode,
+                subAgent: input.subAgent,
+                executionAgent:
+                  preparation.executionAgent ??
+                  input.executionAgent ??
+                  (input.mode === undefined
+                    ? (durable.controls?.executionProfileId ?? undefined)
+                    : undefined),
+                includeLocalSettings: input.includeLocalSettings,
+                promptSuggestions: input.promptSuggestions,
+                model: preparation.model ?? input.model,
+                effort:
+                  durable.agent === "claude"
+                    ? claudeReasoningSelection(
+                        preparation.effort ??
+                          input.reasoningEffort ??
+                          durable.controls?.reasoningId,
+                        durable.controls?.parameterValues,
+                      )
+                    : (preparation.effort ?? input.reasoningEffort),
+                parameterValues: durable.controls?.parameterValues,
+                persistDefaults: durable.controls?.persistDefaults,
+                approvalMode: resolveNativeAgentApprovalMode(
+                  durable.agent,
+                  durable.policy,
+                  durable.controls?.approvalMode,
+                ),
+                agentMcp,
+                ...(artifactGrant ? { artifactGrant } : {}),
+              });
               // Provider acceptance is the authoritative working edge. Record it
               // before the durable dispatch bookkeeping completes so a newer
               // idle activity snapshot cannot be overwritten by a late return
@@ -3544,6 +3574,12 @@ export class NativeAgentService {
                 providerSessionId: durable.providerSessionId,
               });
               settleChangeTurn("accepted");
+              this.signInResends.remember(durable, input, outgoing.prompt, {
+                literalPrompt: commandPlan.command === undefined && !mailInject && !recovery,
+              });
+              return outgoing.deliveredId
+                ? { dispatched: true as const, deliveredAgentHandoffId: outgoing.deliveredId }
+                : undefined;
             } catch (error) {
               settleChangeTurn(
                 error instanceof AmbiguousPromptDispatchError ? "uncertain" : "rejected",
@@ -3566,7 +3602,13 @@ export class NativeAgentService {
             }
           },
           persistAmbiguousDispatch && (session.origin === "interactive-native" || mailInject)
-            ? this.persistedPendingDispatch({ ...input, command: commandPlan.persistedIntent })
+            ? {
+                ...this.persistedPendingDispatch({
+                  ...input,
+                  command: commandPlan.persistedIntent,
+                }),
+                ...(pendingHandoff ? { agentHandoffId: pendingHandoff.id } : {}),
+              }
             : undefined,
           async (durable) => {
             preparation = prepare ? await prepare(durable, provider) : { dispatch: true };
@@ -3624,6 +3666,9 @@ export class NativeAgentService {
         );
         if (result.dispatched && userCommands?.ids.length) {
           this.options.userCommandContext?.delivered(userCommands.ids, input.requestId);
+        }
+        if (result.dispatched && pendingHandoff) {
+          await this.handoffs.markConsumed(result.session, pendingHandoff.id);
         }
         if (
           result.dispatched &&

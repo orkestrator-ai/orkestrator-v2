@@ -20,6 +20,8 @@ collaborators that own it privately, and the service wires them together.
 | `NativeAgentLaunchActivityReconciler` | `native-agent-launch-activity-reconciler.ts` | `observedSessionActivity` (the exact turn-edge state machine), activity sweep scheduling and per-group back-off, pending PR-monitor notifications, startup-launch tasks and retry, the rollback interval timer. |
 | `NativeAgentPromptQueueDispatcher` | `native-agent-prompt-queue-dispatcher.ts` | The per-session work fence, mutation-intent counts, unpersisted Stop fences, queue drain tasks with their retry and attempt counts, the keyed queue scheduler, in-flight parked-dispatch settles. |
 | `NativeAgentGoalService` | `native-agent-goal-service.ts` | An index of sessions with a running goal, per-session advance tasks, running checks. All durable goal state is on the session record; see [goals.md](goals.md). |
+| `NativeAgentHandoffs` | `native-agent-handoffs.ts` | No state. "Continue in…": the full source-transcript read `create_agent_handoff` builds from, and the pending handoff a dispatch carries. |
+| `NativeAgentSignInResends` | `native-agent-sign-in-resend.ts` | A bounded in-memory copy of each session's last accepted plain Claude prompt. The durable hold is on the session record; see [agent-accounts.md](agent-accounts.md). |
 | `NativeAgentSessionOperations` | `native-agent-session-operations.ts` | No state. The session controls that are not a dispatch: Stop and its abort ladder (taking the dispatcher's mutation intent and turn-interrupt fences), background-task stop, suggested prompts, the resume list, resume and closing the session it replaced, fork, session and MCP actions, sign-in, composer controls and interaction answers. |
 
 `native-agent-queue-message.ts` holds the pure `queue*` readers for one
@@ -37,6 +39,35 @@ initialization promise, the scan-task set every collaborator's background work
 is tracked in (kept on the service, not the launch reconciler, because the
 projection, interaction monitor, queue drains and launch scan all feed it and
 shutdown drains it), and the turn-outcome retry bookkeeping.
+
+## "Continue in…" handoffs
+
+The frame, the budget and the record selection are one implementation in
+`@orkestrator/protocol/agent-handoff-frame`, used by the interactive transfer
+and the build pipeline's review handoff, and read back by the pipeline
+transcript. The snapshot and its renderer are `@orkestrator/protocol/agent-handoff`.
+
+- **Created by the backend.** `create_agent_handoff` (`agent-handoffs.ts`) reads
+  the provider's whole transcript, refuses a session that is mid-turn or moves
+  during the read, composes a prior transfer, measures the changes, and stores
+  the immutable record. The renderer names the source and shows the result; it
+  used to build this from whatever window it had loaded.
+- **Delivered at dispatch, for every sender.** While the tab references a handoff
+  that nothing has consumed, `dispatchAdmittedPrompt` prepends its carrier inside
+  the at-most-once window. The delivery is recorded in the same session write that
+  journals the request (`deliveredAgentHandoffIds`). A parked ambiguous request
+  keeps the handoff id on its pending record: a retry sends the same carrier, a
+  confirmation records the delivery, and a discard leaves it pending for the next
+  message. The destination's transcript is checked too, because a request an older
+  renderer delivered is in no journal. If that read fails the dispatch is refused
+  before anything is journaled, since neither guess is safe.
+- **What cannot carry history is refused.** A resolved command (its text must reach
+  the executor as typed) and a goal being set or resumed are rejected while a
+  handoff is pending, whichever client sent them; the renderer's own check is an
+  early copy of the same rule. `/compact` and reading goal status are not affected.
+- **Pruned by the backend.** A layout write that drops a reference prunes, and the
+  orphaned-tab reconcile sweeps, both past `AGENT_HANDOFF_PRUNE_GRACE_MS`: a handoff
+  is stored before the layout that references it. A renderer only evicts its cache.
 
 ## Wiring
 

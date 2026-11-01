@@ -1,3 +1,4 @@
+import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
@@ -37,7 +38,12 @@ function message(
 
 function install(
   placement: AgentMailMessageSummary["placement"],
-  options: { placementReason?: string; presence?: MailboxPresence; policy?: "off" | "idle" } = {},
+  options: {
+    placementReason?: string;
+    presence?: MailboxPresence;
+    policy?: "off" | "idle";
+    noAgent?: boolean;
+  } = {},
 ): void {
   const pending = placement === "pending-inject" || placement === "inject-held" ? 1 : 0;
   const failed = placement === "inject_failed" ? 1 : 0;
@@ -79,7 +85,9 @@ function install(
       agentUnackedCount: 1,
       pendingInjectCount: pending,
       failedInjectCount: failed,
-      capabilities: { canPull: true, canSend: true, canInject: true },
+      capabilities: options.noAgent
+        ? { canPull: false, canSend: false, canInject: false }
+        : { canPull: true, canSend: true, canInject: true },
     },
     messages: [message(placement, options.placementReason)],
     total: 1,
@@ -109,6 +117,39 @@ describe("AgentMailBanner", () => {
     expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     expect(useAgentMailStore.getState().panel).toEqual({ focus: mailboxId });
+  });
+
+  test("says mail for a tab with no agent is waiting, and offers no delivery it cannot make", () => {
+    for (const policy of ["off", "idle"] as const) {
+      install("stored", { placementReason: "recipient-cannot-inject", policy, noAgent: true });
+      const view = render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+      view.unmount();
+    }
+  });
+
+  test("stored external mail makes no promise of automatic delivery", () => {
+    install("stored", { noAgent: true });
+    const snapshot = useAgentMailStore.getState().mailboxes.get(mailboxId)!;
+    snapshot.messages[0]!.trust = "external";
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
+    expect(screen.queryByText(/send a first message|and deliver/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+  });
+
+  test("explains that a delegation report waits for the worker turn", () => {
+    install("inject-held", { placementReason: COORDINATOR_DELEGATION_HOLD_REASON });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(
+      screen
+        .getByText("Worker report waiting · delivers when the worker turn ends")
+        .classList.contains("truncate"),
+    ).toBe(false);
+    expect(screen.queryByText(/agent is idle/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
   });
 
   test("rehydrates its authoritative summary even when cached state has a revision", async () => {

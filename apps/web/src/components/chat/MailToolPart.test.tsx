@@ -128,6 +128,19 @@ describe("mounted mail tool tiles", () => {
       "recipient\0agent",
     ]);
   });
+  test("sent mail waits for an agent when its recipient cannot pull", async () => {
+    const pending = mailbox();
+    pending.descriptor.agent = null;
+    pending.descriptor.capabilities = { canPull: false, canSend: false, canInject: false };
+    pending.messages[100] = { ...pending.messages[100]!, placement: "stored", ackedAt: undefined };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_agent_mail_mailboxes") return { revision: 1, mailboxes: [pending] };
+      throw new Error(`Unexpected command ${command}`);
+    });
+    render(<MailToolPart call={call} expansionKey="awaiting-agent" />);
+    expect(await screen.findByText("waiting for agent")).toBeTruthy();
+  });
+
   test("a missed delivery event converges from a newer summary while the tile is unmounted", async () => {
     const initial = mailbox();
     initial.messages[100] = {

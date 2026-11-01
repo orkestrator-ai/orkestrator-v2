@@ -589,6 +589,29 @@ describe("AgentMailPanel", () => {
     expect(useAgentMailStore.getState().panel).toEqual({ conversation: [AGENT_2, "user"] });
   });
 
+  test.each([true, false])(
+    "conversation status uses the addressee capability (can receive %s)",
+    async (canReceive) => {
+      getAgentMailConversation.mockImplementation(async () =>
+        conversation(
+          [agent1, { ...agent2, agent: canReceive ? "codex" : null, canReceive }],
+          [
+            mail("stored", {
+              from: fromAgent(agent1),
+              toEnvironmentId: "env-2",
+              toTabId: "tab-2",
+              trust: "same-project",
+            }),
+          ],
+        ),
+      );
+      render(<AgentMailPanel />);
+      act(() => useAgentMailStore.getState().openPanel({ conversation: [AGENT_1, AGENT_2] }));
+      expect(await screen.findByText(canReceive ? "in inbox" : "waiting for agent")).toBeTruthy();
+      expect(Boolean(screen.queryByRole("button", { name: "Deliver now" }))).toBe(canReceive);
+    },
+  );
+
   test("does not load remote images and only opens safe web links", async () => {
     getAgentMailConversation.mockImplementation(async () =>
       conversation(

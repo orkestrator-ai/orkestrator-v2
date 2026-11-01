@@ -238,6 +238,10 @@ export class CoordinatorService {
    * is none open. Closing the main tab is how a user changes its provider; the
    * next mail that needs a coordinator starts a fresh one rather than being
    * lost. Work the closed conversation still owed a report to moves with it.
+   *
+   * An open main that has never run gets the default agent the same way: with
+   * no agent it could neither read this mail nor be woken for it. With no
+   * qualified agent it stays unassigned and the mail waits for the user.
    */
   async ensureMainConversation(
     projectId: string,
@@ -246,7 +250,29 @@ export class CoordinatorService {
       const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace was not found");
       const open = coordinatorMainConversation(existing);
-      if (open) return { workspace: existing, main: open, created: false };
+      if (open?.agent) return { workspace: existing, main: open };
+      if (open) {
+        const agent = await this.preferredAgent(projectId).catch(() => undefined);
+        if (!agent) return { workspace: existing, main: open };
+        const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
+          projectId,
+          (current) => {
+            if (!current) throw new Error("Coordinator workspace disappeared");
+            return {
+              ...current,
+              conversations: current.conversations.map((item) =>
+                item.id === open.id && !item.agent ? { ...item, agent } : item,
+              ),
+              updatedAt: new Date().toISOString(),
+            };
+          },
+        );
+        if (!workspace) throw new Error("Coordinator workspace disappeared");
+        return {
+          workspace,
+          main: coordinatorMainConversation(workspace) ?? open,
+        };
+      }
       if (
         existing.conversations.filter((item) => !item.closedAt).length >=
         MAX_OPEN_COORDINATOR_CONVERSATIONS
@@ -273,7 +299,7 @@ export class CoordinatorService {
       );
       if (!workspace) throw new Error("Coordinator workspace disappeared");
       const main = coordinatorMainConversation(workspace) ?? created;
-      return { workspace, main, created: true };
+      return { workspace, main };
     });
     await this.adoptLiveWork(result.workspace, result.main);
     await this.reconcileMainMail(result.workspace, result.main);

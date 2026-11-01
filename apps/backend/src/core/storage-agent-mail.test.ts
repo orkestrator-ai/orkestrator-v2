@@ -640,7 +640,6 @@ describe("StorageService agent mail", () => {
               agent: "codex" as const,
             })),
           }));
-          await storage.synchronizeAgentMailboxes();
           await storage.coordinators.mutateCoordinatorWorkspace("p1", (workspace) => ({
             ...workspace!,
             conversations: workspace!.conversations.map((conversation) => ({
@@ -1455,12 +1454,12 @@ describe("StorageService agent mail", () => {
           agent: "codex" as const,
         })),
       }));
-      await storage.synchronizeAgentMailboxes();
-
       const changes: string[] = [];
       storage.addResourceChangeListener((change) => changes.push(change.resource));
+      await storage.synchronizeAgentMailboxes();
+      // Synchronization now recovers the backlog without a one-time assignment hook.
       expect(await storage.promoteStoredAgentMailForMailbox(environmentId, "coordinator-tab")).toBe(
-        1,
+        0,
       );
       // Acknowledged and discarded mail is not resurrected by assignment; this
       // is the same eligibility rule `retryAgentMailInject` applies.

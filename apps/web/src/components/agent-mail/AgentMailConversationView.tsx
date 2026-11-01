@@ -5,6 +5,8 @@ import {
   AGENT_MAIL_DEFAULT_CONVERSATION_LIMIT,
   AGENT_MAIL_MAX_LIST_LIMIT,
   AGENT_MAIL_USER_PARTICIPANT,
+  agentMailAwaitingAgent,
+  agentMailboxId,
   agentMailParticipantKey,
   agentMailConversationKey,
   isAgentMailBudgetHeld,
@@ -284,14 +286,20 @@ export function AgentMailConversationView({
           const senderKey = agentMailParticipantKey(message.from);
           const sender = conversation.participants.find(({ key }) => key === senderKey);
           const mine = Boolean(right && senderKey === right.key);
-          const status = agentMailStatus(message);
+          const addresseeKey = agentMailboxId(message.toEnvironmentId, message.toTabId);
+          const addressee = conversation.participants.find(({ key }) => key === addresseeKey);
+          const capabilities =
+            addressee && !addressee.closed ? { canPull: addressee.canReceive } : undefined;
+          const status = agentMailStatus(message, capabilities);
           const untrusted = message.trust === "external" || message.trust === "cross-project";
           const failed = !message.discardedAt && message.placement === "inject_failed";
           const held = !message.discardedAt && isAgentMailBudgetHeld(message);
+          // Mail awaiting an agent has nobody to deliver it to yet.
           const waiting =
             !message.discardedAt &&
             !message.ackedAt &&
             !untrusted &&
+            !(capabilities && agentMailAwaitingAgent(message, capabilities)) &&
             (message.placement === "pending-inject" || message.placement === "stored");
           return (
             <div

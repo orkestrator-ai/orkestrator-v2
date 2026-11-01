@@ -27,6 +27,7 @@ import {
   AGENT_PLATFORMS,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import { AgentMailBanner } from "@/components/agent-mail/AgentMailBanner";
 import { AgentNativeTab } from "@/components/native-agent";
 import { TAB_ICON_CLASS } from "@/components/pane-layout/TabShell";
 import { CoordinatorPaneTree, SortableCoordinatorTab } from "./CoordinatorPaneTree";
@@ -821,45 +822,54 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     // Scoped to the conversation that produced it, so another group cannot
     // replay one conversation's first prompt into its own.
     const launch = pendingLaunch?.conversationId === conversation.id ? pendingLaunch : null;
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     return (
-      <AgentNativeTab
-        key={conversation.id}
-        tabId={conversation.tabId}
-        data={{
-          platform: conversation.agent,
-          environmentId: coordinatorRuntimeId(snapshot.workspace.id, conversation.id),
-          isLocal: true,
-          sessionId: conversation.providerSessionId,
-        }}
-        isActive
-        ownsGlobalShortcuts={paneFocused}
-        executionPolicy="coordinator-read-only"
-        coordinatorProjectId={projectId}
-        coordinatorWorkspacePath={snapshot.projectPath}
-        availablePlatforms={availablePlatforms}
-        platformNotes={platformNotes}
-        unassignedPlaceholder="Ask the coordinator to inspect or plan…"
-        emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
-        onAssignPlatform={
-          conversation.agent
-            ? undefined
-            : (platform, prompt, options) =>
-                startConversation(conversation, platform, options, prompt)
-        }
-        beforeSend={
-          conversation.role === "side" ? undefined : () => confirmUpstreamMerge(conversation)
-        }
-        {...(launch
-          ? {
-              initialPrompt: launch.prompt,
-              initialAgentModel: launch.modelId,
-              initialReasoningEffort: launch.reasoningId,
-              initialConversationMode: launch.mode,
-              initialFastMode: launch.fastMode,
-              initialExecutionProfileId: launch.executionProfileId,
+      <div key={conversation.id} className="flex h-full min-h-0 flex-col">
+        <AgentMailBanner
+          environmentId={environmentId}
+          tabId={conversation.tabId}
+          agentAvailable={availablePlatforms.length > 0}
+        />
+        <div className="relative min-h-0 flex-1">
+          <AgentNativeTab
+            tabId={conversation.tabId}
+            data={{
+              platform: conversation.agent,
+              environmentId,
+              isLocal: true,
+              sessionId: conversation.providerSessionId,
+            }}
+            isActive
+            ownsGlobalShortcuts={paneFocused}
+            executionPolicy="coordinator-read-only"
+            coordinatorProjectId={projectId}
+            coordinatorWorkspacePath={snapshot.projectPath}
+            availablePlatforms={availablePlatforms}
+            platformNotes={platformNotes}
+            unassignedPlaceholder="Ask the coordinator to inspect or plan…"
+            emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
+            onAssignPlatform={
+              conversation.agent
+                ? undefined
+                : (platform, prompt, options) =>
+                    startConversation(conversation, platform, options, prompt)
             }
-          : {})}
-      />
+            beforeSend={
+              conversation.role === "side" ? undefined : () => confirmUpstreamMerge(conversation)
+            }
+            {...(launch
+              ? {
+                  initialPrompt: launch.prompt,
+                  initialAgentModel: launch.modelId,
+                  initialReasoningEffort: launch.reasoningId,
+                  initialConversationMode: launch.mode,
+                  initialFastMode: launch.fastMode,
+                  initialExecutionProfileId: launch.executionProfileId,
+                }
+              : {})}
+          />
+        </div>
+      </div>
     );
   };
   const branchSwitchDisabled = operation !== null || switchBlocked || coordinatorTurnActive;

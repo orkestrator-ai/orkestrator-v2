@@ -15,3 +15,18 @@ The owner was rerun while held-history reconciliation was being repaired in a
 separate hook path. No resume-dialog implementation, assertion, deadline or
 skip changed. Shared-host scheduling is a possible explanation; the result
 does not establish a root cause or make the original aggregate green.
+
+## Agent mail review validation — 2026-11-01
+
+- **Original command:** `mise run test:logged -- --name repair-root-tests -- mise run test`.
+  The default runner reserved workspace/root/bridges/protocol slots 5/1/2/1;
+  web used two isolated workers and backend used three. Component browser and
+  isolated-profile browser checks also ran on this host.
+- **Aggregate:** exit 1 after 907.5 s. Web reported 11,276 passed, ten skipped
+  and twelve failed across 11,298 tests in 746 files.
+- **Evidence:** `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8VTwNj/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** The archived-history remount case exceeded 5000 ms at 5532.82 ms.
+- **Complete unchanged owner:** `mise run test:logged -- --name repair-resume-owner -- bun test --cwd apps/web ./src/components/chat/NativeResumeSessionDialog.test.tsx --parallel=1 --only-failures` passed, exit 0, in 13.7 s. Passing raw output was removed by the bounded logger.
+- **Assessment:** recurrence of the existing intermittent failure; no owning
+  implementation, assertion, timeout or skip changed. Shared-host contention
+  remains a hypothesis, and the aggregate remains non-green.

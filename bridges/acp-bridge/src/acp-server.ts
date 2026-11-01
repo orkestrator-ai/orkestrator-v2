@@ -14,11 +14,11 @@ import {
   cursorToolReplayProcesses,
   hostname,
   port,
-  persistenceTail,
   provider,
   setShuttingDown,
   sessions,
 } from "./acp-context.js";
+import { flushStreamingPersist } from "./acp-persist-writer.js";
 import { restorePersistedState } from "./acp-persistence.js";
 import { cancelCursorToolMetadataReconcile } from "./acp-tools.js";
 
@@ -61,7 +61,7 @@ export function shutdown(): Promise<void> {
       ...[...sessions.values()].map((state) => state.child?.close()),
       ...[...cursorToolReplayProcesses].map((child) => child.close()),
     ]);
-    await persistenceTail.catch(() => undefined);
+    await flushStreamingPersist();
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
   })();
   return shutdownPromise;

@@ -245,6 +245,15 @@ export function scheduleStreamingPersist(): void {
   streamingPersistTimer.unref();
 }
 
+/** Persist the final snapshot after producers have stopped, including delayed output. */
+export function flushStreamingPersist(): Promise<void> {
+  if (streamingPersistTimer) {
+    clearTimeout(streamingPersistTimer);
+    streamingPersistTimer = null;
+  }
+  return persistState();
+}
+
 export function schedulePersist(): void {
   if (!stateFile || persistenceScheduled) return;
   setPersistenceScheduled(true);

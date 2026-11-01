@@ -34,6 +34,31 @@ beforeEach(() => {
 });
 
 describe("environmentStore", () => {
+  test("repeated status and PR updates retain the environment array and unchanged rows", () => {
+    const store = useEnvironmentStore.getState();
+    store.setEnvironments([environment("one"), environment("two")]);
+    const initial = useEnvironmentStore.getState().environments;
+    for (let i = 0; i < 3; i++) {
+      store.updateEnvironmentStatus("one", "stopped");
+      store.setEnvironmentPR("one", null, null);
+      expect(useEnvironmentStore.getState().environments).toBe(initial);
+    }
+    store.updateEnvironmentStatus("one", "running");
+    const changed = useEnvironmentStore.getState().environments;
+    expect(changed).not.toBe(initial);
+    expect(changed[1]).toBe(initial[1]);
+    store.updateEnvironmentStatus("one", "running");
+    expect(useEnvironmentStore.getState().environments).toBe(changed);
+    store.setEnvironmentPR("one", "https://example.test/pr/1", "open", false);
+    const withPR = useEnvironmentStore.getState().environments;
+    expect(withPR).not.toBe(changed);
+    expect(withPR[1]).toBe(initial[1]);
+    for (let i = 0; i < 3; i++) {
+      store.setEnvironmentPR("one", "https://example.test/pr/1", "open", false);
+      expect(useEnvironmentStore.getState().environments).toBe(withPR);
+    }
+  });
+
   test("deleting an environment releases retained image prompts for every tab", () => {
     useNativeComposeStore.setState({ sentPrompts: new Map() });
     for (const [envId, tabId] of [

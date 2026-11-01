@@ -1930,3 +1930,15 @@ describe("StorageService native agent session leases are per key", () => {
     });
   });
 });
+
+test.each([{ document: [] }, { document: "invalid document" }, { document: 42 }])(
+  "refuses an invalid whole-store native session document: %j",
+  async ({ document }) => {
+    await withStorage(async (storage) => {
+      seedStore(storage.getDataDir(), SESSIONS_STORE, document);
+      await expect(storage.getNativeAgentSession(input.key)).rejects.toThrow(
+        "Stored native agent sessions are invalid",
+      );
+    });
+  },
+);

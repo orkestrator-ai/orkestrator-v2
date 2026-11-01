@@ -154,7 +154,7 @@ ORKESTRATOR_E2E_BROWSER=webkit mise run test:logged -- --name browser-webkit -- 
   e2e/PaneBreakpoint.spec.ts e2e/EnvironmentSettingsDrawer.spec.ts
 ```
 
-The opt-in Chrome native datalist spec is skipped on alternate engines, as are
+The native datalist popup spec is skipped on alternate engines, as are
 CDP touch-input cases. Engine checks use `browserName`, independently of the
 viewport project name.
 
@@ -174,25 +174,29 @@ works through Chromium's focus blur passes in Chromium and fails there.
 
 ### Native browser controls
 
-`e2e/AgentLaunchDialog.spec.ts` covers the branch field's input/datalist in the
-default engine: the `list` link, the options, and that a chosen suggestion
-reaches the confirmed selection. It chooses one with `fill`, since a suggestion
-taken from the popup only sets the value and fires `input`.
+`e2e/AgentLaunchDialog.spec.ts` covers the branch field's input/datalist in
+every engine: the `list` link, the options, and that a chosen suggestion reaches
+the confirmed selection. It chooses one with `fill`, since a suggestion taken
+from the popup only sets the value and fires `input`.
 
-Chrome's own popup is checked by `e2e/AgentLaunchDialogNativePopup.spec.ts`,
-which is opt-in. Chrome only creates the popup while its window can be the
-active one, so it never appears in a locked or unattended macOS session, even
-for a bare `<input list>` (todo 1171). Run it on an unlocked desktop, with
-Google Chrome installed (or Xvfb on Linux):
+`e2e/AgentLaunchDialogNativePopup.spec.ts` drives Chromium's own datalist popup
+with the keyboard (todo 1171). The popup is browser UI, outside the page, so
+three settings matter:
 
-```bash
-mise exec -- bunx playwright install chrome
-ORKESTRATOR_E2E_NATIVE_POPUPS=1 mise exec -- bunx playwright test \
-  --config e2e/playwright.config.ts e2e/AgentLaunchDialogNativePopup.spec.ts
-```
+- `channel: "chromium"` runs the full bundled build in Chrome's new headless
+  mode. The default headless shell has no autofill popup. A headed window only
+  gets one while it has focus, which a locked or unattended macOS desktop never
+  gives it: Chrome drops the popup with `kNoFrameHasFocus`.
+- `--screen-info={0,0 2000x2000}`. New headless mode's default 800x600 screen
+  leaves no room below the field, so Chrome drops the popup with
+  `kInsufficientSpace`.
+- Keys go through CDP `Input.dispatchKeyEvent` as `rawKeyDown` with the native
+  key code on macOS. Playwright's `press` adds editing commands, and without a
+  native key code Chrome closes the popup (`kViewDestroyed`).
 
-The bundled Chromium build does not expose this native popup through automation
-on macOS, so that spec uses the Chrome channel.
+On failure the spec appends Chrome's `Autofill.PopupHidingReason.DataList`
+histogram, which names why the popup closed. `kAcceptSuggestion` is the
+expected one.
 
 The bundled Chromium itself needs no manual step. `test:browser`, the
 `test:agent:browser*` tasks, `test:agent:design:isolated` and

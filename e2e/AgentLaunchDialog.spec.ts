@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { confirmReleaseBranch, openBranchField } from "./agent-launch-branch";
 
-// Chrome's native datalist popup is checked in AgentLaunchDialogNativePopup.spec.ts,
-// which needs an unlocked desktop (todo 1171). Here, choosing a suggestion is
-// what the popup does to the page: it sets the input's value and fires `input`.
+// Chrome's native datalist popup is driven in AgentLaunchDialogNativePopup.spec.ts,
+// which only Chromium can run (todo 1171). Here, in any engine, choosing a
+// suggestion is what the popup does to the page: it sets the input's value and
+// fires `input`.
 test("offers branch suggestions and confirms a chosen one with the keyboard", async ({ page }) => {
   const { dialog, branch } = await openBranchField(page);
   await branch.fill("release/2.0");

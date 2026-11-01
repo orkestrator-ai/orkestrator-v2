@@ -5,11 +5,14 @@ the keyboard and confirms`, fails on `main` at desktop and mobile widths, alone
 too: the branch input keeps `rel` instead of `release/2.0`. Found by the
 2026-10-25 triage in [0030](0030-test-suite-and-ci-health.md) (task 4).
 
-**Cause (2026-11-01): spec bug.** Chrome never created its datalist popup on the
-hosts that run the suite, even for a bare `<input list>` with no React and no
-`autocomplete`, so the arrow and Enter keys went to the page. The app's markup
-and selection handling are correct. The default case now asserts the
-suggestion list and the choice path; the native popup case is opt-in.
+**Cause (2026-11-01): spec bug.** The spec ran a headed Chrome window on build
+hosts whose macOS session is locked. That window never has browser-side focus,
+so Chrome dropped every datalist popup it was asked to show
+(`kNoFrameHasFocus`), and the arrow and Enter keys went to the page. Chrome's
+own histograms show the app's suggestions reaching the popup controller. The
+spec now runs the full bundled Chromium in new headless mode with a larger
+screen, and the native keyboard selection passes on a locked host at both
+widths.
 
 ## Task analysis
 
@@ -18,18 +21,18 @@ Analysed 2026-10-31 against `main` at `931e55417`.
 ### Tasks
 
 1. **Make the native datalist selection pass or prove the spec wrong**. Status: done
-   (2026-11-01): spec bug; the default case asserts the list, the native popup
-   case is opt-in (`ORKESTRATOR_E2E_NATIVE_POPUPS=1`). Its run on an unlocked
-   desktop is still owed (Qualification).
+   (2026-11-01): spec bug. `e2e/AgentLaunchDialogNativePopup.spec.ts` drives
+   Chromium's own popup in new headless mode and runs by default; it passed
+   30 of 30 at both widths on a locked host (Qualification).
 
 ### 1. Native datalist selection
 
 **Problem.** `mise run test:browser` cannot go green: this owner fails
 deterministically, so every component-browser record lists it.
 
-**Context.** The spec drives Chrome's native `<datalist>` popup through the
-Chrome channel with `headless: false` (bundled Chromium does not expose it on
-macOS). Recorded only inside
+**Context.** Until 2026-11-01 the spec drove Chrome's native `<datalist>` popup
+through the Chrome channel with `headless: false`, because Playwright's default
+headless shell has no such popup. Recorded only inside
 [0493](../../tests/flaky-tests/aggregate-validation-runs/0493-component-browser-aggregate-timeout-cluster.md):
 the complete one-worker owner reproduced it ("two passed, two failed, input
 `rel` instead of `release/2.0`"); [0035](0035-mobile-layout-gaps.md) saw the
@@ -66,9 +69,37 @@ records in 0493, 0035, 0382, 0963 and 1012 came from runs on build hosts like
 this one. The case passed when it landed in #997, presumably on an unlocked
 desktop.
 
+**Second probe (2026-11-01, same host, still locked, Chromium build 1248 and
+Chrome 156).** A throwaway spec (not committed) read Chrome's own UMA
+histograms over CDP (`Browser.getHistograms`) after typing `rel`.
+`Autofill.DataList.Events` had samples in every run, so the renderer sent the
+datalist options and the browser's popup controller received them. The app's
+side works. `Autofill.PopupHidingReason.DataList` then named why each popup
+closed (values from Chromium's `SuggestionHidingReason`):
+
+| Browser setup | Hiding reason | Value after ArrowDown, Enter |
+| --- | --- | --- |
+| Chrome channel, headed (the old spec) | `kNoFrameHasFocus` (23) every time | `rel` |
+| Chrome channel, new headless, default screen | `kInsufficientSpace` (13) | `rel` |
+| New headless, `--screen-info={0,0 2000x2000}`, Playwright `keyboard.press` | `kViewDestroyed` (11) on ArrowDown | `rel` |
+| Same, CDP `rawKeyDown` without native key code | `kViewDestroyed` (11) on ArrowDown | `rel` |
+| Same, CDP `rawKeyDown` with native key code (the spec's keys) | `kAcceptSuggestion` (0) on Enter | `release/2.0` |
+| Bundled Chromium (`channel: "chromium"`), same settings | `kAcceptSuggestion` (0) on Enter | `release/2.0` |
+| Default headless shell (no channel) | none: no popup at all | `rel` |
+
+`kNoFrameHasFocus` comes from `AutofillPopupControllerImpl::Show`, which hides
+a root popup when the tab's `RenderWidgetHostView` lacks focus. Playwright only
+emulates focus inside the page (`document.hasFocus()` was `true`), so a headed
+window on a locked desktop fails there. New headless mode gives the window
+focus without a desktop, but its default 800x600 screen is smaller than the
+1024x900 viewport, so the popup had no room. The final two rows passed at both
+widths.
+
 **Decisions.**
 
-- **How to fix?**
+- **How to fix?** Chosen: the recommended option. The second probe found a way
+  Chrome accepts (new headless, larger screen, native key codes), so the spec
+  drives the popup rather than only asserting the list.
   - **Find whether current Chrome still opens the popup for a focused input
     under automation (one probe), then either drive it the way Chrome now
     accepts or assert the suggestion list instead (recommended).**
@@ -80,13 +111,21 @@ desktop.
 
 ## Current state
 
-Done in code (2026-11-01). `e2e/AgentLaunchDialog.spec.ts` runs headless in the
-default engine. It checks the input's `list`, the datalist's three options, that
-choosing `release/2.0` (as the popup does: set the value, fire `input`) keeps the
-field valid, and that keyboard confirmation returns it. It passes in WebKit too.
-The native popup keys moved to `e2e/AgentLaunchDialogNativePopup.spec.ts`, which
-is skipped unless `ORKESTRATOR_E2E_NATIVE_POPUPS=1`. Shared steps are in
-`e2e/agent-launch-branch.ts`. Not in CI (`test:browser` is not a CI job).
+Done in code (2026-11-01).
+
+- `e2e/AgentLaunchDialogNativePopup.spec.ts` runs by default in `test:browser`.
+  It uses `channel: "chromium"` (the full bundled build, which
+  `mise run playwright:install` already downloads) in new headless mode with
+  `--screen-info={0,0 2000x2000}`, types `rel`, sends ArrowDown and Enter as CDP
+  `rawKeyDown` events with native key codes, and checks the field holds
+  `release/2.0` and the dialog confirms it. It opens no visible window and
+  needs no Chrome install or unlocked desktop. On failure it appends Chrome's
+  datalist hiding reasons to the error.
+- `e2e/AgentLaunchDialog.spec.ts` still checks the list link, the options and
+  the choice path (`fill`) in every engine, including WebKit.
+- The opt-in switch `ORKESTRATOR_E2E_NATIVE_POPUPS` is gone.
+- Shared steps are in `e2e/agent-launch-branch.ts`. Not in CI (`test:browser`
+  is not a CI job).
 
 ## Outstanding work
 
@@ -96,34 +135,29 @@ None.
 
 ### Qualification
 
-- `mise run test:browser` with the owner green at both widths: the
-  AgentLaunchDialog owner is green (2026-11-01, focused runs below). The
-  complete suite is left to the build's validation stage.
-  On arktech-mini with `ORKESTRATOR_E2E_PORT=14871`:
-  - both specs, `--workers=1 --repeat-each=5`: 20 passed, 10 skipped (the
-    opt-in case).
-  - `AgentLaunchDialog.spec.ts`, default workers, `--repeat-each=10`: 40 passed.
-  - `ORKESTRATOR_E2E_BROWSER=webkit`, both specs: 4 passed, 2 skipped.
-  - `ORKESTRATOR_E2E_NATIVE_POPUPS=1` with the session locked: 2 failed with
-    `rel`, as the probe predicts.
-- Owed: run the opt-in case on an unlocked macOS desktop with Chrome able to
-  come to the front. `ORKESTRATOR_E2E_NATIVE_POPUPS=1 mise exec -- bunx
-  playwright test --config e2e/playwright.config.ts
-  e2e/AgentLaunchDialogNativePopup.spec.ts`. A pass answers the open question
-  below. A failure there would be a real Chrome or app regression.
+On arktech-mini, session locked (`CGSSessionScreenIsLocked = 1`), load average
+about 50 to 67, `ORKESTRATOR_E2E_PORT=14876`:
+
+- Both specs, default workers, `--repeat-each=10`: 60 passed, including the
+  native popup case 20 of 20 (10 mobile, 10 desktop).
+- Both specs, `--workers=1 --repeat-each=5`: 30 passed (native case 10 of 10).
+- `ORKESTRATOR_E2E_BROWSER=webkit`, both specs: 4 passed, 2 skipped (the native
+  case is Chromium only).
+- Negative checks, each reverted: without `--screen-info` the case fails with
+  `rel` and the message `Chrome hid its datalist popups with:
+  kInsufficientSpace x5`; on the default headless shell it fails with `none
+  recorded`.
+
+The complete `mise run test:browser` is left to the build's validation stage.
+
+Not checked: a headed run on an unlocked desktop. The spec no longer needs it.
+The popup code it runs is the same, but a headed window is not exercised.
 
 ### Review follow-up (2026-11-01)
 
-The review correctly distinguishes `fill()` coverage from native popup selection:
-the default test does not prove that Chrome's suggestion UI fills the field.
-Keep the unlocked-desktop qualification outstanding until the opt-in spec passes;
-passing default tests or skipping the native spec cannot close this gap.
-
-The follow-up host also reports `CGSSessionScreenIsLocked = 1` from
-`CGSessionCopyCurrentDictionary()` (queried through Swift/CoreGraphics). The
-session cannot supply the required unlocked-desktop qualification.
-
-The follow-up command was:
+The review correctly found that `fill()` does not prove Chrome's suggestion UI
+fills the field, and that the opt-in run on this locked host still failed
+(exit 1, `rel` at both widths, command below). That run was headed Chrome:
 
 ```bash
 ORKESTRATOR_E2E_NATIVE_POPUPS=1 ORKESTRATOR_E2E_PORT=14872 \
@@ -132,19 +166,14 @@ ORKESTRATOR_E2E_NATIVE_POPUPS=1 ORKESTRATOR_E2E_PORT=14872 \
   e2e/AgentLaunchDialogNativePopup.spec.ts --workers=1
 ```
 
-Result: exit 1, two failures (mobile and desktop), each at the expected
-`release/2.0` assertion with actual value `rel`. Separate failure logs are in
-`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.sWlELR`;
-Playwright traces are under `output/playwright/test-results/`. The original
-review package and its artifacts were left intact. This reproduces the symptom
-on a locked host; it does not prove that locking is the only cause or qualify
-the native path. The coverage finding remains unresolved pending the unlocked
-desktop run above. No test was weakened or skipped to make this run green.
+Resolved by the second probe: the native case now runs headless, by default,
+and passes on the locked host. The unlocked desktop it waited on is no longer
+needed.
 
 ## Constraints and rationale
 
-- No skip without the probe; the case exists because bundled Chromium cannot
-  see the popup.
+- No skip without the probe. The headless shell, Playwright's default for
+  headless Chromium, has no popup, so the spec must pick the `chromium` channel.
 - The popup is Chrome's own UI. What the dialog owns is the `list` link, the
   options and handling the `input` event that a chosen suggestion fires. The
   default case covers those on any host and engine.
@@ -156,29 +185,43 @@ desktop run above. No test was weakened or skipped to make this run green.
 - 2026-11-01: followed the recommended option. The probe found no keyboard path
   Chrome accepts while the session is locked: no popup exists to take keys. So
   the default case asserts the suggestion list instead.
-- 2026-11-01: kept the native keyboard case, opt-in through
-  `ORKESTRATOR_E2E_NATIVE_POPUPS=1`, rather than deleting it. It is the only
-  check of the popup a user sees. It is not a plain skip: the default suite still
-  covers the dialog's side.
+- 2026-11-01 (superseded below): kept the native keyboard case, opt-in through
+  `ORKESTRATOR_E2E_NATIVE_POPUPS=1`, rather than deleting it.
 - 2026-11-01: the default case dropped the Chrome channel and `headless: false`.
   `test:browser` no longer needs `playwright install chrome` or opens a visible
   window on a shared build host for this spec.
 - 2026-11-01: the default case sets the value with `fill`, which the testing
   guide used to rule out. The guide now says when that is enough.
 - Assumption: the build hosts that recorded this failure were in the same locked
-  state. Only arktech-mini was checked.
+  state. Only arktech-mini was checked. The fix does not depend on it: new
+  headless mode needs no desktop.
+- 2026-11-01, after review: the native case runs by default, headless, through
+  `channel: "chromium"` rather than the Chrome channel. It passes on a locked
+  host, needs no `playwright install chrome`, and opens no window on a shared
+  build host. The opt-in switch was removed.
+- 2026-11-01: `--screen-info={0,0 2000x2000}` rather than `viewport: null` with
+  `--window-size`. Both gave the popup room in the probe; the screen switch
+  keeps the projects' mobile and desktop viewports.
+- 2026-11-01: kept the 500 ms wait after typing. Neither the DOM, the page's
+  accessibility tree nor the input's computed style shows that the popup is
+  open, and Chrome's datalist histograms do not map cleanly to "open now". The
+  browser handles ArrowDown and Enter before the next CDP command, so no wait
+  sits between them.
+- 2026-11-01: on failure the spec reads `Autofill.PopupHidingReason.DataList`.
+  It is Chrome's internal metric and its values could change, so it is only
+  used in the failure message, never asserted.
 
 ## Open questions
 
-- Does the product's keyboard selection work for a user in current Chrome? The
-  opt-in run on an unlocked desktop answers it.
+- Does a headed Chrome on an unlocked desktop still select the same way? It is
+  no longer needed for the suite; it would only confirm the headed path.
 
 ## Needs verification
 
-- Whether it still fails on current `main` and Chrome: yes, on a locked session
-  (2026-11-01, probe above).
-- Whether the opt-in case passes on an unlocked desktop, which would also
-  confirm the lock as the only cause.
+- Whether it still fails on current `main` and Chrome: yes, headed on a locked
+  session (2026-11-01, probes above).
+- Whether the native case passes repeatedly: yes, 30 of 30 at both widths on a
+  locked, loaded host (Qualification).
 
 ## Related
 

@@ -1,32 +1,58 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Browser } from "@playwright/test";
 import { confirmReleaseBranch, openBranchField } from "./agent-launch-branch";
 
-// Opt-in: Chrome only creates its datalist popup while its window can be the
-// active one. In a locked or unattended macOS session it never appears, even for
-// a bare <input list>, so the keys below reach the page instead (todo 1171).
-const nativePopups = process.env.ORKESTRATOR_E2E_NATIVE_POPUPS === "1";
-
-// Use the full Chrome browser: bundled Chromium does not expose the native
-// datalist popup through automation on macOS. Install with `bunx playwright install chrome`.
-// Do not pass a Chrome channel to an alternate engine, even for skipped tests.
+// Chrome's own datalist popup, driven from the keyboard (todo 1171). The popup
+// is browser UI, so the default headless shell and a headed window both fail:
+// the shell has no autofill popup, and a headed window on a locked or unattended
+// macOS desktop never gets focus, so Chrome drops the popup (`kNoFrameHasFocus`).
+// The `chromium` channel runs the full bundled build in Chrome's new headless
+// mode, which gives the window focus without a desktop. Its default 800x600
+// screen leaves no room under the field (`kInsufficientSpace`), hence the larger
+// screen.
 test.use({
   channel:
-    nativePopups &&
-    (!process.env.ORKESTRATOR_E2E_BROWSER || process.env.ORKESTRATOR_E2E_BROWSER === "chromium")
-      ? "chrome"
+    !process.env.ORKESTRATOR_E2E_BROWSER || process.env.ORKESTRATOR_E2E_BROWSER === "chromium"
+      ? "chromium"
       : undefined,
-  headless: !nativePopups,
+  headless: true,
+  launchOptions: { args: ["--screen-info={0,0 2000x2000}"] },
 });
-test.skip(
-  !nativePopups,
-  "Needs an unlocked desktop where Chrome can be the active app; set ORKESTRATOR_E2E_NATIVE_POPUPS=1",
-);
 test.skip(
   ({ browserName }) => browserName !== "chromium",
   "Requires Chrome's native datalist and CDP",
 );
 
-test("selects a native branch suggestion with the keyboard and confirms", async ({ page }) => {
+// Chrome's `SuggestionHidingReason` values seen while diagnosing todo 1171.
+const hidingReasons: Record<number, string> = {
+  0: "kAcceptSuggestion",
+  7: "kRendererEvent",
+  11: "kViewDestroyed",
+  13: "kInsufficientSpace",
+  23: "kNoFrameHasFocus",
+};
+
+/** Why Chrome closed its datalist popups so far, for a failure message. */
+async function popupHidingReasons(browser: Browser) {
+  const cdp = await browser.newBrowserCDPSession();
+  try {
+    const { histogram } = await cdp.send("Browser.getHistogram", {
+      name: "Autofill.PopupHidingReason.DataList",
+    });
+    return histogram.buckets
+      .map(({ low, count }) => `${hidingReasons[low] ?? low} x${count}`)
+      .join(", ");
+  } catch {
+    // Chrome has no such histogram until it hides a datalist popup.
+    return "none recorded";
+  } finally {
+    await cdp.detach();
+  }
+}
+
+test("selects a native branch suggestion with the keyboard and confirms", async ({
+  browser,
+  page,
+}) => {
   const { dialog, branch } = await openBranchField(page);
   await branch.click();
   await branch.press("ControlOrMeta+A");
@@ -35,29 +61,30 @@ test("selects a native branch suggestion with the keyboard and confirms", async 
   // The browser-owned popup has no DOM locator to await.
   await page.waitForTimeout(500);
   const cdp = await page.context().newCDPSession(page);
-  // Playwright's macOS editing commands target the text editor. Native key codes
-  // without those commands let Chrome's own datalist popup handle navigation.
+  // Playwright's macOS editing commands target the text editor, and without the
+  // native key code Chrome closes the popup (`kViewDestroyed`). Native key codes
+  // without those commands let the popup handle navigation. The browser handles
+  // each key before the next command is sent.
   for (const [key, windowsVirtualKeyCode, nativeVirtualKeyCode] of [
     ["ArrowDown", 40, 125],
     ["Enter", 13, 36],
   ] as const) {
-    await cdp.send("Input.dispatchKeyEvent", {
-      type: "rawKeyDown",
-      key,
-      code: key,
-      windowsVirtualKeyCode,
-      ...(process.platform === "darwin" ? { nativeVirtualKeyCode } : {}),
-    });
-    await cdp.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key,
-      code: key,
-      windowsVirtualKeyCode,
-      ...(process.platform === "darwin" ? { nativeVirtualKeyCode } : {}),
-    });
-    await page.waitForTimeout(500);
+    for (const type of ["rawKeyDown", "keyUp"] as const) {
+      await cdp.send("Input.dispatchKeyEvent", {
+        type,
+        key,
+        code: key,
+        windowsVirtualKeyCode,
+        ...(process.platform === "darwin" ? { nativeVirtualKeyCode } : {}),
+      });
+    }
   }
   await cdp.detach();
-  await expect(branch).toHaveValue("release/2.0");
+  await expect(branch)
+    .toHaveValue("release/2.0")
+    .catch(async (error: Error) => {
+      error.message += `\nChrome hid its datalist popups with: ${await popupHidingReasons(browser)}`;
+      throw error;
+    });
   await confirmReleaseBranch(page, dialog);
 });

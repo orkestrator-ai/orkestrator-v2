@@ -54,6 +54,7 @@ type DesktopGatewaySnapshot = {
   connectionId: string;
   backendId: string | null;
   legacyOrigin: string | null;
+  backendOnThisDevice: boolean;
   workspaceTarget: WorkspaceTarget | null;
   portalIdentity: DesktopIdentity | null;
 };
@@ -101,6 +102,7 @@ function readGatewaySnapshot(ipcRenderer: {
       connectionId: value.connectionId,
       backendId: text(value.backendId),
       legacyOrigin: text(value.legacyOrigin),
+      backendOnThisDevice: value.backendOnThisDevice === true,
       workspaceTarget: parseWorkspaceTarget(value.workspaceTarget),
       portalIdentity: parseIdentity(value.portalIdentity),
     };
@@ -141,6 +143,7 @@ export function exposeActiveConnectionGateway(
     enabled: true,
     desktop: true,
     baseUrl,
+    ...(snapshot?.backendOnThisDevice ? { backendOnThisDevice: true } : {}),
     // A tunnelled route's local port can change after a reconnect; direct
     // URLs re-resolve it instead of keeping the port from page load.
     ...(snapshot

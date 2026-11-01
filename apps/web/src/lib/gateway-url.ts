@@ -84,6 +84,15 @@ export function isRemoteGatewayConnection(): boolean {
   }
 }
 
+/**
+ * Whether backend commands run on a different computer from this client, so
+ * anything they launch (an editor window) would open out of the user's sight.
+ * A gateway alone does not mean that: it can lead back to this computer.
+ */
+export function isBackendOnAnotherDevice(): boolean {
+  return isRemoteGatewayConnection() && window.orkestratorGateway?.backendOnThisDevice !== true;
+}
+
 /** Resolve a loopback page through the gateway's browser-preview namespace. */
 export function resolveGatewayBrowserPreviewUrl(baseUrl: string): string {
   if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;

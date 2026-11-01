@@ -38,6 +38,8 @@ export type GatewaySnapshot = {
   connectionId: string;
   backendId: string | null;
   legacyOrigin: string | null;
+  /** The window's machine is this computer's own backend, whatever route reaches it. */
+  backendOnThisDevice?: boolean;
   /** A workspace realm's node. */
   workspaceTarget?: {
     nodeId: string;

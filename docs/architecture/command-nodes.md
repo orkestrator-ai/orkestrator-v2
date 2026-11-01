@@ -506,6 +506,14 @@ command node.
   node's administrative commands (gateway token, web-client access, control
   MCP token, node registry); those stay in the command node's
   Settings → Nodes.
+- **A realm can be this computer.** When the command node is another machine
+  and this computer is one of its leaves, a realm of this computer's own
+  environments still reaches its backend through a gateway. The desktop's main
+  process compares the realm's node with its local backend's installation ID
+  and says so in `orkestratorGateway.backendOnThisDevice`. What launches a
+  window on the backend's host (Open in VS Code or Cursor) follows
+  `isBackendOnAnotherDevice()`; what depends on the route itself (loopback
+  proxying, preview handoffs) keeps following `isRemoteGatewayConnection()`.
 
 ## Agent chat and the coordinator
 

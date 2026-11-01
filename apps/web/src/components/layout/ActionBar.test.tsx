@@ -6788,7 +6788,7 @@ describe("ActionBar editor actions", () => {
         fireEvent.mouseEnter(containerEditorButton.parentElement!);
         await fireTooltipTimer(open);
         await waitFor(() => {
-          expect(screen.getByText("Unavailable for remote connections")).toBeTruthy();
+          expect(screen.getByText("Environment is on another computer")).toBeTruthy();
           expect(screen.queryByText("⌘O") === null).toBe(true);
         });
 
@@ -6825,9 +6825,48 @@ describe("ActionBar editor actions", () => {
 
       await waitFor(() => {
         expect(screen.getByText("⌘O")).toBeTruthy();
-        expect(screen.queryByText("Unavailable for remote connections") === null).toBe(true);
+        expect(screen.queryByText("Environment is on another computer") === null).toBe(true);
       });
     });
+  });
+
+  test("opens the editor when a command node's gateway leads back to this computer", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      backendOnThisDevice: true,
+      baseUrl: "https://laptop.tailnet.ts.net/",
+    };
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/tmp/this-computer-worktree",
+    };
+    try {
+      await withTooltipClocks(async ({ open }) => {
+        render(<ActionBar />);
+        const editorButton = screen.getByRole("button", { name: "Open in VS Code" });
+        expect((editorButton as HTMLButtonElement).disabled).toBe(false);
+
+        fireEvent.mouseEnter(editorButton.parentElement!);
+        await fireTooltipTimer(open);
+        await waitFor(() => {
+          expect(screen.getByText("⌘O")).toBeTruthy();
+          expect(screen.queryByText("Environment is on another computer") === null).toBe(true);
+        });
+
+        fireEvent.click(editorButton);
+        await waitFor(() =>
+          expect(openLocalInEditorMock).toHaveBeenCalledWith(
+            "/tmp/this-computer-worktree",
+            "vscode",
+          ),
+        );
+      });
+    } finally {
+      delete window.orkestratorGateway;
+    }
   });
 });
 

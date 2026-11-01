@@ -145,7 +145,8 @@ describe("review fan-out dispatch preparation", () => {
       status: "running",
       dispatchState: "prepared",
     });
-    expect(testHarness.saves).toHaveLength(0);
+    expect(testHarness.saves).toHaveLength(1);
+    expect(testHarness.reviewer.error).toContain("policy is temporarily unavailable");
 
     testHarness.rejectPolicy(false);
     await expect(runner.advanceReviewers([testHarness.reviewer])).resolves.toEqual({
@@ -154,7 +155,7 @@ describe("review fan-out dispatch preparation", () => {
     expect(testHarness.sends).toHaveLength(1);
     expect(testHarness.sends[0]?.options.reviewShellPolicy).toEqual(policy);
     expect(testHarness.reviewer.dispatchState).toBe("sent");
-    expect(testHarness.saves.slice(0, 2).map((saved) => saved.dispatchState)).toEqual([
+    expect(testHarness.saves.slice(1, 3).map((saved) => saved.dispatchState)).toEqual([
       "dispatching",
       "sent",
     ]);
@@ -246,6 +247,7 @@ describe("recovered reviewer dispatch", () => {
       for (let pass = 0; pass < 30 && h.reviewer.status === "running"; pass++)
         await runner.advanceReviewers([h.reviewer]);
       expect(h.reviewer.status).toBe("failed");
+      expect(h.reviewer.startFailed).toBe(true);
       expect(h.reviewer.error).toContain("acceptance could not be confirmed");
       expect(h.reviewer.resultReminderSent).toBeUndefined();
       expect(h.sends).toHaveLength(0);
@@ -263,6 +265,7 @@ describe("recovered reviewer dispatch", () => {
       requestId: "review-request",
       dispatchState: "dispatching",
     });
+    expect(h.reviewer.startFailed).toBe(true);
     expect(h.reviewer.error).toContain("lost in a provider restart");
     expect(h.abandoned).toEqual(["review-session"]);
     expect(h.sends).toHaveLength(0);
@@ -430,4 +433,15 @@ test("a sent continuation ignores a superseded restart until its own turn settle
     restartContinuationSent: true,
   });
   expect(h.sends).toHaveLength(0);
+});
+
+test("legacy sent records retain proof of startup when their session fails", async () => {
+  const h = harness("build");
+  h.reviewer.dispatchState = "sent";
+  delete h.reviewer.agentStarted;
+  h.provider.status = async () => "error";
+  await new ReviewFanoutRunner(h.host).advanceReviewers([h.reviewer]);
+  expect(h.reviewer.status).toBe("failed");
+  expect(h.reviewer).toMatchObject({ agentStarted: true });
+  expect(h.reviewer.startFailed).toBeUndefined();
 });

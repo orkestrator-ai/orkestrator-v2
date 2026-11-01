@@ -16,6 +16,7 @@
  * it. It is chosen in the "By account" view and never switches anything by
  * itself.
  */
+import { AutoSwitchBadge } from "@/components/settings/AutoSwitchBadge";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2, LogIn, RefreshCw, Star } from "lucide-react";
 import { toast } from "sonner";
@@ -141,6 +142,7 @@ function AccountCell({
   const accounts = snapshot.accounts.filter((account) => account.platform === platform);
   const active = accounts.find((account) => account.id === snapshot.active[platform]);
   const preferred = preferredStatus(machine, platform, preferredEmail);
+  const autoSwitch = snapshot.autoSwitch?.[platform];
   return (
     <div className={cn("flex items-center gap-1.5", !wide && "flex-wrap")}>
       <Select
@@ -169,6 +171,7 @@ function AccountCell({
           Signed out
         </span>
       ) : null}
+      {autoSwitch && autoSwitch.mode !== "off" ? <AutoSwitchBadge state={autoSwitch} /> : null}
       {preferred?.kind === "available" ? (
         <Button
           type="button"

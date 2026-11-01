@@ -22,7 +22,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { openInBrowser } from "@/lib/backend";
 import { artifactFilename, downloadBase64 } from "@/lib/chat/artifact-download";
-import { useDialogFocusReturn } from "@/lib/chat/rich-markdown/dialog-focus";
+import { useDialogFocusReturn } from "@/lib/dialog-focus";
 import type { GalleryItem } from "@/lib/chat/rich-markdown/media-gallery-registry";
 import { dataUrlBase64, dataUrlMime, fileExtension } from "@/lib/chat/rich-markdown/media-types";
 import { cn } from "@/lib/utils";

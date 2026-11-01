@@ -329,6 +329,10 @@ export function reduceNotification(
     case "account/rateLimits/updated": {
       if (!isRecord(params) || !isRecord(params.rateLimits)) return { events: [] };
       const snapshot = params.rateLimits;
+      // A metered feature's own bucket shares these two slots but is not the
+      // account's general limit, and must not be read as one.
+      const limitId = str(snapshot.limitId);
+      if (limitId && limitId !== "codex") return { events: [] };
       const windows: EngineRateLimitWindowUpdate[] = [];
       const limitName =
         typeof snapshot.limitName === "string" && snapshot.limitName.length > 0

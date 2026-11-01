@@ -101,6 +101,7 @@ beforeEach(async () => {
         return { outcome: "ok", result };
       },
     },
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
   mcp = new ControlMcpServer(
     world.root,

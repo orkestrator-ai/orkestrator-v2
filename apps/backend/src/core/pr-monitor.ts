@@ -1672,7 +1672,8 @@ function isSameCheckSummary(a: PrCheckSummary | null, b: PrCheckSummary | null):
       b !== null &&
       a.passed === b.passed &&
       a.total === b.total &&
-      a.pending === b.pending)
+      a.pending === b.pending &&
+      a.requiredFailed === b.requiredFailed)
   );
 }
 

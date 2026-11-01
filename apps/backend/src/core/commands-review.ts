@@ -1452,6 +1452,32 @@ export function isValidPrUrl(value: unknown): value is string {
 const PASSING_CHECK_OUTCOMES = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const PENDING_CHECK_STATES = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING"]);
 
+/** Where one GraphQL CheckRun or StatusContext entry stands. */
+export function prCheckOutcome(raw: unknown): "passed" | "pending" | "failed" {
+  const check = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const conclusion = typeof check.conclusion === "string" ? check.conclusion.toUpperCase() : null;
+  const status = typeof check.status === "string" ? check.status.toUpperCase() : null;
+  const state = typeof check.state === "string" ? check.state.toUpperCase() : null;
+
+  // A live CheckRun can temporarily retain its previous conclusion while a
+  // new run is queued. Its current status is authoritative over that stale
+  // conclusion, otherwise a running check would be shown as passed.
+  if (status !== null && status !== "COMPLETED") return "pending";
+  if (
+    (conclusion && PASSING_CHECK_OUTCOMES.has(conclusion)) ||
+    (state && PASSING_CHECK_OUTCOMES.has(state))
+  ) {
+    return "passed";
+  }
+  if (
+    (state !== null && PENDING_CHECK_STATES.has(state)) ||
+    (status === null && state === null && conclusion === null)
+  ) {
+    return "pending";
+  }
+  return "failed";
+}
+
 /** Reduces GraphQL CheckRun and StatusContext entries into one stable UI summary. */
 export function parsePrCheckSummary(value: unknown): PrCheckSummary {
   if (!Array.isArray(value)) return { passed: 0, total: 0, pending: 0 };
@@ -1459,27 +1485,9 @@ export function parsePrCheckSummary(value: unknown): PrCheckSummary {
   let passed = 0;
   let pending = 0;
   for (const raw of value) {
-    const check = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
-    const conclusion = typeof check.conclusion === "string" ? check.conclusion.toUpperCase() : null;
-    const status = typeof check.status === "string" ? check.status.toUpperCase() : null;
-    const state = typeof check.state === "string" ? check.state.toUpperCase() : null;
-
-    // A live CheckRun can temporarily retain its previous conclusion while a
-    // new run is queued. Its current status is authoritative over that stale
-    // conclusion, otherwise a running check would be shown as passed.
-    if (status !== null && status !== "COMPLETED") {
-      pending += 1;
-    } else if (
-      (conclusion && PASSING_CHECK_OUTCOMES.has(conclusion)) ||
-      (state && PASSING_CHECK_OUTCOMES.has(state))
-    ) {
-      passed += 1;
-    } else if (
-      (state !== null && PENDING_CHECK_STATES.has(state)) ||
-      (status === null && state === null && conclusion === null)
-    ) {
-      pending += 1;
-    }
+    const outcome = prCheckOutcome(raw);
+    if (outcome === "passed") passed += 1;
+    else if (outcome === "pending") pending += 1;
   }
 
   return { passed, total: value.length, pending };

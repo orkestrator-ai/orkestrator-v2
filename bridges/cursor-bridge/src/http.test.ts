@@ -173,6 +173,46 @@ describe("authentication", () => {
     }
   });
 
+  test("a hung account lookup neither holds status nor signs the session out", async () => {
+    // To-do 1173: `Cursor.me` only builds the account label, and it used to
+    // be awaited with no bound, so a hung network hung this route.
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = "hung-lookup-key";
+    let lookups = 0;
+    restoreCredentials();
+    restoreCredentials = useCursorCredentialRuntimeForTests({
+      store: {
+        load: async () => undefined,
+        save: async () => undefined,
+        clear: async () => undefined,
+      } as never,
+      auth: Cursor.auth,
+      me: (() => {
+        lookups += 1;
+        return new Promise(() => undefined);
+      }) as typeof Cursor.me,
+      meTimeoutMs: 20,
+    });
+    try {
+      const state = await createSession();
+      const status = (await (
+        await call(`/session/${state.id}/status`, { signal: AbortSignal.timeout(2_000) })
+      ).json()) as Record<string, unknown>;
+      expect(status.readiness).toEqual({ state: "ready" });
+
+      const auth = await call("/global/auth", { signal: AbortSignal.timeout(2_000) });
+      expect(await auth.json()).toMatchObject({
+        state: "signed-in",
+        account: { label: "Cursor account" },
+      });
+      // Both reads waited on the one outstanding request.
+      expect(lookups).toBe(1);
+    } finally {
+      if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousApiKey;
+    }
+  });
+
   test("an attached agent is ready without reading credentials", async () => {
     const state = await createSession();
     attachFake(state);

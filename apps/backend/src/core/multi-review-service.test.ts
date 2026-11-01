@@ -4822,6 +4822,76 @@ test("MultiReviewService continues a consolidation a provider restart cut short"
   );
 });
 
+test("a step the weekly limit stopped continues on the new account, then the budget ends it", async () => {
+  const provider = new Provider(false);
+  const environmentId = "env-consolidation-usage-limit";
+  const scope = { environmentId, projectId: "project-1" };
+  const limit = "You've hit your usage limit.";
+  const verdicts = ["wait", "resend", "stop"];
+  const calls: Array<{ environmentId: string; resends: number; error?: string }> = [];
+  Object.assign(provider, {
+    usageLimitStop: async (input: { environmentId: string; resends: number; error?: string }) => {
+      calls.push(input);
+      return verdicts.shift() ?? "stop";
+    },
+  });
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const codex = { agent: "codex" as const, model: "default" };
+      const started = await start([codex], codex);
+      const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+        Boolean(workflow.reviewers[0]?.requestId),
+      );
+      await workflowResults!.submit(scope, reviewing.reviewers[0]!.requestId!, cleanReport);
+      const consolidating = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.activeRequest?.kind === "consolidate" && workflow.activeRequest.state === "sent",
+      );
+      const firstRequestId = consolidating.activeRequest!.requestId;
+      const sessionId = (consolidating.reviewSession ?? consolidating.fixSession)!
+        .providerSessionId;
+
+      provider.sessionFailures.set(sessionId, limit);
+      // Waiting on the verdict neither fails the step nor sends anything.
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.activeRequest?.requestId).toBe(firstRequestId);
+
+      await service.advanceNow(started.id);
+      const queued = (await snapshot(started.id))!;
+      expect(queued.phase).toBe("consolidating");
+      expect(queued.activeRequest).toMatchObject({
+        kind: "consolidate",
+        state: "prepared",
+        usageLimitResends: 1,
+      });
+      expect(queued.activeRequest?.restartContinuationSent).toBeUndefined();
+      expect(queued.activeRequest?.requestId).not.toBe(firstRequestId);
+      expect(calls[0]).toMatchObject({ environmentId, resends: 0 });
+      expect(calls[0]?.error).toContain(limit);
+
+      provider.sessionFailures.delete(sessionId);
+      await service.advanceNow(started.id);
+      const continuationRequestId = queued.activeRequest!.requestId;
+      const continuation = provider.sends.get(continuationRequestId)!;
+      expect(continuation.prompt).toContain("weekly usage limit ran out");
+      expect(continuation.prompt).toContain("submit_consolidated_review");
+      expect(continuation.prompt).not.toContain("<multi-review-reports-json>");
+
+      // The new account refuses too and the verdict is to stop: the step fails.
+      provider.sessionFailures.set(sessionId, limit);
+      await service.advanceNow(started.id);
+      expect(calls.at(-1)?.resends).toBe(1);
+      expect((await snapshot(started.id))?.phase).toBe("failed");
+    },
+    { toolMode: true },
+  );
+});
+
 test("a second restart during a step's continuation fails the step", async () => {
   const provider = new Provider(false);
   const environmentId = "env-consolidation-second-restart";
@@ -7263,7 +7333,11 @@ test("MultiReviewService keeps reviewing and consolidates when another reviewer 
       model: "sonnet",
       status: "failed",
       error: expect.stringContaining("bridge authentication is unavailable"),
+      // It never had a session, so the panel reports it as unable to start.
+      startFailed: true,
     });
+    expect(current?.reviewers[1]?.providerSessionId).toBeUndefined();
+    expect(current?.reviewers[0]?.startFailed).toBeUndefined();
     expect(await storage.getEnvironment("env-attribution")).toMatchObject({
       agentActivityState: "working",
       agentActivitySources: {
@@ -7283,6 +7357,7 @@ test("MultiReviewService keeps reviewing and consolidates when another reviewer 
     const ready = await snapshot(started.id);
     expect(ready?.phase).toBe("ready");
     expect(ready?.reviewers.map((reviewer) => reviewer.status)).toEqual(["completed", "failed"]);
+    expect(ready?.reviewers[1]?.startFailed).toBe(true);
     expect(ready?.consolidatedReport).toBeDefined();
     const consolidation = [...provider.sends.values()].find((sent) =>
       sent.prompt.includes("<multi-review-reports-json>"),
@@ -7313,6 +7388,8 @@ test("MultiReviewService aborts a reviewer session that fails mid-turn while the
     });
     // The session id survives so the read-only transcript stays reachable.
     expect(current?.reviewers[0]?.providerSessionId).toBe("session-1");
+    // It started, so its failure is the review's, not the agent's start.
+    expect(current?.reviewers[0]?.startFailed).toBeUndefined();
     expect(current?.reviewers[1]).toMatchObject({ model: "sonnet", status: "running" });
 
     // The failed turn was aborted before the pass moved on; no healthy session
@@ -12753,3 +12830,73 @@ for (const kind of ["prepare", "consolidate", "fix"] as const) {
     );
   }
 }
+
+test.each(["pending", "running"] as const)(
+  "workflow failure clears stale startup diagnostics on %s reviewers",
+  async (status) => {
+    const provider = new Provider();
+    provider.statusValue = "running";
+    await withService(
+      `env-start-failure-cleanup-${status}`,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        const stored = (await storage.getMultiReviewWorkflow(started.id))!;
+        const workflow = (await snapshot(started.id))!;
+        workflow.phase = "reviewing";
+        for (const reviewer of workflow.reviewers) {
+          reviewer.status = status;
+          reviewer.startFailed = true;
+        }
+        await storage.saveMultiReviewWorkflow(
+          workflow.id,
+          workflow.environmentId,
+          1,
+          workflow,
+          stored.revision,
+        );
+        await (service as unknown as { fail(id: string, error: unknown): Promise<void> }).fail(
+          started.id,
+          new Error("Workflow abandoned"),
+        );
+        const failed = (await snapshot(started.id))!;
+        expect(failed.phase).toBe("failed");
+        expect(failed.reviewers[0]).toMatchObject({
+          status: "failed",
+          error: "Workflow abandoned",
+        });
+        expect(failed.reviewers[0]!.startFailed).toBeUndefined();
+      },
+    );
+  },
+);
+
+test("Multi Review reports initial send refusal after allocation while peers continue", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const send = provider.send.bind(provider);
+  provider.send = async (sessionId, prompt, options) => {
+    if (options.model === "sonnet") throw new Error("Initial authentication refused");
+    await send(sessionId, prompt, options);
+  };
+  await withService(
+    "env-allocated-startup-failure",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start([
+        { agent: "claude", model: "opus" },
+        { agent: "claude", model: "sonnet" },
+      ]);
+      await service.advanceNow(started.id);
+      const current = (await snapshot(started.id))!;
+      expect(current.reviewers[0]!.status).toBe("running");
+      expect(current.reviewers[1]).toMatchObject({
+        status: "failed",
+        startFailed: true,
+        agentStarted: false,
+        error: "Initial authentication refused",
+      });
+      expect(current.reviewers[1]!.providerSessionId).toBeDefined();
+    },
+  );
+});

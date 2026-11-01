@@ -7,6 +7,7 @@
     "./action-defaults": "./src/action-defaults.ts",
     "./capacity-retry": "./src/capacity-retry.ts",
     "./agent-accounts": "./src/agent-accounts.ts",
+    "./agent-account-auto-switch": "./src/agent-account-auto-switch.ts",
     "./agent-usage-limits": "./src/agent-usage-limits.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",

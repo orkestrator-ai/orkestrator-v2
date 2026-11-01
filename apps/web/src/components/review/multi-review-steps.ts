@@ -16,6 +16,8 @@ import {
   multiReviewSharedSessionStep,
 } from "@orkestrator/protocol/multi-review";
 import type { NativeAgentTurnPhase } from "@orkestrator/protocol/native-agent";
+import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { reviewerCouldNotStart } from "@orkestrator/protocol/review-fanout";
 import type { CreateTabOptions } from "@/contexts/TerminalContext";
 import type { PrState } from "@/types";
 import { formatElapsed } from "@/lib/format-elapsed";
@@ -495,6 +497,43 @@ export function reviewerStatusNote(
   return null;
 }
 
+/** A reviewer whose agent could not start, as a panel's notice names it. */
+export interface ReviewerStartFailure {
+  /** "Reviewer 3". */
+  name: string;
+  agent: string;
+  error?: string;
+}
+
+/**
+ * The panel-level notice for reviewers whose agent could not start, so a
+ * smaller panel never passes for a whole one. Null when every reviewer started.
+ */
+export function reviewerStartFailureNotice(
+  failures: readonly ReviewerStartFailure[],
+  panelSize: number,
+): { headline: string; reasons: string[] } | null {
+  if (failures.length === 0) return null;
+  const agentName = (agent: string) =>
+    isAgentPlatform(agent) ? AGENT_PLATFORM_LABELS[agent] : agent;
+  const [first] = failures;
+  const headline =
+    failures.length >= panelSize
+      ? panelSize === 1
+        ? `The reviewer (${agentName(first!.agent)}) could not start, so this review has no reviewer report.`
+        : `No reviewer could start, so this review has no reviewer reports.`
+      : failures.length === 1
+        ? `${first!.name} (${agentName(first!.agent)}) could not start, so this review is missing its findings. The other reviewers carried on.`
+        : `${failures.length} of ${panelSize} reviewers could not start, so this review is missing their findings. The other reviewers carried on.`;
+  return {
+    headline,
+    reasons: failures.map(
+      (failure) =>
+        `${failure.name} · ${agentName(failure.agent)}: ${failure.error?.trim() || "no reason was recorded"}`,
+    ),
+  };
+}
+
 export function reviewerProgressSummary(reviewers: MultiReviewWorkflow["reviewers"]): string {
   const completed = reviewers.filter((reviewer) => reviewer.status === "completed").length;
   const stopped = reviewers.filter((reviewer) => reviewer.status === "cancelled").length;
@@ -621,7 +660,7 @@ export function reviewerStatusLabel(
     case "completed":
       return "Complete";
     case "failed":
-      return "Failed";
+      return reviewerCouldNotStart(reviewer) ? "Could not start" : "Failed";
     default:
       return "Stopped";
   }
@@ -704,7 +743,9 @@ export function reviewerStatusWord(
       }
       return { text: "reviewing", tone: "running" };
     case "failed":
-      return { text: "failed", tone: "destructive" };
+      return reviewerCouldNotStart(reviewer)
+        ? { text: "could not start", tone: "destructive" }
+        : { text: "failed", tone: "destructive" };
     case "cancelled":
       return { text: "stopped", tone: "muted" };
     default:

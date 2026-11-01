@@ -578,6 +578,115 @@ describe("MentionableInput", () => {
     expect(document.activeElement).toBe(elsewhere);
   });
 
+  test("a composer that mounts while an open panel holds focus leaves focus and the caret there", () => {
+    const inputRef = createRef<MentionableInputRef>();
+    function Harness({ value }: { value: string | null }) {
+      return (
+        <>
+          <section role="dialog" aria-label="Agent information" aria-hidden="false">
+            <button type="button" data-testid="panel-close">
+              Close
+            </button>
+          </section>
+          {value === null ? null : (
+            <MentionableInput ref={inputRef} value={value} mentions={[]} onChange={() => {}} />
+          )}
+        </>
+      );
+    }
+
+    const { getByTestId, getByRole, rerender } = render(<Harness value={null} />);
+    const close = getByTestId("panel-close");
+    close.focus();
+    window.getSelection()!.removeAllRanges();
+
+    // A late composer restores its draft. Chromium focuses a contenteditable
+    // that receives the caret, so neither may move while the panel is open.
+    rerender(<Harness value="Late draft" />);
+    expect(document.activeElement).toBe(close);
+    expect(window.getSelection()!.rangeCount).toBe(0);
+
+    // The caret the sync could not place lands when the editor is focused.
+    const input = getByRole("textbox", { name: "Type a message..." });
+    act(() => input.focus());
+    expect(input.textContent).toBe("Late draft");
+    expect(inputRef.current!.getCursorPosition()).toBe("Late draft".length);
+
+    // A later sync, back in the panel, leaves it alone too.
+    close.focus();
+    rerender(<Harness value="Late draft, revised" />);
+    expect(input.textContent).toBe("Late draft, revised");
+    expect(document.activeElement).toBe(close);
+  });
+
+  test.each([
+    ["direct", "Late draft, revised"],
+    ["imperative", "Late draft, revised"],
+    ["direct", "Short"],
+    ["imperative", "Short"],
+  ])(
+    "preserves the deferred caret before %s focus with final draft %s",
+    (focusMethod, finalValue) => {
+      const ref = createRef<MentionableInputRef>();
+      const mention = {
+        id: "file-1",
+        relativePath: "src/a.ts",
+        filename: "a.ts",
+      } satisfies FileMention;
+      function Harness({ value, mentions }: { value: string | null; mentions: FileMention[] }) {
+        return (
+          <>
+            <section role="dialog" aria-label="Agent information">
+              <button type="button">Close panel</button>
+            </section>
+            {value !== null && (
+              <MentionableInput ref={ref} value={value} mentions={mentions} onChange={() => {}} />
+            )}
+          </>
+        );
+      }
+      const { getByRole, rerender } = render(<Harness value={null} mentions={[]} />);
+      const close = getByRole("button", { name: "Close panel" });
+      close.focus();
+      window.getSelection()!.removeAllRanges();
+      for (const [value, mentions] of [
+        ["Late draft", []],
+        ["Late draft, revised", []],
+        ["Late draft, revised", [mention]],
+        [finalValue, [mention]],
+      ] as [string, FileMention[]][]) {
+        rerender(<Harness value={value} mentions={mentions} />);
+        expect(document.activeElement).toBe(close);
+        expect(window.getSelection()!.rangeCount).toBe(0);
+      }
+      const input = getByRole("textbox");
+      act(() => {
+        if (focusMethod === "direct") input.focus();
+        else ref.current!.focus();
+      });
+      expect(document.activeElement).toBe(input);
+      expect(ref.current!.getCursorPosition()).toBe(
+        Math.min("Late draft".length, finalValue.length),
+      );
+    },
+  );
+
+  test("a draft that syncs in while a closed panel's control keeps focus places the caret", () => {
+    const { getByTestId, getByRole } = render(
+      <>
+        <section role="dialog" aria-hidden="true">
+          <button type="button" data-testid="hidden-close">
+            Close
+          </button>
+        </section>
+        <MentionableInput value="Draft" mentions={[]} onChange={() => {}} />
+      </>,
+    );
+    getByTestId("hidden-close").focus();
+    const input = getByRole("textbox");
+    expect(input.contains(window.getSelection()!.getRangeAt(0).startContainer)).toBe(true);
+  });
+
   test("ignores pastes while disabled", () => {
     const onChange = mock(() => {});
     const { container } = render(

@@ -317,6 +317,41 @@ describe("build pipeline transcript deletion", () => {
     });
   });
 
+  test("deleting an environment that only links another environment's pipeline keeps its transcripts", async () => {
+    await withStorage(async (storage) => {
+      await storage.addEnvironment({
+        id: "source",
+        projectId: "proj-1",
+        name: "source",
+        branch: "main",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+      });
+      const body = messages(60, "source-build");
+      await storage.saveBuildPipeline(
+        "p1",
+        "proj-1",
+        "source",
+        2,
+        pipelineSnapshot("p1", [legacySession("p1:build", "build", body)]),
+      );
+      await storage.migrateBuildPipelineTranscripts();
+
+      // A sidebar fork carries the source's buildPipelineId.
+      expect(await storage.deleteBuildPipelinesByEnvironment("fork", "p1")).toEqual([]);
+
+      const [session] = await sessionsOf(storage, "p1");
+      expect(await transcriptOf(storage, "p1", session!)).toEqual(body);
+    });
+  });
+
   test("control and manifest rows are deleted in one commit; a crash before the unlinks only leaves chunks repair removes", async () => {
     await withStorage(async (storage, dataDir) => {
       await seedLegacy(storage);

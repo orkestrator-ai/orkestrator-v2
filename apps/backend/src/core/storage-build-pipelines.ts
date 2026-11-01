@@ -651,7 +651,19 @@ export class BuildPipelinesRepository {
     const { removedIds, transcriptOwners, commit } = await this.enqueueBuildPipelineMutation(
       async () => {
         const loaded = await this.loadBuildPipelineState();
-        const linkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
+        const requestedLinkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
+        // The link alone decides only while the pipeline is unowned: a newly
+        // created pipeline has a blank environmentId until create_environment
+        // links it. A pipeline owned by another environment stays, record and
+        // transcripts: a sidebar fork copies its source's buildPipelineId.
+        const linkedRecord = requestedLinkedId ? loaded.records[requestedLinkedId] : undefined;
+        const linkedId =
+          requestedLinkedId &&
+          (!linkedRecord ||
+            !linkedRecord.environmentId ||
+            linkedRecord.environmentId === environmentId)
+            ? requestedLinkedId
+            : null;
         const removedPipelines = Object.values(loaded.records).filter(
           (pipeline) => pipeline.environmentId === environmentId || pipeline.id === linkedId,
         );

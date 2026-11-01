@@ -100,6 +100,7 @@ export function pipelineNodeStatusLabel(
   if (node.reviewer && node.state !== "complete") {
     return reviewerStatusLabel(node.reviewer, pipeline.reviewFanout?.reviewers ?? []);
   }
+  if (node.startFailed && node.state === "failed") return "Could not start";
   if (node.placeholder) return "Not started yet";
   return STATE_LABEL[node.state];
 }
@@ -206,17 +207,19 @@ export function pipelineNodeView({
       ? { text: "skipped", tone: "muted" }
       : node.reviewer && node.state !== "complete"
         ? reviewerStatusWord(node.reviewer)
-        : node.state === "running"
-          ? { text: "running", tone: "running" }
-          : node.state === "paused"
-            ? { text: "paused", tone: "warning" }
-            : node.state === "failed"
-              ? { text: "failed", tone: "destructive" }
-              : node.state === "cancelled"
-                ? { text: "stopped", tone: "muted" }
-                : node.kind === "ticket"
-                  ? pipelineCriteriaStatusWord(pipeline)
-                  : undefined;
+        : node.startFailed && node.state === "failed"
+          ? { text: "could not start", tone: "destructive" }
+          : node.state === "running"
+            ? { text: "running", tone: "running" }
+            : node.state === "paused"
+              ? { text: "paused", tone: "warning" }
+              : node.state === "failed"
+                ? { text: "failed", tone: "destructive" }
+                : node.state === "cancelled"
+                  ? { text: "stopped", tone: "muted" }
+                  : node.kind === "ticket"
+                    ? pipelineCriteriaStatusWord(pipeline)
+                    : undefined;
   return {
     id: node.id,
     kind: node.kind,

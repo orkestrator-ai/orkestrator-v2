@@ -16,3 +16,11 @@ export const WORKER_CHANGES_LIMITS = Object.freeze({
   maxDiffFiles: 50,
   pageRows: 200,
 });
+
+/**
+ * Which diffs an answer carries: `sinceBase` (the default, and the only one
+ * before `diffScope` existed) is base to working tree; `committed` and
+ * `uncommitted` split it at `HEAD`; `split` is both, sharing the byte budget.
+ */
+export const WORKER_DIFF_SCOPES = ["sinceBase", "committed", "uncommitted", "split"] as const;
+export type WorkerDiffScope = (typeof WORKER_DIFF_SCOPES)[number];

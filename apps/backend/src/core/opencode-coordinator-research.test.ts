@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
-import { openCodeResearchToolIds } from "./opencode-coordinator-research.js";
+import {
+  OpenCodeCoordinatorResearch,
+  openCodeResearchToolIds,
+} from "./opencode-coordinator-research.js";
 import { openCodePermissionRules } from "./opencode-provider-helpers.js";
 import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
 
@@ -61,12 +64,21 @@ describe("OpenCode coordinator research permissions", () => {
 
   test("only a coordinator's provider reads research ids, empty until its launch records them", () => {
     const runtimeId = coordinatorRuntimeId("workspace-1", "conversation-1");
+    const research = new OpenCodeCoordinatorResearch();
     const { coordinatorResearchToolIds } = openCodeEnvironmentDependencies({
       environmentId: runtimeId,
+      openCodeCoordinatorResearch: research,
     });
     expect(coordinatorResearchToolIds?.()).toEqual([]);
     expect(
-      openCodeEnvironmentDependencies({ environmentId: "env-1" }).coordinatorResearchToolIds,
+      openCodeEnvironmentDependencies({
+        environmentId: "env-1",
+        openCodeCoordinatorResearch: research,
+      }).coordinatorResearchToolIds,
+    ).toBeUndefined();
+    // Without its backend's registrations a coordinator gets no research tools.
+    expect(
+      openCodeEnvironmentDependencies({ environmentId: runtimeId }).coordinatorResearchToolIds,
     ).toBeUndefined();
   });
 });

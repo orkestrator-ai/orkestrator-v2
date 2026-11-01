@@ -21,6 +21,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { readOnlyCommandSandboxOffNote } from "@orkestrator/protocol/native-agent";
+import { reviewerCouldNotStart } from "@orkestrator/protocol/review-fanout";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -93,6 +94,7 @@ import {
   type MultiReviewStepKey,
   type MultiReviewStepStatus,
 } from "./multi-review-steps";
+import { ReviewerStartFailureNotice } from "./ReviewerStartFailureNotice";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -1732,6 +1734,20 @@ function MultiReviewOverviewTab({
           Open graph run
         </Button>
       </div>,
+    );
+  }
+  const reviewerStartFailures = workflow.reviewers.flatMap((reviewer, index) =>
+    reviewerCouldNotStart(reviewer)
+      ? [{ name: `Reviewer ${index + 1}`, agent: reviewer.agent, error: reviewer.error }]
+      : [],
+  );
+  if (reviewerStartFailures.length > 0) {
+    notices.push(
+      <ReviewerStartFailureNotice
+        key="reviewer-start-failures"
+        failures={reviewerStartFailures}
+        panelSize={workflow.reviewers.length}
+      />,
     );
   }
   if (error || workflow.error) {

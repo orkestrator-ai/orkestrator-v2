@@ -4,7 +4,30 @@ import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail"
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
-import { agentMailParticipantLabel, useAgentMailEnvironmentName } from "./agent-mail-ui";
+import {
+  agentMailParticipantLabel,
+  agentMailStatus,
+  useAgentMailEnvironmentName,
+} from "./agent-mail-ui";
+
+describe("agentMailStatus", () => {
+  const stored = { placement: "stored" as const, placementReason: "recipient-cannot-inject" };
+
+  test("says stored mail is waiting when its recipient has no agent to read it", () => {
+    expect(agentMailStatus(stored, { canPull: false })).toEqual({
+      label: "waiting for agent",
+      tone: "warning",
+    });
+  });
+
+  test("keeps 'in inbox' for a recipient that can pull, or an unknown one", () => {
+    expect(agentMailStatus(stored, { canPull: true }).label).toBe("in inbox");
+    expect(agentMailStatus(stored).label).toBe("in inbox");
+    expect(agentMailStatus({ ...stored, ackedAt: "now" }, { canPull: false }).label).toBe(
+      "handled",
+    );
+  });
+});
 
 describe("agentMailParticipantLabel", () => {
   test.each([

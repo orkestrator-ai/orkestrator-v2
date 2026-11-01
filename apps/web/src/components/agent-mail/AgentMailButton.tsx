@@ -8,8 +8,8 @@ import { useConfigStore } from "@/stores/configStore";
 /**
  * The title-bar entry to agent mail. It opens the messages panel
  * (`AgentMailPanel`); its badge counts only mail that needs the person —
- * failed or held deliveries and unseen mail from outside the project — not
- * the agents' own traffic.
+ * failed or budget-held deliveries, unseen mail from outside the project,
+ * and unseen non-system mail waiting for an agent.
  */
 export function AgentMailButton() {
   const summary = useAgentMailStore((state) => state.summary);

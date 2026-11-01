@@ -342,3 +342,24 @@ intermittent observation, not proof of a root cause or a passing aggregate.
 Notification-bar review on 2026-11-01 repeated the first-answer timeout; the unchanged owner passed alone on the branch (1.4 s); detached origin/main also showed an armed-delay stale/ready mismatch. Preparation used `mise run test`; its captured output does not name the granted worker count. Evidence: `.orkestrator/review-artifacts/review-validation-eb40d1d2-656b-44f0-9a8f-1c2970a9e415/validation-04.stdout.txt`.
 
 Rerun: `mise run test:logged -- --name fix-codex-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`. Detached main at `b965aea44` used the same command with `--name baseline-codex-catalogue` and independent dependencies: 29 passed, one failed at line 293 (expected stale, received ready; 75.25 ms). Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.WIkxwY/baseline-codex-catalogue.log.gz`. Preparation timed out after 2076.62 ms at line 212. No bridge code changed.
+
+## Agent mail review validation — 2026-11-01
+
+`mise run test:logged -- --name repair-root-tests -- mise run test` repeated
+`a cold app-server child > an explicit refresh cannot replace the baseline for
+an already armed delay`: expected `stale`, received `ready` at line 293
+(97.92 ms). Codex reported 2,331 passed, 63 skipped and one failed across
+2,395 tests in 105 files (67.76 s), using one Bun worker within the two-slot
+bridge reservation. The bridge group took 153.6 s; the aggregate exited 1
+in 907.5 s. Workspace/root/bridges/protocol reservations were 5/1/2/1 and
+browser checks also ran on the host.
+
+The complete unchanged owner rerun also failed:
+`mise run test:logged -- --name repair-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures`.
+It reported 29 passed, one failed (3.3 s), timing out on the first-answer
+settling case at line 212 after 2048.96 ms. This observation is not a passing
+isolated reproduction. No bridge implementation, assertion, deadline or skip
+changed; the existing timing investigation remains open.
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8VTwNj/bridges.log.gz`
+and `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.53Ejpu/repair-catalogue-owner.log.gz`.

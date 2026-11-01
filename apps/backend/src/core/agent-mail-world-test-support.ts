@@ -41,6 +41,8 @@ export type MailWorldOptions = {
   /** Status-wake collaborators for the coordinator service, kept across restarts. */
   statusWakes?: CoordinatorStatusWakeOptions;
   delegations?: CoordinatorDelegationOptions;
+  /** Leave the main coordinator as it is until someone first uses it: no agent. */
+  unassignedMain?: boolean;
 };
 
 /** One carrier's JSON payload, the structured part of an injected mail prompt. */
@@ -184,7 +186,9 @@ export class MailWorld {
     const { coordinator, mail } = MailWorld.services(() => world!, storage, options);
     const ensured = await coordinator.ensure(project.id);
     const main = ensured.workspace.conversations[0]!;
-    await coordinator.assignConversationAgent(project.id, main.id, "codex");
+    if (!options.unassignedMain) {
+      await coordinator.assignConversationAgent(project.id, main.id, "codex");
+    }
     world = new MailWorld(
       root,
       storage,

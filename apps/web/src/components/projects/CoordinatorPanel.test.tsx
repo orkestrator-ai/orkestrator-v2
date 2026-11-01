@@ -10,6 +10,8 @@ import {
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
+import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
@@ -429,6 +431,70 @@ describe("CoordinatorPanel", () => {
       coordinatorProjectId: "project-1",
     });
   });
+
+  test.each([true, false])(
+    "shows stored mail guidance with platform availability %s",
+    async (available) => {
+      const conversation = { ...snapshot.workspace.conversations[0]!, agent: undefined };
+      ensuredSnapshot = {
+        ...snapshot,
+        workspace: { ...snapshot.workspace, conversations: [conversation] },
+        ...(!available ? { providerAvailability: {} } : {}),
+      };
+      const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+      const mailboxId = `${environmentId}\0${conversation.tabId}`;
+      useAgentMailStore.setState({
+        summary: new Map([
+          [
+            mailboxId,
+            {
+              mailboxId,
+              projectId: "project-1",
+              environmentId,
+              tabId: conversation.tabId,
+              unreadCount: 2,
+              userUnseenCount: 2,
+              agentUnackedCount: 2,
+              pendingInjectCount: 0,
+              failedInjectCount: 0,
+              revision: 1,
+            },
+          ],
+        ]),
+        mailboxes: new Map([
+          [
+            mailboxId,
+            {
+              descriptor: {
+                capabilities: { canPull: false, canSend: false, canInject: false },
+                injectPolicy: "off",
+                presence: "unknown",
+              },
+              messages: ["first", "second"].map((id) => ({
+                id,
+                placement: "stored",
+                placementReason: "recipient-cannot-inject",
+              })),
+            } as unknown as AgentMailMailboxSnapshot,
+          ],
+        ]),
+        refreshSummary: async () => undefined,
+        refreshMailbox: async () => undefined,
+      });
+      try {
+        render(<CoordinatorPanel projectId="project-1" />);
+        expect(
+          await screen.findByText(
+            available
+              ? "2 messages in inbox · waiting for an agent"
+              : "2 messages in inbox · enable a qualified agent in Settings",
+          ),
+        ).toBeTruthy();
+      } finally {
+        useAgentMailStore.setState(useAgentMailStore.getInitialState());
+      }
+    },
+  );
 
   test("an unassigned conversation offers every qualified platform and binds on first send", async () => {
     const unassignedConversation = {
@@ -1018,7 +1084,23 @@ describe("CoordinatorPanel", () => {
       },
     );
 
-    test.each(["empty", "attachment", "command"] as const)(
+    test("ignores an empty message before upstream preflight", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      const fetches = await fetchesAfterOpen();
+      await sendFollowUp("  ");
+      await act(async () => {});
+      expect(
+        useNativeComposeStore.getState().drafts.get(launchSessionKey)?.submissionError,
+      ).toBeUndefined();
+      expect(fetchGit.mock.calls.length).toBe(fetches);
+      expect(syncGit).not.toHaveBeenCalled();
+      expect(dispatchIntent).not.toHaveBeenCalled();
+      expect(mergeDialog() === null).toBe(true);
+      expect(storedDecline()).toBeUndefined();
+    });
+
+    test.each(["attachment", "command"] as const)(
       "rejects %s locally before upstream preflight",
       async (kind) => {
         ensuredGit = behindGit();
@@ -1044,9 +1126,7 @@ describe("CoordinatorPanel", () => {
               annotations: [{ id: "a1", text: "Reference", comment: "" }],
             }),
           );
-        await sendFollowUp(
-          kind === "empty" ? "  " : kind === "command" ? "!git status" : "Read the attachment",
-        );
+        await sendFollowUp(kind === "command" ? "!git status" : "Read the attachment");
         await waitFor(() =>
           expect(
             useNativeComposeStore.getState().drafts.get(launchSessionKey)?.submissionError,

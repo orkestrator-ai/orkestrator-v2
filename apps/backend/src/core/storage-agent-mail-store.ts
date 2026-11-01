@@ -261,13 +261,15 @@ export function findMessage(
  *
  * `routed` promotes only mail whose route wakes the recipient on its own —
  * what an explicit Off was holding back — and leaves policy-governed mail
- * stored, since the drain would never claim it.
+ * stored, since the drain would never claim it. `awaiting-agent` recovers only
+ * mail filed because the recipient lacked injection capability; routine
+ * synchronization must not release other policy-held mail.
  */
 export function promoteStoredMessages(
   store: PersistedAgentMailStore,
   mailbox: PersistedMailbox,
   settings: Pick<AgentMessagingSettings, "wakePeers">,
-  scope: "all" | "routed",
+  scope: "all" | "routed" | "awaiting-agent",
 ): number {
   if (!agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canInject) return 0;
   if (mailbox.tombstonedAt || mailbox.mutedInbound) return 0;
@@ -275,6 +277,7 @@ export function promoteStoredMessages(
   for (const message of mailbox.messages) {
     if (
       message.placement !== "stored" ||
+      (scope === "awaiting-agent" && message.placementReason !== "recipient-cannot-inject") ||
       message.toIncarnationId !== mailbox.incarnationId ||
       message.ackedAt ||
       message.discardedAt ||

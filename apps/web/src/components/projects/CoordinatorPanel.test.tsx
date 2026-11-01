@@ -10,6 +10,8 @@ import {
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
+import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
@@ -404,6 +406,64 @@ describe("CoordinatorPanel", () => {
     expect(renderAgentNativeTab.mock.calls.at(-1)?.[0]).toMatchObject({
       coordinatorProjectId: "project-1",
     });
+  });
+
+  test("shows mail waiting for the conversation's first agent", async () => {
+    const conversation = { ...snapshot.workspace.conversations[0]!, agent: undefined };
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: { ...snapshot.workspace, conversations: [conversation] },
+    };
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const mailboxId = `${environmentId}\0${conversation.tabId}`;
+    useAgentMailStore.setState({
+      summary: new Map([
+        [
+          mailboxId,
+          {
+            mailboxId,
+            projectId: "project-1",
+            environmentId,
+            tabId: conversation.tabId,
+            unreadCount: 2,
+            userUnseenCount: 2,
+            agentUnackedCount: 2,
+            pendingInjectCount: 0,
+            failedInjectCount: 0,
+            revision: 1,
+          },
+        ],
+      ]),
+      mailboxes: new Map([
+        [
+          mailboxId,
+          {
+            descriptor: {
+              capabilities: { canPull: false, canSend: false, canInject: false },
+              injectPolicy: "off",
+              presence: "unknown",
+            },
+            messages: ["first", "second"].map((id) => ({
+              id,
+              placement: "stored",
+              placementReason: "recipient-cannot-inject",
+            })),
+          } as unknown as AgentMailMailboxSnapshot,
+        ],
+      ]),
+      refreshSummary: async () => undefined,
+      refreshMailbox: async () => undefined,
+    });
+    try {
+      render(<CoordinatorPanel projectId="project-1" />);
+      expect(
+        await screen.findByText(
+          "2 messages waiting · send a first message to start this agent and deliver them",
+        ),
+      ).toBeTruthy();
+    } finally {
+      useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    }
   });
 
   test("an unassigned conversation offers every qualified platform and binds on first send", async () => {

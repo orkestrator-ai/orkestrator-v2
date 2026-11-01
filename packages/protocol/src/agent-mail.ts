@@ -692,12 +692,29 @@ export function agentMailConversationKey(a: string, b: string): string {
 export function agentMailNeedsAttention(
   message: Pick<
     AgentMailMessage,
-    "placement" | "placementReason" | "trust" | "userSeenAt" | "discardedAt"
+    "placement" | "placementReason" | "trust" | "userSeenAt" | "ackedAt" | "discardedAt"
   >,
+  recipient?: Pick<MailboxCapabilities, "canPull">,
 ): boolean {
   if (message.discardedAt) return false;
   if (message.placement === "inject_failed" || isAgentMailBudgetHeld(message)) return true;
+  if (recipient && agentMailAwaitingAgent(message, recipient) && !message.userSeenAt) return true;
   return (message.trust === "external" || message.trust === "cross-project") && !message.userSeenAt;
+}
+
+/**
+ * Mail filed for a tab with no agent yet, such as a coordinator conversation
+ * that has not started. Nothing can read it or be woken for it until an agent
+ * is assigned, which is different from a terminal tab: that also cannot be
+ * injected into, but its agent can pull.
+ */
+export function agentMailAwaitingAgent(
+  message: Pick<AgentMailMessage, "placement" | "ackedAt" | "discardedAt">,
+  recipient: Pick<MailboxCapabilities, "canPull">,
+): boolean {
+  return (
+    !recipient.canPull && message.placement === "stored" && !message.ackedAt && !message.discardedAt
+  );
 }
 
 export const AGENT_MAIL_DEFAULT_CONVERSATION_LIMIT = 50;

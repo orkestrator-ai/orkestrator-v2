@@ -386,6 +386,18 @@ describe("agent mail protocol", () => {
     ).toBe(false);
   });
 
+  test("stored mail needs the person only when its recipient cannot read it", () => {
+    const base = { placement: "stored" as const, trust: "same-project" as const };
+    const noAgent = { canPull: false };
+    expect(agentMailNeedsAttention(base, noAgent)).toBe(true);
+    // A terminal tab cannot be injected into, but its agent can pull.
+    expect(agentMailNeedsAttention(base, { canPull: true })).toBe(false);
+    expect(agentMailNeedsAttention({ ...base, userSeenAt: "now" }, noAgent)).toBe(false);
+    expect(agentMailNeedsAttention({ ...base, ackedAt: "now" }, noAgent)).toBe(false);
+    expect(agentMailNeedsAttention({ ...base, discardedAt: "now" }, noAgent)).toBe(false);
+    expect(agentMailNeedsAttention({ ...base, placement: "pending-inject" }, noAgent)).toBe(false);
+  });
+
   test("recognises Orkestrator's mail tools however a provider spells them", () => {
     expect(agentMailTranscriptTool("mcp__orkestrator__send_message")).toBe("send_message");
     expect(agentMailTranscriptTool("orkestrator__reply_message")).toBe("reply_message");

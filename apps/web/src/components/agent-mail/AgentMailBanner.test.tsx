@@ -37,7 +37,12 @@ function message(
 
 function install(
   placement: AgentMailMessageSummary["placement"],
-  options: { placementReason?: string; presence?: MailboxPresence; policy?: "off" | "idle" } = {},
+  options: {
+    placementReason?: string;
+    presence?: MailboxPresence;
+    policy?: "off" | "idle";
+    noAgent?: boolean;
+  } = {},
 ): void {
   const pending = placement === "pending-inject" || placement === "inject-held" ? 1 : 0;
   const failed = placement === "inject_failed" ? 1 : 0;
@@ -79,7 +84,9 @@ function install(
       agentUnackedCount: 1,
       pendingInjectCount: pending,
       failedInjectCount: failed,
-      capabilities: { canPull: true, canSend: true, canInject: true },
+      capabilities: options.noAgent
+        ? { canPull: false, canSend: false, canInject: false }
+        : { canPull: true, canSend: true, canInject: true },
     },
     messages: [message(placement, options.placementReason)],
     total: 1,
@@ -109,6 +116,21 @@ describe("AgentMailBanner", () => {
     expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     expect(useAgentMailStore.getState().panel).toEqual({ focus: mailboxId });
+  });
+
+  test("says mail for a tab with no agent is waiting, and offers no delivery it cannot make", () => {
+    for (const policy of ["off", "idle"] as const) {
+      install("stored", { placementReason: "recipient-cannot-inject", policy, noAgent: true });
+      const view = render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      expect(
+        screen.getByText(
+          "1 message waiting · send a first message to start this agent and deliver it",
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+      expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+      view.unmount();
+    }
   });
 
   test("rehydrates its authoritative summary even when cached state has a revision", async () => {

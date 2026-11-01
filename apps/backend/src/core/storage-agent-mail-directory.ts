@@ -608,7 +608,11 @@ export class AgentMailboxDirectory {
         ).length,
         attentionCount: mailbox.messages.filter(
           (message) =>
-            message.toIncarnationId === mailbox.incarnationId && agentMailNeedsAttention(message),
+            message.toIncarnationId === mailbox.incarnationId &&
+            agentMailNeedsAttention(
+              message,
+              agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked),
+            ),
         ).length,
         revision: mailbox.revision,
       })),
@@ -742,7 +746,7 @@ export class AgentMailboxDirectory {
           attentionCount: messages.filter(
             (message) =>
               message.toIncarnationId === descriptor.incarnationId &&
-              agentMailNeedsAttention(message),
+              agentMailNeedsAttention(message, descriptor.capabilities),
           ).length,
           revision,
         })),

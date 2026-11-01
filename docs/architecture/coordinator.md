@@ -189,6 +189,13 @@ the next main — so finished work from long-closed conversations cannot wake a
 fresh coordinator. With no main open, the toolbar action reads **Start
 coordinator**.
 
+An open main that has never run has no agent until its first prompt, so it can
+neither read mail nor be woken for it. Mail from an agent in its own project, or
+a delegation wake, assigns it the default agent the same way, and mail already
+filed for it is delivered. A build-pipeline or review notice still does not
+start it. Until it has an agent, the conversation shows a banner saying the mail
+is waiting.
+
 Every other conversation is a **side agent**, named Side 1, Side 2… (the lowest
 free number). A side agent reads the project and Orkestrator state (its
 credential carries only the `discovery`, `mail` and `schedules` capabilities

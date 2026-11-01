@@ -163,6 +163,110 @@ describe("agent mail between many actors", () => {
     expect(world.received(replacement)).toEqual(["done"]);
   });
 
+  test("a main coordinator nobody has used yet: mail starts it with the default agent", async () => {
+    const unused = await MailWorld.create({ unassignedMain: true });
+    try {
+      const peer = await unused.addEnvironment("peer");
+      const sent = await unused.send(peer, "coordinator", "please launch a worker");
+      expect(sent).toMatchObject({ route: "coordinator", placement: "pending-inject" });
+
+      await unused.deliver();
+      const main = await unused.main();
+      expect(unused.received(main)).toEqual(["please launch a worker"]);
+      const workspace = await unused.storage.coordinators.getCoordinatorWorkspace(unused.projectId);
+      expect(workspace?.conversations[0]?.agent).toBe("codex");
+    } finally {
+      await unused.close();
+    }
+  });
+
+  test("mail filed before a main coordinator could start is delivered when it starts", async () => {
+    const unused = await MailWorld.create({ unassignedMain: true });
+    try {
+      const peer = await unused.addEnvironment("peer");
+      unused.storage.setCoordinatorMailResolver(async () => {
+        throw new Error("could not start");
+      });
+      const early = await unused.send(peer, "coordinator", "first");
+      expect(early).toMatchObject({
+        placement: "stored",
+        placementReason: "recipient-cannot-inject",
+      });
+
+      unused.storage.setCoordinatorMailResolver((projectId) =>
+        unused.coordinator.mainMailAddress(projectId),
+      );
+      await unused.send(peer, "coordinator", "second");
+      await unused.deliver();
+      expect(unused.received(await unused.main())).toEqual(["first", "second"]);
+    } finally {
+      await unused.close();
+    }
+  });
+
+  test("with no qualified agent, mail for an unused main stays filed for the person", async () => {
+    const unused = await MailWorld.create({ unassignedMain: true });
+    try {
+      const peer = await unused.addEnvironment("peer");
+      const config = await unused.storage.loadConfig();
+      await unused.storage.updateGlobalConfig({
+        ...config.global,
+        enabledAgentPlatforms: ["grok"],
+      });
+      const sent = await unused.send(peer, "coordinator", "anyone there?");
+      expect(sent).toMatchObject({
+        placement: "stored",
+        placementReason: "recipient-cannot-inject",
+      });
+      const main = await unused.main();
+      const summary = await unused.storage.getAgentMailSummary();
+      expect(
+        summary.mailboxes.find((entry) => entry.environmentId === main.environmentId)
+          ?.attentionCount,
+      ).toBe(1);
+      const conversations = await unused.storage.listAgentMailConversations();
+      expect(conversations.conversations[0]?.attentionCount).toBe(1);
+    } finally {
+      await unused.close();
+    }
+  });
+
+  test("user, external and workflow mail, and disabled messaging, do not start an unused main", async () => {
+    const unused = await MailWorld.create({ unassignedMain: true });
+    try {
+      const peer = await unused.addEnvironment("peer");
+      const main = await unused.main();
+      const assigned = async () =>
+        (await unused.storage.coordinators.getCoordinatorWorkspace(unused.projectId))
+          ?.conversations[0]?.agent;
+      for (const sender of [
+        { kind: "user" },
+        { kind: "external" },
+        { kind: "system", projectId: unused.projectId, source: "workflow", resourceId: "review" },
+      ] as const) {
+        await unused.storage.sendAgentMail(sender, {
+          requestId: `from-${sender.kind}`,
+          toEnvironmentId: main.environmentId,
+          toTabId: main.tabId,
+          body: "hello",
+        });
+        expect(await assigned()).toBeUndefined();
+      }
+
+      const config = await unused.storage.loadConfig();
+      await unused.storage.updateGlobalConfig({
+        ...config.global,
+        agentMessaging: { ...DEFAULT_AGENT_MESSAGING_SETTINGS, enabled: false },
+      });
+      await expect(unused.send(peer, "coordinator", "hello")).rejects.toMatchObject({
+        code: "messaging-disabled",
+      });
+      expect(await assigned()).toBeUndefined();
+    } finally {
+      await unused.close();
+    }
+  });
+
   test("an unsolicited stream from a worker pauses at the budget and tells the coordinator", async () => {
     const coordinator = await world.main();
     const worker = await world.addEnvironment("worker", { launched: true });

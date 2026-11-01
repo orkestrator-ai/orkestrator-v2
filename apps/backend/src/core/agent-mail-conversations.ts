@@ -2,6 +2,7 @@ import {
   AGENT_MAIL_CONVERSATION_PREVIEW_LENGTH,
   AGENT_MAIL_DEFAULT_CONVERSATION_LIMIT,
   AGENT_MAIL_MAX_LIST_LIMIT,
+  agentMailboxId,
   agentMailConversationKey,
   agentMailNeedsAttention,
   agentMailParticipantKey,
@@ -206,7 +207,8 @@ export function listAgentMailConversations(
     let attentionCount = 0;
     for (const message of conversation.messages) {
       if (compareMessages(message, last) > 0) last = message;
-      if (agentMailNeedsAttention(message)) attentionCount += 1;
+      const recipient = byId.get(agentMailboxId(message.toEnvironmentId, message.toTabId));
+      if (agentMailNeedsAttention(message, recipient?.capabilities)) attentionCount += 1;
     }
     summaries.push({
       key,

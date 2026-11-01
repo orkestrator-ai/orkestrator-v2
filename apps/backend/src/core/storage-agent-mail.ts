@@ -38,6 +38,8 @@ import {
   coordinatorIdFromRuntimeId,
   coordinatorMainConversation,
   coordinatorRuntimeId,
+  type CoordinatorConversation,
+  type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -158,13 +160,17 @@ export class AgentMailRepository {
       if (alias) throw new AgentMailError("recipient-not-found", "This project has no coordinator");
       return input;
     }
+    const open = coordinatorMainConversation(workspace);
     if (!alias) {
       const conversationId = coordinatorConversationIdFromRuntimeId(input.toEnvironmentId);
       const conversation = workspace.conversations.find((item) => item.id === conversationId);
       // One mailbox per conversation, so its tab id is never in doubt.
-      if (conversation && !conversation.closedAt) return { ...input, toTabId: conversation.tabId };
+      if (conversation && !conversation.closedAt) {
+        if (open?.id === conversation.id) await this.startUnassignedMain(sender, workspace, open);
+        return { ...input, toTabId: conversation.tabId };
+      }
     }
-    const open = coordinatorMainConversation(workspace);
+    if (open) await this.startUnassignedMain(sender, workspace, open);
     const address = open
       ? { environmentId: coordinatorRuntimeId(workspace.id, open.id), tabId: open.tabId }
       : await this.coordinatorMailResolver?.(workspace.projectId);
@@ -172,6 +178,29 @@ export class AgentMailRepository {
       throw new AgentMailError("recipient-not-found", "The project coordinator is not open");
     const { replyToMessageId: _replyToMessageId, ...rest } = input;
     return { ...rest, toEnvironmentId: address.environmentId, toTabId: address.tabId };
+  }
+
+  /**
+   * Give a main coordinator that has never run its default agent, so an agent
+   * in its own project can wake it. User, external and cross-project mail wakes
+   * nobody, and a workflow notice does not start a coordinator by itself, so
+   * finished work cannot wake a fresh one. A failure leaves the mail filed for
+   * the unassigned mailbox, where the user can see it.
+   */
+  private async startUnassignedMain(
+    sender: AgentMailSender,
+    workspace: CoordinatorWorkspace,
+    main: CoordinatorConversation,
+  ): Promise<void> {
+    if (main.agent) return;
+    if (sender.kind !== "tab" && sender.kind !== "coordinator" && sender.kind !== "node") return;
+    if (sender.projectId !== workspace.projectId) return;
+    await this.coordinatorMailResolver?.(workspace.projectId).catch((error) => {
+      console.warn(
+        "[agent-mail] Could not start the main coordinator:",
+        error instanceof Error ? error.message : error,
+      );
+    });
   }
 
   /**
@@ -388,16 +417,17 @@ export class AgentMailRepository {
     });
     // A copy: the snapshot is shared and frozen, and a send returns its own message.
     if (replay) return structuredClone(replay);
+    const config = await this.repos.config.loadConfig();
+    const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
+    // Before the address resolves, because resolving can start a coordinator.
+    if (!settings.enabled)
+      throw new AgentMailError("messaging-disabled", "Agent messaging is disabled");
     input = await this.resolveCoordinatorAddress(sender, input);
     await this.repos.agentMailboxes.ensureAgentMailDirectoryFresh([
       input.toEnvironmentId,
       sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
     ]);
     const recipientEnvironment = await this.repos.projects.getEnvironment(input.toEnvironmentId);
-    const config = await this.repos.config.loadConfig();
-    const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
-    if (!settings.enabled)
-      throw new AgentMailError("messaging-disabled", "Agent messaging is disabled");
 
     const placed = await this.store.enqueue(async () => {
       const store = await this.store.load();

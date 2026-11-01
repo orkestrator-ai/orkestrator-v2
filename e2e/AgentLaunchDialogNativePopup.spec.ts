@@ -62,12 +62,13 @@ test("selects a native branch suggestion with the keyboard and confirms", async 
   await page.waitForTimeout(500);
   const cdp = await page.context().newCDPSession(page);
   // Playwright's macOS editing commands target the text editor, and without the
-  // native key code Chrome closes the popup (`kViewDestroyed`). Native key codes
+  // native key code Chrome closes the popup (`kViewDestroyed`). Linux also needs
+  // its XKB native codes (ArrowDown 116, Enter 36). Native key codes
   // without those commands let the popup handle navigation. The browser handles
   // each key before the next command is sent.
-  for (const [key, windowsVirtualKeyCode, nativeVirtualKeyCode] of [
-    ["ArrowDown", 40, 125],
-    ["Enter", 13, 36],
+  for (const [key, windowsVirtualKeyCode, macKeyCode, linuxKeyCode] of [
+    ["ArrowDown", 40, 125, 116],
+    ["Enter", 13, 36, 36],
   ] as const) {
     for (const type of ["rawKeyDown", "keyUp"] as const) {
       await cdp.send("Input.dispatchKeyEvent", {
@@ -75,7 +76,11 @@ test("selects a native branch suggestion with the keyboard and confirms", async 
         key,
         code: key,
         windowsVirtualKeyCode,
-        ...(process.platform === "darwin" ? { nativeVirtualKeyCode } : {}),
+        ...(process.platform === "darwin"
+          ? { nativeVirtualKeyCode: macKeyCode }
+          : process.platform === "linux"
+            ? { nativeVirtualKeyCode: linuxKeyCode }
+            : {}),
       });
     }
   }

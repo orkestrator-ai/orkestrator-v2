@@ -117,7 +117,7 @@ Done in code (2026-11-01).
   It uses `channel: "chromium"` (the full bundled build, which
   `mise run playwright:install` already downloads) in new headless mode with
   `--screen-info={0,0 2000x2000}`, types `rel`, sends ArrowDown and Enter as CDP
-  `rawKeyDown` events with native key codes, and checks the field holds
+  `rawKeyDown` events with platform-native key codes, and checks the field holds
   `release/2.0` and the dialog confirms it. It opens no visible window and
   needs no Chrome install or unlocked desktop. On failure it appends Chrome's
   datalist hiding reasons to the error.
@@ -147,6 +147,31 @@ about 50 to 67, `ORKESTRATOR_E2E_PORT=14876`:
   `rel` and the message `Chrome hid its datalist popups with:
   kInsufficientSpace x5`; on the default headless shell it fails with `none
   recorded`.
+
+Review-fix Linux qualification (2026-11-01), using a clean archive of
+`a668b4a37` in a disposable `orkestrator-v2:dev-cc80206a42eb` container
+(Debian 13, Linux aarch64, Bun 1.4.4, Playwright 1.64.0, bundled Chromium
+156.0.8078.4, revision 1248; `--shm-size=1g`). Dependencies were installed
+inside the container with `bun install --frozen-lockfile`; no host dependencies
+or application data were mounted.
+
+```bash
+mise run test:logged -- --name todo1171-linux-popup -- \
+  docker exec -w /workspace -e CI=1 -e ORKESTRATOR_E2E_PORT=14879 \
+  todo1171-linux-qualification bunx playwright test \
+  --config e2e/playwright.config.ts e2e/AgentLaunchDialog.spec.ts \
+  e2e/AgentLaunchDialogNativePopup.spec.ts --workers=2 --repeat-each=5
+```
+
+- Before the fix: 20 passed, all 10 native cases failed at both widths with
+  `rel` and `kRendererEvent x1, kViewDestroyed x1`.
+- Fix: send Linux XKB native key codes (ArrowDown 116, Enter 36), in addition
+  to the Windows virtual key codes. The macOS codes remain 125 and 36.
+- The exact command after copying the fixed spec into the container: 30 passed,
+  including all 10 native selections, without retries or skips (66.8 s).
+- macOS regression: both specs, `--workers=2`, port 14880: 6 passed (51.0 s).
+- The container was removed after qualification. This qualifies Linux arm64;
+  Linux x64 and Windows were not exercised by this follow-up.
 
 The complete `mise run test:browser` is left to the build's validation stage.
 
@@ -182,9 +207,10 @@ needed.
 
 - 2026-10-31: its own file in cross-cutting, beside the other component-suite
   health work, as 0030 recommended.
-- 2026-11-01: followed the recommended option. The probe found no keyboard path
-  Chrome accepts while the session is locked: no popup exists to take keys. So
-  the default case asserts the suggestion list instead.
+- 2026-11-01 (superseded by the headless probe below): the initial probe found
+  no working keyboard path in headed Chrome while the session was locked, so
+  the default case temporarily asserted the suggestion list instead. The later
+  probe found the headless path now used by the default native case.
 - 2026-11-01 (superseded below): kept the native keyboard case, opt-in through
   `ORKESTRATOR_E2E_NATIVE_POPUPS=1`, rather than deleting it.
 - 2026-11-01: the default case dropped the Chrome channel and `headless: false`.
@@ -210,6 +236,13 @@ needed.
 - 2026-11-01: on failure the spec reads `Autofill.PopupHidingReason.DataList`.
   It is Chrome's internal metric and its values could change, so it is only
   used in the failure message, never asserted.
+
+### Task 1: Linux keyboard qualification
+
+- 2026-11-01: chose a disposable Linux container with independently installed
+  pinned dependencies to exercise the default native case. The omitted native
+  key codes reproduced the review concern; supplying Linux codes fixes it
+  without weakening the selection assertion or changing the macOS path.
 
 ## Open questions
 

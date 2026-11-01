@@ -191,8 +191,10 @@ three settings matter:
   leaves no room below the field, so Chrome drops the popup with
   `kInsufficientSpace`.
 - Keys go through CDP `Input.dispatchKeyEvent` as `rawKeyDown` with the native
-  key code on macOS. Playwright's `press` adds editing commands, and without a
-  native key code Chrome closes the popup (`kViewDestroyed`).
+  key code on macOS (ArrowDown 125, Enter 36) and Linux (XKB codes 116 and
+  36). Omitting Linux native codes also closes the popup with `kViewDestroyed`.
+  Playwright's macOS `press` adds editing commands, so the spec sends CDP keys
+  without those commands.
 
 On failure the spec appends Chrome's `Autofill.PopupHidingReason.DataList`
 histogram, which names why the popup closed. `kAcceptSuggestion` is the

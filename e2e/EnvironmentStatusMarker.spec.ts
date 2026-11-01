@@ -35,7 +35,16 @@ for (const shape of ["circle", "square"]) {
       const ring = marker.getByTestId("environment-status-ring");
       await expect(page.getByRole("tooltip")).toBeHidden();
       await expect(ring).toHaveCSS("pointer-events", "none");
-      await expect(ring).toHaveCSS("animation-name", state === "idle" ? "none" : "pulse");
+      await expect(ring).toHaveCSS(
+        "animation-name",
+        state === "idle"
+          ? "none"
+          : state === "waiting"
+            ? "pulse"
+            : shape === "circle"
+              ? "environment-working-turn"
+              : "environment-working-sweep",
+      );
       await expect(dot).toHaveCSS("animation-name", "none");
       await expect(dot).toHaveCSS("opacity", "1");
       await expect(dot).toHaveCSS("background-color", machineColor);
@@ -49,28 +58,33 @@ for (const shape of ["circle", "square"]) {
 
 for (const shape of ["circle", "square"]) {
   for (const identity of ["", "neutral-"]) {
-    test(`${shape} ${identity || "machine-"}center pixels stay unchanged throughout working and waiting pulses`, async ({
+    test(`${shape} ${identity || "machine-"}center pixels stay unchanged throughout the working spinner and waiting pulse`, async ({
       page,
     }) => {
       const baseline = await centerPixels(page, page.getByTestId(`${shape}-${identity}idle`));
       for (const state of ["working", "waiting"]) {
         const marker = page.getByTestId(`${shape}-${identity}${state}`);
         const halo = marker.getByTestId("environment-status-ring");
-        const opacities: number[] = [];
-        for (const phase of [0, 500, 1000, 1500]) {
-          const opacity = await halo.evaluate(async (element, time) => {
+        const appearances = new Set<string>();
+        for (const phase of [0, 300, 600, 900]) {
+          const appearance = await halo.evaluate(async (element, time) => {
             const animation = element.getAnimations()[0];
-            if (!animation) throw new Error("Expected a pulsing activity halo");
+            if (!animation) throw new Error("Expected an animated activity ring");
             await animation.ready;
             animation.pause();
             animation.currentTime = time;
-            return Number(getComputedStyle(element).opacity);
+            const style = getComputedStyle(element);
+            return [
+              style.opacity,
+              style.transform,
+              style.getPropertyValue("--environment-working-angle"),
+            ].join();
           }, phase);
-          opacities.push(opacity);
+          appearances.add(appearance);
           expect(await centerPixels(page, marker), `${state} at ${phase} ms`).toEqual(baseline);
         }
         // Ensure the screenshots sampled distinct animation phases.
-        expect(Math.min(...opacities)).toBeLessThan(Math.max(...opacities));
+        expect(appearances.size).toBeGreaterThan(1);
       }
     });
   }
@@ -91,6 +105,22 @@ test("stopped markers have a subtle outline while running idle markers have no h
       await expect(stopped).toHaveCSS("opacity", "1");
       await expect(idle).toHaveCSS("opacity", "0");
     }
+  }
+});
+
+test("the working spinner stops turning but stays visible under reduced motion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const shape of ["circle", "square"]) {
+    const ring = page.getByTestId(`${shape}-working`).getByTestId("environment-status-ring");
+    await expect(ring).toHaveCSS("animation-name", "none");
+    const sweep = await ring.evaluate((element) => {
+      const style = getComputedStyle(element, "::before");
+      return { content: style.content, image: style.backgroundImage };
+    });
+    expect(sweep.content).not.toBe("none");
+    expect(sweep.image).toContain("conic-gradient");
   }
 });
 

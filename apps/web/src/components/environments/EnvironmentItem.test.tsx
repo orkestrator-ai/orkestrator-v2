@@ -76,15 +76,15 @@ function renderItem(environment: Environment = environmentFixture()) {
 
 function expectWorking(halo: HTMLElement) {
   expect(halo.parentElement?.getAttribute("data-state")).toBe("working");
-  expect(halo.classList).toContain("bg-red-500/50");
-  expect(halo.classList).toContain("animate-pulse");
+  expect(halo.classList).toContain("environment-working-spinner");
+  expect(halo.classList).not.toContain("animate-pulse");
   expect(halo.classList).not.toContain("bg-yellow-400/50");
 }
 
 function expectIdle(halo: HTMLElement) {
   expect(halo.parentElement?.getAttribute("data-state")).toBe("idle");
   expect(halo.classList).toContain("opacity-0");
-  expect(halo.classList).not.toContain("bg-red-500/50");
+  expect(halo.classList).not.toContain("environment-working-spinner");
   expect(halo.classList).not.toContain("animate-pulse");
 }
 
@@ -92,7 +92,7 @@ function expectWaiting(halo: HTMLElement) {
   expect(halo.parentElement?.getAttribute("data-state")).toBe("waiting");
   expect(halo.classList).toContain("bg-yellow-400/50");
   expect(halo.classList).toContain("animate-pulse");
-  expect(halo.classList).not.toContain("bg-red-500/50");
+  expect(halo.classList).not.toContain("environment-working-spinner");
 }
 
 beforeEach(() => {
@@ -188,7 +188,7 @@ describe("EnvironmentItem build pipeline activity", () => {
     expectWorking(environmentIcon());
   });
 
-  test("pulses the container icon for a containerized environment", () => {
+  test("spins around the container icon for a containerized environment", () => {
     seedPipeline({ environmentType: "containerized" });
     renderItem(
       environmentFixture({

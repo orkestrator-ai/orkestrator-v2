@@ -167,14 +167,31 @@ export function McpServerEditor({
     };
   }, [mode, target.targetId, machine]);
 
+  // A new server goes only to a file that can be written now. The target's
+  // default can be blocked (a container file edited inside the container), and
+  // a chosen file can become blocked while the dialog is open: then nothing is
+  // chosen, rather than a selection the list does not offer.
+  const chosenSourceId =
+    mode.kind === "add" && writableSources.some((candidate) => candidate.sourceId === sourceId)
+      ? sourceId
+      : null;
   const source = useMemo(
     () =>
       snapshot.sources.find(
         (candidate) =>
-          candidate.sourceId === (mode.kind === "add" ? sourceId : definition?.sourceId),
+          candidate.sourceId === (mode.kind === "add" ? chosenSourceId : definition?.sourceId),
       ),
-    [snapshot.sources, mode.kind, sourceId, definition?.sourceId],
+    [snapshot.sources, mode.kind, chosenSourceId, definition?.sourceId],
   );
+  const blockedDefault =
+    mode.kind === "add" && !source
+      ? snapshot.sources.find(
+          (candidate) =>
+            candidate.sourceId === target.defaultSourceId &&
+            !candidate.writable &&
+            candidate.readOnlyReason,
+        )
+      : undefined;
 
   const localErrors = (candidate: McpDraft) => {
     if (mode.kind === "add")
@@ -404,7 +421,7 @@ export function McpServerEditor({
               {mode.kind === "add" ? (
                 <div className="space-y-1.5">
                   <Label htmlFor="mcp-server-scope">Save to</Label>
-                  <Select value={sourceId ?? undefined} onValueChange={setSourceId}>
+                  <Select value={chosenSourceId ?? ""} onValueChange={setSourceId}>
                     <SelectTrigger id="mcp-server-scope">
                       <SelectValue placeholder="Choose where to save" />
                     </SelectTrigger>
@@ -418,6 +435,11 @@ export function McpServerEditor({
                   </Select>
                   {source?.trustReason ? (
                     <p className="text-xs text-muted-foreground">{source.trustReason}</p>
+                  ) : null}
+                  {blockedDefault ? (
+                    <p className="text-xs text-amber-300">
+                      {blockedDefault.label} is not offered: {blockedDefault.readOnlyReason}
+                    </p>
                   ) : null}
                   {!writableSources.length ? (
                     <p className="text-xs text-amber-300">

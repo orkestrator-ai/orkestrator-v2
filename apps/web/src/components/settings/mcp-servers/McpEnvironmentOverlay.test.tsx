@@ -15,6 +15,7 @@ import {
   environmentSource,
   install,
   overlay,
+  preview,
   refreshPreview,
   resetInvoke,
   snapshot,
@@ -359,6 +360,46 @@ describe("where a container's servers run", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review change" }));
     expect(await screen.findByText(/edited inside the container after Orkestrator/)).toBeTruthy();
     await expectReloaded(before);
+  });
+
+  test("a diverged default file is not preselected for a new server; another file can be chosen", async () => {
+    const diverged =
+      "This file was edited inside the container after Orkestrator last wrote it. Import those edits or reapply this environment's configuration before changing it here.";
+    install(
+      containerHandlers(
+        () => ({
+          sources: [
+            environmentSource({
+              writable: false,
+              readOnlyReason: diverged,
+              overlay: overlay({ state: "diverged", divergedNames: ["docs"] }),
+            }),
+            { ...projectSource(), writable: true, readOnlyReason: undefined },
+          ],
+        }),
+        { validate_mcp_mutation: () => ({ valid: true, fieldErrors: [], preview }) },
+      ),
+    );
+    requestMcpServerSettings({ provider: "claude", environmentId: "c1" });
+    render(<ProviderMcpSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: /Add server/ }));
+    const saveTo = screen.getByRole("combobox", { name: "Save to" });
+    expect(saveTo.textContent).toContain("Choose where to save");
+    expect(screen.getByText(`This environment is not offered: ${diverged}`)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
+    fireEvent.change(screen.getByLabelText("Executable"), { target: { value: "files" } });
+    const review = screen.getByRole("button", { name: "Review change" }) as HTMLButtonElement;
+    expect(review.disabled).toBe(true);
+
+    fireEvent.keyDown(saveTo, { key: "ArrowDown" });
+    expectDomAbsent(screen.queryByRole("option", { name: /^This environment/ }), "blocked file");
+    fireEvent.click(await screen.findByRole("option", { name: /^Project \(this worktree\)/ }));
+    expect(saveTo.textContent).toContain("Project (this worktree)");
+    expectDomAbsent(screen.queryByText(/is not offered/), "blocked default note");
+    expect(review.disabled).toBe(false);
+    fireEvent.click(review);
+    await waitFor(() => expect(callsOf("validate_mcp_mutation").length).toBe(1));
+    expect(callsOf("validate_mcp_mutation")[0]!.mutation.operation.sourceId).toBe("claude:project");
   });
 });
 

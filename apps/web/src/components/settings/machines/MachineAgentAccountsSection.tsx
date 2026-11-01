@@ -40,6 +40,7 @@ import { requestCloseGlobalSettings, requestGlobalSettings } from "@/lib/setting
 import { useAccountMachineStore } from "@/components/settings/account-machine";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
+import { cn } from "@/lib/utils";
 import {
   isPreferredIdentity,
   parseHostAgentSignIns,
@@ -116,6 +117,7 @@ function AccountCell({
   platform,
   busy,
   preferredEmail,
+  wide = false,
   onChoose,
   onManage,
 }: {
@@ -123,6 +125,8 @@ function AccountCell({
   platform: AgentAccountPlatform;
   busy: boolean;
   preferredEmail?: string;
+  /** Size to the login's full label, on one line, instead of a capped width. */
+  wide?: boolean;
   onChoose: (accountId: string) => void;
   onManage?: () => void;
 }) {
@@ -138,7 +142,7 @@ function AccountCell({
   const active = accounts.find((account) => account.id === snapshot.active[platform]);
   const preferred = preferredStatus(machine, platform, preferredEmail);
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className={cn("flex items-center gap-1.5", !wide && "flex-wrap")}>
       <Select
         value={snapshot.active[platform]}
         onValueChange={(accountId) => {
@@ -148,7 +152,7 @@ function AccountCell({
       >
         <SelectTrigger
           aria-label={`${AGENT_PLATFORM_LABELS[platform]} account on ${machine.name}`}
-          className="h-8 w-full max-w-[15rem] text-xs"
+          className={cn("h-8 text-xs", wide ? "flex-auto" : "w-full max-w-[15rem]")}
         >
           <SelectValue />
         </SelectTrigger>
@@ -568,11 +572,17 @@ export function MachineAgentAccountsSection({
   nodeId,
   selfOnly = false,
   onManage,
+  wide = false,
 }: {
   nodeId?: string | null;
   selfOnly?: boolean;
   /** Called before a platform's settings open, so a dialog showing this can close. */
   onManage?: () => void;
+  /**
+   * Let the by-machine table grow past the page's width to fit its columns, up to
+   * the width of the nearest `@container`, before it scrolls sideways.
+   */
+  wide?: boolean;
 }) {
   const [machines, setMachines] = useState<MachineAgentAccounts[] | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
@@ -908,7 +918,13 @@ export function MachineAgentAccountsSection({
         />
       ) : null}
       {shown.length > 0 && !(byIdentity && !single) ? (
-        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+        <div
+          data-testid="machine-agent-accounts-table"
+          className={cn(
+            "overflow-x-auto rounded-lg border border-zinc-800",
+            wide && "w-max max-w-[100cqw] min-w-full",
+          )}
+        >
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500">
@@ -955,6 +971,7 @@ export function MachineAgentAccountsSection({
                         {...(single || !preferred[platform]
                           ? {}
                           : { preferredEmail: preferred[platform] })}
+                        wide={wide}
                         onChoose={(accountId) => void choose(machine, platform, accountId)}
                         {...(onManage ? { onManage } : {})}
                       />

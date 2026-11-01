@@ -1042,3 +1042,31 @@ for (const nodeId of ["bk_self", null]) {
     }
   });
 }
+
+for (const mode of ["command", "leaf"] as const) {
+  test(`agent accounts use wide sizing inside the page query container in ${mode} mode`, async () => {
+    install({ status: { ...commandStatus, mode }, nodes: [] });
+    const originalInvoke = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation((command, args) =>
+      command === "list_machine_agent_accounts"
+        ? Promise.resolve({
+            machines: [
+              {
+                nodeId: "self",
+                name: "Desk",
+                self: true,
+                state: "ok",
+                snapshot: { accounts: [], active: { claude: "default", codex: "default" } },
+              },
+            ],
+          })
+        : originalInvoke(command, args),
+    );
+    render(<MachinesSettings />);
+    await screen.findByTestId("machine-agent-accounts-row");
+    const table = screen.getByTestId("machine-agent-accounts-table");
+    expect(table.classList.contains("w-max")).toBe(true);
+    expect(table.classList.contains("max-w-[100cqw]")).toBe(true);
+    expect(table.closest(".\\@container")).toBeTruthy();
+  });
+}

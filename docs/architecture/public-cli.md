@@ -348,16 +348,23 @@ when rows cannot fit; aggregate totals remain available.
 `not-found` and `history-expired` are distinct and neither is evidence that
 nothing ran.
 
-`session start --wait` and `session prompt --wait` do this themselves when the
-submission's response is lost (`transport-uncertain`, for example an admission
-slower than the client's 60 s request timeout). They look the run up by its
+`session start --wait`, `session prompt --wait`, `environment
+start|stop|recreate|delete --wait` and `environment exec --wait` do this
+themselves when the submission's response is lost (`transport-uncertain`, for
+example an admission slower than the client's 60 s request timeout, which a
+container start under load can outlast). They look the run up by its
 saved key and server-validated canonical intent and scope until it appears,
 then keep waiting. Recovery shares one `--timeout` deadline measured from
 before submission; a warning names the recovery. Ordinary successful
 submissions get the full observation duration after admission. If the key
 never appears, exit 4 stands. Definitive lookup errors and signal interruptions
 remain visible with the saved key details. A locally known changed intent is
-refused before sending. Nothing is resubmitted.
+refused before sending. Nothing is resubmitted. For exec the lookup only proves
+admission: a found operation whose worker has not yet claimed it is observed
+like any other pending exec, never treated as lost or started again.
+`environment launch --wait ready`, `project remove --wait` and the `host`
+commands do not recover yet; on a lost response they exit 4 with the
+`run get --request-id` recovery command.
 
 ### Retention and expiry
 

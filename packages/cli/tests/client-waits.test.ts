@@ -5,6 +5,7 @@ import {
   type PublicReceipt,
   type PublicErrorCode,
 } from "@orkestrator/protocol/public-api";
+import type { PublicEnvironmentSummary } from "@orkestrator/protocol/public-api-resources";
 import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import {
   captureIo,
@@ -403,6 +404,263 @@ describe("waiting through a lost submission response", () => {
     expect(result.code).toBe(4);
     expect(JSON.parse(result.out).error.code).toBe("transport-uncertain");
     expect(lookups).toHaveLength(0);
+  });
+});
+
+describe("environment --wait through a lost submission response", () => {
+  type Mutation = "environment.start" | "environment.stop" | "environment.exec";
+
+  function environmentSummary(overrides: Partial<PublicEnvironmentSummary> = {}) {
+    return {
+      id: "env",
+      projectId: "proj",
+      name: "env",
+      branch: "env",
+      environmentType: "container",
+      status: "running",
+      ready: true,
+      setup: { phase: "ready", complete: true, overridden: false },
+      lifecycle: { operation: null, error: null, deletionRequested: false },
+      activity: { state: null, hasUnreadWork: false },
+      pendingAgentLaunch: false,
+      startupSession: null,
+      workspacePath: null,
+      base: { branch: null, commit: null },
+      pr: { url: null, state: null },
+      createdAt: "2026-11-01T00:00:00.000Z",
+      lastActivityAt: null,
+      settingsRevision: "rev-1",
+      ...overrides,
+    } satisfies PublicEnvironmentSummary;
+  }
+
+  /** `action` admits but its response is lost; `run.get` finds it by key later. */
+  async function lostEnvironmentMutation(
+    action: Mutation,
+    byKey: Array<PublicReceipt | null>,
+    byId: PublicReceipt[],
+    options: { mutationDelay?: number; environment?: PublicEnvironmentSummary } = {},
+  ) {
+    const box = await createSandbox();
+    const lookups: Array<Record<string, unknown>> = [];
+    let submissions = 0;
+    const gateway = await startFakeGateway(async (request) => {
+      const called = String(request.body.args.action);
+      const input = request.body.args.input as Record<string, unknown>;
+      if (called === action) {
+        submissions += 1;
+        if (options.mutationDelay) await Bun.sleep(options.mutationDelay);
+        return new Response("upstream timeout", { status: 504 });
+      }
+      if (called === "run.get" && input.requestId !== undefined) {
+        lookups.push(input);
+        const next = byKey.shift();
+        return next
+          ? envelope(publicSuccessEnvelope("run.get", null, next))
+          : envelope(
+              publicErrorEnvelope("run.get", { code: "not-found", message: "not admitted yet" }),
+            );
+      }
+      if (called === "run.get") {
+        const next = byId.length > 1 ? byId.shift()! : byId[0]!;
+        return envelope(publicSuccessEnvelope("run.get", null, next));
+      }
+      if (called === "environment.get")
+        return envelope(
+          publicSuccessEnvelope("environment.get", options.environment ?? environmentSummary()),
+        );
+      return defaultResponder()(request);
+    });
+    cleanups.push(
+      () => box.cleanup(),
+      () => gateway.stop(),
+    );
+    const dataDir = await box.publishDescriptor(gateway);
+    await box.run(["connection", "add", "local", "--data-dir", dataDir, "--default", "--no-check"]);
+    return { box, lookups, submissions: () => submissions };
+  }
+
+  const startReceipt = (overrides: Partial<PublicReceipt>) =>
+    receipt({
+      action: "environment.start",
+      requestId: "slow-env",
+      resources: { environmentId: "env" },
+      dispatch: undefined,
+      execution: undefined,
+      ...overrides,
+    });
+  const execReceipt = (overrides: Partial<PublicReceipt>) =>
+    receipt({
+      action: "environment.exec",
+      requestId: "slow-exec",
+      resources: { environmentId: "env" },
+      dispatch: undefined,
+      result: { operationId: OPERATION },
+      ...overrides,
+    });
+  const START = ["--json", "environment", "start", "env", "--request-id", "slow-env"];
+  const EXEC = ["--json", "environment", "exec", "env", "--request-id", "slow-exec"];
+  const COMMAND = ["--", "sh", "-c", "exit 3"];
+
+  test("start --wait ready finds the start by its request key and waits for setup", async () => {
+    const provisioning = startReceipt({ state: "running", stage: "setup", completedAt: undefined });
+    const { box, lookups, submissions } = await lostEnvironmentMutation(
+      "environment.start",
+      [null, provisioning],
+      [provisioning, startReceipt({})],
+    );
+    const result = await box.run([...START, "--wait", "ready", "--timeout", "30s"]);
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.out);
+    expect(output.receipt.state).toBe("succeeded");
+    expect(output.result).toMatchObject({ condition: "ready", environment: { ready: true } });
+    expect(output.warnings.join("\n")).toContain("request key");
+    expect(lookups).toHaveLength(2);
+    expect(lookups[0]).toMatchObject({ requestId: "slow-env", action: "environment.start" });
+    expect(typeof lookups[0]!.namespace).toBe("string");
+    expect(lookups[0]!.submittedInput).toEqual({ environmentId: "env" });
+    expect(submissions()).toBe(1);
+  });
+
+  test("a recovered start that failed setup still reports the setup failure", async () => {
+    const { box, submissions } = await lostEnvironmentMutation(
+      "environment.start",
+      [startReceipt({ state: "running", stage: "setup", completedAt: undefined })],
+      [startReceipt({ state: "running", stage: "setup", completedAt: undefined })],
+      {
+        environment: environmentSummary({
+          status: "error",
+          ready: false,
+          setup: { phase: "failed", complete: false, overridden: false },
+          lifecycle: { operation: null, error: "setup script exited 2", deletionRequested: false },
+        }),
+      },
+    );
+    const result = await box.run([...START, "--wait", "ready", "--timeout", "30s"]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out).error).toMatchObject({
+      code: "setup-failed",
+      message: "setup script exited 2",
+    });
+    expect(submissions()).toBe(1);
+  });
+
+  test("the other lifecycle commands share the recovery", async () => {
+    const stopped = startReceipt({ action: "environment.stop" });
+    const { box, lookups, submissions } = await lostEnvironmentMutation(
+      "environment.stop",
+      [stopped],
+      [stopped],
+      { environment: environmentSummary({ status: "stopped", ready: false }) },
+    );
+    const result = await box.run([
+      "--json",
+      "environment",
+      "stop",
+      "env",
+      "--request-id",
+      "slow-env",
+      "--wait",
+      "stopped",
+      "--timeout",
+      "30s",
+    ]);
+    expect(result.code).toBe(0);
+    expect(lookups[0]).toMatchObject({ action: "environment.stop" });
+    expect(submissions()).toBe(1);
+  });
+
+  test("exec --wait observes a recovered, not yet claimed command to its exit", async () => {
+    // The worker had not claimed the operation when it was found: the lookup
+    // reports admission, not the command's outcome, so the client keeps
+    // observing instead of treating the missing claim as a failure.
+    const unclaimed = execReceipt({
+      state: "running",
+      stage: "executing",
+      result: { operationId: OPERATION, launch: "unconfirmed" },
+      execution: { state: "pending", reason: "control timed out" },
+      completedAt: undefined,
+    });
+    const exited = execReceipt({
+      execution: { state: "completed", evidence: "process-exit", exitCode: 0 },
+    });
+    const { box, lookups, submissions } = await lostEnvironmentMutation(
+      "environment.exec",
+      [null, unclaimed],
+      [unclaimed, exited],
+    );
+    const result = await box.run([...EXEC, "--wait", "--timeout", "30s", ...COMMAND]);
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.out);
+    expect(output.receipt.state).toBe("succeeded");
+    expect(output.result).toEqual({ execution: exited.execution });
+    expect(output.warnings.join("\n")).toContain("request key");
+    expect(lookups[0]).toMatchObject({ requestId: "slow-exec", action: "environment.exec" });
+    expect(lookups[0]!.submittedInput).toEqual({ environmentId: "env", argv: COMMAND.slice(1) });
+    expect(submissions()).toBe(1);
+  });
+
+  test("exec --wait --exit-code passes a recovered command's own exit code through", async () => {
+    const exited = execReceipt({
+      state: "failed",
+      error: { code: "exec-failed", message: "exited 3" },
+      execution: { state: "failed", evidence: "process-exit", exitCode: 3 },
+    });
+    const { box, submissions } = await lostEnvironmentMutation(
+      "environment.exec",
+      [exited],
+      [exited],
+    );
+    const result = await box.run([...EXEC, "--wait", "--exit-code", ...COMMAND]);
+    expect(result.code).toBe(3);
+    expect(submissions()).toBe(1);
+  });
+
+  test.each([
+    ["start", [...START, "--wait", "running", "--timeout", "600ms"], "environment.start"],
+    ["exec", [...EXEC, "--wait", "--timeout", "600ms", ...COMMAND], "environment.exec"],
+  ] as const)(
+    "%s: the original error stands if the key never appears within the wait",
+    async (_name, argv, action) => {
+      const { box, submissions } = await lostEnvironmentMutation(action, [], []);
+      const result = await box.run([...argv]);
+      expect(result.code).toBe(4);
+      const error = JSON.parse(result.out).error;
+      expect(error.code).toBe("transport-uncertain");
+      expect(error.details).toMatchObject({ requestId: expect.stringMatching(/^slow-/) });
+      expect(submissions()).toBe(1);
+    },
+  );
+
+  test.each([
+    ["start", START, "environment.start"],
+    ["exec", [...EXEC, ...COMMAND], "environment.exec"],
+  ] as const)(
+    "%s without --wait reports a lost response, not looked up",
+    async (_name, argv, action) => {
+      const { box, lookups } = await lostEnvironmentMutation(action, [], []);
+      const result = await box.run([...argv]);
+      expect(result.code).toBe(4);
+      expect(JSON.parse(result.out).error.code).toBe("transport-uncertain");
+      expect(lookups).toHaveLength(0);
+    },
+  );
+
+  test("exec recovery and final observation share the --timeout deadline", async () => {
+    const running = execReceipt({
+      state: "running",
+      stage: "executing",
+      execution: { state: "running" },
+      completedAt: undefined,
+    });
+    const { box } = await lostEnvironmentMutation("environment.exec", [running], [running], {
+      mutationDelay: 400,
+    });
+    const started = Date.now();
+    const result = await box.run([...EXEC, "--wait", "--timeout", "500ms", ...COMMAND]);
+    expect(JSON.parse(result.out).error.code).toBe("deadline-exceeded");
+    // A fresh budget after recovery would run past 400 + 500 ms.
+    expect(Date.now() - started).toBeLessThan(850);
   });
 });
 

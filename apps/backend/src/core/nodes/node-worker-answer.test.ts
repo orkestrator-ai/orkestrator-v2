@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
+
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import { NodeCoordination } from "./node-coordination.js";
@@ -251,4 +253,18 @@ describe("answer-worker-question approval", () => {
       t.done();
     });
   }
+
+  test("an older node, which answers that it has no such command, is told to update", async () => {
+    // The wording a real gateway passes on from the node's backend.
+    const t = await setup(async () => {
+      throw new Error(unknownBackendCommandMessage("answer_controller_worker_question"));
+    });
+    const request = await t.create("bk_remote");
+    const resolved = await t.instance.actions.resolve(request.requestId, "approve");
+    expect(resolved.state).toBe("failed");
+    expect(resolved.result?.message).toContain("runs an older Orkestrator");
+    expect(resolved.result?.message).toContain("Nothing was sent");
+    expect(t.remote).toHaveLength(1);
+    t.done();
+  });
 });

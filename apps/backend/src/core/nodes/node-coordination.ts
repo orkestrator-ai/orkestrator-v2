@@ -7,6 +7,7 @@ import {
 import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrator";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import {
   parseWorkerQuestionRelay,
   workerQuestionAnswerProblem,
@@ -806,10 +807,7 @@ export class NodeCoordination {
         if (error instanceof NodeOutcomeUnknownError) return lost;
         if (error instanceof NodeUnavailableError)
           throw new Error(`${target.nodeName} is not connected; nothing was sent.`);
-        if (
-          error instanceof Error &&
-          error.message.includes("Unknown command: answer_controller_worker_question")
-        )
+        if (isUnknownCommandError(error, "answer_controller_worker_question"))
           throw new Error(
             `${target.nodeName} runs an older Orkestrator that cannot relay answers; update it. Nothing was sent.`,
           );

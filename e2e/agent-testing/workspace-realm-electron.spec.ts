@@ -27,6 +27,7 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 type RouteUpgradeFixture = { allowDirect: boolean; restore(): void; advance(): void };
 type CaptureFixture = { pending: boolean; release(): void; restore(): void };
+type CoordinatorGate = { release(): void };
 type Project = { id: string; name: string };
 type Environment = { id: string; name: string; status?: string; worktreePath?: string | null };
 
@@ -444,6 +445,31 @@ test("a leaf's workspace opens in the window's central region without moving or 
     await expect.poll(connectionPath).toBe("relay");
     await agentTrigger.click();
 
+    // Hold the leaf coordinator's reads until released, so the reloaded realm's
+    // coordinator finishes loading only after a panel has opened over it.
+    await electronApp.evaluate(() => {
+      const held: Array<() => void> = [];
+      let open = true;
+      const inner = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const body = typeof init?.body === "string" ? init.body : "";
+        if (open && /"(get|ensure)_project_coordinator"/.test(body))
+          await new Promise<void>((resolve) => held.push(resolve));
+        return inner(input, init);
+      }) as typeof fetch;
+      (globalThis as typeof globalThis & { coordinatorGate?: CoordinatorGate }).coordinatorGate = {
+        release: () => {
+          open = false;
+          for (const resolve of held.splice(0)) resolve();
+        },
+      };
+    });
+    const releaseCoordinator = () =>
+      electronApp.evaluate(() =>
+        (
+          globalThis as typeof globalThis & { coordinatorGate: CoordinatorGate }
+        ).coordinatorGate.release(),
+      );
     // No upgrade while idle. A real renderer command must travel through
     // getBackend/noteUse, upgrade the route, and reload only this realm.
     await electronApp.evaluate(() => {
@@ -470,6 +496,53 @@ test("a leaf's workspace opens in the window's central region without moving or 
     });
     expect(gateway).toBe(directOrigin);
     await sameWindow();
+    // The realm's open title-bar panel, and whether it holds DOM and native focus.
+    const panelState = () =>
+      electronApp.evaluate(async ({ webContents }) => {
+        const realm = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().includes("realm=workspace"))!;
+        const dom = (await realm.executeJavaScript(`(() => {
+        const panel = document.querySelector('section[role="dialog"][aria-hidden="false"]');
+        return { label: panel?.getAttribute('aria-label') ?? null, focused: Boolean(panel?.contains(document.activeElement)) };
+      })()`)) as { label: string | null; focused: boolean };
+        return { ...dom, nativeFocus: realm.isFocused() };
+      });
+    // A coordinator that finishes loading under an open panel (a slow link, a
+    // loaded host) mounts its composer there. The composer must not take the
+    // panel's focus: it did, and the panel focus checks below failed whenever
+    // the reloaded realm's coordinator was still loading (todo 1170).
+    const coordinatorComposer = () =>
+      electronApp.evaluate(async ({ webContents }) =>
+        webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().includes("realm=workspace"))!
+          .executeJavaScript(
+            `Boolean(document.querySelector('[role="textbox"][aria-label^="Ask the coordinator"]'))`,
+          ),
+      );
+    try {
+      await electronApp.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+      );
+      const trigger = window.getByRole("button", { name: "Open agent information", exact: true });
+      await trigger.focus();
+      await expect(trigger).toBeFocused();
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        const host = BrowserWindow.getAllWindows()[0]!.webContents;
+        host.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+        host.sendInputEvent({ type: "char", keyCode: "\r" });
+        host.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+      });
+      await expect.poll(panelState).toMatchObject({ label: "Agent information", focused: true });
+      expect(await coordinatorComposer()).toBe(false);
+    } finally {
+      await releaseCoordinator();
+    }
+    await expect.poll(coordinatorComposer, { timeout: 30_000 }).toBe(true);
+    expect(await panelState()).toMatchObject({ label: "Agent information", focused: true });
+    await agentTrigger.click();
+    await expect.poll(async () => (await panelState()).label).toBeNull();
     // Reopen on the reloaded document: mounted UI must consume the new snapshot.
     await agentTrigger.click();
     await expect.poll(connectionPath).toBe("direct");
@@ -665,17 +738,6 @@ test("a leaf's workspace opens in the window's central region without moving or 
       }
     }
     // Keyboard focus crosses the native webContents boundary in both directions.
-    const panelState = () =>
-      electronApp.evaluate(async ({ webContents }) => {
-        const realm = webContents
-          .getAllWebContents()
-          .find((contents) => contents.getURL().includes("realm=workspace"))!;
-        const dom = (await realm.executeJavaScript(`(() => {
-        const panel = document.querySelector('section[role="dialog"][aria-hidden="false"]');
-        return { label: panel?.getAttribute('aria-label') ?? null, focused: Boolean(panel?.contains(document.activeElement)) };
-      })()`)) as { label: string | null; focused: boolean };
-        return { ...dom, nativeFocus: realm.isFocused() };
-      });
     for (const [triggerLabel, panelLabel] of [
       ["Open agent information", "Agent information"],
       ["Open environment process usage", "Environment process usage"],

@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ClipboardEvent,
 } from "react";
+import { isFocusHeldElsewhere } from "@/lib/background-focus";
 import { cn } from "@/lib/utils";
 import type { FileMention } from "@/types";
 
@@ -298,6 +299,8 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const isComposingRef = useRef(false);
     const pendingCursorRef = useRef<number | null>(null);
     const pendingFocusRef = useRef(false);
+    /** A caret position a sync could not place without taking focus. */
+    const deferredCaretRef = useRef<number | null>(null);
     const initializedRef = useRef(false);
     const lastCursorPositionRef = useRef(value.length);
 
@@ -432,11 +435,27 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
       if (shouldRestoreFocus) {
         focusEditableElement(input);
       }
-      setCursorOffset(input, cursorPos);
+      // Placing the caret focuses the editor, so a sync while the user is in
+      // another open panel leaves the caret for the editor's next focus.
+      if (shouldRestoreFocus || !isFocusHeldElsewhere(input)) {
+        setCursorOffset(input, cursorPos);
+        deferredCaretRef.current = null;
+      } else {
+        deferredCaretRef.current = cursorPos;
+      }
 
       pendingCursorRef.current = null;
       pendingFocusRef.current = false;
     }, [value, mentions]);
+
+    // Chromium keeps a caret placed during the focus event, and a click
+    // still moves it to where the user clicked afterwards.
+    const handleFocus = useCallback(() => {
+      const input = inputRef.current;
+      const caret = deferredCaretRef.current;
+      deferredCaretRef.current = null;
+      if (input && caret !== null) setCursorOffset(input, caret);
+    }, []);
 
     // Callers disable the input while a prompt is in flight. It stays
     // focusable meanwhile (see `tabIndex` below), so focus survives the send;
@@ -566,6 +585,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           tabIndex={disabled ? -1 : undefined}
           suppressContentEditableWarning
           onInput={handleInput}
+          onFocus={handleFocus}
           onCompositionStart={handleCompositionStart}
           onCompositionEnd={handleCompositionEnd}
           onPaste={handlePaste}

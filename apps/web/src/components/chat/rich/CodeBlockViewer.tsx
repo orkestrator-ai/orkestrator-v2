@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { copyRichText } from "@/lib/chat/rich-markdown/clipboard";
-import { useDialogFocusReturn } from "@/lib/chat/rich-markdown/dialog-focus";
+import { useDialogFocusReturn } from "@/lib/dialog-focus";
 import {
   pinRichViewKey,
   useRichContentViewStore,

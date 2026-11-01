@@ -78,6 +78,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
+import { useDialogFocusReturn, useDialogFocusReturnGroup } from "@/lib/dialog-focus";
 import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
@@ -400,6 +401,14 @@ function ConnectedApp() {
   const [githubSignInOffered, setGithubSignInOffered] = useState(false);
   const [githubReminderOptOut, setGithubReminderOptOut] = useState(false);
   const [claudeLoginNoticeDismissed, setClaudeLoginNoticeDismissed] = useState(false);
+  // The startup notices open on their own, over whatever the user is doing,
+  // and have no trigger for Radix to return focus to. Keep the original
+  // control until the last overlapping or chained notice closes.
+  const startupNoticeFocus = useDialogFocusReturnGroup();
+  const dockerWarningFocus = useDialogFocusReturn(startupNoticeFocus);
+  const noAiCliFocus = useDialogFocusReturn(startupNoticeFocus);
+  const claudeLoginFocus = useDialogFocusReturn(startupNoticeFocus);
+  const githubWarningFocus = useDialogFocusReturn(startupNoticeFocus);
   const [localBackendUnavailableMessage, setLocalBackendUnavailableMessage] = useState<
     string | null
   >(null);
@@ -1533,7 +1542,7 @@ function ConnectedApp() {
               if (!open) setDockerWarningDismissed(true);
             }}
           >
-            <AlertDialogContent>
+            <AlertDialogContent {...dockerWarningFocus}>
               <AlertDialogHeader>
                 <AlertDialogTitle>{dockerWarning.title}</AlertDialogTitle>
                 <AlertDialogDescription>
@@ -1578,7 +1587,7 @@ function ConnectedApp() {
 
           {/* AI CLI not installed dialog - shows only when no agent platform is available */}
           <AlertDialog open={noAiCliAvailable}>
-            <AlertDialogContent>
+            <AlertDialogContent {...noAiCliFocus}>
               <AlertDialogHeader>
                 <AlertDialogTitle>AI CLI Required</AlertDialogTitle>
                 <AlertDialogDescription>
@@ -1628,7 +1637,7 @@ function ConnectedApp() {
 
           {/* Claude Code not logged in notice - non-blocking, dismissible; other platforms keep working */}
           <AlertDialog open={showClaudeLoginNotice}>
-            <AlertDialogContent>
+            <AlertDialogContent {...claudeLoginFocus}>
               <AlertDialogHeader>
                 <AlertDialogTitle>Claude Code Is Not Logged In</AlertDialogTitle>
                 <AlertDialogDescription>
@@ -1665,7 +1674,7 @@ function ConnectedApp() {
 
           {/* GitHub CLI setup dialog - non-blocking, dismissible; signs in gh */}
           <AlertDialog open={showGithubWarning}>
-            <AlertDialogContent>
+            <AlertDialogContent {...githubWarningFocus}>
               <AlertDialogHeader>
                 <AlertDialogTitle>
                   {githubCliMissing ? "GitHub CLI Not Found" : "Sign In to GitHub"}

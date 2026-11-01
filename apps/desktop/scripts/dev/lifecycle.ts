@@ -412,6 +412,36 @@ export function electronReadinessTimeoutMs(flavor: "development" | "agent-test")
   return flavor === "agent-test" ? ELECTRON_READINESS_TIMEOUT_MS : null;
 }
 
+/** Set to `1` to start an agent-test profile's Electron without any display (Linux only). */
+export const AGENT_TEST_HEADLESS_ELECTRON_ENV = "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON";
+
+/**
+ * Chromium switches and display variables for the profile's Electron.
+ *
+ * On a shared Linux host the inherited `DISPLAY` and `WAYLAND_DISPLAY` belong
+ * to whoever is signed in, so an agent-test window would open on their
+ * desktop. With the opt-in, Electron runs on Chromium's headless Ozone
+ * platform with the GPU off and never sees those variables; the browser
+ * suites drive the gateway, not this window. Other flavors and platforms are
+ * unchanged, so a variable left in a shell cannot hide `mise run dev`.
+ */
+export function electronLaunchForRuntime(
+  flavor: "development" | "agent-test",
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): { switches: string[]; env: NodeJS.ProcessEnv } {
+  const next = { ...env };
+  delete next.ELECTRON_RUN_AS_NODE;
+  const headless =
+    flavor === "agent-test" &&
+    platform === "linux" &&
+    env[AGENT_TEST_HEADLESS_ELECTRON_ENV] === "1";
+  if (!headless) return { switches: [], env: next };
+  delete next.DISPLAY;
+  delete next.WAYLAND_DISPLAY;
+  return { switches: ["--ozone-platform=headless", "--disable-gpu"], env: next };
+}
+
 /**
  * Check that Electron announced everything this particular run depends on.
  *
@@ -686,11 +716,14 @@ export async function startDevelopment(
     });
     await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
 
-    const electronEnv = { ...process.env };
-    delete electronEnv.ELECTRON_RUN_AS_NODE;
+    const { switches: electronSwitches, env: electronEnv } = electronLaunchForRuntime(
+      flavor,
+      process.platform,
+      process.env,
+    );
     electron = (dependencies.spawn ?? spawn)(
       electronExecutable,
-      ["apps/desktop/dist/electron/main.js"],
+      [...electronSwitches, "apps/desktop/dist/electron/main.js"],
       {
         cwd: repositoryRoot,
         detached: true,

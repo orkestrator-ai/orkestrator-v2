@@ -11,6 +11,7 @@ import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
+  electronLaunchForRuntime,
   electronReadinessTimeoutMs,
   outputTail,
   startDevelopment,
@@ -94,6 +95,33 @@ describe("Electron readiness", () => {
     // after a fixed timeout meant `mise run dev` never reached the app.
     expect(electronReadinessTimeoutMs("development")).toBeNull();
     expect(electronReadinessTimeoutMs("agent-test")).toBe(60_000);
+  });
+
+  test("hides the display only from an opted-in agent-test Electron on Linux", () => {
+    const env = {
+      DISPLAY: ":0",
+      WAYLAND_DISPLAY: "wayland-1",
+      ELECTRON_RUN_AS_NODE: "1",
+      ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1",
+    };
+    const headless = electronLaunchForRuntime("agent-test", "linux", env);
+    expect(headless.switches).toEqual(["--ozone-platform=headless", "--disable-gpu"]);
+    expect(headless.env.DISPLAY).toBeUndefined();
+    expect(headless.env.WAYLAND_DISPLAY).toBeUndefined();
+    expect(headless.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    expect(env.DISPLAY).toBe(":0");
+    for (const [flavor, platform] of [
+      ["development", "linux"],
+      ["agent-test", "darwin"],
+    ] as const) {
+      const shown = electronLaunchForRuntime(flavor, platform, env);
+      expect(shown.switches).toEqual([]);
+      expect(shown.env.DISPLAY).toBe(":0");
+      expect(shown.env.WAYLAND_DISPLAY).toBe("wayland-1");
+      expect(shown.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    }
+    const { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: _, ...notOptedIn } = env;
+    expect(electronLaunchForRuntime("agent-test", "linux", notOptedIn).switches).toEqual([]);
   });
   test("keeps the one-shot ready frame emitted during post-spawn status persistence", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));

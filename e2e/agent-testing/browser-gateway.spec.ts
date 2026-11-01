@@ -1586,7 +1586,7 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.goto(status.browserUrl!);
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: "Agent messages", exact: true }).click();
+    await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
     await page.getByTestId("agent-mail-conversation-row").first().click();
     const panel = page.getByTestId("agent-mail-panel");
     await panel.getByRole("button", { name: "Deliver now", exact: true }).click();
@@ -1622,7 +1622,7 @@ test("agent mail Deliver now steers into a live bridge turn and survives inactiv
     await page.reload();
     await ensureProjectExpanded(page, fixture.name);
     await page.getByText(target!.name, { exact: true }).first().click();
-    await page.getByRole("button", { name: "Agent messages", exact: true }).click();
+    await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
     await page.getByTestId("agent-mail-conversation-row").first().click();
     await expect(panel.getByText(/^(delivered|handled)$/)).toBeVisible();
     await expect(panel.getByRole("button", { name: "Deliver now", exact: true })).toHaveCount(0);
@@ -1716,6 +1716,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
 
     await page.goto(status.browserUrl!);
     await ensureProjectExpanded(page, fixture!.name);
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
     await expect(page.getByText(sender.name, { exact: true }).first()).toBeVisible();
     await invoke("send_agent_mail", {
@@ -1726,23 +1727,29 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       body: "This message arrived while the recipient environment was inactive.",
     });
 
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
+    ).toBeVisible();
 
     await page.reload();
     await ensureProjectExpanded(page, fixture!.name);
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }),
+    ).toBeVisible();
     // A committed send whose response is lost must retain its draft and retry
     // key across both list navigation and closing the panel.
     const openConversation = async () => {
-      await page.getByRole("button", { name: "Agent messages", exact: true }).click();
+      await page.getByRole("button", { name: /^Agent messages(?:, \d+ needs? you)?$/ }).click();
       await page.getByTestId("agent-mail-conversation-row").first().click();
     };
     await openConversation();
@@ -1773,7 +1780,9 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await panel.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByText("Message was not sent", { exact: true })).toBeVisible();
     await panel.getByRole("button", { name: "Close", exact: true }).click();
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await page.setViewportSize({ width: 390, height: 844 });
     await openConversation();
@@ -1819,7 +1828,9 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       injectOverride: "inherit",
     });
     await page.setViewportSize({ width: 1440, height: 960 });
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(sender.name, { exact: true }).first().click();
+    await dismissSidebarTooltip(page, fixture!.name);
     await page.getByText(recipient.name, { exact: true }).first().click();
     await page.reload();
     expect((await mailbox()).descriptor).toMatchObject({

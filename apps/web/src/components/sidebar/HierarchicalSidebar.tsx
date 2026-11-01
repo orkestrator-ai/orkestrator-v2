@@ -62,7 +62,12 @@ import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
+import {
+  displayedActivityResolver,
+  sortEnvironmentsByActivity,
+} from "@/lib/environment-activity-sort";
 import { useUIStore, useProjectStore, useEnvironmentStore } from "@/stores";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -86,7 +91,6 @@ import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
-import type { ActivitySortOrder } from "@/stores/uiStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -146,54 +150,9 @@ export type SidebarSelectionResult =
   | { type: "range"; ids: string[] }
   | { type: "single"; environmentId: string };
 
-function parseActivityTime(value: string | undefined): number {
-  if (!value) return Number.NEGATIVE_INFINITY;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
-}
-
-const ATTENTION_PRIORITY: Record<NonNullable<Environment["agentActivityState"]>, number> = {
-  waiting: 0,
-  working: 1,
-  idle: 2,
-};
-
-/**
- * "priority": unread work first, then waiting, working and idle, most recent
- * activity first within each. "newest"/"oldest": by activity time alone. The
- * existing project/environment order is a stable fallback in every order.
- */
-export function sortEnvironmentsByActivity(
-  environments: Environment[],
-  projects: Project[],
-  order: ActivitySortOrder = "priority",
-): Environment[] {
-  const projectOrder = new Map(projects.map((project) => [project.id, project.order]));
-  return [...environments].sort((left, right) => {
-    if (order === "priority") {
-      const unreadDifference =
-        Number(right.hasUnreadWork === true) - Number(left.hasUnreadWork === true);
-      if (unreadDifference !== 0) return unreadDifference;
-      const stateDifference =
-        ATTENTION_PRIORITY[left.agentActivityState ?? "idle"] -
-        ATTENTION_PRIORITY[right.agentActivityState ?? "idle"];
-      if (stateDifference !== 0) return stateDifference;
-    }
-
-    const leftActivity = parseActivityTime(left.lastActivityAt);
-    const rightActivity = parseActivityTime(right.lastActivityAt);
-    if (leftActivity !== rightActivity) {
-      return order === "oldest" ? leftActivity - rightActivity : rightActivity - leftActivity;
-    }
-
-    const projectDifference =
-      (projectOrder.get(left.projectId) ?? Number.MAX_SAFE_INTEGER) -
-      (projectOrder.get(right.projectId) ?? Number.MAX_SAFE_INTEGER);
-    if (projectDifference !== 0) return projectDifference;
-    if (left.order !== right.order) return left.order - right.order;
-    return left.id.localeCompare(right.id);
-  });
-}
+// Kept here for existing importers; the order itself is shared with the
+// federated list and the CLI.
+export { sortEnvironmentsByActivity };
 
 export function measureActivityRowLayoutTop(element: HTMLElement): number {
   const getOffsetTop = (node: HTMLElement | null): number => {
@@ -590,9 +549,31 @@ export function HierarchicalSidebar() {
       ),
     [allEnvironments, selectedEnvironmentId],
   );
+  // Sort on the activity each row displays (runtime observations, and working
+  // during an active build), not the raw persisted state.
+  const runtimeActivityStates = useAgentActivityStore((state) => state.containerStates);
+  const runtimeActivityUpdatedAt = useAgentActivityStore((state) => state.containerStateUpdatedAt);
+  const activeBuildEnvironmentIds = useBuildPipelineStore(
+    (state) => state.activeBuildEnvironmentIds,
+  );
+  const displayedActivity = useMemo(
+    () =>
+      displayedActivityResolver(
+        runtimeActivityStates,
+        runtimeActivityUpdatedAt,
+        activeBuildEnvironmentIds,
+      ),
+    [runtimeActivityStates, runtimeActivityUpdatedAt, activeBuildEnvironmentIds],
+  );
   const activityEnvironments = useMemo(
-    () => sortEnvironmentsByActivity(sidebarEnvironments, projects, activitySortOrder),
-    [sidebarEnvironments, projects, activitySortOrder],
+    () =>
+      sortEnvironmentsByActivity(
+        sidebarEnvironments,
+        projects,
+        activitySortOrder,
+        displayedActivity,
+      ),
+    [sidebarEnvironments, projects, activitySortOrder, displayedActivity],
   );
   const defaultCloneDirectory = useMemo(
     () => suggestedCloneDirectory(projects.map((project) => project.localPath)),
@@ -1253,7 +1234,7 @@ export function HierarchicalSidebar() {
             </Tooltip>
           </div>
         </div>
-        {sortEnvironmentsByActivity(allEnvironments, projects, activitySortOrder)
+        {sortEnvironmentsByActivity(allEnvironments, projects, activitySortOrder, displayedActivity)
           .filter(
             (environment) =>
               environment.projectHome &&
@@ -1375,6 +1356,10 @@ export function HierarchicalSidebar() {
     });
   };
 
+  const boundDisplayedActivity = (environmentId: string) => {
+    const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
+    return environment ? displayedActivity(environment) : undefined;
+  };
   const renderFederatedActivityRow = (environmentId: string) => {
     const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
     if (!environment) return null;
@@ -1599,6 +1584,7 @@ export function HierarchicalSidebar() {
               machines={visibleMachines}
               order={activitySortOrder}
               renderBoundRow={renderFederatedActivityRow}
+              boundActivity={boundDisplayedActivity}
             />
           ) : federatedMode === "project" || federatedMode === "repository" ? (
             <MergedProjectList

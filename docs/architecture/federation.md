@@ -462,15 +462,18 @@ with `MachinesFilter`:
 - Activity order offers **Priority order** (the default for both local and
   federated lists), **Newest first**, and **Oldest first**. Priority puts unread
   work first, then waiting, working and idle, newest first within each group.
-  Federated priority recency uses the activity snapshot timestamp, falling back
-  to `lastActivityAt`; local priority uses `lastActivityAt`.
-  Both chronological options use `lastActivityAt`, the time of actual user/agent
-  activity, independent of snapshot writes and lease refreshes. Missing or invalid
-  activity times follow dated rows in Newest first and precede them in Oldest
-  first. Federated ties use backend ID, then environment ID; local ties use
-  project order, environment order, then environment ID. Timestamps come from
-  different clocks, so this is a presentation sort only. The selected order is
-  persisted and applies when filtering to one machine too.
+  The local list, the federated list and `orkestrator environment list --sort`
+  share one comparator (`@orkestrator/protocol/environment-activity-order`), and
+  this machine's rows rank the activity they display in both lists, so an active
+  build counts as working. All three orders use `lastActivityAt`, the time of actual user/agent
+  activity, independent of snapshot writes and lease refreshes; priority alone
+  falls back to the activity snapshot timestamp for a record without one (an older
+  remote backend). Missing or invalid activity times follow dated rows in Newest
+  first and precede them in Oldest first. Federated ties use backend ID, then
+  environment ID; local ties use project order, environment order, then environment
+  ID; the CLI keeps the backend's order. Timestamps come from different clocks, so
+  this is a presentation sort only. The selected order is persisted and applies
+  when filtering to one machine too.
 - `EnvironmentStatusMarker` sits immediately before every environment name:
   federated rows and the bound machine's `EnvironmentItem`. Its 8 px
   `MachineDot` center sits above a 16 px background halo, without a separate

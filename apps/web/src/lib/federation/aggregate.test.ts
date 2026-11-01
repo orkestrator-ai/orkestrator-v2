@@ -125,7 +125,29 @@ describe("aggregate projections", () => {
     ]);
   });
 
-  test("chronological orders follow activity independently of snapshot and lease writes", () => {
+  test("bound rows sort on the activity they display; remote rows on their summary", () => {
+    const bound = environment("bk_a", "bound", "p", {
+      activity: "idle",
+      lastActivityAt: "2026-10-21T09:00:00Z",
+    });
+    const remote = environment("bk_b", "remote", "p", {
+      activity: "idle",
+      lastActivityAt: "2026-10-21T12:00:00Z",
+    });
+    const machines = [
+      machine("a", "A", { bound: true, environmentsByProject: new Map([["p", [bound]]]) }),
+      machine("b", "B", { environmentsByProject: new Map([["p", [remote]]]) }),
+    ];
+    const ids = (shown?: (id: string) => "working" | undefined) =>
+      activityRows(machines, "priority", shown).map((row) => row.environment.ref.environmentId);
+    expect(ids()).toEqual(["remote", "bound"]);
+    expect(ids(() => "working")).toEqual(["bound", "remote"]);
+    // A remote row never takes a local observation: its row shows its summary.
+    expect(ids((id) => (id === "remote" ? "working" : undefined))).toEqual(["remote", "bound"]);
+    expect(bound.activity).toBe("idle");
+  });
+
+  test("activity orders follow activity independently of snapshot and lease writes", () => {
     const a = environment("bk_a", "a", "p", {
       activity: "working",
       lastActivityAt: "2026-10-21T12:00:00Z",
@@ -144,18 +166,19 @@ describe("aggregate projections", () => {
       activityRows(machines, order).map((row) => row.environment.ref.environmentId);
     expect(ids("newest")).toEqual(["a", "b"]);
     expect(ids("oldest")).toEqual(["b", "a"]);
-    expect(ids("priority")).toEqual(["b", "a"]);
+    // Priority recency uses the same activity time (the shared comparator).
+    expect(ids("priority")).toEqual(["a", "b"]);
 
     // Another prompt/completion while the aggregate state remains working.
     b.lastActivityAt = "2026-10-21T13:00:00Z";
     expect(ids("newest")).toEqual(["b", "a"]);
     expect(ids("oldest")).toEqual(["a", "b"]);
 
-    // A snapshot/lease refresh alone must not move the row chronologically.
+    // A snapshot/lease refresh alone must not move the row in any order.
     a.activityUpdatedAt = "2026-10-21T14:00:00Z";
     expect(ids("newest")).toEqual(["b", "a"]);
     expect(ids("oldest")).toEqual(["a", "b"]);
-    expect(ids("priority")).toEqual(["a", "b"]);
+    expect(ids("priority")).toEqual(["b", "a"]);
   });
 
   test("chronological orders treat invalid/missing activity as undated and keep ID ties stable", () => {

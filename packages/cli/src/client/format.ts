@@ -1,3 +1,11 @@
+import {
+  AGENT_ACTIVITY_STATES,
+  type AgentActivityState,
+} from "@orkestrator/protocol/agent-activity";
+import {
+  compareEnvironmentsByActivity,
+  type ActivitySortOrder,
+} from "@orkestrator/protocol/environment-activity-order";
 import type {
   PublicEnvironmentSummary,
   PublicProjectSummary,
@@ -90,6 +98,34 @@ export function environmentLines(environment: PublicEnvironmentSummary): string[
     ["base", environment.base.commit ?? environment.base.branch],
     ["startup session", environment.startupSession?.sessionId],
   ]);
+}
+
+/**
+ * The app's "By activity" order (`@orkestrator/protocol/environment-activity-order`)
+ * applied to one page of environments, ties kept in the backend's order. The
+ * public summary carries no build-pipeline state, so a row's activity is its
+ * reported state.
+ */
+export function sortEnvironmentsByActivity(
+  environments: readonly PublicEnvironmentSummary[],
+  order: ActivitySortOrder,
+): PublicEnvironmentSummary[] {
+  const fields = (environment: PublicEnvironmentSummary) => ({
+    activity: (AGENT_ACTIVITY_STATES as readonly (string | null)[]).includes(
+      environment.activity.state,
+    )
+      ? (environment.activity.state as AgentActivityState)
+      : null,
+    hasUnreadWork: environment.activity.hasUnreadWork,
+    lastActivityAt: environment.lastActivityAt,
+  });
+  return environments
+    .map((environment, index) => ({ environment, index, fields: fields(environment) }))
+    .sort(
+      (left, right) =>
+        compareEnvironmentsByActivity(left.fields, right.fields, order) || left.index - right.index,
+    )
+    .map(({ environment }) => environment);
 }
 
 export function environmentRows(environments: PublicEnvironmentSummary[]): string[] {

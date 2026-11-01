@@ -6,6 +6,7 @@ import {
   type BackendId,
 } from "@orkestrator/protocol/federation";
 import { pathName, repositoryHint } from "@orkestrator/protocol/node-summaries";
+import { compareActivityTimestampsDesc } from "@orkestrator/protocol/environment-activity-order";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
 import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import type { Environment, EnvironmentStatus, Project } from "@/types";
@@ -263,12 +264,6 @@ function inMachineScope(source: ProjectSearchSource, filter: ProjectSearchMachin
   return source.machine?.connectionId === filter;
 }
 
-function parseActivityTime(value: string | undefined): number {
-  if (!value) return Number.NEGATIVE_INFINITY;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
-}
-
 function pathBasename(path: string): string {
   const parts = path.split("/");
   return parts[parts.length - 1] ?? "";
@@ -323,10 +318,12 @@ function scoreHaystacks(haystacks: string[], tokens: string[]): number | null {
   return total;
 }
 
-function environmentActivityTime(environment: ProjectSearchEnvironment): number {
-  const activity = parseActivityTime(environment.lastActivityAt);
-  if (activity !== Number.NEGATIVE_INFINITY) return activity;
-  return parseActivityTime(environment.createdAt);
+/** Last activity, or creation for an environment with no usable activity time. */
+function environmentActivityTimestamp(environment: ProjectSearchEnvironment): string | undefined {
+  const { lastActivityAt } = environment;
+  return lastActivityAt && Number.isFinite(Date.parse(lastActivityAt))
+    ? lastActivityAt
+    : environment.createdAt;
 }
 
 function hitId(machine: MachineView | null, id: string): string {
@@ -451,10 +448,12 @@ export function searchProjectsAndEnvironments({
     const byRecency = recency(left.environment.key) - recency(right.environment.key);
     if (byRecency !== 0) return byRecency;
     if (left.score !== right.score) return right.score - left.score;
-    const leftActivity = environmentActivityTime(left.environment);
-    const rightActivity = environmentActivityTime(right.environment);
-    if (leftActivity !== rightActivity) return rightActivity > leftActivity ? 1 : -1;
     return (
+      // The shared activity-order timestamp rule: newest first, undated last.
+      compareActivityTimestampsDesc(
+        environmentActivityTimestamp(left.environment),
+        environmentActivityTimestamp(right.environment),
+      ) ||
       machineOrder(left.machine) - machineOrder(right.machine) ||
       left.environment.order - right.environment.order ||
       compareText(left.id, right.id)

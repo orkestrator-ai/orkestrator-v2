@@ -5,10 +5,10 @@
  * The Codex bridge, the backend's stored default and the renderer's launch and
  * settings surfaces all project this one list, so a model bump is one edit.
  *
- * The ids are the ones Orkestrator has always shipped. They are not the pinned
- * Codex CLI's own bundled catalogue (0.166.0 lists the gpt-6 family first and
- * no longer carries gpt-5.4); the runtime already replaces an inherited default
- * the login's live catalogue does not offer (`session-held-model.ts`). Moving
+ * These ids predate the pinned Codex CLI: its own bundled catalogue (0.166.0)
+ * lists the gpt-6 family first and no longer carries gpt-5.4. They were kept when
+ * this list was single-sourced because the runtime replaces an inherited default
+ * the login's live catalogue does not offer (`session-held-model.ts`), and moving
  * the default needs live evidence of what API-key and ChatGPT logins serve.
  */
 export type CodexFallbackReasoningEffort = "low" | "medium" | "high" | "xhigh";

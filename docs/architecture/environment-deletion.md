@@ -163,6 +163,7 @@ mutation. An entry records:
 | `stateDirectories` | Absolute paths from `environmentStateDirectories` |
 | `pending` | Steps still owed, from `ENVIRONMENT_CLEANUP_STEPS`: `container`, `volumes`, `network`, `worktree`, `branch`, `state-dirs` |
 | `attempts`, `lastAttemptAt`, `lastError` | Retry state; `lastError` is redacted to an errno code, exit status or fixed refusal text, never a path, command output or credential |
+| `attemptedVersions` | Backend versions that counted an attempt, oldest first, at most 16; absent in older entries |
 
 - `buildEnvironmentCleanupEntry` schedules only what applies: `container`
   when there is a runtime or recovery copy, `volumes` when the lifecycle record
@@ -228,7 +229,15 @@ environment creation or shutdown draining.
   minute, doubling, capped at 6 hours.
 - After `MAX_ENVIRONMENT_CLEANUP_ATTEMPTS` (8) passes the entry is kept for
   inspection, no longer retried, and logged once per process with its pending
-  steps and redacted error. The cap and its predicate,
+  steps and redacted error.
+- An exhausted entry gets one more cycle of attempts from a backend version
+  that has never attempted it (`rearmForVersion` resets `attempts` and
+  records the version at once, so a version re-arms an entry at most once,
+  and going back to an older version does not re-arm it). An upgrade is the
+  likeliest fix for a failure that outlasted every retry. Entries from before
+  versions were recorded are re-armed once by the first backend that reads
+  them. The re-arm is logged; a failure the upgrade did not fix logs the
+  "still failing" line again when the cycle ends. The cap and its predicate,
   `isEnvironmentCleanupExhausted`, live in `environment-cleanup-ledger.ts`;
   `disk:report` reads the store read-only through `parseEnvironmentCleanupLedger`
   and shows those entries in its `environment cleanup ledger` row (count,
@@ -268,8 +277,20 @@ shutdown admission and draining. Each fails alone and logs once per process.
 - **Stray workspace directories** (`sweepStrayWorkspaceDirectories`):
   directories directly under the backend's worktree root
   (`getWorktreeBaseDir`) that no live or deleting environment, ledger entry,
-  project checkout or registered worktree claims, and that hold nothing but
-  directories and `**/.turbo/turbo-*.log`. The walk never follows symlinks and
+  project checkout, registered worktree or chosen worktree folder claims, and
+  that hold nothing but directories and `**/.turbo/turbo-*.log`. It also
+  covers the folders Orkestrator chose for worktrees: each live environment's
+  `worktreeBaseDir`, each ledger entry's `worktreeRoot`, and the Settings >
+  Disk usage environment location unless the backend was started with
+  `--worktree-dir`. Such a folder is used only if it still passes
+  `validateWorktreeLocation` unchanged (canonical, no symlinked ancestor, not
+  the filesystem root or inside a data directory) and is not inside a project
+  checkout. Because it may hold the user's own empty directories, only
+  directories named as creation names them (`<project>-<branch>`, which
+  `parseEnvironmentBranchNamespace` accepts) whose namespace belongs to no
+  live or ledgered environment are candidates there; the other rules are the
+  same. A chosen folder that cannot be listed (an unmounted volume) is
+  skipped. The walk never follows symlinks and
   takes the newest mtime anywhere in the tree. Over 10,000 entries, or an
   unreadable tree, counts as content. A failed `git worktree list` for any
   project abandons the pass. Unowned directories kept for holding files are
@@ -291,6 +312,14 @@ shutdown admission and draining. Each fails alone and logs once per process.
   Other shapes, such as `.coordinators.json.<uuid>.tmp`, are left alone.
 
 Creation cannot collide with these sweeps: it never reuses an existing path or
-branch name, and each environment gets a fresh namespace. Worktree directories
+branch name, and each environment gets a fresh namespace. The namespace is a
+prefix of the environment id (`environmentBranchNamespace`), and no creation,
+move or restore path reuses another environment's id or namespace, so a
+ledger entry, exhausted or re-armed, never blocks creation. Should a feature
+ever reuse one, the steps still act only on exact recorded names (the
+worktree path is skipped while a live environment claims it, the branch must
+pass the branch policy, and state directories and the network follow the
+environment id, whose entries are skipped while its record exists), but the
+orphan sweeps would then protect the reused namespace's strays as owned. Worktree directories
 holding real files and branches that fail every policy check are never swept;
 their ownership cannot be proved from disk.

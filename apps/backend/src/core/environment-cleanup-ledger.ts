@@ -61,6 +61,12 @@ export interface EnvironmentCleanupEntry {
   pending: EnvironmentCleanupStep[];
   attempts: number;
   lastAttemptAt: string | null;
+  /**
+   * Backend versions that have counted an attempt, oldest first. An entry at
+   * the attempt cap gets one more retry cycle from a version not listed here.
+   * Absent in entries written before versions were recorded.
+   */
+  attemptedVersions?: string[];
   /** Redacted failure summary: no paths, command output, or credentials. */
   lastError: string | null;
 }
@@ -84,6 +90,21 @@ export function isEnvironmentCleanupExhausted(
   entry: Pick<EnvironmentCleanupEntry, "attempts">,
 ): boolean {
   return entry.attempts >= MAX_ENVIRONMENT_CLEANUP_ATTEMPTS;
+}
+
+/** Older versions beyond this are forgotten, so the list stays bounded. */
+const MAX_ATTEMPTED_VERSIONS = 16;
+
+/**
+ * True when `backendVersion` has never counted an attempt on the entry, which
+ * entitles an exhausted entry to one more retry cycle: an upgrade is the
+ * likeliest fix for a failure that outlasted every retry.
+ */
+export function isEnvironmentCleanupRetryableByVersion(
+  entry: Pick<EnvironmentCleanupEntry, "attemptedVersions">,
+  backendVersion: string,
+): boolean {
+  return !(entry.attemptedVersions ?? []).includes(backendVersion);
 }
 
 /**
@@ -138,6 +159,9 @@ function parseEntry(value: unknown): EnvironmentCleanupEntry | null {
         : 0,
     lastAttemptAt: stringOrNull(record.lastAttemptAt),
     lastError: stringOrNull(record.lastError),
+    attemptedVersions: [...new Set(strings(record.attemptedVersions))].slice(
+      -MAX_ATTEMPTED_VERSIONS,
+    ),
   };
 }
 
@@ -298,6 +322,7 @@ export class EnvironmentCleanupLedger {
             ],
             pending: [...new Set([...entry.pending, ...existing.pending])],
             attempts: existing.attempts,
+            attemptedVersions: existing.attemptedVersions ?? [],
             recordedAt: existing.recordedAt,
           }
         : entry;
@@ -323,14 +348,43 @@ export class EnvironmentCleanupLedger {
     });
   }
 
-  /** Counts one reconciliation pass over the entry, successful or not. */
-  async noteAttempt(environmentId: string, at: Date): Promise<void> {
+  /**
+   * Counts one reconciliation pass over the entry, successful or not, and
+   * records the backend version that made it.
+   */
+  async noteAttempt(environmentId: string, at: Date, backendVersion?: string): Promise<void> {
     this.mutate((ledger) => {
       const entry = ledger.entries[environmentId];
       if (!entry) return;
       entry.attempts += 1;
       entry.lastAttemptAt = at.toISOString();
+      if (backendVersion) {
+        const versions = (entry.attemptedVersions ?? []).filter(
+          (version) => version !== backendVersion,
+        );
+        entry.attemptedVersions = [...versions, backendVersion].slice(-MAX_ATTEMPTED_VERSIONS);
+      }
     });
+  }
+
+  /**
+   * Gives an exhausted entry one more retry cycle under a backend version that
+   * has never attempted it, by resetting its attempts. The version is recorded
+   * at once, so it cannot re-arm the entry again. True when it re-armed.
+   */
+  async rearmForVersion(environmentId: string, backendVersion: string): Promise<boolean> {
+    let rearmed = false;
+    this.mutate((ledger) => {
+      const entry = ledger.entries[environmentId];
+      if (!entry || !isEnvironmentCleanupExhausted(entry)) return;
+      if (!isEnvironmentCleanupRetryableByVersion(entry, backendVersion)) return;
+      entry.attempts = 0;
+      entry.attemptedVersions = [...(entry.attemptedVersions ?? []), backendVersion].slice(
+        -MAX_ATTEMPTED_VERSIONS,
+      );
+      rearmed = true;
+    });
+    return rearmed;
   }
 
   /**

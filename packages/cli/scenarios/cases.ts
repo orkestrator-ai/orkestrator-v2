@@ -611,16 +611,18 @@ export const SCENARIOS: ScenarioDefinition[] = [
   {
     name: "lost-response",
     description:
-      "A --wait start and exec whose responses are lost after admission are found by request key and settled; nothing is resubmitted or run twice.",
+      "A --wait start whose admission outlasts the client and an exec whose answer is lost are found by request key and settled; nothing is resubmitted or run twice.",
     async run(context) {
       await configureConnection(context);
       const fixture = await addFixtureProject(context, "lost-response");
       const environment = await createEnvironment(context, fixture.projectId, "lost-response-env");
-      // A second connection to the same backend through a proxy that loses the
-      // first start and exec answers after the backend has admitted them.
+      // A second connection to the same backend through a proxy. The start is
+      // admitted only after the client's first lookup came back not-found (an
+      // admission slower than the request timeout, flake 0440); the exec is
+      // admitted and its answer lost.
       const proxy = await startLossyProxy({
         upstream: context.backend.descriptor.url,
-        dropFirst: ["environment.start", "environment.exec"],
+        lose: { "environment.start": "admission", "environment.exec": "answer" },
       });
       context.cleanup.push({ label: "stop lossy proxy", run: () => proxy.stop() });
       await context.cli.ok(
@@ -664,6 +666,10 @@ export const SCENARIOS: ScenarioDefinition[] = [
         "start, response lost",
       );
       recovered(start.envelope, "environment.start");
+      expectThat(
+        proxy.lookups("environment.start") >= 2,
+        `the start was found after ${proxy.lookups("environment.start")} lookups; the first must precede admission`,
+      );
 
       const exec = await context.cli.run(
         [

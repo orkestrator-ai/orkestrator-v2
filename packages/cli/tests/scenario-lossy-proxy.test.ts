@@ -31,11 +31,11 @@ async function upstream() {
   return { url: `http://127.0.0.1:${server.port}`, received };
 }
 
-async function invoke(proxy: LossyProxy, action: string) {
+async function invoke(proxy: LossyProxy, action: string, input: Record<string, unknown> = {}) {
   return fetch(`${proxy.url}/__orkestrator/invoke?x=1`, {
     method: "POST",
     headers: { authorization: "Bearer token-0123456789abcdef", "content-type": "application/json" },
-    body: JSON.stringify({ command: "public_action", args: { action } }),
+    body: JSON.stringify({ command: "public_action", args: { action, input } }),
   });
 }
 
@@ -43,7 +43,7 @@ test("loses only the first answer per named action, after the backend received i
   const backend = await upstream();
   const proxy = await startLossyProxy({
     upstream: backend.url,
-    dropFirst: ["environment.start"],
+    lose: { "environment.start": "answer" },
   });
   stops.push(() => proxy.stop());
 
@@ -69,4 +69,27 @@ test("loses only the first answer per named action, after the backend received i
   expect(proxy.dropped("environment.start")).toBe(1);
   expect(proxy.submissions("run.get")).toBe(1);
   expect(proxy.dropped("run.get")).toBe(0);
+});
+
+test("an admission loss delivers the submission only after the first key lookup was answered", async () => {
+  const backend = await upstream();
+  const proxy = await startLossyProxy({
+    upstream: backend.url,
+    lose: { "environment.exec": "admission" },
+  });
+  stops.push(() => proxy.stop());
+
+  expect((await invoke(proxy, "environment.exec")).status).toBe(504);
+  // Nothing reached the backend yet: the client's lookup outruns admission.
+  expect(backend.received).toEqual([]);
+  const lookup = await invoke(proxy, "run.get", {
+    requestId: "key",
+    action: "environment.exec",
+  });
+  expect(lookup.status).toBe(200);
+  await proxy.stop();
+  expect(backend.received.map((entry) => entry.action)).toEqual(["run.get", "environment.exec"]);
+  expect(proxy.lookups("environment.exec")).toBe(1);
+  expect(proxy.submissions("environment.exec")).toBe(1);
+  expect(proxy.dropped("environment.exec")).toBe(1);
 });

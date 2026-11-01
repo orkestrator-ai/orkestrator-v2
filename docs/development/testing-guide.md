@@ -581,7 +581,7 @@ the full matrix is a separate task:
 
 ```bash
 # Credential-free: read-only, local-lifecycle, retry-and-retention,
-# setup-failure, client-exit, exec, wrong-profile, project-cascade,
+# setup-failure, client-exit, exec, lost-response, wrong-profile, project-cascade,
 # project-init (container runs add foreign-owner and drop the local-only ones)
 mise run test:logged -- --name cli-scenarios -- mise run test:cli:scenarios
 

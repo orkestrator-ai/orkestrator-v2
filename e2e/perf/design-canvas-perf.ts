@@ -11,8 +11,9 @@
  * React) into a temporary directory (or `--dist`, which is reused when it
  * already holds a build: delete it after changing web code) and served by
  * `vite preview`. `--rev` builds the web code of a committed revision instead of
- * the working tree (`git archive` of `apps/web`, `e2e` and `packages`, with
- * this checkout's node_modules linked in and this harness's own fixture files,
+ * the working tree (`git archive` of `apps/web`, `e2e`, `packages` and
+ * `apps/backend/src`, which some component fixtures import, with this
+ * checkout's node_modules linked in and this harness's own fixture files,
  * `DesignLibraryPerfFixture.tsx` and `main.tsx`, laid over it), so uncommitted
  * product edits in the checkout cannot leak into the measurement. Modules
  * resolved through node_modules (`@orkestrator/protocol`) still come from this
@@ -176,7 +177,7 @@ function exportRevision(rev: string, workDir: string): string {
   mkdirSync(root, { recursive: true });
   const archive = spawnSync(
     "git",
-    ["archive", "--format=tar", rev, "apps/web", "e2e", "packages"],
+    ["archive", "--format=tar", rev, "apps/web", "e2e", "packages", "apps/backend/src"],
     {
       cwd: repositoryRoot,
       maxBuffer: 1024 * 1024 * 1024,
@@ -191,10 +192,12 @@ function exportRevision(rev: string, workDir: string): string {
     if (existsSync(path.join(repositoryRoot, file)))
       copyFileSync(path.join(repositoryRoot, file), path.join(root, file));
   symlinkSync(path.join(repositoryRoot, "node_modules"), path.join(root, "node_modules"));
-  symlinkSync(
-    path.join(repositoryRoot, "apps/web/node_modules"),
-    path.join(root, "apps/web/node_modules"),
-  );
+  for (const app of ["web", "backend"])
+    if (existsSync(path.join(repositoryRoot, `apps/${app}/node_modules`)))
+      symlinkSync(
+        path.join(repositoryRoot, `apps/${app}/node_modules`),
+        path.join(root, `apps/${app}/node_modules`),
+      );
   return root;
 }
 

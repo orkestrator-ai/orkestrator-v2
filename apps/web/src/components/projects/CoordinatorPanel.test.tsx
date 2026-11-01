@@ -1665,7 +1665,7 @@ describe("CoordinatorPanel", () => {
     expect(screen.queryByText("Discard changes and switch branch?") === null).toBe(true);
   });
 
-  test("disables Git mutations during an active turn and persists dismissed context warnings", async () => {
+  test("disables Git mutations during an active turn", async () => {
     ensuredGit = {
       ...gitStatus,
       upstream: "origin/main",
@@ -1673,21 +1673,6 @@ describe("CoordinatorPanel", () => {
       behind: 1,
       ahead: 0,
       remoteState: "fresh",
-    };
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        repositoryContextRevision: 1,
-        repositoryContextEvents: [
-          {
-            revision: 1,
-            branch: "main",
-            headCommit: "b".repeat(40),
-            occurredAt: new Date(1).toISOString(),
-          },
-        ],
-      },
     };
     const sessionKey = createSessionKey(
       coordinatorRuntimeId("coordinator-1", "conversation-1"),
@@ -1706,17 +1691,10 @@ describe("CoordinatorPanel", () => {
       generation: "test",
     } as never);
 
-    const active = render(<CoordinatorPanel projectId="project-1" />);
-    expect(await screen.findByText(/Earlier analysis may be stale/)).toBeTruthy();
-    expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "Sync" }).hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss repository context notice" }));
-    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
-    active.unmount();
-
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
+    expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Sync" }).hasAttribute("disabled")).toBe(true);
     cleanup();
 
     act(() => {
@@ -1731,147 +1709,77 @@ describe("CoordinatorPanel", () => {
     expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(false);
   });
 
-  test("hides repository context warnings acknowledged by the selected conversation", async () => {
+  test("shows no repository context notice when a context-change event arrives", async () => {
+    const contextEvent = (revision: number, branch: string, commitChar: string) => ({
+      revision,
+      branch,
+      headCommit: commitChar.repeat(40),
+      occurredAt: new Date(revision).toISOString(),
+    });
+    const expectNoContextNotice = () => {
+      expect(screen.queryByText(/Repository context changed/) === null).toBe(true);
+      expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
+      expect(screen.queryByText(/\(context r\d+\)/) === null).toBe(true);
+      expect(
+        screen.queryByRole("button", { name: "Dismiss repository context notice" }) === null,
+      ).toBe(true);
+    };
     ensuredSnapshot = {
       ...snapshot,
       workspace: {
         ...snapshot.workspace,
         repositoryContextRevision: 1,
-        repositoryContextEvents: [
-          {
-            revision: 1,
-            branch: "main",
-            headCommit: "b".repeat(40),
-            occurredAt: new Date(1).toISOString(),
-          },
-        ],
-        conversations: snapshot.workspace.conversations.map((conversation) => ({
-          ...conversation,
-          repositoryContextRevisionAcknowledged: 1,
-        })),
+        repositoryContextEvents: [contextEvent(1, "main", "b")],
       },
     };
+
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
-  });
+    expectNoContextNotice();
 
-  test("dismisses repository context warnings without a selected conversation across remounts", async () => {
+    // A later merge on the base branch arrives as a new, unacknowledged
+    // context revision on the next authoritative read.
+    const reads = getCoordinatorView.mock.calls.length;
+    await act(async () => {
+      ensuredSnapshot = {
+        ...ensuredSnapshot,
+        workspace: {
+          ...ensuredSnapshot.workspace,
+          repositoryContextRevision: 2,
+          repositoryContextEvents: [
+            ...(ensuredSnapshot.workspace.repositoryContextEvents ?? []),
+            contextEvent(2, "main", "c"),
+          ],
+          conversations: ensuredSnapshot.workspace.conversations.map((conversation) => ({
+            ...conversation,
+            title: "After context change",
+          })),
+        },
+      };
+      dispatchResourceChange({
+        resource: "coordinator",
+        id: "project-1",
+        projectId: "project-1",
+        revision: 2,
+      });
+    });
+    await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
+    await screen.findAllByRole("button", { name: "After context change, Codex" });
+    expectNoContextNotice();
+    cleanup();
+
+    // Nor with no conversation selected.
     ensuredSnapshot = {
-      ...snapshot,
+      ...ensuredSnapshot,
       workspace: {
-        ...snapshot.workspace,
+        ...ensuredSnapshot.workspace,
         conversations: [],
         selectedConversationId: null,
-        repositoryContextRevision: 1,
-        repositoryContextEvents: [
-          {
-            revision: 1,
-            branch: "main",
-            headCommit: "b".repeat(40),
-            occurredAt: new Date(1).toISOString(),
-          },
-        ],
       },
     };
-
-    const active = render(<CoordinatorPanel projectId="project-1" />);
-    expect(await screen.findByText(/Earlier analysis may be stale/)).toBeTruthy();
-    expect(screen.getByText(/No coordinator is open/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss repository context notice" }));
-    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
-    active.unmount();
-
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByText(/No coordinator is open/);
-    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
-  });
-
-  test("shows a newer repository context warning after dismissing an earlier revision", async () => {
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        repositoryContextRevision: 1,
-        repositoryContextEvents: [
-          {
-            revision: 1,
-            branch: "main",
-            headCommit: "b".repeat(40),
-            occurredAt: new Date(1).toISOString(),
-          },
-        ],
-      },
-    };
-
-    const first = render(<CoordinatorPanel projectId="project-1" />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Dismiss repository context notice" }),
-    );
-    first.unmount();
-
-    ensuredSnapshot = {
-      ...ensuredSnapshot,
-      workspace: {
-        ...ensuredSnapshot.workspace,
-        repositoryContextRevision: 2,
-        repositoryContextEvents: [
-          ...(ensuredSnapshot.workspace.repositoryContextEvents ?? []),
-          {
-            revision: 2,
-            branch: "feature",
-            headCommit: "c".repeat(40),
-            occurredAt: new Date(2).toISOString(),
-          },
-        ],
-      },
-    };
-
-    render(<CoordinatorPanel projectId="project-1" />);
-    expect(await screen.findByText(/context r2/)).toBeTruthy();
-  });
-
-  test("scopes dismissed repository context warnings to one conversation", async () => {
-    const secondConversation = {
-      ...snapshot.workspace.conversations[0]!,
-      id: "conversation-2",
-      tabId: "coordinator-tab-2",
-      logicalSessionKey: "coordinator-coordinator-1:conversation-2",
-      title: "Second",
-      mailboxIncarnationId: "incarnation-2",
-    };
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: {
-        ...snapshot.workspace,
-        conversations: [...snapshot.workspace.conversations, secondConversation],
-        repositoryContextRevision: 1,
-        repositoryContextEvents: [
-          {
-            revision: 1,
-            branch: "main",
-            headCommit: "b".repeat(40),
-            occurredAt: new Date(1).toISOString(),
-          },
-        ],
-      },
-    };
-
-    const first = render(<CoordinatorPanel projectId="project-1" />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Dismiss repository context notice" }),
-    );
-    first.unmount();
-
-    ensuredSnapshot = {
-      ...ensuredSnapshot,
-      workspace: {
-        ...ensuredSnapshot.workspace,
-        selectedConversationId: secondConversation.id,
-      },
-    };
-    render(<CoordinatorPanel projectId="project-1" />);
-    expect(await screen.findByText(/Earlier analysis may be stale/)).toBeTruthy();
+    expectNoContextNotice();
   });
 
   test("shows waiting workers only for the selected conversation", async () => {

@@ -150,10 +150,9 @@ export function buildReviewModelCatalog(
     // A Pi catalogue that marks no connected row as where a session starts
     // leaves a defaulted launch to Pi's own session default (the shared launch
     // resolver's rule), so that choice is offered as a row of its own.
-    pi:
-      pi.length > 0 && pi.some((model) => model.sessionDefault && model.connected !== false)
-        ? pi
-        : [PI_DEFAULT_MODEL, ...pi],
+    pi: pi.some((model) => model.sessionDefault && model.connected !== false)
+      ? pi
+      : [PI_DEFAULT_MODEL, ...pi],
     opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
   };
 }

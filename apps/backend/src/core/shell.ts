@@ -2,6 +2,9 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { inspect } from "node:util";
+import { formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import {
   MAX_TEXT_FILE_BYTES,
   MAX_TEXT_FILE_SIZE_LABEL,
@@ -28,11 +31,21 @@ export type ExecBufferResult = {
  * real non-zero exit) must not pattern-match the message: it is whatever the
  * child wrote to stderr, is locale- and version-dependent, and for a timeout is
  * empty because the child is killed before it can explain itself.
+ *
+ * `message` and `stdout` hold the child's output, so a raw `console` call or a
+ * `JSON.stringify` prints the safe form below instead: a classified reason, the
+ * exit code and signal, and bounded stack frames. `String(error)` and reading
+ * `.message` still give the output, because callers build user-facing text from
+ * them; a log line must not, and `formatLogError` is how it avoids that.
  */
 export class CommandFailedError extends Error {
   readonly stdout: string;
   readonly timedOut: boolean;
   readonly executableMissing: boolean;
+  /** The caller's abort signal stopped it. `timedOut` is also set, as callers expect. */
+  readonly aborted: boolean;
+  /** It wrote more than `MAX_COMMAND_OUTPUT_BYTES`, so it was killed. */
+  readonly outputLimitExceeded: boolean;
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
 
@@ -42,6 +55,8 @@ export class CommandFailedError extends Error {
       stdout?: string;
       timedOut?: boolean;
       executableMissing?: boolean;
+      aborted?: boolean;
+      outputLimitExceeded?: boolean;
       exitCode?: number | null;
       signal?: NodeJS.Signals | null;
     } = {},
@@ -51,8 +66,20 @@ export class CommandFailedError extends Error {
     this.stdout = details.stdout ?? "";
     this.timedOut = details.timedOut ?? false;
     this.executableMissing = details.executableMissing ?? false;
+    this.aborted = details.aborted ?? false;
+    this.outputLimitExceeded = details.outputLimitExceeded ?? false;
     this.exitCode = details.exitCode ?? null;
     this.signal = details.signal ?? null;
+  }
+
+  toJSON() {
+    return { ...formatLogError(this), ...classifyCommandFailure(this) };
+  }
+
+  [inspect.custom](): string {
+    const { name, reason, exitCode, signal, stack } = this.toJSON();
+    const frames = stack?.length ? ` | ${stack.join(" | ")}` : "";
+    return `${name} reason=${reason} exitCode=${exitCode} signal=${signal} outputOmitted=true${frames}`;
   }
 }
 
@@ -87,10 +114,15 @@ function redactCommandValues(
   return secrets.reduce((redacted, secret) => redacted.split(secret).join("[REDACTED]"), value);
 }
 
+const COMMAND_ABORTED_MESSAGE = "Command aborted";
+const OUTPUT_LIMIT_MESSAGE = "maxBuffer length exceeded";
+
 /** Classify failures using structured outcomes rather than CLI output. */
 function commandFailureOutcome(error: unknown): {
   timedOut: boolean;
   executableMissing: boolean;
+  aborted: boolean;
+  outputLimitExceeded: boolean;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
 } {
@@ -98,10 +130,16 @@ function commandFailureOutcome(error: unknown): {
     killed?: boolean;
     code?: number | string | null;
     signal?: NodeJS.Signals | null;
+    message?: unknown;
   };
+  // Read before the message is replaced by the child's output. These two messages
+  // are written by `executeCommandBytes` below, so they are not CLI output.
+  const message = typeof details.message === "string" ? details.message : "";
   return {
     timedOut: details.killed === true,
     executableMissing: details.code === "ENOENT",
+    aborted: message === COMMAND_ABORTED_MESSAGE,
+    outputLimitExceeded: message.endsWith(OUTPUT_LIMIT_MESSAGE),
     exitCode: typeof details.code === "number" ? details.code : null,
     signal: details.signal ?? null,
   };
@@ -199,7 +237,7 @@ function executeCommandBytes(
 ): Promise<ExecBufferResult> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
-      reject(Object.assign(new Error("Command aborted"), { killed: true }));
+      reject(Object.assign(new Error(COMMAND_ABORTED_MESSAGE), { killed: true }));
       return;
     }
     const child = spawn(command, args, {
@@ -240,7 +278,7 @@ function executeCommandBytes(
     const abort = () => {
       timedOut = true;
       signalCommand(child, "SIGKILL");
-      fail(new Error("Command aborted"));
+      fail(new Error(COMMAND_ABORTED_MESSAGE));
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     const capture = (chunks: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
@@ -252,7 +290,7 @@ function executeCommandBytes(
       else stderrBytes += retained.length;
       if (previousBytes + chunk.length > MAX_COMMAND_OUTPUT_BYTES) {
         signalCommand(child, "SIGKILL");
-        fail(new Error(`${stream} maxBuffer length exceeded`));
+        fail(new Error(`${stream} ${OUTPUT_LIMIT_MESSAGE}`));
       }
     };
     child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk, "stdout"));

@@ -3,6 +3,8 @@ import { redactSecrets } from "./secret-redaction.js";
 const MAX_MESSAGE_CHARS = 1024;
 const MAX_STACK_FRAMES = 8;
 const MAX_FRAME_CHARS = 240;
+/** Enough for a deep path's anchor to survive; the frame is cut to its bound afterwards. */
+const MAX_RAW_FRAME_CHARS = 1024;
 const MAX_CAUSE_DEPTH = 2;
 const TRUNCATED_MARKER = "...[truncated]";
 
@@ -69,6 +71,47 @@ function boundedText(value: string, maxChars: number): string {
   );
 }
 
+/**
+ * An absolute path or URL in a stack frame. Paths hold spaces ("Application
+ * Support"), so one ends at its line and column, or at what closes the frame, not
+ * at whitespace. It must start a word, so `Foo/bar` in a function name is left.
+ */
+const FRAME_LOCATION =
+  /(^|[\s(])((?:[a-z][a-z0-9+.-]*:\/\/[^/\s)]*)?(?:\/|[a-z]:[\\/]).*?)(?=:\d+(?::\d+)?\)?(?:,|$)|\)(?:,|$)|,\s|$)/gi;
+const LOCATION_SCHEME = /^([a-z][a-z0-9+.-]*):\/\/[^/\s)]*/i;
+/** A workspace of this repository, or a bridge's own package when it is deployed alone. */
+const APP_PATH =
+  /(?:^|\/)((?:apps\/(?:backend|desktop|web|web-public)|packages\/(?:protocol|cli|toolchain)|bridges\/[\w-]+|[\w-]+-bridge)\/.*)$/;
+const PACKAGED_PATH = /\/((?:app\.asar(?:\.unpacked)?|resources)\/.*)$/i;
+
+/**
+ * Relative to the app, by what the path contains rather than a configured root:
+ * this runs in every process, the browser included, and has to work before
+ * anything has been set up. A path it cannot place keeps only its file name, so
+ * a directory under someone's home never reaches a log.
+ */
+function appRelativeLocation(location: string): string {
+  const scheme = LOCATION_SCHEME.exec(location)?.[1]?.toLowerCase();
+  const isWebUrl = scheme !== undefined && scheme !== "file";
+  const withoutOrigin = location.replace(LOCATION_SCHEME, "");
+  const path = (isWebUrl ? withoutOrigin.split(/[?#]/, 1)[0]! : withoutOrigin).replace(/\\/g, "/");
+  const modules = path.lastIndexOf("/node_modules/");
+  if (modules >= 0) return path.slice(modules + 1);
+  const app = APP_PATH.exec(path)?.[1] ?? PACKAGED_PATH.exec(path)?.[1];
+  if (app) return app;
+  if (isWebUrl) return path.replace(/^\/+/, "");
+  return `.../${path.slice(path.lastIndexOf("/") + 1)}`;
+}
+
+function relativeFrame(frame: string): string {
+  return frame
+    .slice(0, MAX_RAW_FRAME_CHARS)
+    .replace(
+      FRAME_LOCATION,
+      (_match, lead: string, location: string) => `${lead}${appRelativeLocation(location)}`,
+    );
+}
+
 function read(target: object, key: string): unknown {
   try {
     return (target as Record<string, unknown>)[key];
@@ -105,7 +148,7 @@ function stackFrames(target: object, message: string | undefined): string[] | un
     .split("\n")
     .filter((line) => /^\s*at\s/.test(line))
     .slice(0, MAX_STACK_FRAMES)
-    .map((line) => boundedText(line, MAX_FRAME_CHARS));
+    .map((line) => boundedText(relativeFrame(line), MAX_FRAME_CHARS));
   return frames.length > 0 ? frames : undefined;
 }
 
@@ -163,7 +206,8 @@ export interface FormatLogErrorOptions {
 
 /**
  * The only way an error reaches a log entry. Returns the name, code and a
- * bounded, redacted message, plus bounded stack frames. It never returns an
+ * bounded, redacted message, plus bounded stack frames with paths relative to
+ * the app. It never returns an
  * error's other fields, and never `stdout`, `stderr`, `cmd` or `spawnargs`: for
  * a failed child process even the message is dropped, because it is that output.
  */
@@ -217,7 +261,7 @@ export function logErrorFromWire(value: unknown, depth = 0): SafeLogError | null
     const frames = wire.stack
       .filter((frame): frame is string => typeof frame === "string")
       .slice(0, MAX_STACK_FRAMES)
-      .map((frame) => boundedText(frame, MAX_FRAME_CHARS));
+      .map((frame) => boundedText(relativeFrame(frame), MAX_FRAME_CHARS));
     if (frames.length > 0) details.stack = frames;
   }
   if (depth < MAX_CAUSE_DEPTH) {

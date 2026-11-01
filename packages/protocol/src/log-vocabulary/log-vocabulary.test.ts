@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DESKTOP_STARTUP_EVENTS } from "../debug-logging.js";
 import type { LogAreaSpec } from "./define.js";
-import { LOG_VOCABULARY } from "./index.js";
+import { COMMAND_FAILURE_REASONS, LOG_VOCABULARY } from "./index.js";
 
 const NAME_GRAMMAR = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/;
 const areas = LOG_VOCABULARY as Readonly<Record<string, LogAreaSpec>>;
 
 const DOMAIN_FILES = readdirSync(import.meta.dir).filter(
   (name) =>
-    name.endsWith(".ts") && !name.endsWith(".test.ts") && !["define.ts", "index.ts"].includes(name),
+    name.endsWith(".ts") &&
+    !name.endsWith(".test.ts") &&
+    !["define.ts", "index.ts", "command-failure-reasons.ts"].includes(name),
 );
 
 async function domainAreas(): Promise<Array<[file: string, area: string]>> {
@@ -72,5 +74,34 @@ describe("log vocabulary", () => {
       expect.arrayContaining([...DESKTOP_STARTUP_EVENTS]),
     );
     expect(areas["desktop.startup"]!.tag).toBe("DesktopStartup");
+  });
+});
+
+describe("command failure reasons", () => {
+  const reasons = Object.entries(COMMAND_FAILURE_REASONS) as Array<[string, string]>;
+
+  test("every reason follows the grammar, as a single word with no hierarchy", () => {
+    for (const [reason] of reasons) {
+      expect(reason).toMatch(NAME_GRAMMAR);
+      expect(reason).not.toContain(".");
+    }
+  });
+
+  test("every reason says what it means", () => {
+    for (const [, description] of reasons) expect(description.length).toBeGreaterThan(10);
+  });
+
+  test("the fallback is listed", () => {
+    expect(COMMAND_FAILURE_REASONS.unclassified.length).toBeGreaterThan(10);
+  });
+
+  test("the logging guide lists every reason and no other", () => {
+    const guide = readFileSync(
+      join(import.meta.dir, "../../../../docs/architecture/logging.md"),
+      "utf8",
+    );
+    const section = guide.slice(guide.indexOf("### The reasons"));
+    const listed = Array.from(section.matchAll(/^\| `([a-z-]+)` \|/gm), (match) => match[1]);
+    expect(listed.sort()).toEqual(reasons.map(([reason]) => reason).sort());
   });
 });

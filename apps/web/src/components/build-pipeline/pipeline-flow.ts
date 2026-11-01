@@ -986,8 +986,8 @@ export function pipelineFlowModel(
           model: reviewer.model,
           reasoningEffort: reviewer.reasoningEffort,
           error: reviewer.error,
-          // Kept only for reviewers that never had a session.
-          startFailed: true,
+          // Missing session rows do not establish a startup failure.
+          startFailed: reviewer.startFailed,
         };
         reviewPass.reviewers.set(reviewer.slot, node);
         place(reviewPass.reviewersColumn, node);

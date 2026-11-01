@@ -104,6 +104,9 @@ describe("reviewer records", () => {
   test("records a start failure as a boolean, read only on a failed reviewer", () => {
     const unstartable = reviewer({ status: "failed", error: "bridge missing", startFailed: true });
     expect(isReviewerRecord(unstartable)).toBe(true);
+    expect(isReviewerRecord(reviewer({ agentStarted: true }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ agentStarted: false }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ agentStarted: "yes" as never }))).toBe(false);
     expect(isReviewerRecord(reviewer({ startFailed: "yes" as never }))).toBe(false);
     expect(reviewerCouldNotStart(unstartable)).toBe(true);
     expect(reviewerCouldNotStart(reviewer({ status: "failed", error: "session failed" }))).toBe(

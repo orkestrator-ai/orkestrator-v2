@@ -106,3 +106,76 @@ describe("a pipeline reviewer whose agent cannot start", () => {
     });
   });
 });
+
+test("allocated sessions whose first send is refused retain startup diagnostics through retirement and retry", async () => {
+  await withPipeline(async ({ service, read, provider, providers }) => {
+    const cursor = providers.get("cursor")!;
+    const send = cursor.send.bind(cursor);
+    cursor.send = async () => {
+      throw new Error("Cursor credentials unavailable");
+    };
+    provider.runningModels.add("opus");
+    const started = await service.start(startInput(PANEL));
+    const reviewing = await untilReviewerSettles(service, read, started.id, 1);
+    const failed = reviewing.reviewFanout!.reviewers[1]!;
+    expect(failed).toMatchObject({ status: "failed", startFailed: true, agentStarted: false });
+    expect(failed.providerSessionId).toBeDefined();
+    expect(reviewing.reviewFanout!.reviewers[0]!.status).toBe("running");
+    provider.runningModels.delete("opus");
+    const retired = await advanceUntil(service, read, started.id, "addressing");
+    expect(retired.sessions.find((s) => s.label === "Consolidation")?.sessionlessReviewers).toEqual(
+      [expect.objectContaining({ startFailed: true, error: "Cursor credentials unavailable" })],
+    );
+    expect(isBuildPipeline(retired)).toBe(true);
+    cursor.send = send;
+  });
+});
+
+test("retry after an allocated session refuses dispatch clears its startup failure", async () => {
+  await withPipeline(async ({ service, read, provider, providers }) => {
+    const cursor = providers.get("cursor")!;
+    const send = cursor.send.bind(cursor);
+    cursor.send = async () => {
+      throw new Error("Cursor credentials unavailable");
+    };
+    provider.runningModels.add("opus");
+    const started = await service.start(startInput(PANEL));
+    const failed = (await untilReviewerSettles(service, read, started.id, 1)).reviewFanout!
+      .reviewers[1]!;
+    expect(failed.startFailed).toBe(true);
+    cursor.send = send;
+    await service.retryReviewer(started.id, failed.id);
+    const retried = (await untilReviewerSettles(service, read, started.id, 1)).reviewFanout!
+      .reviewers[1]!;
+    expect(retried.status).toBe("completed");
+    expect(retried.startFailed).toBeUndefined();
+    expect(retried.agentStarted).toBe(true);
+  });
+});
+
+test("a failure before the first observation preserves a generic classification in retired history", async () => {
+  await withPipeline(async ({ service, read, provider, providers }) => {
+    const cursor = providers.get("cursor")!;
+    cursor.status = async () => {
+      throw new Error("Observation failed after accepted dispatch");
+    };
+    provider.runningModels.add("opus");
+    const started = await service.start(startInput(PANEL));
+    const reviewing = await untilReviewerSettles(service, read, started.id, 1);
+    expect(reviewing.reviewFanout!.reviewers[1]).toMatchObject({
+      status: "failed",
+      agentStarted: true,
+    });
+    expect(reviewing.reviewFanout!.reviewers[1]!.startFailed).toBeUndefined();
+    provider.runningModels.delete("opus");
+    const retired = await advanceUntil(service, read, started.id, "addressing");
+    expect(
+      retired.sessions.find((entry) => entry.label === "Consolidation")?.sessionlessReviewers,
+    ).toEqual([
+      expect.objectContaining({
+        startFailed: false,
+        error: "Observation failed after accepted dispatch",
+      }),
+    ]);
+  });
+});

@@ -114,6 +114,7 @@ export interface GraphAgentProgressItem {
 export interface GraphAgentSessionState {
   /** The provider session key; stable across restarts. */
   sessionKey?: string;
+  agentStarted?: boolean;
   /** The activation whose provider session this one continues (`session: "continue"`). */
   continuedFrom?: string;
   turnMode?: GraphAgentTurnMode;
@@ -140,6 +141,7 @@ export interface GraphAgentSessionState {
 
 export const GRAPH_AGENT_SESSION_FIELDS = [
   "sessionKey",
+  "agentStarted",
   "continuedFrom",
   "turnMode",
   "startedAt",
@@ -304,6 +306,9 @@ export function checkGraphAgentSessionFields(
   path: string,
   errors: FieldErrorCollector,
 ): void {
+  if (value.agentStarted !== undefined && typeof value.agentStarted !== "boolean") {
+    errors.add(joinPath(path, "agentStarted"), "type", "Expected a boolean");
+  }
   const B = GRAPH_AGENT_SESSION_BOUNDS;
   const field = (name: string) => joinPath(path, name);
   if (value.sessionKey !== undefined) {

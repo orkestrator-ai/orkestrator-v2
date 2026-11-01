@@ -325,8 +325,10 @@ async function projectReviewer(
         ...projected,
         status: "failed",
         ...(bounded(activation.error) ? { error: bounded(activation.error) } : {}),
-        // The activation failed before its agent session existed.
-        ...(session?.providerSessionId ? {} : { startFailed: true }),
+        // Allocation is not proof of an accepted agent turn.
+        ...((session?.agentStarted ?? session?.dispatchState === "sent")
+          ? {}
+          : { startFailed: true }),
         ...(activation.finishedAt ? { completedAt: activation.finishedAt } : {}),
       };
     default:

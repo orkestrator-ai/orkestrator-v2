@@ -163,13 +163,15 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   report?: StructuredReviewReport;
   error?: string;
   /**
-   * The reviewer failed before its agent session existed: its bridge, CLI or
+   * The reviewer failed before its first agent turn was accepted: its bridge, CLI or
    * provider could not be started on this host, so `error` is why the agent
    * could not start rather than anything it reviewed. Its panel says so, and
    * the review carries on with the reviewers that did start. Read it only on
    * a `failed` reviewer.
    */
   startFailed?: boolean;
+  /** Whether this session has accepted an agent turn (allocation alone is insufficient). */
+  agentStarted?: boolean;
   /**
    * Findings reported through `report_finding` while the reviewer runs, oldest
    * first. Dropped when its report is accepted; kept, unconfirmed, when it
@@ -424,6 +426,7 @@ const REVIEWER_KEYS = [
   "restartContinuationSent",
   "error",
   "startFailed",
+  "agentStarted",
   "tokenCount",
   "cacheReadTokens",
   "usageFinalizationPolls",
@@ -473,6 +476,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
       typeof value.restartContinuationSent === "boolean") &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
+    (value.agentStarted === undefined || typeof value.agentStarted === "boolean") &&
     (value.startFailed === undefined || typeof value.startFailed === "boolean") &&
     optionalCount(value.tokenCount) &&
     optionalCount(value.cacheReadTokens) &&

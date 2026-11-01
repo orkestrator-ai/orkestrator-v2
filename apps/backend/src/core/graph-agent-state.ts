@@ -94,6 +94,7 @@ export function graphAgentBranch(
           ...(session.providerSessionId !== undefined
             ? { providerSessionId: session.providerSessionId }
             : {}),
+          agentStarted: session.agentStarted ?? session.dispatchState === "sent",
           requestId: session.requestId,
           dispatchState: session.dispatchState,
           resultTransport: session.resultTransport as WorkflowResultTransport,
@@ -151,6 +152,7 @@ export function graphAgentSession(
     ...(branch.model !== undefined && !branch.modelUnpinned ? { model: branch.model } : {}),
     ...(branch.reasoningEffort !== undefined ? { effort: branch.reasoningEffort } : {}),
     providerSessionId: branch.providerSessionId,
+    ...(branch.agentStarted !== undefined ? { agentStarted: branch.agentStarted } : {}),
     requestId: branch.requestId,
     dispatchState: branch.dispatchState,
     resultTransport: branch.resultTransport ?? "tool-v1",

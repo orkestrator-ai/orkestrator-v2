@@ -893,8 +893,8 @@ describe("graph consolidation scores match the bespoke scores", () => {
         });
         expect(record.report).toEqual(reviewer.report);
         if (reviewer.status === "failed") expect(record.error).toBe(reviewer.error);
-        // These failed activations never opened an agent session.
-        expect(record.startFailed).toBe(reviewer.status === "failed" ? true : undefined);
+        // Corpus activations have already dispatched a turn; later failures are generic.
+        expect(record.startFailed).toBeUndefined();
       }
 
       // The record's consolidation is the bespoke one: the same submission,
@@ -956,4 +956,25 @@ describe("graph consolidation scores match the bespoke scores", () => {
       ).toEqual(scoreConsolidation(plain, referenceConsolidation(plain)));
     },
   );
+});
+
+test("graph startup classification uses accepted turns, retaining allocated session IDs", async () => {
+  const fixture = [...runs.values()][0]!;
+  for (const agentStarted of [false, true]) {
+    const run = structuredClone(fixture.run);
+    const activation = run.activations.find((entry) => entry.nodeId === N.review)!;
+    activation.state = "failed";
+    activation.error = "Agent attachment failed";
+    activation.session = {
+      agent: "cursor",
+      providerSessionId: "allocated",
+      requestId: "request",
+      dispatchState: "prepared",
+      resultTransport: "tool-v1",
+      agentStarted,
+    };
+    const projected = await projectMultiReviewGraphRun(workflowFor(fixture), run, read(run.id));
+    expect(projected.reviewers[0]!.providerSessionId).toBe("allocated");
+    expect(projected.reviewers[0]!.startFailed).toBe(agentStarted ? undefined : true);
+  }
 });

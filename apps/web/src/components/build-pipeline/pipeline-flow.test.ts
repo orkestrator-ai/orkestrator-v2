@@ -330,7 +330,13 @@ describe("pipelineFlowModel", () => {
             label: "Consolidation",
             reviewPassId: "pass-1",
             sessionlessReviewers: [
-              { id: "unstartable", slot: 0, agent: "cursor", error: BRIDGE_MISSING },
+              {
+                id: "unstartable",
+                slot: 0,
+                agent: "cursor",
+                error: BRIDGE_MISSING,
+                startFailed: true,
+              },
             ],
           }),
           session("address", "address", 180, { status: "running" }),
@@ -360,7 +366,13 @@ describe("pipelineFlowModel", () => {
             label: "Consolidation",
             reviewPassId: "pass-1",
             sessionlessReviewers: [
-              { id: "unstartable", slot: 0, agent: "cursor", error: BRIDGE_MISSING },
+              {
+                id: "unstartable",
+                slot: 0,
+                agent: "cursor",
+                error: BRIDGE_MISSING,
+                startFailed: true,
+              },
             ],
           }),
           session("address", "address", 180),
@@ -2024,4 +2036,35 @@ describe("earlier passes' validation", () => {
       state: "failed",
     });
   });
+});
+
+test("retired sessionless failures preserve generic failure classification", () => {
+  for (const startFailed of [false, undefined]) {
+    const pipeline = build({
+      phase: "addressing",
+      reviewers: PANEL.slice(0, 2),
+      sessions: [
+        reviewer(1, "survivor", 60, { reviewPassId: "pass-1", reviewerOutcome: "completed" }),
+        session("review", "consolidation", 120, {
+          label: "Consolidation",
+          reviewPassId: "pass-1",
+          sessionlessReviewers: [
+            {
+              id: "dispatch-failure",
+              slot: 0,
+              agent: "cursor",
+              error: "Dispatch refused",
+              startFailed,
+            },
+          ],
+        }),
+        session("address", "address", 180, { status: "running" }),
+      ],
+    });
+    const model = pipelineFlowModel(pipeline);
+    const node = model.nodes.find((entry) => entry.id === "reviewer:dispatch-failure")!;
+    expect(node.startFailed).not.toBe(true);
+    expect(node.state).toBe("failed");
+    expect(pipelineReviewerStartFailures(model).failures).toEqual([]);
+  }
 });

@@ -284,10 +284,9 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       }
       branch.status = "failed";
       branch.error = agentBranchErrorMessage(error).slice(0, 4_096);
-      // No session means the agent itself never started (its bridge, CLI or
-      // provider failed on this host), which the owner reports apart from a
-      // review that went wrong.
-      if (branch.providerSessionId) delete branch.startFailed;
+      // Session allocation can precede authentication/attachment. Only an
+      // accepted turn proves startup; keep this fact across continuation sends.
+      if (branch.agentStarted ?? branch.dispatchState === "sent") delete branch.startFailed;
       else branch.startFailed = true;
       branch.completedAt = agentBranchNowIso();
       this.host.clearAdmission?.(branch);
@@ -313,6 +312,10 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
    */
   async advance(branch: B, index: number, count: number): Promise<"continue" | "stop"> {
     const host = this.host;
+    // Upgrade records written before acceptance was tracked explicitly.
+    if (branch.agentStarted === undefined && branch.dispatchState === "sent") {
+      branch.agentStarted = true;
+    }
     let provider: BuildPipelineProvider;
     try {
       provider = await host.provider(branch);
@@ -405,6 +408,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       await host.assertFence();
       branch.sessionKey = sessionKey;
       branch.providerSessionId = providerSessionId;
+      branch.agentStarted = false;
       branch.requestId = randomUUID();
       branch.dispatchState = "prepared";
       branch.resultTransport = agentBranchResultTransport(this.context, branch);
@@ -469,6 +473,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
           `The ${host.wording.subject} dispatch acceptance could not be confirmed`,
         );
       }
+      branch.agentStarted = true;
       branch.dispatchState = "sent";
       delete branch.continuationPrompt;
       delete branch.idleResultPolls;
@@ -603,6 +608,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       elapsedMs: sentAt - this.passStartedAt,
     });
     await host.assertFence();
+    branch.agentStarted = true;
     branch.dispatchState = "sent";
     delete branch.continuationPrompt;
     await this.commits.commit();

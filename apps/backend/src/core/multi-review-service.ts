@@ -439,6 +439,7 @@ function resetReviewerForRestart(
   dropProvisionalFindings(reviewer);
   reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
   delete reviewer.providerSessionId;
+  delete reviewer.agentStarted;
   delete reviewer.requestId;
   delete reviewer.dispatchState;
   delete reviewer.resultTransport;
@@ -1427,6 +1428,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete reviewer.report;
           dropProvisionalFindings(reviewer);
           delete reviewer.providerSessionId;
+          delete reviewer.agentStarted;
           reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
           delete reviewer.requestId;
           delete reviewer.dispatchState;
@@ -1531,6 +1533,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             delete reviewer.startFailed;
             dropProvisionalFindings(reviewer);
             delete reviewer.providerSessionId;
+            delete reviewer.agentStarted;
             reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
             delete reviewer.requestId;
             delete reviewer.dispatchState;

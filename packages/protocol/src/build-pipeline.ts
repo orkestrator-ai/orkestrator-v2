@@ -991,8 +991,9 @@ export interface PipelineReviewIssueCounts {
 
 export type PipelineReviewerOutcome = "completed" | "failed" | "cancelled";
 
-/** Bounded history for a reviewer whose provider session could not be created. */
+/** Bounded history for a failed reviewer without a mirrored pipeline session row. */
 export interface PipelineSessionlessReviewer {
+  startFailed?: boolean;
   id: string;
   slot: number;
   agent: BuildPipelineAgent;
@@ -1006,6 +1007,7 @@ function isPipelineSessionlessReviewer(value: unknown): value is PipelineSession
     isRecord(value) &&
     isNonBlankString(value.id) &&
     value.id.length <= 128 &&
+    (value.startFailed === undefined || typeof value.startFailed === "boolean") &&
     isNonNegativeInteger(value.slot) &&
     value.slot < MAX_BUILD_PIPELINE_REVIEWERS &&
     BUILD_PIPELINE_AGENTS.includes(value.agent as BuildPipelineAgent) &&

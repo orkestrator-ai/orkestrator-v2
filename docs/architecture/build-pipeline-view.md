@@ -87,7 +87,7 @@ a transcript.
   with no session yet are nodes too. Once the pass is retired, each reviewer
   session keeps how it ended (`reviewerOutcome`), a bounded `error` (2,000
   characters) and per-severity `reviewIssueCounts`; older records without them
-  fall back to the session status. Reviewers that failed before session creation
+  fall back to the session status. Failed reviewers without a mirrored session row
   are retained in the consolidation session’s `sessionlessReviewers` summary
   (at most one entry per panel slot, bounded model and error text), so their
   model and diagnostic remain inspectable after the live pass is retired.
@@ -95,10 +95,11 @@ a transcript.
   remain valid. A retried reviewer replaces its failed
   attempt in the same slot, and the inspector says how many earlier attempts
   there were.
-- **A reviewer that could not start.** A reviewer that fails before its agent
-  session exists (a missing bridge or CLI, unavailable bridge auth) carries
-  `startFailed` on its live record. A retired pass's `sessionlessReviewers`
-  are all of this kind. Its node and inspector read "Could not start", and a
+- **A reviewer that could not start.** A reviewer that fails before its first agent
+  turn is accepted (a missing bridge or CLI, unavailable bridge auth) carries
+  `startFailed` on its live record. The session ID alone does not prove startup: `agentStarted` records acceptance.
+  A retired pass's `sessionlessReviewers` preserve `startFailed` explicitly;
+  entries without it retain a generic failure label. Its node and inspector read "Could not start", and a
   notice above the graph names each such reviewer of the newest pass, with
   its agent and error (`ReviewerStartFailureNotice`). The Multi Review
   overview shows the same notice. The rest of the panel carries on, and each

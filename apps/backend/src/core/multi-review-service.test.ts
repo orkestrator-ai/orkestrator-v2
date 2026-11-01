@@ -7263,7 +7263,11 @@ test("MultiReviewService keeps reviewing and consolidates when another reviewer 
       model: "sonnet",
       status: "failed",
       error: expect.stringContaining("bridge authentication is unavailable"),
+      // It never had a session, so the panel reports it as unable to start.
+      startFailed: true,
     });
+    expect(current?.reviewers[1]?.providerSessionId).toBeUndefined();
+    expect(current?.reviewers[0]?.startFailed).toBeUndefined();
     expect(await storage.getEnvironment("env-attribution")).toMatchObject({
       agentActivityState: "working",
       agentActivitySources: {
@@ -7283,6 +7287,7 @@ test("MultiReviewService keeps reviewing and consolidates when another reviewer 
     const ready = await snapshot(started.id);
     expect(ready?.phase).toBe("ready");
     expect(ready?.reviewers.map((reviewer) => reviewer.status)).toEqual(["completed", "failed"]);
+    expect(ready?.reviewers[1]?.startFailed).toBe(true);
     expect(ready?.consolidatedReport).toBeDefined();
     const consolidation = [...provider.sends.values()].find((sent) =>
       sent.prompt.includes("<multi-review-reports-json>"),
@@ -7313,6 +7318,8 @@ test("MultiReviewService aborts a reviewer session that fails mid-turn while the
     });
     // The session id survives so the read-only transcript stays reachable.
     expect(current?.reviewers[0]?.providerSessionId).toBe("session-1");
+    // It started, so its failure is the review's, not the agent's start.
+    expect(current?.reviewers[0]?.startFailed).toBeUndefined();
     expect(current?.reviewers[1]).toMatchObject({ model: "sonnet", status: "running" });
 
     // The failed turn was aborted before the pass moved on; no healthy session

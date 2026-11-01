@@ -325,6 +325,8 @@ async function projectReviewer(
         ...projected,
         status: "failed",
         ...(bounded(activation.error) ? { error: bounded(activation.error) } : {}),
+        // The activation failed before its agent session existed.
+        ...(session?.providerSessionId ? {} : { startFailed: true }),
         ...(activation.finishedAt ? { completedAt: activation.finishedAt } : {}),
       };
     default:

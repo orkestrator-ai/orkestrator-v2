@@ -32,7 +32,7 @@ import {
   type PipelineSession,
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
-import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
+import { reviewerCouldNotStart, type ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import {
   flowEdgeState,
@@ -98,6 +98,8 @@ export interface PipelineFlowNode {
   issueCounts?: PipelineReviewIssueCounts;
   /** Why the node failed (or what stopped it), from the record. */
   error?: string;
+  /** A reviewer whose agent could not start: it failed before its session existed. */
+  startFailed?: boolean;
   /** Activity time, for the default selection. */
   activityAt?: number;
   /**
@@ -984,6 +986,8 @@ export function pipelineFlowModel(
           model: reviewer.model,
           reasoningEffort: reviewer.reasoningEffort,
           error: reviewer.error,
+          // Kept only for reviewers that never had a session.
+          startFailed: true,
         };
         reviewPass.reviewers.set(reviewer.slot, node);
         place(reviewPass.reviewersColumn, node);
@@ -1080,6 +1084,7 @@ export function pipelineFlowModel(
         completedAt: reviewer.completedAt,
         tokenCount: reviewer.tokenCount,
         ...(reviewer.error ? { error: reviewer.error } : {}),
+        ...(reviewerCouldNotStart(reviewer) ? { startFailed: true } : {}),
         earlierAttempts: existing ? (existing.earlierAttempts ?? 0) + 1 : 0,
       };
       // The live retry replaces the failed attempt it follows.
@@ -1404,4 +1409,26 @@ export function pipelineReviewPassNodes(
   const prepare =
     before?.kind === "prepare" ? model.nodes.find((node) => node.id === before.nodeIds[0]) : null;
   return prepare ? [prepare, ...passNodes] : passNodes;
+}
+
+/**
+ * The reviewers of the newest review pass whose agent could not start, and
+ * how many reviewers that pass has. An earlier pass's failures are history:
+ * every pass starts its whole panel again.
+ */
+export function pipelineReviewerStartFailures(model: PipelineFlowModel): {
+  failures: PipelineFlowNode[];
+  panelSize: number;
+} {
+  const column = model.columns.findLast(
+    (candidate) => candidate.kind === "review" && !candidate.superseded,
+  );
+  const reviewers = (column?.nodeIds ?? []).flatMap((id) => {
+    const node = model.nodes.find((candidate) => candidate.id === id);
+    return node?.kind === "reviewer" && !node.superseded ? [node] : [];
+  });
+  return {
+    failures: reviewers.filter((node) => node.startFailed && node.state === "failed"),
+    panelSize: reviewers.length,
+  };
 }

@@ -74,6 +74,8 @@ export interface AgentBranchRecord {
   progressDigest?: string;
   stalledSince?: string;
   error?: string;
+  /** Failed before its session existed: the agent could not be started. */
+  startFailed?: boolean;
   tokenCount?: number;
   cacheReadTokens?: number;
   usageFinalizationPolls?: number;

@@ -458,6 +458,7 @@ function resetReviewerForRestart(
   delete reviewer.commandSandboxOff;
   delete reviewer.report;
   delete reviewer.error;
+  delete reviewer.startFailed;
   delete reviewer.startedAt;
   delete reviewer.completedAt;
 }
@@ -1422,6 +1423,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
           reviewer.status = "pending";
           delete reviewer.error;
+          delete reviewer.startFailed;
           delete reviewer.report;
           dropProvisionalFindings(reviewer);
           delete reviewer.providerSessionId;
@@ -1526,6 +1528,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
             reviewer.status = "pending";
             delete reviewer.error;
+            delete reviewer.startFailed;
             dropProvisionalFindings(reviewer);
             delete reviewer.providerSessionId;
             reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
@@ -4828,6 +4831,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       for (const reviewer of abandoned) {
         reviewer.status = "failed";
         reviewer.error = workflow.error;
+        delete reviewer.startFailed;
       }
     }
     if (workflow.fixSession?.status === "running") {

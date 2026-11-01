@@ -95,6 +95,14 @@ a transcript.
   remain valid. A retried reviewer replaces its failed
   attempt in the same slot, and the inspector says how many earlier attempts
   there were.
+- **A reviewer that could not start.** A reviewer that fails before its agent
+  session exists (a missing bridge or CLI, unavailable bridge auth) carries
+  `startFailed` on its live record. A retired pass's `sessionlessReviewers`
+  are all of this kind. Its node and inspector read "Could not start", and a
+  notice above the graph names each such reviewer of the newest pass, with
+  its agent and error (`ReviewerStartFailureNotice`). The Multi Review
+  overview shows the same notice. The rest of the panel carries on, and each
+  round tries the reviewer again ([to-do 1090](../todo/coordinator-and-multi-review/1090-cursor-reviewer-cannot-start-on-standalone-backend.md)).
 - **Read-only review.** Reviewers, consolidation and Verify must leave HEAD
   and the Git-visible paths as they found them. Reviewers and consolidation
   also run in provider read-only mode, as Multi Review's do. The backend

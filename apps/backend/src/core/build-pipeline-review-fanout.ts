@@ -1495,6 +1495,7 @@ export function resetReviewerForRetry(reviewer: ReviewerRecord): void {
   delete reviewer.commandSandboxOff;
   delete reviewer.report;
   delete reviewer.error;
+  delete reviewer.startFailed;
   delete reviewer.startedAt;
   delete reviewer.completedAt;
 }

@@ -163,6 +163,14 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   report?: StructuredReviewReport;
   error?: string;
   /**
+   * The reviewer failed before its agent session existed: its bridge, CLI or
+   * provider could not be started on this host, so `error` is why the agent
+   * could not start rather than anything it reviewed. Its panel says so, and
+   * the review carries on with the reviewers that did start. Read it only on
+   * a `failed` reviewer.
+   */
+  startFailed?: boolean;
+  /**
    * Findings reported through `report_finding` while the reviewer runs, oldest
    * first. Dropped when its report is accepted; kept, unconfirmed, when it
    * fails or is stopped.
@@ -415,6 +423,7 @@ const REVIEWER_KEYS = [
   "resultReminderSent",
   "restartContinuationSent",
   "error",
+  "startFailed",
   "tokenCount",
   "cacheReadTokens",
   "usageFinalizationPolls",
@@ -464,6 +473,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
       typeof value.restartContinuationSent === "boolean") &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
+    (value.startFailed === undefined || typeof value.startFailed === "boolean") &&
     optionalCount(value.tokenCount) &&
     optionalCount(value.cacheReadTokens) &&
     optionalFinalUsagePollCount(value.usageFinalizationPolls) &&
@@ -698,6 +708,13 @@ export function reviewersSettled(reviewers: readonly ReviewerRecord[]): boolean 
   return !reviewers.some(
     (reviewer) => reviewer.status === "pending" || reviewer.status === "running",
   );
+}
+
+/** A failed reviewer whose agent never started; see {@link ReviewerRecord.startFailed}. */
+export function reviewerCouldNotStart(
+  reviewer: Pick<ReviewerRecord, "status" | "startFailed">,
+): boolean {
+  return reviewer.status === "failed" && reviewer.startFailed === true;
 }
 
 /** The reviewers whose reports are usable inputs to consolidation. */

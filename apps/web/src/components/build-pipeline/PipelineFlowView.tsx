@@ -48,11 +48,13 @@ import { FlowInspectorHeader, FlowInspectorPanel } from "@/components/flow-graph
 import { defaultFlowSelection } from "@/components/flow-graph/flow-graph-model";
 import { reviewerStatusNote } from "@/components/review/multi-review-steps";
 import { ReviewValidationStatus } from "@/components/review/ReviewValidationStatus";
+import { ReviewerStartFailureNotice } from "@/components/review/ReviewerStartFailureNotice";
 import { WorkflowResultStatus } from "@/components/review/WorkflowResultStatus";
 import {
   pipelineFlowModel,
   pipelinePackageRestartStageId,
   pipelineReviewPassNodes,
+  pipelineReviewerStartFailures,
   pipelineSkipAction,
   type PipelineFlowModel,
   type PipelineFlowNode,
@@ -532,6 +534,8 @@ export function PipelineFlowView({
         }
       : null;
 
+  const startFailures = pipelineReviewerStartFailures(model);
+
   // The live run's steps; a previous attempt is history.
   const liveNodes = model.nodes.filter((node) => !node.superseded);
   const reached = liveNodes.filter((node) => !node.placeholder && node.state !== "not-started");
@@ -593,6 +597,19 @@ export function PipelineFlowView({
                 open {reportHint.title} to read the report.
               </span>
             </button>
+          ) : null}
+          {startFailures.failures.length > 0 ? (
+            <div className="shrink-0 border-b border-divider px-3 py-2">
+              <ReviewerStartFailureNotice
+                failures={startFailures.failures.map((node) => ({
+                  name: node.title,
+                  agent: node.agent ?? node.reviewer?.agent ?? "unknown agent",
+                  error: node.error,
+                }))}
+                panelSize={startFailures.panelSize}
+                onShow={() => onPin(startFailures.failures[0]!.id)}
+              />
+            </div>
           ) : null}
           <div className="flex shrink-0 items-center gap-2 border-b border-divider px-3 py-1.5">
             <Button

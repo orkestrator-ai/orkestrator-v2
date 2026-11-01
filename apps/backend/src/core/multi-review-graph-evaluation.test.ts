@@ -893,6 +893,8 @@ describe("graph consolidation scores match the bespoke scores", () => {
         });
         expect(record.report).toEqual(reviewer.report);
         if (reviewer.status === "failed") expect(record.error).toBe(reviewer.error);
+        // These failed activations never opened an agent session.
+        expect(record.startFailed).toBe(reviewer.status === "failed" ? true : undefined);
       }
 
       // The record's consolidation is the bespoke one: the same submission,

@@ -284,6 +284,11 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       }
       branch.status = "failed";
       branch.error = agentBranchErrorMessage(error).slice(0, 4_096);
+      // No session means the agent itself never started (its bridge, CLI or
+      // provider failed on this host), which the owner reports apart from a
+      // review that went wrong.
+      if (branch.providerSessionId) delete branch.startFailed;
+      else branch.startFailed = true;
       branch.completedAt = agentBranchNowIso();
       this.host.clearAdmission?.(branch);
       delete branch.idleResultPolls;
@@ -407,6 +412,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
       branch.status = "running";
       branch.startedAt = agentBranchNowIso();
       host.clearAdmission?.(branch);
+      delete branch.startFailed;
       delete branch.tokenCount;
       delete branch.cacheReadTokens;
       delete branch.usageFinalizationPolls;

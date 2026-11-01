@@ -768,12 +768,22 @@ describe("pipeline environment Git wiring", () => {
         "The environment's container is not running. Start the environment, then try again.",
       );
     }
-    status = async () => {
-      throw new Error("Error: No such object: container-git");
-    };
-    await expect(git("git-env", ["status"])).rejects.toThrow(
-      "The environment's container could not be found.",
-    );
+    for (const inspectFailure of [
+      new shell.CommandFailedError("", { timedOut: true }),
+      new shell.CommandFailedError("Cannot connect to the Docker daemon", { exitCode: 1 }),
+      new shell.CommandFailedError("Error: No such object: container-git", { exitCode: 1 }),
+    ]) {
+      status = async () => {
+        throw inspectFailure;
+      };
+      const unavailable = await git("git-env", ["status"]).catch((error: unknown) => error);
+      expect(unavailable).toBeInstanceOf(EnvironmentUnavailableError);
+      expect((unavailable as Error).message).toBe(
+        "The environment's container status could not be checked. Check that Docker is running and the environment is available, then try again.",
+      );
+      expect((unavailable as Error).message).not.toContain("could not be found");
+      expect((unavailable as Error).cause).toBe(refusal);
+    }
 
     // A running container's failure is Git's own answer, kept as it is.
     status = async () => "running";

@@ -14,6 +14,7 @@ on:
       - ".github/workflows/container-live-qualification.yml"
       - "apps/backend/tests/container-live-*.test.ts"
       - "apps/backend/tests/container-benchmarks.test.ts"
+      - "apps/backend/tests/build-pipeline-code-rewind-docker.test.ts"
       - "apps/backend/tests/container-lifecycle-fixtures.ts"
       - "apps/backend/tests/container-live-rebuild-*.ts"
       - "apps/backend/tests/container-live-workspace.ts"

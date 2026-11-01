@@ -234,7 +234,9 @@ async function containerUnavailableReason(
   try {
     status = await readStatus(containerId);
   } catch {
-    return "The environment's container could not be found. Start the environment, then try again.";
+    // An inspect failure cannot distinguish a missing container from an
+    // unavailable daemon or a timeout. Keep the refusal without guessing.
+    return "The environment's container status could not be checked. Check that Docker is running and the environment is available, then try again.";
   }
   if (status === "running") return undefined;
   if (status === "paused") {

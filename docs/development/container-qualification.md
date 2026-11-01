@@ -742,6 +742,27 @@ network and the benchmark harness) had not kept up with account switching
 from view when it was started again. Both are fixed. Detail and decisions are
 in [0019-container-platform-qualification.md](../todo/containers-and-environments/0019-container-platform-qualification.md).
 
+## Build-pipeline rewind review evidence (2026-11-01)
+
+The review fixes passed all three live build-pipeline rewind cases on Linux
+amd64, Docker Engine 29.9.2, using `orkestrator-v2:dev-3e57790310c6`
+(image ID `sha256:d0cc33252a29f76e08cf502d36bde24520346d485355ce0ccc1737c4d56074b7`).
+The run completed in 14.5 seconds:
+
+```bash
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:dev-3e57790310c6 \
+  mise run test:logged -- --name review-repair-live-rewind -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./tests/build-pipeline-code-rewind-docker.test.ts --parallel=1
+```
+
+This exercised real container Git backup and reset, restart and lease-push
+instructions, refusal while paused, and completion of a journaled reset after
+unpause. The providers were harness fakes; no provider turns were taken.
+The logged runner reported exit 0 and removed its passing output under the
+normal retention policy. Docker Desktop, rootless Docker, and egress-gateway
+configurations were outside this focused run.
+
 ## Provider-state review evidence (2026-10-16)
 
 The provider-state review fixes were exercised on native arm64 Docker Desktop

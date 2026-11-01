@@ -242,11 +242,8 @@ export class SessionsRepository {
   }
 
   async getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
-    const layouts = await this.context.loadJsonCached<Record<string, PersistedPaneLayout>>(
-      this.files.paneLayoutsFile(),
-      () => ({}),
-    );
-    return layouts[environmentId] ?? null;
+    const stored = this.context.loadStoreRow(this.files.paneLayoutsFile(), environmentId);
+    return stored === undefined ? null : (stored as PersistedPaneLayout);
   }
 
   /**

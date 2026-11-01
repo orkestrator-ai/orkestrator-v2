@@ -24,6 +24,9 @@ import {
   pruneAgentInteractionResolutionJournal,
   resolveNativeAgentInteractionMetadata,
 } from "./storage-shared.js";
+const UNREADABLE_NATIVE_SESSION =
+  "Stored native agent session metadata is invalid or uses an unsupported version";
+
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -388,11 +391,7 @@ export class NativeAgentSessionsRepository {
   }
 
   assertReadableNativeAgentSession(loaded: LoadedNativeAgentSessions, key: string): void {
-    if (key in loaded.opaque) {
-      throw new Error(
-        "Stored native agent session metadata is invalid or uses an unsupported version",
-      );
-    }
+    if (key in loaded.opaque) throw new Error(UNREADABLE_NATIVE_SESSION);
   }
 
   async getNativeAgentSession(key: string): Promise<PersistedNativeAgentSession | null> {
@@ -403,9 +402,18 @@ export class NativeAgentSessionsRepository {
     // an external provider create, so a routine tab reattach must not wait on
     // it. Every caller treats the result as advisory and re-checks under the
     // lease before acting.
-    const loaded = await this.loadNativeAgentSessions();
-    this.assertReadableNativeAgentSession(loaded, key);
-    return loaded.sessions[key] ?? null;
+    const file = this.files.nativeAgentSessionsFile();
+    const stored = this.context.loadStoreRow(file, key);
+    if (stored === undefined) {
+      // A store held whole may not be a record at all, which must still refuse
+      // rather than read as "no session".
+      if (!this.context.storeHeldAsDocument(file)) return null;
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, key);
+      return loaded.sessions[key] ?? null;
+    }
+    if (!isPersistedNativeAgentSession(stored, key)) throw new Error(UNREADABLE_NATIVE_SESSION);
+    return stored;
   }
 
   /** Teardown must see identity captures already queued behind a provider mutation. */

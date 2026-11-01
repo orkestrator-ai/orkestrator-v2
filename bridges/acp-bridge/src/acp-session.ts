@@ -118,7 +118,7 @@ import {
 } from "./acp-rows.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { emptySessionConfig } from "./acp-persistence.js";
-import { persistState, schedulePersist } from "./acp-persist-writer.js";
+import { persistState, schedulePersist, scheduleStreamingPersist } from "./acp-persist-writer.js";
 import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
 import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
 import { sessionInstructionsMeta } from "./acp-provider-config.js";
@@ -2122,7 +2122,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     failTranscriptLimit(state);
     return;
   }
-  schedulePersist();
+  scheduleStreamingPersist();
 }
 
 export function composerPatchFromSpawn(

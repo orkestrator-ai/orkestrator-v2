@@ -1186,7 +1186,9 @@ when that is smaller, because shared memory is charged to the limit.
 `container-oom-events.ts` follows Docker's `oom` events for this owner — a
 killed child process leaves `State.OOMKilled` false — replaying from its last
 event after a restart without double-counting; samples carry `oomEvents`
-(null while not following). A memory update below current use is refused
+(null while not following). The same follower reports `start`, `die`, `stop` and
+`destroy`, which invalidate the shared `docker ps` snapshot so status reads do
+not keep answering for a container that just ended. A memory update below current use is refused
 `confirmation-required` until the user confirms it.
 
 ## Bounded logs (`bounded-logs=1`)

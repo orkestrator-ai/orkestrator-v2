@@ -58,7 +58,7 @@ import {
   stringifyToolPayload,
   truncateUtf8,
 } from "./acp-transcript.js";
-import { schedulePersist } from "./acp-persist-writer.js";
+import { schedulePersist, scheduleStreamingPersist } from "./acp-persist-writer.js";
 import { formatAcpProviderError } from "./acp-errors.js";
 import {
   currentAssistantMessage,
@@ -181,7 +181,7 @@ export function commitToolPartMutation(
     failTranscriptLimit(state);
     return false;
   }
-  schedulePersist();
+  scheduleStreamingPersist();
   return true;
 }
 

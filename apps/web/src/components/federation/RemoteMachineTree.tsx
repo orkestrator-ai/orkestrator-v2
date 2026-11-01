@@ -51,13 +51,9 @@ import {
   parseProjectFolderDragId,
   projectFolderKey,
   projectSortableIds,
-  resolveAddProjectToFolder,
-  resolveProjectArrangement,
-  resolveRemoveProjectFromFolder,
-  resolveRenameProjectFolder,
-  resolveSortProjectFolder,
-  resolveUngroupProjectFolder,
-  type ProjectArrangement,
+  mapProjectArrangementIntentIds,
+  resolveProjectArrangementIntent,
+  type ProjectArrangementIntent,
 } from "@/lib/project-folders";
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
@@ -231,8 +227,12 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
     }),
   );
 
-  const arrange = (arrangement: ProjectArrangement | null) => {
-    if (!sortable || !arrangement) return;
+  // The gesture is resolved here for an instant preview and by the owner, on
+  // its current projects, for the result.
+  const arrange = (intent: ProjectArrangementIntent) => {
+    if (!sortable) return;
+    const arrangement = resolveProjectArrangementIntent(intent, items);
+    if (!arrangement) return;
     const byKey = new Map(items.map((item) => [item.id, item.project.ref.projectId]));
     const folders: Record<string, string | null> = {};
     for (const [key, folder] of Object.entries(arrangement.folders)) {
@@ -246,6 +246,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
         folders,
       },
       (error: unknown) => reportWriteError(machine, "Arrange projects", error),
+      mapProjectArrangementIntentIds(intent, (id) => byKey.get(id) ?? id),
     );
   };
 
@@ -264,7 +265,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
     const activeId = String(active.id);
     const overId = String(over.id);
     if (parseProjectFolderDragId(activeId) !== null || items.some((item) => item.id === activeId)) {
-      arrange(resolveProjectArrangement(activeId, overId, items));
+      arrange({ kind: "move", activeId, overId });
       return;
     }
     // Environments never move between projects, so both rows share one.
@@ -292,7 +293,8 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
             onAddToFolder: () => setFolderDialogKey(item.id),
             ...(item.folder
               ? {
-                  onRemoveFromFolder: () => arrange(resolveRemoveProjectFromFolder(items, item.id)),
+                  onRemoveFromFolder: () =>
+                    arrange({ kind: "remove-from-folder", projectId: item.id }),
                 }
               : {}),
           }
@@ -317,12 +319,12 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
                   const normalized = normalizeProjectFolderName(nextName);
                   if (!normalized) return;
                   const collapsed = isFolderCollapsed(entry.name);
-                  arrange(resolveRenameProjectFolder(items, entry.name, nextName));
+                  arrange({ kind: "rename-folder", folder: entry.name, name: nextName });
                   setFolderKeyCollapsed(folderCollapseKey(entry.name), false);
                   setFolderKeyCollapsed(folderCollapseKey(normalized), collapsed);
                 },
-                onSort: () => arrange(resolveSortProjectFolder(items, entry.name)),
-                onUngroup: () => arrange(resolveUngroupProjectFolder(items, entry.name)),
+                onSort: () => arrange({ kind: "sort-folder", folder: entry.name }),
+                onUngroup: () => arrange({ kind: "ungroup-folder", folder: entry.name }),
               }
             : {};
           return (
@@ -350,7 +352,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
         existingFolders={listProjectFolderNames(items)}
         onSubmit={(folderName) => {
           if (!folderDialogItem) return;
-          arrange(resolveAddProjectToFolder(items, folderDialogItem.id, folderName));
+          arrange({ kind: "add-to-folder", projectId: folderDialogItem.id, folder: folderName });
           // A folder the user just filed something into has to be visible,
           // otherwise the project appears to have vanished from the sidebar.
           const normalized = normalizeProjectFolderName(folderName);

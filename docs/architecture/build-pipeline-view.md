@@ -13,6 +13,34 @@ The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
 tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
 
+## Starting a build
+
+Every launcher sends only what the user explicitly chose, and the backend fills
+the rest in one place:
+
+| Launcher | Command | What it sends |
+| --- | --- | --- |
+| Build buttons (Kanban, Linear, GitHub) | `launch_build_pipeline` (`build-pipeline-launch.ts`) | The ticket and any step, reviewer or agent the launcher set |
+| Features view | `start_feature_plan_build` (`feature-plan-build.ts`) | The feature plan id |
+| CLI `build launch`, coordinator | `build.launch`, `start_controller_build_pipeline` | Their request |
+
+All of them apply `buildPipelineInputWithDefaults`
+(`coordinator-launch-defaults.ts`), which is documented at the top of
+`build-pipeline-launch.ts`: an explicit step replaces the saved one, a step with
+no agent keeps the saved selection, and the review step is always the first
+reviewer. A launcher may still resolve the same defaults to display them
+(`@orkestrator/protocol/build-pipeline-defaults`). The ticket snapshot, source
+link and naming prompt come from the mappers in
+`@orkestrator/protocol/build-pipeline-tickets`.
+
+`start_feature_plan_build` formats the stories, creates the ticket, claims the
+plan, starts the pipeline and records the link, compensating on failure: a claim
+is released only while no pipeline is linked, and a new ticket deleted only
+while no pipeline record holds it. A plan claimed by a launch that stopped
+midway reuses that claim's ticket. Feature builds run on Codex unless the caller
+names another agent, because the story prompt asks for Codex threads and the
+build reuses the plan's Codex planning environment.
+
 ## Shared flow graph
 
 Multi Review and the pipeline draw with the same components in

@@ -61,6 +61,7 @@ import {
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { ActivitySortOrder } from "@/stores/uiStore";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import {
   ActivityEnvironmentList,
   type ActivityCreateTarget,
@@ -589,6 +590,7 @@ export function FederatedActivityList({
   machines,
   order = "priority",
   renderBoundRow,
+  boundActivity,
   renderBoundHome = () => null,
   boundSelectedId = null,
   onCreateBound,
@@ -598,6 +600,8 @@ export function FederatedActivityList({
   order?: ActivitySortOrder;
   /** A row of this window's own machine. */
   renderBoundRow: (environmentId: string) => ReactNode;
+  /** The activity those rows display, so they sort on what they show. */
+  boundActivity?: (environmentId: string) => AgentActivityState | undefined;
   /** The activity button of one of this window's project homes (nothing while quiet). */
   renderBoundHome?: (environmentId: string) => ReactNode;
   /** The environment this window shows, when it is one of its own. */
@@ -608,7 +612,7 @@ export function FederatedActivityList({
   boundWaitingCount?: number;
 }) {
   const active = useRemoteWorkspaceStore((state) => state.active);
-  const rows = activityRows(machines, order);
+  const rows = activityRows(machines, order, boundActivity);
   const mixed = machines.length > 1;
   const createTargets: ActivityCreateTarget[] = machines.flatMap((machine) =>
     isMachineWritable(machine)

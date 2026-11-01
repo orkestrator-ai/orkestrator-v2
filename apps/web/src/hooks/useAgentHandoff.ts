@@ -7,6 +7,7 @@ import {
   type AgentHandoffSnapshot,
   type AgentProvider,
 } from "@/lib/agent-handoff";
+import { getAgentHandoffCapabilities } from "@/lib/backend";
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
@@ -15,6 +16,8 @@ interface AgentHandoffState {
   handoff: AgentHandoffSnapshot | null;
   loading: boolean;
   error: string | null;
+  /** The backend delivers this handoff itself with the tab's first dispatch. */
+  backendDelivers: boolean;
 }
 
 interface StoredAgentHandoffState extends AgentHandoffState {
@@ -34,6 +37,7 @@ const EMPTY_STATE: StoredAgentHandoffState = {
   loading: false,
   error: null,
   errorAt: null,
+  backendDelivers: false,
 };
 
 /** What a request shows before its load settles; no request is the empty state. */
@@ -49,7 +53,22 @@ function pendingHandoffState(
     loading: true,
     error: null,
     errorAt: null,
+    backendDelivers: false,
   };
+}
+
+/**
+ * Whether the backend delivers handoffs. An answer that cannot be read counts as
+ * "no": this renderer then prepends the history, and a backend that delivers
+ * recognises the carrier and does not add a second one, so the wrong guess costs
+ * nothing, where assuming "yes" could drop the history.
+ */
+async function backendDeliversHandoffs(): Promise<boolean> {
+  try {
+    return (await getAgentHandoffCapabilities()).delivery;
+  } catch {
+    return false;
+  }
 }
 
 export function useAgentHandoff(
@@ -66,7 +85,11 @@ export function useAgentHandoff(
   consumedHandoffId?: string,
 ): AgentHandoffState & {
   ready: boolean;
-  /** History to prepend only when the user submits the first destination prompt. */
+  /**
+   * The transferred history while it is still waiting for the destination's
+   * first prompt. Display state: the backend prepends it at dispatch, unless
+   * `backendDelivers` is false (a backend that predates that).
+   */
   pendingHistory?: string;
   displayMessages: NativeMessage[];
 } {
@@ -98,10 +121,11 @@ export function useAgentHandoff(
         loading: false,
         error: message,
         errorAt: new Date().toISOString(),
+        backendDelivers: false,
       });
     };
-    void loadAgentHandoff(handoffId)
-      .then((handoff) => {
+    void Promise.all([loadAgentHandoff(handoffId), backendDeliversHandoffs()])
+      .then(([handoff, backendDelivers]) => {
         if (cancelled) return;
         if (!handoff) {
           fail("The transferred conversation could not be loaded.");
@@ -122,6 +146,7 @@ export function useAgentHandoff(
           loading: false,
           error: null,
           errorAt: null,
+          backendDelivers,
         });
       })
       .catch((error) => {
@@ -192,6 +217,7 @@ export function useAgentHandoff(
     handoff: state.handoff,
     loading: state.loading,
     error: state.error,
+    backendDelivers: state.backendDelivers,
     ready,
     pendingHistory:
       ready && !destinationTranscriptStarted && !consumedHandoffId

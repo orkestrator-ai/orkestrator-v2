@@ -585,6 +585,34 @@ describe("BuildPipelineService", () => {
     }
   });
 
+  test("imports a legacy snapshot whose report predates testResults.notRun", async () => {
+    await withService(async (service, storage) => {
+      const { notRun: _notRun, ...legacyTestResults } = cleanReview.testResults;
+      const legacy = {
+        ...startInput(),
+        id: "legacy-report-pipeline",
+        environmentId: "env-1",
+        phase: "complete",
+        sessions: [],
+        currentSessionIndex: -1,
+        iteration: 0,
+        maxIterations: 3,
+        createdAt: new Date(0).toISOString(),
+        backendRevision: 99,
+        structuredReview: { ...cleanReview, testResults: legacyTestResults },
+      };
+      delete (legacy as { existingEnvironmentId?: string }).existingEnvironmentId;
+      delete (legacy as { namingPrompt?: string }).namingPrompt;
+
+      expect(await service.importLegacy("project-1", [legacy])).toEqual({
+        importedIds: ["legacy-report-pipeline"],
+        skipped: 0,
+      });
+      const imported = await pipeline(storage, "legacy-report-pipeline");
+      expect(imported.structuredReview?.testResults.notRun).toBe(0);
+    });
+  });
+
   test("imports only valid unowned legacy snapshots and never overwrites backend records", async () => {
     await withService(async (service, storage) => {
       const legacy = {

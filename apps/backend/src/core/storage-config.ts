@@ -554,6 +554,35 @@ export class ConfigRepository {
     });
   }
 
+  /**
+   * Change only the user-editable repository settings a client actually
+   * edited, merged onto the stored record under the config lock. Backend-owned
+   * last-create state is never taken from the request. `unset` clears an
+   * optional field; a required one falls back to its default.
+   */
+  async patchRepositorySettings(
+    projectId: string,
+    updates: Partial<RepositoryConfig>,
+    unset: readonly string[] = [],
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadOwnConfig();
+      const current = config.repositories[projectId] ?? defaultRepositoryConfig();
+      const userUpdates = { ...updates } as Record<string, unknown>;
+      const backendOwned = new Set(["lastEnvironmentType", "lastEnvironmentAgentSelection"]);
+      for (const key of backendOwned) delete userUpdates[key];
+      const next = { ...current, ...userUpdates } as Record<string, unknown>;
+      for (const key of unset) if (!backendOwned.has(key)) delete next[key];
+      config.repositories[projectId] = {
+        ...defaultRepositoryConfig(),
+        ...(next as unknown as RepositoryConfig),
+      };
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
+      return this.withInheritedSettings(config);
+    });
+  }
+
   /** Atomically patch backend-owned repository state under the config lock. */
   async patchRepositoryConfig(
     projectId: string,
@@ -577,6 +606,45 @@ export class ConfigRepository {
     globalConfig: AppConfig["global"],
     options: { preserveCredentials?: boolean; preserveInheritedSettings?: boolean } = {},
   ): Promise<AppConfig> {
+    const validated = this.validateGlobalConfigForSave(globalConfig, options);
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadOwnConfig();
+      return this.commitGlobalConfig(config, validated, { ...options, keepOwnInherited: true });
+    });
+  }
+
+  /**
+   * Change only the supplied top-level settings, merged onto the stored global
+   * inside the config lock, so a client that edited one field cannot replace
+   * fields another client changed since it loaded its copy. `unset` removes a
+   * key (JSON cannot carry an explicit `undefined`). The merged result goes
+   * through exactly the validation and normalisation a whole-object save does.
+   */
+  async patchGlobalConfig(
+    patch: Partial<AppConfig["global"]>,
+    options: { unset?: readonly string[]; preserveCredentials?: boolean } = {},
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadOwnConfig();
+      const merged = { ...config.global, ...patch } as unknown as Record<string, unknown>;
+      for (const key of options.unset ?? []) delete merged[key];
+      const validated = this.validateGlobalConfigForSave(
+        merged as unknown as AppConfig["global"],
+        {},
+      );
+      return this.commitGlobalConfig(config, validated, {
+        preserveCredentials: options.preserveCredentials,
+        // The patch names only what the client changed, so an inherited key
+        // in it is a deliberate edit, not an echo of the command node's value.
+        keepOwnInherited: false,
+      });
+    });
+  }
+
+  private validateGlobalConfigForSave(
+    globalConfig: AppConfig["global"],
+    options: { preserveInheritedSettings?: boolean },
+  ): AppConfig["global"] {
     const reviewValidated = validateGlobalReviewInstruction(
       options.preserveInheritedSettings ? withDefaultInheritedSettings(globalConfig) : globalConfig,
     );
@@ -685,68 +753,76 @@ export class ConfigRepository {
         defaultAgent: firstEnabledAgentPlatform(enabledAgentPlatforms, agentSettings.defaultAgent),
       },
     };
-    return this.enqueueConfigMutation(async () => {
-      const config = await this.loadOwnConfig();
-      validated.coordinatorProviderTierDefaultVersion = Math.max(
-        validated.coordinatorProviderTierDefaultVersion ??
-          COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
-        normalizeCoordinatorProviderTierDefaultVersion(
-          config.global.coordinatorProviderTierDefaultVersion,
-        ),
-      );
-      // Backend-owned rollout gate: a renderer settings save that does not
-      // carry it must not silently re-enable a switched-off feature.
-      if (validated.mcpManagement === undefined && config.global.mcpManagement !== undefined)
-        validated.mcpManagement = config.global.mcpManagement;
-      // A settings save that predates the engine setting keeps the stored one.
-      if (
-        validated.multiReviewEngine === undefined &&
-        config.global.multiReviewEngine !== undefined
-      )
-        validated.multiReviewEngine = config.global.multiReviewEngine;
-      if (
-        validated.containerResourceLimits === undefined &&
-        config.global.containerResourceLimits !== undefined
-      )
-        validated.containerResourceLimits = config.global.containerResourceLimits;
-      // Written only by `updateWorktreeLocations`; the settings form never sends it.
-      if (config.global.worktreeLocations !== undefined)
-        validated.worktreeLocations = config.global.worktreeLocations;
-      else delete validated.worktreeLocations;
-      // Written only by `updateAgentAccountAutoSwitchSettings`, likewise.
-      if (config.global.agentAccountAutoSwitch !== undefined)
-        validated.agentAccountAutoSwitch = config.global.agentAccountAutoSwitch;
-      else delete validated.agentAccountAutoSwitch;
-      // Written only by `setGitHubCliReminderDismissed`, likewise.
-      if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
-      else delete validated.githubCliReminderDismissed;
-      const ownGlobal = this.keepOwnInheritedValues(validated, config.global);
-      if (options.preserveInheritedSettings) {
-        // A leaf-window save routes preferences separately. Its machine save
-        // must preserve local preferences even if a newer sync arrived first.
-        for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
-          delete ownGlobal[key];
-          if (config.global[key] !== undefined)
-            Object.assign(ownGlobal, { [key]: config.global[key] });
-        }
+    return validated;
+  }
+
+  /** Persist a validated global under the config lock the caller already holds. */
+  private async commitGlobalConfig(
+    config: AppConfig,
+    validated: AppConfig["global"],
+    options: {
+      preserveCredentials?: boolean;
+      preserveInheritedSettings?: boolean;
+      keepOwnInherited: boolean;
+    },
+  ): Promise<AppConfig> {
+    validated.coordinatorProviderTierDefaultVersion = Math.max(
+      validated.coordinatorProviderTierDefaultVersion ?? COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
+      normalizeCoordinatorProviderTierDefaultVersion(
+        config.global.coordinatorProviderTierDefaultVersion,
+      ),
+    );
+    // Backend-owned rollout gate: a renderer settings save that does not
+    // carry it must not silently re-enable a switched-off feature.
+    if (validated.mcpManagement === undefined && config.global.mcpManagement !== undefined)
+      validated.mcpManagement = config.global.mcpManagement;
+    // A settings save that predates the engine setting keeps the stored one.
+    if (validated.multiReviewEngine === undefined && config.global.multiReviewEngine !== undefined)
+      validated.multiReviewEngine = config.global.multiReviewEngine;
+    if (
+      validated.containerResourceLimits === undefined &&
+      config.global.containerResourceLimits !== undefined
+    )
+      validated.containerResourceLimits = config.global.containerResourceLimits;
+    // Written only by `updateWorktreeLocations`; the settings form never sends it.
+    if (config.global.worktreeLocations !== undefined)
+      validated.worktreeLocations = config.global.worktreeLocations;
+    else delete validated.worktreeLocations;
+    // Written only by `updateAgentAccountAutoSwitchSettings`, likewise.
+    if (config.global.agentAccountAutoSwitch !== undefined)
+      validated.agentAccountAutoSwitch = config.global.agentAccountAutoSwitch;
+    else delete validated.agentAccountAutoSwitch;
+    // Written only by `setGitHubCliReminderDismissed`, likewise.
+    if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
+    else delete validated.githubCliReminderDismissed;
+    const ownGlobal = options.keepOwnInherited
+      ? this.keepOwnInheritedValues(validated, config.global)
+      : validated;
+    if (options.preserveInheritedSettings) {
+      // A leaf-window save routes preferences separately. Its machine save
+      // must preserve local preferences even if a newer sync arrived first.
+      for (const key of INHERITED_GLOBAL_SETTING_KEYS) {
+        delete ownGlobal[key];
+        if (config.global[key] !== undefined)
+          Object.assign(ownGlobal, { [key]: config.global[key] });
       }
-      config.global = options.preserveCredentials
-        ? {
-            ...ownGlobal,
-            ...(config.global.githubToken ? { githubToken: config.global.githubToken } : {}),
-            ...(config.global.anthropicApiKey
-              ? { anthropicApiKey: config.global.anthropicApiKey }
-              : {}),
-            ...(config.global.cursorApiKey ? { cursorApiKey: config.global.cursorApiKey } : {}),
-            ...(config.global.openCodeZenApiKey
-              ? { openCodeZenApiKey: config.global.openCodeZenApiKey }
-              : {}),
-          }
-        : ownGlobal;
-      await this.context.saveSensitiveJson(this.files.configFile(), config);
-      this.context.changes.announce("config", "app");
-      return this.withInheritedSettings(config);
-    });
+    }
+    config.global = options.preserveCredentials
+      ? {
+          ...ownGlobal,
+          ...(config.global.githubToken ? { githubToken: config.global.githubToken } : {}),
+          ...(config.global.anthropicApiKey
+            ? { anthropicApiKey: config.global.anthropicApiKey }
+            : {}),
+          ...(config.global.cursorApiKey ? { cursorApiKey: config.global.cursorApiKey } : {}),
+          ...(config.global.openCodeZenApiKey
+            ? { openCodeZenApiKey: config.global.openCodeZenApiKey }
+            : {}),
+        }
+      : ownGlobal;
+    await this.context.saveSensitiveJson(this.files.configFile(), config);
+    this.context.changes.announce("config", "app");
+    return this.withInheritedSettings(config);
   }
 
   /** Replace where new worktrees are created; paths are validated by the caller. */

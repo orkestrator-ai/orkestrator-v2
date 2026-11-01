@@ -195,7 +195,7 @@ export async function stopEnvironmentExecWorkers(
   options: { requireStopped?: boolean } = {},
 ): Promise<void> {
   try {
-    await stopGoalCheckWorkers(environmentId, context);
+    await stopGoalCheckWorkers(environmentId, context, options);
   } catch (error) {
     // Local workers are detached host processes: removing their workspace
     // does not stop them. Only container teardown can tolerate a failed drain.
@@ -249,7 +249,11 @@ export async function stopEnvironmentExecWorkers(
 }
 
 /** Durable worker identities survive a backend restart and a cleared goal. */
-async function stopGoalCheckWorkers(environmentId: string, context: CommandContext): Promise<void> {
+async function stopGoalCheckWorkers(
+  environmentId: string,
+  context: CommandContext,
+  options: { requireStopped?: boolean },
+): Promise<void> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (
     !environment ||
@@ -268,11 +272,25 @@ async function stopGoalCheckWorkers(environmentId: string, context: CommandConte
     });
     if (!entries.some((name) => /^goal-check-[a-f0-9]{64}$/.test(name))) return;
   }
-  const operations = (await control(environment, context, {
-    action: "list-goal-checks",
-    directory,
-    environmentId,
-  })) as string[];
+  let operations: string[];
+  try {
+    const listed = await control(environment, context, {
+      action: "list-goal-checks",
+      directory,
+      environmentId,
+    });
+    if (
+      !Array.isArray(listed) ||
+      !listed.every((id) => typeof id === "string" && /^goal-check-[a-f0-9]{64}$/.test(id))
+    )
+      throw new Error("Invalid goal check worker list");
+    operations = listed;
+  } catch (error) {
+    if (options.requireStopped || environment.environmentType === "local")
+      throw new Error("Goal check workers could not be verified stopped");
+    console.warn(`[public-api] Could not list goal check workers: ${boundedMessage(error)}`);
+    return;
+  }
   for (const operationId of operations) {
     const workerDirectory = execDirectory(environment, operationId, context);
     const state = (await control(environment, context, {

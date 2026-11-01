@@ -1196,7 +1196,7 @@ esac
       );
       expect(dockerLog).toContain("set -o pipefail; git show 'main:src/app.ts' | base64");
       expect(dockerLog).toContain(
-        "exec -i container-1 bash -lc base64 -d > '/workspace/generated/out.bin'",
+        "exec -i container-1 bash -lc mkdir -p -- '/workspace/generated' && base64 -d > '/workspace/generated/out.bin'",
       );
     });
   });

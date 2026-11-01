@@ -11,6 +11,7 @@
 
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { ActivitySortOrder } from "@/stores/uiStore";
 import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import type { FederatedEnvironment, FederatedProject, SummaryFreshness } from "./summaries";
@@ -56,13 +57,19 @@ export function filterMachines(
 }
 
 /**
- * Every environment across the selected machines, in the activity order this
- * window's own list uses (`compareActivity`). Ties fall to machine ID, then
- * the machine's project order, environment order and ID.
+ * Every environment across the selected machines, in the shared activity order
+ * (`compareActivity`, backed by the protocol comparator). Ties use machine ID,
+ * project order, environment order and environment ID.
+ *
+ * `boundActivity` is the activity the bound machine's own rows display: those
+ * render as this window's `EnvironmentItem`, which can show runtime observations
+ * and active builds its summary does not carry. Other machines' rows display
+ * their summary's activity, so that is what they sort on.
  */
 export function activityRows(
   machines: readonly MachineView[],
   order: ActivitySortOrder = "priority",
+  boundActivity?: (environmentId: string) => AgentActivityState | undefined,
 ): ActivityRow[] {
   const rows: Array<ActivityRow & { key: ActivitySortKey }> = [];
   for (const machine of machines) {
@@ -77,7 +84,9 @@ export function activityRows(
           environment,
           key: {
             hasUnreadWork: environment.hasUnreadWork,
-            activity: environment.buildActive ? "working" : environment.activity,
+            activity:
+              (machine.bound ? boundActivity?.(environment.ref.environmentId) : undefined) ??
+              (environment.buildActive ? "working" : environment.activity),
             activityUpdatedAt: environment.activityUpdatedAt,
             lastActivityAt: environment.lastActivityAt,
             machineId: machine.backendId,

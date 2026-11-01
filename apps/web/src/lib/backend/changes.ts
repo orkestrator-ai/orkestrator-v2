@@ -5,7 +5,6 @@ import type {
   ChangesApplyRestoreResult,
   ChangesGetDiffResult,
   ChangesGetFilesResult,
-  ChangesGetHandoffResult,
   ChangesGetHistoryResult,
   ChangesPrepareRestoreResult,
   ChangesRefreshResult,
@@ -105,16 +104,6 @@ export function getChangeDiff(
 
 export function refreshChanges(resourceKey: string): Promise<ChangesRefreshResult> {
   return invoke<ChangesRefreshResult>("changes_refresh", { resourceKey });
-}
-
-export function getChangeHandoff(
-  measurementIds: readonly string[],
-  maxCharacters?: number,
-): Promise<ChangesGetHandoffResult> {
-  return invoke<ChangesGetHandoffResult>("changes_get_handoff", {
-    measurementIds: [...measurementIds],
-    ...(maxCharacters !== undefined ? { maxCharacters } : {}),
-  });
 }
 
 export function prepareChangeRestore(

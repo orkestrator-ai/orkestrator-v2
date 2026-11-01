@@ -9,6 +9,7 @@ import * as realDiffViewerTab from "./DiffViewerTab";
 import * as realMonacoFileEditor from "./MonacoFileEditor";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { ChangeDiffTarget } from "@/types/paneLayout";
+import { FILE_WRITE_CONFLICT_MESSAGE } from "@orkestrator/protocol/file-write-precondition";
 
 const realBackendSnapshot = { ...realBackend };
 const realMarkdownEditorTabSnapshot = { ...realMarkdownEditorTab };
@@ -40,9 +41,14 @@ const getFileDraftMock = mock(
 );
 const saveFileDraftMock = mock(async () => undefined);
 const deleteFileDraftMock = mock(async () => undefined);
+const writeContainerFileMock = mock(
+  async (_containerId: string, _filePath: string, _data: string, _expected?: unknown) =>
+    "/workspace/notes.txt",
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
+  writeContainerFile: writeContainerFileMock,
   readLocalFile: readLocalFileMock,
   readContainerFile: readContainerFileMock,
   readEnvironmentFileBase64: readEnvironmentFileBase64Mock,
@@ -666,6 +672,8 @@ describe("FileViewerTab component", () => {
     expect(useFileDirtyStore.getState().dirtyFiles.get("remount-tab")).toEqual({
       content: "newer unsaved buffer",
       originalContent: "container text",
+      // A save still checks what the buffer was edited from, not the newer read.
+      baseContent: "older disk",
     });
   });
 
@@ -696,6 +704,48 @@ describe("FileViewerTab component", () => {
     expect(useFileDirtyStore.getState().dirtyFiles.get("restore-tab")).toEqual({
       content: "restored buffer",
       originalContent: "container text",
+      baseContent: "old disk",
+    });
+  });
+
+  test("reloading after a save conflict drops the edits and the saved draft", async () => {
+    writeContainerFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
+    mockToastError.mockClear();
+    render(
+      <FileViewerTab
+        tabId="conflict-tab"
+        environmentId="env-conflict"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "mine" } });
+    fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+    expect(useFileDirtyStore.getState().isDirty("conflict-tab")).toBe(true);
+
+    readContainerFileMock.mockImplementation(async () => ({
+      content: "newer on disk",
+      language: "plaintext",
+    }));
+    const options = mockToastError.mock.calls.at(-1)?.[1] as {
+      cancel: { label: string; onClick: () => void };
+    };
+    expect(options.cancel.label).toBe("Reload");
+    act(() => options.cancel.onClick());
+
+    await waitFor(async () =>
+      expect(
+        ((await screen.findByRole("textbox", { name: "Monaco plaintext" })) as HTMLTextAreaElement)
+          .value,
+      ).toBe("newer on disk"),
+    );
+    expect(deleteFileDraftMock).toHaveBeenCalled();
+    expect(useFileDirtyStore.getState().dirtyFiles.get("conflict-tab")).toEqual({
+      content: "newer on disk",
+      originalContent: "newer on disk",
     });
   });
 

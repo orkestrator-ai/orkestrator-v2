@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import {
   COORDINATOR_MAIL_ADDRESS,
   coordinatorConversationIdFromRuntimeId,
@@ -665,7 +666,7 @@ export function registerCoordinatorCommands(
         coordinatorDelegationOpened = Boolean(
           await context.storage.coordinators.openCoordinatorDelegation(
             receipt.association.id,
-            "startup-agent",
+            STARTUP_AGENT_TAB_ID,
           ),
         );
       }

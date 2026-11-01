@@ -43,6 +43,7 @@ import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/nat
 import { invalidateTranscriptCatalogCache } from "./history/rollout.js";
 import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
+import { isTabInitialPromptRequestId } from "@orkestrator/protocol/tab-initial-prompt";
 
 import type { BridgeModel } from "./models-cache.js";
 import { structuredOutputFailure, type JsonSchema } from "@orkestrator/protocol/structured-output";
@@ -661,7 +662,7 @@ export class CodexRuntimePrompt {
         turn = await startTurn();
       } catch (error) {
         const failure = this.ctx.options.engine.classifyFailure(error);
-        if (!requestId.startsWith("initial-prompt:") || !failure.retryImmediately) {
+        if (!isTabInitialPromptRequestId(requestId) || !failure.retryImmediately) {
           throw error;
         }
         dispatchDefinitelyDidNotRun = true;

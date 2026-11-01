@@ -11,6 +11,7 @@ import type {
   ScopedResourceRevisionManifest,
 } from "./storage-shared.js";
 import type { StorageContext } from "./storage-context.js";
+import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
 
 /** The store (or, for `config`, the file) each manifest resource is revised by. */
 export const RESOURCE_MANIFEST_FILES: Readonly<Record<ResourceManifestKind, string>> = {
@@ -43,6 +44,7 @@ export class StorageChanges {
   /** The gateway's broadcast sink. */
   private listener: ResourceChangeListener | null = null;
   private readonly observers = new Set<ResourceChangeListener>();
+  private readonly attentionListeners = new Set<(event: EnvironmentAttentionEvent) => void>();
   /** Revision of the latest announced change; the scoped manifest's cursor. */
   private revision = 0;
   private readonly journal: JournalEntry[] = [];
@@ -64,6 +66,30 @@ export class StorageChanges {
   addResourceChangeListener(listener: ResourceChangeListener): () => void {
     this.observers.add(listener);
     return () => this.observers.delete(listener);
+  }
+
+  /** Observe environments the backend has just marked as needing attention. */
+  addEnvironmentAttentionListener(
+    listener: (event: EnvironmentAttentionEvent) => void,
+  ): () => void {
+    this.attentionListeners.add(listener);
+    return () => this.attentionListeners.delete(listener);
+  }
+
+  /**
+   * Publishes one attention edge after its write committed (see
+   * `@orkestrator/protocol/environment-attention`). Like `announce`, a
+   * listener that throws never fails the committed mutation.
+   */
+  notifyEnvironmentAttention(event: EnvironmentAttentionEvent): void {
+    if (this.context.deferUntilCommit(() => this.notifyEnvironmentAttention(event))) return;
+    for (const listener of this.attentionListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error("[Storage] Environment attention listener threw:", error);
+      }
+    }
   }
 
   /**

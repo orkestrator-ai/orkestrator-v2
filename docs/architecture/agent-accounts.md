@@ -229,13 +229,20 @@ error in the transcript, and pinned above the composer while Claude's `Not
 logged in · Please run /login` reply is the latest exchange or Claude reports
 `authentication-required` readiness (below). It reuses the settings pane's
 link-and-code panel and resumes a sign-in already running. When the card
-answers `Not logged in`, a successful sign-in sends the refused prompt again.
-Claude ran nothing for that prompt, so sending it again cannot repeat work.
-The renderer keeps the last prompt it sent for each session, exactly as sent
-(`NativeSentPrompt`), because Claude's transcript stores an attached image as
-inline data rather than its path. The resend happens only when that prompt is
-the user row the notice answers and the composer is empty. It waits up to 30
-s for the composer to unlock, and otherwise the card asks the user to resend. Its compact form,
+answers `Not logged in`, a successful sign-in sends the refused prompt again,
+from whichever client signs in and whether or not the tab is open. Claude ran
+nothing for that prompt, so sending it again cannot repeat work. The backend owns
+this (`native-agent-sign-in-resend.ts`): it remembers each accepted plain prompt
+in memory, exactly as sent, because Claude's transcript stores an attached image
+as inline data rather than its path, and records it durably on the session
+(`signInResend`) only when the turn ends in the notice. An accepted later dispatch
+clears it in the same write. The sign-in sends it once, under a request id derived
+from the refused one, only while the notice is still the latest exchange and the
+draft is empty. An ambiguous resend parks for the user like any other dispatch. The
+card promises the resend only when `get_native_agent_sign_in_resend` says the
+backend holds the prompt, and otherwise asks the user to resend, as it does after a
+backend restart lost the memory, for a terminal sign-in (the backend does not see
+one) and for a container with its own login. Its compact form,
 `ClaudeAccountSignInAction`, is the **Sign in to Claude** action on the Agent
 Info account card and on the Claude settings sign-in card. Claude's bridge
 hint names those cards rather than a terminal; its route kind stays

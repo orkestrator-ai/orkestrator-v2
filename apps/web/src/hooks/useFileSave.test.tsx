@@ -2,13 +2,20 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } 
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realBackend from "@/lib/backend";
+import {
+  FILE_WRITE_CONFLICT_MESSAGE,
+  fileContentSha256,
+} from "@orkestrator/protocol/file-write-precondition";
+import { mockToastError } from "../../../../tests/mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const writeContainerFileMock = mock(
-  async (_containerId: string, _filePath: string, _base64Data: string) => "/workspace/file.md",
+  async (_containerId: string, _filePath: string, _base64Data: string, _expected?: unknown) =>
+    "/workspace/file.md",
 );
 const writeLocalFileMock = mock(
-  async (_worktreePath: string, _filePath: string, _base64Data: string) => "/repo/file.md",
+  async (_worktreePath: string, _filePath: string, _base64Data: string, _expected?: unknown) =>
+    "/repo/file.md",
 );
 
 mock.module("@/lib/backend", () => ({
@@ -39,6 +46,7 @@ beforeEach(() => {
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
   writeContainerFileMock.mockClear();
   writeLocalFileMock.mockClear();
+  mockToastError.mockClear();
 });
 
 afterEach(() => {
@@ -73,6 +81,74 @@ describe("useFileSave", () => {
     expect(call?.[0]).toBe("container-1");
     expect(call?.[1]).toBe("README.md");
     expect(decodeBase64Utf8(call?.[2] ?? "")).toBe("updated");
+    // The write is conditional on the file still holding what was loaded.
+    expect(call?.[3]).toEqual({ sha256: fileContentSha256("original") });
+    expect(useFileDirtyStore.getState().isDirty("tab")).toBe(false);
+  });
+
+  test("a reload while the buffer is edited does not move what the save checks", async () => {
+    useFileDirtyStore.getState().setOriginalContent("tab", "original");
+    useFileDirtyStore.getState().setContent("tab", "mine");
+    // An agent changed the file; the tab remounted and read it back.
+    useFileDirtyStore.getState().observeDiskContent("tab", "agent's version");
+
+    const { result } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
+    await act(async () => {
+      await result.current.saveFile();
+    });
+
+    expect(writeContainerFileMock.mock.calls[0]?.[3]).toEqual({
+      sha256: fileContentSha256("original"),
+    });
+  });
+
+  test("a file changed on disk keeps the buffer and offers overwrite or reload", async () => {
+    writeLocalFileMock.mockRejectedValueOnce(new Error(FILE_WRITE_CONFLICT_MESSAGE));
+    useFileDirtyStore.getState().setOriginalContent("tab", "original");
+    useFileDirtyStore.getState().setContent("tab", "mine");
+    const reload = mock(() => undefined);
+    const { result } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "notes.md",
+        worktreePath: "/repo",
+        isLocalEnvironment: true,
+        onReloadFromDisk: reload,
+      }),
+    );
+
+    await act(async () => {
+      await expect(result.current.saveFile()).resolves.toBe(false);
+    });
+    expect(useFileDirtyStore.getState().isDirty("tab")).toBe(true);
+    const [title, options] = mockToastError.mock.calls.at(-1)! as [
+      string,
+      {
+        action: { label: string; onClick: () => void };
+        cancel: { label: string; onClick: () => void };
+      },
+    ];
+    expect(title).toBe("File changed on disk");
+    expect(options.cancel.label).toBe("Reload");
+    options.cancel.onClick();
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    expect(options.action.label).toBe("Overwrite");
+    await act(async () => {
+      options.action.onClick();
+      await Promise.resolve();
+    });
+    // Overwrite is the same save without the precondition.
+    const overwrite = writeLocalFileMock.mock.calls.at(-1);
+    expect(decodeBase64Utf8(overwrite?.[2] ?? "")).toBe("mine");
+    expect(overwrite?.[3]).toBeUndefined();
     expect(useFileDirtyStore.getState().isDirty("tab")).toBe(false);
   });
 

@@ -245,11 +245,14 @@ const sessionStart: MutationActionHandler<StartInput> = {
 export interface SessionStartExtras {
   completionAction?: "refresh-pr-after-agent-completion";
   afterAccepted?: (environment: Environment) => Promise<void>;
+  /** Mark the new tab as a review tab, as the Review button does (it offers Address all). */
+  reviewTab?: boolean;
 }
 
 /**
  * `session.start`'s admission and execution, shared by the button actions
- * that open an agent tab with a fixed prompt (`pr.create`, `pr.resolve`).
+ * that open an agent tab with a fixed prompt (`pr.create`, `pr.resolve`,
+ * `pr.push`, `review.start`).
  */
 export async function prepareSessionStart(
   input: StartInput,
@@ -317,6 +320,7 @@ export async function prepareSessionStart(
           ...(input.literal ? { literal: true } : {}),
           ...(attachments.length ? { attachments } : {}),
           ...(extras.completionAction ? { completionAction: extras.completionAction } : {}),
+          ...(extras.reviewTab ? { reviewTab: true } : {}),
           activateTab: false,
         },
       );

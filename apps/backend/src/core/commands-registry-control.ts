@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
@@ -95,6 +96,11 @@ async function launchNativeAgentJobInternal(
     throw new Error("literal must be true when given");
   }
   const literal = args.literal === true;
+  // Marks the tab the way the Review button does, so it offers Address all.
+  if (args.reviewTab !== undefined && args.reviewTab !== true) {
+    throw new Error("reviewTab must be true when given");
+  }
+  const reviewTab = args.reviewTab === true;
   const tabReuse = options.allowCompletionAction ? args.tabReuse : undefined;
   if (tabReuse !== undefined && !isNativeAgentJobTabReuse(tabReuse)) {
     throw new Error("tabReuse is invalid");
@@ -119,14 +125,7 @@ async function launchNativeAgentJobInternal(
   if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
     throw new Error("Environment is being deleted");
   }
-  if (
-    environment.status !== "running" ||
-    !(
-      environment.setupPhase === "ready" ||
-      environment.setupScriptsComplete === true ||
-      environment.setupOverride === true
-    )
-  ) {
+  if (!isEnvironmentReadyForAgents(environment)) {
     throw new Error("Environment is not running with setup complete");
   }
 
@@ -248,10 +247,7 @@ async function launchNativeAgentJobInternal(
       current.prRecheckAfterAgentCompletionArmedAt === armedAt &&
       !current.lifecycleOperation &&
       !current.deletionRequestedAt &&
-      current.status === "running" &&
-      (current.setupPhase === "ready" ||
-        current.setupScriptsComplete === true ||
-        current.setupOverride === true)
+      isEnvironmentReadyForAgents(current)
     );
   };
   let dispatchStarted = false;
@@ -301,6 +297,7 @@ async function launchNativeAgentJobInternal(
       agent,
       title,
       activate: args.activateTab === true,
+      ...(reviewTab ? { isReviewTab: true } : {}),
       ...(completionAction ? { completionAction } : {}),
     });
     const session = await context.nativeAgents.ensureSession({

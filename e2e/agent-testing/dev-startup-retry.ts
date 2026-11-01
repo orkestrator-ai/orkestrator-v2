@@ -12,6 +12,13 @@ export async function loadAppWithDevRetry(
   testInfo: TestInfo,
   load: () => Promise<unknown>,
 ): Promise<void> {
+  const notice = page.getByRole("dialog", {
+    name: "Docker containers can't reach Orkestrator",
+    exact: true,
+  });
+  await page.addLocatorHandler(notice, async () => {
+    await notice.getByRole("button", { name: "Close", exact: true }).first().click();
+  });
   const console: string[] = [];
   const listener = (message: { text(): string }) => {
     const text = message.text();

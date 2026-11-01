@@ -208,6 +208,18 @@ and edits to a path that was already uncommitted are invisible. Guards detect;
 they do not prevent. Review sessions and panel passes recorded before the
 guard existed carry no baseline and are not certified.
 
+## Launching from a client
+
+The renderer's Multi Review button, the CLI's `review launch` and a command
+node's coordinator all run the same backend path (`launchMultiReviewButton` in
+`commands-registry-controller-workflows.ts`, registered as `launch_multi_review`
+and `launch_controller_multi_review`). It fills omitted rows, the target branch
+and the review instruction from saved settings, reuses an active review, and
+writes the root tab into the environment's pane layout, so a client that goes
+away mid-launch cannot leave a review without a tab. A client learns about the
+tab from the `pane-layout` resource change, as it does for any backend-created
+tab, and may focus it from the returned `ui.tabId`.
+
 ## Lifecycle and visibility
 
 The header's restart control selects the work currently in progress. During a

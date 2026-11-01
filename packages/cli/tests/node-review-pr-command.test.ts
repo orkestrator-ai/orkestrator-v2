@@ -327,6 +327,47 @@ describe("review and pr commands", () => {
     expect(resolved.code).toBe(0);
     expect(requestsFor(gateway, "pr.resolve")[0]?.body.args.node).toBe(LEAF);
   });
+
+  test("review start and pr push submit runs; the backend builds their prompts", async () => {
+    const { box, gateway } = await fixture((request) => {
+      const action = request.body.args.action;
+      return action === "review.start" || action === "pr.push"
+        ? envelope(
+            publicSuccessEnvelope(
+              action,
+              { sessionId: "ses_button", tabId: "agent-job-button", runId: "op-1" },
+              receipt(action),
+            ),
+          )
+        : undefined;
+    });
+    const review = await box.run([
+      "review",
+      "start",
+      "env-1",
+      "--target-branch",
+      "develop",
+      "--output",
+      "id",
+    ]);
+    expect(review.code).toBe(0);
+    expect(review.out.trim()).toBe("ses_button");
+    // Only the selection crosses: no prompt is built or sent by the client.
+    expect(requestsFor(gateway, "review.start")[0]!.body.args.input).toEqual({
+      environmentId: "env-1",
+      targetBranch: "develop",
+    });
+    const push = await box.run(["pr", "push", "env-1", "--agent", "codex", "--json"]);
+    expect(push.code).toBe(0);
+    expect(requestsFor(gateway, "pr.push")[0]!.body.args.input).toEqual({
+      environmentId: "env-1",
+      agent: "codex",
+    });
+    // Push has no target branch to choose.
+    const bad = await box.run(["pr", "push", "env-1", "--target-branch", "main", "--json"]);
+    expect(bad.code).toBe(2);
+    expect(requestsFor(gateway, "pr.push")).toHaveLength(1);
+  });
 });
 
 describe("node receipts and partial reads", () => {

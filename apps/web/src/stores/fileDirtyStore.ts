@@ -9,6 +9,16 @@ interface FileDirtyEntry {
   content: string;
   /** Original content loaded from disk (for comparison) */
   originalContent: string;
+  /**
+   * What the buffer was edited from, kept only while disk has since moved
+   * (`originalContent` follows disk so the tab shows the real difference).
+   */
+  baseContent?: string;
+}
+
+/** The content a save requires the file to still hold. */
+export function fileSaveBaseline(entry: FileDirtyEntry): string {
+  return entry.baseContent ?? entry.originalContent;
 }
 
 interface FileDirtyState {
@@ -22,13 +32,24 @@ interface FileDirtyState {
   setOriginalContent: (tabId: string, content: string) => void;
 
   /**
+   * Record what disk holds now without changing what a live buffer was edited
+   * from, so a later save still reports the change instead of overwriting it.
+   */
+  observeDiskContent: (tabId: string, content: string) => void;
+
+  /**
    * Update the current content for a file tab.
    * The file is considered dirty if content differs from originalContent.
    */
   setContent: (tabId: string, content: string) => void;
 
   /** Install a backend-restored dirty buffer without an intermediate clean state. */
-  hydrateDraft: (tabId: string, content: string, originalContent: string) => void;
+  hydrateDraft: (
+    tabId: string,
+    content: string,
+    originalContent: string,
+    baseContent?: string,
+  ) => void;
 
   /**
    * Mark a file as saved (resets the dirty state).
@@ -61,11 +82,29 @@ export const useFileDirtyStore = create<FileDirtyState>()((set, get) => ({
       const existing = newMap.get(tabId);
       if (existing) {
         // Update original, keep current content
-        newMap.set(tabId, { ...existing, originalContent: content });
+        newMap.set(tabId, { content: existing.content, originalContent: content });
       } else {
         // Initialize both to the same content (not dirty)
         newMap.set(tabId, { content, originalContent: content });
       }
+      return { dirtyFiles: newMap };
+    });
+  },
+
+  observeDiskContent: (tabId, content) => {
+    set((state) => {
+      const newMap = new Map(state.dirtyFiles);
+      const existing = newMap.get(tabId);
+      if (!existing) {
+        newMap.set(tabId, { content, originalContent: content });
+        return { dirtyFiles: newMap };
+      }
+      const base = fileSaveBaseline(existing);
+      newMap.set(tabId, {
+        content: existing.content,
+        originalContent: content,
+        ...(base === content ? {} : { baseContent: base }),
+      });
       return { dirtyFiles: newMap };
     });
   },
@@ -84,10 +123,14 @@ export const useFileDirtyStore = create<FileDirtyState>()((set, get) => ({
     });
   },
 
-  hydrateDraft: (tabId, content, originalContent) => {
+  hydrateDraft: (tabId, content, originalContent, baseContent) => {
     set((state) => {
       const newMap = new Map(state.dirtyFiles);
-      newMap.set(tabId, { content, originalContent });
+      newMap.set(tabId, {
+        content,
+        originalContent,
+        ...(baseContent === undefined || baseContent === originalContent ? {} : { baseContent }),
+      });
       return { dirtyFiles: newMap };
     });
   },

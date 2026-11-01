@@ -84,6 +84,16 @@ export const RESOURCE_KINDS = [
    * needs to. A hint only: the summary read is authoritative.
    */
   "environment-pr-health",
+  /**
+   * A project's coordinator tab groups were saved. The id is the project id;
+   * clients re-read `get_coordinator_pane_layout`. A hint only.
+   */
+  "coordinator-pane-layout",
+  /**
+   * Notice dismissals changed. The id is `notice-dismissals`; clients re-read
+   * `list_notice_dismissals`. A hint only.
+   */
+  "notice-dismissal",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

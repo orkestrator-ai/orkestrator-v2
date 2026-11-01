@@ -201,6 +201,7 @@ not advertise at its version before sending it.
 | `review list ENV` / `review get REVIEW` | `review.list/get` | Multi Review storage, bounded summary | read |
 | `review open REVIEW [--fix]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Fix tab; Address findings) | metadata / provider |
 | `review cancel REVIEW` | `review.cancel` | Multi Review supervisor `cancel` | process |
+| `review start ENV [--target-branch B]` | `review.start` | the single-agent Review button: `session.start`'s job path with the shared review prompt (`@orkestrator/protocol/git-workflow-prompts`), the target branch (else the project's PR base branch, else `main`) and the saved review instruction resolved by the backend, the `Review` title, the `review` action default, and a review tab (it offers Address all) | provider |
 | `build launch TICKET --project P (--type local\|container [--base-branch B --base-commit SHA] \| --environment ENV) [--agent A] [--step STAGE=A[/M[@E]]]… [--instructions STAGE=TEXT]… [--instructions-file STAGE=PATH]… [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--max-iterations N]` | `build.launch` | the Build button on a Kanban ticket, through the coordinator's path: `buildPipelineInputWithDefaults` over the saved Build defaults, `isStartBuildPipelineInput`, `BuildPipelineService.start` (whose admission key returns the ticket's active build: `reused`). See [Build Pipelines](#build-pipelines) | metadata, filesystem, provider, external |
 | `build list --project P` / `build get BUILD` | `build.list/get` | Build Pipeline storage; each step's selection with the byte size of its instructions and focus, never the text | read |
 | `build cancel BUILD` | `build.cancel` | Build Pipeline supervisor `cancel` (refused once the build ended) | process |
@@ -210,6 +211,7 @@ not advertise at its version before sending it.
 | `graph status RUN` / `graph cancel RUN` | `graph.status` / `graph.cancel` | the graph run record (states and counts) / `GraphRunService.cancel` (refused once the run ended) | read / process |
 | `pr create ENV [--target-branch B]` | `pr.create` | the Create PR button: `session.start`'s job path with the shared PR prompt, the `PR` tab title and the `pr` action default, then PR monitoring; refused when the environment has a PR | provider, external |
 | `pr resolve ENV [--target-branch B]` | `pr.resolve` | the Resolve Conflicts button: the same path with the shared resolve prompt, the `Resolve` title, the `resolve` action default and the PR refresh on completion. Always a new tab with its own receipt; the button can reuse this tab, but this action never resends to one | provider, external |
+| `pr push ENV` | `pr.push` | the Push Changes button: the same path with the shared push prompt, the `Git Push` title and the `push` action default; refused unless the environment has an open PR | provider, external |
 | `pr get ENV` / `pr timeline ENV` / `pr files ENV [--path P]` / `pr options ENV` | `pr.get` / `pr.timeline` / `pr.files` / `pr.options` | the environment's pull request, read live through the viewer's commands; `pr get` reports `attachment` (`stored`, `detected`, `none`, `unknown`) | read |
 | `pr list PROJECT [--filter F] [--query Q]` | `pr.list` | the viewer's pull request list | read |
 | `pr merge ENV --yes [--method M] [--keep-branch] [--cleanup] [--expected-head-sha S]` | `pr.merge` | the Merge and Merge and Cleanup buttons: `merge_environment_pr`, settled from GitHub | external, filesystem, process |
@@ -290,6 +292,9 @@ answered.
   one node. Attention applies `--limit` per node; the combined page may contain
   more items than that limit. Human attention lines name their owning node,
   and partial-read warnings are retained in both human and JSON output.
+- **`environment list --sort priority|newest|oldest`** orders the returned page
+  on the client with the app's activity comparator. It orders one page only and
+  never reaches the backend.
 - **Codes.** `node-not-found` (3): no such node here. `node-unavailable` (4):
   registered but disabled or not connected; nothing was sent.
   `node-unsupported` (8): the leaf's Orkestrator is too old to take public

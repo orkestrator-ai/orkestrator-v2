@@ -581,21 +581,44 @@ export class DraftsRepository {
    * lock timeout or a kill between the layout update and the request drops it
    * silently, and the id is gone from the layout by then, so nothing would ever
    * retry. Without this sweep those transcripts stay on disk permanently,
-   * unreachable and unremovable short of deleting the environment. Called after
-   * pane-layout hydration, when `referencedHandoffIds` is authoritative.
+   * unreachable and unremovable short of deleting the environment. The backend
+   * calls it whenever a saved layout stops referencing a handoff and from its
+   * periodic sweep (`agent-handoffs.ts`); older renderers still call it after
+   * pane-layout hydration.
    */
   async pruneAgentHandoffs(
     environmentId: string,
     referencedHandoffIds: string[],
+    options: {
+      /**
+       * Keep records younger than this. A handoff is stored before the layout
+       * that references it is saved, and another client's layout can be
+       * applied in between: without a grace window that write would prune a
+       * transfer that is about to be opened.
+       */
+      graceMs?: number;
+      now?: number;
+    } = {},
   ): Promise<string[]> {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Agent handoff environment ID must not be blank");
     }
     const referenced = new Set(referencedHandoffIds.filter(isNonBlankString));
+    const graceMs = Math.max(0, options.graceMs ?? 0);
+    const now = options.now ?? Date.now();
+    const withinGrace = (handoff: Record<string, unknown>): boolean => {
+      if (graceMs === 0) return false;
+      const createdAt =
+        typeof handoff.createdAt === "string" ? Date.parse(handoff.createdAt) : Number.NaN;
+      return Number.isFinite(createdAt) && now - createdAt < graceMs;
+    };
     return this.enqueueAgentHandoffMutation(async () => {
       const stored = await this.loadAgentHandoffEntries();
       const isOrphan = (storedId: string, handoff: unknown): boolean =>
-        isRecord(handoff) && handoff.environmentId === environmentId && !referenced.has(storedId);
+        isRecord(handoff) &&
+        handoff.environmentId === environmentId &&
+        !referenced.has(storedId) &&
+        !withinGrace(handoff);
       const removedIds = Object.entries(stored)
         .filter(([storedId, handoff]) => isOrphan(storedId, handoff))
         .map(([storedId]) => storedId);
@@ -610,6 +633,18 @@ export class DraftsRepository {
       );
       return removedIds;
     });
+  }
+
+  /** Environments that own at least one stored handoff, for the backend's sweep. */
+  async agentHandoffEnvironmentIds(): Promise<string[]> {
+    const stored = await this.loadAgentHandoffEntries();
+    const ids = new Set<string>();
+    for (const handoff of Object.values(stored)) {
+      if (isRecord(handoff) && isNonBlankString(handoff.environmentId)) {
+        ids.add(handoff.environmentId);
+      }
+    }
+    return [...ids];
   }
 
   async deleteAgentHandoffsByEnvironment(environmentId: string): Promise<string[]> {
@@ -807,3 +842,9 @@ export class DraftsRepository {
     return deleted;
   }
 }
+
+/** The backend-owned handoff lifecycle: pruning and its sweep (`storage.agentHandoffs`). */
+export type AgentHandoffsStorage = Pick<
+  DraftsRepository,
+  "pruneAgentHandoffs" | "agentHandoffEnvironmentIds"
+>;

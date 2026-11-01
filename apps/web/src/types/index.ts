@@ -28,6 +28,7 @@ import type {
   CoordinatorResearchMcpServer,
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
+import type { StartupAgentTabId } from "@orkestrator/protocol/tab-initial-prompt";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
 import type {
@@ -271,7 +272,7 @@ export interface Environment {
   hasInitialPromptAttachments?: boolean;
   /** Backend-owned projection of the one-shot startup agent launch. */
   startupAgentSession?: {
-    tabId: "startup-agent";
+    tabId: StartupAgentTabId;
     agent: DefaultAgent;
     style: "terminal" | "native";
     providerSessionId?: string;

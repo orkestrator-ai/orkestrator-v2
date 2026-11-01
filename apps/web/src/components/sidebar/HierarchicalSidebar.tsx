@@ -52,6 +52,10 @@ import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
+import {
+  displayedActivityResolver,
+  sortEnvironmentsByActivity,
+} from "@/lib/environment-activity-sort";
 import { useUIStore, useProjectStore, useEnvironmentStore } from "@/stores";
 import { drainProjectHomeEnsures } from "@/hooks/useFilesPanel";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
@@ -76,7 +80,6 @@ import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
-import type { ActivitySortOrder } from "@/stores/uiStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -92,7 +95,6 @@ import {
 } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
 import { withoutProjectHomes } from "@/lib/project-home";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
@@ -104,13 +106,6 @@ import {
   normalizeProjectFolderName,
   parseProjectFolderDragId,
   projectSortableIds,
-  resolveAddProjectToFolder,
-  resolveProjectArrangement,
-  resolveRemoveProjectFromFolder,
-  resolveRenameProjectFolder,
-  resolveSortProjectFolder,
-  resolveUngroupProjectFolder,
-  type ProjectArrangement,
   type ProjectFolderEntry,
 } from "@/lib/project-folders";
 
@@ -137,35 +132,9 @@ export type SidebarSelectionResult =
   | { type: "range"; ids: string[] }
   | { type: "single"; environmentId: string };
 
-/**
- * This window's environments in the activity order every machine's rows
- * share (`compareActivity`). Its machine ID is the same for every row, so
- * ties fall to project order, environment order and ID.
- */
-export function sortEnvironmentsByActivity(
-  environments: Environment[],
-  projects: Project[],
-  order: ActivitySortOrder = "priority",
-  activeBuildEnvironmentIds: ReadonlySet<string> = new Set(),
-): Environment[] {
-  const projectOrder = new Map(projects.map((project) => [project.id, project.order]));
-  const key = (environment: Environment): ActivitySortKey => ({
-    hasUnreadWork: environment.hasUnreadWork === true,
-    activity: activeBuildEnvironmentIds.has(environment.id)
-      ? "working"
-      : (environment.agentActivityState ?? "idle"),
-    activityUpdatedAt: environment.agentActivityUpdatedAt,
-    lastActivityAt: environment.lastActivityAt,
-    machineId: "",
-    projectOrder: projectOrder.get(environment.projectId),
-    order: environment.order,
-    id: environment.id,
-  });
-  return environments
-    .map((environment) => ({ environment, key: key(environment) }))
-    .sort((left, right) => compareActivity(left.key, right.key, order))
-    .map(({ environment }) => environment);
-}
+// Kept here for existing importers; the order itself is shared with the
+// federated list and the CLI.
+export { sortEnvironmentsByActivity };
 
 export { animateActivityRowMovement, measureActivityRowLayoutTop } from "./ActivityEnvironmentList";
 
@@ -363,7 +332,7 @@ export function HierarchicalSidebar() {
     createProjectFromScratch,
     removeProject,
     updateProject,
-    arrangeProjects,
+    arrangeProjectsByIntent,
     validateGitUrl,
     isLoading: projectsLoading,
   } = useProjects();
@@ -471,8 +440,21 @@ export function HierarchicalSidebar() {
       ),
     [allEnvironments, selectedEnvironmentId],
   );
+  // Sort on the activity each row displays (runtime observations, and working
+  // during an active build), not the raw persisted state.
+  const runtimeActivityStates = useAgentActivityStore((state) => state.containerStates);
+  const runtimeActivityUpdatedAt = useAgentActivityStore((state) => state.containerStateUpdatedAt);
   const activeBuildEnvironmentIds = useBuildPipelineStore(
     (state) => state.activeBuildEnvironmentIds,
+  );
+  const displayedActivity = useMemo(
+    () =>
+      displayedActivityResolver(
+        runtimeActivityStates,
+        runtimeActivityUpdatedAt,
+        activeBuildEnvironmentIds,
+      ),
+    [runtimeActivityStates, runtimeActivityUpdatedAt, activeBuildEnvironmentIds],
   );
   const activityEnvironments = useMemo(
     () =>
@@ -480,9 +462,9 @@ export function HierarchicalSidebar() {
         sidebarEnvironments,
         projects,
         activitySortOrder,
-        activeBuildEnvironmentIds,
+        displayedActivity,
       ),
-    [sidebarEnvironments, projects, activitySortOrder, activeBuildEnvironmentIds],
+    [sidebarEnvironments, projects, activitySortOrder, displayedActivity],
   );
   const defaultCloneDirectory = useMemo(
     () => suggestedCloneDirectory(projects.map((project) => project.localPath)),
@@ -591,12 +573,6 @@ export function HierarchicalSidebar() {
     setActiveType(projects.some((p) => p.id === draggedId) ? "project" : "environment");
   };
 
-  /** Persists one arrangement, or nothing when the gesture was a no-op. */
-  const applyArrangement = async (arrangement: ProjectArrangement | null): Promise<void> => {
-    if (!arrangement) return;
-    await arrangeProjects(arrangement.projectIds, arrangement.folders);
-  };
-
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
@@ -607,7 +583,7 @@ export function HierarchicalSidebar() {
     const droppedOnId = String(over.id);
     try {
       if (activeType === "project" || activeType === "folder") {
-        await applyArrangement(resolveProjectArrangement(draggedId, droppedOnId, projects));
+        await arrangeProjectsByIntent({ kind: "move", activeId: draggedId, overId: droppedOnId });
         return;
       }
       const reorder = resolveSidebarReorder(
@@ -624,14 +600,14 @@ export function HierarchicalSidebar() {
   };
 
   const handleAddToFolder = async (projectId: string, folderName: string): Promise<void> => {
-    await applyArrangement(resolveAddProjectToFolder(projects, projectId, folderName));
+    await arrangeProjectsByIntent({ kind: "add-to-folder", projectId, folder: folderName });
     // A folder the user just filed something into has to be visible, otherwise
     // the project appears to have vanished from the sidebar.
     setProjectFolderCollapsed(folderName, false);
   };
 
   const handleRemoveFromFolder = (projectId: string): void => {
-    void applyArrangement(resolveRemoveProjectFromFolder(projects, projectId)).catch((err) => {
+    void arrangeProjectsByIntent({ kind: "remove-from-folder", projectId }).catch((err) => {
       console.error("Failed to remove project from folder:", err);
     });
   };
@@ -642,7 +618,7 @@ export function HierarchicalSidebar() {
     // runs, and a key that no longer matches leaves the renamed folder expanded
     // while stranding the old entry in the persisted list forever.
     const storedName = normalizeProjectFolderName(nextName);
-    void applyArrangement(resolveRenameProjectFolder(projects, folderName, nextName))
+    void arrangeProjectsByIntent({ kind: "rename-folder", folder: folderName, name: nextName })
       .then(() => {
         if (storedName && isProjectFolderCollapsed(collapsedProjectFolders, folderName)) {
           setProjectFolderCollapsed(folderName, false);
@@ -655,7 +631,7 @@ export function HierarchicalSidebar() {
   };
 
   const handleUngroupFolder = (folderName: string): void => {
-    void applyArrangement(resolveUngroupProjectFolder(projects, folderName))
+    void arrangeProjectsByIntent({ kind: "ungroup-folder", folder: folderName })
       .then(() => setProjectFolderCollapsed(folderName, false))
       .catch((err) => {
         console.error("Failed to remove project folder:", err);
@@ -663,7 +639,7 @@ export function HierarchicalSidebar() {
   };
 
   const handleSortFolder = (folderName: string): void => {
-    void applyArrangement(resolveSortProjectFolder(projects, folderName)).catch((err) => {
+    void arrangeProjectsByIntent({ kind: "sort-folder", folder: folderName }).catch((err) => {
       console.error("Failed to sort project folder:", err);
     });
   };
@@ -1077,7 +1053,7 @@ export function HierarchicalSidebar() {
           allEnvironments,
           projects,
           activitySortOrder,
-          activeBuildEnvironmentIds,
+          displayedActivity,
         )
           .filter(
             (environment) =>
@@ -1182,6 +1158,10 @@ export function HierarchicalSidebar() {
     });
   };
 
+  const boundDisplayedActivity = (environmentId: string) => {
+    const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
+    return environment ? displayedActivity(environment) : undefined;
+  };
   const renderFederatedActivityRow = (environmentId: string) => {
     const environment = sidebarEnvironments.find((entry) => entry.id === environmentId);
     return environment ? renderActivityItem(environment) : null;
@@ -1405,6 +1385,7 @@ export function HierarchicalSidebar() {
               machines={visibleMachines}
               order={activitySortOrder}
               renderBoundRow={renderFederatedActivityRow}
+              boundActivity={boundDisplayedActivity}
               renderBoundHome={renderFederatedActivityHome}
               boundSelectedId={isMultiSelectMode ? null : selectedEnvironmentId}
               onCreateBound={handleOpenCreateEnvDialog}

@@ -36,7 +36,7 @@ import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 
 import * as realReactVirtuoso from "react-virtuoso";
 
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 
 import { mockReadImage } from "../../mocks/clipboard";
 
@@ -90,7 +90,7 @@ const renameEnvironmentFromPromptMock = mock(async () => {});
 
 const openInBrowserMock = mock(async () => {});
 
-const updateGlobalConfigMock = mock(async (global: any) => ({
+const patchGlobalConfigMock = mock(async (global: any) => ({
   version: "1.0",
   global,
   repositories: {},
@@ -424,7 +424,7 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: writeLocalFileMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   openInBrowser: openInBrowserMock,
-  updateGlobalConfig: updateGlobalConfigMock,
+  patchGlobalConfig: patchGlobalConfigMock,
   getClaudeModelCatalog: getClaudeModelCatalogMock,
   getComposeDraft: getComposeDraftMock,
   saveComposeDraft: saveComposeDraftMock,
@@ -686,8 +686,8 @@ describe("ClaudeTmuxChatTab", () => {
     renameEnvironmentFromPromptMock.mockImplementation(async () => {});
     openInBrowserMock.mockReset();
     openInBrowserMock.mockImplementation(async () => {});
-    updateGlobalConfigMock.mockReset();
-    updateGlobalConfigMock.mockImplementation(async (global: any) => ({
+    patchGlobalConfigMock.mockReset();
+    patchGlobalConfigMock.mockImplementation(async (global: any) => ({
       version: "1.0",
       global,
       repositories: {},

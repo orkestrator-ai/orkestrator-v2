@@ -196,7 +196,7 @@ for (const [grouping, board] of [
         grouping={grouping}
       />,
     );
-    const row = screen.getByRole("button", { name: project.name });
+    const row = screen.getByRole("button", { name: `Open ${project.name} on Leaf` });
     if (board) {
       fireEvent.contextMenu(row);
       fireEvent.click(screen.getByText("Open Board"));

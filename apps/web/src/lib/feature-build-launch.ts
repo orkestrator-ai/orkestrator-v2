@@ -13,7 +13,10 @@ import type {
   BuildStepConfigs,
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
-import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
+import {
+  featureBuildRequestIdentity,
+  type CreateFeatureBuildInput,
+} from "@orkestrator/protocol/feature-build";
 import {
   defaultFastModeFor,
   defaultEffortFor,
@@ -256,28 +259,8 @@ export function featureBuildRequest(input: FeatureBuildRequestInput): CreateFeat
  * What an idempotency key is allowed to stand for.
  *
  * The backend binds a `requestId` to the arguments it first saw and refuses to
- * reuse it for anything else, so a caller that keeps a key across an edit gets
- * a hard rejection rather than a new build. This is everything the backend
- * hashes — the request minus the key itself — so a launcher can tell "the same
- * request again", which must reuse the key, from "a different request", which
- * must mint a new one.
- *
- * Key order is normalised because the shape of the request depends on which
- * optional fields are present, and two objects that differ only in insertion
- * order are the same request.
+ * reuse it for anything else, so a launcher keeps a key only while this value
+ * is unchanged. It is the protocol's own identity, the same string the backend
+ * hashes, so the two sides cannot drift.
  */
-export function featureBuildIdentity(request: CreateFeatureBuildInput): string {
-  const canonical = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(canonical);
-    if (value && typeof value === "object") {
-      return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>)
-          .filter(([key, entry]) => key !== "requestId" && entry !== undefined)
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(([key, entry]) => [key, canonical(entry)]),
-      );
-    }
-    return value;
-  };
-  return JSON.stringify(canonical(request));
-}
+export const featureBuildIdentity = featureBuildRequestIdentity;

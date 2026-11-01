@@ -698,9 +698,8 @@ export function registerWebAnnotationCommands(registerCommand: CommandRegistrar)
 
   register(c.rolloutSet, async (args, context) => {
     const input = parse("rolloutSet", args);
-    const current = await context.storage.loadConfig();
     const next = normalizeWebAnnotationRolloutSettings({ mode: input.mode });
-    await context.storage.updateGlobalConfig({ ...current.global, webAnnotations: next });
+    await context.storage.patchGlobalConfig({ webAnnotations: next });
     context.webAnnotationRollout?.setConfigured(next.mode);
     return rolloutSnapshot(context);
   });

@@ -1,4 +1,5 @@
 import { runCommand } from "../shell.js";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { Environment } from "../models.js";
 import { requireEnvironment, requireProject } from "./actions-discovery.js";
 import { runWithContinuation } from "./background.js";
@@ -302,12 +303,7 @@ function lifecycleHandler(
 }
 
 export function isSetupReady(environment: Environment): boolean {
-  return (
-    environment.status === "running" &&
-    (environment.setupPhase === "ready" ||
-      environment.setupScriptsComplete === true ||
-      environment.setupOverride === true)
-  );
+  return isEnvironmentReadyForAgents(environment);
 }
 
 const environmentFork: MutationActionHandler<{

@@ -1,33 +1,28 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
-import type {
-  BuildPipelineSource,
-  BuildStepConfig,
-  BuildStepConfigs,
-  StartBuildPipelineInput,
-  TaskSnapshot,
-} from "@orkestrator/protocol/build-pipeline";
+import type { BuildStepConfig, BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
+import type { LaunchBuildPipelineInput } from "@orkestrator/protocol/build-pipeline-defaults";
+import {
+  githubIssueBuildTicket,
+  kanbanTaskBuildTicket,
+  linearIssueBuildTicket,
+  type BuildPipelineTicket,
+  type GitHubIssueBuildInput,
+} from "@orkestrator/protocol/build-pipeline-tickets";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
-import { resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
+import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
-import { buildPipelineConfiguredDefaults } from "@/lib/build-launch-options";
+import { legacyBuildPipelineStartInput } from "@/lib/build-pipeline-launch-compat";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { LinearIssueDetail } from "@/types/linear";
 
-type BuildPipelineTicketInput = {
-  id: string;
-  projectId: string;
-  title: string;
-  taskSnapshot: TaskSnapshot;
-  source: BuildPipelineSource;
-  namingPrompt: string;
-};
+export type { GitHubIssueBuildInput };
 
 type StartBuildOptions = {
   existingEnvironmentId?: string | null;
@@ -41,107 +36,6 @@ type StartBuildOptions = {
   /** Whether source-ticket comments should be copied into the task snapshot. */
   includeComments?: boolean;
 };
-
-export type GitHubIssueBuildComment = {
-  id: string | number;
-  body: string;
-  authorLogin?: string;
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-export type GitHubIssueBuildInput = {
-  repositoryOwner: string;
-  repositoryName: string;
-  number: number;
-  url: string;
-  title: string;
-  body: string;
-  labels: string[];
-  status: string;
-  comments: GitHubIssueBuildComment[];
-  authorLogin?: string;
-  assigneeLogins?: string[];
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-function linearIssueToTicketInput(
-  issue: LinearIssueDetail,
-  projectId: string,
-  includeComments = true,
-): BuildPipelineTicketInput {
-  const comments = [
-    { text: `Linear issue: ${issue.identifier}` },
-    ...(issue.url ? [{ text: `URL: ${issue.url}` }] : []),
-    ...(issue.status ? [{ text: `Status: ${issue.status}` }] : []),
-    ...(includeComments ? issue.comments : []).map((comment) => ({
-      text: comment.authorName ? `${comment.authorName}: ${comment.body}` : comment.body,
-    })),
-  ];
-  return {
-    id: issue.id,
-    projectId,
-    title: `${issue.identifier}: ${issue.title}`,
-    namingPrompt: [issue.identifier, issue.title, issue.description, issue.status]
-      .filter(Boolean)
-      .join("\n\n"),
-    source: {
-      type: "linear",
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      issueUrl: issue.url,
-      status: issue.status,
-      teamKey: issue.teamKey,
-      updatedAt: issue.updatedAt,
-    },
-    taskSnapshot: {
-      title: `${issue.identifier}: ${issue.title}`,
-      description: issue.description,
-      acceptanceCriteria: "",
-      comments,
-      images: [],
-    },
-  };
-}
-
-function githubIssueToTicketInput(
-  issue: GitHubIssueBuildInput,
-  projectId: string,
-): BuildPipelineTicketInput {
-  const repository = `${issue.repositoryOwner}/${issue.repositoryName}`;
-  return {
-    id: `github:${repository.toLowerCase()}#${issue.number}`,
-    projectId,
-    title: `#${issue.number}: ${issue.title}`,
-    namingPrompt: [
-      `GitHub issue ${repository}#${issue.number}`,
-      issue.title,
-      issue.body,
-      issue.status,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-    source: {
-      type: "github",
-      repositoryOwner: issue.repositoryOwner,
-      repositoryName: issue.repositoryName,
-      issueNumber: issue.number,
-      issueUrl: issue.url,
-      status: issue.status,
-      updatedAt: issue.updatedAt,
-    },
-    taskSnapshot: {
-      title: `#${issue.number}: ${issue.title}`,
-      description: issue.body,
-      acceptanceCriteria: "",
-      comments: issue.comments.map((comment) => ({
-        text: `${comment.authorLogin ? `@${comment.authorLogin}: ` : ""}${comment.body}`,
-      })),
-      images: [],
-    },
-  };
-}
 
 function findBuildTabInTree(
   node: PaneNode,
@@ -168,36 +62,23 @@ export function useBuildPipeline() {
 
   const startBuildFromTicket = useCallback(
     async (
-      ticket: BuildPipelineTicketInput,
+      ticket: BuildPipelineTicket,
       environmentType: EnvironmentType,
       agentOverride?: DefaultAgent,
       options: StartBuildOptions = {},
     ) => {
       try {
-        const configured = buildPipelineConfiguredDefaults(config, ticket.projectId);
-        const steps: BuildStepConfigs = {
-          ...configured.steps,
-          ...options.steps,
-        };
-        const reviewers = options.reviewers
-          ? options.reviewers
-          : configured.reviewers.map((reviewer, index) =>
-              index === 0 && steps.review ? steps.review : reviewer,
-            );
-        const reviewPreparation = options.reviewPreparation ?? configured.reviewPreparation;
-        const input: StartBuildPipelineInput = {
+        // Only what this launch explicitly chose. The backend fills everything
+        // else from the saved Build defaults, in one implementation every
+        // client shares (`launch_build_pipeline`).
+        const request: LaunchBuildPipelineInput = {
           taskId: ticket.id,
           projectId: ticket.projectId,
           environmentType,
-          // The build step's harness is the pipeline agent when one was chosen;
-          // the backend resolves it the same way, so both agree on the snapshot.
-          agentType:
-            steps.build?.agent ??
-            agentOverride ??
-            resolveBuildPipelineAgent(config, ticket.projectId),
-          steps,
-          reviewers,
-          ...(reviewPreparation ? { reviewPreparation } : {}),
+          ...(agentOverride ? { agentType: agentOverride } : {}),
+          ...(options.steps ? { steps: options.steps } : {}),
+          ...(options.reviewers ? { reviewers: options.reviewers } : {}),
+          ...(options.reviewPreparation ? { reviewPreparation: options.reviewPreparation } : {}),
           taskTitle: ticket.title,
           taskSnapshot: ticket.taskSnapshot,
           source: ticket.source,
@@ -205,7 +86,10 @@ export function useBuildPipeline() {
           existingEnvironmentId: options.existingEnvironmentId ?? undefined,
           featurePlanId: options.featurePlanId,
         };
-        const authoritative = await backend.startBuildPipeline(input);
+        const authoritative = await backend.launchBuildPipeline(request).catch((error: unknown) => {
+          if (!isUnsupportedBackendCommand(error, "launch_build_pipeline")) throw error;
+          return backend.startBuildPipeline(legacyBuildPipelineStartInput(config, request));
+        });
         const pipeline = authoritative as BuildPipeline;
         replacePipeline(pipeline);
         // An idempotent admission can return a pipeline whose environment is
@@ -249,24 +133,10 @@ export function useBuildPipeline() {
         }),
       );
       return startBuildFromTicket(
-        {
-          id: task.id,
-          projectId: task.projectId,
-          title: task.title,
-          namingPrompt: [task.title, task.description, task.acceptanceCriteria]
-            .filter(Boolean)
-            .join("\n\n"),
-          source: { type: "kanban", taskId: task.id },
-          taskSnapshot: {
-            title: task.title,
-            description: task.description,
-            acceptanceCriteria: task.acceptanceCriteria,
-            comments: task.comments.map((comment) => ({ text: comment.text })),
-            images: images.filter(
-              (image): image is { filename: string; data: string } => image !== null,
-            ),
-          },
-        },
+        kanbanTaskBuildTicket(
+          task,
+          images.filter((image): image is { filename: string; data: string } => image !== null),
+        ),
         environmentType,
         agentOverride,
         options,
@@ -309,7 +179,7 @@ export function useBuildPipeline() {
       options: StartBuildOptions = {},
     ) =>
       startBuildFromTicket(
-        linearIssueToTicketInput(issue, projectId, options.includeComments ?? true),
+        linearIssueBuildTicket(issue, projectId, options.includeComments ?? true),
         environmentType,
         undefined,
         options,
@@ -322,7 +192,7 @@ export function useBuildPipeline() {
       options?: StartBuildOptions,
     ) =>
       startBuildFromTicket(
-        githubIssueToTicketInput(issue, projectId),
+        githubIssueBuildTicket(issue, projectId),
         environmentType,
         agentOverride,
         options,

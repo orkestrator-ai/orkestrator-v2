@@ -1,4 +1,5 @@
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import type { FileWritePrecondition } from "@orkestrator/protocol/file-write-precondition";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { invoke } from "@/lib/native/backend";
 import type {
@@ -201,12 +202,22 @@ export async function readContainerFileBase64(
 }
 
 /** Write a file to inside a container from base64-encoded data */
+/**
+ * `expected` makes the write conditional on the file still holding the content
+ * the editor loaded; a mismatch rejects with the file-write conflict error.
+ */
 export async function writeContainerFile(
   containerId: string,
   filePath: string,
   base64Data: string,
+  expected?: FileWritePrecondition,
 ): Promise<string> {
-  return invoke<string>("write_container_file", { containerId, filePath, base64Data });
+  return invoke<string>("write_container_file", {
+    containerId,
+    filePath,
+    base64Data,
+    ...(expected ? { expected } : {}),
+  });
 }
 
 export interface InitialPromptAttachmentWrite {
@@ -504,12 +515,19 @@ export async function readLocalFileAtBranch(
 }
 
 /** Write a file to a local environment (worktree path) from base64-encoded data */
+/** See `writeContainerFile` for `expected`. */
 export async function writeLocalFile(
   worktreePath: string,
   filePath: string,
   base64Data: string,
+  expected?: FileWritePrecondition,
 ): Promise<string> {
-  return invoke<string>("write_local_file", { worktreePath, filePath, base64Data });
+  return invoke<string>("write_local_file", {
+    worktreePath,
+    filePath,
+    base64Data,
+    ...(expected ? { expected } : {}),
+  });
 }
 
 /** Restore a local file to its state at the target branch or commit. */

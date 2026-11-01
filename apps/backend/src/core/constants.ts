@@ -25,6 +25,7 @@ export {
   AGENT_NETWORK_DOMAINS_BY_PLATFORM,
   requiredAgentNetworkDomains,
 } from "@orkestrator/protocol/network-allowlist";
+import { DEFAULT_CODEX_MAX_CONCURRENT_THREADS } from "@orkestrator/protocol/app-config-defaults";
 
 export const OPENCODE_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;
@@ -32,7 +33,7 @@ export const CODEX_BRIDGE_PORT = 4098;
 export const CURSOR_BRIDGE_PORT = 4099;
 export const GROK_ACP_BRIDGE_PORT = 4100;
 export const PI_BRIDGE_PORT = 4101;
-export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
+export { DEFAULT_CODEX_MAX_CONCURRENT_THREADS };
 // Codex multi-agent V2 counts the root thread in addition to these child
 // threads, so reserve one safe-integer slot for the bridge's conversion.
 export const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;

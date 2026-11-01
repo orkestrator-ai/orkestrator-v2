@@ -186,6 +186,17 @@ export function registerNativeAgentCommands(
     });
   });
 
+  // Whether this tab's refused prompt goes out again after a sign-in; the
+  // renderer's sign-in card says so only when it will.
+  register("get_native_agent_sign_in_resend", async (args, context) => {
+    if (!context.nativeAgents) return { pending: false };
+    return context.nativeAgents.signInResends.status({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    });
+  });
+
   register("get_native_agent_sync_capabilities", (_args, context) => ({
     projectionSyncVersions: [1],
     historyPagingVersions: [1],

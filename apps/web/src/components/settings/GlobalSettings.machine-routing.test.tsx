@@ -37,8 +37,8 @@ function mount(section: GlobalSettingsSection, machine: string | null = "other")
 }
 for (const machine of [null, "other"]) {
   test(`${machine ?? "command node"} autosave, credential writes and GitHub propagation carry the selected target`, async () => {
-    const save = spyOn(backend, "updateGlobalConfig").mockImplementation(
-      async (global) => (selected = { ...selected, global }),
+    const save = spyOn(backend, "patchGlobalConfig").mockImplementation(
+      async (patch) => (selected = { ...selected, global: { ...selected.global, ...patch } }),
     );
     const token = spyOn(backend, "setGitHubToken").mockResolvedValue(selected);
     const propagate = spyOn(backend, "propagateGithubCredentialsToContainers").mockResolvedValue({
@@ -55,8 +55,8 @@ for (const machine of [null, "other"]) {
     fireEvent.change(path, { target: { value: "/selected/projects" } });
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith(
-        expect.objectContaining({ defaultProjectsDirectory: "/selected/projects" }),
-        machine,
+        { defaultProjectsDirectory: "/selected/projects" },
+        { unset: [], machine },
       ),
     );
     cleanup();
@@ -69,7 +69,7 @@ for (const machine of [null, "other"]) {
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith(
         expect.objectContaining({ autoMergeRequireChecks: false }),
-        machine,
+        { unset: [], machine },
       ),
     );
     const field = screen.getByLabelText("GitHub token");
@@ -116,8 +116,8 @@ for (const machine of [null, "other"]) {
 }
 
 test("a different selected backend never changes this window's web server", async () => {
-  const save = spyOn(backend, "updateGlobalConfig").mockImplementation(
-    async (global) => (selected = { ...selected, global }),
+  const save = spyOn(backend, "patchGlobalConfig").mockImplementation(
+    async (patch) => (selected = { ...selected, global: { ...selected.global, ...patch } }),
   );
   const enable = spyOn(backend, "setWebClientEnabled");
   spyOn(backend, "getWebClientStatus").mockResolvedValue({
@@ -135,10 +135,7 @@ test("a different selected backend never changes this window's web server", asyn
   mount("web-client");
   fireEvent.click(await screen.findByRole("switch", { name: "Allow web access" }));
   await waitFor(() =>
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ webClientEnabled: false }),
-      "other",
-    ),
+    expect(save).toHaveBeenCalledWith({ webClientEnabled: false }, { unset: [], machine: "other" }),
   );
   expect(enable).not.toHaveBeenCalled();
 });

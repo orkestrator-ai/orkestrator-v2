@@ -127,7 +127,14 @@ function waitBudget(options: Record<string, unknown>): number {
 /** Submit a run; with --wait, a lost response is recovered by request key. */
 export async function submitRun<T>(
   context: CommandContext,
-  action: "session.start" | "session.prompt" | "session.command" | "pr.create" | "pr.resolve",
+  action:
+    | "session.start"
+    | "session.prompt"
+    | "session.command"
+    | "pr.create"
+    | "pr.resolve"
+    | "pr.push"
+    | "review.start",
   input: Record<string, unknown>,
   options: Record<string, unknown>,
 ) {

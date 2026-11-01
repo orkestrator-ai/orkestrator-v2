@@ -8,9 +8,16 @@ const mockGetAgentHandoff = mock(
   async (_handoffId: string): Promise<Record<string, unknown> | null> => null,
 );
 
+const mockGetAgentHandoffCapabilities = mock(async () => ({
+  create: false,
+  delivery: false,
+  pruning: false,
+}));
+
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getAgentHandoff: mockGetAgentHandoff,
+  getAgentHandoffCapabilities: mockGetAgentHandoffCapabilities,
 }));
 
 import {
@@ -75,6 +82,12 @@ beforeEach(() => {
   resetAgentHandoffCache();
   mockGetAgentHandoff.mockReset();
   mockGetAgentHandoff.mockResolvedValue(null);
+  mockGetAgentHandoffCapabilities.mockReset();
+  mockGetAgentHandoffCapabilities.mockResolvedValue({
+    create: false,
+    delivery: false,
+    pruning: false,
+  });
 });
 
 afterEach(cleanup);
@@ -82,6 +95,8 @@ afterEach(cleanup);
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
+
+const EMPTY_MESSAGES: NativeMessage[] = [];
 
 describe("useAgentHandoff", () => {
   test("returns provider messages immediately when no handoff is requested", () => {
@@ -221,6 +236,46 @@ describe("useAgentHandoff", () => {
         content.includes("<orkestrator-handoff"),
       ),
     ).toBe(false);
+  });
+
+  test("reports whether the backend delivers the history itself", async () => {
+    const snapshot = handoff("handoff-delivers");
+    mockGetAgentHandoff.mockImplementation(async () => record(snapshot));
+    mockGetAgentHandoffCapabilities.mockImplementation(async () => ({
+      create: true,
+      delivery: true,
+      pruning: true,
+    }));
+    const delivers = renderHook(() =>
+      useAgentHandoff(snapshot.id, "codex", "env-1", EMPTY_MESSAGES),
+    );
+    // Not ready until the answer is in, so nothing can be sent on a guess.
+    expect(delivers.result.current.ready).toBe(false);
+    await waitFor(() => expect(delivers.result.current.ready).toBe(true));
+    expect(delivers.result.current.backendDelivers).toBe(true);
+    // Still pending for display, and for the renderer's own early refusals.
+    expect(delivers.result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
+    delivers.unmount();
+  });
+
+  test.each([
+    ["an older backend", async () => ({ create: false, delivery: false, pruning: false })],
+    [
+      "an unreadable answer",
+      async (): Promise<{ create: boolean; delivery: boolean; pruning: boolean }> => {
+        throw new Error("connection lost");
+      },
+    ],
+  ] as const)("keeps the history itself against %s", async (_label, answer) => {
+    const snapshot = handoff("handoff-keeps");
+    mockGetAgentHandoff.mockImplementation(async () => record(snapshot));
+    mockGetAgentHandoffCapabilities.mockImplementation(answer);
+    const { result } = renderHook(() =>
+      useAgentHandoff(snapshot.id, "codex", "env-1", EMPTY_MESSAGES),
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.backendDelivers).toBe(false);
+    expect(result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
   });
 
   test("reports a missing handoff and leaves the destination usable", async () => {

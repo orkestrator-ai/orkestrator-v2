@@ -1,4 +1,5 @@
 import { MAX_LIFECYCLE_RECORD_BYTES } from "@orkestrator/protocol/container-lifecycle";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
 import * as shared from "./storage-shared.js";
 import {
@@ -15,8 +16,13 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { normalizeProjectIcon } from "@orkestrator/protocol/project-icon";
+import {
+  resolveProjectArrangementIntent,
+  type ProjectArrangementIntent,
+} from "@orkestrator/protocol/project-arrangement";
 import { isPrMergeability } from "@orkestrator/protocol/pr-merge-readiness";
 import { parseEnvironmentDiffBaseOverride } from "@orkestrator/protocol/diff-stats";
+import { isEnvironmentAttentionReason } from "@orkestrator/protocol/environment-attention";
 import type { AgentActivityCompletionOutcome, EnvironmentUnreadReason } from "./models.js";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
@@ -125,6 +131,35 @@ export function applyProjectFolder(project: Project, folder: unknown): void {
   const normalized = normalizeProjectFolderName(folder);
   if (normalized) project.folder = normalized;
   else delete project.folder;
+}
+
+/** Move folder members and rewrite `order`; ids the store no longer has are skipped. */
+function applyProjectArrangement(
+  projects: Project[],
+  arrangement: {
+    projectIds: readonly string[];
+    folders: Readonly<Record<string, string | null>>;
+  },
+): void {
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  for (const [projectId, folder] of Object.entries(arrangement.folders)) {
+    const project = byId.get(projectId);
+    // A project deleted by another client is not an error here: the caller
+    // computed this arrangement against a snapshot that still had it, and
+    // failing the whole write would discard every other move it made.
+    if (project) applyProjectFolder(project, folder);
+  }
+
+  const provided = new Set(arrangement.projectIds);
+  for (const [index, id] of arrangement.projectIds.entries()) {
+    const project = byId.get(id);
+    if (project) project.order = index;
+  }
+
+  let order = arrangement.projectIds.length;
+  for (const project of projects) {
+    if (!provided.has(project.id)) project.order = order++;
+  }
 }
 
 /** Sets or clears a project's sidebar icon; blank or null clears it. */
@@ -429,6 +464,8 @@ export class ProjectsRepository {
     }
     // Its template trust records and capability ceiling (item 109) go with it.
     this.repos.graphTemplates.deleteGraphProjectSettings(projectId);
+    // Its coordinator tab groups and upstream-merge decline.
+    this.repos.clientState.deleteProjectClientState(projectId);
     this.context.changes.announce("project", projectId, undefined, undefined, true);
   }
 
@@ -486,30 +523,35 @@ export class ProjectsRepository {
   ): Promise<Project[]> {
     const projects = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
-      const byId = new Map(projects.map((project) => [project.id, project]));
-      for (const [projectId, folder] of Object.entries(folders)) {
-        const project = byId.get(projectId);
-        // A project deleted by another client is not an error here: the caller
-        // computed this arrangement against a snapshot that still had it, and
-        // failing the whole write would discard every other move it made.
-        if (project) applyProjectFolder(project, folder);
-      }
-
-      const provided = new Set(projectIds);
-      for (const [index, id] of projectIds.entries()) {
-        const project = byId.get(id);
-        if (project) project.order = index;
-      }
-
-      let order = projectIds.length;
-      for (const project of projects) {
-        if (!provided.has(project.id)) project.order = order++;
-      }
-
+      applyProjectArrangement(projects, { projectIds, folders });
       await this.context.saveJson(this.files.projectsFile(), projects);
       return projects.sort((a, b) => a.order - b.order);
     });
     for (const project of projects) this.context.changes.announce("project", project.id);
+    return projects;
+  }
+
+  /**
+   * Apply what the user did to the projects as they are now, under the store
+   * lock. A client sends the gesture rather than an order it computed, so a
+   * stale copy cannot undo another client's arrangement, and a folder rename
+   * reaches every current member. A gesture that changes nothing writes nothing.
+   */
+  async arrangeProjectsByIntent(intent: ProjectArrangementIntent): Promise<Project[]> {
+    let changed = false;
+    const projects = await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      const ordered = [...projects].sort((a, b) => a.order - b.order);
+      const arrangement = resolveProjectArrangementIntent(intent, ordered);
+      if (!arrangement) return ordered;
+      changed = true;
+      applyProjectArrangement(projects, arrangement);
+      await this.context.saveJson(this.files.projectsFile(), projects);
+      return projects.sort((a, b) => a.order - b.order);
+    });
+    if (changed) {
+      for (const project of projects) this.context.changes.announce("project", project.id);
+    }
     return projects;
   }
 
@@ -1288,12 +1330,7 @@ export class ProjectsRepository {
           environment.hasMergeConflicts !== true ||
           environment.deletionRequestedAt ||
           environment.lifecycleOperation ||
-          environment.status !== "running" ||
-          !(
-            environment.setupPhase === "ready" ||
-            environment.setupScriptsComplete ||
-            environment.setupOverride
-          ))
+          !isEnvironmentReadyForAgents(environment))
       )
         return { environment, armedAt: null };
       if (claim?.autoMergePrUrl && !environment.autoMergeResolveRequestId)
@@ -1546,6 +1583,7 @@ export class ProjectsRepository {
           ),
         ).toISOString();
       }
+      const unreadBefore = environment.hasUnreadWork === true;
       if (failedEnd) {
         environment.hasUnreadWork = true;
         environment.unreadReason = "agent_failed";
@@ -1569,6 +1607,9 @@ export class ProjectsRepository {
       // the broadcast; genuine state transitions still announce below.
       if (agentActivityStructureFingerprint(environment) !== structureBefore) {
         this.context.changes.announce("environment", environmentId, environment.projectId);
+      }
+      if (!unreadBefore && environment.hasUnreadWork === true) {
+        this.notifyAttention(environment);
       }
       return environment;
     });
@@ -1684,11 +1725,13 @@ export class ProjectsRepository {
         return environment;
       }
 
+      const unreadBefore = environment.hasUnreadWork === true;
       environment.lastActivityAt = normalizedActivityAt;
       environment.hasUnreadWork = true;
       environment.unreadReason = "terminal_finished";
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
+      if (!unreadBefore) this.notifyAttention(environment);
       return environment;
     });
   }
@@ -1744,10 +1787,12 @@ export class ProjectsRepository {
           ? Math.max(acceptedTime, previousCompletionTime + 1)
           : acceptedTime,
       ).toISOString();
+      const unreadBefore = environment.hasUnreadWork === true;
       environment.hasUnreadWork = true;
       environment.unreadReason = reason;
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
+      if (!unreadBefore) this.notifyAttention(environment);
       return environment;
     });
   }
@@ -1798,11 +1843,30 @@ export class ProjectsRepository {
           ? previousTime + 1
           : occurredTime;
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
+      const unreadBefore = environment.hasUnreadWork === true;
       environment.hasUnreadWork = true;
       environment.unreadReason = "agent_question";
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
+      if (!unreadBefore) this.notifyAttention(environment);
       return { environment, recorded: true };
+    });
+  }
+
+  /**
+   * Raises the attention event for an environment whose unread badge this
+   * backend just lit (an edge, never a re-light of a badge already shown).
+   * Only agent and terminal reasons count; a client marking it unread does not.
+   */
+  private notifyAttention(environment: Environment): void {
+    const reason = environment.unreadReason;
+    if (!isEnvironmentAttentionReason(reason)) return;
+    this.context.changes.notifyEnvironmentAttention({
+      attentionId: shared.randomUUID(),
+      environmentId: environment.id,
+      projectId: environment.projectId,
+      reason,
+      occurredAt: environment.lastActivityAt ?? shared.nowIso(),
     });
   }
 

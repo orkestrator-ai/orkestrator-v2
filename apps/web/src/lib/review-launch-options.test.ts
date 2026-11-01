@@ -181,7 +181,9 @@ describe("buildReviewModelCatalog", () => {
         reasoningEfforts: ["xhigh"],
       },
     ]);
+    // No Pi row is marked as where a session starts, so Pi's own default leads.
     expect(catalog.pi).toEqual([
+      { id: "default", name: "Pi default", reasoningEfforts: [] },
       {
         id: "anthropic/claude-pi",
         name: "Claude Pi",
@@ -189,6 +191,29 @@ describe("buildReviewModelCatalog", () => {
         reasoningEfforts: ["high"],
       },
     ]);
+  });
+
+  test("offers Pi's own default when no connected row is marked, and opens on it", () => {
+    useAgentModelCatalogStore.getState().setAcpModels([
+      { platform: "pi", id: "openai/gpt-4", label: "GPT-4" },
+      {
+        platform: "pi",
+        id: "openai/gpt-6.1-sol",
+        label: "GPT-6.1 Sol",
+        sessionDefault: true,
+        connected: false,
+      },
+    ]);
+
+    const catalog = buildReviewModelCatalog();
+    expect(catalog.pi?.map((model) => model.id)).toEqual([
+      "default",
+      "openai/gpt-4",
+      "openai/gpt-6.1-sol",
+    ]);
+    expect(catalog.pi?.[2]?.connected).toBe(false);
+    // The shared launch resolver leaves the model to Pi, as the backend does.
+    expect(firstModelFor("pi", catalog)).toBe("default");
   });
 
   test("carries Pi's session-default mark so the Multi Review button picks it (0172)", () => {

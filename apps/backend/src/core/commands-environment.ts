@@ -1,4 +1,5 @@
 import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESS } from "@orkestrator/protocol/container-host-reachability";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import {
   assertWorktreePathUnlinked,
   captureWorktreePathIdentity,
@@ -886,12 +887,7 @@ export async function startEnvironmentSetupOnce(
           });
     return { setupStarted: false, environment: ready };
   }
-  if (
-    (current.setupScriptsComplete ||
-      current.setupPhase === "ready" ||
-      current.setupOverride === true) &&
-    setupCompletionBelongsToRuntime(current)
-  ) {
+  if (isEnvironmentSetupSettled(current) && setupCompletionBelongsToRuntime(current)) {
     logSetupTerminal("setup already complete", {
       environmentId: current.id,
       environmentName: current.name,

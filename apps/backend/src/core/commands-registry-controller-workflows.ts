@@ -266,8 +266,11 @@ export function registerControllerWorkflowCommands(
     return context.buildPipelines.start(input as StartBuildPipelineInput);
   });
 
-  /** The Multi Review button, under an ID the command node reserved for this request. */
-  register("launch_controller_multi_review", async (args, context) => {
+  /** The Multi Review button, under an ID the caller reserved for this request. */
+  const launchMultiReviewButton = async (
+    args: Record<string, unknown>,
+    context: CommandContext,
+  ): Promise<MultiReviewActionResult> => {
     if (!context.multiReviews) throw new Error("Multi Review supervisor is unavailable");
     const service = context.multiReviews;
     if (!isLaunchMultiReviewActionInput(args.input)) {
@@ -327,7 +330,16 @@ export function registerControllerWorkflowCommands(
         return actionResult(workflow, reused, { status: "unavailable" }, recovery);
       }
     });
-  });
+  };
+  register("launch_controller_multi_review", launchMultiReviewButton);
+  /**
+   * The same button for a renderer on this node: `{ input, reservedId }`, with
+   * `reservedId` minted once per click. Omitted rows, target branch and review
+   * instruction take this node's saved defaults, an active review is reused,
+   * and the root tab is written into the environment's pane layout here, so
+   * a renderer that disappears mid-launch cannot leave a review without a tab.
+   */
+  register("launch_multi_review", launchMultiReviewButton);
 
   /**
    * Open a saved review's root, Fix or reviewer tab, address its findings, or

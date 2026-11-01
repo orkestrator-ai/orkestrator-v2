@@ -1311,8 +1311,11 @@ user's own credentials, so:
   `/global/models` marks the first available saved or profile default
   `sessionDefault` (`markSessionDefault` in `models.ts`; global settings only,
   as no session asks), and every launch default that has no saved model (Multi
-  Review rows, the launch dialogs' `firstModelFor`) picks the marked row before
-  the first, so a review row runs where a tab would.
+  Review rows, the launch dialogs' `firstModelFor`, all through
+  `resolveLaunchSelection` in `packages/protocol/src/launch-selection.ts`) picks
+  the marked row. A catalogue that marks no connected row leaves the model
+  `default` rather than pinning its first row, so a review row runs where a tab
+  would; the launch dialogs offer that choice as a "Pi default" row.
 - **"Signed in" is per provider.** `GET /global/auth` reports each provider's
   status; there is no single account. Sign-in itself is not served: Pi's login
   is an interactive multi-step prompt flow (`select`, `text`, `secret`) with no

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { pipelineCriteriaStatusWord } from "./pipeline-criteria";
+import { pipelineCriteriaStatusWord } from "@orkestrator/protocol/build-pipeline-criteria";
 import {
   CircleDot,
   ClipboardList,

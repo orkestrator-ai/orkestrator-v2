@@ -33,7 +33,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { useVirtuosoScrollState } from "@/hooks";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import {
-  formatFeatureStoriesForBuild,
   stripFeaturePlannerStateBlocks,
   stripStoryRefinementStateBlocks,
 } from "@/lib/feature-planner";
@@ -52,7 +51,14 @@ import {
   useProjectStore,
 } from "@/stores";
 import { isActiveFeaturePlanningPhase } from "@/stores/featurePlanStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import * as backend from "@/lib/backend";
+import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
+import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
+import {
+  FEATURE_BUILD_ALREADY_ACTIVE,
+  legacyStartFeaturePlanBuild,
+} from "@/lib/feature-plan-build-compat";
 import type { EnvironmentType } from "@/types";
 import type {
   FeaturePlan,
@@ -179,6 +185,20 @@ function latestUserMessageTime(feature: FeaturePlan): number {
 
 interface FeaturesViewProps {
   projectId: string;
+}
+
+/**
+ * A launch that claimed the plan and stopped before linking a pipeline, such as
+ * a backend restart mid-launch. The backend finishes it under the same ticket and
+ * serializes per plan, so pressing Build during a live launch only rejoins it.
+ */
+function featureBuildIsResumable(feature: FeaturePlan): boolean {
+  return !!feature.buildTaskId && !feature.buildPipelineId;
+}
+
+function featureBuildIsLocked(feature: FeaturePlan): boolean {
+  if (featureBuildIsResumable(feature)) return false;
+  return feature.status === "building" || !!feature.buildPipelineId;
 }
 
 export function FeaturesView({ projectId }: FeaturesViewProps) {
@@ -513,82 +533,49 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (
         buildingFeatureId ||
         hasBlockingConversation ||
-        feature.status === "building" ||
-        !!feature.buildTaskId ||
-        !!feature.buildPipelineId ||
+        featureBuildIsLocked(feature) ||
         feature.stories.length === 0
       )
         return;
       setBuildingFeatureId(feature.id);
-      let ownsBuildReservation = false;
-      let unreservedTaskId: string | null = null;
       try {
-        const taskDetails = formatFeatureStoriesForBuild(feature);
-        const taskId = await addTask(projectId, taskDetails.title, taskDetails.description);
-        if (!taskId) throw new Error("Failed to create Kanban task for feature build");
-        unreservedTaskId = taskId;
-
-        const task = useKanbanStore.getState().tasks.find((candidate) => candidate.id === taskId);
-        if (!task) throw new Error("Created build task was not found in the Kanban store");
-
-        // Persist the feature→task half of the launch before navigation can
-        // unmount this view. A restarted client now sees an in-progress feature
-        // instead of offering a duplicate build while the pipeline is being
-        // created.
-        const reservation = await claimFeatureBuild(feature.id, taskId);
-        if (!reservation) {
-          await deleteTask(taskId);
-          unreservedTaskId = null;
-          throw new Error("Failed to reserve the feature build");
-        }
-        if (!reservation.claimed) {
-          await deleteTask(taskId);
-          unreservedTaskId = null;
-          toast.error("This feature already has an active build");
+        // One request: the backend claims the plan, creates the ticket, starts
+        // the pipeline and records the link, undoing its own partial work.
+        const started = await backend
+          .startFeaturePlanBuild({ featureId: feature.id })
+          .catch((error: unknown) => {
+            if (!isUnsupportedBackendCommand(error, "start_feature_plan_build")) throw error;
+            return null;
+          });
+        if (!started) {
+          await legacyStartFeaturePlanBuild(feature, {
+            projectId,
+            environmentType: getPreferredEnvironmentType(projectId),
+            addTask,
+            deleteTask,
+            claimFeatureBuild,
+            updateFeature,
+            startBuild,
+          });
           return;
         }
-        ownsBuildReservation = true;
-        unreservedTaskId = null;
-
-        await startBuild(task, getPreferredEnvironmentType(projectId), "codex", {
-          existingEnvironmentId: feature.codexEnvironmentId,
-          featurePlanId: feature.id,
-        });
-        const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(taskId);
-        if (!pipeline || pipeline.phase === "failed") {
-          // startBuild surfaces its own error toast and clears or fails the
-          // pipeline when it cannot start. Undo the durable reservation so the
-          // feature does not remain stuck in "building" with no live pipeline.
-          await updateFeature(feature.id, {
-            status: feature.status,
-            buildTaskId: feature.buildTaskId,
-            buildPipelineId: feature.buildPipelineId,
-          }).catch(() => undefined);
-          ownsBuildReservation = false;
-          return;
-        }
-        const updated = await updateFeature(feature.id, {
-          status: "building",
-          buildTaskId: taskId,
-          buildPipelineId: pipeline.id,
-          ...(pipeline.environmentId ? { codexEnvironmentId: pipeline.environmentId } : {}),
-        });
-        if (!updated) throw new Error("Failed to persist the feature build state");
+        const pipeline = started.pipeline as BuildPipeline;
+        useBuildPipelineStore.getState().replacePipeline(pipeline);
+        scheduleBuildPipelineTabActivation(
+          projectId,
+          pipeline.id,
+          pipeline.environmentId || undefined,
+        );
+        void loadFeatures(projectId);
+        if (!started.reused) toast.success("Build pipeline started");
       } catch (error) {
         console.error("[FeaturesView] Failed to start feature build:", error);
-        if (unreservedTaskId) {
-          await deleteTask(unreservedTaskId);
+        const message = error instanceof Error ? error.message : "Unknown error";
+        if (message === FEATURE_BUILD_ALREADY_ACTIVE) {
+          toast.error(FEATURE_BUILD_ALREADY_ACTIVE);
+        } else {
+          toast.error("Failed to start feature build", { description: message });
         }
-        if (ownsBuildReservation) {
-          await updateFeature(feature.id, {
-            status: feature.status,
-            buildTaskId: feature.buildTaskId,
-            buildPipelineId: feature.buildPipelineId,
-          }).catch(() => undefined);
-        }
-        toast.error("Failed to start feature build", {
-          description: error instanceof Error ? error.message : "Unknown error",
-        });
       } finally {
         setBuildingFeatureId(null);
       }
@@ -599,6 +586,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       claimFeatureBuild,
       deleteTask,
       hasBlockingConversation,
+      loadFeatures,
       projectId,
       startBuild,
       updateFeature,
@@ -711,21 +699,17 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   disabled={
                     buildingFeatureId === selectedFeature.id ||
                     hasBlockingConversation ||
-                    selectedFeature.status === "building" ||
-                    !!selectedFeature.buildTaskId ||
-                    !!selectedFeature.buildPipelineId
+                    featureBuildIsLocked(selectedFeature)
                   }
                   onClick={() => void handleBuildFeature(selectedFeature)}
                 >
                   {buildingFeatureId === selectedFeature.id ||
-                  selectedFeature.status === "building" ||
-                  !!selectedFeature.buildTaskId ||
-                  !!selectedFeature.buildPipelineId ? (
+                  featureBuildIsLocked(selectedFeature) ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Wrench className="h-3.5 w-3.5" />
                   )}
-                  Build
+                  {featureBuildIsResumable(selectedFeature) ? "Resume build" : "Build"}
                 </Button>
               )}
             </div>

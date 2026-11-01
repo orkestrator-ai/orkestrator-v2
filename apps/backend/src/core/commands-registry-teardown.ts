@@ -18,6 +18,7 @@ import {
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
+import { sweepAgentHandoffs } from "./agent-handoffs.js";
 import {
   fenceRetainingCloseSessionId,
   isNativeTabTeardownKind,
@@ -635,6 +636,14 @@ export function registerTeardownCommands(
     const tmux = reconcileTmux
       ? ((await reconcileTmux({}, context)) as { reaped?: number })
       : undefined;
+    // Transferred transcripts no tab references any more, on the same layouts.
+    await sweepAgentHandoffs(context.storage, paneLayouts.layouts, now).catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to sweep agent handoffs:",
+        error instanceof Error ? error.message : error,
+      );
+      return 0;
+    });
     return { terminals, nativeSessions, tmuxSessions: tmux?.reaped ?? 0 };
   });
 }

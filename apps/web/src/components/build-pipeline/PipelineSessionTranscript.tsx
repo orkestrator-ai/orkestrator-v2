@@ -29,7 +29,7 @@ import {
   REVIEW_PACKAGE_PLAN_ROOT_KEYS,
   showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
-} from "@/lib/structured-review-messages";
+} from "@orkestrator/protocol/structured-review-transcript";
 import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";

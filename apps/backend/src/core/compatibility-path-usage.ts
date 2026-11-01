@@ -48,6 +48,10 @@ export const COMPATIBILITY_PATH_IDS = [
   "build-pipeline.address-text-report",
   /** `list_nodes` asked a node for its load and the node does not have the command yet. */
   "machine-load.older-node",
+  /** An older renderer built a "Continue in…" handoff itself (`save_agent_handoff`). */
+  "agent-handoff.renderer-saved",
+  /** A prompt reached dispatch already holding its handoff: an older renderer prepended it. */
+  "agent-handoff.renderer-carried",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

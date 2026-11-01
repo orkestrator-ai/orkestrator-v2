@@ -5,11 +5,7 @@ import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { useSettingsConfig } from "./settings-config";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import { getReviewInstructionValidationError } from "@orkestrator/protocol/review-instruction";
-import {
-  isShippedReviewLensPresetList,
-  resolveReviewLensPresets,
-  type ReviewLensPreset,
-} from "@orkestrator/protocol/review-lens";
+import { resolveReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { reviewLensDraftError } from "@/components/review/ReviewLensField";
 import { reviewLensPresetsError } from "./agent/ReviewLensPresetsEditor";
 import { DEFAULT_COORDINATOR_PROVIDER_TIER } from "@orkestrator/protocol/coordinator";
@@ -30,7 +26,6 @@ import type {
   GatewayTokenSettings,
   GlobalConfig,
   PreferredEditor,
-  TerminalAppearance,
   WebClientStatus,
 } from "@/types";
 import {
@@ -44,15 +39,8 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
-import {
-  DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
-  resolveClaudeBackgroundCommandLimitHours,
-} from "@orkestrator/protocol/claude-background-commands";
-import {
-  DEFAULT_SESSION_TITLE_GENERATION_POLICY,
-  resolveSessionTitleGenerationPolicy,
-  type SessionTitleGenerationPolicy,
-} from "@orkestrator/protocol/session-title-generation";
+import { resolveClaudeBackgroundCommandLimitHours } from "@orkestrator/protocol/claude-background-commands";
+import { resolveSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
 import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
@@ -78,6 +66,7 @@ import {
 import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import { parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
+import { globalConfigPatchFromCoreFields, type CoreFieldsSnapshot } from "./global-settings-patch";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import { cn } from "@/lib/utils";
 
@@ -112,49 +101,6 @@ export function normalizeAllowedDomainsInput(value: string | string[]): string[]
     domains.push(entry);
   }
   return domains;
-}
-
-/**
- * Every non-secret setting the shared form owns, normalized to the shape that is
- * actually persisted. Comparing a normalized local snapshot against the stored
- * config is what stops a save that changes nothing from re-arming the debounce.
- */
-interface CoreFieldsSnapshot {
-  containerResources: { cpuCores: number; memoryGb: number };
-  envFilePatterns: string[];
-  allowedDomains: string[];
-  useHostGitHubCredentials: boolean;
-  sshAgentSocketPath: string;
-  autoMergeRequireChecks: boolean;
-  defaultProjectsDirectory: string;
-  useHostClaudeCredentials: boolean;
-  preferredEditor: PreferredEditor;
-  enabledAgentPlatforms: AgentPlatform[];
-  coordinatorProviderTiers: "enforced" | "provider-configured" | "advisory";
-  coordinatorWebResearch: CoordinatorWebResearch;
-  coordinatorResearchMcpServers: CoordinatorResearchMcpServer[];
-  agentSettings: AgentSettingsTier;
-  openCodeModelProviders: string[];
-  codexMaxConcurrentThreads: number;
-  claudeBackgroundCommandLimitHours: number;
-  sessionTitleGeneration: SessionTitleGenerationPolicy;
-  terminalAppearance: TerminalAppearance;
-  terminalScrollback: number;
-  terminalHistoryEnabled: boolean;
-  terminalHistoryRetentionMb: number;
-  terminalHistoryGlobalRetentionMb: number;
-  terminalHistoryRetentionDays: number;
-  experimentalCodexRawEventLogging: boolean;
-  experimentalScheduling: boolean;
-  experimentalGraphs: boolean;
-  debugLogging: boolean;
-  debugLogRetentionDays: number;
-  webClientEnabled: boolean;
-  reviewInstruction: string;
-  /** Resolved: the shipped five when none are stored. */
-  reviewLensPresets: ReviewLensPreset[];
-  /** Which runtime runs new Multi Reviews (item 301); absent is bespoke. */
-  multiReviewEngine: MultiReviewEngine;
 }
 
 /** The same fields as `CoreFieldsSnapshot`, read from the persisted config. */
@@ -449,6 +395,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   // The last `global` this form synced itself from, as a value rather than an
   // object identity. `null` until the first sync so a fresh mount always runs.
   const syncedGlobalSignatureRef = useRef<string | null>(null);
+  // The `global` those values came from: the baseline a save diffs against, so
+  // only the fields edited here are sent and nothing else is overwritten.
+  const syncedGlobalRef = useRef<GlobalConfig>(global);
 
   // Sync local state when config changes in the store
   useEffect(() => {
@@ -459,6 +408,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     const signature = globalFormSignature(global);
     if (syncedGlobalSignatureRef.current === signature) return;
     syncedGlobalSignatureRef.current = signature;
+    syncedGlobalRef.current = global;
     setCpuCores(global.containerResources.cpuCores);
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
@@ -869,105 +819,13 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setIsSaving(true);
     setSaveState("saving");
     try {
-      const patterns = normalizeEnvPatternsInput(envPatterns);
-      const domains = normalizeAllowedDomainsInput(allowedDomains);
-      const savedSshAgentSocketPath = sshAgentSocketPathForSave(sshAgentSocketPath);
-      const savedDefaultProjectsDirectory = defaultProjectsDirectory.trim() || undefined;
-
-      const newGlobal: {
-        containerResources: { cpuCores: number; memoryGb: number };
-        envFilePatterns: string[];
-        allowedDomains: string[];
-        useHostGitHubCredentials: boolean;
-        sshAgentSocketPath?: string;
-        autoMergeRequireChecks: boolean;
-        defaultProjectsDirectory?: string;
-        useHostClaudeCredentials: boolean;
-        preferredEditor?: PreferredEditor;
-        enabledAgentPlatforms: AgentPlatform[];
-        coordinatorProviderTiers: "enforced" | "provider-configured" | "advisory";
-        coordinatorWebResearch: CoordinatorWebResearch;
-        coordinatorResearchMcpServers: CoordinatorResearchMcpServer[];
-        favoriteModels: Array<{ platform: AgentPlatform; modelId: string }>;
-        agentSettings: AgentSettingsTier;
-        openCodeModelProviders: string[];
-        codexMaxConcurrentThreads: number;
-        claudeBackgroundCommandLimitHours?: number;
-        sessionTitleGeneration?: SessionTitleGenerationPolicy;
-        terminalAppearance: TerminalAppearance;
-        terminalScrollback: number;
-        terminalHistoryEnabled: boolean;
-        terminalHistoryRetentionMb: number;
-        terminalHistoryGlobalRetentionMb: number;
-        terminalHistoryRetentionDays: number;
-        experimentalCodexRawEventLogging: boolean;
-        experimentalScheduling: boolean;
-        experimentalGraphs: boolean;
-        debugLogging: boolean;
-        debugLogRetentionDays: number;
-        webClientEnabled: boolean;
-        notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;
-        reviewInstruction?: string;
-        reviewLensPresets?: ReviewLensPreset[];
-        multiReviewEngine?: MultiReviewEngine;
-      } = {
-        containerResources: { cpuCores, memoryGb },
-        envFilePatterns: patterns,
-        allowedDomains: domains,
-        useHostGitHubCredentials,
-        ...(savedSshAgentSocketPath ? { sshAgentSocketPath: savedSshAgentSocketPath } : {}),
-        autoMergeRequireChecks,
-        ...(savedDefaultProjectsDirectory
-          ? { defaultProjectsDirectory: savedDefaultProjectsDirectory }
-          : {}),
-        useHostClaudeCredentials,
-        preferredEditor,
-        enabledAgentPlatforms,
-        coordinatorProviderTiers,
-        coordinatorWebResearch,
-        coordinatorResearchMcpServers,
-        favoriteModels: global.favoriteModels ?? [],
-        agentSettings: normalizeAgentSettings(agentSettings),
-        openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
-        codexMaxConcurrentThreads,
-        // Absent keeps the Claude CLI's own ceiling and its foreground limit.
-        ...(claudeBackgroundCommandLimitHours !== DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS
-          ? { claudeBackgroundCommandLimitHours }
-          : {}),
-        // Absent keeps following the default if it ever changes.
-        ...(sessionTitleGeneration !== DEFAULT_SESSION_TITLE_GENERATION_POLICY
-          ? { sessionTitleGeneration }
-          : {}),
-        terminalAppearance: {
-          fontFamily: terminalFontFamily,
-          fontSize: terminalFontSize,
-          backgroundColor: terminalBackgroundColor,
-        },
-        terminalScrollback,
-        terminalHistoryEnabled,
-        terminalHistoryRetentionMb,
-        terminalHistoryGlobalRetentionMb,
-        terminalHistoryRetentionDays,
-        experimentalCodexRawEventLogging,
-        experimentalScheduling,
-        experimentalGraphs,
-        debugLogging,
-        debugLogRetentionDays,
-        webClientEnabled,
-        notificationSounds: global.notificationSounds,
-        // `update_global_config` replaces the stored global wholesale, so this
-        // has to be sent from every section's save, not only the Defaults tab.
-        multiReviewEngine,
-      };
-
-      if (reviewInstruction !== DEFAULT_REVIEW_INSTRUCTION) {
-        newGlobal.reviewInstruction = reviewInstruction;
-      }
-      // Absent means the shipped presets, so an unedited list is not stored and
-      // later improvements to the shipped text reach it.
-      if (!isShippedReviewLensPresetList(reviewLensPresets)) {
-        newGlobal.reviewLensPresets = reviewLensPresets;
-      }
+      // Only what changed since the form loaded travels; the backend merges it
+      // onto its current settings, so another window's edits are kept.
+      const changes = globalConfigPatchFromCoreFields(
+        localCoreFields,
+        storedCoreFields(syncedGlobalRef.current),
+        syncedGlobalRef.current,
+      );
 
       const githubCredentialSourceChanged =
         useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true);
@@ -977,14 +835,16 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         githubPropagationFailureToastShownRef.current = false;
       }
 
-      const newConfig = await backend.updateGlobalConfig(newGlobal, machine);
-      if (coreSignatureRef.current !== signature) {
-        // An edit landed while this write was in flight. Mark the returned store
-        // state as already accounted for so the sync effect does not reset the
-        // form to this write's values and discard the newer edit; the debounce
-        // will persist it next.
-        syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
-      }
+      // A retry of a failed credential propagation has no changes to send; the
+      // empty patch writes nothing and answers with the authoritative config.
+      const newConfig = await backend.patchGlobalConfig(changes.patch, {
+        unset: changes.unset,
+        machine,
+      });
+      // Always advance the raw baseline, even when the resolved form values did
+      // not change. Also preserve edits made while this save was in flight.
+      syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
+      syncedGlobalRef.current = newConfig.global;
       setConfig(newConfig);
       if (useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true)) {
         // The Claude plan read goes unavailable when host credentials are off,
@@ -1295,7 +1155,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   };
 
   // A validation failure in one section blocks auto-save for every section: the
-  // whole form is written in one `update_global_config`, so a bad value in
+  // form's changes are written in one `patch_global_config`, so a bad value in
   // Network or Terminal would otherwise ship alongside an otherwise valid edit.
   const saveBlocker = useMemo(() => {
     const blockers: Array<{ section: string; message: string }> = [];

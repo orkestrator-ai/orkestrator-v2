@@ -337,8 +337,8 @@ See
 [`coordinator.md`](coordinator.md#course-corrections-with-delivernow).
 
 **Logs.** The backend logs one `[agent-mail] placed` line per send, one
-`[agent-mail] waiting` line each time the drain's reason for passing over a
-pending message changes, and one `[agent-mail] dispatched` line per batch.
+`[agent-mail] delivery.waiting` line each time the drain's reason for passing
+over a pending message changes, and one `[agent-mail] dispatched` line per batch.
 They carry ids, route, placement and reason, never subjects or bodies.
 
 A worker that chats while the coordinator is waiting has its mail stored

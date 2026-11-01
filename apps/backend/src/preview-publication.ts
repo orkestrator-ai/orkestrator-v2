@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import {
   PREVIEW_BOOTSTRAP_PATH,
@@ -42,6 +43,8 @@ export interface PreviewPublicationOptions {
   /** Test seam for the certificate expiry clock. */
   now?: () => number;
 }
+
+const log = createLogger("preview");
 
 const MAX_BOOTSTRAP_BODY_BYTES = 4 * 1024;
 const DOMAIN =
@@ -346,19 +349,22 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
         this.reason = "The preview certificate expired and could not be renewed.";
         this.options.runtime.publication = null;
       }
-      this.options.logger.warn(
-        `[previews] Certificate refresh failed: ${error instanceof Error ? error.message : "error"}`,
-      );
+      log.throttled("warn", "certificate.refresh-failed", {
+        error,
+        fields: () => ({ error: formatLogError(error, { stack: false }) }),
+      });
       return;
     }
-    if (this.certificate.cert !== previous.cert || this.certificate.key !== previous.key) {
-      if (!this.certificate.coversHosts) {
-        this.certificate = previous;
-        this.options.logger.warn(
-          "[previews] Ignoring a renewed certificate that does not cover the preview hosts",
-        );
-        return;
-      }
+    log.recovered("certificate.refresh-failed");
+    const renewed =
+      this.certificate.cert !== previous.cert || this.certificate.key !== previous.key;
+    if (renewed && !this.certificate.coversHosts) {
+      this.certificate = previous;
+      log.throttled("warn", "certificate.renewal-refused", { kind: "hosts-not-covered" });
+      return;
+    }
+    log.recovered("certificate.renewal-refused");
+    if (renewed) {
       // Bun's HTTPS server supports neither setSecureContext nor SNICallback,
       // so renewal re-binds only this listener on the same address and port.
       // Preview sessions are server-side and survive; gateway listeners are

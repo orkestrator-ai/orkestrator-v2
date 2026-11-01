@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import http from "node:http";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { createCommandFixtures } from "./command-fixtures";
 import type { CommandContext } from "./command-fixtures";
@@ -158,11 +159,28 @@ describe("local bridge reuse under load", () => {
       () => true,
     );
     await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
+    const logs = captureLogs();
+    const events = () =>
+      logs
+        .records()
+        .filter((record) => record.area === "local-server")
+        .map((record) => record.event);
 
     await expect(
       commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
     ).rejects.toMatchObject({ retryable: true });
     expect(isProcessRunning(first.pid)).toBe(true);
+
+    // Each retry costs one count, not one line.
+    await expect(
+      commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+    ).rejects.toMatchObject({ retryable: true });
+    expect(events()).toEqual(["bridge.not-answering"]);
+    expect(logs.records().find((record) => record.area === "local-server")?.fields).toMatchObject({
+      scope: `codex:${environmentId}`,
+      kind: "work-in-progress",
+      pid: first.pid,
+    });
 
     // The activity sweep must not read the stalled bridge as absent, which
     // would record its running turn as idle.
@@ -177,6 +195,8 @@ describe("local bridge reuse under load", () => {
       context,
     )) as Started;
     expect(recovered).toMatchObject({ wasRunning: true, pid: first.pid });
+    expect(events()).toEqual(["bridge.not-answering", "throttle.recovered"]);
+    logs.restore();
   });
 
   test("keeps the bridge while a provider send has not yet produced an activity observation", async () => {

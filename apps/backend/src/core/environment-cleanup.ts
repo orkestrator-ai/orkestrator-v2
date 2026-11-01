@@ -1,5 +1,6 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { createLogger } from "@orkestrator/protocol/logger";
 
 import type { CommandContext } from "./commands-context.js";
 import { validateGitRefName } from "./commands-agent-support.js";
@@ -478,11 +479,7 @@ async function cleanupStateDirectories(
   }
 }
 
-/**
- * Process-wide on purpose: it only de-duplicates a log line, so two backends
- * in one process share at most one fewer warning (docs/architecture/backend-runtime.md).
- */
-const loggedKeptBranches = new Set<string>();
+const log = createLogger("environment");
 
 /**
  * Runs one step and records the outcome in the ledger. Never throws: a failed
@@ -518,11 +515,12 @@ export async function runEnvironmentCleanupStep(
     } else if (step === "worktree") await cleanupWorktree(entry, context, run);
     else if (step === "branch") {
       const outcome = await cleanupEnvironmentBranch(entry, run);
-      if (outcome === "kept" && !loggedKeptBranches.has(entry.environmentId)) {
-        loggedKeptBranches.add(entry.environmentId);
-        console.info(
-          `[backend] Kept the local branch of deleted environment ${entry.environmentId}: it may hold unmerged work`,
-        );
+      // Throttled rather than plain: a step whose ledger write failed runs again.
+      if (outcome === "kept") {
+        log.throttled("info", "cleanup.branch-kept", {
+          scope: entry.environmentId,
+          kind: "may-hold-unmerged-work",
+        });
       }
     } else await cleanupStateDirectories(entry, context);
   } catch (error) {

@@ -9,6 +9,7 @@
  * frozen selections, reservations, the persisted enqueue intent, and the
  * lifecycle projection. The storage queue is never held across a port call.
  */
+import { createLogger } from "@orkestrator/protocol/logger";
 import {
   WEB_ANNOTATION_LIMITS,
   WEB_ANNOTATION_TERMINAL_REQUEST_STATES,
@@ -63,6 +64,8 @@ import type {
   WebAnnotationManifest,
   WebAnnotationTransaction,
 } from "./web-annotation-storage.js";
+
+const log = createLogger("web-annotations");
 
 const MAX_PREPARATIONS = 64;
 const BRIEF_ENTRY_LIMIT = 50;
@@ -1359,11 +1362,12 @@ export class WebAnnotationRequests {
   ): void {
     if (this.reconcileTimer || this.stopped) return;
     this.reconcileTimer = setInterval(() => {
-      void this.reconcileOnce().catch((error: unknown) => {
-        console.warn(
-          `[web-annotations] Reconcile pass failed: ${error instanceof Error ? error.name : "unknown"}`,
-        );
-      });
+      void this.reconcileOnce()
+        .then(() => log.recovered("reconcile.failed"))
+        .catch((error: unknown) => {
+          // Only the error's type: a request's text can reach its message.
+          log.throttled("warn", "reconcile.failed", { error });
+        });
     }, intervalMs);
     this.reconcileTimer.unref?.();
     void this.reconcileOnce().catch(() => undefined);

@@ -1,5 +1,6 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   agentMcpConfigJson,
   agentToolConnectionTarget,
@@ -1068,16 +1069,28 @@ describe("live session read paths", () => {
       // for the whole session, and the tab silently stops receiving hooks and
       // transcript lines with nothing reporting an error.
       await fs.chmod(pendingDir, 0o000);
-      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      const logs = captureLogs();
+      const tmuxEvents = () =>
+        logs
+          .records()
+          .filter((record) => record.area === "tmux")
+          .map((record) => record.event);
       try {
         // The three whole ticks the former 750ms wait covered at POLL_INTERVAL_MS
-        // (250ms). Each must fail its snapshot and still park for the next tick.
+        // (250ms). Each must fail its snapshot and still park for the next tick,
+        // and only the first of them is written.
         for (let tick = 0; tick < 3; tick += 1) await ticks.step();
-        expect(
-          warn.mock.calls.filter(([message]) => message === "[tmux] poll snapshot failed"),
-        ).toHaveLength(3);
+        expect(tmuxEvents()).toEqual(["poll.snapshot-failed"]);
+        await fs.chmod(pendingDir, 0o755);
+        await ticks.step();
+        expect(tmuxEvents()).toEqual(["poll.snapshot-failed", "throttle.recovered"]);
+        expect(logs.records().at(-1)?.fields).toMatchObject({
+          site: "poll.snapshot-failed",
+          failures: 3,
+          suppressed: 2,
+        });
       } finally {
-        warn.mockRestore();
+        logs.restore();
         await fs.chmod(pendingDir, 0o755);
       }
 

@@ -139,7 +139,6 @@ declaration:
 | `change-tracking/legacy-payload.ts` | `compatibilityCache` | A bounded memo of a pure function of its content key. |
 | `design/export-writer.ts` | `destinationLocks`, `destinationOperations` | Serialise writes to one file on the host; the cap bounds the process. Keyed by destination path, not by backend: a copy per backend would let two backends write the same file at once. |
 | `gateway-support-core.ts` | `activeDynamicCompressions` | CPU-bound compression admission per process: the bound protects the host's CPU, so a counter per backend would multiply it (gateway, not core; still on the `import/no-mutable-exports` allowlist for this binding). |
-| `environment-cleanup.ts` | `loggedKeptBranches` | Only de-duplicates a log line. |
 | `disk-usage.ts` | `running`, `waiting` | Bound disk scans on the host, like `gitDockerScanPool`; a bound per backend would multiply it. |
 | `transcript-artifacts/interactive-modules.ts` | `macroCheck` | A fact about this Bun: whether it honours `macros: false`. |
 | `storage-agent-mail.ts` | `lastIdTime`, `idSequence` | One clock orders mail ids across every repository in the process, a stronger guarantee than one per repository; it shares nothing but ordering. |

@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import * as shared from "./tmux-shared.js";
 import { claudeCliReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
@@ -123,6 +124,8 @@ export type TmuxSessionTimingOptions = {
   /** Pause before startup readiness and between deadline checks. */
   sleep?: (delayMs: number) => Promise<void>;
 };
+
+const log = createLogger("tmux");
 
 export class TmuxSession {
   readonly sessionId: string;
@@ -586,6 +589,14 @@ export class TmuxSession {
     throw new Error("timed out waiting for Claude to leave its startup prompt");
   }
 
+  private warnPollFailed(event: Parameters<typeof log.throttled>[1], error: unknown): void {
+    log.throttled("warn", event, {
+      scope: this.tmuxSession,
+      error,
+      fields: () => ({ error: formatLogError(error) }),
+    });
+  }
+
   private spawnPollLoop(context: CommandContext): void {
     if (this.pollLoopRunning) return;
     this.pollLoopRunning = true;
@@ -613,8 +624,9 @@ export class TmuxSession {
             try {
               const transcriptPath = await this.discoverTranscriptPath();
               if (transcriptPath) tail = new TranscriptTail(transcriptPath);
+              log.recovered("poll.discovery-failed", this.tmuxSession);
             } catch (error) {
-              console.warn("[tmux] transcript discovery failed", error);
+              this.warnPollFailed("poll.discovery-failed", error);
             }
             nextDiscoveryAt = Date.now() + discoveryInterval;
             discoveryInterval = Math.min(discoveryInterval * 2, TMUX_DISCOVERY_MAX_INTERVAL_MS);
@@ -623,8 +635,9 @@ export class TmuxSession {
           let snapshot: TmuxPollSnapshot | undefined;
           try {
             snapshot = await this.backend.pollSnapshot(this.sessionHookPaths, tail?.filePath);
+            log.recovered("poll.snapshot-failed", this.tmuxSession);
           } catch (error) {
-            console.warn("[tmux] poll snapshot failed", error);
+            this.warnPollFailed("poll.snapshot-failed", error);
           }
 
           if (snapshot) {
@@ -641,8 +654,9 @@ export class TmuxSession {
                 emittedBlockingIds,
               );
               for (const event of events) this.emitHook(context, event);
+              log.recovered("poll.drain-pending-failed", this.tmuxSession);
             } catch (error) {
-              console.warn("[tmux] drainPending failed", error);
+              this.warnPollFailed("poll.drain-pending-failed", error);
             }
 
             try {
@@ -662,8 +676,9 @@ export class TmuxSession {
                   event_id: timeout.id,
                 });
               }
+              log.recovered("poll.drain-timeouts-failed", this.tmuxSession);
             } catch (error) {
-              console.warn("[tmux] drainTimeouts failed", error);
+              this.warnPollFailed("poll.drain-timeouts-failed", error);
             }
 
             if (tail) {
@@ -681,8 +696,9 @@ export class TmuxSession {
                     line: this.withTaskSnapshot(line, this.taskTracker),
                   });
                 }
+                log.recovered("poll.tail-failed", this.tmuxSession);
               } catch (error) {
-                console.warn("[tmux] transcript tail failed", error);
+                this.warnPollFailed("poll.tail-failed", error);
               }
             }
           }

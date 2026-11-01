@@ -432,9 +432,11 @@ describe("useEnvironments", () => {
     expect(createdEnv?.id).toBe("new-env-id");
     expect(result.current.allEnvironments).toHaveLength(1);
     expect(result.current.error).toBeNull();
-    expect(useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType).toBe(
-      "containerized",
-    );
+    // lastEnvironmentType is backend-owned: the create command records it and
+    // the resulting config announcement refreshes the store.
+    expect(
+      useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType,
+    ).toBeUndefined();
   });
 
   test("createEnvironment forwards optional creation parameters", async () => {
@@ -469,7 +471,7 @@ describe("useEnvironments", () => {
     );
   });
 
-  test("forkEnvironment creates an environment from the source and records its type", async () => {
+  test("forkEnvironment creates an environment from the source", async () => {
     const { result } = renderHook(() => useEnvironments("project-1"));
 
     await waitFor(() => {
@@ -487,9 +489,9 @@ describe("useEnvironments", () => {
     expect(
       result.current.allEnvironments.some((environment) => environment.id === "forked-env-id"),
     ).toBe(true);
-    expect(useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType).toBe(
-      "local",
-    );
+    expect(
+      useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType,
+    ).toBeUndefined();
   });
 
   test("forkEnvironment sets error, toasts, and cleans up creation state on failure", async () => {
@@ -3038,7 +3040,7 @@ describe("useEnvironments", () => {
     expect(updated?.branch).toBe("new-name");
   });
 
-  test("environment-renamed event clears PR state when branch changes", async () => {
+  test("environment-renamed event clears local PR state without a backend clear when branch changes", async () => {
     const existingEnv = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
@@ -3088,8 +3090,9 @@ describe("useEnvironments", () => {
     expect(updated?.prUrl).toBeNull();
     expect(updated?.prState).toBeNull();
 
-    // clearEnvironmentPr should have been called
-    expect(mockClearEnvironmentPr).toHaveBeenCalledWith("env-1");
+    // The backend clears PR state in the rename write itself; a second clear
+    // from every connected client could wipe a PR found for the new branch.
+    expect(mockClearEnvironmentPr).not.toHaveBeenCalled();
   });
 
   test("environment-renamed event does not clear PR state when branch unchanged", async () => {

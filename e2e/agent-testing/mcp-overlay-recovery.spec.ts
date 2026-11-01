@@ -11,6 +11,7 @@ import type {
 import { environmentStateDirectory } from "../../apps/backend/src/core/environment-state-paths";
 import { writableSourcePath } from "./mcp-apply-live-safety";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
@@ -44,17 +45,7 @@ test("container MCP reset recovers unreadable changes and rehydrates after reloa
   expect(status.flavor).toBe("agent-test");
   // This host diagnostic can cover the app even though the overlay paths only
   // need `docker exec`. Acknowledge it without altering the host's firewall.
-  await page.addLocatorHandler(
-    page.getByRole("dialog", { name: "Docker containers can't reach Orkestrator", exact: true }),
-    async (dialog) => {
-      testInfo.annotations.push({
-        type: "environment",
-        description:
-          "Acknowledged container-to-host connectivity warning; overlays use docker exec.",
-      });
-      await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
-    },
-  );
+  await acknowledgeDockerReachabilityWarning(page, testInfo);
   const login = manifest("dev:login") as { loginUrl: string };
   await loadAppWithDevRetry(page, testInfo, () => page.goto(login.loginUrl));
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {

@@ -21,6 +21,7 @@ import {
   snapshot,
   type Handlers,
 } from "./mcp-test-fixtures";
+import { McpServerEditor } from "./McpServerEditor";
 import { ProviderMcpSettings } from "./ProviderMcpSettings";
 
 afterEach(() => {
@@ -464,4 +465,78 @@ test("a Claude refresh with no staged rewrite needed reports success", async () 
     expect(mockToastSuccess).toHaveBeenCalledWith("Refreshed from the backend user"),
   );
   expect(mockToastWarning).not.toHaveBeenCalled();
+});
+
+test("a source blocked during review disables both saves and preserves the draft for another source", async () => {
+  install({
+    validate_mcp_mutation: () => ({ valid: true, fieldErrors: [], preview }),
+  });
+  const other = {
+    ...projectSource(),
+    writable: true,
+    readOnlyReason: undefined,
+  };
+  const current = snapshot({
+    target: containerTarget,
+    sources: [environmentSource(), other],
+  });
+  const props = {
+    mode: { kind: "add" as const },
+    snapshot: current,
+    onClose: () => {},
+    onReload: () => {},
+  };
+  const mounted = render(<McpServerEditor {...props} />);
+  fireEvent.change(screen.getByLabelText("Name"), {
+    target: { value: "files" },
+  });
+  fireEvent.change(screen.getByLabelText("Executable"), {
+    target: { value: "files" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Review change" }));
+  const save = await screen.findByRole("button", { name: "Save" });
+  expect((save as HTMLButtonElement).disabled).toBe(false);
+  mounted.rerender(
+    <McpServerEditor
+      {...props}
+      snapshot={{
+        ...current,
+        sources: [
+          environmentSource({
+            writable: false,
+            readOnlyReason: "Edited inside the container.",
+            overlay: overlay({ state: "diverged" }),
+          }),
+          other,
+        ],
+      }}
+    />,
+  );
+  expect(screen.getByRole("alert").textContent).toContain(
+    "The selected file is no longer writable",
+  );
+  for (const name of ["Save", "Save and apply"]) {
+    const button = screen.getByRole("button", {
+      name,
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+  }
+  expect(callsOf("mutate_mcp_definition").length).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("files");
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Save to" }), {
+    key: "ArrowDown",
+  });
+  fireEvent.click(await screen.findByRole("option", { name: /^Project \(this worktree\)/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Review change" }));
+  await screen.findByRole("button", { name: "Save" });
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Save",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+  expect(callsOf("validate_mcp_mutation")[1]!.mutation.operation.sourceId).toBe("claude:project");
 });

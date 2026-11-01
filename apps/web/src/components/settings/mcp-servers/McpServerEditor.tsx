@@ -193,6 +193,8 @@ export function McpServerEditor({
         )
       : undefined;
 
+  const reviewSourceBlocked = mode.kind === "add" && !source;
+
   const localErrors = (candidate: McpDraft) => {
     if (mode.kind === "add")
       return localAddErrors(
@@ -480,6 +482,13 @@ export function McpServerEditor({
             </p>
           ) : null}
 
+          {step === "review" && reviewSourceBlocked ? (
+            <p className="text-xs text-amber-300" role="alert">
+              The selected file is no longer writable. Go back and choose where to save, then review
+              the change again.
+            </p>
+          ) : null}
+
           {problem ? (
             <McpErrorNotice problem={problem}>
               {problem.conflict ? (
@@ -498,14 +507,14 @@ export function McpServerEditor({
                 </Button>
                 <Button
                   variant={applyBlocked ? "default" : "outline"}
-                  disabled={busy || !!writeBlocked}
+                  disabled={busy || !!writeBlocked || reviewSourceBlocked}
                   onClick={() => void submit("save")}
                 >
                   Save
                 </Button>
                 {applyBlocked ? null : (
                   <Button
-                    disabled={busy || !!writeBlocked}
+                    disabled={busy || !!writeBlocked || reviewSourceBlocked}
                     onClick={() => void submit("save-and-apply")}
                   >
                     {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}

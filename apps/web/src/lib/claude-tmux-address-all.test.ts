@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "./review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { submitClaudeTmuxAddressAll } from "./claude-tmux-address-all";
 
 describe("submitClaudeTmuxAddressAll", () => {

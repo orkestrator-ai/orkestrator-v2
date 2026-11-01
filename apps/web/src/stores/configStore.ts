@@ -1,80 +1,11 @@
 import { create } from "zustand";
 import { deepEqualJson } from "@/lib/chat/message-identity";
-import type { AppConfig, EnvironmentType, GlobalConfig, RepositoryConfig } from "@/types";
-import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
-import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
-import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
-import { DEFAULT_ALLOWED_DOMAINS } from "@orkestrator/protocol/network-allowlist";
-import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "@orkestrator/protocol/debug-logging";
-import { COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION } from "@orkestrator/protocol/coordinator";
-import {
-  DEFAULT_TERMINAL_HISTORY_ENABLED,
-  DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
-  DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-  DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
-} from "@orkestrator/protocol/terminal-history";
-import { DEFAULT_NOTIFICATION_SOUND_SETTINGS } from "@orkestrator/protocol/notification-sounds";
+import type { AppConfig, GlobalConfig, RepositoryConfig } from "@/types";
+import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-defaults";
 
-const DEFAULT_CONFIG: AppConfig = {
-  schemaVersion: 2,
-  version: "1.0",
-  global: {
-    containerResources: {
-      cpuCores: 2,
-      memoryGb: 4,
-    },
-    envFilePatterns: [".env.local", ".env"],
-    useHostGitHubCredentials: true,
-    useHostClaudeCredentials: true,
-    agentMessaging: {
-      enabled: true,
-      allowCrossProject: false,
-      defaultInjectPolicy: "off",
-      wakePeers: true,
-      autonomousWakeBudget: 16,
-      hourlyWakeLimit: 40,
-      coordinatorStatusWakes: "settled",
-      retentionDays: 14,
-      paused: false,
-    },
-    // The list a new install persists; replaced when the backend config loads.
-    allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
-    enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
-    coordinatorProviderTierDefaultVersion: COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
-    favoriteModels: [],
-    // Mirrors `defaultConfig()` in the backend, which is the source of truth.
-    agentSettings: {
-      defaultAgent: "claude",
-      platforms: {
-        claude: {
-          mode: DEFAULT_CLAUDE_MODE,
-          model: "claude-sonnet-5-5",
-          claudeNativeBackend: "sdk",
-        },
-        codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
-        // No model: unset resolves to OpenCode's connected, allowlisted default.
-        opencode: { mode: "terminal" },
-        grok: { mode: "terminal" },
-      },
-    },
-    codexMaxConcurrentThreads: 5,
-    terminalAppearance: {
-      fontFamily: "FiraCode Nerd Font",
-      fontSize: 14,
-      backgroundColor: TERMINAL_BACKGROUND_COLOR,
-    },
-    terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
-    terminalHistoryEnabled: DEFAULT_TERMINAL_HISTORY_ENABLED,
-    terminalHistoryRetentionMb: DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
-    terminalHistoryGlobalRetentionMb: DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
-    terminalHistoryRetentionDays: DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-    experimentalCodexRawEventLogging: true,
-    debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
-    webClientEnabled: true,
-    notificationSounds: { ...DEFAULT_NOTIFICATION_SOUND_SETTINGS },
-  },
-  repositories: {},
-};
+// The same builder the backend persists on first run, so what renders before
+// the backend's config arrives is exactly what a new install would load.
+const DEFAULT_CONFIG: AppConfig = createDefaultAppConfig();
 
 interface ConfigState {
   // State
@@ -88,7 +19,6 @@ interface ConfigState {
   setConfig: (config: AppConfig) => void;
   updateGlobalConfig: (updates: Partial<GlobalConfig>) => void;
   setRepositoryConfig: (repoId: string, config: RepositoryConfig) => void;
-  setRepositoryLastEnvironmentType: (repoId: string, environmentType: EnvironmentType) => void;
   removeRepositoryConfig: (repoId: string) => void;
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
@@ -142,27 +72,6 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
         },
       },
     })),
-
-  setRepositoryLastEnvironmentType: (repoId, environmentType) =>
-    set((state) => {
-      const existing = state.config.repositories[repoId] ?? {
-        defaultBranch: "main",
-        prBaseBranch: "main",
-      };
-
-      return {
-        config: {
-          ...state.config,
-          repositories: {
-            ...state.config.repositories,
-            [repoId]: {
-              ...existing,
-              lastEnvironmentType: environmentType,
-            },
-          },
-        },
-      };
-    }),
 
   removeRepositoryConfig: (repoId) =>
     set((state) => {

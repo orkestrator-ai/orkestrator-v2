@@ -487,7 +487,6 @@ function cleanupLocalTabResources(
     const store = useNativeComposeStore.getState();
     const key = createSessionKey(envId, tab.id);
     if (permanent) store.clearSession(key);
-    else store.recordSentPrompt(key, undefined);
   }
   if (tab.type === "claude-tmux") {
     const store = useClaudeTmuxStore.getState();
@@ -500,23 +499,19 @@ function tabHandoffIds(tab: TabInfo): string[] {
   return tab.agentHandoffId ? [tab.agentHandoffId] : [];
 }
 
-function deleteUnreferencedAgentHandoffs(
-  envId: string,
-  removedTabs: TabInfo[],
-  remainingRoot: PaneNode,
-): void {
+/**
+ * Drops the cached snapshots of tabs that just left the layout. Only the cache:
+ * the backend prunes the stored record when the layout write reaches it, on the
+ * authoritative tree rather than this client's copy.
+ */
+function forgetRemovedAgentHandoffs(removedTabs: TabInfo[], remainingRoot: PaneNode): void {
   const remainingHandoffIds = new Set(
     getAllLeaves(remainingRoot)
       .flatMap((leaf) => leaf.tabs)
       .flatMap(tabHandoffIds),
   );
-  const removedHandoffIds = new Set(removedTabs.flatMap(tabHandoffIds));
-  for (const handoffId of removedHandoffIds) {
-    if (remainingHandoffIds.has(handoffId)) continue;
-    forgetAgentHandoff(handoffId);
-    backend.deleteAgentHandoff(handoffId, envId).catch((error) => {
-      console.debug("[PaneLayout] Error deleting agent handoff:", error);
-    });
+  for (const handoffId of new Set(removedTabs.flatMap(tabHandoffIds))) {
+    if (!remainingHandoffIds.has(handoffId)) forgetAgentHandoff(handoffId);
   }
 }
 
@@ -537,20 +532,25 @@ function forgetUnreferencedAgentHandoffs(previousRoot: PaneNode, remainingRoot: 
 }
 
 /**
- * Reclaims handoffs the restored layout no longer references.
+ * Reclaims stored handoffs on a backend that does not prune them itself.
  *
- * The per-tab delete is fire-and-forget; if it is dropped (backend restart, lock
- * timeout, app kill) the reference is already gone from the layout, so nothing
- * retries and a sensitive transcript is stranded on disk forever. Hydration is
- * the one moment the full reference set for an environment is authoritative.
+ * Current backends prune on every layout write and sweep periodically, so this
+ * is a no-op against them: one client's copy of a layout cannot race another's.
+ * An older backend only ever pruned when a renderer asked, so without this a
+ * sensitive transcript would stay on disk until the environment was deleted.
  */
 function pruneUnreferencedAgentHandoffs(envId: string, root: PaneNode): void {
   const referenced = getAllLeaves(root)
     .flatMap((leaf) => leaf.tabs)
     .flatMap(tabHandoffIds);
-  backend.pruneAgentHandoffs(envId, referenced).catch((error) => {
-    console.debug("[PaneLayout] Error pruning agent handoffs:", error);
-  });
+  void Promise.resolve()
+    .then(async () => {
+      const capabilities = await backend.getAgentHandoffCapabilities();
+      if (!capabilities.pruning) await backend.pruneAgentHandoffs(envId, referenced);
+    })
+    .catch((error) => {
+      console.debug("[PaneLayout] Error pruning agent handoffs:", error);
+    });
 }
 
 export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
@@ -627,7 +627,6 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     if (!envId) return;
 
     const envState = state.environments.get(envId);
-    useNativeComposeStore.getState().clearSentPromptsForEnvironment(envId);
 
     const terminalPortalStore = useTerminalPortalStore.getState();
     const containerId = envState?.containerId ?? null;
@@ -849,7 +848,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         const newEnvs = new Map(state.environments);
         newEnvs.set(envId, { ...envState, root: newRoot });
         set({ environments: newEnvs });
-        deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
+        forgetRemovedAgentHandoffs([closedTab], newRoot);
       }
       return;
     }
@@ -872,7 +871,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
-    deleteUnreferencedAgentHandoffs(envId, [closedTab], newRoot);
+    forgetRemovedAgentHandoffs([closedTab], newRoot);
   },
 
   setActiveTab: (paneId, tabId, environmentId) => {
@@ -1151,7 +1150,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
-    deleteUnreferencedAgentHandoffs(envId, [tabWithHandoff], newRoot);
+    forgetRemovedAgentHandoffs([tabWithHandoff], newRoot);
   },
 
   retireSetupTabMarker: (tabId, environmentId) => {
@@ -1238,7 +1237,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     environments.set(envId, { ...envState, root: newRoot });
     set({ environments });
     if (shouldDetachConsumedHandoff) {
-      deleteUnreferencedAgentHandoffs(envId, [existingTab], newRoot);
+      forgetRemovedAgentHandoffs([existingTab], newRoot);
     }
   },
 
@@ -1742,7 +1741,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot, activePaneId: newActivePaneId });
     set({ environments: newEnvs });
-    deleteUnreferencedAgentHandoffs(envId, pane.tabs, newRoot);
+    forgetRemovedAgentHandoffs(pane.tabs, newRoot);
   },
 
   setActivePane: (paneId, environmentId) => {

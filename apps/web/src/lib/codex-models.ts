@@ -3,6 +3,8 @@
 // Codex Native is driven by the backend; the renderer only keeps the model
 // catalogue for launchers and settings, hydrated from the backend cache.
 
+import { CODEX_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/codex-model-catalog";
+
 export type CodexReasoningEffort =
   "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
@@ -21,19 +23,8 @@ export interface CodexModel {
   defaultReasoningEffort?: CodexReasoningEffort;
 }
 
-export const CODEX_MODELS: CodexModel[] = [
-  {
-    id: "gpt-5.4",
-    name: "gpt-5.4",
-    description: "Latest frontier agentic coding model.",
-    reasoningEfforts: ["low", "medium", "high", "xhigh"],
-    defaultReasoningEffort: "high",
-  },
-  {
-    id: "gpt-5.4-mini",
-    name: "GPT-5.4-Mini",
-    description: "Smaller frontier agentic coding model.",
-    reasoningEfforts: ["low", "medium", "high", "xhigh"],
-    defaultReasoningEffort: "high",
-  },
-];
+/** Projection of the shared fallback catalogue (`@orkestrator/protocol/codex-model-catalog`). */
+export const CODEX_MODELS: CodexModel[] = CODEX_FALLBACK_MODEL_CATALOG.map((model) => ({
+  ...model,
+  reasoningEfforts: [...model.reasoningEfforts],
+}));

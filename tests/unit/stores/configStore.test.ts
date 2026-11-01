@@ -292,33 +292,6 @@ describe("configStore", () => {
     expect(state.config.repositories["repo-2"]).toEqual(config2);
   });
 
-  test("setRepositoryLastEnvironmentType preserves existing repository config", () => {
-    useConfigStore.getState().setRepositoryConfig("repo-1", {
-      defaultBranch: "develop",
-      prBaseBranch: "release",
-      defaultPortMappings: [{ containerPort: 3000, hostPort: 4000, protocol: "tcp" }],
-    });
-
-    useConfigStore.getState().setRepositoryLastEnvironmentType("repo-1", "local");
-
-    expect(useConfigStore.getState().config.repositories["repo-1"]).toEqual({
-      defaultBranch: "develop",
-      prBaseBranch: "release",
-      lastEnvironmentType: "local",
-      defaultPortMappings: [{ containerPort: 3000, hostPort: 4000, protocol: "tcp" }],
-    });
-  });
-
-  test("setRepositoryLastEnvironmentType creates a default repository config when missing", () => {
-    useConfigStore.getState().setRepositoryLastEnvironmentType("repo-1", "containerized");
-
-    expect(useConfigStore.getState().config.repositories["repo-1"]).toEqual({
-      defaultBranch: "main",
-      prBaseBranch: "main",
-      lastEnvironmentType: "containerized",
-    });
-  });
-
   test("removeRepositoryConfig removes the specified repository", () => {
     const config: RepositoryConfig = {
       defaultBranch: "main",

@@ -23,13 +23,24 @@ const startBuildPipelineMock = mock(async (_input: unknown) =>
     projectId: "project-1",
   }),
 );
+// `startBuildPipelineMock` above answers `launch_build_pipeline`; this one is
+// the raw start an older backend gets instead.
+const legacyStartMock = mock(async (_input: unknown) =>
+  buildPipelineFixture({
+    id: "pipeline-new",
+    environmentId: "env-new",
+    taskId: "task-1",
+    projectId: "project-1",
+  }),
+);
 const getKanbanImageDataMock = mock(async (imageId: string) =>
   imageId === "image-bad" ? Promise.reject(new Error("missing image")) : `data:${imageId}`,
 );
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
-  startBuildPipeline: startBuildPipelineMock,
+  launchBuildPipeline: startBuildPipelineMock,
+  startBuildPipeline: legacyStartMock,
   getKanbanImageData: getKanbanImageDataMock,
 }));
 
@@ -91,7 +102,15 @@ const linearIssue = {
 };
 
 function startInput() {
-  return startBuildPipelineMock.mock.calls[0]?.[0] as Record<string, unknown>;
+  return (legacyStartMock.mock.calls[0]?.[0] ??
+    startBuildPipelineMock.mock.calls[0]?.[0]) as Record<string, unknown>;
+}
+
+/** The next launch answers as a backend that predates `launch_build_pipeline`. */
+function olderBackend() {
+  startBuildPipelineMock.mockImplementationOnce(async () => {
+    throw new Error("Unknown backend command: launch_build_pipeline");
+  });
 }
 
 function buildTabs(environmentId: string) {
@@ -104,6 +123,7 @@ describe("useBuildPipeline", () => {
     cleanup();
     localStorage.clear();
     startBuildPipelineMock.mockClear();
+    legacyStartMock.mockClear();
     getKanbanImageDataMock.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map(),
@@ -384,13 +404,9 @@ describe("useBuildPipeline", () => {
     const input = startInput() as Record<string, any>;
     expect(input.namingPrompt).toBe("ENG-42\n\nLinear title");
     expect(input.taskSnapshot.comments).toEqual([{ text: "Linear issue: ENG-42" }]);
-    expect(input.source).toEqual(
-      expect.objectContaining({
-        issueUrl: undefined,
-        status: "",
-        teamKey: undefined,
-      }),
-    );
+    expect(input.source.issueUrl).toBeUndefined();
+    expect(input.source.status).toBe("");
+    expect(input.source.teamKey).toBeUndefined();
   });
 
   test("preserves supported GitHub dates and both comment attribution forms", async () => {
@@ -470,7 +486,8 @@ describe("useBuildPipeline", () => {
     expect(startInput().steps).toEqual(steps);
   });
 
-  test("the build step's harness outranks an agent override", async () => {
+  test("older backend: the build step's harness outranks an agent override", async () => {
+    olderBackend();
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
@@ -481,7 +498,8 @@ describe("useBuildPipeline", () => {
     expect(startInput().agentType).toBe("codex");
   });
 
-  test("an agent override wins when no step configuration was chosen", async () => {
+  test("older backend: an agent override wins when no step configuration was chosen", async () => {
+    olderBackend();
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
@@ -496,7 +514,8 @@ describe("useBuildPipeline", () => {
     expect(startInput().reviewers).toHaveLength(2);
   });
 
-  test("an agent override wins when the step map pins no build harness", async () => {
+  test("older backend: an agent override wins when the step map pins no build harness", async () => {
+    olderBackend();
     const { result } = renderHook(() => useBuildPipeline());
 
     // The backend accepts a sparse step map, so the launcher's build step can
@@ -515,7 +534,8 @@ describe("useBuildPipeline", () => {
     });
   });
 
-  test("applies the configured Multi Review fan-out and verify model by default", async () => {
+  test("older backend: applies the configured Multi Review fan-out and verify model by default", async () => {
+    olderBackend();
     const baseConfig = useConfigStore.getState().config;
     useConfigStore.setState({
       config: {
@@ -560,7 +580,8 @@ describe("useBuildPipeline", () => {
     });
   });
 
-  test("falls back to the repository's configured agent when neither is given", async () => {
+  test("older backend: falls back to the repository's configured agent when neither is given", async () => {
+    olderBackend();
     const baseConfig = useConfigStore.getState().config;
     useConfigStore.setState({
       config: {
@@ -591,7 +612,8 @@ describe("useBuildPipeline", () => {
     }
   });
 
-  test("a single configured reviewer omits fan-out and review preparation", async () => {
+  test("older backend: a single configured reviewer omits fan-out and review preparation", async () => {
+    olderBackend();
     const baseConfig = useConfigStore.getState().config;
     useConfigStore.setState({
       config: {
@@ -625,7 +647,8 @@ describe("useBuildPipeline", () => {
     });
   });
 
-  test("an explicit review step replaces only the first configured reviewer", async () => {
+  test("older backend: an explicit review step replaces only the first configured reviewer", async () => {
+    olderBackend();
     const baseConfig = useConfigStore.getState().config;
     useConfigStore.setState({
       config: {
@@ -658,7 +681,8 @@ describe("useBuildPipeline", () => {
     ]);
   });
 
-  test("a GitHub issue build without options sends the configured Multi Review defaults", async () => {
+  test("older backend: a GitHub issue build without options sends the configured Multi Review defaults", async () => {
+    olderBackend();
     const baseConfig = useConfigStore.getState().config;
     useConfigStore.setState({
       config: {
@@ -708,7 +732,8 @@ describe("useBuildPipeline", () => {
     });
 
     expect(startInput().steps).toEqual(steps);
-    expect(startInput().agentType).toBe("codex");
+    // The backend resolves the pipeline agent; the launcher's override travels as chosen.
+    expect(startInput().agentType).toBe("claude");
   });
 
   test("the Linear entry point carries per-step launcher configuration", async () => {
@@ -722,7 +747,37 @@ describe("useBuildPipeline", () => {
     });
 
     expect(startInput().steps).toEqual(steps);
-    expect(startInput().agentType).toBe("codex");
+    expect(startInput().agentType).toBeUndefined();
+  });
+
+  test("sends only the launch's explicit choices, leaving defaults to the backend", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild(task, "local");
+    });
+
+    const input = startInput();
+    expect(input).not.toHaveProperty("agentType");
+    expect(input).not.toHaveProperty("steps");
+    expect(input).not.toHaveProperty("reviewers");
+    expect(input).not.toHaveProperty("reviewPreparation");
+    expect(legacyStartMock).not.toHaveBeenCalled();
+  });
+
+  test("a refused launch never falls back to the raw start", async () => {
+    startBuildPipelineMock.mockImplementationOnce(async () => {
+      throw new Error("The selected build environment does not belong to this project");
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    let pipelineId: string | undefined;
+    await act(async () => {
+      pipelineId = await result.current.startBuild(task, "local");
+    });
+
+    expect(pipelineId).toBeUndefined();
+    expect(legacyStartMock).not.toHaveBeenCalled();
   });
 
   test("announces the start and names the reason a start failed", async () => {

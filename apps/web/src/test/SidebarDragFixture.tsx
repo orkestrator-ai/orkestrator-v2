@@ -1,3 +1,7 @@
+import {
+  resolveProjectArrangementIntent,
+  type ProjectArrangementIntent,
+} from "@orkestrator/protocol/project-arrangement";
 import { useState } from "react";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
@@ -154,6 +158,25 @@ function install() {
             ...(id in folders ? { folder: folders[id] } : {}),
           }));
           persist();
+          return projects as T;
+        }
+        case "arrange_projects_by_intent": {
+          // Resolved against current projects, as the backend does. The write
+          // records the result too, which is what the specs assert on.
+          const intent = args!.intent as ProjectArrangementIntent;
+          const ordered = [...projects].sort((left, right) => left.order - right.order);
+          const arrangement = resolveProjectArrangementIntent(intent, ordered);
+          calls.setState((state) => ({
+            writes: [...state.writes, { command, args: { ...args, ...arrangement } }],
+          }));
+          if (arrangement) {
+            projects = arrangement.projectIds.map((id, order) => ({
+              ...projects.find((project) => project.id === id)!,
+              order,
+              ...(id in arrangement.folders ? { folder: arrangement.folders[id] } : {}),
+            }));
+            persist();
+          }
           return projects as T;
         }
         case "update_portal_layout":

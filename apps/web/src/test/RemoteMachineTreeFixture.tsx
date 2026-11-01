@@ -1,3 +1,7 @@
+import {
+  resolveProjectArrangementIntent,
+  type ProjectArrangementIntent,
+} from "@orkestrator/protocol/project-arrangement";
 import { useState } from "react";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
@@ -103,6 +107,21 @@ function install() {
         // The owner applies the arrangement and publishes it at once.
         const arrangement = args.args as { projectIds: string[] };
         state.setState((current) => ({ arrangements: [...current.arrangements, args.args] }));
+        node.projects = node.projects.map((project) => ({
+          ...project,
+          order: arrangement.projectIds.indexOf(project.ref.projectId),
+        }));
+        void portalStore.refresh();
+        return { outcome: "ok", result: {} } as T;
+      }
+      if (command === "invoke_on_node" && args?.command === "arrange_projects_by_intent") {
+        // The owner resolves the gesture against its own order and publishes it.
+        const ordered = [...node.projects]
+          .sort((left, right) => left.order - right.order)
+          .map((project) => ({ id: project.ref.projectId, name: project.name }));
+        const intent = (args.args as { intent: ProjectArrangementIntent }).intent;
+        const arrangement = resolveProjectArrangementIntent(intent, ordered)!;
+        state.setState((current) => ({ arrangements: [...current.arrangements, arrangement] }));
         node.projects = node.projects.map((project) => ({
           ...project,
           order: arrangement.projectIds.indexOf(project.ref.projectId),

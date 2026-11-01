@@ -20,8 +20,8 @@ import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
   createAgentHandoffSnapshot,
   loadAgentHandoff,
-  rememberAgentHandoff,
   resetAgentHandoffCache,
+  type AgentProvider,
 } from "@/lib/agent-handoff";
 import {
   mockToastError,
@@ -3305,14 +3305,36 @@ describe("AgentInfoButton session actions", () => {
     seedOpenCodeProjection();
   }
 
-  /**
-   * Answers a handoff's two consistency reads in order. The panel's own usage
-   * refresh (`refreshUsage`) keeps reading whatever the store holds.
-   */
-  function handoffReads(...reads: Array<NativeAgentSessionProjection | null>) {
-    mockNativeProjectionRead.mockImplementation(async (args) =>
-      args?.refreshUsage ? readStoredProjection() : (reads.shift() ?? null),
-    );
+  /** The backend builds the handoff; this answers `create_agent_handoff` as it would. */
+  function answerHandoffCreation(messageCount = 1) {
+    const created: Array<Record<string, unknown>> = [];
+    const route = nativeInvokeMock.getMockImplementation()!;
+    nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command !== "create_agent_handoff") return route(command, args);
+      created.push(args);
+      const snapshot = createAgentHandoffSnapshot({
+        id: args.handoffId as string,
+        environmentId: args.environmentId as string,
+        sourceProvider: args.sourceAgent as AgentProvider,
+        destinationProvider: args.destinationProvider as AgentProvider,
+        sourceSessionId: args.sourceSessionId as string,
+        messages: Array.from({ length: messageCount }, (_, index) => ({
+          id: `message-${index}`,
+          role: "user" as const,
+          content: "keep going",
+          parts: [{ type: "text" as const, content: "keep going" }],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        })),
+      });
+      return {
+        id: snapshot.id,
+        environmentId: snapshot.environmentId,
+        version: 1,
+        snapshot,
+        createdAt: snapshot.createdAt,
+      };
+    });
+    return created;
   }
 
   function startHandoff(tab: TabInfo, destination: "Claude" | "Codex" | "OpenCode") {
@@ -3325,6 +3347,7 @@ describe("AgentInfoButton session actions", () => {
   function expectNoHandoffCreated() {
     expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
     expect(nativeInvokeMock).not.toHaveBeenCalledWith("save_agent_handoff", expect.anything());
+    expect(nativeInvokeMock).not.toHaveBeenCalledWith("delete_agent_handoff", expect.anything());
     expect(mockToastSuccess).not.toHaveBeenCalled();
   }
 
@@ -3364,58 +3387,38 @@ describe("AgentInfoButton session actions", () => {
     ["claude", "Codex", "codex"],
     ["codex", "OpenCode", "opencode"],
   ] as const)(
-    "persists an authoritative %s handoff from two projection reads",
+    "asks the backend to build a %s handoff and opens its destination tab",
     async (source, destination, destinationProvider) => {
       seedNativeProjection(source, `${source}-session-1`);
-      const saved: Array<Record<string, unknown>> = [];
-      const route = nativeInvokeMock.getMockImplementation()!;
-      nativeInvokeMock.mockImplementation(
-        async (command: string, args: Record<string, unknown>) => {
-          if (command === "save_agent_handoff") {
-            saved.push(args.snapshot as Record<string, unknown>);
-            return {
-              id: args.handoffId,
-              environmentId: args.environmentId,
-              version: args.version,
-              snapshot: args.snapshot,
-              createdAt: "2026-07-27T10:00:00.000Z",
-            };
-          }
-          return route(command, args);
-        },
-      );
+      const created = answerHandoffCreation();
       startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
 
       await waitFor(() =>
         expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
       );
-      expect(
-        nativeInvokeMock.mock.calls.filter(
-          ([command, args]) =>
-            command === "get_native_agent_projection" &&
-            !(args as { refreshUsage?: boolean } | undefined)?.refreshUsage,
-        ),
-      ).toEqual([
-        [
-          "get_native_agent_projection",
-          { environmentId: ENVIRONMENT_ID, agent: source, logicalSessionKey: SESSION_KEY },
-        ],
-        [
-          "get_native_agent_projection",
-          { environmentId: ENVIRONMENT_ID, agent: source, logicalSessionKey: SESSION_KEY },
-        ],
+      expect(created).toEqual([
+        {
+          handoffId: expect.any(String),
+          environmentId: ENVIRONMENT_ID,
+          sourceAgent: source,
+          logicalSessionKey: SESSION_KEY,
+          sourceSessionId: `${source}-session-1`,
+          destinationProvider,
+          ...(created[0]?.sourceModel ? { sourceModel: created[0].sourceModel } : {}),
+          ...(created[0]?.sourceTitle ? { sourceTitle: created[0].sourceTitle } : {}),
+        },
       ]);
-      expect(saved.at(-1)).toMatchObject({
-        sourceProvider: source,
-        destinationProvider,
-        sourceSessionId: `${source}-session-1`,
-      });
+      // The transcript and the change text are the backend's to read: the
+      // renderer no longer reads, measures or saves anything for a transfer.
+      for (const command of ["changes_get_handoff", "save_agent_handoff"]) {
+        expect(nativeInvokeMock).not.toHaveBeenCalledWith(command, expect.anything());
+      }
       const handoffTab = usePaneLayoutStore
         .getState()
         .getAllTabs(ENVIRONMENT_ID)
         .find((tab) => tab.id !== TAB_ID)!;
       expect(handoffTab.type).toBe("agent-native");
-      expect(handoffTab.agentHandoffId).toBeTruthy();
+      expect(handoffTab.agentHandoffId).toBe(created[0]!.handoffId as string);
       expect(handoffTab.nativeAgentData).toMatchObject({
         environmentId: ENVIRONMENT_ID,
         platform: destinationProvider,
@@ -3424,168 +3427,85 @@ describe("AgentInfoButton session actions", () => {
       expect(mockToastSuccess).toHaveBeenCalledWith(
         `Continuing in ${destination} with 1 message and 0 tool calls`,
       );
+      // The tab renders from the snapshot the backend committed, unread again.
+      await expect(loadAgentHandoff(handoffTab.agentHandoffId!)).resolves.toMatchObject({
+        id: handoffTab.agentHandoffId,
+      });
+      expect(nativeInvokeMock).not.toHaveBeenCalledWith("get_agent_handoff", expect.anything());
     },
   );
 
-  test("deletes a persisted handoff if its source session changes before the destination opens", async () => {
+  test("opens no destination when the source tab changes while the backend builds", async () => {
     seedClaudeProjection();
-    let releaseSave!: () => void;
-    let reportSaveStarted!: () => void;
-    const saveStarted = new Promise<void>((resolve) => {
-      reportSaveStarted = resolve;
+    let release!: () => void;
+    let reportStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      reportStarted = resolve;
     });
-    const saveReleased = new Promise<void>((resolve) => {
-      releaseSave = resolve;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    nativeInvokeMock.mockImplementation(async (command: string) => {
-      if (command === "get_native_agent_projection") return readStoredProjection();
-      if (command === "save_agent_handoff") {
-        reportSaveStarted();
-        await saveReleased;
+    answerHandoffCreation();
+    const answer = nativeInvokeMock.getMockImplementation()!;
+    nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "create_agent_handoff") {
+        reportStarted();
+        await released;
       }
-      return command === "delete_agent_handoff" ? true : undefined;
+      return answer(command, args);
     });
 
     const view = render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
     fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
-    await saveStarted;
+    await started;
 
     view.rerender(<AgentInfoButton activeTab={claudeTab({ id: "another-tab" })} />);
-    releaseSave();
+    release();
+    await Bun.sleep(0);
 
-    await waitFor(() =>
-      expect(nativeInvokeMock).toHaveBeenCalledWith(
-        "delete_agent_handoff",
-        expect.objectContaining({ environmentId: ENVIRONMENT_ID }),
-      ),
-    );
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-    expect(mockToastSuccess).not.toHaveBeenCalled();
+    // Nothing references it, so the backend reclaims it after its grace window.
+    expectNoHandoffCreated();
   });
 
-  test("reads and revalidates an authoritative OpenCode handoff before opening Claude", async () => {
-    const projection = openCodeProjection();
-    useNativeAgentProjectionStore.getState().setProjection(OPENCODE_KEY, projection);
-    const saved: Array<Record<string, unknown>> = [];
+  test("shows what the backend refuses and opens nothing", async () => {
+    seedClaudeProjection();
+    const route = nativeInvokeMock.getMockImplementation()!;
     nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
-      if (command === "get_native_agent_projection") return projection;
-      if (command === "save_agent_handoff") {
-        saved.push(args.snapshot as Record<string, unknown>);
-        return {
-          id: args.handoffId,
-          environmentId: args.environmentId,
-          version: args.version,
-          snapshot: args.snapshot,
-          createdAt: "2026-07-27T10:00:00.000Z",
-        };
+      if (command === "create_agent_handoff") {
+        throw new Error("Wait for Claude to finish before continuing in another agent");
       }
-      return undefined;
+      return route(command, args);
     });
-    render(<AgentInfoButton activeTab={openCodeTab()} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
-
-    await waitFor(() =>
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
-    );
-    // Two consistency reads of the backend projection, apart from the panel's
-    // own usage refresh.
-    expect(
-      nativeInvokeMock.mock.calls.filter(
-        ([command, args]) =>
-          command === "get_native_agent_projection" &&
-          !(args as { refreshUsage?: boolean } | undefined)?.refreshUsage,
-      ),
-    ).toHaveLength(2);
-    expect(saved.at(-1)).toMatchObject({
-      sourceProvider: "opencode",
-      destinationProvider: "claude",
-    });
-    const handoffTab = usePaneLayoutStore
-      .getState()
-      .getAllTabs(ENVIRONMENT_ID)
-      .find((tab) => tab.id !== TAB_ID)!;
-    expect(handoffTab.type).toBe("agent-native");
-    expect(handoffTab.nativeAgentData?.environmentId).toBe(ENVIRONMENT_ID);
-  });
-
-  test.each([
-    ["Claude Native", "claude", "Codex"],
-    ["Codex Native", "codex", "OpenCode"],
-  ] as const)(
-    "rejects a %s transfer when its authoritative session is unavailable",
-    async (label, source, destination) => {
-      seedNativeProjection(source, `${source}-session-1`);
-      handoffReads(null);
-      startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
-
-      await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(`${label} session is unavailable`),
-      );
-      expectNoHandoffCreated();
-    },
-  );
-
-  test.each([
-    ["Claude Native", "claude", "Codex"],
-    ["Codex Native", "codex", "OpenCode"],
-  ] as const)("rejects an initially non-idle %s transfer", async (label, source, destination) => {
-    seedNativeProjection(source, `${source}-session-1`);
-    handoffReads(nativeProjection(source, `${source}-session-1`, { turn: { phase: "running" } }));
-    startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
+    startHandoff(claudeTab(), "Codex");
 
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith(
-        `Wait for ${label} to finish before continuing in another agent`,
+        "Wait for Claude to finish before continuing in another agent",
       ),
     );
     expectNoHandoffCreated();
   });
 
-  test.each([
-    ["Claude Native", "claude", "Codex"],
-    ["Codex Native", "codex", "OpenCode"],
-  ] as const)(
-    "rejects a %s transfer when the session disappears after its message read",
-    async (label, source, destination) => {
-      seedNativeProjection(source, `${source}-session-1`);
-      handoffReads(nativeProjection(source, `${source}-session-1`), null);
-      startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
+  test("says why when the backend predates building handoffs", async () => {
+    seedClaudeProjection();
+    const route = nativeInvokeMock.getMockImplementation()!;
+    nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "create_agent_handoff") {
+        throw new Error("Unknown backend command: create_agent_handoff");
+      }
+      return route(command, args);
+    });
+    startHandoff(claudeTab(), "Codex");
 
-      await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(
-          `${label} conversation changed while it was being transferred`,
-        ),
-      );
-      expectNoHandoffCreated();
-    },
-  );
-
-  test.each([
-    ["Claude Native", "claude", "Codex", "a new revision", { revision: 2 }],
-    ["Codex Native", "codex", "OpenCode", "a running turn", { turn: { phase: "running" } }],
-    ["Codex Native", "codex", "OpenCode", "a new generation", { generation: "replacement" }],
-  ] as const)(
-    "rejects a %s transfer whose second read reports %s",
-    async (label, source, destination, _change, after) => {
-      seedNativeProjection(source, `${source}-session-1`);
-      handoffReads(
-        nativeProjection(source, `${source}-session-1`),
-        nativeProjection(source, `${source}-session-1`, after),
-      );
-      startHandoff(source === "claude" ? claudeTab() : codexTab(), destination);
-
-      await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(
-          `${label} conversation changed while it was being transferred`,
-        ),
-      );
-      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-    },
-  );
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Continuing in another agent needs a newer Orkestrator backend. Update this machine and try again.",
+      ),
+    );
+    expectNoHandoffCreated();
+  });
 
   test("does not open a destination tab when the source tab carries no native data", async () => {
     seedCodexProjection();
@@ -3599,117 +3519,15 @@ describe("AgentInfoButton session actions", () => {
     expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
   });
 
-  test("preserves the prior imported transcript when a transferred tab is handed off again", async () => {
-    const prior = createAgentHandoffSnapshot({
-      id: "prior-handoff",
-      environmentId: ENVIRONMENT_ID,
-      sourceProvider: "claude",
-      destinationProvider: "codex",
-      sourceSessionId: "claude-session-1",
-      messages: [
-        {
-          id: "prior-message",
-          role: "user",
-          content: "original request",
-          parts: [{ type: "text", content: "original request" }],
-          createdAt: "2026-07-27T09:00:00.000Z",
-        },
-      ],
-    });
-    rememberAgentHandoff(prior);
-    seedCodexProjection({
-      messages: [
-        {
-          id: "bootstrap",
-          role: "user",
-          content: prior.bootstrapPrompt,
-          parts: [{ type: "text", content: prior.bootstrapPrompt }],
-          createdAt: "2026-07-27T10:00:00.000Z",
-        },
-        {
-          id: "codex-answer",
-          role: "assistant",
-          content: "current provider answer",
-          parts: [{ type: "text", content: "current provider answer" }],
-          createdAt: "2026-07-27T10:01:00.000Z",
-        },
-      ],
-    });
-
-    render(<AgentInfoButton activeTab={codexTab({ agentHandoffId: prior.id })} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "OpenCode" }));
+  test("names the transfer a tab was itself continued from", async () => {
+    seedCodexProjection();
+    const created = answerHandoffCreation();
+    startHandoff(codexTab({ agentHandoffId: "prior-handoff" }), "OpenCode");
 
     await waitFor(() =>
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
     );
-    const handoffTab = usePaneLayoutStore
-      .getState()
-      .getAllTabs(ENVIRONMENT_ID)
-      .find((tab) => tab.id !== TAB_ID)!;
-    const saved = await loadAgentHandoff(handoffTab.agentHandoffId!);
-    expect(saved?.messages.map((message) => message.id)).toEqual(["prior-message", "codex-answer"]);
-  });
-
-  test("rejects a handoff when its referenced prior transfer cannot be loaded", async () => {
-    seedCodexProjection();
-    startHandoff(codexTab({ agentHandoffId: "missing-handoff" }), "OpenCode");
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "The previous conversation transfer could not be loaded",
-      ),
-    );
-    expect(nativeInvokeMock).toHaveBeenCalledWith("get_agent_handoff", {
-      handoffId: "missing-handoff",
-    });
-    expectNoHandoffCreated();
-  });
-
-  test.each([
-    ["environment", "other-env", "codex"],
-    ["destination provider", ENVIRONMENT_ID, "opencode"],
-  ] as const)(
-    "rejects a prior handoff with mismatched %s metadata",
-    async (_field, environmentId, destinationProvider) => {
-      const prior = createAgentHandoffSnapshot({
-        id: `mismatched-${_field.replace(" ", "-")}`,
-        environmentId,
-        sourceProvider: "claude",
-        destinationProvider,
-        sourceSessionId: "claude-session-1",
-        messages: [
-          {
-            id: "prior-message",
-            role: "user",
-            content: "original request",
-            parts: [{ type: "text", content: "original request" }],
-            createdAt: "2026-07-27T09:00:00.000Z",
-          },
-        ],
-      });
-      rememberAgentHandoff(prior);
-      seedCodexProjection();
-      startHandoff(codexTab({ agentHandoffId: prior.id }), "OpenCode");
-
-      await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(
-          "The previous conversation transfer does not belong to this session",
-        ),
-      );
-      expectNoHandoffCreated();
-    },
-  );
-
-  test("rejects a handoff whose authoritative transcript is empty", async () => {
-    seedClaudeProjection({ messages: [] });
-    startHandoff(claudeTab(), "Codex");
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("This conversation has no history to transfer"),
-    );
-    expectNoHandoffCreated();
+    expect(created[0]).toMatchObject({ priorHandoffId: "prior-handoff" });
   });
 
   test("does not allow a handoff while the source turn is running", () => {
@@ -5785,42 +5603,40 @@ describe("AgentInfoButton ACP agents", () => {
     expect(screen.queryByText("Session actions") === null).toBe(true);
   });
 
-  test("transfers an ACP conversation read from its authoritative projection", async () => {
+  test("transfers an ACP conversation through the backend", async () => {
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
     });
-    const projection = acpProjection("cursor", {
-      title: "Cursor investigated the flake",
-      messages: [
-        {
-          id: "cursor-message-1",
-          role: "user",
-          content: "why is this test flaky",
-          parts: [{ type: "text", content: "why is this test flaky" }],
-          createdAt: "2026-08-14T10:00:00.000Z",
-        },
-      ],
-    });
+    const projection = acpProjection("cursor", { title: "Cursor investigated the flake" });
     useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, projection);
-    const saved: Array<Record<string, unknown>> = [];
-    // Every transfer reads the backend
-    // projection twice and refuses unless both reads agree. Both answer the
-    // same snapshot; the revision guard is exercised by its own test below.
+    const created: Array<Record<string, unknown>> = [];
     nativeInvokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
       if (command === "get_native_agent_projection") return projection;
-      if (command === "save_agent_handoff") {
-        saved.push(args.snapshot as Record<string, unknown>);
-        // Handoffs are immutable server-side, so the caller verifies the stored
-        // record matches what it wrote before caching it.
-        return {
-          id: args.handoffId,
-          environmentId: args.environmentId,
-          version: args.version,
-          snapshot: args.snapshot,
-          createdAt: "2026-08-14T10:00:00.000Z",
-        };
-      }
-      return undefined;
+      if (command !== "create_agent_handoff") return undefined;
+      created.push(args);
+      const snapshot = createAgentHandoffSnapshot({
+        id: args.handoffId as string,
+        environmentId: args.environmentId as string,
+        sourceProvider: "cursor",
+        destinationProvider: "claude",
+        sourceSessionId: args.sourceSessionId as string,
+        messages: [
+          {
+            id: "cursor-message-1",
+            role: "user",
+            content: "why is this test flaky",
+            parts: [{ type: "text", content: "why is this test flaky" }],
+            createdAt: "2026-08-14T10:00:00.000Z",
+          },
+        ],
+      });
+      return {
+        id: snapshot.id,
+        environmentId: snapshot.environmentId,
+        version: 1,
+        snapshot,
+        createdAt: snapshot.createdAt,
+      };
     });
 
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
@@ -5831,8 +5647,8 @@ describe("AgentInfoButton ACP agents", () => {
     await waitFor(() =>
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(2),
     );
-    expect(saved.at(-1)).toMatchObject({
-      sourceProvider: "cursor",
+    expect(created.at(-1)).toMatchObject({
+      sourceAgent: "cursor",
       destinationProvider: "claude",
       sourceTitle: "Cursor investigated the flake",
     });
@@ -5843,48 +5659,6 @@ describe("AgentInfoButton ACP agents", () => {
     expect(destinationTab.nativeAgentData?.platform).toBe("claude");
     expect(destinationTab.displayTitle).toBe("Claude · from Cursor");
     expect(destinationTab.agentHandoffId).toBeTruthy();
-  });
-
-  test("refuses an ACP transfer when the conversation moves between reads", async () => {
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "cursor", "grok", "opencode"],
-    });
-    const projection = acpProjection("grok", {
-      messages: [
-        {
-          id: "grok-message-1",
-          role: "user",
-          content: "keep going",
-          parts: [{ type: "text", content: "keep going" }],
-          createdAt: "2026-08-14T10:00:00.000Z",
-        },
-      ],
-    });
-    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, projection);
-    let reads = 0;
-    nativeInvokeMock.mockImplementation(
-      async (command: string, args?: { refreshUsage?: boolean }) => {
-        if (command !== "get_native_agent_projection") return undefined;
-        // Opening the information panel performs an independent detailed-usage
-        // refresh. It is not one of the handoff's two consistency reads.
-        if (args?.refreshUsage) return projection;
-        reads += 1;
-        // The second read lands after the agent advanced a revision.
-        return reads === 1 ? projection : { ...projection, revision: projection.revision + 1 };
-      },
-    );
-
-    render(<AgentInfoButton activeTab={acpTab("grok")} />);
-    open();
-    fireEvent.click(screen.getByRole("button", { name: /Continue in/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "Grok Build conversation changed while it was being transferred",
-      ),
-    );
-    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
   });
 
   test("reports an agent that volunteers no runtime facts as unknown", () => {

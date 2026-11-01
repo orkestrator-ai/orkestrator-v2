@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { allPublicPages as allPages } from "./control-mcp-pages.js";
 import { randomUUID } from "node:crypto";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -464,7 +465,7 @@ export async function operatorLaunchEnvironment(caller: ControlMcpCaller, input:
   return legacyResult({
     environmentId:
       result.environment?.id ?? result.environmentId ?? envelope.receipt?.resources.environmentId,
-    tabId: "startup-agent",
+    tabId: STARTUP_AGENT_TAB_ID,
     sessionId: result.sessionId,
     runId: result.runId,
     status: "accepted",

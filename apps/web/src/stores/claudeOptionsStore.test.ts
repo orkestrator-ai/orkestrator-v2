@@ -5,7 +5,6 @@ describe("claudeOptionsStore", () => {
   beforeEach(() => {
     useClaudeOptionsStore.setState({
       options: {},
-      pendingNativeLaunches: {},
     });
   });
 
@@ -28,7 +27,7 @@ describe("claudeOptionsStore", () => {
     expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
   });
 
-  test("round-trips one-shot model and reasoning effort on both launch shapes", () => {
+  test("round-trips one-shot model and reasoning effort", () => {
     const store = useClaudeOptionsStore.getState();
     store.setOptions("env-1", {
       launchAgent: true,
@@ -38,21 +37,6 @@ describe("claudeOptionsStore", () => {
       reasoningEffort: "high",
     });
     expect(useClaudeOptionsStore.getState().getOptions("env-1")).toEqual(
-      expect.objectContaining({ model: "gpt-5.6-sol", reasoningEffort: "high" }),
-    );
-
-    // The pending-launch record is what `TerminalContainer` turns into a tab, so
-    // it has to carry the options too.
-    store.setPendingNativeLaunch("env-1", {
-      containerId: null,
-      environmentId: "env-1",
-      targetPaneId: "default",
-      agentType: "codex",
-      launchMode: "native",
-      model: "gpt-5.6-sol",
-      reasoningEffort: "high",
-    });
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-1")).toEqual(
       expect.objectContaining({ model: "gpt-5.6-sol", reasoningEffort: "high" }),
     );
 
@@ -87,69 +71,6 @@ describe("claudeOptionsStore", () => {
           base64Data: "QUJD",
         },
       ],
-    });
-  });
-
-  test("stores and clears pending native launches per environment", () => {
-    useClaudeOptionsStore.getState().setPendingNativeLaunch("env-1", {
-      containerId: "container-1",
-      environmentId: "env-1",
-      initialPrompt: "Continue after setup",
-      targetPaneId: "default",
-      agentType: "codex",
-    });
-
-    useClaudeOptionsStore.getState().setPendingNativeLaunch("env-2", {
-      containerId: null,
-      environmentId: "env-2",
-      targetPaneId: "default",
-      agentType: "claude",
-      claudeNativeBackend: "tmux",
-    });
-
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-1")).toEqual({
-      containerId: "container-1",
-      environmentId: "env-1",
-      initialPrompt: "Continue after setup",
-      targetPaneId: "default",
-      agentType: "codex",
-    });
-
-    useClaudeOptionsStore.getState().clearPendingNativeLaunch("env-1");
-
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-1")).toBeUndefined();
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-2")).toEqual({
-      containerId: null,
-      environmentId: "env-2",
-      targetPaneId: "default",
-      agentType: "claude",
-      claudeNativeBackend: "tmux",
-    });
-  });
-
-  test("clearing transient options does not clear a pending native launch", () => {
-    useClaudeOptionsStore.getState().setOptions("env-1", {
-      launchAgent: true,
-      agentType: "opencode",
-      initialPrompt: "Start after setup",
-    });
-    useClaudeOptionsStore.getState().setPendingNativeLaunch("env-1", {
-      containerId: "container-1",
-      environmentId: "env-1",
-      initialPrompt: "Start after setup",
-      targetPaneId: "default",
-      agentType: "opencode",
-    });
-
-    useClaudeOptionsStore.getState().clearOptions("env-1");
-
-    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-1")).toEqual({
-      containerId: "container-1",
-      environmentId: "env-1",
-      initialPrompt: "Start after setup",
-      targetPaneId: "default",
-      agentType: "opencode",
     });
   });
 });

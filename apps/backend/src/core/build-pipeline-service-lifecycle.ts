@@ -32,6 +32,7 @@ import {
   sectionsFromTicketText,
   TICKET_SECTION_LIMITS,
 } from "@orkestrator/protocol/ticket-sections";
+import { backfillBuildPipelineReviewReports } from "./storage-record-upgrades.js";
 import type { KanbanTask } from "./storage-shared-core.js";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type { Environment } from "./models.js";
@@ -629,8 +630,10 @@ export class BuildPipelineLifecycle {
         skipped += 1;
         continue;
       }
+      // A localStorage snapshot can predate `testResults.notRun`, the one old
+      // shape the database migration upgrades for stored records.
       const normalized = {
-        ...snapshot,
+        ...(backfillBuildPipelineReviewReports(snapshot) as Record<string, unknown>),
         controller: "backend",
         backendRevision: 0,
       };

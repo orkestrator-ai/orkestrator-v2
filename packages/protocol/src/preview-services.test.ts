@@ -8,9 +8,12 @@ import {
   parsePreviewPort,
   parsePreviewUrlIntent,
   PREVIEW_LIMITS,
+  previewError,
   previewErrorFromUnknown,
   previewFailure,
+  previewServiceReadiness,
   redactPreviewPath,
+  resolvePreviewEntryService,
   resolvePreviewLimits,
   stablePreviewJson,
   validatePreviewServiceInput,
@@ -25,6 +28,7 @@ import {
   FIXTURE_BACKEND_INSTANCE_ID,
   FIXTURE_SERVICE_ID,
   fixturePreviewCapabilities,
+  fixturePreviewService,
   fixturePreviewSnapshot,
 } from "./testing/preview-contract-fixtures.js";
 
@@ -327,5 +331,58 @@ describe("browser tab targets", () => {
       url: "orkestrator-preview://service/x/y/z",
     });
     expect(parsePreviewTabTarget("orkestrator-preview://intent/env/rm-rf?url=x").kind).toBe("url");
+  });
+});
+
+describe("entry service resolution", () => {
+  const service = (serviceId: string, definition: Record<string, unknown> = {}) =>
+    fixturePreviewService({
+      definition: { serviceId, entry: false, enabled: true, ...definition },
+    });
+
+  test("prefers the enabled entry service", () => {
+    const services = [service("a"), service("b", { entry: true }), service("c")];
+    expect(resolvePreviewEntryService(services)?.definition.serviceId).toBe("b");
+  });
+
+  test("a disabled entry falls back to a sole service, and several without an entry give none", () => {
+    expect(
+      resolvePreviewEntryService([service("a", { entry: true, enabled: false })])?.definition
+        .serviceId,
+    ).toBe("a");
+    expect(
+      resolvePreviewEntryService([service("a", { entry: true, enabled: false }), service("b")]),
+    ).toBeNull();
+    expect(resolvePreviewEntryService([])).toBeNull();
+  });
+
+  test("only counts the named environment's services", () => {
+    const services = [service("a"), service("b", { environmentId: "other" })];
+    expect(resolvePreviewEntryService(services)).toBeNull();
+    expect(
+      resolvePreviewEntryService(services, services[0]!.definition.environmentId)?.definition
+        .serviceId,
+    ).toBe("a");
+  });
+});
+
+describe("service readiness labels", () => {
+  test("map definition and endpoint states to one label and tone", () => {
+    const ready = fixturePreviewService();
+    ready.endpoint.readiness.http = { state: "ok", statusClass: "2xx" };
+    expect(previewServiceReadiness(ready)).toEqual({ label: "ready · 2xx", tone: "ready" });
+    expect(
+      previewServiceReadiness(fixturePreviewService({ definition: { enabled: false } })),
+    ).toEqual({ label: "disabled", tone: "problem" });
+    const stopped = fixturePreviewService();
+    stopped.endpoint = {
+      ...stopped.endpoint,
+      state: "unavailable",
+      failure: previewError("environment-stopped", { retryable: true }),
+    };
+    expect(previewServiceReadiness(stopped)).toEqual({ label: "stopped", tone: "problem" });
+    const revoked = fixturePreviewService();
+    revoked.endpoint = { ...revoked.endpoint, state: "revoked" };
+    expect(previewServiceReadiness(revoked)).toEqual({ label: "reconnecting", tone: "starting" });
   });
 });

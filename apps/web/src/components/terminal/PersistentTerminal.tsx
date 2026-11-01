@@ -56,7 +56,7 @@ import {
 import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeBar";
 import { TerminalWarningBanner } from "@/components/terminal/TerminalWarningBanner";
 import { TerminalDisconnectedBanner } from "@/components/terminal/TerminalDisconnectedBanner";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
 import { isKeyboardShortcutsShortcut } from "@/lib/keyboard-shortcuts";
 import { MobileTerminalKeyBar, resolveTerminalKeyData } from "./MobileTerminalKeyBar";

@@ -5,11 +5,7 @@ import { createSessionKey } from "@/lib/utils";
 import { beginTabInitialPromptFallback } from "./tab-initial-prompt";
 import type { TabInfo } from "@/types/paneLayout";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import {
-  buildTabInitialPromptQueueMessage,
-  handTabInitialPromptToBackend,
-  tabInitialPromptRequestId,
-} from "./tab-initial-prompt";
+import { handTabInitialPromptToBackend, tabInitialPromptRequestId } from "./tab-initial-prompt";
 
 const invokeMock = invoke as unknown as Mock<(command: string, args?: unknown) => Promise<unknown>>;
 const originalInvoke = invokeMock.getMockImplementation()!;
@@ -45,43 +41,8 @@ afterEach(() => {
 });
 
 describe("tab initial prompt hand-off", () => {
-  test("uses the request id the mounted tab sends under", () => {
-    expect(tabInitialPromptRequestId("env-1", "design-agent-1")).toBe(
-      "initial-prompt:env-1:design-agent-1",
-    );
-  });
-
-  test("builds each provider's queue shape", () => {
-    const options = {
-      model: "m",
-      reasoningEffort: "high",
-      fastMode: true,
-      attachments: [{ type: "image" as const, path: ".orkestrator/a.png", filename: "a.png" }],
-    };
-    expect(buildTabInitialPromptQueueMessage("claude", "id-1", "Brief", options)).toEqual({
-      id: "id-1",
-      requestId: "id-1",
-      text: "Brief",
-      attachments: [{ type: "image", path: ".orkestrator/a.png", filename: "a.png" }],
-      model: "m",
-      effort: "high",
-      planModeEnabled: false,
-      fastModeEnabled: true,
-    });
-    expect(buildTabInitialPromptQueueMessage("codex", "id-1", "Brief", options)).toMatchObject({
-      reasoningEffort: "high",
-      mode: "build",
-      fastMode: true,
-    });
-    expect(buildTabInitialPromptQueueMessage("opencode", "id-1", "Brief", options)).toMatchObject({
-      variant: "high",
-      mode: "build",
-    });
-    expect(
-      buildTabInitialPromptQueueMessage("claude", "id-1", "Brief", { mode: "plan" }),
-    ).toMatchObject({ planModeEnabled: true, attachments: [] });
-  });
-
+  // The request id and queue shapes are covered by the protocol contract's own
+  // tests (`packages/protocol/src/tab-initial-prompt.test.ts`).
   test("queues durably under the tab's session, then drops the renderer fallback", async () => {
     seedTab({
       id: "tab-a",

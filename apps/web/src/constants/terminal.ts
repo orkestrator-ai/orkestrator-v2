@@ -1,4 +1,9 @@
 import type { TerminalAppearance } from "@/types";
+import {
+  DEFAULT_TERMINAL_BACKGROUND_COLOR,
+  DEFAULT_TERMINAL_FONT_FAMILY,
+  DEFAULT_TERMINAL_FONT_SIZE,
+} from "@orkestrator/protocol/app-config-defaults";
 
 /**
  * Username for root terminal sessions inside Docker containers.
@@ -8,12 +13,12 @@ import type { TerminalAppearance } from "@/types";
 export const ROOT_TERMINAL_USER = "orkroot";
 
 /** Default terminal appearance values - shared across all components */
-export const TERMINAL_BACKGROUND_COLOR = "#0e1014";
+export const TERMINAL_BACKGROUND_COLOR = DEFAULT_TERMINAL_BACKGROUND_COLOR;
 
 /** Default terminal appearance values - shared across all components */
 export const DEFAULT_TERMINAL_APPEARANCE: TerminalAppearance = {
-  fontFamily: "FiraCode Nerd Font",
-  fontSize: 14,
+  fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
+  fontSize: DEFAULT_TERMINAL_FONT_SIZE,
   backgroundColor: TERMINAL_BACKGROUND_COLOR,
 };
 
@@ -29,7 +34,7 @@ export function resolveTerminalBackgroundColor(backgroundColor: string | undefin
 }
 
 /** Default terminal scrollback buffer (lines) */
-export const DEFAULT_TERMINAL_SCROLLBACK = 1000;
+export { DEFAULT_TERMINAL_SCROLLBACK } from "@orkestrator/protocol/app-config-defaults";
 
 /** Available font options for terminal settings */
 export const FONT_OPTIONS = [

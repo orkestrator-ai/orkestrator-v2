@@ -28,7 +28,9 @@ export async function activeRunFor(
             record.action === "session.prompt" ||
             record.action === "session.command" ||
             record.action === "pr.create" ||
-            record.action === "pr.resolve") &&
+            record.action === "pr.resolve" ||
+            record.action === "pr.push" ||
+            record.action === "review.start") &&
           record.resources.sessionId === session.sessionId &&
           !!record.resources.dispatchRequestId &&
           dispatched.includes(record.resources.dispatchRequestId),

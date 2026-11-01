@@ -272,16 +272,13 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       settings,
       normalizeAgentMessagingSettings(current.global.agentMessaging),
     );
-    return storage.updateGlobalConfig({ ...current.global, agentMessaging: normalized });
+    return storage.patchGlobalConfig({ agentMessaging: normalized });
   });
   register("set_agent_messaging_paused", async ({ paused }, { storage }) => {
     if (typeof paused !== "boolean") throw new Error("paused must be a boolean");
     const current = await storage.loadConfig();
     const settings = normalizeAgentMessagingSettings(current.global.agentMessaging);
-    await storage.updateGlobalConfig({
-      ...current.global,
-      agentMessaging: { ...settings, paused },
-    });
+    await storage.patchGlobalConfig({ agentMessaging: { ...settings, paused } });
     return { paused };
   });
 }

@@ -1,3 +1,4 @@
+import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
 import * as backend from "@/lib/backend";
 import {
   BUILD_PIPELINE_VERSION,
@@ -6,7 +7,6 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
-import { parseStructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 export { isBuildPipeline } from "@/stores/buildPipelineStore";
 
@@ -46,24 +46,14 @@ function setBoundedGeneration(
   }
 }
 
-function normalizeStructuredReview(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const pipeline = value as Record<string, unknown>;
-  if (pipeline.structuredReview === undefined) return value;
-  try {
-    return {
-      ...pipeline,
-      structuredReview: parseStructuredReviewReport(pipeline.structuredReview, {
-        allowLegacyTestResults: true,
-      }),
-    };
-  } catch {
-    return value;
-  }
-}
-
 function toSnapshot(persisted: PersistedBuildPipeline<BuildPipeline>): BuildPipeline | null {
-  const snapshot = normalizeStructuredReview(persisted.snapshot);
+  // Older remote backends cannot run the storage migration. Backfill only the
+  // historical field here; strict pipeline validation still rejects bad reports.
+  const raw = persisted.snapshot;
+  const snapshot: unknown =
+    raw && typeof raw === "object" && raw.structuredReview
+      ? { ...raw, structuredReview: backfillLegacyTestResults(raw.structuredReview) }
+      : raw;
   if (
     persisted.version !== BUILD_PIPELINE_VERSION ||
     !Number.isSafeInteger(persisted.revision) ||

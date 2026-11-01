@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { useFileDirtyStore } from "./fileDirtyStore";
+import { fileSaveBaseline, useFileDirtyStore } from "./fileDirtyStore";
 
 beforeEach(() => {
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -57,5 +57,36 @@ describe("fileDirtyStore", () => {
 
     expect(useFileDirtyStore.getState().dirtyFiles.has("closed")).toBe(false);
     expect(store.getContent("kept")).toBe("other edit");
+  });
+
+  test("observing disk keeps the buffer's baseline until a save or fresh load", () => {
+    const store = useFileDirtyStore.getState();
+    store.setOriginalContent("baseline", "loaded");
+    store.setContent("baseline", "edited");
+    store.observeDiskContent("baseline", "moved on disk");
+
+    const entry = () => useFileDirtyStore.getState().dirtyFiles.get("baseline")!;
+    expect(entry().originalContent).toBe("moved on disk");
+    expect(fileSaveBaseline(entry())).toBe("loaded");
+
+    // Disk coming back to the baseline needs no separate record.
+    store.observeDiskContent("baseline", "loaded");
+    expect(entry().baseContent).toBeUndefined();
+
+    store.observeDiskContent("baseline", "moved again");
+    store.markSaved("baseline", "edited");
+    expect(fileSaveBaseline(entry())).toBe("edited");
+
+    store.observeDiskContent("baseline", "moved after save");
+    store.setOriginalContent("baseline", "loaded fresh");
+    expect(fileSaveBaseline(entry())).toBe("loaded fresh");
+  });
+
+  test("a restored draft checks against what it was edited from", () => {
+    const store = useFileDirtyStore.getState();
+    store.hydrateDraft("draft", "edited", "disk now", "edited from");
+    expect(fileSaveBaseline(useFileDirtyStore.getState().dirtyFiles.get("draft")!)).toBe(
+      "edited from",
+    );
   });
 });

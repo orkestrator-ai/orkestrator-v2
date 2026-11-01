@@ -108,7 +108,7 @@ pick its tip so only this branch's own work shows. Commands:
 | Bridge adapters | `bridges/<bridge>/src/**/change-evidence.ts` (Claude, Codex, Cursor, Pi, ACP/Grok) |
 | OpenCode adapter | `apps/backend/src/core/opencode-change-evidence.ts` |
 | Public CLI | `changes.view` / `changes.history` actions (`public-api/actions-changes.ts`), `orkestrator changes view|history` |
-| Web clients | `apps/web/src/lib/changes/` (subscriptions, labels, handoff), `apps/web/src/hooks/useChangeProjection.ts`, `apps/web/src/stores/changeProjectionStore.ts`, `apps/web/src/components/changes/` |
+| Web clients | `apps/web/src/lib/changes/` (subscriptions, labels), `apps/web/src/hooks/useChangeProjection.ts`, `apps/web/src/stores/changeProjectionStore.ts`, `apps/web/src/components/changes/` |
 
 Backend services (one composition root, `service.ts`):
 
@@ -274,7 +274,7 @@ platform and provider imports.
 | Claude tmux transcript | the backend reading the JSONL stamps each `tool_use`'s path and payload sides on the line (`toolDiffs`, `tmux-transcript-tool-diffs.ts`); the store never interprets tool inputs, and counts come from `changes_measure_legacy_payload` |
 | Diff tab | historical `DiffIdentity` or explicit live current-file target; backend hunks, split/unified, whitespace view (`DiffViewerTab.tsx`) |
 | Restore | preview/apply dialog gated by the capability and the projection's `restore` action (`RestoreChangesButton.tsx`) |
-| Agent handoff | `changes_get_handoff` text per tool call; unmeasured calls say "changes: not measured" |
+| Agent handoff | The backend writes the same serializer's text per tool call when it builds the handoff (`agentHandoffChangeSummaries`, `agent-handoffs.ts`); unmeasured calls say "changes: not measured" |
 | CLI | `orkestrator changes view <environment>` / `changes history <session>` |
 
 Older clients that still read the legacy `toolDiff` shape receive

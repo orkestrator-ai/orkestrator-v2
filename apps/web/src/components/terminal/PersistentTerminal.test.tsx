@@ -414,7 +414,7 @@ import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSess
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import { ROOT_TERMINAL_USER } from "@/constants/terminal";
 

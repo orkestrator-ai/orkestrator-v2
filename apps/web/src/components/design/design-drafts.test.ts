@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { projectedFrames, emptyProjection, type DesignIntent } from "@/stores/designStore";
-import { DRAFT_LIMITS, isPersistable, loadDrafts, saveDrafts } from "./design-drafts";
+import { clearLegacyDrafts, readLegacyDrafts } from "./design-drafts";
 
 function intent(id: string, extra: Partial<DesignIntent> = {}): DesignIntent {
   return {
@@ -19,50 +19,69 @@ function intent(id: string, extra: Partial<DesignIntent> = {}): DesignIntent {
   };
 }
 
-describe("design draft persistence", () => {
+describe("legacy draft migration", () => {
   beforeEach(() => window.localStorage.clear());
+  const KEY = "orkestrator.design.intents.v1";
 
-  test("persists unsettled and unreviewed intents; drops verified successes", () => {
-    expect(isPersistable(intent("a"))).toBe(true);
-    expect(isPersistable(intent("b", { phase: "prepared", token: "op_x" }))).toBe(true);
-    expect(isPersistable(intent("c", { phase: "settled", outcome: "rejected" }))).toBe(true);
-    expect(isPersistable(intent("d", { phase: "settled", outcome: "committed" }))).toBe(false);
-    expect(isPersistable(intent("e", { phase: "settled", outcome: "canceled" }))).toBe(false);
-  });
-
-  test("restored intents are marked restored and never lose their token", () => {
-    expect(saveDrafts("key", [intent("a", { phase: "prepared", token: "op_1" })])).toBe(true);
-    const restored = loadDrafts("key");
-    expect(restored).toHaveLength(1);
-    expect(restored[0]).toMatchObject({ id: "a", token: "op_1", restored: true });
-  });
-
-  test("bounds protect accepted work while tokenless drafts are best effort", () => {
-    const many = Array.from({ length: DRAFT_LIMITS.perCanvas + 1 }, (_, index) =>
-      intent(`i${index}`),
+  test("reads every window's entries of one canvas and leaves other canvases alone", () => {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        "b|env|canvas": [intent("shared")],
+        "b|env|canvas|window-a": [intent("a", { token: "op_a" })],
+        "b|env|canvas|window-b": [intent("b")],
+        "b|env|canvas-2|window-a": [intent("other")],
+      }),
     );
-    expect(saveDrafts("key", many.slice(0, 2))).toBe(true);
-    expect(saveDrafts("key", many)).toBe(true);
-    expect(loadDrafts("key")).toHaveLength(8);
-    expect(saveDrafts("key", [])).toBe(true);
-    for (let canvas = 0; canvas < 4; canvas++)
-      expect(saveDrafts(`c${canvas}`, many.slice(0, 8))).toBe(true);
-    expect(saveDrafts("c-over", [intent("x")])).toBe(true);
-    expect(loadDrafts("c-over")).toHaveLength(0);
-    const accepted = many.map((item) => ({ ...item, token: `op_${item.id}` }));
-    expect(saveDrafts("accepted", accepted)).toBe(false);
+    const legacy = readLegacyDrafts("b|env|canvas");
+    expect(legacy.keys.sort()).toEqual([
+      "b|env|canvas",
+      "b|env|canvas|window-a",
+      "b|env|canvas|window-b",
+    ]);
+    expect((legacy.intents as DesignIntent[]).map((item) => item.id).sort()).toEqual([
+      "a",
+      "b",
+      "shared",
+    ]);
+    clearLegacyDrafts(legacy.keys);
+    expect(readLegacyDrafts("b|env|canvas").intents).toEqual([]);
+    expect(readLegacyDrafts("b|env|canvas-2").intents).toHaveLength(1);
+    clearLegacyDrafts(["b|env|canvas-2|window-a"]);
+    expect(window.localStorage.getItem(KEY)).toBeNull();
   });
 
-  test("separate window keys retain their own accepted tokens", () => {
-    expect(saveDrafts("canvas|window-a", [intent("a", { token: "op_a" })])).toBe(true);
-    expect(saveDrafts("canvas|window-b", [intent("b", { token: "op_b" })])).toBe(true);
-    expect(loadDrafts("canvas|window-a").map((item) => item.id)).toEqual(["a"]);
-    expect(loadDrafts("canvas|window-b").map((item) => item.id)).toEqual(["b"]);
+  test("partial imports preserve capacity-skipped drafts and unresolved tokens", () => {
+    const draft = intent("draft");
+    const unresolved = intent("unresolved", {
+      phase: "admitted",
+      token: "op_held",
+      outcome: "unknown",
+    });
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({
+        "b|env|canvas|a": [intent("imported"), draft],
+        "b|env|canvas|b": [unresolved],
+        "b|env|other": [intent("other")],
+      }),
+    );
+    clearLegacyDrafts(readLegacyDrafts("b|env|canvas").keys, [intent("imported")]);
+    expect(readLegacyDrafts("b|env|canvas").intents).toEqual([draft, unresolved]);
+    expect(readLegacyDrafts("b|env|other").intents).toEqual([intent("other")]);
+  });
+
+  test("acknowledging an import preserves entries saved while it was in flight", () => {
+    window.localStorage.setItem(KEY, JSON.stringify({ key: [intent("old")] }));
+    const legacy = readLegacyDrafts("key");
+    window.localStorage.setItem(KEY, JSON.stringify({ key: [intent("old"), intent("new")] }));
+    clearLegacyDrafts(legacy.keys, legacy.intents);
+    expect(readLegacyDrafts("key").intents).toEqual([intent("new")]);
   });
 
   test("corrupt storage reads as empty", () => {
-    window.localStorage.setItem("orkestrator.design.intents.v1", "{not-json");
-    expect(loadDrafts("key")).toEqual([]);
+    window.localStorage.setItem(KEY, "{not-json");
+    expect(readLegacyDrafts("key")).toEqual({ keys: [], intents: [] });
   });
 });
 

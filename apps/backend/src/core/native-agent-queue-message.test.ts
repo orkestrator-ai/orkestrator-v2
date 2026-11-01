@@ -1,5 +1,7 @@
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { describe, expect, test } from "bun:test";
+import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
+import { buildTabInitialPromptQueueMessage } from "@orkestrator/protocol/tab-initial-prompt";
 import {
   queueBoolean,
   queueDispatchMode,
@@ -78,3 +80,30 @@ test.each(AGENT_PLATFORMS)(
     ).toBeUndefined();
   },
 );
+
+describe("tab initial-prompt contract", () => {
+  // The renderer and the backend's startup launch build opening prompts with
+  // the protocol's builder; these readers must recover every choice from it.
+  test.each([...BUILD_PIPELINE_AGENTS])("%s reads back the builder's choices", (agent) => {
+    for (const mode of ["build", "plan"] as const) {
+      for (const fastMode of [true, false]) {
+        const message = buildTabInitialPromptQueueMessage(agent, "id-1", "Brief", {
+          model: "m",
+          reasoningEffort: "high",
+          fastMode,
+          mode,
+        });
+        expect(queueString(message, "requestId")).toBe("id-1");
+        expect(queueString(message, "model")).toBe("m");
+        expect(queueReasoningEffort(message)).toBe("high");
+        expect(queueFastMode(agent, message)).toBe(fastMode);
+        expect(queueExecutionMode(agent, message)).toBe(mode);
+        expect(queueDispatchMode(agent, message)).toBe(mode);
+      }
+    }
+    // An unset mode is Build, as a composer send is.
+    expect(queueExecutionMode(agent, buildTabInitialPromptQueueMessage(agent, "id", "x"))).toBe(
+      "build",
+    );
+  });
+});

@@ -146,14 +146,43 @@ a code (`conflict`, `invalid-input`, `invalid-content`,
 
 Preconditions are exact. Selector edits carry the frame revision **and**
 structure identity observed when the element was inspected; a structural
-change conflicts even if the selector still matches. The client rebases a
-precondition only across its own acknowledged commits (a proven chain); any
+change conflicts even if the selector still matches. The backend rebases a
+queued edit's precondition only across the same client's own committed receipts
+(`rebaseOverOwnCommits`, a proven chain that must end at the current state); any
 other writer's change surfaces as a conflict. Batches (≤16 same-canvas
 operations, ≤512 KiB) validate everything, commit once, advance each changed
 frame once and create one history entry.
 
 Legacy one-shot actions (`design_action`, MCP tools) are prepare+execute
 adapters with their original response shapes.
+
+### Intent queue
+
+Every document has a backend-owned queue of the edits users have not finished
+with (`design/intents.ts`): unsent drafts, edits in flight and failures awaiting
+review. It is one small file per canvas beside the pending file, written only
+under the canvas lane, removed with the canvas, and bounded (32 per canvas, 8
+per client, 2 MiB; successes are kept two minutes so a client that lost a
+response can still learn them). `design_capabilities` reports `intents: true`.
+
+- `design_intent_run` records the intent (rebased), prepares it, executes it and
+  records the outcome, so an edit is durable before anything is prepared. A
+  repeat never prepares again: an intent that has a token is only reconciled.
+- `design_intents` lists the queue and reconciles from backend state: a
+  `preparing` intent adopts the token its correlation id was prepared under, or
+  becomes a draft once no live call can own it; a token of unknown outcome takes
+  its status. This is the recovery path after a lost response or a restart, for
+  any client. Listing never executes anything.
+- `design_intent_save` saves unsent drafts; it never overwrites an edit that was
+  sent or that another client owns.
+- `design_intent_resume` takes an edit over from any client: an unresolved token
+  keeps being reconciled (a prepared one is executed, Resume being the consent it
+  waited for); an edit that never ran becomes a draft under a new correlation id.
+- `design_intent_discard` cancels a token that has not started and removes the
+  edit for every client.
+- `design_intent_import` takes a browser's legacy localStorage entries once.
+
+Each queue change publishes a content-free `status` hint flagged `intents`.
 
 ### Concurrency and bounds
 
@@ -289,11 +318,18 @@ per backend/environment/canvas (`apps/web/src/stores/designStore.ts`).
 Activation subscribes before reading; a 3 s cursor check repairs lost hints
 while visible; with no visible view, polling stops but queued and admitted
 work continues. `refresh()` resolves only after a sync cycle that started
-after the call. Tokens are persisted with their drafts
-(`design-drafts.ts`, ≤8 per canvas, 32 per client, 2 MiB) before execution;
-restored drafts never run without **Resume draft**. A lost execute response is
-reconciled by status, never by preparing again. A failure pauses later edits
-in the same lane only. The footer separates **Saved in workspace**, pending
+after the call. The window schedules the edits it makes itself (per-lane order,
+optimistic previews, gesture collapse, prepare backoff) and sends each through
+`design_intent_run`; drafts still waiting are saved to the backend shortly after
+they are made. The backend's queue is authoritative for everything else
+(`design-intent-merge.ts`, read on every sync cycle): an intent this window did
+not create is `restored` and never runs without **Resume draft**, whichever
+client made it; another window's edit it is still working on stays out of the
+review list. A lost response is reconciled from the queue, never by preparing
+again. A failure pauses later edits in the same lane only. A backend without the
+queue still runs edits through prepare and execute, rebasing over this window's
+own commits, but nothing survives a reload there. `design-drafts.ts` only migrates
+the old per-browser store once. The footer separates **Saved in workspace**, pending
 edits, **Needs review** and **Exported revision N to path**.
 
 The canvas renders only frames near the viewport with at most eight live
@@ -453,7 +489,7 @@ credentials or prompts.
 
 ## Tests
 
-Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
+Backend: the `core/design/` `service`, `operations`, `intents`, `history`, `lifecycle`,
 `sync`, `records`, `exports`, `export-writer`, `renderer`, `mcp`,
 `cross-process`, `host-file` and `session-links` tests,
 `commands-registry-teardown` (a closing tab records its session on design
@@ -463,7 +499,7 @@ plus one real-Chromium renderer test). Backend tests reach a storage bound
 (change log, history entries) by lowering it with `withDesignLimit`, not with
 hundreds of fsynced commits, and check the shipped bound in memory. A test
 that counts hints after an HTML edit first holds the background validation
-with `renderer.block`. Web: controller, drafts, viewport,
+with `renderer.block`. Web: controller, intent merge, drafts, viewport,
 canvas tab, inspector, layer tree, history/export, entry, agent context and
 `design-session-links` (link states, resume tab ids, concurrent resume)
 tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and

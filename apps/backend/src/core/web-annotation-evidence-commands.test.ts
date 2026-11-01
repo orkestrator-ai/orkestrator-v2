@@ -12,6 +12,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands.js";
+import {
+  fileContentSha256,
+  isFileWriteConflict,
+} from "@orkestrator/protocol/file-write-precondition";
 import { makePng } from "./web-annotation-test-support.js";
 
 let root: string;
@@ -23,6 +27,10 @@ const FAKE_DOCKER = `#!/bin/sh
 printf '%s %s %s %s\\n' "$1" "$2" "$3" "$4" >> "$FAKE_DOCKER_LOG"
 [ "$1" = exec ] || exit 40
 shift 3
+if [ "$1" = bash ]; then
+  shift 2
+  exec node -e 'const {spawnSync}=require("node:child_process"); const result=spawnSync("bash", ["-c", process.argv[1].replaceAll("/workspace",process.env.FAKE_WORKSPACE)], {stdio:"inherit"}); process.exit(result.status ?? 1);' "$1"
+fi
 [ "$1" = node ] || exit 41
 shift
 [ "$1" = -e ] || exit 42
@@ -87,6 +95,36 @@ describe("container evidence commands", () => {
     const log = await readFile(path.join(root, "docker.log"), "utf8");
     expect(log).toContain("exec -i container-1 node");
     expect(log).not.toContain("base64 -d");
+  });
+
+  test("conditional ordinary writes map exit 75 to conflict without recreating a deleted parent", async () => {
+    const commands = createCommandRegistry();
+    const target = path.join(workspace, "src", "nested", "file.txt");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, "loaded");
+    const write = (expected?: { sha256: string }) =>
+      commands.get("write_container_file")!(
+        {
+          containerId: "container-1",
+          filePath: "src/nested/file.txt",
+          base64Data: Buffer.from("edited").toString("base64"),
+          expected,
+        },
+        context,
+      );
+    await write({ sha256: fileContentSha256("loaded") });
+    expect(await readFile(target, "utf8")).toBe("edited");
+    await rm(path.join(workspace, "src"), { recursive: true });
+    let conflict: unknown;
+    try {
+      await write({ sha256: fileContentSha256("edited") });
+    } catch (error) {
+      conflict = error;
+    }
+    expect(isFileWriteConflict(conflict)).toBe(true);
+    expect(existsSync(path.join(workspace, "src"))).toBe(false);
+    await write();
+    expect(await readFile(target, "utf8")).toBe("edited");
   });
 
   test("a symlinked evidence directory cannot redirect the write", async () => {

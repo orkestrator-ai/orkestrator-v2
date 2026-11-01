@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CODEX_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/codex-model-catalog";
 import { REASONING_DESCRIPTIONS, REASONING_LABELS } from "./models-cache.js";
 
 // Importing index.ts starts the Hono app; guard against binding a real server.
@@ -7,11 +8,17 @@ process.env.CODEX_BRIDGE_NO_SERVER = "1";
 const { __testing } = await import("./index.js");
 const FALLBACK_MODELS = __testing.FALLBACK_MODELS;
 
-// The fallback catalog is hand-maintained: each model duplicates its effort
-// ladder across `reasoningEfforts` and `reasoningOptions`, and each option's
-// label/description must come from the shared REASONING_* tables. These tests
-// guard against the two easy ways that duplication drifts.
+// The fallback catalog is projected from the shared protocol catalogue: each
+// model carries its effort ladder in both `reasoningEfforts` and
+// `reasoningOptions`, and each option's label/description must come from the
+// shared REASONING_* tables. These tests guard the projection.
 describe("codex-bridge FALLBACK_MODELS", () => {
+  test("projects the shared protocol catalogue, in order", () => {
+    const summary = (models: readonly { id: string; name: string }[]) =>
+      models.map(({ id, name }) => ({ id, name }));
+    expect(summary(FALLBACK_MODELS)).toEqual(summary(CODEX_FALLBACK_MODEL_CATALOG));
+  });
+
   test("exposes at least one model with a stable id/name", () => {
     expect(FALLBACK_MODELS.length).toBeGreaterThan(0);
     for (const model of FALLBACK_MODELS) {

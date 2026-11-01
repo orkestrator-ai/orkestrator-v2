@@ -96,7 +96,7 @@ const renameEnvironmentFromPromptMock = mock(async () => {});
 
 const openInBrowserMock = mock(async () => {});
 
-const updateGlobalConfigMock = mock(async (global: any) => ({
+const patchGlobalConfigMock = mock(async (global: any) => ({
   version: "1.0",
   global,
   repositories: {},
@@ -379,7 +379,7 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: writeLocalFileMock,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   openInBrowser: openInBrowserMock,
-  updateGlobalConfig: updateGlobalConfigMock,
+  patchGlobalConfig: patchGlobalConfigMock,
   getClaudeModelCatalog: getClaudeModelCatalogMock,
   getComposeDraft: getComposeDraftMock,
   saveComposeDraft: saveComposeDraftMock,
@@ -680,8 +680,8 @@ describe("ClaudeTmuxChatTab", () => {
     renameEnvironmentFromPromptMock.mockImplementation(async () => {});
     openInBrowserMock.mockReset();
     openInBrowserMock.mockImplementation(async () => {});
-    updateGlobalConfigMock.mockReset();
-    updateGlobalConfigMock.mockImplementation(async (global: any) => ({
+    patchGlobalConfigMock.mockReset();
+    patchGlobalConfigMock.mockImplementation(async (global: any) => ({
       version: "1.0",
       global,
       repositories: {},
@@ -2246,7 +2246,7 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => {
       expect(switchModelMock).toHaveBeenCalledWith("tab-1", "default", "env-1");
     });
-    expect(updateGlobalConfigMock).not.toHaveBeenCalled();
+    expect(patchGlobalConfigMock).not.toHaveBeenCalled();
     expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
       "claude-sonnet-4-6",
     );
@@ -2541,7 +2541,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
-    expect(updateGlobalConfigMock).not.toHaveBeenCalled();
+    expect(patchGlobalConfigMock).not.toHaveBeenCalled();
     expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
       "claude-sonnet-4-6",
     );
@@ -2582,7 +2582,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
-    expect(updateGlobalConfigMock).not.toHaveBeenCalled();
+    expect(patchGlobalConfigMock).not.toHaveBeenCalled();
     expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
       "claude-sonnet-4-6",
     );

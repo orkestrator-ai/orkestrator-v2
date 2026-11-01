@@ -2,8 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { openBackendDatabase } from "./storage-stores.js";
+import { StorageDatabase } from "./storage-database.js";
+import { openBackendDatabase, STORAGE_MIGRATIONS, storeLayout } from "./storage-stores.js";
 import {
+  BUILD_PIPELINE_REVIEW_REPORT_UPGRADE_VERSION,
+  backfillBuildPipelineReviewReports,
+  upgradeBuildPipelineRecords,
   promptQueueMessageFingerprint,
   restoreLegacyPromptQueueClaims,
   upgradeCoordinatorStore,
@@ -208,5 +212,78 @@ describe("record shape upgrades", () => {
       workspaces: { p1: { codexBridgePort: 1 } },
     });
     reopened.close();
+  });
+});
+
+describe("build pipeline review report backfill", () => {
+  const legacyReport = { testResults: { total: 3, passed: 2, failed: 0, failures: [] } };
+  const currentReport = {
+    testResults: { total: 3, passed: 2, failed: 0, notRun: 1, failures: [] },
+  };
+  const legacySnapshot = {
+    id: "pipeline-1",
+    structuredReview: legacyReport,
+    sessions: [
+      { phase: "review", reviewReport: legacyReport },
+      { phase: "address" },
+      "not-a-record",
+    ],
+    roundReviewReports: [{ iteration: 0, sessionKey: "s", report: legacyReport }],
+  };
+
+  test("fills every report a snapshot carries", () => {
+    expect(backfillBuildPipelineReviewReports(legacySnapshot)).toEqual({
+      id: "pipeline-1",
+      structuredReview: currentReport,
+      sessions: [
+        { phase: "review", reviewReport: currentReport },
+        { phase: "address" },
+        "not-a-record",
+      ],
+      roundReviewReports: [{ iteration: 0, sessionKey: "s", report: currentReport }],
+    });
+  });
+
+  test("leaves a current snapshot and an unreadable value untouched", () => {
+    const current = {
+      id: "pipeline-1",
+      structuredReview: currentReport,
+      sessions: [{ phase: "review", reviewReport: currentReport }],
+      roundReviewReports: [{ iteration: 0, sessionKey: "s", report: currentReport }],
+    };
+    expect(backfillBuildPipelineReviewReports(current)).toBe(current);
+    expect(backfillBuildPipelineReviewReports("garbage")).toBe("garbage");
+    const stored = { a: { id: "a", snapshot: current }, b: "malformed" };
+    expect(upgradeBuildPipelineRecords(stored)).toBe(stored);
+  });
+
+  test("an upgraded database has its stored reports backfilled once", async () => {
+    const directory = await dataDir();
+    const before = new StorageDatabase(directory, {
+      layoutFor: storeLayout,
+      migrations: STORAGE_MIGRATIONS.filter(
+        (migration) => migration.version < BUILD_PIPELINE_REVIEW_REPORT_UPGRADE_VERSION,
+      ),
+    });
+    before.writeStore("build-pipelines", {
+      "pipeline-1": { id: "pipeline-1", revision: 4, snapshot: legacySnapshot },
+    });
+    before.close();
+
+    const upgraded = openBackendDatabase(directory);
+    try {
+      expect(upgraded.schemaVersion()).toBeGreaterThanOrEqual(
+        BUILD_PIPELINE_REVIEW_REPORT_UPGRADE_VERSION,
+      );
+      const stored = upgraded.readStore("build-pipelines")!.value as Record<
+        string,
+        { revision: number; snapshot: { structuredReview: unknown } }
+      >;
+      // The revision is kept: this is the same record, not a new write to it.
+      expect(stored["pipeline-1"]!.revision).toBe(4);
+      expect(stored["pipeline-1"]!.snapshot.structuredReview).toEqual(currentReport);
+    } finally {
+      upgraded.close();
+    }
   });
 });

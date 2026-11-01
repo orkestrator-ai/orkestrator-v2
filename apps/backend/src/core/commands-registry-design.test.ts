@@ -432,6 +432,51 @@ describe("design command registry", () => {
     ).toMatchObject({ ok: false, failure: { code: "not-found" } });
   });
 
+  test("the intent queue is shared by every client through typed commands", async () => {
+    expect(await value("design_capabilities", {})).toMatchObject({ intents: true });
+    const canvas = await design.create("local", "Intents", undefined, "user");
+    const descriptor = {
+      canvasId: canvas.id,
+      input: { kind: "create_frame", frame },
+      preconditions: { canvasRevision: 1 },
+      clientId: "tab-a",
+      correlationId: "i-1",
+    };
+    const draft = { id: "i-1", lane: "canvas", label: "Add frame", createdAt: 1, descriptor };
+    expect(
+      await value("design_intent_save", {
+        environmentId: "local",
+        canvasId: canvas.id,
+        clientId: "tab-a",
+        drafts: [draft],
+      }),
+    ).toEqual({ saved: ["i-1"] });
+    // Another client lists the unsent draft.
+    expect(
+      await value<{ intents: unknown[] }>("design_intents", {
+        environmentId: "local",
+        canvasId: canvas.id,
+      }),
+    ).toMatchObject({ intents: [{ id: "i-1", phase: "draft", clientId: "tab-a" }] });
+    const run = await value<{ status: DesignOperationStatus }>("design_intent_run", {
+      environmentId: "local",
+      canvasId: canvas.id,
+      intent: draft,
+      waitMs: 5000,
+    });
+    expect(run.status.state).toBe("committed");
+    expect(
+      await value("design_intent_discard", {
+        environmentId: "local",
+        canvasId: canvas.id,
+        intentId: "i-1",
+      }),
+    ).toEqual({ discarded: true, mayStillFinish: false });
+    expect(
+      await typed("design_intents", { environmentId: "container", canvasId: canvas.id }),
+    ).toMatchObject({ ok: false, failure: { code: "not-found" } });
+  });
+
   test("design_open_file authorizes environments, validates paths and returns typed results", async () => {
     const canvas = await design.create("local", "Open file", undefined, "user");
     await value("design_export_save", {

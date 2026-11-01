@@ -45,7 +45,7 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   hideMachineOutputText,
   showOnlyFinalStructuredReviewMessage,
-} from "@/lib/structured-review-messages";
+} from "@orkestrator/protocol/structured-review-transcript";
 import * as backend from "@/lib/backend";
 import { REVIEWER_DATA_SAVING_BACKOFF_MS } from "@/lib/data-saving-policy";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";

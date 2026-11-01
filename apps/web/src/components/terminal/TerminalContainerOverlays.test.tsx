@@ -446,7 +446,6 @@ describe("TerminalContainer", () => {
 
     useClaudeOptionsStore.setState({
       options: {},
-      pendingNativeLaunches: {},
     });
   });
 

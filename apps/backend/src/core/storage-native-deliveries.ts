@@ -16,6 +16,7 @@ import type {
   PersistedNativeAgentPendingDispatch,
   PersistedNativeAgentPendingSteer,
   PersistedNativeAgentSession,
+  PersistedNativeAgentSignInResend,
   PersistedPromptQueue,
 } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
@@ -27,9 +28,12 @@ import {
   MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES,
   PendingNativeAgentDispatchError,
   PendingNativeAgentSteerError,
+  deliveredAgentHandoffIds,
   isNonBlankString,
   isRecord,
   nowIso,
+  sessionSignInResend,
+  withDeliveredAgentHandoffId,
 } from "./storage-shared.js";
 
 /**
@@ -50,6 +54,20 @@ export function restoreSteeredQueueItem(
     afterId === undefined ? -1 : others.findIndex((item) => isRecord(item) && item.id === afterId);
   return [...others.slice(0, after + 1), restored, ...others.slice(after + 1)];
 }
+
+/**
+ * What a dispatch callback reports. Nothing (or `dispatched: true`) means the
+ * provider accepted it; a delivered handoff is journaled with the request.
+ */
+export type NativeAgentDispatchOutcome =
+  | void
+  | { dispatched: true; deliveredAgentHandoffId?: string; mode?: "plan" | "build" }
+  | {
+      dispatched: false;
+      mailRefused?: true;
+      /** Recorded under the session's persisted notice field; `null` clears it. */
+      incompleteTurnNotice?: IncompleteTurnNotice | null;
+    };
 
 /**
  * The per-session delivery journals: a prompt dispatch or steer is recorded
@@ -87,17 +105,7 @@ export class NativeAgentDeliveries {
   async dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<
-      | void
-      | {
-          dispatched: false;
-          mailRefused?: true;
-          /** Recorded under the session's persisted notice field; `null` clears it. */
-          incompleteTurnNotice?: IncompleteTurnNotice | null;
-        }
-      /** The provider accepted the turn in this mode. */
-      | { dispatched: true; mode: "plan" | "build" | undefined }
-    >,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<NativeAgentDispatchOutcome>,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
     /** Runs after deduplication/conflict checks, under the delivery lease, before journaling. */
     admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
@@ -245,13 +253,27 @@ export class NativeAgentDeliveries {
         this.repos.nativeAgentSessions.announceNativeAgentRecord(updated);
         return { session: updated, dispatched: false };
       }
+      const deliveredHandoffId = outcome?.dispatched ? outcome.deliveredAgentHandoffId : undefined;
       const updated: PersistedNativeAgentSession = {
         ...session,
-        // Any successfully accepted prompt supersedes a prior recovery notice.
+        // Any successfully accepted prompt supersedes a prior recovery notice,
+        // and a prompt held for re-sending after a sign-in: the conversation
+        // has moved on, so sending it later would answer a stale question.
         openCodeIncompleteTurnNotice: undefined,
+        signInResend: undefined,
         pendingDispatch: undefined,
         retiredDispatch: undefined,
         dispatchedRequestIds: [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
+        // Atomic with the journal entry above: this one write makes the request
+        // dispatched and its handoff delivered, so a crash cannot split them.
+        ...(deliveredHandoffId
+          ? {
+              deliveredAgentHandoffIds: withDeliveredAgentHandoffId(
+                deliveredAgentHandoffIds(session),
+                deliveredHandoffId,
+              ),
+            }
+          : {}),
         lastDispatchedTurn: outcome?.dispatched
           ? { requestId, ...(outcome.mode ? { mode: outcome.mode } : {}) }
           : undefined,
@@ -260,8 +282,84 @@ export class NativeAgentDeliveries {
       sessions[key] = updated;
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
+      const supersededResend = sessionSignInResend(session);
+      if (supersededResend) await this.scrubSignInResendBackups(key, supersededResend.requestId);
       this.repos.nativeAgentSessions.announceNativeAgentRecord(updated);
       return { session: updated, dispatched: true };
+    });
+  }
+
+  /** The held prompt's text must not outlive the record in a rotated backup. */
+  private async scrubSignInResendBackups(key: string, requestId: string): Promise<void> {
+    await this.context.transformSensitiveJsonBackups(
+      this.files.nativeAgentSessionsFile(),
+      (records) => {
+        const record = records[key];
+        if (
+          isRecord(record) &&
+          isRecord(record.signInResend) &&
+          record.signInResend.requestId === requestId
+        ) {
+          const next = { ...record };
+          delete next.signInResend;
+          return { ...records, [key]: next };
+        }
+        return records;
+      },
+    );
+  }
+
+  /**
+   * Hold a prompt Claude refused for want of a login. Only while that refusal
+   * is still the session's last word: a later dispatch or a replaced provider
+   * session means the conversation moved on, and it is not recorded.
+   */
+  async recordNativeAgentSignInResend(
+    key: string,
+    resend: PersistedNativeAgentSignInResend,
+  ): Promise<boolean> {
+    return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
+      const { sessions } = loaded;
+      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (
+        !session ||
+        session.providerSessionId !== resend.providerSessionId ||
+        session.dispatchedRequestIds?.at(-1) !== resend.requestId ||
+        session.pendingDispatch ||
+        session.pendingSteer
+      ) {
+        return false;
+      }
+      sessions[key] = { ...session, signInResend: resend, updatedAt: nowIso() };
+      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!);
+      return true;
+    });
+  }
+
+  /**
+   * Remove and return a held prompt, under the session's lease. Exactly one
+   * caller gets it, so one refusal is re-sent at most once however many
+   * sign-ins or clients race.
+   */
+  async takeNativeAgentSignInResend(
+    key: string,
+    requestId: string,
+  ): Promise<PersistedNativeAgentSignInResend | null> {
+    return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
+      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
+      const { sessions } = loaded;
+      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      const held = session ? sessionSignInResend(session) : undefined;
+      if (!session || held?.requestId !== requestId) return null;
+      sessions[key] = { ...session, signInResend: undefined, updatedAt: nowIso() };
+      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+      await this.scrubSignInResendBackups(key, requestId);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!);
+      return held;
     });
   }
 
@@ -290,6 +388,7 @@ export class NativeAgentDeliveries {
       if (!session || session.pendingDispatch?.requestId !== requestId) {
         return false;
       }
+      const carriedHandoffId: unknown = session.pendingDispatch.agentHandoffId;
       sessions[key] = {
         ...session,
         lastDispatchedTurn: {
@@ -301,6 +400,15 @@ export class NativeAgentDeliveries {
         dispatchedRequestIds: session.dispatchedRequestIds?.includes(requestId)
           ? session.dispatchedRequestIds
           : [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
+        // The parked request reached the provider, so its handoff did too.
+        ...(typeof carriedHandoffId === "string" && carriedHandoffId
+          ? {
+              deliveredAgentHandoffIds: withDeliveredAgentHandoffId(
+                deliveredAgentHandoffIds(session),
+                carriedHandoffId,
+              ),
+            }
+          : {}),
         updatedAt: nowIso(),
       };
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);

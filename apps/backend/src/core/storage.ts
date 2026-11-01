@@ -6,12 +6,14 @@ export type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 export type { GraphRunsStorage } from "./storage-graph-runs.js";
 export type { GraphEffectsStorage } from "./storage-graph-effects.js";
 export type { GraphDescribeStorage } from "./storage-graph-describe.js";
+export type { ClientStateStorage } from "./storage-client-state.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
+import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
 import {
@@ -22,12 +24,15 @@ import {
 import { StorageContext } from "./storage-context.js";
 import { StorageRepositories } from "./storage-repositories.js";
 import type { AgentAccountsStorage } from "./storage-agent-accounts.js";
+import type { AgentHandoffsStorage } from "./storage-drafts.js";
+import type { NativeAgentDispatchOutcome } from "./storage-native-deliveries.js";
 import type { CoordinatorsStorage } from "./storage-coordinators.js";
 import type { BugReportsStorage } from "./storage-bug-reports.js";
 import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphEffectsStorage } from "./storage-graph-effects.js";
 import type { GraphDescribeStorage } from "./storage-graph-describe.js";
+import type { ClientStateStorage } from "./storage-client-state.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -50,6 +55,7 @@ import type {
   IncompleteTurnNotice,
   NativeAgentJobCompletionAction,
   NativeAgentSessionBackendTitle,
+  PersistedNativeAgentSignInResend,
 } from "./models.js";
 import type { NativeAgentDisplayTailDeletion } from "./native-agent-display-tail-store.js";
 import type { NativeAgentDisplayTail } from "./native-agent-display-tails.js";
@@ -58,6 +64,7 @@ import type { PendingAgentMailInject } from "./storage-agent-mail-injects.js";
 import type { AgentMailSender } from "./storage-agent-mail-store.js";
 import type { AgentMailRepository } from "./storage-agent-mail.js";
 import type { ConfigRepository } from "./storage-config.js";
+import type { ProjectsRepository } from "./storage-projects.js";
 import type {
   AgentActivitySource,
   AgentActivityState,
@@ -143,11 +150,13 @@ export class StorageService {
   readonly nodes: NodesStorage;
   readonly previewServices: PreviewServicesStorage;
   readonly agentAccounts: AgentAccountsStorage;
+  readonly agentHandoffs: AgentHandoffsStorage;
   readonly bugReports: BugReportsStorage;
   readonly graphTemplates: GraphTemplatesStorage;
   readonly graphRuns: GraphRunsStorage;
   readonly graphEffects: GraphEffectsStorage;
   readonly graphDescribe: GraphDescribeStorage;
+  readonly clientState: ClientStateStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -158,11 +167,13 @@ export class StorageService {
     this.nodes = this.repos.nodes;
     this.previewServices = this.repos.previewServices;
     this.agentAccounts = this.repos.agentAccounts;
+    this.agentHandoffs = this.repos.drafts;
     this.bugReports = this.repos.bugReports;
     this.graphTemplates = this.repos.graphTemplates;
     this.graphRuns = this.repos.graphRuns;
     this.graphEffects = this.repos.graphEffects;
     this.graphDescribe = this.repos.graphDescribe;
+    this.clientState = this.repos.clientState;
   }
 
   async init(): Promise<void> {
@@ -199,6 +210,13 @@ export class StorageService {
   /** Subscribe backend services without replacing the gateway's broadcast sink. */
   addResourceChangeListener(listener: ResourceChangeListener): () => void {
     return this.context.changes.addResourceChangeListener(listener);
+  }
+
+  /** Observe the attention edges environment writes raise (the "agent stopped" signal). */
+  addEnvironmentAttentionListener(
+    listener: (event: EnvironmentAttentionEvent) => void,
+  ): () => void {
+    return this.context.changes.addEnvironmentAttentionListener(listener);
   }
 
   /** Publish a provider-authoritative projection after its cache is committed. */
@@ -349,6 +367,12 @@ export class StorageService {
     folders: Readonly<Record<string, string | null>> = {},
   ): Promise<Project[]> {
     return this.repos.projects.arrangeProjects(projectIds, folders);
+  }
+
+  arrangeProjectsByIntent(
+    ...args: Parameters<ProjectsRepository["arrangeProjectsByIntent"]>
+  ): Promise<Project[]> {
+    return this.repos.projects.arrangeProjectsByIntent(...args);
   }
 
   loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
@@ -634,6 +658,18 @@ export class StorageService {
     return this.repos.config.updateGlobalConfig(globalConfig, options);
   }
 
+  patchGlobalConfig(
+    ...args: Parameters<ConfigRepository["patchGlobalConfig"]>
+  ): Promise<AppConfig> {
+    return this.repos.config.patchGlobalConfig(...args);
+  }
+
+  patchRepositorySettings(
+    ...args: Parameters<ConfigRepository["patchRepositorySettings"]>
+  ): Promise<AppConfig> {
+    return this.repos.config.patchRepositorySettings(...args);
+  }
+
   updateWorktreeLocations(
     locations: import("@orkestrator/protocol/disk-usage").WorktreeLocationSettings,
   ): Promise<AppConfig> {
@@ -733,6 +769,10 @@ export class StorageService {
     selectionIntent?: PaneLayoutSelectionIntent,
   ): Promise<PersistedPaneLayout> {
     return this.repos.sessions.applyPaneLayoutIntent(environmentId, base, desired, selectionIntent);
+  }
+
+  markTabAgentHandoffConsumed(environmentId: string, tabId: string, handoffId: string) {
+    return this.repos.sessions.markTabAgentHandoffConsumed(environmentId, tabId, handoffId);
   }
 
   ensureBuildPipelineTab(input: {
@@ -1051,17 +1091,7 @@ export class StorageService {
   dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (session: PersistedNativeAgentSession) => Promise<
-      | void
-      | {
-          dispatched: false;
-          mailRefused?: true;
-          /** Recorded under the session's persisted notice field; `null` clears it. */
-          incompleteTurnNotice?: IncompleteTurnNotice | null;
-        }
-      /** The provider accepted the turn in this mode. */
-      | { dispatched: true; mode: "plan" | "build" | undefined }
-    >,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<NativeAgentDispatchOutcome>,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
     admit?: (session: PersistedNativeAgentSession) => Promise<NativeAgentControlUpdate | undefined>,
   ): Promise<{
@@ -1079,6 +1109,14 @@ export class StorageService {
 
   confirmNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
     return this.repos.nativeAgentDeliveries.confirmNativeAgentDispatch(key, requestId);
+  }
+
+  recordNativeAgentSignInResend(key: string, resend: PersistedNativeAgentSignInResend) {
+    return this.repos.nativeAgentDeliveries.recordNativeAgentSignInResend(key, resend);
+  }
+
+  takeNativeAgentSignInResend(key: string, requestId: string) {
+    return this.repos.nativeAgentDeliveries.takeNativeAgentSignInResend(key, requestId);
   }
 
   clearPendingNativeAgentDispatch(

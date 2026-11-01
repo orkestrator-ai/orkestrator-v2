@@ -8,6 +8,10 @@
  * annotations and coordinator scope live in `control-mcp-server.ts`; public
  * envelopes, receipts and error codes live in `public-api/`.
  */
+import {
+  STARTUP_AGENT_TAB_ID,
+  tabInitialPromptRequestId,
+} from "@orkestrator/protocol/tab-initial-prompt";
 import { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
@@ -544,5 +548,5 @@ export function launchEnvironmentCreateInput(input: LaunchEnvironmentInput): Jso
 
 /** Stable request ID of the startup agent's single initial prompt. */
 export function initialPromptRequestId(environmentId: string): string {
-  return `initial-prompt:${environmentId}:startup-agent`;
+  return tabInitialPromptRequestId(environmentId, STARTUP_AGENT_TAB_ID);
 }

@@ -265,6 +265,8 @@ async function confirmationFor(
       return `This starts an agent that commits, pushes and opens a pull request from ${await environmentName(caller, input.environmentId)}${typeof input.targetBranch === "string" ? ` against ${short(input.targetBranch, 100)}` : ""}.`;
     case "pr.resolve":
       return `This starts an agent that merges ${typeof input.targetBranch === "string" ? short(input.targetBranch, 100) : "the target branch"} into ${await environmentName(caller, input.environmentId)}, resolves conflicts and pushes.`;
+    case "pr.push":
+      return `This starts an agent that commits every change in ${await environmentName(caller, input.environmentId)} and pushes it to its pull request.`;
     case "pr.merge":
       return mergeDescription(caller, input, mergeView);
     case "pr.close":

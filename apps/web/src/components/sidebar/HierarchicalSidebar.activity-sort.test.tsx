@@ -12,6 +12,7 @@ import {
 import { useBoundMachineView } from "@/components/federation/useMachineViews";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { activityRows } from "@/lib/federation/aggregate";
+import { displayedActivityResolver } from "@/lib/environment-activity-sort";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
@@ -124,7 +125,9 @@ test("sidebar menu orders cross-machine activity and preserves the order under a
       <HierarchicalSidebar />
     </FederationProvider>,
   );
-  await waitFor(() => expect(displayedNames()).toEqual(["c", "b", "a"]));
+  // Priority recency is lastActivityAt (a 12:00, b 11:00, c 10:00); c's later
+  // snapshot time is a refresh, not activity.
+  await waitFor(() => expect(displayedNames()).toEqual(["a", "b", "c"]));
 
   for (const [label, order, expected] of [
     ["Newest first", "newest", ["a", "b", "c"]],
@@ -198,7 +201,7 @@ test("an active build sorts with working environments even when persisted activi
       [idle, build, working],
       [project],
       "priority",
-      new Set(["build"]),
+      displayedActivityResolver({}, {}, new Set(["build"])),
     ).map((row) => row.id),
   ).toEqual(["build", "working", "idle"]);
 });

@@ -229,11 +229,18 @@ coordinator. Dividers resize, and a group closes when its last tab leaves.
 Each group has its own **New side agent** action, and a new conversation
 joins whichever group is focused.
 
-The arrangement is renderer presentation only
-(`apps/web/src/lib/coordinator-pane-layout.ts`, persisted per project in
-`coordinatorPaneLayoutStore`). It never opens or closes a conversation; on
-every snapshot it is reconciled against the backend's open set, dropping
-closed conversations and placing new ones. Focusing a group selects its front
+The arrangement is presentation, edited by the renderer
+(`apps/web/src/lib/coordinator-pane-layout.ts`) and stored by the backend per
+project (`get/save_coordinator_pane_layout`, `@orkestrator/protocol/coordinator-pane-layout`),
+so every client shows the same groups. A save is a compare-and-swap on the
+record's revision: when another client saved first the save answers `conflict`
+with the stored record and the renderer adopts it, which is why a layout change
+lost in that race is not retried. Other clients hear `coordinator-pane-layout`
+and re-read. A browser's earlier local copy is imported once at revision 0, so it
+never replaces a layout already stored, and then deleted; against a backend
+without the capability the layout stays in that copy. It never opens or closes a
+conversation; on every snapshot it is reconciled against the backend's open set,
+dropping closed conversations and placing new ones. Focusing a group selects its front
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere
 brings that conversation to the front of its group. Only each group's front
 conversation is mounted.
@@ -722,23 +729,30 @@ checkout.
 ### Merging upstream commits before a message
 
 Before each message to the main coordinator, its first prompt included, the
-panel runs the cooldown-bound fetch (`fetchProjectGit` without `force`, waited
-on for at most five seconds) and asks *"There are N upstream commits … Do you
-wish to merge them?"* when the checkout can merge them: an upstream is
-configured, `behind > 0`, and nothing blocks a fast-forward (no local commits,
-no uncommitted changes, no unfinished repository operation). **Enter** (the
+panel asks the backend whether to offer a merge
+(`check_coordinator_upstream_merge`, waited on for at most five seconds). The
+backend answers without fetching while the checkout cannot change, and otherwise
+runs the cooldown-bound fetch and applies the rule in
+`@orkestrator/protocol/coordinator-upstream-merge`. The panel then asks *"There
+are N upstream commits … Do you wish to merge them?"* when the checkout can merge
+them: an upstream is configured, `behind > 0`, and nothing blocks a fast-forward
+(no local commits, no uncommitted changes, no unfinished repository operation). **Enter** (the
 focused default) fast-forwards with `syncProjectGit`, then sends; a failed
 fast-forward keeps the draft and shows the error. **Escape** or **Don't merge**
 sends without merging.
 
 A decline is remembered per project against the upstream tip it was given for
-(`ProjectGitStatus.upstreamCommit`), in a persisted renderer store whose key is
-per machine (`coordinatorUpstreamDeclineStore`). The question returns as soon as
-the tip changes, and survives a reload. It is not asked for side agents, for `!`
-commands, while any of the coordinator's conversations is running a turn (the
-backend refuses to change the checkout then), or when the checkout is behind but
-blocked; the toolbar already says why that checkout cannot sync. A status from a
-backend that predates `upstreamCommit` cannot match a decline, so it always asks.
+(`ProjectGitStatus.upstreamCommit`), in the backend
+(`decline_coordinator_upstream_merge`), so every client honours it. The question
+returns as soon as the tip changes, and survives a reload. It is not asked for
+side agents, for `!` commands, while any of the coordinator's conversations or
+the project home is running a turn (the backend refuses to change the checkout
+then), or when the checkout is behind but blocked; the toolbar already says why
+that checkout cannot sync. A status from a backend that predates `upstreamCommit`
+cannot match a decline, so it always asks. Against a backend without the check,
+the renderer applies the same protocol rule to its own fetch and browser copy of
+the declines; otherwise that copy is imported once (never replacing a newer
+answer) and deleted.
 
 A chip in the same toolbar shows **Waiting on N workers** when the selected
 conversation has open delegations. It is a projection from the snapshot, not
@@ -1414,7 +1428,9 @@ saved focus. The coordinator is told to set a lens only when the user asks for
 a focus.
 
 Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
-over the worker's model catalogue, mirroring the launch dialog: an unset or
+over the worker's model catalogue through `resolveLaunchSelection`
+(`packages/protocol/src/launch-selection.ts`), the resolver the launch dialogs
+call too, which documents the rules: an unset or
 stale saved model falls back to the connected model a tab with no model would
 start on (the catalogue row marked `sessionDefault`, which the Pi bridge sets
 on Pi's saved default), else to the first connected catalogue model, and an

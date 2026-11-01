@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -153,12 +154,9 @@ const SIGN_IN_COMMANDS: Record<HostSignInPlatform, string> = {
 function canHostSignInTerminal(environment: Environment): boolean {
   return (
     environment.environmentType === "local" &&
-    environment.status === "running" &&
     !environment.deletionRequestedAt &&
     environment.lifecycleOperation !== "deleting" &&
-    (environment.setupPhase === "ready" ||
-      environment.setupScriptsComplete === true ||
-      environment.setupOverride === true)
+    isEnvironmentReadyForAgents(environment)
   );
 }
 

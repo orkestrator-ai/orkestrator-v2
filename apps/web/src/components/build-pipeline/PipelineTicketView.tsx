@@ -4,7 +4,7 @@ import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pi
 import { sectionsFromTicketText } from "@orkestrator/protocol/ticket-sections";
 import { MarkdownBody } from "@/components/pull-requests/pull-request-shared";
 import { TicketSectionsGrid } from "@/components/tickets/TicketSectionsGrid";
-import { pipelineCriteriaView } from "./pipeline-criteria";
+import { pipelineCriteriaView } from "@orkestrator/protocol/build-pipeline-criteria";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useKanbanStore } from "@/stores/kanbanStore";
 

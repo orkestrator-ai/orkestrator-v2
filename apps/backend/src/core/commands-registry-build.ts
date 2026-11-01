@@ -10,6 +10,8 @@ import {
   toClientEnvironment,
 } from "./commands-helpers.js";
 import { createFeatureBuild } from "./feature-build.js";
+import { launchBuildPipeline } from "./build-pipeline-launch.js";
+import { startFeaturePlanBuild } from "./feature-plan-build.js";
 import {
   conditionalBuildPipelineRead,
   withoutTranscriptBodies,
@@ -32,6 +34,15 @@ export function registerBuildPipelineCommands(
    * renderer that navigates away mid-flight cannot leave one without the other.
    */
   register("create_feature_build", (args, context) => createFeatureBuild(args, context));
+  /**
+   * The Build button: a ticket plus only the choices the user made; every
+   * omitted step, reviewer and model comes from the saved Build defaults here,
+   * the same way the coordinator and the public `build.launch` fill them.
+   * `start_build_pipeline` stays for callers that send a complete request.
+   */
+  register("launch_build_pipeline", (args, context) => launchBuildPipeline(args, context));
+  /** The Features view's Build: claim, ticket, pipeline and link, compensated here. */
+  register("start_feature_plan_build", (args, context) => startFeaturePlanBuild(args, context));
   register("pause_build_pipeline", ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.pause(asNonBlankString(pipelineId, "pipelineId"));

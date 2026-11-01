@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { useNativeComposeStore } from "./nativeComposeStore";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { clearRichEnvironmentContent } from "@/lib/chat/rich-content-reset";
 import type { Environment, EnvironmentStatus, PrState } from "@/types";
@@ -70,7 +69,6 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
     // Deleting an environment removes its conversations' rich view state,
     // render cache entries and cached artifact reads too.
     clearRichEnvironmentContent(environmentId);
-    useNativeComposeStore.getState().clearSentPromptsForEnvironment(environmentId);
     set((state) => {
       const deletingEnvironments = new Set(state.deletingEnvironments);
       deletingEnvironments.delete(environmentId);

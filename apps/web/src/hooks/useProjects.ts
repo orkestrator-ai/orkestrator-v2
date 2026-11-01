@@ -9,6 +9,10 @@ import {
   useProjectStore,
 } from "@/stores/projectStore";
 import * as backend from "@/lib/backend";
+import {
+  resolveProjectArrangementIntent,
+  type ProjectArrangementIntent,
+} from "@orkestrator/protocol/project-arrangement";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 
 interface ProjectLoad {
@@ -199,24 +203,26 @@ export function useProjects() {
   );
 
   /**
-   * Persists a sidebar arrangement — order plus folder membership — as one
-   * mutation. Folder-only moves still send the full order because a folder's
-   * position is derived from its first member, so membership and order are not
-   * independently meaningful.
+   * Applies a sidebar gesture: previewed here against this client's copy, and
+   * resolved by the backend against its current projects under the store lock,
+   * so a stale copy cannot undo what another client just arranged. A gesture
+   * that changes nothing locally is not sent.
    */
-  const arrangeProjects = useCallback(
-    async (projectIds: string[], folders: Record<string, string | null> = {}) => {
+  const arrangeProjectsByIntent = useCallback(
+    async (intent: ProjectArrangementIntent) => {
+      const preview = resolveProjectArrangementIntent(intent, useProjectStore.getState().projects);
+      if (!preview) return;
       invalidateProjectSnapshots();
-      arrangeProjectsInStore(projectIds, folders);
+      arrangeProjectsInStore(preview.projectIds, preview.folders);
       try {
-        setProjects(await backend.arrangeProjects(projectIds, folders));
+        setProjects(await backend.arrangeProjectsByIntent(intent, preview));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to arrange projects";
         // A folder-free arrangement is a plain reorder — the most common drag
         // in the sidebar — so naming folders there reports a feature the user
         // never touched.
         toast.error(
-          Object.keys(folders).length === 0
+          Object.keys(preview.folders).length === 0
             ? "Failed to reorder projects"
             : "Failed to update project folders",
         );
@@ -268,7 +274,7 @@ export function useProjects() {
     removeProject,
     updateProject,
     reorderProjects,
-    arrangeProjects,
+    arrangeProjectsByIntent,
     validateGitUrl,
     getProjectById,
   };

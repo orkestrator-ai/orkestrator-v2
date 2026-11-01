@@ -505,6 +505,15 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary: "Cancel a running Multi Review; its record and tabs are kept.",
   },
+  "review.start": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session"],
+    observation: "run",
+    milestone: "D",
+    summary:
+      "Start the single-agent Review session in an environment (the Review tab): commit the review snapshot and review it against the target branch with the saved review instruction. For several reviewers use review.launch.",
+  },
   "build.launch": {
     version: 1,
     mutation: true,
@@ -609,6 +618,15 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary:
       "Start the Resolve Conflicts agent session in an environment (the Resolve tab): merge the target branch, resolve and validate conflicts, commit and push.",
+  },
+  "pr.push": {
+    version: 1,
+    mutation: true,
+    effects: ["provider-session", "external-repository"],
+    observation: "run",
+    milestone: "D",
+    summary:
+      "Start the Push Changes agent session in an environment (the Git Push tab): commit every change and push the branch to update its open pull request. Refused when the environment has no PR.",
   },
   "pr.get": {
     version: 1,

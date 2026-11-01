@@ -4,6 +4,7 @@
  * coordinator-only workflow tools. `control-mcp-server.ts` owns the listener
  * and authentication; it rebuilds this server for every request.
  */
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { coordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -1519,7 +1520,7 @@ export async function createControlMcp(
         return toolResult({
           environmentId: environment.id,
           ...onNodeResult(target),
-          tabId: "startup-agent",
+          tabId: STARTUP_AGENT_TAB_ID,
           status: startError ? "created" : "accepted",
           ...selection,
           ...(delegationOpened ? asyncDelegationResult() : {}),
@@ -1568,7 +1569,7 @@ export async function createControlMcp(
           const session = await invoke<unknown>("get_native_agent_session", {
             environmentId: environment.id,
             agent: input.agent,
-            logicalSessionKey: `env-${environment.id}:startup-agent`,
+            logicalSessionKey: `env-${environment.id}:${STARTUP_AGENT_TAB_ID}`,
           });
           if (isRecord(session) && isRecord(session.controls)) {
             startup = {
@@ -1617,7 +1618,7 @@ export async function createControlMcp(
         launch.coordinatorDelegationOpened === true;
       return toolResult({
         environmentId: environment.id,
-        tabId: "startup-agent",
+        tabId: STARTUP_AGENT_TAB_ID,
         status: startError ? "created" : "accepted",
         ...selection,
         ...(delegationOpened ? asyncDelegationResult() : {}),

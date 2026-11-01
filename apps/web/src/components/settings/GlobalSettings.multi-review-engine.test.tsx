@@ -32,8 +32,8 @@ function mount() {
 }
 
 test("the Multi Review runtime defaults to the engine and saves the graph runtime when chosen", async () => {
-  const save = spyOn(backend, "updateGlobalConfig").mockImplementation(
-    async (global) => (selected = { ...selected, global }),
+  const save = spyOn(backend, "patchGlobalConfig").mockImplementation(
+    async (patch) => (selected = { ...selected, global: { ...selected.global, ...patch } }),
   );
   mount();
   const engine = (await screen.findByRole("radio", {
@@ -42,9 +42,6 @@ test("the Multi Review runtime defaults to the engine and saves the graph runtim
   expect(engine.checked).toBe(true);
   fireEvent.click(screen.getByRole("radio", { name: /Graph runtime \(preview\)/ }));
   await waitFor(() =>
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ multiReviewEngine: "graph" }),
-      null,
-    ),
+    expect(save).toHaveBeenCalledWith({ multiReviewEngine: "graph" }, { unset: [], machine: null }),
   );
 });

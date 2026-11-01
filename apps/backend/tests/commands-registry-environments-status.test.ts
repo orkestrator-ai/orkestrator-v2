@@ -973,7 +973,9 @@ exit 0
           commands.get("stop_environment")?.({ environmentId: environment.id }, context),
         ).rejects.toThrow("ContainerLifecycleError:daemon-unavailable");
 
-        expect(await fs.readFile(all, "utf8")).not.toContain("stop unreachable-container");
+        const log = await fs.readFile(all, "utf8");
+        expect(log).not.toContain("exec ");
+        expect(log).not.toContain("stop unreachable-container");
       },
     );
     expect(updates).toHaveLength(0);

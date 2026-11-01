@@ -929,8 +929,8 @@ describe("structured review normalization on hydrate", () => {
       overallRisk: "low",
       reasoning: "r",
     },
-    // The legacy shape the parser is asked to upgrade: no notRun field, which
-    // the current contract requires and the backfill derives.
+    // The legacy shape: no notRun field, which the current contract requires.
+    // An older remote backend has not run the storage migration.
     testResults: { total: 3, passed: 2, failed: 0, failures: [] },
     strengths: [],
     issues: [],
@@ -940,18 +940,32 @@ describe("structured review normalization on hydrate", () => {
     reviewSummary: "r",
   };
 
-  test("upgrades a legacy structured review so the snapshot still validates", async () => {
+  test("backfills a historical report served by an older backend", async () => {
     const stored = {
       ...snapshot(),
       structuredReview: legacyReport,
     } as unknown as BuildPipeline;
 
     const hydrated = await hydrateBuildPipeline("pipeline-1", async () => record(stored, 4));
+    expect(hydrated?.structuredReview?.testResults).toMatchObject({
+      total: 3,
+      passed: 2,
+      failed: 0,
+      notRun: 1,
+    });
+    expect(stored.structuredReview?.testResults).not.toHaveProperty("notRun");
+  });
 
-    // Without normalization the guard rejects the legacy report and the whole
-    // pipeline silently disappears from the UI with no error anywhere.
-    expect(hydrated).not.toBeNull();
-    expect(hydrated?.structuredReview?.testResults.notRun).toBe(1);
+  test("rejects inconsistent historical counts after backfilling", async () => {
+    const stored = {
+      ...snapshot(),
+      structuredReview: {
+        ...legacyReport,
+        testResults: { total: 1, passed: 2, failed: 0, failures: [] },
+      },
+    } as unknown as BuildPipeline;
+    const hydrated = await hydrateBuildPipeline("pipeline-1", async () => record(stored, 4));
+    expect(hydrated).toBeNull();
   });
 
   test("passes through a snapshot that carries no review at all", async () => {

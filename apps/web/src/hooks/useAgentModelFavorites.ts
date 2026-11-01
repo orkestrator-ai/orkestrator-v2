@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { updateGlobalConfig as persistGlobalConfig } from "@/lib/backend";
+import { patchGlobalConfig } from "@/lib/backend";
 import { useConfigStore } from "@/stores/configStore";
 
 const EMPTY_FAVORITE_MODELS: AgentModelRef[] = [];
@@ -78,11 +78,13 @@ function persistFavoriteModels(favoriteModels: AgentModelRef[]): void {
   if (favoriteWritePending === 0) favoriteWriteCommitted = [...previous];
   favoriteWritePending += 1;
   const writeRevision = ++favoriteWriteRevision;
-  const global = { ...state.config.global, favoriteModels };
   state.updateGlobalConfig({ favoriteModels });
+  // Only the list travels: the backend merges it onto its current settings, so
+  // a favourite click cannot overwrite settings another window changed. The
+  // queue still keeps this client's own writes in the order they were made.
   favoriteWriteTail = favoriteWriteTail.then(async () => {
     try {
-      const config = await persistGlobalConfig(global);
+      const config = await patchGlobalConfig({ favoriteModels });
       favoriteWriteCommitted = [...(config.global.favoriteModels ?? favoriteModels)];
       // A later interaction has already become the optimistic state. The
       // older response is still persisted in order, but must not overwrite it.

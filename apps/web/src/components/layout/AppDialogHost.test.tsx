@@ -328,7 +328,7 @@ test("repository settings waits for saved config, saves through the owner's proj
     nativeInvoke.mockImplementation(async (command: string) => {
       if (command === "get_projects") return [project];
       if (command === "update_project") return { ...project, name: "renamed", localPath: null };
-      if (command === "update_repository_config") return savedConfig;
+      if (command === "patch_repository_settings") return savedConfig;
       return [];
     });
     useProjectStore.setState({ projects: [project], hasLoaded: true });
@@ -346,7 +346,7 @@ test("repository settings waits for saved config, saves through the owner's proj
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(
-        nativeInvoke.mock.calls.some(([command]) => command === "update_repository_config"),
+        nativeInvoke.mock.calls.some(([command]) => command === "patch_repository_settings"),
       ).toBe(true),
     );
     expect(nativeInvoke).toHaveBeenCalledWith(
@@ -356,16 +356,11 @@ test("repository settings waits for saved config, saves through the owner's proj
         updates: expect.objectContaining({ name: "renamed" }),
       }),
     );
-    expect(nativeInvoke).toHaveBeenCalledWith(
-      "update_repository_config",
-      expect.objectContaining({
-        projectId: project.id,
-        repoConfig: expect.objectContaining({
-          defaultBranch: "saved-main",
-          prBaseBranch: "saved-base",
-        }),
-      }),
-    );
+    // The dialog loaded the saved record, so an unchanged branch is not resent.
+    expect(nativeInvoke).toHaveBeenCalledWith("patch_repository_settings", {
+      projectId: project.id,
+      updates: {},
+    });
     await waitFor(() => expect(useAppDialogStore.getState().request).toBeNull());
     act(() =>
       useAppDialogStore.getState().open({ kind: "repository-settings", projectId: project.id }),

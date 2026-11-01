@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
+import { fileSaveBaseline } from "@/stores/fileDirtyStore";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { useFileSave } from "@/hooks/useFileSave";
 import { useChangeContentGeneration, useChangeProjection } from "@/hooks/useChangeProjection";
@@ -283,6 +284,7 @@ export function FileViewerTab({
   // Dirty file tracking
   const setOriginalContent = useFileDirtyStore((state) => state.setOriginalContent);
   const setDirtyContent = useFileDirtyStore((state) => state.setContent);
+  const observeDiskContent = useFileDirtyStore((state) => state.observeDiskContent);
   const hydrateDraft = useFileDirtyStore((state) => state.hydrateDraft);
   const dirtyEntry = useFileDirtyStore((state) => state.dirtyFiles.get(tabId));
   const dirtyContent = useFileDirtyStore((state) => state.dirtyFiles.get(tabId)?.content);
@@ -292,12 +294,30 @@ export function FileViewerTab({
     showDiff,
     hasDiffData: hasDiffTarget,
   });
+  // Bumped to re-read the file after the user chose to drop their edits.
+  const [reloadGeneration, setReloadGeneration] = useState(0);
+  const reloadFromDisk = useCallback(() => {
+    void (async () => {
+      // Discard the persisted draft first, or the reload would restore it.
+      if (environmentId) {
+        await discardFileDraft(environmentId, filePath, getFileDraftRevisionState(tabId)).catch(
+          (draftError: unknown) => {
+            console.warn("[FileViewerTab] Failed to discard file draft on reload:", draftError);
+          },
+        );
+      }
+      lastDraftFlushRef.current = null;
+      useFileDirtyStore.getState().clearDirty(tabId);
+      setReloadGeneration((generation) => generation + 1);
+    })();
+  }, [environmentId, filePath, tabId]);
   const { saveFile, isSaving } = useFileSave({
     tabId,
     filePath,
     containerId,
     worktreePath,
     isLocalEnvironment,
+    onReloadFromDisk: reloadFromDisk,
   });
 
   const reportFileDraftError = useCallback(function reportFileDraftError(
@@ -331,7 +351,7 @@ export function FileViewerTab({
                   context.environmentId,
                   context.filePath,
                   entry.content,
-                  entry.originalContent,
+                  fileSaveBaseline(entry),
                   state,
                 )
               : resolveFileDraftDiscardConflict(context.environmentId, context.filePath, state);
@@ -355,7 +375,7 @@ export function FileViewerTab({
             context.environmentId,
             context.filePath,
             entry.content,
-            entry.originalContent,
+            fileSaveBaseline(entry),
           ])
         : JSON.stringify([context.environmentId, context.filePath, "discard"]);
     if (lastDraftFlushRef.current === fingerprint) return;
@@ -366,7 +386,7 @@ export function FileViewerTab({
             context.environmentId,
             context.filePath,
             entry.content,
-            entry.originalContent,
+            fileSaveBaseline(entry),
             getFileDraftRevisionState(context.tabId),
           )
         : discardFileDraft(
@@ -480,7 +500,9 @@ export function FileViewerTab({
             if (liveEntry) {
               // Visibility changes may unmount the editor before its debounce
               // fires. Its in-memory buffer is newer than any backend snapshot.
-              setOriginalContent(tabId, fileContent.content);
+              // The buffer's own baseline stays, so disk moving meanwhile is a
+              // conflict at save rather than an overwrite.
+              observeDiskContent(tabId, fileContent.content);
             } else if (
               persistedDraft &&
               persistedDraft.environmentId === environmentId &&
@@ -489,8 +511,13 @@ export function FileViewerTab({
               // Disk may have changed while the app was closed. Preserve the
               // user's buffer but compare it with the current disk content so
               // the editor never silently treats an externally changed file as
-              // saved.
-              hydrateDraft(tabId, persistedDraft.content, fileContent.content);
+              // saved. A save still checks against what the draft was edited from.
+              hydrateDraft(
+                tabId,
+                persistedDraft.content,
+                fileContent.content,
+                persistedDraft.originalContent,
+              );
             } else {
               setOriginalContent(tabId, fileContent.content);
             }
@@ -523,7 +550,9 @@ export function FileViewerTab({
     tabId,
     environmentId,
     hydrateDraft,
+    observeDiskContent,
     setOriginalContent,
+    reloadGeneration,
   ]);
 
   // Write through after a short debounce. The persistence helper serializes

@@ -1,8 +1,14 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
 import { asString, asNumber } from "./commands-helpers.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { isFrozenPromptQueueMessage } from "./storage-prompts.js";
 import { resetAgentMailBudget } from "./commands-registry-mail.js";
+import {
+  AGENT_HANDOFF_CAPABILITIES,
+  createAgentHandoff,
+  parseCreateAgentHandoffInput,
+} from "./agent-handoffs.js";
 
 export function registerPromptCommands(
   register: CommandRegistrar,
@@ -157,14 +163,21 @@ export function registerPromptCommands(
   register("get_agent_handoff", ({ handoffId }, { storage }) =>
     storage.getAgentHandoff(asString(handoffId, "handoffId")),
   );
-  register("save_agent_handoff", ({ handoffId, environmentId, version, snapshot }, { storage }) =>
-    storage.saveAgentHandoff(
+  register("save_agent_handoff", ({ handoffId, environmentId, version, snapshot }, { storage }) => {
+    // Only a renderer older than `create_agent_handoff` still builds its own.
+    compatibilityPathUsage.record("agent-handoff.renderer-saved");
+    return storage.saveAgentHandoff(
       asString(handoffId, "handoffId"),
       asString(environmentId, "environmentId"),
       asNumber(version, "version"),
       snapshot,
-    ),
+    );
+  });
+  register("create_agent_handoff", (args, context) =>
+    createAgentHandoff(context, parseCreateAgentHandoffInput(args)),
   );
+  register("get_agent_handoff_capabilities", () => AGENT_HANDOFF_CAPABILITIES);
+  // Older renderers still call these; current ones leave deletion to the backend.
   register("delete_agent_handoff", ({ handoffId, environmentId }, { storage }) =>
     storage.deleteAgentHandoff(
       asString(handoffId, "handoffId"),

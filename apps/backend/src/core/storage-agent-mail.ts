@@ -1,3 +1,4 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { createHash, randomUUID } from "node:crypto";
 import {
   AGENT_MAIL_MAX_BODY_BYTES,
@@ -235,7 +236,7 @@ export class AgentMailRepository {
     workerTabId: string,
   ): Promise<boolean> {
     if (
-      workerTabId === "startup-agent" &&
+      workerTabId === STARTUP_AGENT_TAB_ID &&
       (await this.repos.projects.getEnvironment(workerEnvironmentId))?.pendingAgentLaunch === true
     ) {
       return true;

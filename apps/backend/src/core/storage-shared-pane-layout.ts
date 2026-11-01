@@ -2,6 +2,7 @@ import type {
   PaneLayoutMergeInput,
   PaneLayoutSelectionIntent,
 } from "@orkestrator/protocol/pane-layout-merge";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import type { Environment, PersistedPaneLayout } from "./models.js";
 import { isRecord } from "./storage-shared-core.js";
 
@@ -95,12 +96,9 @@ export function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
   return leaves;
 }
 
+/** The shared predicate the renderer also uses. */
 export function environmentIsReadyForSetupHandoff(environment: Environment): boolean {
-  return (
-    environment.setupPhase === "ready" ||
-    environment.setupScriptsComplete === true ||
-    environment.setupOverride === true
-  );
+  return isEnvironmentSetupSettled(environment);
 }
 
 /**
@@ -230,4 +228,46 @@ export function suppressLateSetupTabAdditions(
         ? previous.activePaneId
         : layout.activePaneId,
   };
+}
+
+/**
+ * How long a stored handoff survives without a layout referencing it. A
+ * handoff is stored before its destination tab is saved, so a layout written
+ * in between (another client, a backend-owned tab update) must not reclaim it.
+ */
+export const AGENT_HANDOFF_PRUNE_GRACE_MS = 10 * 60 * 1_000;
+
+/** Every handoff id a pane layout's tabs still reference (`tab.agentHandoffId`). */
+export function paneLayoutAgentHandoffIds(root: unknown): Set<string> {
+  const ids = new Set<string>();
+  for (const leaf of paneLayoutLeaves(root)) {
+    for (const tab of leaf.tabs) {
+      if (typeof tab.agentHandoffId === "string" && tab.agentHandoffId) ids.add(tab.agentHandoffId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The handoff a tab still has to deliver: referenced, and not yet marked
+ * consumed (`consumedAgentHandoffId`) by the backend or a renderer.
+ */
+export function pendingPaneLayoutAgentHandoffId(root: unknown, tabId: string): string | undefined {
+  for (const leaf of paneLayoutLeaves(root)) {
+    const tab = leaf.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) continue;
+    const handoffId = tab.agentHandoffId;
+    if (typeof handoffId !== "string" || !handoffId) return undefined;
+    return tab.consumedAgentHandoffId === handoffId ? undefined : handoffId;
+  }
+  return undefined;
+}
+
+/** True when `next` dropped a handoff reference `previous` held. */
+export function paneLayoutDroppedAgentHandoff(previous: unknown, next: unknown): boolean {
+  const remaining = paneLayoutAgentHandoffIds(next);
+  for (const id of paneLayoutAgentHandoffIds(previous)) {
+    if (!remaining.has(id)) return true;
+  }
+  return false;
 }

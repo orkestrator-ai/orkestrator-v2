@@ -9,13 +9,25 @@ import {
   type MultiReviewActionResult,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import {
+  createPushChangesPrompt,
+  createReviewPrompt,
+  resolvePrTargetBranch,
+  PUSH_CHANGES_TAB_TITLE,
+  REVIEW_TAB_TITLE,
+} from "@orkestrator/protocol/git-workflow-prompts";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import { conciseError } from "../commands-error-text.js";
 import { workflowSummary } from "../control-workflow-summary.js";
 import type { Environment } from "../models.js";
 import { MULTI_REVIEW_AUTO_PR_TAB_TITLE } from "../multi-review-auto-pr.js";
 import { requireEnvironment } from "./actions-discovery.js";
-import { parseAgentSelection, prepareSessionStart, type StartInput } from "./actions-sessions.js";
+import {
+  parseAgentSelection,
+  prepareSessionStart,
+  type SessionStartExtras,
+  type StartInput,
+} from "./actions-sessions.js";
 import { PublicActionError } from "./errors.js";
 import {
   invalid,
@@ -36,14 +48,17 @@ import type {
 
 /**
  * The environment buttons an agent could not reach before: Multi Review
- * (`review.*`), Create PR (`pr.create`) and Resolve Conflicts (`pr.resolve`).
+ * (`review.*`), Review (`review.start`), Create PR (`pr.create`), Resolve
+ * Conflicts (`pr.resolve`) and Push Changes (`pr.push`).
  *
- * Each runs the backend twin of the button. A review launches through
+ * Each runs the backend twin of the button. A Multi Review launches through
  * `launch_controller_multi_review`, the unscoped Multi Review button a command
  * node's coordinator also uses, under an ID reserved from the operation, so a
- * retried request key reaches the same review. PR and Resolve open an agent
- * tab exactly as `session.start` does, with the button's prompt, tab title,
- * action default and completion hook, so they are runs with receipts.
+ * retried request key reaches the same review. Review, PR, Resolve and Push
+ * open an agent tab exactly as `session.start` does, with the button's prompt
+ * (built here, with the target branch and saved review instruction resolved
+ * server-side), tab title, action default and completion hook, so they are
+ * runs with receipts.
  */
 
 function reviewSummary(
@@ -291,17 +306,52 @@ async function buttonSelection(
     ...(model && reasoning ? { reasoning } : {}),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
     repositoryBase: config.repositories?.[environment.projectId]?.prBaseBranch || undefined,
+    reviewInstruction: config.global.reviewInstruction,
   };
 }
 
-function buttonHandler(action: "pr.create" | "pr.resolve"): MutationActionHandler<ButtonInput> {
+type ButtonAction = "pr.create" | "pr.resolve" | "pr.push" | "review.start";
+
+/** Each button's action default, tab title and whether it takes a target branch. */
+const BUTTONS: Record<
+  ButtonAction,
+  { defaultKey: ActionDefaultKey; title: string; targetBranch: boolean }
+> = {
+  "pr.create": { defaultKey: "pr", title: MULTI_REVIEW_AUTO_PR_TAB_TITLE, targetBranch: true },
+  "pr.resolve": { defaultKey: "resolve", title: "Resolve", targetBranch: true },
+  "pr.push": { defaultKey: "push", title: PUSH_CHANGES_TAB_TITLE, targetBranch: false },
+  "review.start": { defaultKey: "review", title: REVIEW_TAB_TITLE, targetBranch: true },
+};
+
+/** The button's prompt, built here from the shared protocol builders rather than by the caller. */
+function buttonPrompt(
+  action: ButtonAction,
+  targetBranch: string,
+  reviewInstruction: unknown,
+): string {
+  switch (action) {
+    case "pr.create":
+      return createPRPrompt(targetBranch);
+    case "pr.resolve":
+      return createResolveConflictsPrompt(targetBranch);
+    case "pr.push":
+      return createPushChangesPrompt();
+    case "review.start":
+      return createReviewPrompt(targetBranch, reviewInstruction);
+  }
+}
+
+function buttonHandler(action: ButtonAction): MutationActionHandler<ButtonInput> {
+  const button = BUTTONS[action];
   return {
     kind: "mutation",
     action,
     parse(input) {
       onlyActionKeys(input, action);
       const environmentId = requiredId(input, "environmentId");
-      const targetBranch = optionalString(input, "targetBranch", 500)?.trim();
+      const targetBranch = button.targetBranch
+        ? optionalString(input, "targetBranch", 500)?.trim()
+        : undefined;
       const selection =
         input.agent !== undefined
           ? parseAgentSelection(input)
@@ -329,30 +379,37 @@ function buttonHandler(action: "pr.create" | "pr.resolve"): MutationActionHandle
           { details: { prUrl: environment.prUrl } },
         );
       }
-      const { repositoryBase, ...selection } = await buttonSelection(
+      // The Push Changes button is offered only on an open pull request.
+      if (action === "pr.push" && (!environment.prUrl || environment.prState !== "open")) {
+        throw new PublicActionError(
+          "conflict",
+          environment.prUrl
+            ? "This environment's pull request is not open; no push agent was started"
+            : "This environment has no pull request; use pr.create to open one",
+          { details: { prUrl: environment.prUrl ?? null, prState: environment.prState ?? null } },
+        );
+      }
+      const { repositoryBase, reviewInstruction, ...selection } = await buttonSelection(
         context,
         environment,
-        action === "pr.create" ? "pr" : "resolve",
+        button.defaultKey,
         input,
       );
-      const targetBranch =
-        input.targetBranch ??
-        (action === "pr.resolve" ? environment.prBaseBranch || undefined : undefined) ??
-        repositoryBase ??
-        "main";
+      const targetBranch = button.targetBranch
+        ? resolvePrTargetBranch({
+            override: input.targetBranch,
+            environmentBase: action === "pr.resolve" ? environment.prBaseBranch : undefined,
+            repositoryBase,
+          })
+        : undefined;
       const start: StartInput = {
         environmentId: environment.id,
         ...selection,
         mode: "build",
-        title: action === "pr.create" ? MULTI_REVIEW_AUTO_PR_TAB_TITLE : "Resolve",
-        prompt:
-          action === "pr.create"
-            ? createPRPrompt(targetBranch)
-            : createResolveConflictsPrompt(targetBranch),
+        title: button.title,
+        prompt: buttonPrompt(action, targetBranch ?? "", reviewInstruction),
       };
-      const prepared = await prepareSessionStart(
-        start,
-        context,
+      const extras: SessionStartExtras =
         action === "pr.create"
           ? {
               // Poll faster until the PR appears, as the Create PR button does.
@@ -362,12 +419,16 @@ function buttonHandler(action: "pr.create" | "pr.resolve"): MutationActionHandle
                   mode: "create-pending",
                 }),
             }
-          : { completionAction: "refresh-pr-after-agent-completion" },
-        environment,
-      );
+          : action === "pr.resolve"
+            ? { completionAction: "refresh-pr-after-agent-completion" }
+            : action === "review.start"
+              ? // A review tab, as the Review button opens: it offers Address all.
+                { reviewTab: true }
+              : {};
+      const prepared = await prepareSessionStart(start, context, extras, environment);
       return {
         ...prepared,
-        resolved: { ...prepared.resolved, targetBranch },
+        resolved: { ...prepared.resolved, ...(targetBranch ? { targetBranch } : {}) },
       };
     },
   };
@@ -380,6 +441,8 @@ export const REVIEW_HANDLERS: PublicActionHandler[] = [
   surfaceHandler("review.open"),
   surfaceHandler("review.address"),
   reviewCancel,
+  buttonHandler("review.start"),
   buttonHandler("pr.create"),
   buttonHandler("pr.resolve"),
+  buttonHandler("pr.push"),
 ];

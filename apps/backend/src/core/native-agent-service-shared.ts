@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isEnvironmentReadyForAgents as isSharedEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
@@ -919,17 +920,15 @@ export function nonBlank(value: unknown): value is string {
 
 /**
  * An agent can only be driven once its environment is running and its setup
- * scripts have finished.
+ * scripts have finished, or the user overrode a failed setup. This is the shared
+ * protocol predicate, so the drain and the launch commands cannot disagree.
  *
  * The launch path has always checked this. The drain path must too: without it a
  * stopped or still-provisioning environment with a leftover queued prompt makes
  * the backend spawn bridge servers and attempt dispatch every two seconds.
  */
 export function isEnvironmentReadyForAgents(environment: Environment): boolean {
-  return (
-    environment.status === "running" &&
-    (environment.setupPhase === "ready" || environment.setupScriptsComplete === true)
-  );
+  return isSharedEnvironmentReadyForAgents(environment);
 }
 
 export {

@@ -4,6 +4,7 @@ import {
   parseClaudeTmuxStateKey,
   parseTmuxPromptAttachments,
 } from "@orkestrator/protocol/tmux-prompt";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { StorageService } from "./storage.js";
 import type { Environment } from "./models.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
@@ -27,17 +28,6 @@ interface TmuxStatusSnapshot {
 
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-/**
- * An agent can only be driven once its environment is running and its setup has
- * finished. Mirrors the guard `NativeAgentService` applies to its own queues.
- */
-function isEnvironmentReadyForAgents(environment: Environment): boolean {
-  return (
-    environment.status === "running" &&
-    (environment.setupPhase === "ready" || environment.setupScriptsComplete === true)
-  );
 }
 
 export interface PromptQueueDrainerOptions {

@@ -157,6 +157,7 @@ import {
   type ControlMcpSettings,
 } from "./control-mcp-server.js";
 import { isDefaultDataDir } from "../data-dir.js";
+import { installStorageEventFanout } from "./backend-event-fanout.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -598,14 +599,10 @@ export class OrkestratorBackend {
         }),
       );
     }
-    // Every committed mutation fans out to all connected clients, so a second
-    // window or browser converges without polling. `emit` is read lazily by the
-    // caller's closure, which is how this survives the gateway not existing yet.
-    storage.setResourceChangeListener((change) => {
-      options.emit(RESOURCE_CHANGED_EVENT, change);
-      // Created below; a change before then has no self summary to refresh.
-      this.nodePortal?.readModel.noteLocalEvent(RESOURCE_CHANGED_EVENT, change);
-    });
+    // The node portal is created below; a change before then has no self summary to refresh.
+    installStorageEventFanout(storage, options.emit, (change) =>
+      this.nodePortal?.readModel.noteLocalEvent(RESOURCE_CHANGED_EVENT, change),
+    );
     const context = {
       storage,
       design,

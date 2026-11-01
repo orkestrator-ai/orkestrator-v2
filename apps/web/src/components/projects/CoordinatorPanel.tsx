@@ -62,20 +62,20 @@ import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
-import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
+import {
+  useNativeNoticeDismissalStore,
+  useNoticeDismissalsReady,
+} from "@/stores/nativeNoticeDismissalStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useStore } from "zustand";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useProjectStore } from "@/stores/projectStore";
 import {
   selectCoordinatorPaneLayout,
+  selectCoordinatorPaneLayoutReady,
   useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
-import { shouldOfferUpstreamMerge } from "@/lib/coordinator-upstream-merge";
-import {
-  selectDeclinedUpstreamMerge,
-  useCoordinatorUpstreamDeclineStore,
-} from "@/stores/coordinatorUpstreamDeclineStore";
+import { checkUpstreamMergeOffer, declineUpstreamMerge } from "@/lib/coordinator-upstream-check";
 
 /** How long a message waits on the pre-send fetch before it is sent without asking. */
 const UPSTREAM_CHECK_TIMEOUT_MS = 5_000;
@@ -190,17 +190,28 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const conversationIds = useMemo(() => conversations.map((item) => item.id), [conversations]);
   const conversationIdsRef = useRef(conversationIds);
   /*
-   * Tab groups. The layout is renderer presentation over the backend's open
+   * Tab groups. The layout is stored by the backend per project so every
+   * client shows the same groups, and is presentation over the backend's open
    * conversations: reconciling adds conversations no group holds yet to the
    * focused group and drops closed ones, so it never decides what is open.
-   * Nothing is reconciled before the first snapshot, which would otherwise
-   * read as "every conversation closed" and discard the remembered layout.
+   * Nothing is reconciled before the first snapshot and the stored layout are
+   * both read, which would otherwise read as "every conversation closed" (or
+   * "no layout") and discard the remembered one.
    */
   const storedLayout = useCoordinatorPaneLayoutStore(selectCoordinatorPaneLayout(projectId));
+  const storedLayoutReady = useCoordinatorPaneLayoutStore(
+    selectCoordinatorPaneLayoutReady(projectId),
+  );
   const setStoredLayout = useCoordinatorPaneLayoutStore((state) => state.setLayout);
+  useEffect(() => {
+    void useCoordinatorPaneLayoutStore.getState().hydrate(projectId);
+  }, [projectId]);
   const layout = useMemo(
-    () => (snapshot ? reconcileCoordinatorLayout(storedLayout, conversationIds) : null),
-    [conversationIds, snapshot, storedLayout],
+    () =>
+      snapshot && storedLayoutReady
+        ? reconcileCoordinatorLayout(storedLayout, conversationIds)
+        : null,
+    [conversationIds, snapshot, storedLayout, storedLayoutReady],
   );
   const layoutRef = useRef(layout);
   const snapshotRef = useRef(snapshot);
@@ -359,52 +370,60 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   /*
    * The main coordinator reads this checkout, so a message sent while the
    * branch is behind its upstream is answered from older code. Before each
-   * message to the main coordinator (its first prompt included), a
-   * cooldown-bound fetch refreshes the "behind" state, and when the upstream
-   * commits can be fast-forwarded the user is asked whether to merge them.
+   * message to the main coordinator (its first prompt included), the backend
+   * refreshes the "behind" state with a cooldown-bound fetch and decides
+   * whether to ask about merging the upstream commits
+   * (`check_coordinator_upstream_merge`); this panel only asks.
    *
    * Merging resolves only after the fast-forward, so the message then reads
    * the merged code; a failed fast-forward rejects, which the composer reports
-   * with the draft kept. Declining resolves straight away and is remembered
-   * against the upstream tip, so the question returns only with new commits.
-   * A blocked checkout (local commits, uncommitted changes, an unfinished
-   * operation) is not asked about: the header already says why it cannot sync.
-   * Nor is one while any of this coordinator's conversations is running a
-   * turn, since the backend refuses to change the checkout under it.
+   * with the draft kept. Declining resolves straight away and is remembered by
+   * the backend against the upstream tip, on every client, so the question
+   * returns only with new commits. A blocked checkout (local commits,
+   * uncommitted changes, an unfinished operation) is not asked about: the
+   * header already says why it cannot sync. Nor is one while any of this
+   * coordinator's conversations or the project home is running a turn, since
+   * the backend refuses to change the checkout under it.
    */
   const confirmUpstreamMerge = useCallback(
     async (conversation: { role?: string }) => {
       const lifetime = upstreamCheckLifetimeRef.current;
       if (!lifetime || lifetime.signal.aborted) return false;
       if (conversation.role === "side") return;
-      const current = snapshotRef.current;
-      const projections = useNativeAgentProjectionStore.getState().projections;
-      const turnRunning = current?.workspace.conversations.some((item) => {
-        if (item.closedAt || !item.agent) return false;
-        const phase = projections.get(
-          createSessionKey(coordinatorRuntimeId(current.workspace.id, item.id), item.tabId),
-        )?.turn.phase;
-        return (
+      // Only an older backend needs this panel to judge running turns itself.
+      const turnRunning = () => {
+        const current = snapshotRef.current;
+        const projections = useNativeAgentProjectionStore.getState().projections;
+        const active = (phase: string | undefined) =>
           phase === "running" ||
           phase === "blocked" ||
           phase === "cancelling" ||
-          phase === "recovering"
+          phase === "recovering";
+        const conversationRunning = current?.workspace.conversations.some(
+          (item) =>
+            !item.closedAt &&
+            item.agent &&
+            active(
+              projections.get(
+                createSessionKey(coordinatorRuntimeId(current.workspace.id, item.id), item.tabId),
+              )?.turn.phase,
+            ),
         );
-      });
-      const homeIds = new Set(
-        useEnvironmentStore
-          .getState()
-          .environments.filter(
-            (environment) => environment.projectId === projectId && environment.projectHome,
+        const homeIds = new Set(
+          useEnvironmentStore
+            .getState()
+            .environments.filter(
+              (environment) => environment.projectId === projectId && environment.projectHome,
+            )
+            .map((environment) => environment.id),
+        );
+        return (
+          conversationRunning === true ||
+          Array.from(projections.values()).some(
+            (projection) => homeIds.has(projection.environmentId) && active(projection.turn.phase),
           )
-          .map((environment) => environment.id),
-      );
-      const homeRunning = Array.from(projections.values()).some(
-        (projection) =>
-          homeIds.has(projection.environmentId) &&
-          ["running", "blocked", "cancelling", "recovering"].includes(projection.turn.phase),
-      );
-      if (turnRunning || homeRunning) return;
+        );
+      };
       let cancel!: () => void;
       const cancelled = new Promise<false>((resolve) => {
         cancel = () => resolve(false);
@@ -414,24 +433,21 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         // An unreachable or slow remote is no reason to hold the message: past
         // the bound it is sent without asking, and the fetch still lands.
         let timer: ReturnType<typeof setTimeout> | undefined;
-        const status = await Promise.race([
+        const check = await Promise.race([
           cancelled,
-          backend
-            .fetchProjectGit(projectId)
-            .then((fetched) => {
+          checkUpstreamMergeOffer(projectId, {
+            turnRunning,
+            onStatus: (fetched) => {
               if (!lifetime.signal.aborted) setGit(fetched);
-              return fetched;
-            })
-            .catch(() => null),
+            },
+          }).catch(() => null),
           new Promise<null>((resolve) => {
             timer = setTimeout(() => resolve(null), UPSTREAM_CHECK_TIMEOUT_MS);
           }),
         ]).finally(() => clearTimeout(timer));
-        if (lifetime.signal.aborted || status === false) return false;
-        const declined = selectDeclinedUpstreamMerge(projectId)(
-          useCoordinatorUpstreamDeclineStore.getState(),
-        );
-        if (!status || !shouldOfferUpstreamMerge(status, declined)) return;
+        if (lifetime.signal.aborted || check === false) return false;
+        if (!check?.offer) return;
+        const status = check.status;
         const choice = await Promise.race([
           cancelled,
           new Promise<"merge" | "skip">((resolve) => setUpstreamMerge({ status, resolve })),
@@ -439,12 +455,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         if (lifetime.signal.aborted || choice === false) return false;
         setUpstreamMerge(null);
         if (choice === "skip") {
-          if (status.upstream && status.upstreamCommit) {
-            useCoordinatorUpstreamDeclineStore.getState().decline(projectId, {
-              upstream: status.upstream,
-              upstreamCommit: status.upstreamCommit,
-            });
-          }
+          // Best effort: a lost decline only means the question is asked again.
+          void declineUpstreamMerge(projectId, status).catch(() => undefined);
           return;
         }
         setOperation("sync");
@@ -636,7 +648,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       : false,
   );
   const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
+  const noticeDismissalsReady = useNoticeDismissalsReady();
   const latestContextEvent =
+    noticeDismissalsReady &&
     newestContextEvent &&
     (selected?.repositoryContextRevisionAcknowledged ?? 0) < newestContextEvent.revision &&
     !contextNoticeDismissed

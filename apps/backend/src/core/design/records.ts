@@ -401,6 +401,10 @@ export class DesignRecordStore {
   pendingFile(id: string) {
     return join(this.root, "pending", `${designId.parse(id)}.json`);
   }
+  /** The document's backend-owned intent queue (`design/intents.ts`). */
+  intentsFile(id: string) {
+    return join(this.root, "intents", `${designId.parse(id)}.json`);
+  }
   async ensure() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
   }
@@ -547,7 +551,12 @@ export class DesignRecordStore {
   }
   async remove(id: string): Promise<void> {
     // Remove the root record last: ids() must keep finding interrupted cleanup.
-    for (const file of [this.pendingFile(id), this.legacyFile(id), this.recordFile(id)]) {
+    for (const file of [
+      this.pendingFile(id),
+      this.intentsFile(id),
+      this.legacyFile(id),
+      this.recordFile(id),
+    ]) {
       await unlink(file).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
       });

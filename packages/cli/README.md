@@ -157,9 +157,10 @@ orkestrator environment exec "$ENV" --wait -- bun test
   pass `--literal` to send plain text. `session commands` and `session
   command` list and run slash commands by ID. `--enqueue` queues a prompt
   behind a busy session instead of refusing it.
-- `review launch|list|get|open|address|cancel` drives Multi Review, and `pr
-  create` / `pr resolve` open the Create PR and Resolve Conflicts agent tabs
-  (runs you can `--wait` on; neither merges).
+- `review launch|list|get|open|address|cancel` drives Multi Review, and
+  `review start`, `pr create`, `pr resolve` and `pr push` open the
+  single-agent Review, Create PR, Resolve Conflicts and Push Changes agent
+  tabs (runs you can `--wait` on; none of them merges).
 - `build launch|list|get|cancel` drives a Kanban ticket's Build Pipeline,
   with per-step models (`--step`), per-step instructions (`--instructions`,
   `--instructions-file`) and reviewer rows with a focus (`--reviewer`,

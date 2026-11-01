@@ -199,28 +199,57 @@ function reviewMutation(
   };
 }
 
-function prCommand(verb: "create" | "resolve"): CommandSpec {
-  const action = verb === "create" ? "pr.create" : "pr.resolve";
-  return {
-    path: ["pr", verb],
-    action,
+type AgentButtonAction = "pr.create" | "pr.resolve" | "pr.push" | "review.start";
+
+/** The environment buttons that open one agent tab with a prompt the backend builds. */
+const AGENT_BUTTONS: Record<
+  AgentButtonAction,
+  { path: [string, string]; summary: string; targetBranch?: string }
+> = {
+  "pr.create": {
+    path: ["pr", "create"],
+    summary: "Start the Create PR agent: commit, push and open a pull request (never merges).",
+    targetBranch: "Pull request base. Omitted: the project's PR base branch.",
+  },
+  "pr.resolve": {
+    path: ["pr", "resolve"],
     summary:
-      verb === "create"
-        ? "Start the Create PR agent: commit, push and open a pull request (never merges)."
-        : "Start the Resolve Conflicts agent: merge the target branch, resolve, validate and push.",
+      "Start the Resolve Conflicts agent: merge the target branch, resolve, validate and push.",
+    targetBranch: "Branch to merge in. Omitted: the environment's PR base branch.",
+  },
+  "pr.push": {
+    path: ["pr", "push"],
+    summary:
+      "Start the Push Changes agent: commit every change and push it to the open pull request.",
+  },
+  "review.start": {
+    path: ["review", "start"],
+    summary:
+      "Start the single-agent Review: review the committed snapshot against the target branch (Multi Review is `review launch`).",
+    targetBranch: "Branch to review against. Omitted: the project's PR base branch.",
+  },
+};
+
+function agentButtonCommand(action: AgentButtonAction): CommandSpec {
+  const button = AGENT_BUTTONS[action];
+  return {
+    path: button.path,
+    action,
+    summary: button.summary,
     description:
       "Opens the same agent tab as the environment's button, without focusing it. The response is a run receipt; add --wait (or `run wait`) to observe it.",
     positionals: [{ name: "environment", required: true, description: "Ready environment." }],
     options: [
-      {
-        name: "target-branch",
-        kind: "string",
-        valueName: "BRANCH",
-        description:
-          verb === "create"
-            ? "Pull request base. Omitted: the project's PR base branch."
-            : "Branch to merge in. Omitted: the environment's PR base branch.",
-      },
+      ...(button.targetBranch
+        ? [
+            {
+              name: "target-branch",
+              kind: "string" as const,
+              valueName: "BRANCH",
+              description: button.targetBranch,
+            },
+          ]
+        : []),
       ...AGENT_OPTIONS,
       ...WAIT_OPTIONS,
       REQUEST_ID_OPTION,
@@ -526,6 +555,8 @@ export const workflowCommands: CommandSpec[] = [
     "Address a Multi Review's findings: hand them to its Fix session.",
   ),
   reviewMutation("cancel", "review.cancel", "Cancel a running Multi Review; its record is kept."),
-  prCommand("create"),
-  prCommand("resolve"),
+  agentButtonCommand("review.start"),
+  agentButtonCommand("pr.create"),
+  agentButtonCommand("pr.resolve"),
+  agentButtonCommand("pr.push"),
 ];

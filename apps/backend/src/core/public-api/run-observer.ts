@@ -537,6 +537,8 @@ for (const action of [
   "session.command",
   "pr.create",
   "pr.resolve",
+  "pr.push",
+  "review.start",
 ] as const) {
   registerReconciler(action, observeRun);
 }

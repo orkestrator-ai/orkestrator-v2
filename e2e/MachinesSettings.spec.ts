@@ -239,3 +239,54 @@ test("self Rebuild with no node id waits for its snapshot and repeated requests 
     settings.getByRole("button", { name: "Rebuild (keeps files)…", exact: true }),
   ).toBeVisible();
 });
+
+test("agent accounts fit their columns up to the settings pane and scroll locally beyond it", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2400, height: 1000 });
+  await page.goto("/machines-settings?accountLayout");
+  const table = page.getByTestId("machine-agent-accounts-table");
+  await expect(page.getByRole("combobox", { name: "Claude Code account on Studio" })).toContainText(
+    "developer@long-company-name.example",
+  );
+
+  async function geometry() {
+    return table.evaluate((element) => {
+      const container = element.closest(".\\@container")!;
+      const pageColumn = container.firstElementChild!;
+      const pane = document.querySelector('[data-slot="settings-content-scrollport"]')!;
+      const rect = element.getBoundingClientRect();
+      const bounds = container.getBoundingClientRect();
+      return {
+        width: rect.width,
+        pageWidth: pageColumn.getBoundingClientRect().width,
+        containerWidth: bounds.width,
+        right: rect.right,
+        containerRight: bounds.right,
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+        paneScrollWidth: pane.scrollWidth,
+        paneClientWidth: pane.clientWidth,
+      };
+    });
+  }
+
+  const wide = await geometry();
+  expect(wide.pageWidth).toBe(1024);
+  expect(wide.width).toBeGreaterThan(wide.pageWidth);
+  expect(wide.width).toBeLessThan(wide.containerWidth);
+  expect(wide.scrollWidth).toBeLessThanOrEqual(wide.clientWidth + 1);
+
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const narrow = await geometry();
+    expect(narrow.width).toBeCloseTo(narrow.containerWidth, 0);
+    expect(narrow.right).toBeLessThanOrEqual(narrow.containerRight + 1);
+    expect(narrow.scrollWidth).toBeGreaterThan(narrow.clientWidth);
+    expect(narrow.paneScrollWidth).toBeLessThanOrEqual(narrow.paneClientWidth + 1);
+    await table.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth;
+    });
+    expect(await table.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  }
+});

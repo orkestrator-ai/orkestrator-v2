@@ -1,3 +1,5 @@
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
+import { afterAll } from "bun:test";
 import { describe, expect, mock, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -74,14 +76,15 @@ function harness(
   const host = fakeWindow("host");
   const createHostWindow = mock(input.createHostWindow ?? (async () => host));
   const requestAttention = mock((_window: FakeWindow, _message: string) => undefined);
+  configureLogger({
+    sink: ({ method, line }) => (method === "info" ? logs : errors).push(line),
+  });
   const dialogs = createNativeDialogs<FakeWindow>({
     dialog,
     platform: input.platform ?? "darwin",
     currentWindow: () => input.current ?? null,
     createHostWindow,
     requestAttention,
-    log: (message) => logs.push(message),
-    logError: (message) => errors.push(message),
     now: () => clock,
   });
   const answer = async (response = 0, index = 0) => {
@@ -113,11 +116,11 @@ describe("native dialogs", () => {
     const run = harness();
     const window = fakeWindow("main");
     const shown = run.dialogs.showMessageBox("updater", OPTIONS, window);
-    expect(run.logs).toEqual(["[Dialog] updater opening (parent: visible)"]);
+    expect(run.logs).toEqual(["[desktop.dialog] opening source=updater parent=visible"]);
     run.advance(1_500);
     await run.answer(1);
     expect(await shown).toEqual({ response: 1, checkboxChecked: false });
-    expect(run.logs[1]).toBe("[Dialog] updater closed after 1500 ms");
+    expect(run.logs[1]).toBe("[desktop.dialog] closed source=updater durationMs=1500");
     expect(run.logs.join("\n")).not.toContain("secret");
   });
 
@@ -129,7 +132,7 @@ describe("native dialogs", () => {
     void run.dialogs.showMessageBox("updater", OPTIONS, fakeWindow("main", state));
     await Bun.sleep(0);
     expect(run.calls[0]?.parent).toBe("main");
-    expect(run.logs[0]).toBe("[Dialog] updater opening (parent: hidden)");
+    expect(run.logs[0]).toBe("[desktop.dialog] opening source=updater parent=hidden");
   });
 
   test("on macOS uses the current window when the caller has none", async () => {
@@ -152,7 +155,7 @@ describe("native dialogs", () => {
     const shown = run.dialogs.showMessageBox("startup-failure", OPTIONS);
     await Bun.sleep(0);
     expect(run.calls[0]?.parent).toBe("host");
-    expect(run.logs[0]).toBe("[Dialog] startup-failure opening (parent: host)");
+    expect(run.logs[0]).toBe("[desktop.dialog] opening source=startup-failure parent=host");
     expect(run.host.closed).toBe(false);
     await run.answer();
     await shown;
@@ -192,7 +195,7 @@ describe("native dialogs", () => {
         await Bun.sleep(0);
         expect(run.calls.map((call) => call.parent)).toEqual(["host", "host"]);
         expect(run.createHostWindow).toHaveBeenCalledTimes(1);
-        expect(run.logs[1]).toBe("[Dialog] b opening (parent: host)");
+        expect(run.logs[1]).toBe("[desktop.dialog] opening source=b parent=host");
         const shown = [first, second];
         await run.answer(0, firstToFinish);
         await shown[firstToFinish];
@@ -235,7 +238,8 @@ describe("native dialogs", () => {
       checkboxChecked: false,
     });
     expect(run.calls).toEqual([]);
-    expect(run.errors).toEqual(["[Dialog] toolchain-setup could not open:"]);
+    expect(run.errors).toHaveLength(1);
+    expect(run.errors[0]).toStartWith("[desktop.dialog] open-failed source=toolchain-setup");
   });
 
   test("elsewhere a windowless box stays windowless", async () => {
@@ -243,7 +247,7 @@ describe("native dialogs", () => {
     void run.dialogs.showMessageBox("backend-error", OPTIONS);
     await Bun.sleep(0);
     expect(run.calls[0]?.parent).toBeNull();
-    expect(run.logs[0]).toBe("[Dialog] backend-error opening (parent: none)");
+    expect(run.logs[0]).toBe("[desktop.dialog] opening source=backend-error parent=none");
     expect(run.createHostWindow).not.toHaveBeenCalled();
   });
 
@@ -268,7 +272,8 @@ describe("native dialogs", () => {
     void run.dialogs.showMessageBox("updater", OPTIONS, fakeWindow("main"));
     await Bun.sleep(0);
     expect(run.calls[0]?.parent).toBe("main");
-    expect(run.errors).toEqual(["[Dialog] updater could not ask for attention:"]);
+    expect(run.errors).toHaveLength(1);
+    expect(run.errors[0]).toStartWith("[desktop.dialog] attention-failed source=updater");
   });
 
   test("install routes Electron's own callers, with and without a window", async () => {
@@ -280,8 +285,8 @@ describe("native dialogs", () => {
     await Bun.sleep(0);
     expect(run.calls.map((call) => call.parent)).toEqual(["owner", "current"]);
     expect(run.logs).toEqual([
-      "[Dialog] unrouted opening (parent: visible)",
-      "[Dialog] unrouted opening (parent: visible)",
+      "[desktop.dialog] opening source=unrouted parent=visible",
+      "[desktop.dialog] opening source=unrouted parent=visible",
     ]);
   });
 
@@ -310,7 +315,7 @@ describe("native dialogs", () => {
         options: { type: "error", message: "Title", detail: "secret content" },
       });
       expect(run.logs).toEqual([
-        `[Dialog] error-box opening (parent: ${platform === "darwin" ? "visible" : "none"})`,
+        `[desktop.dialog] opening source=error-box parent=${platform === "darwin" ? "visible" : "none"}`,
       ]);
       expect(run.createHostWindow).not.toHaveBeenCalled();
       await run.answer();
@@ -360,7 +365,7 @@ describe("uncaught exceptions", () => {
           close = resolve;
         }),
     );
-    const logError = mock((_message: string, _error: unknown) => undefined);
+    const logError = mock((_event: string) => undefined);
     installUncaughtExceptionDialog(
       {
         on: (_event, added) => {
@@ -368,7 +373,7 @@ describe("uncaught exceptions", () => {
         },
       },
       { showMessageBox },
-      logError,
+      { error: logError },
     );
     listener(new Error("first"));
     listener(new Error("second"));
@@ -395,3 +400,5 @@ test("only the helper opens dialogs from the main process", () => {
     );
   expect(offenders).toEqual([]);
 });
+
+afterAll(resetLogger);

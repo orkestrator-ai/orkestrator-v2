@@ -1,6 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import os from "node:os";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("desktop");
 
 /**
  * Restarts the application after this instance exits.
@@ -133,9 +136,7 @@ export function relaunchApplication(
       env,
     );
     if (registered) return;
-    console.error(
-      "[Desktop] Could not register the AppImage relaunch service; using a detached waiter",
-    );
+    log.warn("relaunch.service-register-failed");
   }
   const waiter = context.spawn("/bin/sh", args, {
     detached: true,
@@ -148,7 +149,7 @@ export function relaunchApplication(
   // A spawn failure arrives asynchronously, usually before the quit completes.
   // Electron's relauncher is the better fallback than no relaunch at all.
   waiter.once("error", (error) => {
-    console.error("[Desktop] Could not schedule the AppImage relaunch:", error);
+    log.error("relaunch.schedule-failed", { error: formatLogError(error) });
     app.relaunch();
   });
   waiter.unref();

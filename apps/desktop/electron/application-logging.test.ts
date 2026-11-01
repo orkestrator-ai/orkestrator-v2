@@ -1,3 +1,4 @@
+import { configureLogger, createLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmod,
@@ -102,6 +103,148 @@ describe("production application log settings", () => {
 });
 
 describe("production application log writing", () => {
+  test("keeps formats separate across same-day restarts in both directions", async () => {
+    const dataDir = await enabledDataDir();
+    const now = () => new Date("2026-08-25T18:00:00.000Z");
+    let logging: InstalledApplicationLogging | null = null;
+    try {
+      // Both formats resume their own file on the second launch.
+      for (const format of ["text", "json", "text", "json"] as const) {
+        configureLogger({ format });
+        logging = installProductionApplicationLogging({ dataDir, now });
+        console.log(`launch in ${format}`);
+        await logging?.stop();
+      }
+      const logDirectory = path.join(dataDir, "logs");
+      expect((await readdir(logDirectory)).sort()).toEqual([
+        "orkestrator-ai-2026-08-25.jsonl",
+        "orkestrator-ai-2026-08-25.log",
+      ]);
+      const text = await readFile(path.join(logDirectory, "orkestrator-ai-2026-08-25.log"), "utf8");
+      expect(text.match(/LOG launch in text/g)).toHaveLength(2);
+      expect(text).not.toContain("launch in json");
+      const json = await readFile(
+        path.join(logDirectory, "orkestrator-ai-2026-08-25.jsonl"),
+        "utf8",
+      );
+      const records = json
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(records.filter((record) => record.message === "launch in json")).toHaveLength(2);
+      expect(records.every((record) => record.orklog === 1)).toBe(true);
+      expect(json).not.toContain("launch in text");
+    } finally {
+      await logging?.stop();
+      resetLogger();
+    }
+  });
+
+  test("keeps queued entries in their format's destination", async () => {
+    const dataDir = await enabledDataDir();
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      now: () => new Date("2026-08-25T18:00:00.000Z"),
+    });
+    try {
+      console.log("text before");
+      configureLogger({ format: "json" });
+      console.log("json between");
+      configureLogger({ format: "text" });
+      console.log("text after");
+      await logging?.stop();
+      const text = await readFile(
+        path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
+        "utf8",
+      );
+      expect(text).toContain("LOG text before");
+      expect(text).toContain("LOG text after");
+      expect(text).not.toContain("json between");
+      const json = await readFile(
+        path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.jsonl"),
+        "utf8",
+      );
+      expect(JSON.parse(json)).toMatchObject({ message: "json between" });
+    } finally {
+      await logging?.stop();
+      resetLogger();
+    }
+  });
+
+  test("rolls JSON files separately and resumes their latest roll on restart", async () => {
+    const dataDir = await enabledDataDir();
+    const options = {
+      dataDir,
+      now: () => new Date("2026-08-25T18:00:00.000Z"),
+      bounds: { maxFileBytes: 400 },
+    };
+    let logging: InstalledApplicationLogging | null = null;
+    configureLogger({ format: "json" });
+    try {
+      logging = installProductionApplicationLogging(options);
+      for (let index = 0; index < 8; index += 1) console.log(`entry ${index} ${"y".repeat(60)}`);
+      await logging?.stop();
+      const logDirectory = path.join(dataDir, "logs");
+      const beforeRestart = await readdir(logDirectory);
+      expect(beforeRestart).toContain("orkestrator-ai-2026-08-25.1.jsonl");
+      const baseFile = path.join(logDirectory, "orkestrator-ai-2026-08-25.jsonl");
+      const original = await readFile(baseFile, "utf8");
+      logging = installProductionApplicationLogging(options);
+      console.log("after JSON restart");
+      await logging?.stop();
+      expect(await readFile(baseFile, "utf8")).toBe(original);
+      const records: Array<Record<string, unknown>> = [];
+      for (const file of await readdir(logDirectory)) {
+        expect(file.endsWith(".jsonl")).toBe(true);
+        const contents = await readFile(path.join(logDirectory, file), "utf8");
+        expect(Buffer.byteLength(contents)).toBeLessThanOrEqual(400);
+        records.push(
+          ...contents
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        );
+      }
+      expect(records).toContainEqual(expect.objectContaining({ message: "after JSON restart" }));
+    } finally {
+      await logging?.stop();
+      resetLogger();
+    }
+  });
+
+  test.each([false, true])(
+    "escapes Unicode separators in raw JSON entries (truncated: %s)",
+    async (truncated) => {
+      const dataDir = await enabledDataDir();
+      configureLogger({ format: "json" });
+      const logging = installProductionApplicationLogging({
+        dataDir,
+        now: () => new Date("2026-08-25T18:00:00.000Z"),
+        bounds: { maxEntryBytes: 400 },
+      });
+      const message = "first\u2028second\u2029third" + (truncated ? "x".repeat(1000) : "");
+      try {
+        console.log(message);
+        await logging?.stop();
+        const json = await readFile(
+          path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.jsonl"),
+          "utf8",
+        );
+        const lines = json.trim().split(/\r\n|\n|\r|\u2028|\u2029/);
+        expect(lines).toHaveLength(2);
+        const records = lines.map((line) => JSON.parse(line));
+        expect(records[1]).toMatchObject({
+          message: truncated ? message.slice(0, 50) : message,
+          ...(truncated ? { truncated: true } : {}),
+        });
+        expect(lines.every((line) => Buffer.byteLength(line) <= 400)).toBe(true);
+      } finally {
+        await logging?.stop();
+        resetLogger();
+      }
+    },
+  );
+
   test("writes console output to a daily production log", async () => {
     const dataDir = await enabledDataDir(14);
     const logger = installProductionApplicationLogging({
@@ -116,8 +259,77 @@ describe("production application log writing", () => {
       path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
       "utf8",
     );
-    expect(contents).toContain("Saving logs to");
+    expect(contents).toContain("[logging] capture.started directory=");
     expect(contents).toContain("WARN diagnostic { code: 42 }");
+  });
+
+  test("writes valid JSON lines in JSON mode, including console output and drop markers", async () => {
+    const dataDir = await enabledDataDir();
+    configureLogger({ format: "json" });
+    try {
+      const logger = installProductionApplicationLogging({
+        dataDir,
+        now: () => new Date("2026-08-25T18:00:00.000Z"),
+        bounds: { maxPendingBytes: 700 },
+      });
+      createLogger("updater").warn("check.failed", { attempt: 2 });
+      console.error("[Backend] unmigrated\nsecond line");
+      console.log("z".repeat(800));
+      await logger?.stop();
+
+      const contents = await readFile(
+        path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.jsonl"),
+        "utf8",
+      );
+      const entries = contents
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(entries.every((entry) => entry.orklog === 1)).toBe(true);
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "updater",
+          event: "check.failed",
+          fields: { attempt: 2 },
+        }),
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({ level: "error", message: "[Backend] unmigrated\nsecond line" }),
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          area: "logging",
+          event: "entries.dropped",
+          fields: expect.objectContaining({ entries: 1 }),
+        }),
+      );
+    } finally {
+      resetLogger();
+    }
+  });
+
+  test("keeps a JSON line parseable when the entry bound cuts it", async () => {
+    const dataDir = await enabledDataDir();
+    configureLogger({ format: "json" });
+    try {
+      const logger = installProductionApplicationLogging({
+        dataDir,
+        now: () => new Date("2026-08-25T18:00:00.000Z"),
+        bounds: { maxEntryBytes: 400 },
+      });
+      console.log("x".repeat(4000));
+      await logger?.stop();
+      const contents = await readFile(
+        path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.jsonl"),
+        "utf8",
+      );
+      const last = JSON.parse(contents.trim().split("\n").at(-1)!) as Record<string, unknown>;
+      expect(last.truncated).toBe(true);
+      expect(Buffer.byteLength(contents.trim().split("\n").at(-1)!)).toBeLessThanOrEqual(400);
+    } finally {
+      resetLogger();
+    }
   });
 
   test("truncates an entry past the per-entry byte bound", async () => {
@@ -161,8 +373,9 @@ describe("production application log writing", () => {
       path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
       "utf8",
     );
-    expect(contents).toContain("2 entries (");
-    expect(contents).toContain("dropped: log queue full");
+    expect(contents).toMatch(
+      /WARN \[logging\] entries\.dropped entries=2 bytes=\d+ reason=queue-full/,
+    );
     expect(contents).toContain("kept");
     expect(logger?.dropStats()).toEqual({ droppedEntries: 0, droppedBytes: 0 });
   });
@@ -181,8 +394,9 @@ describe("production application log writing", () => {
       path.join(dataDir, "logs", "orkestrator-ai-2026-08-25.log"),
       "utf8",
     );
-    expect(contents).toContain("1 entry (");
-    expect(contents).toContain("dropped: log queue full");
+    expect(contents).toMatch(
+      /WARN \[logging\] entries\.dropped entries=1 bytes=\d+ reason=queue-full/,
+    );
   });
 
   test("rolls over to a numbered file once one passes the per-file bound", async () => {

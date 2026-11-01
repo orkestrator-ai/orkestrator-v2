@@ -32,6 +32,13 @@
     "react/use-memo": "error",
     "import/no-cycle": "error",
     "import/no-mutable-exports": "error",
+    "no-restricted-globals": [
+      "error",
+      {
+        "name": "console",
+        "message": "Use createLogger from @orkestrator/protocol/logger (docs/architecture/logging.md)."
+      }
+    ],
     "no-restricted-imports": [
       "error",
       {
@@ -188,6 +195,31 @@
                 "group": ["../node/*"],
                 "allowTypeImports": true,
                 "message": "Graph protocol modules are shared with the browser renderer and may import only types from src/node/."
+              },
+              {
+                "group": ["../testing/*"],
+                "message": "Test fixtures and fakes are for tests only."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/protocol/src/log-vocabulary/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["node:*", "bun:*"],
+                "message": "The log vocabulary is shared with the browser renderer. Put Node- or Bun-dependent code in src/node/."
+              },
+              {
+                "group": ["../node/*"],
+                "allowTypeImports": true,
+                "message": "The log vocabulary is shared with the browser renderer and may import only types from src/node/."
               },
               {
                 "group": ["../testing/*"],
@@ -356,6 +388,50 @@
       ],
       "rules": {
         "import/no-mutable-exports": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/test/**",
+        "**/tests/**",
+        "**/testing/**",
+        "e2e/**",
+        "**/mocks/**",
+        "**/*test-harness*",
+        "**/*test-support*",
+        "**/*test-helpers*",
+        "**/*test-fixtures*",
+        "scripts/**",
+        "apps/desktop/scripts/**",
+        "packages/cli/**",
+        "docker/**",
+        "packages/protocol/src/logger.ts",
+        "packages/protocol/src/node/application-logging.ts",
+        "packages/protocol/src/fatal-rejections.ts",
+        "apps/backend/src/bounded-console.ts"
+      ],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": [
+        "apps/backend/**",
+        "apps/web/**",
+        "apps/web-public/**",
+        "bridges/acp-bridge/**",
+        "bridges/claude-bridge/**",
+        "bridges/codex-bridge/**",
+        "bridges/cursor-bridge/**",
+        "bridges/pi-bridge/**",
+        "packages/protocol/src/bridge-lifecycle.ts",
+        "packages/protocol/src/event-loop-stall-monitor.ts",
+        "packages/protocol/src/node/bridge-diagnostics.ts"
+      ],
+      "rules": {
+        "no-restricted-globals": "off"
       }
     }
   ]

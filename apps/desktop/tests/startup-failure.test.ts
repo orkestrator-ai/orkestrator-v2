@@ -10,7 +10,7 @@ function harness(agentTest: boolean) {
         answer = () => resolve({ response: 0, checkboxChecked: false });
       }),
   );
-  const logError = mock((_message: string, _error: unknown) => undefined);
+  const logError = mock((_error: unknown) => undefined);
   const quit = mock(() => undefined);
   const report = createStartupFailureReporter({
     agentTest,
@@ -39,7 +39,7 @@ describe("startup failure reporting", () => {
     const error = new Error("Backend failed");
     run.fail(error);
     await Bun.sleep(0);
-    expect(run.logError).toHaveBeenCalledWith("[Desktop] Startup failed:", error);
+    expect(run.logError).toHaveBeenCalledWith(error);
     expect(run.showMessageBox).not.toHaveBeenCalled();
     expect(run.quit).toHaveBeenCalledTimes(1);
   });
@@ -49,7 +49,7 @@ describe("startup failure reporting", () => {
     async (error) => {
       const run = harness(false);
       run.fail(error);
-      expect(run.logError).toHaveBeenCalledWith("[Desktop] Startup failed:", error);
+      expect(run.logError).toHaveBeenCalledWith(error);
       expect(run.showMessageBox).toHaveBeenCalledWith("startup-failure", {
         type: "error",
         title: "Orkestrator failed to start",

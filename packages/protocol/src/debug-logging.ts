@@ -19,8 +19,12 @@ export function desktopStartupMessage(event: DesktopStartupEvent): string {
   return `[DesktopStartup] ${event}`;
 }
 
+export function desktopStartupEventOf(message: string): DesktopStartupEvent | null {
+  return DESKTOP_STARTUP_EVENTS.find((event) => desktopStartupMessage(event) === message) ?? null;
+}
+
 export function isDesktopStartupMessage(message: string): boolean {
-  return DESKTOP_STARTUP_EVENTS.some((event) => desktopStartupMessage(event) === message);
+  return desktopStartupEventOf(message) !== null;
 }
 
 export function isValidDebugLogRetentionDays(value: unknown): value is number {

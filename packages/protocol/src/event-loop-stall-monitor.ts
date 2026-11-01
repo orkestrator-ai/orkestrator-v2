@@ -51,6 +51,8 @@ export interface EventLoopStallMonitorOptions {
   logIntervalMs?: number;
   alwaysLogMs?: number;
   log?: (message: string) => void;
+  /** Takes each stall instead of `formatStall` and `log`, for a structured logger. */
+  report?: (stall: { lagMs: number; endedAt: string; intervalMs: number; folded: string }) => void;
   /** The log line for one stall; `folded` is "" or a suffix naming suppressed stalls. */
   formatStall?: (stall: {
     lagMs: number;
@@ -135,7 +137,9 @@ export function startEventLoopStallMonitor(
         : "";
     suppressed = 0;
     suppressedMaxMs = 0;
-    log(formatStall({ lagMs, endedAt: new Date(at).toISOString(), intervalMs, folded }));
+    const stall = { lagMs, endedAt: new Date(at).toISOString(), intervalMs, folded };
+    if (options.report) options.report(stall);
+    else log(formatStall(stall));
   };
 
   const schedule = () => {

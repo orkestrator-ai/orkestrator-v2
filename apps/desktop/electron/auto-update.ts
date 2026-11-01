@@ -6,6 +6,12 @@ import {
   type HostUpdateChannel,
 } from "@orkestrator/protocol/host-maintenance";
 import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from "electron";
+import {
+  createLogger,
+  formatLogError,
+  type Logger,
+  type LogEventOf,
+} from "@orkestrator/protocol/logger";
 
 /** First check shortly after launch, so it never competes with startup work. */
 const INITIAL_CHECK_DELAY_MS = 30_000;
@@ -113,7 +119,7 @@ export type AutoUpdateOptions = {
     window: BrowserWindow | null,
     options: MessageBoxOptions,
   ): Promise<MessageBoxReturnValue>;
-  log?: Pick<Console, "info" | "warn">;
+  log?: Pick<Logger<LogEventOf<"updater">>, "info" | "warn">;
   /** Called after every check, background ones included. */
   onCheckResult?(report: UpdateCheckReport): void;
   /** Drain the backend and release the AppImage single-instance lock before spawning its replacement. */
@@ -129,7 +135,7 @@ export type AutoUpdateOptions = {
  */
 export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpdateController {
   const { updater, productName, currentVersion, getWindow, showMessageBox } = options;
-  const log = options.log ?? console;
+  const log = options.log ?? createLogger("updater");
   let downloadedVersion: string | null = null;
   let promptedVersion: string | null = null;
   let manualCheck = false;
@@ -198,13 +204,13 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
 
   updater.on("update-downloaded", (info) => {
     downloadedVersion = info.version;
-    log.info(`[Updater] Downloaded ${info.version}`);
+    log.info("downloaded", { version: info.version });
     if (!checkInFlight) offerRestart(info.version);
   });
   function offerRestart(version: string): void {
     if (remoteStaging > 0) return;
     void promptToRestart(version).catch((error: unknown) =>
-      log.warn("[Updater] Restart prompt failed:", error),
+      log.warn("restart-prompt.failed", { error: formatLogError(error) }),
     );
   }
 
@@ -218,7 +224,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
     // MacUpdater emits update-downloaded for its ZIP before native staging.
     // A later native error must also invalidate an already-open restart dialog.
     invalidateReadiness();
-    log.warn("[Updater] Update failed:", error);
+    log.warn("update.failed", { error: formatLogError(error) });
   });
 
   function reportCheck(report: Omit<UpdateCheckReport, "checkedAt">): void {
@@ -229,7 +235,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
         checkedAt: new Date().toISOString(),
       });
     } catch (error) {
-      log.warn("[Updater] Reporting a check failed:", error);
+      log.warn("check-report.failed", { error: formatLogError(error) });
     }
   }
 
@@ -238,7 +244,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
     try {
       result = await updater.checkForUpdates();
     } catch (error) {
-      log.warn("[Updater] Update check failed:", error);
+      log.warn("check.failed", { error: formatLogError(error) });
       if (generation === channelGeneration)
         reportCheck({
           latestVersion: null,
@@ -259,7 +265,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
       await result?.downloadPromise;
     } catch (error) {
       invalidateReadiness();
-      log.warn("[Updater] Update download or staging failed:", error);
+      log.warn("download.failed", { error: formatLogError(error) });
       throw new UpdateDownloadError(error);
     }
     if (generation === channelGeneration && downloadedVersion) offerRestart(downloadedVersion);
@@ -327,7 +333,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
       remoteReserved = false;
     },
     setChannel(next: HostUpdateChannel): void {
-      if (channel !== next) log.info(`[Updater] Following the ${next} channel`);
+      if (channel !== next) log.info("channel.following", { channel: next });
       applyChannel(next);
     },
     async installStaged(version: string): Promise<boolean> {

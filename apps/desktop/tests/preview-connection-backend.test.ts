@@ -115,9 +115,8 @@ describe("rebinding a window's previews", () => {
     const warn = mock((..._args: unknown[]) => undefined);
     rebindWindowPreviews(context, "local", runtime, { warn });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(warn).toHaveBeenCalledWith(
-      "[Previews] Failed to close preview transport:",
-      expect.any(Error),
-    );
+    expect(warn).toHaveBeenCalledWith("transport.close-failed", {
+      error: expect.objectContaining({ name: "Error" }),
+    });
   });
 });

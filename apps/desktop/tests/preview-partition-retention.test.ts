@@ -395,7 +395,7 @@ describe("PreviewPartitionRetention", () => {
     );
     // A failed removal is retried on the next start; nothing else is kept.
     expect(fs.pending()).toEqual([busy]);
-    expect(warn).toHaveBeenCalledWith("[Previews] Failed to remove cleared preview partitions.");
+    expect(warn).toHaveBeenCalledWith("partitions.remove-failed");
   });
 
   test("forgotten cleanup drains beyond one pass and retries failures without a transport, then survives restart", async () => {

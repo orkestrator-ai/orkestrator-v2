@@ -2,6 +2,7 @@ import type { ConnectionManager } from "./connection-manager.js";
 import { PORTAL_EVENT_CHANNEL } from "./federation-ipc.js";
 import { rebindWindowPreviews, type WindowPreviewRuntime } from "./preview-connection-backend.js";
 import { editDesktopConnection, type WorkspaceContext } from "./window-workspace-target.js";
+import { formatLogError, type Logger, type LogEventOf } from "@orkestrator/protocol/logger";
 
 /** A renderer's web contents, as far as the window bookkeeping uses it. */
 export type RendererContents = {
@@ -50,7 +51,7 @@ export interface DesktopWindowContextsOptions<T extends DesktopWindowContextReco
   publishConnectionLists(): void;
   /** The window list or focus changed; rebuild the application menu. */
   menuChanged(): void;
-  logger: Pick<Console, "warn">;
+  logger: Pick<Logger<LogEventOf<"preview">>, "warn">;
 }
 
 export function emitToContents(contents: RendererContents, event: string, payload: unknown): void {
@@ -86,7 +87,7 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
       // Owned local listeners and tunnel connections end with the window;
       // the backend's services and applications keep running.
       void closing?.previewTransport.disposeAll().catch((error: unknown) => {
-        this.options.logger.warn("[Previews] Failed to close preview transport:", error);
+        this.options.logger.warn("transport.close-failed", { error: formatLogError(error) });
       });
       this.options.cancelPrompts(webContentsId);
       this.contexts.delete(webContentsId);

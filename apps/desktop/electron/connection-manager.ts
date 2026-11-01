@@ -70,6 +70,9 @@ import {
   type OpenedRoute,
   type SshTunnelProvider,
 } from "./connection-routes.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("connections");
 
 type LocalBackend = Pick<
   BackendHttpClient,
@@ -247,10 +250,9 @@ export class ConnectionManager {
         false,
       );
     } catch (error) {
-      console.warn(
-        "[Connections] Could not restore the previous remote connection; using Local:",
-        sanitizeDiagnostic(error instanceof Error ? error.message : String(error)),
-      );
+      log.warn("restore.failed", {
+        reason: sanitizeDiagnostic(error instanceof Error ? error.message : String(error)),
+      });
       await this.mutateCatalogue((current) => ({
         ...current,
         activeConnectionId: LOCAL_CONNECTION_ID,
@@ -2103,14 +2105,9 @@ export class ConnectionManager {
 
   /** Main awaits `initialize()` before the first window, so a silent wait looks like a hang. */
   private async detectSecureStorageAtStartup(): Promise<boolean> {
-    const [store, prompt] =
-      this.platform === "darwin"
-        ? ["the macOS keychain", "keychain"]
-        : ["the system keyring", "keyring"];
+    const store = this.platform === "darwin" ? "macos-keychain" : "system-keyring";
     const notice = setTimeout(() => {
-      console.warn(
-        `[Connections] Waiting for ${store} (safe storage) before opening the first window; answer the ${prompt} prompt to continue`,
-      );
+      log.warn("secure-storage.waiting", { store });
     }, SECURE_STORAGE_WAIT_NOTICE_MS);
     notice.unref?.();
     try {

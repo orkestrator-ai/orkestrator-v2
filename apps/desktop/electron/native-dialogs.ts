@@ -1,3 +1,12 @@
+import {
+  createLogger,
+  formatLogError,
+  type Logger,
+  type LogEventOf,
+} from "@orkestrator/protocol/logger";
+
+const log = createLogger("desktop.dialog");
+const desktopLog = createLogger("desktop");
 /**
  * The one way this process opens a native dialog.
  *
@@ -69,14 +78,10 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
   createHostWindow(): Promise<Window>;
   /** Tells someone away from the app that a dialog is waiting for them. */
   requestAttention(window: Window, message: string): void;
-  log?: (message: string) => void;
-  logError?: (message: string, error: unknown) => void;
   /** Monotonic milliseconds. */
   now?: () => number;
 }): NativeDialogs<Window> {
   const { dialog, platform, currentWindow, createHostWindow, requestAttention } = options;
-  const log = options.log ?? ((message: string) => console.info(message));
-  const logError = options.logError ?? ((message, error) => console.error(message, error));
   const now = options.now ?? (() => performance.now());
   const original = dialog.showMessageBox.bind(dialog) as NativeDialogApi<Window>["showMessageBox"];
   let routed: NativeDialogApi<Window>["showMessageBox"] | null = null;
@@ -130,18 +135,18 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
   ): Promise<MessageBoxResult> => {
     const record: DialogRecord = { source, parent: state, openedAt: now(), closedAt: null };
     records.push(record);
-    log(`[Dialog] ${source} opening (parent: ${state})`);
+    log.info("opening", { source, parent: state });
     try {
       if (!parent) return await nativeBox()(dialogOptions);
       try {
         requestAttention(parent, dialogOptions.message);
       } catch (error) {
-        logError(`[Dialog] ${source} could not ask for attention:`, error);
+        log.warn("attention-failed", { source, error: formatLogError(error) });
       }
       return await nativeBox()(parent, dialogOptions);
     } finally {
       record.closedAt = now();
-      log(`[Dialog] ${source} closed after ${Math.round(record.closedAt - record.openedAt)} ms`);
+      log.info("closed", { source, durationMs: Math.round(record.closedAt - record.openedAt) });
       const closed = records.filter((entry) => entry.closedAt !== null);
       for (const entry of closed.slice(0, -RECENT_CLOSED_DIALOGS)) {
         records.splice(records.indexOf(entry), 1);
@@ -169,7 +174,7 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
       return await open(source, dialogOptions, await acquireHost(), "host");
     } catch (error) {
       // Never fall back to a windowless box: refuse, as if it were cancelled.
-      logError(`[Dialog] ${source} could not open:`, error);
+      log.error("open-failed", { source, error: formatLogError(error) });
       return { response: dialogOptions.cancelId ?? 0, checkboxChecked: false };
     } finally {
       releaseHost();
@@ -221,12 +226,11 @@ export function createNativeDialogs<Window extends DialogWindow>(options: {
 export function installUncaughtExceptionDialog<Window>(
   target: { on(event: "uncaughtException", listener: (error: Error) => void): unknown },
   dialogs: Pick<NativeDialogs<Window>, "showMessageBox">,
-  logError: (message: string, error: unknown) => void = (message, error) =>
-    console.error(message, error),
+  exceptionLog: Pick<Logger<LogEventOf<"desktop">>, "error"> = desktopLog,
 ): void {
   let showing = false;
   target.on("uncaughtException", (error) => {
-    logError("[Desktop] Uncaught exception:", error);
+    exceptionLog.error("uncaught-exception", { error: formatLogError(error) });
     if (showing) return;
     showing = true;
     void dialogs
@@ -237,7 +241,11 @@ export function installUncaughtExceptionDialog<Window>(
         detail: error.stack ?? `${error.name}: ${error.message}`,
         buttons: ["OK"],
       })
-      .catch((failure: unknown) => logError("[Desktop] Could not show the exception:", failure))
+      .catch((failure: unknown) =>
+        exceptionLog.error("uncaught-exception.dialog-failed", {
+          error: formatLogError(failure),
+        }),
+      )
       .finally(() => {
         showing = false;
       });

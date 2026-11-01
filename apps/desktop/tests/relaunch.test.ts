@@ -96,14 +96,14 @@ describe("relaunchApplication", () => {
 
   test("uses the stable detached waiter if the systemd service cannot be registered", () => {
     const { value, spawned } = context({ runSystemdService: () => false });
-    const original = console.error;
-    console.error = mock(() => undefined);
+    const original = console.warn;
+    console.warn = mock(() => undefined);
     try {
       relaunchApplication({ relaunch: () => undefined }, value);
       expect(spawned).toHaveLength(1);
       expect(spawned[0]!.options.cwd).toBe("/home/user");
     } finally {
-      console.error = original;
+      console.warn = original;
     }
   });
 

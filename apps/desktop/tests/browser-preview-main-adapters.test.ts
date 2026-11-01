@@ -56,9 +56,6 @@ describe("browser preview main adapters", () => {
     });
     adapters.openExternal("https://example.com/failure");
     await flushPromises();
-    expect(logError).toHaveBeenCalledWith(
-      "[BrowserPreview] Failed to open link externally:",
-      failure,
-    );
+    expect(logError).toHaveBeenCalledWith(failure);
   });
 });

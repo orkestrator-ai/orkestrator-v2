@@ -1,3 +1,11 @@
+import {
+  createLogger,
+  formatLogError,
+  type Logger,
+  type LogEventOf,
+} from "@orkestrator/protocol/logger";
+
+const log = createLogger("preview");
 /** What a window's preview transport needs from one connection's backend client. */
 export type PreviewConnectionClient = {
   invoke<T>(command: string, args: Record<string, unknown>): Promise<T>;
@@ -55,14 +63,14 @@ export function rebindWindowPreviews<
   context: WindowPreviewRuntime<Manager, Transport>,
   connectionId: string,
   create: (connectionId: string) => { manager: Manager; previewTransport: Transport },
-  logger: Pick<Console, "warn"> = console,
+  logger: Pick<Logger<LogEventOf<"preview">>, "warn"> = log,
   force = false,
 ): boolean {
   if (!force && connectionId === context.previewConnectionId) return false;
   const next = create(connectionId);
   context.browserPreviewManager.destroyAll();
   void context.previewTransport.disposeAll().catch((error: unknown) => {
-    logger.warn("[Previews] Failed to close preview transport:", error);
+    logger.warn("transport.close-failed", { error: formatLogError(error) });
   });
   context.browserPreviewManager = next.manager;
   context.previewTransport = next.previewTransport;

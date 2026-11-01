@@ -194,7 +194,7 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     try {
       const descriptor = await releaseManager.acquire(target(), "tab-release");
       await expect(releaseManager.disposeAll()).resolves.toBeUndefined();
-      expect(warn).toHaveBeenCalledWith("[Previews] Failed to release preview attachment.");
+      expect(warn).toHaveBeenCalledWith("attachment.release-failed");
       expect(warn).toHaveBeenCalledTimes(1);
       await expect(get(descriptor.origin)).rejects.toThrow();
       expect(releaseManager.stats().services).toBe(0);

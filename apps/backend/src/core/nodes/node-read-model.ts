@@ -255,6 +255,7 @@ export class NodeReadModel {
         resource !== "project" &&
         resource !== "environment" &&
         resource !== "environment-pr-health" &&
+        resource !== "build-pipeline" &&
         resource !== "config"
       ) {
         return;
@@ -457,7 +458,11 @@ export class NodeReadModel {
     // Repository config owns defaultBranch without advancing the project manifest.
     if (change.resource === "project" || change.resource === "config") {
       void this.requestHydrate(nodeId);
-    } else if (change.resource === "environment" || change.resource === "environment-pr-health") {
+    } else if (
+      change.resource === "environment" ||
+      change.resource === "environment-pr-health" ||
+      change.resource === "build-pipeline"
+    ) {
       const projectId =
         typeof change.projectId === "string"
           ? change.projectId

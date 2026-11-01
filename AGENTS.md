@@ -32,6 +32,58 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Graphs plan work items (`plans/graphs/`): starting one, updating its status | [`plans/graphs/AGENTS.md`](plans/graphs/AGENTS.md) |
 | Goals plan work items (`plans/goals/`): starting one, updating its status | [`plans/goals/AGENTS.md`](plans/goals/AGENTS.md) |
 
+## Show every visual change as an image in the transcript
+
+When the user asks for a change to anything they can see, show them a picture
+of it in your reply. This covers UI components, CSS, layout, spacing, colours,
+icons, themes, animations, empty and error states, rendered Markdown, diagrams,
+charts and generated images. Do not describe a visual change in words alone or
+leave the user to run the app to see it. This applies to every agent, workers
+included, and to proposals: when you offer design options before building one,
+render each option.
+
+Orkestrator renders Markdown images inline in the agent transcript
+(`MediaBlock`, through the media resolver; see the Media and Image versions
+entries in
+[`docs/architecture/rich-transcripts.md`](docs/architecture/rich-transcripts.md)).
+Use that, as follows:
+
+1. **Render it.** Prefer a screenshot of the real UI: drive a throwaway dev
+   profile with Playwright as described in
+   [Required frontend-to-browser test cycle for agents](#required-frontend-to-browser-test-cycle-for-agents).
+   When the live stack cannot show the state (or you are proposing options
+   before implementing), render a standalone HTML or SVG mock with the same
+   styles and screenshot it with Playwright's headless Chromium. For an
+   animation, capture its key frames.
+2. **Save it in the worktree.** Write PNGs to `output/visual-previews/` in your
+   working directory (git-ignored, so previews stay out of the change set). In
+   a container that is `/workspace/output/visual-previews/`. Give each version
+   a new descriptive name (`composer-before.png`, `composer-after-narrow.png`)
+   rather than overwriting one file.
+3. **Embed it with Markdown image syntax and an absolute path**, in the reply
+   text itself:
+   `![Composer after, 390px viewport](/abs/path/to/worktree/output/visual-previews/composer-after-narrow.png)`.
+   Opening the file with a Read tool is not enough; the image must be in the
+   message.
+
+Path rules the renderer enforces: the path must be absolute and inside
+Orkestrator-managed workspace storage (your worktree) or the container's
+`/workspace`. Files under `/tmp`, other directories outside the workspace, and
+project-home checkouts show a placeholder instead of the image. Use PNG, JPEG,
+GIF or SVG; keep images well under 8 MiB and 40 megapixels. A transcript
+image keeps the bytes it first showed, so a later overwrite does not update an
+earlier message.
+
+What to show:
+
+- Before and after when changing existing UI.
+- A desktop and a narrow viewport when the change affects layout.
+- Each reachable state the change touches (for example empty, loading, error).
+
+Screenshots must not contain gateway tokens, credentials or other secrets. If
+you genuinely cannot render the change, say so and why in the reply instead of
+silently omitting the image.
+
 ## Main Branch and Pull Request Policy
 
 All changes to `main` must be integrated through a pull request. Agents must

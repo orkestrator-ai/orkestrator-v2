@@ -7,6 +7,7 @@
  * restart, an idle detach or a crashed child all recover without the renderer
  * seeing anything other than a session that was briefly connecting.
  */
+import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import {
   nativeAgentDeniedCapabilities,
   nativeAgentPolicyDeniesWebSearch,
@@ -503,6 +504,12 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     ...(skills ? [COORDINATOR_SKILLS_SERVER] : []),
   ];
   state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
+  const settingSources = cursorSettingSources(policy, {
+    readOnly,
+    selectsServers: selectServers !== undefined,
+  });
+  // Without `project` the SDK skips AGENTS.md; `cursorPromptText` sends it.
+  state.loadsProjectRules = settingSources.includes("project");
   const options: AgentOptions = {
     apiKey,
     model: modelSelection(state.composer),
@@ -512,10 +519,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       // Read-only coordinators keep only the injected Orkestrator MCP server.
       // User settings would otherwise load the host's MCP catalog through the
       // same `mcp` capability the allowlist has to grant for delegation.
-      settingSources: cursorSettingSources(policy, {
-        readOnly,
-        selectsServers: selectServers !== undefined,
-      }),
+      settingSources,
       sandboxOptions: { enabled: policy.sandbox === "provider" },
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
       ...(customTools ? { customTools } : {}),
@@ -1303,10 +1307,17 @@ function pushHistoricRow(state: SessionState, row: HistoricRow, planned: boolean
 }
 
 function historicUserTexts(body: Record<string, unknown>): string[] {
+  // A sent prompt carries the shared agent instructions in a frame
+  // (`cursorPromptText`); the row shows only what the user wrote. Both lists
+  // are stripped alike, because `consume` matches one against the other.
   const extract = (value: unknown): string | undefined => {
-    if (typeof value === "string") return value;
-    if (isObject(value) && nonBlank(value.text)) return value.text;
-    return undefined;
+    const raw =
+      typeof value === "string"
+        ? value
+        : isObject(value) && nonBlank(value.text)
+          ? value.text
+          : undefined;
+    return raw === undefined ? undefined : stripSystemInstructions(raw);
   };
 
   const texts: string[] = [];

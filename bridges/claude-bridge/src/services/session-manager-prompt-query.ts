@@ -10,7 +10,8 @@ import {
   claudeWorkflowResultTools,
   createWorkflowResultTurnHook,
 } from "./claude-workflow-result-tools.js";
-import { backgroundCommandInstruction } from "./background-commands.js";
+import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
+import { claudeSystemPromptAppend } from "./system-prompt-append.js";
 import {
   claudeAsksForApproval,
   claudeManagedSettings,
@@ -130,6 +131,12 @@ export async function resolveQueryPlan(
   };
   const settingSources = claudeTurnSettingSources(session, options);
   session.commandDiscoveryInputs.includeLocalSettings = settingSources.includes("local");
+  // The CLI reads the checkout's CLAUDE.md or AGENTS.md only with the
+  // `project` source, which also loads its hooks and settings. Without it the
+  // repository's AGENTS.md is appended instead, coordinators included.
+  const repositoryInstructions = settingSources.includes("project")
+    ? undefined
+    : await readRepositoryInstructions(cwd);
   // A read-only turn asks for the CLI's sandbox only where it can run; where
   // it cannot, the hook is the boundary and the turn says so.
   const readOnlyCommandSandbox = isCoordinatorReadOnlyPolicy(policy)
@@ -290,6 +297,7 @@ export async function resolveQueryPlan(
   const mcpServersKey = createHash("sha256").update(JSON.stringify(mcpServers)).digest("hex");
   return {
     settingSources,
+    repositoryInstructions,
     cwd,
     policy,
     effortLevel,
@@ -455,22 +463,12 @@ export function claudeQueryOptions(
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: coordinatorReadOnly
-        ? "You are a read-only coordinator. Inspect the checkout with reading tools and use the trusted research tools available for this turn. Delegate all mutations and artifact creation to worker environments through Orkestrator tools. Present findings directly in your response."
-        : [
-            "IMPORTANT: You MUST read a file before editing or writing to it. The Edit and Write tools will fail if you have not first used the Read tool to read the file in this conversation. Always read files before attempting to modify them.",
-            // Since Claude Code 2.1.285 an Agent SDK session stops a background
-            // shell command at its `timeout`, so a dev server Claude starts here
-            // does not outlive the ceiling configured in Settings.
-            backgroundCommandInstruction(queryEnvironment),
-            // The claude.ai Claude Docs connector and docs skill steer reports
-            // into remote docs that only an Artifact tool can open, and
-            // Orkestrator has none, so the report never shows up here.
-            "When the user asks for a document (a report, design doc, plan, analysis, guide, or other writing to keep), prefer writing it as a Markdown file in a `docs/` folder at the root of the working directory over creating a Claude Doc or claude.ai artifact, and tell the user the file's path. Project instructions (such as CLAUDE.md or AGENTS.md), local skills, and the user's own request take priority over this default when they say where or how to write documents.",
-            // Host preview reads exclude project-home checkouts even though they
-            // are a session's working directory. Keep the storage boundary explicit.
-            "When you show the user an image in your reply (a screenshot, rendered preview, or chart) using Markdown image syntax, reference it by its absolute path. In a managed worktree or container environment, save the file inside the working directory, preferably in a git-ignored folder so preview files stay out of the change set. Local image previews are limited to Orkestrator-managed workspace storage or the container's /workspace. Project-home checkouts are excluded from host preview reads, even when they are the working directory, so images saved there cannot be previewed from a local Markdown path. Paths outside previewable storage, such as /tmp, also show a placeholder.",
-          ].join("\n\n"),
+      append: [
+        coordinatorReadOnly
+          ? "You are a read-only coordinator. Inspect the checkout with reading tools and use the trusted research tools available for this turn. Delegate all mutations and artifact creation to worker environments through Orkestrator tools. Present findings directly in your response."
+          : claudeSystemPromptAppend(queryEnvironment),
+        ...(plan.repositoryInstructions ? [plan.repositoryInstructions] : []),
+      ].join("\n\n"),
     },
     // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
     // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types

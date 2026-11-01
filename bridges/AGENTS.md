@@ -193,6 +193,21 @@ When touching command discovery or dispatch:
   hydrate a transcript or re-attach an idle session; push freshness rides on
   `commandRevision` in the snapshot the backend already reads.
 
+## Orkestrator's agent instructions
+
+What Orkestrator tells every agent about itself (image previews, where
+documents go) is `GENERAL_AGENT_INSTRUCTIONS` in
+`packages/protocol/src/agent-system-instructions.ts`, and every bridge
+delivers it through its own channel
+([agent-engines.md](../docs/architecture/agent-engines.md#orkestrators-agent-instructions)).
+Never add such a rule to one bridge's prompt alone: add it to the general
+block, and keep a bridge's own lines for what only that provider needs. A
+new bridge must deliver the block too, and not to a read-only coordinator.
+Every session also reads the repository's AGENTS.md, coordinators included:
+where the provider loads it only together with the checkout's executable
+configuration, the bridge sends `readRepositoryInstructions` itself rather
+than trusting that configuration.
+
 ## Packaging
 
 Every bridge that builds has to be listed in the root `package.json`'s

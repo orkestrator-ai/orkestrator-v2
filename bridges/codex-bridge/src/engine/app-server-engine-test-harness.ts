@@ -161,6 +161,7 @@ export function harness(
     clientInfo: { name: "orkestrator", title: "Orkestrator", version: "2.4.9" },
     interruptTimeoutMs: 30,
     toolHistoryVerdict: async () => "clean",
+    readConfiguredDeveloperInstructions: async () => undefined,
     // The engine always owns its own supervisor wiring; only the process spawn
     // and timings are overridden here.
     supervisorOverrides: {

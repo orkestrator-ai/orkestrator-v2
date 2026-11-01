@@ -663,12 +663,13 @@ describe("Pi SDK lifecycle", () => {
     });
     // Extensions can replace a built-in such as `read` by name. A read-only
     // session must therefore exclude every repository-controlled registration,
-    // even when the container normally opts into project resources.
+    // even when the container normally opts into project resources. AGENTS.md
+    // is instructions, not a registration, and every session reads it.
     expect(projectResourceDiscoveryOptions(true, true)).toEqual({
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
-      noContextFiles: true,
+      noContextFiles: false,
     });
   });
 
@@ -711,7 +712,9 @@ describe("Pi SDK lifecycle", () => {
       });
       await readOnly.reload();
       expect(readOnly.getExtensions().extensions).toHaveLength(0);
-      expect(readOnly.getAgentsFiles().agentsFiles).toHaveLength(0);
+      // AGENTS.md is instructions, which every session on every provider
+      // reads, read-only ones included; only registrations stay out.
+      expect(readOnly.getAgentsFiles().agentsFiles).toHaveLength(1);
     } finally {
       await rm(project, { recursive: true, force: true });
     }

@@ -22,6 +22,8 @@
  *     against persisted turns rather than retrying blind.
  */
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
+import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import {
   ARTIFACT_TOOL_NAMES,
@@ -472,6 +474,14 @@ export interface AppServerEngineOptions {
    * fork ancestors; scripted-child tests replace it.
    */
   toolHistoryVerdict?: (threadId: string) => Promise<ToolHistoryVerdict>;
+  /**
+   * The `developer_instructions` the user configured, read back for a thread
+   * so Orkestrator's own instructions add to them (`developerInstructions`).
+   * `cwd` is set only when the thread loads the checkout's project layer.
+   * Defaults to `config/read`; scripted-child tests replace it so their
+   * configuration reads stay the ones they verify.
+   */
+  readConfiguredDeveloperInstructions?: (cwd: string | undefined) => Promise<unknown>;
   /**
    * The empty `gh` configuration directory a thread that withholds the GitHub
    * credential points `GH_CONFIG_DIR` at (`github-credential-config.ts`).
@@ -1760,9 +1770,51 @@ export class AppServerEngine implements CodexEngine {
     return { ...skills, ...mcp, ...credential };
   }
 
+  /**
+   * Developer instructions for a thread: the instructions every Orkestrator
+   * provider receives (`agentSystemInstructions`; not for a read-only
+   * coordinator, which delegates every file it would write), then the
+   * repository's AGENTS.md when the thread does not load the checkout itself
+   * (project resources off pins it untrusted, which drops AGENTS.md with the
+   * rest; coordinators included), then any `developer_instructions` the user
+   * configured. The thread parameter replaces the configured value rather
+   * than adding to it, so the configured text is read back and kept. A
+   * project layer is read only when the thread loads the checkout's own
+   * configuration; otherwise a trusted project's instructions would reach a
+   * thread that pins it untrusted. An unreadable configuration costs the
+   * user's own text for this thread, not Orkestrator's.
+   */
+  private async developerInstructions(
+    generation: EngineGeneration,
+    config: EngineTurnConfig,
+  ): Promise<string | undefined> {
+    const loadsProject = !config.policy || config.policy.projectResources;
+    const cwd = config.cwd ?? this.options.cwd;
+    const ours = [
+      ...(config.policy?.id === "coordinator-read-only" ? [] : [agentSystemInstructions()]),
+      ...(loadsProject ? [] : [await readRepositoryInstructions(cwd)]),
+    ].filter((part): part is string => Boolean(part));
+    // Nothing of Orkestrator's: leave the configured instructions to Codex.
+    if (ours.length === 0) return undefined;
+    const read =
+      this.options.readConfiguredDeveloperInstructions ??
+      ((projectCwd: string | undefined) =>
+        this.supervisor
+          .requestOnGeneration<{ config?: { developer_instructions?: unknown } }>(
+            generation,
+            "config/read",
+            projectCwd ? { cwd: projectCwd } : {},
+          )
+          .then((result) => result?.config?.developer_instructions));
+    const configured = await read(loadsProject ? cwd : undefined).catch(() => undefined);
+    if (typeof configured === "string" && configured.trim()) ours.push(configured);
+    return ours.join("\n\n");
+  }
+
   private toThreadParams(
     config: EngineTurnConfig,
     extraConfig: Record<string, unknown> = {},
+    developerInstructions?: string,
   ): Record<string, unknown> {
     const approveAgentMcpTools =
       (config.policy?.approvals === "auto-approve" &&
@@ -1857,6 +1909,7 @@ export class AppServerEngine implements CodexEngine {
       ...(config.model ? { model: config.model } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
       serviceTier: config.serviceTier ?? null,
+      ...(developerInstructions ? { developerInstructions } : {}),
       ...(Object.keys(threadConfig).length > 0 ? { config: threadConfig } : {}),
     };
   }
@@ -1976,11 +2029,12 @@ export class AppServerEngine implements CodexEngine {
     const generation = await this.assertHostedNetworkLock(options.config);
     await this.assertToolHistoryLock(generation, options.config);
     const extra = await this.policyThreadConfig(generation, options.config);
+    const instructions = await this.developerInstructions(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/start", this.toThreadParams(options.config, extra));
+    }>(generation, "thread/start", this.toThreadParams(options.config, extra, instructions));
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     return this.bindThread(response.thread, options.config, response.model);
   }
@@ -1989,11 +2043,15 @@ export class AppServerEngine implements CodexEngine {
     const generation = await this.assertHostedNetworkLock(options.config);
     await this.assertToolHistoryLock(generation, options.config);
     const extra = await this.policyThreadConfig(generation, options.config);
+    const instructions = await this.developerInstructions(generation, options.config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config, extra) });
+    }>(generation, "thread/resume", {
+      threadId,
+      ...this.toThreadParams(options.config, extra, instructions),
+    });
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     const thread = this.bindThread(response.thread, options.config, response.model);
     await this.assertNoToolHistory(thread.id ?? threadId, options.config, true);
@@ -2052,6 +2110,7 @@ export class AppServerEngine implements CodexEngine {
     // rollout the fork may not have written yet.
     await this.assertNoToolHistory(threadId, config, false);
     const extra = await this.policyThreadConfig(generation, config);
+    const instructions = await this.developerInstructions(generation, config);
     const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -2059,7 +2118,7 @@ export class AppServerEngine implements CodexEngine {
     }>(generation, "thread/fork", {
       threadId,
       ...(lastTurnId ? { lastTurnId } : {}),
-      ...this.toThreadParams(config, extra),
+      ...this.toThreadParams(config, extra, instructions),
     });
     this.assertPermissionProfile(response.activePermissionProfile, config);
     return this.bindThread(response.thread, config, response.model);

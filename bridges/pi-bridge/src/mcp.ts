@@ -63,6 +63,7 @@ const TOOL_CALL_TIMEOUT_MS = 120_000;
 const MAX_MCP_TOOLS = 128;
 const MAX_MCP_RESULT_BYTES = 50_000;
 const MAX_MCP_DESCRIPTION_BYTES = 4_000;
+const MAX_MCP_INSTRUCTIONS_BYTES = 8_000;
 const MAX_MCP_SCHEMA_BYTES = 20_000;
 
 /**
@@ -109,6 +110,8 @@ export interface PiMcpListedTool {
 
 export interface PiMcpConnection {
   tools: PiMcpListedTool[];
+  /** What the server's `initialize` result asks the model to know. */
+  instructions?: string;
   call(name: string, args: JsonObject): Promise<{ content?: unknown; isError?: boolean }>;
   close(): Promise<void>;
 }
@@ -145,6 +148,8 @@ interface PiMcpRuntime {
   /** Whether this generation's servers were selected by an explicit grant. */
   granted: boolean;
   tools: RegisteredMcpTool[];
+  /** Each connected server's bounded instructions, in connection order. */
+  instructions: Array<{ serverId: string; text: string }>;
   connections: PiMcpConnection[];
   /** The tab credential these connections were prepared with; "" for the env. */
   connectionKey: string;
@@ -380,6 +385,7 @@ export async function preparePiMcp(
     grantedToolNames: new Set(),
     granted: nativeAgentUserMcpGrant(state.policy) !== undefined,
     tools: [],
+    instructions: [],
     connections: [],
     connectionKey: mcpConnectionKey(state),
     configKey: "",
@@ -450,6 +456,24 @@ export function piMcpExtension(state: SessionState): (pi: ExtensionAPI) => void 
       });
     }
   };
+}
+
+/**
+ * The instructions this session's connected MCP servers returned on
+ * `initialize`, as one system prompt block, or undefined when none did. Pi's
+ * SDK loads no MCP client, so without this the model would get each server's
+ * tools but never what the server says about using them (the Orkestrator
+ * server's mailbox address and artifact flow among them). Claude, Codex and
+ * the other providers' own MCP clients deliver the same text.
+ */
+export function piMcpInstructions(state: SessionState): string | undefined {
+  const entries = runtimes.get(state)?.instructions ?? [];
+  if (entries.length === 0) return undefined;
+  return [
+    "# MCP Server Instructions",
+    "The following MCP servers have provided instructions for how to use their tools and resources:",
+    ...entries.map((entry) => `## ${entry.serverId}\n${entry.text}`),
+  ].join("\n\n");
 }
 
 export async function closePiMcp(state: SessionState): Promise<void> {
@@ -545,6 +569,16 @@ async function connectAndRegister(
     return detachedServer(server);
   }
   runtime.connections.push(connection);
+  const instructions = connection.instructions?.trim();
+  if (instructions) {
+    runtime.instructions.push({
+      serverId: server.id,
+      text:
+        instructions.length > MAX_MCP_INSTRUCTIONS_BYTES
+          ? instructions.slice(0, MAX_MCP_INSTRUCTIONS_BYTES)
+          : instructions,
+    });
+  }
   const tools = connection.tools.slice(0, MAX_MCP_TOOLS);
   const names: string[] = [];
   for (const listed of tools) {
@@ -723,7 +757,9 @@ const defaultTransport: PiMcpTransport = {
     try {
       await client.connect(transport);
       const listed = await client.listTools();
+      const instructions = client.getInstructions();
       return {
+        ...(instructions ? { instructions } : {}),
         tools: (listed.tools ?? []).map((tool) => ({
           name: tool.name,
           ...(tool.description ? { description: tool.description } : {}),

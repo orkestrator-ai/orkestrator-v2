@@ -143,7 +143,7 @@ const {
   setCursorMcpFingerprintForTests,
   useCursorAgentForTests,
 } = await import("./agent-session.js");
-const { refreshAgentUsage } = await import("./prompt.js");
+const { cursorPromptText, refreshAgentUsage } = await import("./prompt.js");
 const {
   resetCursorSandboxBootstrapForTests,
   useCursorLocalAgentStoreForTests,
@@ -1870,6 +1870,29 @@ describe("resumeSession", () => {
     expect(
       state.messages.filter((message) => message.role === "user").map((message) => message.content),
     ).toEqual(["original", "steer mid-turn"]);
+  });
+
+  test("replays a historic prompt without the shared instructions frame it was sent with", async () => {
+    const sent = cursorPromptText(newSessionState(), { prompt: "make the header blue" });
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: sent },
+              userMessages: [{ text: sent }, { text: "steer mid-turn" }],
+              steps: [{ type: "assistantMessage", message: { text: "done" } }],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    expect(
+      state.messages.filter((message) => message.role === "user").map((message) => message.content),
+    ).toEqual(["make the header blue", "steer mid-turn"]);
   });
 
   test("keeps two identical historic steer texts in order after resume", async () => {

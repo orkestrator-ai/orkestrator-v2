@@ -270,6 +270,51 @@ bridges keep running. Backend stores are rows in `orkestrator.sqlite`
 | OpenCode session and history | The OpenCode server; the backend holds registration and subscriptions in memory | No bridge | Registration lost; the session persists on the server |
 | Transcript cursor | Request state; bridges answer from `droppedMessages` plus the retained window | A restart changes the window; an invalid cursor falls back to the retained window | Unaffected |
 
+## Orkestrator's agent instructions
+
+Every provider receives the same system-level instructions about Orkestrator
+itself: how images render in the transcript, and where requested documents
+go. They live in one place, `GENERAL_AGENT_INSTRUCTIONS`
+(`packages/protocol/src/agent-system-instructions.ts`), and each provider gets
+them through the most native channel it has. A rule that only one provider
+needs (Claude's read-before-edit rule, its background-command limit, its
+claude.ai connector note) is passed to `agentSystemInstructions` by that
+provider alone, after the general block. Add a new rule to the general block
+unless it truly concerns one provider. A read-only coordinator gets none of
+it on any provider: both rules ask the agent to write a file, which a
+coordinator delegates. Cursor and Grok run every read-only session under the
+coordinator policy, so a read-only review there gets none either.
+
+| Provider | Channel | Where |
+| --- | --- | --- |
+| Claude | Appended to the `claude_code` system prompt preset, with Claude's own lines | `bridges/claude-bridge/src/services/system-prompt-append.ts` |
+| Codex | `developerInstructions` on every `thread/start`, `thread/resume` and `thread/fork`. That parameter replaces the configured `developer_instructions`, so the engine reads them back (`config/read`, with the project layer only when the thread loads project resources) and keeps them after Orkestrator's | `AppServerEngine.developerInstructions` |
+| OpenCode | The prompt's `system` field on every prompt, before a turn's artifact grant | `openCodePromptToolOptions` |
+| Pi | `appendSystemPromptOverride`, after any `APPEND_SYSTEM.md`, followed by the connected MCP servers' own instructions (Pi's SDK has no MCP client, so the bridge's client collects them) | `piAppendedInstructions` |
+| Grok | `_meta.rules` on `session/new`, appended to Grok's system prompt and kept with the session, so a `session/load` in a new process still has them (both verified live on 1.0.70). The `--rules` flag is ignored under `agent stdio` (also verified live) | `sessionInstructions`, `sessionInstructionsMeta` |
+| Cursor | A system-instructions frame after the user's text on every prompt: the SDK's `systemPrompt` replaces Cursor's whole prompt and is enabled per account. History reload strips the frame | `cursorPromptText` |
+
+### The repository's AGENTS.md
+
+Every session on every provider reads the repository's AGENTS.md, read-only
+coordinators and reviews included. Loading it never trusts the checkout's
+executable configuration (hooks, MCP servers, settings, extensions), which
+stays behind the session's project-resources setting (see
+[Execution policy](#execution-policy)). Where a provider loads AGENTS.md only
+together with that configuration, the bridge reads `<cwd>/AGENTS.md` itself
+(`readRepositoryInstructions`: at most 256 KiB, then a note naming the file;
+a link that leaves the working directory is not followed) and sends it as a
+`repositoryInstructionsBlock` through the channel above:
+
+| Provider | Loads it natively when | Otherwise |
+| --- | --- | --- |
+| Claude | The `project` setting source is on (CLAUDE.md, or AGENTS.md where there is none) | Appended to the system prompt on every turn, coordinators included |
+| Codex | The thread loads project resources (an untrusted pin drops AGENTS.md) | Added to the developer instructions on every start, resume and fork |
+| OpenCode | Always | — |
+| Pi | Always: context files load in every session (`noContextFiles: false`), read-only ones included | — |
+| Grok | The session trusts the checkout (`GROK_FOLDER_TRUST=0`) | Added to `_meta.rules` on `session/new`. A checkout the user trusted in Grok itself may load it twice |
+| Cursor | The `project` setting source is on | Added to the prompt frame once per Cursor agent (`repositoryInstructionsFor`), and again after a replacement agent or a compaction. It is too large to repeat on every prompt |
+
 ## Activity observation
 
 The backend's activity sweep (every 2 s) is the one observer of whether a

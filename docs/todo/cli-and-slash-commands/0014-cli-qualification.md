@@ -6,6 +6,9 @@ Checked against `main` at `00a0cb82` (2026-10-25).
 
 Analysed 2026-10-27 against `main` at `863b5782`.
 
+Rechecked 2026-11-01 against `main` at `93b99bfb`: tasks 2 and 3 are done
+(see their outcomes), task 6 was settled by #1491, and task 7 is unchanged.
+
 Code items 1 to 4 and qualification items 2 to 4 are done and on `main`
 (`c23f6be9` #1274, with the harness toolchain install from `a51045a4` #1287).
 The open work is the live run for three providers, two measurements or
@@ -14,12 +17,12 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
 ### Tasks
 
 1. **Live `live-session` for Pi, Cursor and Grok, and the completion flip** (qualification item 1). Status: blocked (on API-key credentials; Cursor is unblockable on this Linux host, see below).
-2. **Re-run the slow-admission `--wait` recovery under load** (code item 4, flake 0440). Status: open.
-3. **Lost-response recovery for `environment exec --wait` and `environment start --wait`**: they still exit 4 on a lost response. Status: open (noted in code item 4, never filed).
+2. **Re-run the slow-admission `--wait` recovery under load** (code item 4, flake 0440). Status: done (2026-11-01, credential-free; flake 0440 resolved).
+3. **Lost-response recovery for `environment exec --wait` and `environment start --wait`**. Status: done (2026-11-01; `stop`, `recreate` and `delete --wait` share it).
 4. **Token cost of a live run** (qualification item 5). Status: open (optional measurement).
 5. **Fresh Linux evidence**: the latest Linux CLI run is 2026-09-26. Status: open.
-6. **Ship the Pi, ACP and Cursor bridges in the published package?** (open question 1). Status: open.
-7. **Re-run qualified providers after an agent upgrade?** (open question 2, shared with 0031). Status: open (maintainer's call).
+6. **Ship the Pi, ACP and Cursor bridges in the published package?** (open question 1). Status: done (settled by #1491 on 2026-10-31).
+7. **Re-run qualified providers after an agent upgrade?** (open question 2, shared with 0031). Status: open (maintainer's call; recommendation below).
 
 ### 1. Live `live-session` for Pi, Cursor and Grok, and the completion flip
 
@@ -71,6 +74,17 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
     - Pros: always exercises the path through the packaged CLI and real backend.
     - Cons: a test-only delay hook in the backend; not a live-provider proof.
 
+**Outcome (2026-11-01).** Done with the second option, without a backend hook:
+the credential-free `lost-response` scenario puts a loopback proxy
+(`packages/cli/scenarios/lossy-proxy.ts`) between the packaged CLI and the
+real backend. The proxy answers `environment start` with a 504 at once and
+delivers it only after the client's first key lookup came back `not-found`
+(0440's ordering), and loses an `exec` answer after admission. Run under load
+beside the full matrices: local 4/4 and 10/10 (load 42.8 to 49.3), container
+4/4 and 8/8 (load 44.2 to 104.8); see "Evidence log". The first option was not
+run: it costs live provider turns, which this run excluded, and it cannot
+force the path. Flake 0440 is resolved. See "Assumptions and decisions".
+
 ### 3. Lost-response recovery for `environment exec --wait` and `environment start --wait`
 
 **Problem.** Code item 4 says these "still exit 4 on a lost response". A script that waits on a slow container start gets exit 4 although the operation may be running.
@@ -88,6 +102,21 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
   - **Document exit 4 as "check with `run get --request-id`" and leave it.**
     - Pros: no code.
     - Cons: every script must implement the recovery the session commands already do.
+
+**Outcome (2026-11-01).** Fixed here rather than filed (this to-do's ticket
+asked for the fix). `environment start|stop|recreate|delete --wait` (the
+shared `lifecycle` helper) and `environment exec --wait` now submit through
+`submitForWait` (`packages/cli/src/client/commands/environment.ts`), and
+observe within the same `--timeout` deadline. The exec concern does not
+apply: the lookup only finds the admitted operation, and a found exec that
+its worker has not claimed (`execution: pending`, `launch: "unconfirmed"`)
+is observed like any pending exec; the backend's reconciliation still decides
+it and never starts a second worker. Covered by `client-waits.test.ts`
+(recovery for start, a recovered setup failure, stop, unclaimed exec, exit-code
+passthrough, key never appearing, no lookup without `--wait`, shared
+deadline) and the `lost-response` scenario. `environment launch --wait ready`,
+`project remove --wait` and the `host` commands still exit 4 on a lost
+response; see "Assumptions and decisions".
 
 ### 4. Token cost of a live run
 
@@ -149,13 +178,26 @@ re-runs, one CLI gap the file mentions in passing, and two open questions.
     - Pros: no work.
     - Cons: standalone serve (0033's remote hosts) keeps lacking three providers.
 
+**Outcome (rechecked 2026-11-01).** Settled on `main` by #1491 (`d9b260fb`,
+2026-10-31), close to the recommended option: `packages/cli/scripts/bridges.ts`
+bundles `claude-bridge`, `codex-bridge` and `acp-bridge` (Grok), and ships
+`cursor-bridge` and `pi-bridge` as bundled code plus a pinned manifest and
+lockfile under `resources/<bridge>/runtime/`. The backend installs their SDKs
+into its data directory the first time the bridge starts
+(`apps/backend/src/core/bridge-runtime-install.ts`), not through `toolchain
+install`. `tests/cli.test.ts` checks the table against every buildable
+bridge. Nothing is left to decide here. The scenario harness still overlays
+the worktree-built bridge with its SDKs vendored
+(`scenarios/provider-runtime.ts`) so a live run does not depend on the
+registry.
+
 ### 7. Re-run qualified providers after an agent upgrade?
 
-**Problem.** `docs/development/upgrade-agents.md` lists `test:cli:scenarios` only for bundled native dependencies (`:1687`); a provider bump can break request-specific completion with no CLI re-run.
+**Problem.** `docs/development/upgrade-agents.md` lists `test:cli:scenarios` only for bundled native dependencies (`:1909`); a provider bump can break request-specific completion with no CLI re-run.
 
-**Context.** Shared with 0031, whose recommendation (2026-10-25) is no blanket re-run, only the bumped engine's opt-in live specs. Slash commands already have such a rule (`upgrade-agents.md:1607`).
+**Context.** Shared with 0031, whose recommendation (2026-10-25) is no blanket re-run, only the bumped engine's opt-in live specs. Slash commands already have such a rule (`upgrade-agents.md:1829`, "Re-qualify slash commands for every provider whose pin moved").
 
-**Investigation.** Still open in 0031. `live-session` is the only test that proves a provider's `qualified` entry.
+**Investigation.** Rechecked 2026-11-01: still open in 0031 (its task 6), and the runbook still has no CLI step. `live-session` is the only test that proves a provider's `qualified` entry. The evidence supports the recommended option: the slash-command rule is the precedent, and since 0166 a bump can change how a provider's turn ends (OpenCode's `--attach` failure shipped past unit tests and was caught only by `live-session`). Not applied to the runbook here: it commits every bump to live tokens, which is the maintainer's call.
 
 **Decisions.**
 
@@ -190,9 +232,10 @@ a success signal.
   agent-test`). `packages/cli/scripts/run-scenarios.ts` accepts `--scenario`,
   `--provider`, `--environment-type`, `--docker-image`, `--keep-on-failure`
   and `--list`. There is no option to target an already running profile.
-- `packages/cli/scripts/build.ts` bundles only `claude-bridge` and
-  `codex-bridge`; OpenCode runs its own server. The published package is
-  unchanged. For a live Pi, Cursor or Grok run the harness gives the scenario
+- Since #1491 the package bundles `claude-bridge`, `codex-bridge` and
+  `acp-bridge`, and installs the Cursor and Pi bridge SDKs on first use from a
+  pinned lockfile (`packages/cli/scripts/bridges.ts`); OpenCode runs its own
+  server. For a live Pi, Cursor or Grok run the harness gives the scenario
   backend its own resource root (`prepareProviderRuntime` in
   `packages/cli/scenarios/provider-runtime.ts`): the packaged Claude and
   Codex bridges plus the provider's bridge as this worktree built it
@@ -203,10 +246,16 @@ a success signal.
   and Claude/Codex bridges under test stay the packaged ones.
 - Scenarios in `packages/cli/scenarios/cases.ts`: `read-only`,
   `local-lifecycle`, `retry-and-retention`, `setup-failure`, `client-exit`,
-  `exec`, `wrong-profile`, `project-cascade`, `project-init` and (container
-  only) `foreign-owner` (credential-free), plus `live-session` (opt-in).
-  `setup-failure`, `client-exit` and `project-init` are local only, so the
-  local matrix has nine cases and the container matrix seven.
+  `exec`, `lost-response`, `wrong-profile`, `project-cascade`, `project-init`
+  and (container only) `foreign-owner` (credential-free), plus `live-session`
+  (opt-in). `setup-failure`, `client-exit` and `project-init` are local only,
+  so the local matrix has ten cases and the container matrix eight.
+- `lost-response` connects a second time through a loopback proxy
+  (`scenarios/lossy-proxy.ts`) that delivers `environment start` only after
+  the client's first key lookup came back `not-found`, and loses the first
+  `exec` answer after admission. `start --wait ready` and `exec --wait
+  --exit-code` must report the recovery, pass the child's exit code through,
+  submit once each and run the command once.
 - `wrong-profile` covers a missing explicit profile. `foreign-owner` puts a
   container and two volumes (one mounted, one unmounted) carrying every label
   of the scenario's environment except the owner beside it, and checks that
@@ -295,8 +344,11 @@ a success signal.
    `--wait` the behaviour is unchanged. Covered by `client-waits.test.ts`.
    Not re-run live under load; flake
    [0440](../../tests/flaky-tests/backend-services-and-tooling/0440-cli-live-opencode-container-start-transport-timeout.md)
-   stays open until it is. Other `--wait` mutations (`environment exec`,
-   `environment start`) still exit 4 on a lost response.
+   stayed open until it was. Re-run under load on 2026-11-01 (task 2) and
+   resolved. Since 2026-11-01 `environment start|stop|recreate|delete --wait`
+   and `environment exec --wait` recover the same way (task 3);
+   `environment launch --wait`, `project remove --wait` and `host` commands
+   still exit 4 on a lost response.
 
 ### Qualification
 
@@ -398,6 +450,35 @@ command, result and limitations. Run artifacts are
 `output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages, exit
 codes, backend start-up time and, for live turns, the pinned and reported
 model).
+
+- **2026-11-01, macOS (Darwin 27.0.0, arm64), tasks 2 and 3.** Branch
+  `cli-wait-recovery-0e4046a8eef3-r1` on `93b99bfb` plus this change; Bun
+  1.4.4, Docker Desktop Engine 29.9.2, image `orkestrator-v2:dev-cc80206a42eb`
+  (`mise run docker:build:dev`). About a dozen other builds ran on the host
+  throughout. Credential-free; no provider turns.
+  - Local, three concurrent `--scenario lost-response` runs beside `mise run
+    test:cli:scenarios`, load average 42.8 to 49.3: 4/4 `lost-response` and
+    10/10 matrix pass. The recovered `start --wait ready` took 1.3 to 2.4 s.
+    Manifests `2026-11-01T03-03-37-119Z-cd5e036c`, `-20c8787b`, `-4130364d`
+    and `2026-11-01T03-03-37-120Z-47d9cac8` (matrix).
+  - Container, the same shape with `--environment-type container
+    --docker-image orkestrator-v2:dev-cc80206a42eb`, load average 44.2 to
+    104.8: 4/4 `lost-response` and 8/8 matrix pass (`foreign-owner` included).
+    The recovered `start --wait ready` took 12.4 to 16.6 s and the recovered
+    `exec --wait --exit-code` returned the child's 3 in 0.4 to 0.6 s.
+    Manifests `2026-11-01T03-05-49-828Z-cfb485b3`, `-97f8c19d`,
+    `2026-11-01T03-05-49-940Z-72746bc7` and `-943Z-ce2414bd` (matrix). No
+    cleanup errors, no containers left.
+  - An earlier pass with the proxy losing only answers after admission (no
+    `not-found` lookup) also passed: local 3/3 plus 10/10 at load 33 to 38,
+    container 3/3 plus 8/8 at load 39.8 to 54.2.
+  - Negative control: with `environment.ts` from before this change, the
+    packaged scenario failed at `[start, response lost] expected exit 0, got 4
+    (transport-uncertain)`. The six new recovery tests in
+    `client-waits.test.ts` failed the same way; the four that check
+    unchanged behaviour passed both ways.
+  - Not run: live `live-session` (no billed turns in this run); Pi, Cursor and
+    Grok (task 1); Linux (task 5).
 
 - **2026-10-26, macOS (Darwin 27.0.0, arm64), todo 0166.** Branch
   `todo-0166-opencode-attach-prompt-0d17ce147985` on `93018933` plus the
@@ -710,6 +791,35 @@ model).
   makes OpenCode's `live-session` fail after the parts this file owns
   (start, file assertion, follow-up, model record) have passed. Fixed by
   0166 on 2026-10-26 (see the evidence log).
+- **Lost-response recovery fixed here, not filed (task 3).** The analysis
+  recommended a new to-do; this to-do's ticket asked for the fix, so it was
+  made in place. Scope: every command that shares `lifecycle` (`start`,
+  `stop`, `recreate`, `delete`) and `exec`, because they share the code and
+  the risk. Left out: `environment launch --wait ready` (its result names the
+  new environment and session, which a recovered receipt only has once
+  creation has recorded them, so it needs its own lookup loop), `project
+  remove --wait` (a cascade that is rarely slow to admit) and the `host`
+  commands (they already wait through backend restarts). Each still exits 4
+  with the `run get --request-id` recovery. After recovery the command's
+  `result` is the one the backend recorded on the operation (the receipt's
+  bounded `result`), since the original answer was never received.
+- **Load re-run through a fault-injecting proxy, not live runs (task 2).**
+  Options: (a) three concurrent live container `live-session` runs, as
+  recommended; (b) a backend test hook delaying admission; (c) a proxy in the
+  scenario between the packaged CLI and the real backend. Chose (c). It forces
+  the path on every run, needs no backend test code and no credentials, and
+  reproduces 0440's ordering (a lookup before admission). (a) was excluded
+  because this run allowed no billed provider turns, and a live run can pass
+  without ever losing a response. Con: the loss is injected, not caused by load.
+  The load only shows that recovery and the rest of the matrix stay correct on
+  a loaded host. A live `session start --wait` recovery has still never been
+  observed.
+- **Flake 0440 resolved** on that evidence. `session start --wait` uses the
+  same `submitForWait` the scenario proves. The alternative was to keep it
+  open until a live container batch happens to lose a response. That could
+  stay open indefinitely, because the path triggers only by chance. The case
+  file says to reopen it on any live `transport-uncertain` exit from a
+  `--wait` command.
 - **Item 5 narrowed, not finished.** Start-up, failure time, flake rate and
   cleanup failures were measurable from the manifests; token cost was not,
   and stays open.
@@ -730,10 +840,9 @@ model).
 - Bundle more bridges into the package, or qualify against dev profiles?
   Decided 2026-10-22: neither, for qualification. The harness overlays the
   worktree-built bridge on the packaged resources for that run only
-  (`provider-runtime.ts`). Still open: whether the published package should
-  ship the Pi, ACP and Cursor bridges at all. Without them a standalone
-  `orkestrator serve` cannot run those providers in local environments
-  (Pi's vendored SDK is about 174 MB, Cursor's about 45 MB).
+  (`provider-runtime.ts`). Whether the published package should ship the Pi,
+  ACP and Cursor bridges was settled by #1491: ACP is bundled, and Cursor and
+  Pi install their SDKs on first use (task 6).
 - Should qualified providers be re-run after every agent SDK or binary
   upgrade? [`upgrade-agents.md`](../../development/upgrade-agents.md) has no such
   step, and

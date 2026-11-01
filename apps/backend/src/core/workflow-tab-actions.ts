@@ -3,6 +3,7 @@ import {
   PANE_LAYOUT_VERSION,
   isPaneLayoutRevisionConflict,
 } from "@orkestrator/protocol/pane-layout";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 import type {
   MultiReviewWorkflow,
@@ -42,14 +43,7 @@ export async function openMultiReviewTab(
     ) {
       throw new Error("The review environment is unavailable");
     }
-    if (
-      environment.status !== "running" ||
-      !(
-        environment.setupPhase === "ready" ||
-        environment.setupScriptsComplete === true ||
-        environment.setupOverride === true
-      )
-    ) {
+    if (!isEnvironmentReadyForAgents(environment)) {
       throw new Error("Start the environment and finish setup before opening Multi Review");
     }
     const containerId = environment.environmentType === "local" ? null : environment.containerId;

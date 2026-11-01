@@ -2,6 +2,7 @@ import type {
   PaneLayoutMergeInput,
   PaneLayoutSelectionIntent,
 } from "@orkestrator/protocol/pane-layout-merge";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import type { Environment, PersistedPaneLayout } from "./models.js";
 import { isRecord } from "./storage-shared-core.js";
 
@@ -96,11 +97,7 @@ export function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
 }
 
 export function environmentIsReadyForSetupHandoff(environment: Environment): boolean {
-  return (
-    environment.setupPhase === "ready" ||
-    environment.setupScriptsComplete === true ||
-    environment.setupOverride === true
-  );
+  return isEnvironmentSetupSettled(environment);
 }
 
 /**

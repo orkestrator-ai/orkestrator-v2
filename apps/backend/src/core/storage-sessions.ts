@@ -1,4 +1,5 @@
 import * as shared from "./storage-shared.js";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { StoreCorruptError } from "./storage-database.js";
 import { UsageHistoryStore, type RecordUsageTurnsInput } from "./usage-history-store.js";
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
@@ -423,11 +424,7 @@ export class SessionsRepository {
             { selectionIntent },
           )
         : desired;
-      if (
-        environment.setupPhase === "ready" ||
-        environment.setupScriptsComplete === true ||
-        environment.setupOverride === true
-      ) {
+      if (isEnvironmentSetupSettled(environment)) {
         next = suppressLateSetupTabAdditions(next, previous, base);
       }
       if (sameGeneration)

@@ -2,6 +2,7 @@ import {
   agentMailRouteWakes,
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import type { AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import type { CommandContext } from "./commands-context.js";
@@ -118,12 +119,7 @@ export async function settleCoordinatorDeliverNow(
   if (!config.global.agentMessaging?.enabled) blockedReason = "messaging-disabled";
   else if (config.global.agentMessaging.paused) blockedReason = "paused";
   else if (!environment || environment.status !== "running") blockedReason = "environment-stopped";
-  else if (
-    environment.setupPhase !== "ready" &&
-    environment.setupScriptsComplete !== true &&
-    environment.setupOverride !== true
-  )
-    blockedReason = "environment-unready";
+  else if (!isEnvironmentSetupSettled(environment)) blockedReason = "environment-unready";
   else if (descriptor.mutedInbound) blockedReason = "recipient-muted";
   else if (descriptor.tombstonedAt) blockedReason = "recipient-unavailable";
   else if (!descriptor.capabilities.canInject) blockedReason = "recipient-cannot-inject";

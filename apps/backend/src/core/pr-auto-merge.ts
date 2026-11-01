@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import {
   evaluatePrMergeReadiness,
   isPrReadingConfirmedByMonitor,
@@ -88,14 +89,7 @@ export function decideAutoMerge(
   // Only an explicit conflict reading arms the Resolve token below; a `dirty`
   // merge state alone would launch Resolve again on every attempt.
   if (environment.hasMergeConflicts !== true) return { kind: "wait", reason: "conflicts" };
-  if (
-    environment.status !== "running" ||
-    !(
-      environment.setupPhase === "ready" ||
-      environment.setupScriptsComplete ||
-      environment.setupOverride
-    )
-  ) {
+  if (!isEnvironmentReadyForAgents(environment)) {
     return { kind: "wait", reason: "busy" };
   }
   return environment.prRecheckAfterAgentCompletionArmedAt

@@ -3,6 +3,7 @@ import {
   PANE_LAYOUT_VERSION,
   isPaneLayoutRevisionConflict,
 } from "@orkestrator/protocol/pane-layout";
+import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 import type { CoordinatorTabEditOperation } from "@orkestrator/protocol/coordinator-surfaces";
 import type { Environment } from "./models.js";
@@ -35,14 +36,7 @@ type Tab = Record<string, unknown>;
 
 /** The worker must be running and set up before a tab can open in it. */
 function assertWorkerReady(environment: Environment): void {
-  if (
-    environment.status !== "running" ||
-    !(
-      environment.setupPhase === "ready" ||
-      environment.setupScriptsComplete === true ||
-      environment.setupOverride === true
-    )
-  ) {
+  if (!isEnvironmentReadyForAgents(environment)) {
     throw new Error("Start the worker environment and let setup finish first");
   }
 }

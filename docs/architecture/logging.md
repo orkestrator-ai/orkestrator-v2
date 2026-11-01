@@ -180,9 +180,10 @@ flowchart LR
 - **Electron re-reads `config.json`.** The audit line reaches it on the relay and
   only prompts the read, so an imitation of it costs one read and changes nothing.
   The order keeps the line in the saved log: turning saving on starts the writer
-  first, and turning it off writes the line first. A config resource event and
-  every backend start also prompt a read, in case the bounded console dropped the
-  line. A file that cannot be read leaves the settings as they are.
+  first, and turning it off writes the line first. A config resource event, two
+  seconds later so it cannot overtake the line, and every backend start also prompt
+  a read, in case the bounded console dropped the line. A file that cannot be read
+  leaves the settings as they are.
 - **The file writer is always installed.** It writes only while saving is on, and
   off costs one comparison per console call. Off announces any drop not yet
   reported. The byte bounds and drop markers do not change. A retention change

@@ -25,6 +25,9 @@ const REQUEST_TIMEOUT_MS = 5_000;
 // stuck turn may be holding up. After these, its next start resends.
 const RETRY_DELAYS_MS = [2_000, 10_000];
 const TARGET_LIST_CONCURRENCY = 8;
+// A full push prunes these to the bridges still running; between pushes, each
+// replaced bridge adds an entry.
+const MAX_TRACKED_BRIDGES = 1_024;
 
 export interface BridgeLogPolicyTarget {
   /** The bridge's platform, for the log line. */
@@ -67,6 +70,14 @@ function targetIdentity(target: BridgeLogPolicyTarget): string {
     .update("\0")
     .update(target.authToken)
     .digest("hex");
+}
+
+function track(entries: Map<string, number>, id: string, seq: number): void {
+  entries.delete(id);
+  entries.set(id, seq);
+  if (entries.size <= MAX_TRACKED_BRIDGES) return;
+  const oldest = entries.keys().next().value;
+  if (oldest !== undefined) entries.delete(oldest);
 }
 
 function bridgeDetailKey(detail: LogDetail): string {
@@ -116,7 +127,7 @@ export class LogPolicyService {
     this.setDetail(effectiveLogDetail(policy.detail, this.env));
     applyApplicationLogPolicy(policy, this.options.logging, undefined, this.env);
     // Container bridges outlive a backend restart and may hold an older policy.
-    void this.pushToRunningBridges();
+    this.pushInBackground();
   }
 
   /** Call after any write to the config. Writes that leave logging alone do nothing. */
@@ -136,13 +147,13 @@ export class LogPolicyService {
     const effective = effectiveLogDetail(policy.detail, this.env);
     if (bridgeDetailKey(effective) === this.detailKey) return;
     this.setDetail(effective);
-    void this.pushToRunningBridges();
+    this.pushInBackground();
   }
 
   /** A bridge just started or was found running. Sends only if it may be out of date. */
   bridgeStarted(target: BridgeLogPolicyTarget): void {
     if (this.stopped || this.seq === 0) return;
-    void this.deliver(target);
+    this.deliver(target).catch(() => undefined);
   }
 
   stop(): void {
@@ -156,6 +167,10 @@ export class LogPolicyService {
     // earlier process sent, as long as the clock has not gone backwards, and
     // the `stale` answer below recovers from that too.
     this.seq = Math.max(this.now(), this.seq + 1);
+  }
+
+  private pushInBackground(): void {
+    this.pushToRunningBridges().catch(() => undefined);
   }
 
   private async pushToRunningBridges(): Promise<void> {
@@ -191,14 +206,14 @@ export class LogPolicyService {
         const seq = this.seq;
         const outcome = await this.post(target, seq);
         if (outcome.kind === "applied") {
-          this.delivered.set(id, seq);
+          track(this.delivered, id, seq);
           this.reportedFailures.delete(id);
           failures = 0;
           continue;
         }
         if (outcome.kind === "predates-route") {
           // Not a failure: it keeps working and reads its environment next start.
-          this.delivered.set(id, seq);
+          track(this.delivered, id, seq);
           log.debug("policy.bridge-predates-route", { agent: target.agent });
           failures = 0;
           continue;
@@ -210,7 +225,7 @@ export class LogPolicyService {
         const delay = this.retryDelaysMs[failures];
         if (delay === undefined) {
           if (this.reportedFailures.get(id) !== seq) {
-            this.reportedFailures.set(id, seq);
+            track(this.reportedFailures, id, seq);
             log.warn("policy.push-failed", { agent: target.agent, reason: outcome.reason });
           }
           return;

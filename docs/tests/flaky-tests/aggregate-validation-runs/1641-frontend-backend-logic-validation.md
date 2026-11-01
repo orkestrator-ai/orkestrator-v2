@@ -44,3 +44,59 @@ Base also failed `a waiting group that fits its cap follows appended calls` at o
 ## Fourth aggregate run
 
 At commit `c49c053e3`, load average about 8, the only failure was `each child keeps one card, its transcript and status across a fresh backend and a cold restart` (case 0310). The owning file then passed eight times in a row alone and six out of six run concurrently. That does not explain why it failed in two of four aggregate runs, so whether this branch changed its rate is unproven.
+
+## Review repairs on 2026-11-01
+
+Commit `e491ab280` repairs the retained-intent byte bound and oversized-queue
+recovery, compensates feature-plan claim failures, preserves capacity-skipped
+legacy drafts, backfills historical review counts from older backends, moves
+container directory creation after the digest check, makes goal-check listing
+best effort during stop, checks container ownership before draining workers,
+and refreshes the raw settings baseline after saves.
+
+Targeted regressions passed for the changed backend and web owners, including
+ten 250 KiB HTML replacements and restart/list/resume/run/discard recovery;
+claim rejection before and after persistence followed by a retry; partial
+legacy imports, unresolved tokens and writes during import; concurrent resend
+scans and a newer dispatch during probing; container handler conflict mapping;
+and empty, invalid or unavailable goal-check output. The lifecycle owners
+(`commands-registry-environments-status`, `commands-registry-environments-lifecycle`,
+`container-replacement`, and `public-api/exec-control`) passed together in 19.3 s.
+
+Changed-file formatting and lint checks passed. Backend, web and agent-E2E
+project typechecks passed. The complete `e2e/GlobalSettings.spec.ts` owner
+passed all eight mobile/desktop cases in 80.8 s, including save 24 hours,
+remount, reset to default, unset payload and storage removal. Its preceding
+unchanged run passed seven and failed the mobile Session titles mount assertion;
+case [1642](../web-ui/1642-session-title-setting-browser-mount.md) retains that evidence.
+
+The credential-free `backend-owned-state.spec.ts` passed through a real
+isolated backend in 26.7 s, with the profile stopped and reset. It covers
+settings merge/unset, persisted layout rehydration, immutable handoff retry
+from a historical transfer, and refusal of a missing source session. It does
+not send a live model turn or qualify first-prompt handoff delivery. The test
+is included in `test:agent:browser:isolated`; the focused run used
+`runIsolatedBrowser` with a one-spec suite override.
+
+The first broad reruns overlapped edits. In particular, the first full run
+observed new legacy-draft assertions with behavior matching the earlier cleanup
+implementation; that mixed-source run is not evidence for the committed version
+and is not classified as a flake. A second exact `mise run test:full` was queued
+after the commit. The component browser rerun was restarted with two granted
+workers after the six-worker attempt timed out on unrelated fixtures. The
+isolated browser runner's ambiguous Close selector was corrected, its profile
+was stopped/reset, and the exact isolated command was restarted.
+
+The broad run also found an outdated command-string assertion in
+`commands-io-coverage.test.ts`: unconditional container writes now create their
+parent inside the write script. The assertion was updated to the combined
+script and its complete owner passed in 7.9 s; formatting and lint passed.
+
+The exact isolated browser rerun reached case 30 of 134 and hit its 900 s suite
+deadline (934.0 s including startup/cleanup). It recorded seven failures in
+account-picker interaction, host pickers, capped file-tree visibility, agent
+mail, host maintenance and CLI UI visibility. The runner stopped and reset
+`qa-browser-fb89c904-8ba`; its runtime directory was confirmed absent. Evidence:
+`/tmp/orkestrator-test-run.FlgawK/review-agent-browser-rerun.log.gz`. This full
+run remains incomplete; the new focused backend-state regression passed
+separately after extraction into its own spec.

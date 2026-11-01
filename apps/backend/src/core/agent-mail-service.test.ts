@@ -658,6 +658,45 @@ describe("AgentMailService", () => {
     }
   });
 
+  test.each([
+    ["disabled", { enabled: false }, 0],
+    ["paused", { enabled: true, paused: true }, 1],
+  ] as const)("presence refresh while messaging is %s", async (_state, change, expectedReads) => {
+    const { storage, dataDir } = await fixture();
+    let reads = 0;
+    const service = new AgentMailService(
+      storage,
+      {
+        reconcileMailInject: async () => "unknown",
+        sessionActivitySnapshot: () => "unknown",
+        dispatchMailInject: async (input) => ({
+          outcome: "accepted",
+          requestId: input.requestId,
+        }),
+      },
+      {
+        mailInjectPresence: async () => {
+          reads += 1;
+          return "idle";
+        },
+        dispatchMailInject: async () => ({ outcome: "accepted" }),
+      },
+    );
+    try {
+      await replaceRecipientTab(storage, "claude-tmux");
+      await service.init();
+      const config = await storage.loadConfig();
+      config.global.agentMessaging = { ...config.global.agentMessaging!, ...change };
+      await storage.saveConfig(config);
+      reads = 0;
+      await service.refreshPresence();
+      expect(reads).toBe(expectedReads);
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("keeps a held idle injection deferred after the first drain", async () => {
     const { storage, dataDir } = await fixture();
     let dispatches = 0;

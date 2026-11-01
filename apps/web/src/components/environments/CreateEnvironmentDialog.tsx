@@ -38,7 +38,6 @@ import {
   Bot,
   ChevronDown,
   Container,
-  FileText,
   FolderOpen,
   Globe,
   Laptop,
@@ -77,6 +76,7 @@ import type {
 import type { AgentType } from "@/stores";
 import { useConfigStore } from "@/stores";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
+import { InitialPromptAttachmentPreviews } from "./InitialPromptAttachmentPreviews";
 import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
 import {
   defaultFastModeFor,
@@ -198,55 +198,6 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
   return btoa(binary);
-}
-
-function AttachmentPreviews({
-  attachments,
-  disabled,
-  onRemove,
-}: {
-  attachments: InitialPromptImageAttachment[];
-  disabled: boolean;
-  onRemove: (id: string) => void;
-}) {
-  if (attachments.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {attachments.map((attachment) => (
-        <div
-          key={attachment.id}
-          className={cn(
-            "group relative h-16 overflow-hidden rounded-md border border-border bg-muted",
-            attachment.type === "file" ? "flex w-40 items-center gap-2 px-2" : "w-16",
-          )}
-        >
-          {attachment.type === "file" ? (
-            <>
-              <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate pr-4 text-xs" title={attachment.name}>
-                {attachment.name}
-              </span>
-            </>
-          ) : (
-            <img
-              src={attachment.previewUrl}
-              alt={attachment.name}
-              className="h-full w-full object-cover"
-            />
-          )}
-          <button
-            type="button"
-            onClick={() => onRemove(attachment.id)}
-            disabled={disabled}
-            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-            aria-label={`Remove ${attachment.name}`}
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 export interface ClaudeOptions {
@@ -1530,30 +1481,58 @@ export function CreateEnvironmentDialog({
     ],
   );
 
-  const handlePromptKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Only handle plain Enter (no modifier keys) to submit the form
-      // Shift+Enter allows normal newline behavior
-      // Cmd/Ctrl+key combinations (copy, paste, etc.) pass through normally
-      if (
-        e.key === "Enter" &&
-        !e.shiftKey &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        !isLoading &&
-        pendingAttachmentOperations === 0
-      ) {
-        e.preventDefault();
-        formRef.current?.requestSubmit();
-      }
-    },
-    [isLoading, pendingAttachmentOperations],
-  );
+  const submitDisabled =
+    isLoading ||
+    pendingAttachmentOperations > 0 ||
+    (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings())) ||
+    (environmentType === "local" && !localEnvironmentAvailable) ||
+    // A blank name is generated from the description by the backend.
+    // At least one must be present so the ticket is identifiable.
+    (buildIntent === "feature" &&
+      (!onCreateFeatureBuild || (!featureName.trim() && !initialPrompt.trim())));
+
+  // Plain Enter never submits: multi-line fields take it as a newline, and a
+  // single-line field (the name, ports) would otherwise submit the form
+  // implicitly, so it is swallowed there.
+  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
+    if (
+      e.key === "Enter" &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      e.target instanceof HTMLInputElement &&
+      // Pickers portal their search inputs out of the form; leave those alone.
+      e.currentTarget.contains(e.target)
+    ) {
+      e.preventDefault();
+    }
+  };
+
+  // Cmd+Enter (Ctrl+Enter off macOS) from anywhere in the dialog does what the
+  // Create Environment button does, including staying inert while it is disabled.
+  // Capture before Radix consumes Enter on checkbox and select triggers. Stop
+  // propagation so the chord cannot also toggle, open, or activate a control.
+  const handleDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (
+      e.key !== "Enter" ||
+      e.defaultPrevented ||
+      e.repeat ||
+      e.nativeEvent.isComposing ||
+      !(e.metaKey || e.ctrlKey) ||
+      e.shiftKey ||
+      e.altKey
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (submitDisabled) return;
+    formRef.current?.requestSubmit();
+  };
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
+        onKeyDownCapture={handleDialogKeyDown}
         size="4xl"
         className={cn(
           "flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90vh] sm:p-0",
@@ -1621,6 +1600,7 @@ export function CreateEnvironmentDialog({
         <form
           ref={formRef}
           onSubmit={handleSubmit}
+          onKeyDown={handleFormKeyDown}
           className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         >
           <Tabs
@@ -2083,7 +2063,7 @@ export function CreateEnvironmentDialog({
                         Drop images to attach them to the feature
                       </p>
                     )}
-                    <AttachmentPreviews
+                    <InitialPromptAttachmentPreviews
                       attachments={initialPromptAttachments.filter(
                         (attachment) => attachment.type !== "file",
                       )}
@@ -2117,7 +2097,6 @@ export function CreateEnvironmentDialog({
                           }
                           value={initialPrompt}
                           onChange={(e) => setInitialPrompt(e.target.value)}
-                          onKeyDown={handlePromptKeyDown}
                           disabled={isLoading}
                           rows={3}
                           className="min-h-36 max-h-[calc(15*theme(lineHeight.normal)*1em)] resize-y overflow-y-auto rounded-xl border border-border/70 bg-input-surface px-3 py-2 shadow-none"
@@ -2127,7 +2106,7 @@ export function CreateEnvironmentDialog({
                             Drop files to attach them to the initial prompt
                           </p>
                         )}
-                        <AttachmentPreviews
+                        <InitialPromptAttachmentPreviews
                           attachments={initialPromptAttachments}
                           disabled={isLoading}
                           onRemove={removeInitialPromptAttachment}
@@ -2154,17 +2133,7 @@ export function CreateEnvironmentDialog({
           <Button
             type="button"
             onClick={() => formRef.current?.requestSubmit()}
-            disabled={
-              isLoading ||
-              pendingAttachmentOperations > 0 ||
-              (environmentType === "containerized" &&
-                (!dockerAvailable || !validatePortMappings())) ||
-              (environmentType === "local" && !localEnvironmentAvailable) ||
-              // A blank name is generated from the description by the backend.
-              // At least one must be present so the ticket is identifiable.
-              (buildIntent === "feature" &&
-                (!onCreateFeatureBuild || (!featureName.trim() && !initialPrompt.trim())))
-            }
+            disabled={submitDisabled}
             className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

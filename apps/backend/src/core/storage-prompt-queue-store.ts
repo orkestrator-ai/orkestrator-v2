@@ -122,6 +122,18 @@ export class PromptQueueStore {
     return added.length === 0 ? existing : [...existing, ...added].slice(-64);
   }
 
+  /** One queue, with the same claim recovery and validation as {@link loadPromptQueues}. */
+  loadPromptQueue(queueKey: string): PersistedPromptQueue | null {
+    const stored = this.context.loadStoreRow(this.files.promptQueuesFile(), queueKey);
+    if (stored === undefined) return null;
+    const restored = restoreLegacyPromptQueueClaims({ [queueKey]: stored }) as Record<
+      string,
+      unknown
+    >;
+    const queue = restored[queueKey];
+    return isPersistedPromptQueue(queue, queueKey) ? queue : null;
+  }
+
   async loadPromptQueues(): Promise<Record<string, PersistedPromptQueue>> {
     const stored = await this.context.loadJson<Record<string, PersistedPromptQueue>>(
       this.files.promptQueuesFile(),

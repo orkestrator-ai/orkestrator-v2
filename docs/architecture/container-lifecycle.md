@@ -1069,7 +1069,10 @@ Subnets in Docker's primary pool widen to it (for example
 environment networks are covered, unless one of the host's own non-Docker
 interface addresses is in that pool; then, and for subnets in `192.168.0.0/16`
 or `10.0.0.0/8` (common LAN ranges, never widened to), the rules name Docker's
-exact subnets. Probe containers and the temporary network
+exact subnets. The fix is always one pasteable line: several subnets become
+`sudo sh -c 'for net in ...; do ufw allow ... || exit 1; done'`, because
+pasting one `sudo` line per rule lets the password prompt read the next line
+as the password. Probe containers and the temporary network
 carry the owner and `host-reachability-probe` role labels (not the `app`
 label, so cleanup inventories never see them) and are removed after each
 check; leftovers are reaped by the next one. Every step is logged with the
@@ -1186,7 +1189,9 @@ when that is smaller, because shared memory is charged to the limit.
 `container-oom-events.ts` follows Docker's `oom` events for this owner — a
 killed child process leaves `State.OOMKilled` false — replaying from its last
 event after a restart without double-counting; samples carry `oomEvents`
-(null while not following). A memory update below current use is refused
+(null while not following). The same follower reports `start`, `die`, `stop` and
+`destroy`, which invalidate the shared `docker ps` snapshot so status reads do
+not keep answering for a container that just ended. A memory update below current use is refused
 `confirmation-required` until the user confirms it.
 
 ## Bounded logs (`bounded-logs=1`)

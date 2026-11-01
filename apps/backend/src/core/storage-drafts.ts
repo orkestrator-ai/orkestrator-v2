@@ -157,7 +157,8 @@ export class DraftsRepository {
 
   async getComposeDraft(draftKey: string): Promise<PersistedComposeDraft | null> {
     if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
-    return (await this.repos.prompts.loadComposeDrafts())[draftKey] ?? null;
+    const stored = this.context.loadStoreRow(this.files.composeDraftsFile(), draftKey);
+    return isPersistedComposeDraft(stored, draftKey) ? stored : null;
   }
 
   async listComposeDrafts(
@@ -696,8 +697,8 @@ export class DraftsRepository {
   }
 
   async getSession(sessionId: string): Promise<Session | null> {
-    const sessions = await this.context.loadJson<Session[]>(this.files.sessionsFile(), () => []);
-    return sessions.find((session) => session.id === sessionId) ?? null;
+    const stored = this.context.loadStoreRow(this.files.sessionsFile(), sessionId);
+    return isRecord(stored) && stored.id === sessionId ? (stored as unknown as Session) : null;
   }
 
   async getSessionsByEnvironment(environmentId: string): Promise<Session[]> {

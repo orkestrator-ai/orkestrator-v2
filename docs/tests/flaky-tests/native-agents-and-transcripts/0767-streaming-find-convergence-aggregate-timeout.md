@@ -176,3 +176,16 @@ run (147 passed, three skipped, two unrelated AgentLaunchDialog failures).
 This was a combined owner run, not a new standalone qualification. No assertion,
 deadline or implementation changed. Exact commands and evidence are recorded in
 [session history validation](../aggregate-validation-runs/1166-session-titles-0006-validation.md#structured-review-fixes--2026-10-31).
+
+## Environment shortcut review — 2026-11-01
+
+- **Original command:** `mise run test:logged -- --name browser -- mise run test:browser`.
+  Chromium ran eight workers across desktop and mobile viewports; other host validation
+  was active during part of the run.
+- **Failure:** the mobile `scrollbar departure after find stays put when streaming reapplies highlights`
+  case failed waiting for find convergence. The aggregate reported 1,038 passed,
+  108 skipped and 12 failed in 685.8 s; the other failures were outside this owner.
+- **Complete unchanged owner:** `NODE_ENV=test mise run test:logged -- --name transcript-scroll-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts --workers=1`
+  passed, exit 0, in 51.1 s.
+- **Evidence:** `/tmp/orkestrator-test-run.kXXcAm/browser.log.gz`.
+  No transcript implementation, assertion, deadline or skip changed. Cause remains unconfirmed.

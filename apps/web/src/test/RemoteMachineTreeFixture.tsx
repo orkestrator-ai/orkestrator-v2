@@ -54,6 +54,9 @@ function install() {
           order: index,
           status: "running",
           projectHome: id === "home",
+          ...(id === "b" && new URLSearchParams(location.search).has("accessible-state")
+            ? { hasUnreadWork: true, agentMailUnread: 2, prState: "open" }
+            : {}),
           // `?merge-ready`: "b" relays a clean persisted PR reading without
           // monitor health; `?merge-ready=confirmed` adds the leaf's
           // confirmation, and "c" then relays confirmed merge conflicts.
@@ -93,6 +96,12 @@ function install() {
         return { selfId: "bk_self", nodes: [structuredClone(node)] } as T;
       if (command === "get_backend_profile")
         return { revision: 1, displayName: "Self", colorToken: "teal", updatedAt: "t" } as T;
+      if (command === "invoke_on_node" && args?.command === "get_environment") {
+        return {
+          outcome: "ok",
+          result: { id: "b", name: "b", prUrl: "https://github.com/o/r/pull/1" },
+        } as T;
+      }
       if (command === "list_node_outcomes") return [...outcomes] as T;
       if (command === "invoke_on_node" && args?.command === "arrange_projects") {
         // The owner applies the arrangement and publishes it at once.

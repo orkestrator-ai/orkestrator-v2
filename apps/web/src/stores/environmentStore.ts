@@ -99,26 +99,41 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
     }),
 
   updateEnvironmentStatus: (environmentId, status) =>
-    set((state) => ({
-      environments: state.environments.map((environment) =>
-        environment.id === environmentId ? { ...environment, status } : environment,
-      ),
-    })),
+    set((state) => {
+      const current = state.environments.find((environment) => environment.id === environmentId);
+      if (!current || current.status === status) return state;
+      return {
+        environments: state.environments.map((environment) =>
+          environment === current ? { ...environment, status } : environment,
+        ),
+      };
+    }),
 
   setEnvironmentPR: (environmentId, prUrl, prState, hasMergeConflicts) =>
-    set((state) => ({
-      environments: state.environments.map((environment) =>
-        environment.id === environmentId
-          ? {
-              ...environment,
-              prUrl,
-              prState,
-              hasMergeConflicts: hasMergeConflicts ?? null,
-              prMergeability: environment.prUrl === prUrl ? environment.prMergeability : null,
-            }
-          : environment,
-      ),
-    })),
+    set((state) => {
+      const current = state.environments.find((environment) => environment.id === environmentId);
+      if (
+        !current ||
+        (current.prUrl === prUrl &&
+          current.prState === prState &&
+          current.hasMergeConflicts === (hasMergeConflicts ?? null))
+      ) {
+        return state;
+      }
+      return {
+        environments: state.environments.map((environment) =>
+          environment === current
+            ? {
+                ...environment,
+                prUrl,
+                prState,
+                hasMergeConflicts: hasMergeConflicts ?? null,
+                prMergeability: environment.prUrl === prUrl ? environment.prMergeability : null,
+              }
+            : environment,
+        ),
+      };
+    }),
 
   reorderEnvironments: (projectId, environmentIds) =>
     set((state) => ({

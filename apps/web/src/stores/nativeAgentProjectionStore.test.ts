@@ -350,6 +350,15 @@ describe("native agent projection byte accounting", () => {
       // An idle poll rebuilds an identical entry.
       store.setProgressiveCache("session-a", { ...entry });
       expect(notifications).toBe(0);
+      // Two visible sessions polling in turn change nothing either.
+      store.setProgressiveCache("session-b", entry);
+      notifications = 0;
+      store.setProgressiveCache("session-a", { ...entry });
+      store.setProgressiveCache("session-b", { ...entry });
+      store.setProgressiveCache("session-a", { ...entry });
+      expect(notifications).toBe(0);
+      store.setProgressiveCache("session-b", null);
+      notifications = 0;
       // A refresh-flag toggle is a real change, but the discovery is not.
       store.setProgressiveCache("session-a", { ...entry, transcriptRefreshing: true });
       store.setProgressiveCache("session-a", { ...entry, transcriptRefreshing: false });

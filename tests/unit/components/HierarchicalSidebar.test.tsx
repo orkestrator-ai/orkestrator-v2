@@ -340,9 +340,11 @@ describe("HierarchicalSidebar", () => {
       expect(useUIStore.getState().selectedProjectId).toBe(sameRepository.id);
       fireEvent.click(within(list).getByRole("button", { name: "Collapse project Project One" }));
       await waitFor(() =>
-        expect(within(list).queryByRole("button", { name: "First worker" }) === null).toBe(true),
+        expect(within(list).queryByRole("button", { name: /^First worker, on / }) === null).toBe(
+          true,
+        ),
       );
-      expect(within(list).getByRole("button", { name: "Second worker" })).toBeTruthy();
+      expect(within(list).getByRole("button", { name: /^Second worker, on / })).toBeTruthy();
       expect(useUIStore.getState().selectedProjectId).toBe(sameRepository.id);
       expect(
         within(list)
@@ -350,7 +352,7 @@ describe("HierarchicalSidebar", () => {
           .getAttribute("aria-expanded"),
       ).toBe("true");
       fireEvent.click(within(list).getByRole("button", { name: "Expand project Project One" }));
-      expect(await within(list).findByRole("button", { name: "First worker" })).toBeTruthy();
+      expect(await within(list).findByRole("button", { name: /^First worker, on / })).toBeTruthy();
       fireEvent.click(member);
       expect(useUIStore.getState().selectedProjectId).toBe(project.id);
       expect(member.getAttribute("aria-current")).toBe("page");
@@ -2314,7 +2316,7 @@ describe("HierarchicalSidebar", () => {
     });
     render(<HierarchicalSidebar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: /Failed Cleanup/ }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Failed Cleanup/ }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 

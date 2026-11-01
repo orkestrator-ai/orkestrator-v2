@@ -26,6 +26,8 @@ import {
   thinkingDisplayProbeArgs,
   thinkingDisplayProbeIndicatesSupport,
   TMUX_HOOK_PAYLOAD_MAX_BYTES,
+  TMUX_IDLE_AFTER_QUIET_TICKS,
+  TMUX_IDLE_POLL_INTERVAL_MS,
   tmuxSessionName,
   tmuxSessionNamePrefix,
   transcriptContainsSessionId,
@@ -2005,6 +2007,51 @@ describe("live session read paths", () => {
       ).resolves.toBeNull();
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 15_000);
+
+  test("a quiet tab polls slower and returns to the fast cadence on a hook", async () => {
+    const ticks = pollTickStepper();
+    const intervals: number[] = [];
+    const handlers = createHandlers({
+      sessionTiming: {
+        pollTick: (intervalMs: number) => {
+          intervals.push(intervalMs);
+          return ticks.pollTick();
+        },
+      },
+    });
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          setEnvironmentAgentActivity: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-idle-backoff";
+      const status = (await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      )) as { session_id: string };
+
+      for (let tick = 0; tick < TMUX_IDLE_AFTER_QUIET_TICKS; tick += 1) await ticks.step();
+      expect(intervals.at(-1)).toBe(TMUX_IDLE_POLL_INTERVAL_MS);
+      expect(intervals.slice(0, TMUX_IDLE_AFTER_QUIET_TICKS).every((ms) => ms === 250)).toBe(true);
+
+      // UserPromptSubmit marks the session busy, which stays on the fast cadence.
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+      await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-wake.json"), "{}");
+      await ticks.step();
+      expect(intervals.at(-1)).toBe(250);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+      await ticks.release().catch(() => undefined);
     });
   }, 15_000);
 

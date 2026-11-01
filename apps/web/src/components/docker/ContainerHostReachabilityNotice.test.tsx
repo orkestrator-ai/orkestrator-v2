@@ -42,7 +42,7 @@ afterAll(() => {
 const { ContainerHostReachabilityNotice } = await import("./ContainerHostReachabilityNotice");
 
 const FIX =
-  "sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment 'Orkestrator agent tools'";
+  'sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment "Orkestrator agent tools"';
 
 const blocked: ContainerHostReachability = {
   status: "blocked",

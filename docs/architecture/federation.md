@@ -469,7 +469,7 @@ with `MachinesFilter`:
   activity, independent of snapshot writes and lease refreshes; priority alone
   falls back to the activity snapshot timestamp for a record without one (an older
   remote backend). Missing or invalid activity times follow dated rows in Newest
-  first and precede them in Oldest first. Federated ties use backend ID, then
+  first and precede them in Oldest first. Federated ties use backend ID, project order, environment order, then
   environment ID; local ties use project order, environment order, then environment
   ID; the CLI keeps the backend's order. Timestamps come from different clocks, so
   this is a presentation sort only. The selected order is persisted and applies
@@ -490,8 +490,9 @@ with `MachinesFilter`:
   badges show the name. "Compact machine labels" reduces labels to the dot plus
   a tooltip.
 - A row of the bound machine selects in place. A row of another machine opens
-  its panel. Its actions menu offers Open in panel, Copy link, Start, Stop and
-  Delete…, all disabled while the machine is not writable.
+  its machine's workspace; its actions menu adds Open workspace and Copy link to
+  the actions every row has, and disables writes while the machine is not
+  writable.
 - `FederationEffects` handles `?resource=<encoded {b, e|p}>` links
   (`encodeResourceLink`). The link names a machine and a resource, never a
   route, port or token. A link for an unsaved machine offers to add a
@@ -504,6 +505,47 @@ with `MachinesFilter`:
 - Settings pages show a scope banner: **All machines** for Machines,
   **Backend: name** for everything else, which always targets the window's
   bound machine.
+
+### One presentation for both paths
+
+A machine's projects and environments look the same whether the window is
+bound to that machine or shows it through a command node. Each piece is one
+component with two thin adapters:
+
+| Piece | Shared component | This window's adapter | Another machine's adapter |
+| --- | --- | --- | --- |
+| Environment row | `EnvironmentRow`, drawn from `environmentRowModel(facts)` | `EnvironmentItem` (`localEnvironmentRowFacts`) | `RemoteEnvironmentItem` (`nodeEnvironmentRowFacts`) |
+| Row frame (grip, selection, offline dimming) | `SortableEnvironmentRowFrame`, `activityRowClassName` | `SortableEnvironmentItem` | `RemoteSortableEnvironmentItem` |
+| Delete confirmation | `EnvironmentDeleteDialog` | through `EnvironmentRow` | through `EnvironmentRow` |
+| Project header | `ProjectGroupHeader` | `SortableProjectGroup` | `RemoteProjectGroup` |
+| Project home activity | `ProjectHomeActivityButton`, `projectHomeStatus` | `ProjectHomeActivity` | `RemoteProjectGroup`, `RemoteActivityHome` |
+| Activity list | `ActivityEnvironmentList`, `compareActivity` | `HierarchicalSidebar` | `FederatedActivityList` |
+
+The adapters only gather facts (from this window's stores, or from
+`NodeEnvironmentSummary`/`NodeProjectSummary`) and actions. When changing what a
+row, header, badge, icon, menu, hover card, filter or sort shows:
+
+- Change the shared component or the model, not an adapter. A new fact goes in
+  `EnvironmentRowFacts`, which both adapters must then supply.
+- If another machine's adapter needs data it does not have, add a bounded,
+  optional, content-free field to the node summary (`node-summaries.ts`) and to
+  the machine's summary read (`get_environment_snapshots` with
+  `includePrMonitorHealth`), so older machines degrade to the previous display.
+  If the field changes on an event other than an environment change, make
+  `NodeReadModel` re-read on it (agent mail does).
+- Add a case to `environment-row-model.parity.test.ts`, which feeds one
+  environment through both adapters and requires the same row, or a rendering
+  test to `remote-row-parity.test.tsx`.
+- The only intended differences follow from the row being on another machine:
+  clicking opens that machine's workspace, "Open workspace" and "Copy link"
+  exist, writes are disabled while it is unavailable, it takes no part in this
+  window's multi-select, and items that need this window's own host ("Copy
+  Address", "Copy Initial Prompt", the clickable port, the design-canvas
+  deletion notice) are absent. Its Docker availability is not relayed, so its
+  container actions are gated by the machine being writable instead.
+
+[2190](../todo/cross-cutting/2190-direct-and-command-node-sidebar-parity.md)
+records how the two paths were merged and what remains.
 
 ## Project search
 

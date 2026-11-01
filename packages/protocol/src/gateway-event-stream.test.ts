@@ -11,6 +11,7 @@ import {
   parseSseBlock,
   readSseStream,
   SseFrameDecoder,
+  type SseFrame,
 } from "./gateway-event-stream";
 
 const envelope = (event: string, payload: unknown = null) => JSON.stringify({ event, payload });
@@ -73,6 +74,64 @@ describe("SSE framing", () => {
       GatewayEventFrameTooLargeError,
     );
     expect(new SseFrameDecoder(10).push("data: 😀\n\n")).toEqual([{ id: null, data: "😀" }]);
+  });
+
+  test("frames are the same however the stream is cut into chunks", () => {
+    const stream =
+      'id: 1\ndata: {"a":1}\n\nid: 2\r\ndata: é😀\r\n\r\n: keepalive\n\n' +
+      "data: one\r\n\ndata: two\n\r\ndata: tail\n\n";
+    const whole = new SseFrameDecoder().push(stream);
+    expect(whole.map((frame) => frame.data)).toEqual([
+      '{"a":1}',
+      "é😀",
+      null,
+      "one",
+      "two",
+      "tail",
+    ]);
+    for (let size = 1; size <= stream.length; size += 1) {
+      const decoder = new SseFrameDecoder();
+      const frames: SseFrame[] = [];
+      for (let start = 0; start < stream.length; start += size) {
+        frames.push(...decoder.push(stream.slice(start, start + size)));
+      }
+      expect(frames).toEqual(whole);
+    }
+    for (let split = 0; split <= stream.length; split += 1) {
+      const decoder = new SseFrameDecoder();
+      expect([
+        ...decoder.push(stream.slice(0, split)),
+        ...decoder.push(stream.slice(split)),
+      ]).toEqual(whole);
+    }
+  });
+
+  test("the byte bound holds across chunks and resets after each frame", () => {
+    const decoder = new SseFrameDecoder(10);
+    expect(decoder.push("data: ab")).toEqual([]);
+    expect(decoder.push("\n\n")).toEqual([{ id: null, data: "ab" }]);
+    expect(decoder.push("data: cd")).toEqual([]);
+    expect(decoder.push("\n\n")).toEqual([{ id: null, data: "cd" }]);
+    const overflowing = new SseFrameDecoder(10);
+    expect(overflowing.push("data: abcd")).toEqual([]);
+    expect(() => overflowing.push("e")).toThrow(GatewayEventFrameTooLargeError);
+  });
+
+  test("a surrogate pair split between chunks still counts as four bytes", () => {
+    const decoder = new SseFrameDecoder(10);
+    expect(decoder.push("data: \ud83d")).toEqual([]);
+    expect(decoder.push("\ude00")).toEqual([]);
+    expect(decoder.push("\n\n")).toEqual([{ id: null, data: "😀" }]);
+  });
+
+  test("a frame much larger than its chunks decodes whole", () => {
+    const decoder = new SseFrameDecoder();
+    const data = "x".repeat(1_024);
+    for (let index = 0; index < 2_048; index += 1) {
+      expect(decoder.push(index === 0 ? `data: ${data}` : data)).toEqual([]);
+    }
+    const [frame] = decoder.push("\n\n");
+    expect(frame?.data?.length).toBe(1_024 * 2_048);
   });
 
   test("reads a body to its end, decoding characters split across chunks", async () => {

@@ -61,6 +61,12 @@ import { MachinesFilter } from "./MachinesFilter";
 import { SshPromptDialog } from "./SshPromptDialog";
 import { useMachineViews } from "./useMachineViews";
 
+/** A project's header button, found through its "+" button, which names project and machine. */
+function projectHeading(project: string, machine: string): HTMLElement {
+  const add = screen.getByRole("button", { name: `New environment in ${project} on ${machine}` });
+  return add.parentElement!.querySelector("button")!;
+}
+
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
 const originalReload = window.location.reload;
@@ -688,8 +694,8 @@ describe("CL-05: machine identity visual rules", () => {
         subtitle="app"
       />,
     );
-    expect(screen.getByRole("button", { name: /^feature, on Machine A, Working/ })).toBeTruthy();
-    expect(screen.getByText("app")).toBeTruthy();
+    const row = screen.getByRole("button", { name: /^feature, on Machine A, Working/ });
+    expect(within(row).getByText("app")).toBeTruthy();
   });
 
   test("another machine's build pipeline and auto-merge rows carry their markers", () => {
@@ -712,6 +718,27 @@ describe("CL-05: machine identity visual rules", () => {
     expect(within(built).getByText("feature")).toBeTruthy();
   });
 
+  test("another machine's merged PR shows the merged icon, as the machine's own row does", () => {
+    const machine = machineView();
+    const plain = firstEnvironment(machine);
+    const { rerender } = render(
+      <RemoteEnvironmentItem machine={machine} environment={{ ...plain, prState: "open" }} />,
+    );
+    expect(screen.queryByRole("img", { name: "Merged" }) === null).toBe(true);
+
+    rerender(
+      <RemoteEnvironmentItem
+        machine={machine}
+        environment={{ ...plain, prState: "merged", autoMerge: true }}
+      />,
+    );
+    const row = screen.getByRole("button", { name: /^feature, on Machine A,/ });
+    const icon = within(row).getByRole("img", { name: "Merged" });
+    expect(icon.getAttribute("data-state")).toBe("merged");
+    // The merged icon replaces the auto-merge icon rather than doubling it.
+    expect(within(row).queryByTestId("environment-auto-merge-icon") === null).toBe(true);
+  });
+
   test("another machine's clean PR stays plain without leaf monitor health", () => {
     const machine = machineView();
     const ready: FederatedEnvironment = {
@@ -725,8 +752,12 @@ describe("CL-05: machine identity visual rules", () => {
     const name = within(row).getByText("feature");
     expect(name.classList).not.toContain("text-shimmer");
     expect(name.classList).not.toContain("merge-ready-name");
-    const describedBy = row.getAttribute("aria-describedby");
-    expect(describedBy).toBeNull();
+    const description = () =>
+      (row.getAttribute("aria-describedby") ?? "")
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
+    expect(description()).not.toMatch(/ready to merge/i);
 
     // A failing check makes GitHub report the merge state as unstable.
     rerender(
@@ -736,7 +767,7 @@ describe("CL-05: machine identity visual rules", () => {
       />,
     );
     expect(within(row).getByText("feature").classList).not.toContain("text-shimmer");
-    expect(row.hasAttribute("aria-describedby")).toBe(false);
+    expect(description()).not.toMatch(/ready to merge/i);
 
     // A machine whose summaries are not current cannot vouch for the reading.
     rerender(
@@ -1210,13 +1241,16 @@ describe("RT-02/OP-05: actions keep the destination captured when they started",
     const menu = await openRowActions("Machine A");
     fireEvent.click(within(menu).getByRole("menuitem", { name: /Delete/ }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByRole("heading").textContent).toBe("Delete “feature” on Machine A?");
+    // The same confirmation this window's rows use, naming the owner.
+    const question = () => within(dialog).getByText(/Are you sure you want to delete/).textContent;
+    expect(within(dialog).getByRole("heading").textContent).toBe("Delete Environment");
+    expect(question()).toContain("delete feature on Machine A?");
 
     // The user's focus moves to machine B while the confirmation is open.
     act(() => {
       useMachineViewStore.getState().setMachineFilter("bk_b");
     });
-    expect(within(dialog).getByRole("heading").textContent).toBe("Delete “feature” on Machine A?");
+    expect(question()).toContain("delete feature on Machine A?");
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete on Machine A" }));
     await waitFor(() => expect(fake.callsTo("a", "delete_environment")).toHaveLength(1));
@@ -1266,7 +1300,7 @@ describe("another machine's menus offer what this machine's do", () => {
 
   async function openProjectMenu() {
     await act(async () => {
-      fireEvent.contextMenu(screen.getByTitle("Open app on Machine A"));
+      fireEvent.contextMenu(projectHeading("app", "Machine A"));
     });
     return screen.findByRole("menu");
   }
@@ -2119,7 +2153,7 @@ for (const rejectWrite of [false, true]) {
     });
     useMachineViewStore.getState().setFolderKeyCollapsed("bk_a/work", true);
     renderWithFederation(<RemoteSections />);
-    fireEvent.contextMenu(await screen.findByRole("button", { name: "App A" }));
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Open App A on Machine A" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add to Folder" }));
     fireEvent.change(await screen.findByLabelText("Folder name"), {
       target: { value: "  Work  " },
@@ -2135,17 +2169,21 @@ for (const rejectWrite of [false, true]) {
     if (rejectWrite) {
       await waitFor(() => expect(mockToastError).toHaveBeenCalled());
       expectDomAbsent(
-        screen.getByRole("button", { name: "App A" }).closest("[data-project-folder-content]"),
+        screen
+          .getByRole("button", { name: "Open App A on Machine A" })
+          .closest("[data-project-folder-content]"),
       );
     } else {
-      fireEvent.contextMenu(screen.getByRole("button", { name: "App A" }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Open App A on Machine A" }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from Folder" }));
       await waitFor(() => expect(fake.callsTo("a", "arrange_projects_by_intent")).toHaveLength(2));
       expect(fake.callsTo("a", "arrange_projects_by_intent")[1]!.args).toEqual({
         intent: { kind: "remove-from-folder", projectId: "p" },
       });
       expectDomAbsent(
-        screen.getByRole("button", { name: "App A" }).closest("[data-project-folder-content]"),
+        screen
+          .getByRole("button", { name: "Open App A on Machine A" })
+          .closest("[data-project-folder-content]"),
       );
     }
   });

@@ -1,4 +1,8 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   CONTAINER_HOST_REACHABILITY_CHANGED_EVENT,
   containerHostReachabilityNeedsAttention,
@@ -96,6 +100,201 @@ describe("classifyProbeOutput", () => {
 });
 
 describe("remediation", () => {
+  // Run the copyable command in a real shell, with no host firewall/service
+  // binaries on PATH. NUL delimiters preserve spaces and argument boundaries.
+  function executeRemediation(
+    command: string,
+    options: { failArgument?: string; blockDropIn?: boolean } = {},
+  ) {
+    const dir = mkdtempSync(join(tmpdir(), "ork-remediation 'quoted' "));
+    const bin = join(dir, "bin");
+    const log = join(dir, "calls");
+    const dropIn = join(
+      dir,
+      ".config/systemd/user/docker.service.d/orkestrator-host-loopback.conf",
+    );
+    try {
+      mkdirSync(bin);
+      writeFileSync(log, "");
+      symlinkSync("/bin/sh", join(bin, "sh"));
+      writeFileSync(join(bin, "sudo"), '#!/bin/sh\nexport STUB_PRIVILEGED=1\nexec "$@"\n', {
+        mode: 0o700,
+      });
+      for (const name of ["ufw", "firewall-cmd", "iptables", "mkdir", "systemctl"]) {
+        writeFileSync(
+          join(bin, name),
+          `#!/bin/sh
+printf '%s\\0' '${name}' "$@" >> "$CALL_LOG"
+printf '\\0' >> "$CALL_LOG"
+${["ufw", "firewall-cmd", "iptables"].includes(name) ? '[ "$STUB_PRIVILEGED" = 1 ] || exit 24' : ""}
+for arg do
+  if [ "$arg" = "$FAIL_ARGUMENT" ]; then exit 23; fi
+done
+${
+  name === "systemctl"
+    ? `if [ "$2" = daemon-reload ]; then
+  {
+    IFS= read -r header && IFS= read -r environment &&
+    [ "$header" = '[Service]' ] &&
+    [ "$environment" = 'Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false"' ]
+  } < "$DROP_IN" || exit 24
+fi`
+    : ""
+}
+${name === "mkdir" ? 'exec /bin/mkdir "$@"' : "exit 0"}
+`,
+          { mode: 0o700 },
+        );
+      }
+      if (options.blockDropIn) mkdirSync(dropIn, { recursive: true });
+      const result = spawnSync("/bin/sh", ["-c", command], {
+        env: {
+          PATH: bin,
+          HOME: dir,
+          CALL_LOG: log,
+          DROP_IN: dropIn,
+          FAIL_ARGUMENT: options.failArgument ?? "",
+        },
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+      if (result.error) throw result.error;
+      expect(result.signal).toBeNull();
+      const entries = readFileSync(log, "utf8");
+      return {
+        status: result.status,
+        calls: entries
+          ? entries
+              .slice(0, -2)
+              .split("\0\0")
+              .map((entry) => entry.split("\0"))
+          : [],
+        dropIn: options.blockDropIn
+          ? null
+          : (() => {
+              try {
+                return readFileSync(dropIn, "utf8");
+              } catch {
+                return null;
+              }
+            })(),
+      };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  for (const firewall of ["ufw", "firewalld", "iptables"] as const) {
+    for (const subnets of [["192.168.64.0/20"], ["192.168.64.0/20", "10.200.0.0/24"]]) {
+      const rule = (source: string) => {
+        switch (firewall) {
+          case "ufw":
+            return [
+              "ufw",
+              "allow",
+              "proto",
+              "tcp",
+              "from",
+              source,
+              "to",
+              "any",
+              "port",
+              "4567",
+              "comment",
+              "Orkestrator agent tools",
+            ];
+          case "firewalld":
+            return [
+              "firewall-cmd",
+              "--permanent",
+              `--add-rich-rule=rule family=ipv4 source address=${source} port port=4567 protocol=tcp accept`,
+            ];
+          case "iptables":
+            return [
+              "iptables",
+              "-I",
+              "INPUT",
+              "-p",
+              "tcp",
+              "-s",
+              source,
+              "--dport",
+              "4567",
+              "-j",
+              "ACCEPT",
+            ];
+        }
+      };
+      const command = () => {
+        const commands = buildContainerHostRemediation({
+          firewall,
+          port: 4567,
+          subnets,
+          outcomes: ["timeout"],
+        }).commands;
+        expect(commands).toHaveLength(1);
+        return commands[0]!;
+      };
+      test(`${firewall}, ${subnets.length} source(s): shell preserves arguments and reloads after all rules`, () => {
+        const result = executeRemediation(command());
+        expect(result.status).toBe(0);
+        expect(result.calls).toEqual([
+          ...subnets.map(rule),
+          ...(firewall === "firewalld" ? [["firewall-cmd", "--reload"]] : []),
+        ]);
+      });
+      for (const [index, source] of subnets.entries()) {
+        test(`${firewall}, ${subnets.length} source(s): failure at source ${index + 1} stops later rules and reload`, () => {
+          const result = executeRemediation(command(), {
+            failArgument: rule(source).find((arg) => arg.includes(source)),
+          });
+          expect(result.status).not.toBe(0);
+          expect(result.calls).toEqual(subnets.slice(0, index + 1).map(rule));
+        });
+      }
+      if (firewall === "firewalld") {
+        test(`firewalld, ${subnets.length} source(s): reload failure propagates`, () => {
+          const result = executeRemediation(command(), { failArgument: "--reload" });
+          expect(result.status).toBe(23);
+          expect(result.calls).toEqual([...subnets.map(rule), ["firewall-cmd", "--reload"]]);
+        });
+      }
+    }
+  }
+
+  test("rootless remediation writes the drop-in before reloading and restarting the user service", () => {
+    const commands = buildRootlessHostRemediation(4567).commands;
+    expect(commands).toHaveLength(1);
+    const result = executeRemediation(commands[0]!);
+    expect(result.status).toBe(0);
+    expect(result.dropIn).toBe(
+      '[Service]\nEnvironment="DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false"\n',
+    );
+    expect(result.calls).toEqual([
+      ["mkdir", "-p", expect.stringMatching(/\/.config\/systemd\/user\/docker\.service\.d$/)],
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "restart", "docker"],
+    ]);
+  });
+
+  for (const failure of ["mkdir", "write", "daemon-reload", "restart"] as const) {
+    test(`rootless remediation stops and fails when ${failure} fails`, () => {
+      const result = executeRemediation(buildRootlessHostRemediation(4567).commands[0]!, {
+        failArgument: failure === "mkdir" ? "-p" : failure,
+        blockDropIn: failure === "write",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.calls.map((call) => (call[0] === "mkdir" ? "mkdir" : call[2]))).toEqual(
+        failure === "mkdir" || failure === "write"
+          ? ["mkdir"]
+          : failure === "daemon-reload"
+            ? ["mkdir", "daemon-reload"]
+            : ["mkdir", "daemon-reload", "restart"],
+      );
+      if (failure === "mkdir" || failure === "write") expect(result.dropIn).toBeNull();
+    });
+  }
+
   test("only Docker's own pool is widened; LAN-style ranges keep their exact subnets", () => {
     expect(coveringCidrs(["172.17.0.0/16", "172.18.0.0/16", "172.30.4.0/24"])).toEqual([
       "172.16.0.0/12",
@@ -158,7 +357,7 @@ describe("remediation", () => {
       outcomes: ["timeout"],
     });
     expect(remediation.commands).toEqual([
-      "sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment 'Orkestrator agent tools'",
+      'sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment "Orkestrator agent tools"',
     ]);
     const steps = remediation.steps.join(" ");
     expect(steps).toContain("ufw");
@@ -175,8 +374,7 @@ describe("remediation", () => {
       hostAddresses: ["172.20.5.10"],
     });
     expect(remediation.commands).toEqual([
-      "sudo ufw allow proto tcp from 172.17.0.0/16 to any port 38179 comment 'Orkestrator agent tools'",
-      "sudo ufw allow proto tcp from 192.168.64.0/20 to any port 38179 comment 'Orkestrator agent tools'",
+      `sudo sh -c 'for net in 172.17.0.0/16 192.168.64.0/20; do ufw allow proto tcp from $net to any port 38179 comment "Orkestrator agent tools" || exit 1; done'`,
     ]);
     const steps = remediation.steps.join(" ");
     expect(steps).not.toContain("172.16.0.0/12");
@@ -191,8 +389,7 @@ describe("remediation", () => {
       outcomes: ["timeout"],
     });
     expect(firewalld.commands).toEqual([
-      `sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="172.16.0.0/12" port port="4567" protocol="tcp" accept'`,
-      "sudo firewall-cmd --reload",
+      `sudo firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=172.16.0.0/12 port port=4567 protocol=tcp accept" && sudo firewall-cmd --reload`,
     ]);
     const unknown = buildContainerHostRemediation({
       firewall: "unknown",
@@ -360,7 +557,7 @@ describe("ContainerHostReachabilityService.check", () => {
     expect(result.summary).toContain("port 38179");
     expect(result.summary).toContain("firewall");
     expect(result.remediation?.commands).toEqual([
-      "sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment 'Orkestrator agent tools'",
+      'sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment "Orkestrator agent tools"',
     ]);
     expect(containerHostReachabilityNeedsAttention(result)).toBe(true);
     expect(events.map((event) => event.status)).toEqual(["checking", "blocked"]);
@@ -500,7 +697,8 @@ describe("ContainerHostReachabilityService.check", () => {
     const { svc } = service({ runner, readTextFile: async () => null });
     const result = await svc.check("manual");
     expect(result.firewall.kind).toBe("firewalld");
-    expect(result.remediation?.commands.at(-1)).toBe("sudo firewall-cmd --reload");
+    expect(result.remediation?.commands).toHaveLength(1);
+    expect(result.remediation?.commands[0]).toEndWith("&& sudo firewall-cmd --reload");
   });
 });
 
@@ -538,7 +736,7 @@ describe("environment container probes and workflow preflight", () => {
     expect(message).toContain("http://host.docker.internal:38179/mcp");
     expect(message).toContain("timed out");
     expect(message).toContain(
-      "sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment 'Orkestrator agent tools'",
+      'sudo ufw allow proto tcp from 172.16.0.0/12 to any port 38179 comment "Orkestrator agent tools"',
     );
     expect(message).toContain("retry this stage");
     expect(prepared).toEqual([environment.containerId]);

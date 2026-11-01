@@ -307,6 +307,9 @@ export class AgentMailService {
   }
 
   private async refreshPresenceOnce(): Promise<void> {
+    // Nothing reads presence while messaging is off. Paused still refreshes:
+    // it only holds delivery, and the mail surfaces stay visible.
+    if (!(await this.storage.loadConfig()).global.agentMessaging?.enabled) return;
     const mailboxes: MailboxDescriptor[] = [];
     let offset = 0;
     while (true) {

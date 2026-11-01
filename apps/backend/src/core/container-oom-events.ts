@@ -12,11 +12,15 @@ import { spawnParentBoundCommand } from "./shell.js";
  * with backoff when it exits (replaying from the moment it stopped, so a
  * restart does not lose events) and stopped at shutdown. Counts are since the
  * first start, per container, bounded in number.
+ *
+ * The same follower reports the installation's containers starting and ending,
+ * so a state snapshot does not keep answering for a container that just died.
  */
 
 const MAX_TRACKED = 256;
 const RESTART_MIN_MS = 1_000;
 const RESTART_MAX_MS = 60_000;
+const FOLLOWED_EVENTS = ["oom", "start", "die", "stop", "destroy"] as const;
 
 type Spawn = (command: string, args: string[]) => ReturnType<typeof spawnParentBoundCommand>;
 
@@ -39,14 +43,17 @@ export class OomEventWatcher {
   private running = false;
   /** Unix seconds a restart replays from. */
   private resumeFrom: number | null = null;
-  /** The newest event counted (nanoseconds), so a replay counts nothing twice. */
+  /** The newest event seen (nanoseconds), where a restart replays from. */
   private lastSeenNano = 0n;
+  /** The newest kill counted (nanoseconds), so a replay counts nothing twice. */
+  private lastOomNano = 0n;
 
   constructor(
     private readonly owner: string,
     // Parent-bound: a backend killed without its shutdown path would otherwise
     // leave the follower running forever, since it only writes on an OOM.
     private readonly spawn: Spawn = spawnParentBoundCommand,
+    private readonly onLifecycle: () => void = () => undefined,
   ) {}
 
   start(): void {
@@ -55,13 +62,12 @@ export class OomEventWatcher {
       "events",
       "--filter",
       "type=container",
-      "--filter",
-      "event=oom",
+      ...FOLLOWED_EVENTS.flatMap((event) => ["--filter", `event=${event}`]),
       "--filter",
       `label=orkestrator-owner=${this.owner}`,
       ...(this.resumeFrom !== null ? ["--since", String(this.resumeFrom)] : []),
       "--format",
-      "{{.Actor.ID}}\t{{.TimeNano}}",
+      "{{.Actor.ID}}\t{{.TimeNano}}\t{{.Action}}",
     ]);
     this.child = child;
     this.running = true;
@@ -93,12 +99,17 @@ export class OomEventWatcher {
   }
 
   private record(line: string): void {
-    const [id = "", nanos = ""] = line.trim().split("\t");
+    const [id = "", nanos = "", action = "oom"] = line.trim().split("\t");
     if (!/^[0-9a-f]{12,64}$/.test(id) || !/^\d{1,20}$/.test(nanos)) return;
     this.restartDelay = RESTART_MIN_MS;
     const at = BigInt(nanos);
-    if (at <= this.lastSeenNano) return;
-    this.lastSeenNano = at;
+    if (at > this.lastSeenNano) this.lastSeenNano = at;
+    if (action !== "oom") {
+      this.onLifecycle();
+      return;
+    }
+    if (at <= this.lastOomNano) return;
+    this.lastOomNano = at;
     const lastAt = new Date(Number(at / 1_000_000n)).toISOString();
     const current = this.counts.get(id);
     this.counts.delete(id);
@@ -115,7 +126,7 @@ export class OomEventWatcher {
     this.child = null;
     // Unknown until the follower is back; it then replays the gap.
     this.running = false;
-    // From the last event counted when there is one (duplicates are skipped
+    // From the last event seen when there is one (duplicates are skipped
     // by time), else from shortly before the exit.
     this.resumeFrom =
       this.lastSeenNano > 0n
@@ -140,12 +151,15 @@ export class OomEventWatcher {
 export class ContainerOomEvents {
   private watcher: OomEventWatcher | null = null;
 
-  constructor(private readonly spawn: Spawn = spawnParentBoundCommand) {}
+  constructor(
+    private readonly spawn: Spawn = spawnParentBoundCommand,
+    private readonly onLifecycle?: () => void,
+  ) {}
 
   /** Starts the backend's watcher (idempotent). */
   start(owner: string): void {
     if (this.watcher) return;
-    this.watcher = new OomEventWatcher(owner, this.spawn);
+    this.watcher = new OomEventWatcher(owner, this.spawn, this.onLifecycle);
     this.watcher.start();
   }
 

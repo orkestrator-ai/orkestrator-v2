@@ -38,3 +38,18 @@
   directory. The aggregate remained non-green. The complete unchanged owner
   passed separately; no owning implementation, assertion, deadline or skip
   changed. The cause remains unconfirmed.
+
+## Environment shortcut review — 2026-11-01
+
+- **Original command:** `mise run test:logged -- --name repaired-tests -- mise run test`.
+  Default aggregate worker reservations were 6/1/2/1 for workspace/root/bridges/protocol;
+  web used two isolated Bun workers. Component browser validation ran alongside it.
+- **Failure:** the same exact-call assertion received `get_node_status` and
+  `get_node_summaries` before `open_in_browser` (32.76 ms). Web ran 11,242 tests
+  across 742 files with one failure; every other aggregate group passed.
+  The aggregate finished in 271.4 s with exit 1.
+- **Complete unchanged owner:** `NODE_ENV=test mise run test:logged -- --name unrelated-machine-routing -- bun test --cwd apps/web ./src/components/settings/machine-sign-in-routing.test.tsx --parallel=1 --only-failures`
+  passed all three tests, exit 0, in 0.5 s.
+- **Evidence:** `/tmp/orkestrator-test-run.uABkYC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `/tmp/orkestrator-test-run.gW1G7G/repaired-tests.log.gz`.
+  No settings implementation, assertion, timeout or skip changed; cause remains unconfirmed.

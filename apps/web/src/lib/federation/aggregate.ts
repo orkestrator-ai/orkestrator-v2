@@ -12,10 +12,8 @@
 import type { ConnectionTransportState } from "@orkestrator/protocol/connections";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
-import {
-  compareEnvironmentsByActivity,
-  type ActivitySortOrder,
-} from "@orkestrator/protocol/environment-activity-order";
+import type { ActivitySortOrder } from "@/stores/uiStore";
+import { compareActivity, type ActivitySortKey } from "@/lib/activity-order";
 import type { FederatedEnvironment, FederatedProject, SummaryFreshness } from "./summaries";
 
 export interface MachineView {
@@ -60,8 +58,8 @@ export function filterMachines(
 
 /**
  * Every environment across the selected machines, in the shared activity order
- * (`compareEnvironmentsByActivity`). Machine and environment IDs break ties the
- * same way in every order.
+ * (`compareActivity`, backed by the protocol comparator). Ties use machine ID,
+ * project order, environment order and environment ID.
  *
  * `boundActivity` is the activity the bound machine's own rows display: those
  * render as this window's `EnvironmentItem`, which can show runtime observations
@@ -73,31 +71,36 @@ export function activityRows(
   order: ActivitySortOrder = "priority",
   boundActivity?: (environmentId: string) => AgentActivityState | undefined,
 ): ActivityRow[] {
-  const rows: ActivityRow[] = [];
+  const rows: Array<ActivityRow & { key: ActivitySortKey }> = [];
   for (const machine of machines) {
     const projects = new Map(machine.projects.map((project) => [project.ref.projectId, project]));
     for (const [projectId, environments] of machine.environmentsByProject) {
+      const project = projects.get(projectId) ?? null;
       for (const environment of environments) {
         if (environment.isProjectHome) continue;
-        rows.push({ machine, project: projects.get(projectId) ?? null, environment });
+        rows.push({
+          machine,
+          project,
+          environment,
+          key: {
+            hasUnreadWork: environment.hasUnreadWork,
+            activity:
+              (machine.bound ? boundActivity?.(environment.ref.environmentId) : undefined) ??
+              (environment.buildActive ? "working" : environment.activity),
+            activityUpdatedAt: environment.activityUpdatedAt,
+            lastActivityAt: environment.lastActivityAt,
+            machineId: machine.backendId,
+            projectOrder: project?.order,
+            order: environment.order,
+            id: environment.ref.environmentId,
+          },
+        });
       }
     }
   }
-  const sortFields = (row: ActivityRow) => {
-    const shown = row.machine.bound
-      ? boundActivity?.(row.environment.ref.environmentId)
-      : undefined;
-    return shown ? { ...row.environment, activity: shown } : row.environment;
-  };
   return rows
-    .map((row) => ({ row, fields: sortFields(row) }))
-    .sort(
-      (a, b) =>
-        compareEnvironmentsByActivity(a.fields, b.fields, order) ||
-        compareText(a.row.machine.backendId, b.row.machine.backendId) ||
-        compareText(a.row.environment.ref.environmentId, b.row.environment.ref.environmentId),
-    )
-    .map(({ row }) => row);
+    .sort((a, b) => compareActivity(a.key, b.key, order))
+    .map(({ machine, project, environment }) => ({ machine, project, environment }));
 }
 
 export interface ConnectivitySummary {
@@ -146,8 +149,4 @@ export function duplicateMachineColors(
   }
   for (const [color, ids] of Array.from(byColor)) if (ids.length < 2) byColor.delete(color);
   return byColor;
-}
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }

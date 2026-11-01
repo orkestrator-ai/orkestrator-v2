@@ -32,6 +32,49 @@ async function waitUntil(predicate: () => Promise<boolean> | boolean) {
 }
 
 describe("out-of-memory event watcher", () => {
+  test("follows lifecycle events without counting them as kills", async () => {
+    const child = new FakeChild();
+    const lifecycle = mock(() => undefined);
+    const spawn = mock((_command: string, _args: string[]) => {
+      return child as unknown as ReturnType<typeof spawnParentBoundCommand>;
+    });
+    const watcher = new OomEventWatcher("owner", spawn, lifecycle);
+    watcher.start();
+    const args = spawn.mock.calls[0]?.[1] ?? [];
+    expect(args.filter((arg) => arg.startsWith("event="))).toEqual([
+      "event=oom",
+      "event=start",
+      "event=die",
+      "event=stop",
+      "event=destroy",
+    ]);
+
+    child.stdout.write(`${ID}\t${nanos(10)}\tdie\n`);
+    await waitUntil(() => lifecycle.mock.calls.length === 1);
+    expect(watcher.count(ID)).toBe(0);
+
+    // A kill older than the lifecycle event just seen still counts, once.
+    child.stdout.write(`${ID}\t${nanos(9)}\toom\n${ID}\t${nanos(9)}\toom\n`);
+    await waitUntil(() => watcher.count(ID) === 1);
+    child.stdout.write(`${ID}\t${nanos(11)}\toom\n`);
+    await waitUntil(() => watcher.count(ID) === 2);
+    expect(lifecycle).toHaveBeenCalledTimes(1);
+    watcher.stop();
+  });
+
+  test("a lifecycle event invalidates the backend's state snapshot", async () => {
+    const child = new FakeChild();
+    const invalidate = mock(() => undefined);
+    const events = new ContainerOomEvents(
+      () => child as unknown as ReturnType<typeof spawnParentBoundCommand>,
+      invalidate,
+    );
+    events.start("owner");
+    child.stdout.write(`${ID}\t${nanos(1)}\tstop\n`);
+    await waitUntil(() => invalidate.mock.calls.length === 1);
+    events.stop();
+  });
+
   test("the backend owner starts once, passes its namespace and stops only its follower", () => {
     const children: FakeChild[] = [];
     const spawn = mock((_command: string, _args: string[]) => {

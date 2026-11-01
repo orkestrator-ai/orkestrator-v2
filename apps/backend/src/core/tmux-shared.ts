@@ -48,6 +48,22 @@ export const TMUX_BUSY_OBSERVATION_INTERVAL_MS = 500;
  * already stopped — runs on this slower cadence.
  */
 export const LIVENESS_CHECK_EVERY_TICKS = 8;
+/**
+ * A tab with nothing happening polls slower, after this many quiet ticks. A hook
+ * can still take one idle interval to be seen, which stays inside the 2 s budget
+ * for showing an approval; once one arrives the loop is back on the fast cadence.
+ */
+export const TMUX_IDLE_AFTER_QUIET_TICKS = 8;
+export const TMUX_IDLE_POLL_INTERVAL_MS = 1_000;
+/** Idle ticks are longer, so liveness keeps its roughly 2 s detection time. */
+export const TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS = 2;
+/**
+ * A tab binds its transcript only after its first prompt, and each search costs
+ * several process spawns plus reading every recent transcript, so an unbound tab
+ * searches on this backoff. Any hook activity searches again at once.
+ */
+export const TMUX_DISCOVERY_MIN_INTERVAL_MS = 2_000;
+export const TMUX_DISCOVERY_MAX_INTERVAL_MS = 10_000;
 // The hook process owns the shared five-minute timeout. Renderers receive the
 // resulting absolute timestamps and only display them.
 if (

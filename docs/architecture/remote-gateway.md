@@ -117,7 +117,7 @@ equivalent environment variable unless noted.
 | `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. On Linux, run `sudo tailscale set --operator=$USER` once first; otherwise Tailscale answers `Access denied: serve config denied` and the backend exits. |
 | `--tailscale-serve-port` | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | Serve HTTPS port. Default `443`. |
 | `--tailscale-bin` | `ORKESTRATOR_TAILSCALE_BIN` | Tailscale CLI path. |
-| `--compression` | `ORKESTRATOR_GATEWAY_COMPRESSION` | `off`, `body` (default) or `on` (adds SSE gzip). See [Compression and terminal transport](#compression-and-terminal-transport). |
+| `--compression` | `ORKESTRATOR_GATEWAY_COMPRESSION` | `off`, `body` or `on` (default; adds SSE gzip). See [Compression and terminal transport](#compression-and-terminal-transport). |
 | `--data-dir` | `ORKESTRATOR_DATA_DIR` | Application data directory. |
 | `--docker-image` | `ORKESTRATOR_DOCKER_IMAGE` | Image tag. Default `orkestrator-v2:latest`. |
 | `--control-host` / `--control-port` | | Loopback Control MCP listener. |
@@ -177,9 +177,9 @@ for existing services that remote clients reach directly over the tailnet.
 (`GATEWAY_COMPRESSION_MODES` in `apps/backend/src/gateway-support-core.ts`):
 
 - `off`: nothing is compressed.
-- `body` (default): eligible ordinary responses and static assets are
+- `body`: eligible ordinary responses and static assets are
   compressed; event streams are not.
-- `on`: `body` plus gzip on direct `/__orkestrator/events` streams
+- `on` (default): `body` plus gzip on direct `/__orkestrator/events` streams
   (`GzipEventClientWriter`) and proxied event streams
   (`createSseGzipCompressor`). Each frame, keepalive comment and
   `gateway.keepalive` event is sync-flushed, so delivery stays incremental. A
@@ -205,10 +205,13 @@ The socket has process-wide socket and channel limits and a per-socket channel
 limit, uses no message compression, and is not touched by `--compression`.
 Output ACKs are cumulative and coalesced for 50 ms.
 
-Neither default has changed. The measurement plan and the first in-process
-baseline are in
+The default became `on` on 2026-11-01, after a live probe through Tailscale
+Serve showed no held frames and no re-encoding. `--compression body` is the
+rollback. The terminal transport default has not changed. The evidence and the
+remaining measurement plan are in
 [0052-remote-client-bandwidth.md](../todo/transcripts-and-observation/0052-remote-client-bandwidth.md);
-the harness is `apps/backend/scripts/remote-bandwidth-baseline.ts`.
+the harnesses are `apps/backend/scripts/sse-route-probe.ts` and
+`apps/backend/scripts/remote-bandwidth-baseline.ts`.
 
 `apps/backend/tests/gateway-sse-gzip-routes.test.ts` and
 `e2e/SseGzipStreaming.spec.ts` prove incremental delivery directly, through

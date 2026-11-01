@@ -366,7 +366,11 @@ describe("agent mail protocol", () => {
   });
 
   test("only failed, budget-held and unseen untrusted mail needs the person", () => {
-    const base = { placement: "stored" as const, trust: "same-project" as const };
+    const base = {
+      placement: "stored" as const,
+      trust: "same-project" as const,
+      from: { kind: "user" as const },
+    };
     expect(agentMailNeedsAttention(base)).toBe(false);
     expect(agentMailNeedsAttention({ ...base, placement: "inject_failed" })).toBe(true);
     expect(
@@ -387,9 +391,26 @@ describe("agent mail protocol", () => {
   });
 
   test("stored mail needs the person only when its recipient cannot read it", () => {
-    const base = { placement: "stored" as const, trust: "same-project" as const };
+    const base = {
+      placement: "stored" as const,
+      trust: "same-project" as const,
+      from: { kind: "user" as const },
+    };
     const noAgent = { canPull: false };
     expect(agentMailNeedsAttention(base, noAgent)).toBe(true);
+    const routineNotice = {
+      ...base,
+      from: {
+        kind: "system" as const,
+        projectId: "project",
+        source: "workflow" as const,
+        resourceId: "account-auto-switch:codex",
+      },
+    };
+    expect(agentMailNeedsAttention(routineNotice, noAgent)).toBe(false);
+    expect(agentMailNeedsAttention({ ...routineNotice, placement: "inject_failed" }, noAgent)).toBe(
+      true,
+    );
     // A terminal tab cannot be injected into, but its agent can pull.
     expect(agentMailNeedsAttention(base, { canPull: true })).toBe(false);
     expect(agentMailNeedsAttention({ ...base, userSeenAt: "now" }, noAgent)).toBe(false);

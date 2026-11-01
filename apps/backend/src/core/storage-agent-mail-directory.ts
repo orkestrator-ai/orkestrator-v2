@@ -220,13 +220,14 @@ export class AgentMailboxDirectory {
   }
 
   async synchronizeAgentMailboxes(): Promise<void> {
-    const [projects, environments, layoutsResult, coordinators, coordinatorWorkflows] =
+    const [projects, environments, layoutsResult, coordinators, coordinatorWorkflows, config] =
       await Promise.all([
         this.repos.projects.loadProjects(),
         this.repos.projects.loadEnvironments(),
         this.repos.sessions.loadPaneLayoutsForReconciliation(),
         this.repos.coordinators.listCoordinatorWorkspaces(),
         this.repos.coordinators.listAllCoordinatorWorkflowAssociations(),
+        this.repos.config.loadConfig(),
       ]);
     const coordinatorOrigins = coordinatorOriginsByEnvironment(coordinators, coordinatorWorkflows);
     if (!layoutsResult.available) return;
@@ -381,6 +382,19 @@ export class AgentMailboxDirectory {
           Object.assign(current, metadata);
           current.revision += 1;
           changedMailboxIds.add(mailboxId);
+        }
+      }
+      // Durable recovery: assignment and mailbox publication are separate writes.
+      // Retry even when metadata already matches, including after a restart. Only
+      // mail stored because no agent could receive it belongs to this recovery.
+      const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
+      if (settings.enabled) {
+        for (const mailboxId of observed.keys()) {
+          const mailbox = store.mailboxes[mailboxId];
+          if (mailbox && promoteStoredMessages(store, mailbox, settings, "awaiting-agent") > 0) {
+            mailbox.revision += 1;
+            changedMailboxIds.add(mailboxId);
+          }
         }
       }
       for (const [mailboxId, mailbox] of Object.entries(store.mailboxes)) {

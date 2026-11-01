@@ -687,18 +687,25 @@ export function agentMailConversationKey(a: string, b: string): string {
 /**
  * Whether a message needs the person rather than the agents: its delivery
  * failed, a wake budget is holding it, or it came from outside the project
- * and nobody has looked at it. Ordinary agent-to-agent mail never does.
+ * and nobody has looked at it, or waits in an inbox with no agent to read it.
+ * Routine system notices waiting for an agent do not need attention.
  */
 export function agentMailNeedsAttention(
   message: Pick<
     AgentMailMessage,
-    "placement" | "placementReason" | "trust" | "userSeenAt" | "ackedAt" | "discardedAt"
+    "placement" | "placementReason" | "trust" | "userSeenAt" | "ackedAt" | "discardedAt" | "from"
   >,
   recipient?: Pick<MailboxCapabilities, "canPull">,
 ): boolean {
   if (message.discardedAt) return false;
   if (message.placement === "inject_failed" || isAgentMailBudgetHeld(message)) return true;
-  if (recipient && agentMailAwaitingAgent(message, recipient) && !message.userSeenAt) return true;
+  if (
+    recipient &&
+    message.from.kind !== "system" &&
+    agentMailAwaitingAgent(message, recipient) &&
+    !message.userSeenAt
+  )
+    return true;
   return (message.trust === "external" || message.trust === "cross-project") && !message.userSeenAt;
 }
 

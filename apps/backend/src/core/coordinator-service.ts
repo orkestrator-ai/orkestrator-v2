@@ -250,10 +250,10 @@ export class CoordinatorService {
       const existing = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace was not found");
       const open = coordinatorMainConversation(existing);
-      if (open?.agent) return { workspace: existing, main: open, assigned: false };
+      if (open?.agent) return { workspace: existing, main: open };
       if (open) {
         const agent = await this.preferredAgent(projectId).catch(() => undefined);
-        if (!agent) return { workspace: existing, main: open, assigned: false };
+        if (!agent) return { workspace: existing, main: open };
         const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
           projectId,
           (current) => {
@@ -271,7 +271,6 @@ export class CoordinatorService {
         return {
           workspace,
           main: coordinatorMainConversation(workspace) ?? open,
-          assigned: true,
         };
       }
       if (
@@ -300,20 +299,10 @@ export class CoordinatorService {
       );
       if (!workspace) throw new Error("Coordinator workspace disappeared");
       const main = coordinatorMainConversation(workspace) ?? created;
-      return { workspace, main, assigned: false };
+      return { workspace, main };
     });
     await this.adoptLiveWork(result.workspace, result.main);
     await this.reconcileMainMail(result.workspace, result.main);
-    if (result.assigned) {
-      // Mail filed before it had an agent is deliverable now. Best-effort, as
-      // in `assignConversationAgent`: the mail itself is safe in the store.
-      await this.storage
-        .promoteStoredAgentMailForMailbox(
-          coordinatorRuntimeId(result.workspace.id, result.main.id),
-          result.main.tabId,
-        )
-        .catch(() => undefined);
-    }
     return { workspace: result.workspace, main: result.main };
   }
 

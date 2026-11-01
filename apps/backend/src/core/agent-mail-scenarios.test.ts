@@ -3,8 +3,11 @@
  * Each asserts what reached which agent and that no message
  * needed a person to deliver it.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
+import { AgentMailStore } from "./storage-agent-mail-store.js";
+import { createEnvironment, createProject } from "./storage.js";
+import { mailAutoSwitchNotice } from "./agent-accounts-auto-switch-notices.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 
 describe("agent mail between many actors", () => {
@@ -198,7 +201,263 @@ describe("agent mail between many actors", () => {
       );
       await unused.send(peer, "coordinator", "second");
       await unused.deliver();
+      await unused.finishTurn(await unused.main());
       expect(unused.received(await unused.main())).toEqual(["first", "second"]);
+    } finally {
+      await unused.close();
+    }
+  });
+
+  for (const failure of ["reconciliation", "promotion"] as const) {
+    for (const recovery of ["send", "restart"] as const) {
+      test(`stored mail recovers after ${failure} fails following assignment, via ${recovery}`, async () => {
+        const unused = await MailWorld.create({ unassignedMain: true });
+        try {
+          const peer = await unused.addEnvironment("peer");
+          unused.storage.setCoordinatorMailResolver(async () => {
+            throw new Error("temporarily unavailable");
+          });
+          const early = await unused.send(peer, "coordinator", "first");
+          expect(early.placement).toBe("stored");
+          unused.storage.setCoordinatorMailResolver((projectId) =>
+            unused.coordinator.mainMailAddress(projectId),
+          );
+          const fault =
+            failure === "reconciliation"
+              ? spyOn(unused.storage, "synchronizeAgentMailboxes").mockRejectedValueOnce(
+                  new Error("reconcile failed"),
+                )
+              : spyOn(AgentMailStore.prototype, "save").mockRejectedValueOnce(
+                  new Error("promotion save failed"),
+                );
+          try {
+            await expect(
+              unused.coordinator.ensureMainConversation(unused.projectId),
+            ).rejects.toThrow();
+          } finally {
+            fault.mockRestore();
+          }
+          const main = await unused.main();
+          expect(
+            (await unused.storage.coordinators.getCoordinatorWorkspace(unused.projectId))
+              ?.conversations[0]?.agent,
+          ).toBe("codex");
+          expect(
+            (await unused.storage.getAgentMailMessage(main.environmentId, main.tabId, early.id))
+              .placement,
+          ).toBe("stored");
+          if (recovery === "restart") await unused.restart();
+          else await unused.send(peer, "coordinator", "second");
+          await unused.deliver();
+          expect(unused.received(await unused.main())).toContain("first");
+          expect(
+            unused.received(await unused.main()).filter((body) => body === "first"),
+          ).toHaveLength(1);
+        } finally {
+          await unused.close();
+        }
+      });
+    }
+  }
+
+  test.each(["runtime", "closed", "node"] as const)(
+    "mail using a %s address/sender starts an unassigned main",
+    async (address) => {
+      const unused = await MailWorld.create({ unassignedMain: true });
+      try {
+        const peer = await unused.addEnvironment("peer");
+        const original = await unused.main();
+        const destination = original;
+        if (address === "closed") {
+          await unused.closeMain();
+          await unused.coordinator.createConversation(unused.projectId);
+        }
+        const sent =
+          address === "node"
+            ? await unused.storage.sendAgentMail(
+                {
+                  kind: "node",
+                  nodeId: "remote-node",
+                  nodeName: "Remote",
+                  role: "agent",
+                  projectId: unused.projectId,
+                  environmentId: "remote-env",
+                  tabId: "agent",
+                  title: "Remote agent",
+                },
+                {
+                  requestId: "node-main",
+                  toEnvironmentId: destination.environmentId,
+                  toTabId: destination.tabId,
+                  body: "hello from node",
+                },
+              )
+            : await unused.send(peer, destination, "hello by address");
+        expect(sent.placement).toBe("pending-inject");
+        await unused.deliver();
+        expect(unused.received(await unused.main())).toContain(
+          address === "node" ? "hello from node" : "hello by address",
+        );
+        expect(
+          (
+            await unused.storage.coordinators.getCoordinatorWorkspace(unused.projectId)
+          )?.conversations.find((item) => !item.closedAt && item.role === "main")?.agent,
+        ).toBe("codex");
+      } finally {
+        await unused.close();
+      }
+    },
+  );
+
+  test("cross-project mail stays stored without assigning the main even when messaging is allowed", async () => {
+    const unused = await MailWorld.create({ unassignedMain: true });
+    try {
+      const peer = await unused.addEnvironment("other-project-peer");
+      const otherProject = await unused.storage.addProject(
+        createProject("https://example.invalid/other.git", unused.root + "/other"),
+      );
+      const remotePeer = createEnvironment(otherProject.id, {
+        name: "other-peer",
+        environmentType: "local",
+      });
+      remotePeer.status = "running";
+      await unused.storage.addEnvironment(remotePeer);
+      const peerLayout = (await unused.storage.getPaneLayout(peer.environmentId))!;
+      await unused.storage.savePaneLayout(remotePeer.id, peerLayout, 0);
+      const config = await unused.storage.loadConfig();
+      await unused.storage.updateGlobalConfig({
+        ...config.global,
+        agentMessaging: { ...DEFAULT_AGENT_MESSAGING_SETTINGS, allowCrossProject: true },
+      });
+      const main = await unused.main();
+      await unused.storage.synchronizeAgentMailboxes();
+      const sent = await unused.storage.sendAgentMail(
+        {
+          kind: "tab",
+          projectId: otherProject.id,
+          environmentId: remotePeer.id,
+          tabId: peer.tabId,
+        },
+        {
+          requestId: "cross-project",
+          toEnvironmentId: main.environmentId,
+          toTabId: main.tabId,
+          body: "untrusted request",
+        },
+      );
+      expect(sent).toMatchObject({ trust: "cross-project", placement: "stored" });
+      expect(
+        (await unused.storage.coordinators.getCoordinatorWorkspace(unused.projectId))
+          ?.conversations[0]?.agent,
+      ).toBeUndefined();
+      await unused.coordinator.ensureMainConversation(unused.projectId);
+      await unused.deliver();
+      expect(unused.received(main)).toEqual([]);
+      expect(
+        (await unused.storage.getAgentMailMessage(main.environmentId, main.tabId, sent.id))
+          .placement,
+      ).toBe("stored");
+    } finally {
+      await unused.close();
+    }
+  });
+
+  test("assigning a platform to a native environment tab recovers its stored mail", async () => {
+    const sender = await world.addEnvironment("sender");
+    const target = await world.addEnvironment("target");
+    const config = await world.storage.loadConfig();
+    await world.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...DEFAULT_AGENT_MESSAGING_SETTINGS, wakePeers: true },
+    });
+    const layout = (await world.storage.getPaneLayout(target.environmentId))!;
+    await world.storage.savePaneLayout(
+      target.environmentId,
+      {
+        ...layout,
+        root: {
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            {
+              id: target.tabId,
+              type: "agent-native",
+              nativeAgentData: { environmentId: target.environmentId },
+            },
+          ],
+          activeTabId: target.tabId,
+        },
+      },
+      layout.revision,
+    );
+    await world.storage.synchronizeAgentMailboxes();
+    const sent = await world.send(sender, target, "waiting for the platform");
+    expect(sent).toMatchObject({ placement: "stored", placementReason: "recipient-cannot-inject" });
+    const unassigned = (await world.storage.getPaneLayout(target.environmentId))!;
+    await world.storage.savePaneLayout(target.environmentId, layout, unassigned.revision);
+    await world.storage.synchronizeAgentMailboxes();
+    await world.deliver();
+    expect(world.received(target)).toEqual(["waiting for the platform"]);
+    await world.restart();
+    expect(
+      (await world.storage.getAgentMailMessage(target.environmentId, target.tabId, sent.id))
+        .placement,
+    ).toBe("injected");
+  });
+
+  test("a delegation wake assigns the default agent to an unused main", async () => {
+    const unused = await MailWorld.create({ unassignedMain: true });
+    try {
+      const worker = await unused.addEnvironment("quiet", { launched: true });
+      await unused.finishTurn(worker);
+      const main = await unused.main();
+      expect(
+        (await unused.storage.coordinators.getCoordinatorWorkspace(unused.projectId))
+          ?.conversations[0]?.agent,
+      ).toBe("codex");
+      expect(unused.received(main)[0]).toContain("without sending a report");
+    } finally {
+      await unused.close();
+    }
+  });
+
+  test("a routine automatic switch notice does not need attention in an unused main", async () => {
+    const unused = await MailWorld.create({ unassignedMain: true });
+    try {
+      await mailAutoSwitchNotice(
+        unused.storage,
+        {
+          platform: "codex",
+          from: "old@example.invalid",
+          to: "new@example.invalid",
+          reason: "limit",
+          at: new Date().toISOString(),
+        },
+        "test machine",
+      );
+      const main = await unused.main();
+      expect(
+        (await unused.storage.getAgentMailSummary()).mailboxes.find(
+          (entry) => entry.environmentId === main.environmentId,
+        )?.attentionCount,
+      ).toBe(0);
+      expect(
+        (await unused.storage.coordinators.getCoordinatorWorkspace(unused.projectId))
+          ?.conversations[0]?.agent,
+      ).toBeUndefined();
+      const peer = await unused.addEnvironment("peer");
+      const config = await unused.storage.loadConfig();
+      await unused.storage.updateGlobalConfig({
+        ...config.global,
+        enabledAgentPlatforms: ["grok"],
+      });
+      const request = await unused.send(peer, "coordinator", "needs an agent");
+      expect(request).toMatchObject({ trust: "same-project", placement: "stored" });
+      expect(
+        (await unused.storage.getAgentMailSummary()).mailboxes.find(
+          (entry) => entry.environmentId === main.environmentId,
+        )?.attentionCount,
+      ).toBe(1);
     } finally {
       await unused.close();
     }

@@ -192,7 +192,11 @@ export class AgentMailRepository {
     workspace: CoordinatorWorkspace,
     main: CoordinatorConversation,
   ): Promise<void> {
-    if (main.agent) return;
+    if (main.agent) {
+      // A previous assignment may have committed before mailbox reconciliation.
+      await this.repos.agentMailboxes.synchronizeAgentMailboxes();
+      return;
+    }
     if (sender.kind !== "tab" && sender.kind !== "coordinator" && sender.kind !== "node") return;
     if (sender.projectId !== workspace.projectId) return;
     await this.coordinatorMailResolver?.(workspace.projectId).catch((error) => {

@@ -811,7 +811,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     return (
       <div key={conversation.id} className="flex h-full min-h-0 flex-col">
-        <AgentMailBanner environmentId={environmentId} tabId={conversation.tabId} />
+        <AgentMailBanner
+          environmentId={environmentId}
+          tabId={conversation.tabId}
+          agentAvailable={availablePlatforms.length > 0}
+        />
         <div className="relative min-h-0 flex-1">
           <AgentNativeTab
             tabId={conversation.tabId}

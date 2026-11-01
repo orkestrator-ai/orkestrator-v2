@@ -278,7 +278,17 @@ conversation that has not started, cannot (`canPull: false`), so nothing can
 read it until an agent is assigned (`agentMailAwaitingAgent`). For that second
 case the sender's `deliveryHint` says it was not delivered, the banner and tiles
 say it is waiting for an agent, and it counts toward `attentionCount` until the
-person has seen it.
+person has seen it. Routine system notices do not add attention merely because
+no agent is assigned. The banner describes stored mail as being in the inbox;
+it does not promise that agent startup delivers untrusted or non-waking mail.
+When no qualified platform is available, it directs the person to Settings.
+
+Mailbox synchronization retries eligible `recipient-cannot-inject` mail once the
+recipient gains injection capability, even when its metadata already matches.
+The recovery uses the same trust, incarnation and wake filters as promotion, so
+an assignment committed before a reconciliation failure or process restart
+cannot strand the backlog. This also covers environment native tabs gaining a
+platform. Policy-held mail with other reasons stays stored.
 
 **Releasing one message.** Retry, Resume and **Deliver now** call
 `retry_agent_mail_inject`, which stamps `userReleasedAt`. The drain delivers a
@@ -460,7 +470,7 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 | Transcript, delivered mail | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
 | Transcript, sent and read mail | `MailToolPart` (`apps/web/src/components/chat/`) | `send_message`, `reply_message`, `read_message` and a coordinator's `get_message` calls render as mail tiles, not tool rows, and stay out of the collapsed tool group (`agentMailToolCall`, `apps/web/src/lib/chat/agent-mail-tool-call.ts`). A sent tile shows the recipient and its live delivery state from the recipient's mailbox; a read tile is where pull-only mail enters the transcript. Every tile with both participants known opens their conversation |
 | Messages panel | `AgentMailPanel` (`apps/web/src/components/agent-mail/`) | A right-hand sheet. The list is one row per pair that has exchanged mail (`list_agent_mail_conversations`), those needing the person first; a conversation is both directions between two participants, oldest first (`get_agent_mail_conversation`), with retry, resume, deliver-now and discard on the messages that need them. The person composes only in their own conversation with a tab. Opening a conversation marks it seen (`mark_agent_mail_conversation_seen`) |
-| Title-bar button | `AgentMailButton` | Opens the panel. Its badge counts `attentionCount`: failed and budget-held deliveries, unseen external or cross-project mail, and unseen mail waiting for an agent (`agentMailNeedsAttention`), not the agents' own traffic |
+| Title-bar button | `AgentMailButton` | Opens the panel. Its badge counts `attentionCount`: failed and budget-held deliveries, unseen external or cross-project mail, and unseen non-system mail waiting for an agent (`agentMailNeedsAttention`), not the agents' own traffic |
 | Per-tab banner | `AgentMailBanner` | Environment tabs and coordinator conversations. Pending, failed, pull-only, waiting for an agent, budget or hourly-limit held; retry / resume / deliver now / discard, and View opens the tab's conversations |
 | Tab menu, Agent info | `DraggableTab`, `AgentInfoButton` | One "Messages…" entry when `canPull`: the panel focused on the tab, with its delivery policy and mutes |
 | Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `coordinatorStatusWakes` (`off` / `settled` / `stages`), `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |

@@ -408,63 +408,69 @@ describe("CoordinatorPanel", () => {
     });
   });
 
-  test("shows mail waiting for the conversation's first agent", async () => {
-    const conversation = { ...snapshot.workspace.conversations[0]!, agent: undefined };
-    ensuredSnapshot = {
-      ...snapshot,
-      workspace: { ...snapshot.workspace, conversations: [conversation] },
-    };
-    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
-    const mailboxId = `${environmentId}\0${conversation.tabId}`;
-    useAgentMailStore.setState({
-      summary: new Map([
-        [
-          mailboxId,
-          {
+  test.each([true, false])(
+    "shows stored mail guidance with platform availability %s",
+    async (available) => {
+      const conversation = { ...snapshot.workspace.conversations[0]!, agent: undefined };
+      ensuredSnapshot = {
+        ...snapshot,
+        workspace: { ...snapshot.workspace, conversations: [conversation] },
+        ...(!available ? { providerAvailability: {} } : {}),
+      };
+      const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+      const mailboxId = `${environmentId}\0${conversation.tabId}`;
+      useAgentMailStore.setState({
+        summary: new Map([
+          [
             mailboxId,
-            projectId: "project-1",
-            environmentId,
-            tabId: conversation.tabId,
-            unreadCount: 2,
-            userUnseenCount: 2,
-            agentUnackedCount: 2,
-            pendingInjectCount: 0,
-            failedInjectCount: 0,
-            revision: 1,
-          },
-        ],
-      ]),
-      mailboxes: new Map([
-        [
-          mailboxId,
-          {
-            descriptor: {
-              capabilities: { canPull: false, canSend: false, canInject: false },
-              injectPolicy: "off",
-              presence: "unknown",
+            {
+              mailboxId,
+              projectId: "project-1",
+              environmentId,
+              tabId: conversation.tabId,
+              unreadCount: 2,
+              userUnseenCount: 2,
+              agentUnackedCount: 2,
+              pendingInjectCount: 0,
+              failedInjectCount: 0,
+              revision: 1,
             },
-            messages: ["first", "second"].map((id) => ({
-              id,
-              placement: "stored",
-              placementReason: "recipient-cannot-inject",
-            })),
-          } as unknown as AgentMailMailboxSnapshot,
-        ],
-      ]),
-      refreshSummary: async () => undefined,
-      refreshMailbox: async () => undefined,
-    });
-    try {
-      render(<CoordinatorPanel projectId="project-1" />);
-      expect(
-        await screen.findByText(
-          "2 messages waiting · send a first message to start this agent and deliver them",
-        ),
-      ).toBeTruthy();
-    } finally {
-      useAgentMailStore.setState(useAgentMailStore.getInitialState());
-    }
-  });
+          ],
+        ]),
+        mailboxes: new Map([
+          [
+            mailboxId,
+            {
+              descriptor: {
+                capabilities: { canPull: false, canSend: false, canInject: false },
+                injectPolicy: "off",
+                presence: "unknown",
+              },
+              messages: ["first", "second"].map((id) => ({
+                id,
+                placement: "stored",
+                placementReason: "recipient-cannot-inject",
+              })),
+            } as unknown as AgentMailMailboxSnapshot,
+          ],
+        ]),
+        refreshSummary: async () => undefined,
+        refreshMailbox: async () => undefined,
+      });
+      try {
+        render(<CoordinatorPanel projectId="project-1" />);
+        expect(
+          await screen.findByText(
+            available
+              ? "2 messages in inbox · waiting for an agent"
+              : "2 messages in inbox · enable a qualified agent in Settings",
+          ),
+        ).toBeTruthy();
+      } finally {
+        useAgentMailStore.setState(useAgentMailStore.getInitialState());
+      }
+    },
+  );
 
   test("an unassigned conversation offers every qualified platform and binds on first send", async () => {
     const unassignedConversation = {

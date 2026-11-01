@@ -8,6 +8,7 @@ import {
   parseMachineLoadReport,
   type MachineLoadReport,
 } from "@orkestrator/protocol/machine-load";
+import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
 import { COMPATIBILITY_PATH_IDS, compatibilityPathUsage } from "./compatibility-path-usage.js";
@@ -343,24 +344,25 @@ describe("reading one node's load", () => {
 
   test("only the unknown-command answer means an older node, and it is counted", async () => {
     const before = compatibilityPathUsage.snapshot().paths["machine-load.older-node"]?.count ?? 0;
-    for (const wording of [
-      `Unknown backend command: ${MACHINE_LOAD_COMMAND}`,
-      `Unknown command: ${MACHINE_LOAD_COMMAND}`,
-    ]) {
-      const view = await readNodeMachineLoad(
-        (async () => {
-          throw new Error(wording);
-        }) as never,
-        node,
-      );
-      expect(view).toMatchObject({ reason: "older-version" });
-    }
+    const view = await readNodeMachineLoad(
+      (async () => {
+        throw new Error(unknownBackendCommandMessage(MACHINE_LOAD_COMMAND));
+      }) as never,
+      node,
+    );
+    expect(view).toMatchObject({ reason: "older-version" });
     expect(compatibilityPathUsage.snapshot().paths["machine-load.older-node"]?.count).toBe(
-      before + 2,
+      before + 1,
     );
     expect(COMPATIBILITY_PATH_IDS).toContain("machine-load.older-node");
 
-    for (const wording of ["Network down", "Unknown backend command: something_else"]) {
+    // No backend has answered "Unknown command:", and a longer name is another command.
+    for (const wording of [
+      "Network down",
+      `Unknown command: ${MACHINE_LOAD_COMMAND}`,
+      "Unknown backend command: something_else",
+      `Unknown backend command: ${MACHINE_LOAD_COMMAND}_v2`,
+    ]) {
       const view = await readNodeMachineLoad(
         (async () => {
           throw new Error(wording);
@@ -370,7 +372,7 @@ describe("reading one node's load", () => {
       expect(view).toMatchObject({ reason: "error" });
     }
     expect(compatibilityPathUsage.snapshot().paths["machine-load.older-node"]?.count).toBe(
-      before + 2,
+      before + 1,
     );
   });
 

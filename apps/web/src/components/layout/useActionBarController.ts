@@ -940,7 +940,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           const legacy = await legacyLaunchMultiReview({
             environmentId: selectedEnvironmentId,
             projectId: selectedProjectId,
-            targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+            targetBranch: defaultPrTargetBranch(
+              config.repositories[selectedProjectId]?.prBaseBranch,
+            ),
             reviewInstruction: config.global.reviewInstruction,
             selection,
             createTab: (workflowId) =>
@@ -1603,7 +1605,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const openPrDialog = useCallback(() => {
     if (!canConfigurePR || !selectedEnvironmentId || !selectedProjectId) return;
     const projectId = selectedProjectId;
-    const targetBranch = config.repositories[projectId]?.prBaseBranch || "main";
+    const targetBranch = defaultPrTargetBranch(config.repositories[projectId]?.prBaseBranch);
     setPrLaunchError(null);
     setPrDialogTarget({
       environmentId: selectedEnvironmentId,
@@ -1879,10 +1881,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setResolveDialogTarget({
       environmentId: selectedEnvironmentId,
       projectId: selectedProjectId,
-      targetBranch:
-        selectedEnvironment?.prBaseBranch ||
-        config.repositories[selectedProjectId]?.prBaseBranch ||
-        "main",
+      targetBranch: resolvePrTargetBranch({
+        environmentBase: selectedEnvironment?.prBaseBranch,
+        repositoryBase: config.repositories[selectedProjectId]?.prBaseBranch,
+      }),
     });
   }, [
     canConfigureResolve,
@@ -2115,7 +2117,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   // Get target branch for PR dialog
   const targetBranch = selectedProjectId
-    ? config.repositories[selectedProjectId]?.prBaseBranch || "main"
+    ? defaultPrTargetBranch(config.repositories[selectedProjectId]?.prBaseBranch)
     : "main";
   const sourceBranch = selectedEnvironment?.branch || "current branch";
 

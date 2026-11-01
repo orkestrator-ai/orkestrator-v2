@@ -102,6 +102,11 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "graph-artifacts": { kind: "record", owner: ownerField("runId") },
   // "Describe a graph" (item 215): one row per environment, its latest job.
   "graph-describe": { kind: "record", owner: ownerField("environmentId") },
+  // Shared client presentation state (storage-client-state.ts): one row per
+  // project, and the notice dismissals document as one row.
+  "coordinator-pane-layouts": { kind: "record", owner: ownerField("projectId") },
+  "coordinator-upstream-declines": { kind: "record", owner: ownerField("projectId") },
+  "notice-dismissals": { kind: "record" },
 };
 
 /**

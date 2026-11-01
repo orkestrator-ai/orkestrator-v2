@@ -150,6 +150,17 @@ export class ProjectGitService {
     return this.activeMutations.has(projectId);
   }
 
+  /**
+   * Whether the checkout cannot change now: a Git mutation is running, a
+   * coordinator turn is starting, or a coordinator or project-home turn is
+   * active. The same gate `sync` refuses on, read without side effects.
+   */
+  async isCheckoutBusy(projectId: string): Promise<boolean> {
+    if (this.activeMutations.has(projectId)) return true;
+    if ((this.pendingTurns.get(projectId) ?? 0) > 0) return true;
+    return this.hasActiveCoordinatorTurns(projectId);
+  }
+
   beginCoordinatorTurn(projectId: string): () => void {
     if (this.activeMutations.has(projectId)) {
       throw new Error("The project checkout is changing; wait for the Git operation to finish");

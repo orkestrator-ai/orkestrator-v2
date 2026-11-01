@@ -1,35 +1,25 @@
 import { createUuid } from "@/lib/uuid";
 import { MAX_SPLIT_DEPTH, type EdgeDirection } from "@/types/paneLayout";
+import {
+  collectCoordinatorLeaves,
+  type CoordinatorPaneLayout,
+  type CoordinatorPaneLeaf,
+  type CoordinatorPaneNode,
+  type CoordinatorPaneSplit,
+} from "@orkestrator/protocol/coordinator-pane-layout";
 
 /**
- * How the coordinator page arranges its conversation tabs into tab groups.
- *
- * The same split tree as an environment's pane layout, except that a leaf holds
- * conversation ids rather than tab records: conversations themselves are owned
- * by the backend workspace, so this is presentation only. It never opens or
- * closes a conversation; it only follows the backend's open set.
+ * Editing operations over a coordinator pane layout. The shape, bounds and
+ * sanitizer live in the protocol, where the backend validates stored layouts.
  */
-export interface CoordinatorPaneLeaf {
-  kind: "leaf";
-  id: string;
-  conversationIds: string[];
-  activeConversationId: string | null;
-}
-
-export interface CoordinatorPaneSplit {
-  kind: "split";
-  id: string;
-  direction: "horizontal" | "vertical";
-  children: [CoordinatorPaneNode, CoordinatorPaneNode];
-  sizes: [number, number];
-}
-
-export type CoordinatorPaneNode = CoordinatorPaneLeaf | CoordinatorPaneSplit;
-
-export interface CoordinatorPaneLayout {
-  root: CoordinatorPaneNode;
-  activePaneId: string;
-}
+export {
+  collectCoordinatorLeaves,
+  sanitizeCoordinatorPaneLayout,
+  type CoordinatorPaneLayout,
+  type CoordinatorPaneLeaf,
+  type CoordinatorPaneNode,
+  type CoordinatorPaneSplit,
+} from "@orkestrator/protocol/coordinator-pane-layout";
 
 function generateId(prefix: string): string {
   return `${prefix}-${createUuid()}`;
@@ -37,14 +27,6 @@ function generateId(prefix: string): string {
 
 function emptyLeaf(id = generateId("coordinator-pane")): CoordinatorPaneLeaf {
   return { kind: "leaf", id, conversationIds: [], activeConversationId: null };
-}
-
-export function collectCoordinatorLeaves(node: CoordinatorPaneNode): CoordinatorPaneLeaf[] {
-  if (node.kind === "leaf") return [node];
-  return [
-    ...collectCoordinatorLeaves(node.children[0]),
-    ...collectCoordinatorLeaves(node.children[1]),
-  ];
 }
 
 export function findCoordinatorLeaf(
@@ -339,67 +321,4 @@ export function resizeCoordinatorSplit(
       : node,
   );
   return root === layout.root ? layout : { ...layout, root };
-}
-
-const MAX_PERSISTED_ID_LENGTH = 200;
-
-function isPersistedId(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_PERSISTED_ID_LENGTH;
-}
-
-function sanitizeNode(
-  value: unknown,
-  level: number,
-  nodeIds: Set<string>,
-): CoordinatorPaneNode | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (!isPersistedId(record.id) || nodeIds.has(record.id)) return null;
-  nodeIds.add(record.id);
-  if (record.kind === "leaf") {
-    if (!Array.isArray(record.conversationIds)) return null;
-    const conversationIds = Array.from(new Set(record.conversationIds.filter(isPersistedId))).slice(
-      0,
-      64,
-    );
-    return {
-      kind: "leaf",
-      id: record.id,
-      conversationIds,
-      activeConversationId:
-        isPersistedId(record.activeConversationId) &&
-        conversationIds.includes(record.activeConversationId)
-          ? record.activeConversationId
-          : (conversationIds[0] ?? null),
-    };
-  }
-  if (record.kind !== "split" || level >= MAX_SPLIT_DEPTH) return null;
-  if (record.direction !== "horizontal" && record.direction !== "vertical") return null;
-  if (!Array.isArray(record.children) || record.children.length !== 2) return null;
-  const first = sanitizeNode(record.children[0], level + 1, nodeIds);
-  const second = sanitizeNode(record.children[1], level + 1, nodeIds);
-  if (!first || !second) return null;
-  const sizes = Array.isArray(record.sizes) ? record.sizes : [];
-  const valid = (size: unknown): size is number =>
-    typeof size === "number" && Number.isFinite(size) && size > 0 && size < 100;
-  return {
-    kind: "split",
-    id: record.id,
-    direction: record.direction,
-    children: [first, second],
-    sizes: valid(sizes[0]) && valid(sizes[1]) ? [sizes[0], sizes[1]] : [50, 50],
-  };
-}
-
-/** Bounds an untrusted persisted layout; returns null when it cannot be used. */
-export function sanitizeCoordinatorPaneLayout(value: unknown): CoordinatorPaneLayout | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const root = sanitizeNode(record.root, 0, new Set());
-  if (!root) return null;
-  const leaves = collectCoordinatorLeaves(root);
-  const activePaneId = leaves.some((leaf) => leaf.id === record.activePaneId)
-    ? (record.activePaneId as string)
-    : leaves[0]!.id;
-  return { root, activePaneId };
 }

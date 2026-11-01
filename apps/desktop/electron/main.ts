@@ -184,7 +184,7 @@ import {
   type CommandHandoverDeps,
 } from "./command-handover.js";
 import { ArtifactHostManager } from "./artifact-host-manager.js";
-import type { ArtifactHostDiagnostics } from "./artifact-host-session.js";
+import { reportArtifactHostDiagnostics, reportMainThreadStall } from "./diagnostic-logging.js";
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
 import { DesktopWindowContexts, emitToContents } from "./desktop-window-contexts.js";
@@ -198,7 +198,6 @@ const desktopLog = createLogger("desktop");
 const previewLog = createLogger("preview");
 const updaterLog = createLogger("updater");
 const toolchainLog = createLogger("toolchain");
-const artifactHostLog = createLogger("artifact-host");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -389,14 +388,7 @@ const nativeDialogs = createNativeDialogs<BrowserWindow>({
 nativeDialogs.install();
 installUncaughtExceptionDialog(process, nativeDialogs);
 startEventLoopStallMonitor({
-  report: ({ lagMs, endedAt, intervalMs, folded }) =>
-    desktopLog.warn("main-thread.stalled", {
-      lagMs,
-      endedAt,
-      intervalMs,
-      openDialog: nativeDialogs.describeStall(lagMs).replace(/^; /, "") || undefined,
-      folded: folded.replace(/^; /, "") || undefined,
-    }),
+  report: (stall) => reportMainThreadStall(stall, (lagMs) => nativeDialogs.describeStall(lagMs)),
 });
 const showNonBlockingError = (title: string, detail: string): void => {
   void showRestartPrompt({
@@ -423,15 +415,6 @@ const toolchainProgress = createToolchainProgressController({
   logError: (error) =>
     toolchainLog.warn("bootstrap-progress.show-failed", { error: formatLogError(error) }),
 });
-
-/** Counts by reason, each as its own scalar field. */
-function artifactHostDiagnosticFields(diagnostics: ArtifactHostDiagnostics) {
-  return Object.fromEntries(
-    (["blocked", "rejected"] as const).flatMap((kind) =>
-      Object.entries(diagnostics[kind]).map(([reason, count]) => [`${kind}.${reason}`, count]),
-    ),
-  ) as Record<string, number>;
-}
 
 function emitToWindow(window: BrowserWindow, event: string, payload: unknown): void {
   if (!window.isDestroyed()) window.webContents.send("orkestrator:event", event, payload);
@@ -751,8 +734,7 @@ function createWindowArtifactHosts(
       }
     },
     // Content-free reason counters only; never URLs or page data.
-    reportDiagnostics: (diagnostics) =>
-      artifactHostLog.info("host.ended", artifactHostDiagnosticFields(diagnostics)),
+    reportDiagnostics: reportArtifactHostDiagnostics,
   });
   owner.on("did-navigate", () => artifactHosts.closeAll("window-closed"));
   return artifactHosts;

@@ -136,6 +136,9 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
   did not come from the logger is wrapped as `{"orklog":1,"ts","level","message"}`
   with no area or event, and an entry over the 64 KiB bound becomes a shortened
   one with `"truncated":true` rather than a line that does not parse.
+- Text files end in `.log`, and JSON files in `.jsonl`, with separate numbered
+  rolls. Changing format between launches on the same day keeps each file in
+  one format.
 - In text mode `trace` shows as `DEBUG` in the file: it goes out through
   `console.debug`, because `console.trace` prints a stack of its own and neither
   the bounded console nor the file tee wraps it.
@@ -143,8 +146,9 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
 ### Levels at startup
 
 `ORKESTRATOR_LOG_LEVEL` takes a default, areas, or both: `warn`,
-`updater=debug` or `warn,updater=debug,bridge=trace`. An area covers its children
-unless a child has its own entry. The default is `info`.
+`updater=debug` or `warn,updater=debug,desktop.dialog=trace`. An area covers its
+children unless a child has its own entry: `desktop=debug` also covers
+`desktop.dialog`. The default is `info`.
 
 This is read once at startup and is the only control. Live settings and a settings
 screen are undecided. **Save Logs for Debugging** still decides whether anything is

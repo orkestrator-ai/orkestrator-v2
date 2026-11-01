@@ -6,11 +6,13 @@ import { formatWithOptions } from "node:util";
 import { normalizeDebugLogRetentionDays } from "../debug-logging.js";
 import {
   createLogger,
+  escapeLogLine,
   formatLogError,
   getLogFormat,
   LOG_RECORD_PREFIX,
   parseLogRecordLine,
   renderLogLine,
+  type LogFormat,
 } from "../logger.js";
 
 /** Electron's own log. A standalone backend writes beside it under its own prefix. */
@@ -267,8 +269,9 @@ function dailyLogBase(logDirectory: string, filePrefix: string, now: Date): stri
   return path.join(logDirectory, `${filePrefix}${now.toISOString().slice(0, 10)}`);
 }
 
-function logPathFor(base: string, index: number): string {
-  return index === 0 ? `${base}.log` : `${base}.${index}.log`;
+function logPathFor(base: string, index: number, format: LogFormat): string {
+  const extension = format === "json" ? "jsonl" : "log";
+  return index === 0 ? `${base}.${extension}` : `${base}.${index}.${extension}`;
 }
 
 async function fileSize(target: string): Promise<number | null> {
@@ -294,10 +297,12 @@ function jsonEntry(
   const only = args.length === 1 && typeof args[0] === "string" ? args[0] : null;
   const wrap = (message: string, truncated: boolean) =>
     Buffer.from(
-      `${LOG_RECORD_PREFIX}${JSON.stringify({ ts: timestamp, level, message, ...(truncated ? { truncated } : {}) }).slice(1)}\n`,
+      `${LOG_RECORD_PREFIX}${escapeLogLine(JSON.stringify({ ts: timestamp, level, message, ...(truncated ? { truncated } : {}) })).slice(1)}\n`,
     );
   const whole =
-    only !== null && parseLogRecordLine(only) ? Buffer.from(`${only}\n`) : wrap(formatted, false);
+    only !== null && parseLogRecordLine(only)
+      ? Buffer.from(`${escapeLogLine(only)}\n`)
+      : wrap(formatted, false);
   if (whole.byteLength <= maxEntryBytes) return whole;
   // Cutting the bytes would leave a line that does not parse. The eighth allows
   // for JSON escapes; the marker says the entry is incomplete.
@@ -339,7 +344,7 @@ export function installProductionApplicationLogging(options: {
   let stopped = false;
   let droppedEntries = 0;
   let droppedBytes = 0;
-  let active: { base: string; index: number; bytes: number } | null = null;
+  let active: { base: string; format: LogFormat; index: number; bytes: number } | null = null;
 
   const reportWriteFailure = (error: unknown) => {
     originalMethods.error.call(
@@ -353,30 +358,31 @@ export function installProductionApplicationLogging(options: {
    * active one would pass `maxFileBytes`. Runs inside the serialized write
    * chain, so `active` is never read concurrently.
    */
-  const resolveTarget = async (entryBytes: number): Promise<string> => {
+  const resolveTarget = async (entryBytes: number, format: LogFormat): Promise<string> => {
     const base = dailyLogBase(logDirectory, filePrefix, now());
-    if (!active || active.base !== base) {
+    if (!active || active.base !== base || active.format !== format) {
       let index = 0;
-      let bytes = (await fileSize(logPathFor(base, 0))) ?? 0;
+      let bytes = (await fileSize(logPathFor(base, 0, format))) ?? 0;
       while (index < MAX_LOG_FILE_INDEX) {
-        const next = await fileSize(logPathFor(base, index + 1));
+        const next = await fileSize(logPathFor(base, index + 1, format));
         if (next === null) break;
         index += 1;
         bytes = next;
       }
-      active = { base, index, bytes };
+      active = { base, format, index, bytes };
     }
     // `bytes > 0` keeps a single oversized entry writable instead of rolling
     // forever through empty files.
     if (active.bytes > 0 && active.bytes + entryBytes > bounds.maxFileBytes) {
       active = {
         base: active.base,
+        format: active.format,
         index: Math.min(active.index + 1, MAX_LOG_FILE_INDEX),
         bytes: 0,
       };
     }
     active.bytes += entryBytes;
-    return logPathFor(active.base, active.index);
+    return logPathFor(active.base, active.index, active.format);
   };
 
   const dropMarker = (timestamp: string): Buffer | null => {
@@ -389,12 +395,12 @@ export function installProductionApplicationLogging(options: {
     return Buffer.from(getLogFormat() === "json" ? `${line}\n` : `${timestamp} WARN ${line}\n`);
   };
 
-  const write = (payload: Buffer) => {
+  const write = (payload: Buffer, format: LogFormat) => {
     pendingBytes += payload.byteLength;
     pending = pending
       .then(async () => {
         await mkdir(logDirectory, { recursive: true, mode: 0o700 });
-        await appendFile(await resolveTarget(payload.byteLength), payload, { mode: 0o600 });
+        await appendFile(await resolveTarget(payload.byteLength, format), payload, { mode: 0o600 });
       })
       .catch(reportWriteFailure)
       .finally(() => {
@@ -404,13 +410,14 @@ export function installProductionApplicationLogging(options: {
 
   const enqueue = (level: string, args: unknown[]) => {
     if (stopped) return;
+    const format = getLogFormat();
     const timestamp = now().toISOString();
     const formatted = formatWithOptions(
       { colors: false, depth: 5, maxArrayLength: 100, maxStringLength: 10_000 },
       ...args,
     );
     const entry =
-      getLogFormat() === "json"
+      format === "json"
         ? jsonEntry(timestamp, level, args, formatted, bounds.maxEntryBytes)
         : boundedEntry(`${timestamp} ${level.toUpperCase()} ${formatted}\n`, bounds.maxEntryBytes);
     const marker = dropMarker(timestamp);
@@ -426,7 +433,7 @@ export function installProductionApplicationLogging(options: {
       droppedEntries = 0;
       droppedBytes = 0;
     }
-    write(payload);
+    write(payload, format);
   };
 
   for (const level of Object.keys(originalMethods) as Array<keyof typeof originalMethods>) {
@@ -470,7 +477,7 @@ export function installProductionApplicationLogging(options: {
         if (marker) {
           droppedEntries = 0;
           droppedBytes = 0;
-          write(marker);
+          write(marker, getLogFormat());
         }
       }
       await pending;

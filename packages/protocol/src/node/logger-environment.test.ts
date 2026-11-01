@@ -17,6 +17,14 @@ beforeEach(() => {
 afterEach(() => capture.restore());
 
 describe("parseLogLevels", () => {
+  test("accepts the documented startup example", () => {
+    expect(parseLogLevels("warn,updater=debug,desktop.dialog=trace")).toEqual({
+      level: "warn",
+      areaLevels: { updater: "debug", "desktop.dialog": "trace" },
+      invalid: [],
+    });
+  });
+
   test("reads a default and per-area levels", () => {
     expect(parseLogLevels("warn, updater=debug ,desktop=trace")).toEqual({
       level: "warn",

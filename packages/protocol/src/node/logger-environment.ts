@@ -7,7 +7,7 @@ import {
   type LogLevel,
 } from "../logger.js";
 
-/** `info`, or a default plus areas: `warn,updater=debug,bridge=trace`. */
+/** `info`, or a default plus areas: `warn,updater=debug,desktop.dialog=trace`. */
 export const LOG_LEVEL_ENV = "ORKESTRATOR_LOG_LEVEL";
 /** `text` (the default) or `json` for JSON lines. */
 export const LOG_FORMAT_ENV = "ORKESTRATOR_LOG_FORMAT";
@@ -31,7 +31,7 @@ export function parseLogLevels(value: string | undefined): ParsedLogLevels {
     }
     const area = trimmed.slice(0, separator);
     const level = trimmed.slice(separator + 1);
-    // A parent of a listed area counts: `bridge` covers `bridge.claude`.
+    // A parent of a listed area counts: `desktop` covers `desktop.dialog`.
     if (isLogLevel(level) && isKnownScope(area)) parsed.areaLevels[area] = level;
     else parsed.invalid.push(trimmed);
   }

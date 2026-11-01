@@ -90,7 +90,7 @@ export type LogSink = (output: LogOutput) => void;
 export interface LoggerConfig {
   /** Applies to every area without its own entry in `areaLevels`. */
   level: LogLevel;
-  /** By area; `bridge` also covers `bridge.claude` unless that has its own. */
+  /** By area; `desktop` also covers `desktop.dialog` unless that has its own. */
   areaLevels: Readonly<Record<string, LogLevel>>;
   format: LogFormat;
   sink: LogSink;
@@ -265,7 +265,7 @@ function appendTextField(parts: string[], name: string, value: LogWireValue): vo
  * `JSON.stringify` leaves these raw, and a reader such as Node's readline ends a
  * line at U+2028 and U+2029, which would split one entry into two.
  */
-function oneLine(line: string): string {
+export function escapeLogLine(line: string): string {
   return line.replace(
     /[\u007f-\u009f\u2028\u2029]/g,
     (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
@@ -279,11 +279,11 @@ function renderText(record: LogRecord): string {
     for (const name of Object.keys(record.fields))
       appendTextField(parts, name, record.fields[name]!);
   }
-  return oneLine(parts.join(" "));
+  return escapeLogLine(parts.join(" "));
 }
 
 function renderJson(record: LogRecord): string {
-  return oneLine(JSON.stringify(record));
+  return escapeLogLine(JSON.stringify(record));
 }
 
 function deliver(record: LogRecord): void {

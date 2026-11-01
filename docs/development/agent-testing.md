@@ -63,6 +63,25 @@ mise run test:agent:browser:isolated --agent-platforms codex,opencode
 The runner owns `--profile` and `--fixture` and rejects anything else before it
 creates a profile.
 
+On a shared Linux host, a profile's Electron window would otherwise open on the
+signed-in user's desktop (it inherits `DISPLAY` and `WAYLAND_DISPLAY`). Set
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` for `dev:test` or either isolated
+task to start it on Chromium's headless Ozone platform with the GPU off and
+both display variables removed; the browser suites drive the gateway, not that
+window. It applies only to agent-test profiles on Linux, and Electron specs,
+which need the real window, are not supported in this mode:
+
+```bash
+ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 mise run test:agent:design:isolated
+```
+
+On Linux, Chromium aborts in-flight requests, including loopback ones, with
+`net::ERR_NETWORK_CHANGED` whenever a network interface or address changes,
+and Docker adds or removes a bridge or veth for every network and container it
+creates or deletes. A browser suite running beside other Docker work on the
+same host can therefore lose Vite module loads and render a blank page; see
+flake [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli`), because `cli-ui.spec.ts` drives
 `packages/cli/dist`.

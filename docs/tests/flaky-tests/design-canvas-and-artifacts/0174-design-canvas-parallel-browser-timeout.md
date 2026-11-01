@@ -1,7 +1,7 @@
 # Design canvas times out in the parallel browser suite
 
 - **ID:** 0174
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-28
 - **Test:** `canvas edits, script isolation, missed events, conflict and reload`
 - **File:** `e2e/DesignCanvas.spec.ts:16`
@@ -305,3 +305,53 @@ run (147 passed, three skipped, two unrelated AgentLaunchDialog failures).
 This was a combined owner run, not a new standalone qualification. No assertion,
 deadline or implementation changed. Exact commands and evidence are recorded in
 [session history validation](../aggregate-validation-runs/1166-session-titles-0006-validation.md#structured-review-fixes--2026-10-31).
+
+## Linux reproduction and fix — 2026-11-01
+
+Host: beelink, Linux 7.1.8, Intel Core Ultra 9 285H (16 logical CPUs),
+Playwright 1.64.0 with Chromium 156, shared with other builds throughout
+(load averages 3–77; see each run). Base `93b99bfb`. Port 52741.
+
+- **Throttle, one worker** (`ORKESTRATOR_E2E_DESIGN_CPU_THROTTLE`,
+  `--workers=1 --repeat-each=5 --timeout=120000`, both projects):
+  - rate 4: 10 of 10 passed (2.1 min in total; load 4.7–5.3).
+  - rate 8: 9 of 10 passed in 21.9–25.1 s each. The failure (desktop, line
+    210, heading not found 5 s after `page.reload()`) had a Vite module
+    request aborted with `net::ERR_NETWORK_CHANGED`: host Docker churn, see
+    [2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md),
+    not a design stall.
+  - Neither rate stalled at **Apply styles** or at the replacement element's
+    `display`.
+- **Eight workers, unchanged file** (`--workers=8 --repeat-each=8`, default
+  30 s, load 48–77): 16 of 16 hit the 30 s deadline, at lines 210, 220 and
+  224 (the reloaded heading, the second **Apply styles**, the conflict
+  alert). The traces show uniform slowness, not a stall: `page.goto` took
+  8.6–10.0 s and `page.reload()` 5.2–5.8 s, together 14–16 s of the 30 s,
+  and no other step took longer than 1.4 s. No trace had a network-change
+  error. This matches every recorded recurrence: the step that fails varies
+  because the deadline lands on whichever step comes next.
+- **Cause.** The journey makes two full loads of the component fixture from
+  the Vite dev server. Under parallel load those loads alone can spend half
+  the budget, leaving too little for about 80 steps. The 2026-10-26 "display
+  empty rather than `inline-block`" recurrence fits: `toHaveCSS` was still
+  polling the re-rendering frame when the deadline landed. (**Close
+  inspector** clears the selection, so the nudge cannot have hit a stale
+  selection.)
+- **Fix (test only, every assertion kept).** `pageLoad()` in
+  `e2e/DesignCanvas.spec.ts` runs `page.goto` and `page.reload()` under the
+  deadline, then adds their duration back with `test.info().setTimeout()`.
+  The steps keep the whole 30 s, so a step that stalls still fails at it,
+  and a page load that hangs still fails at the deadline.
+- **After the fix**, same command:
+  - mobile 8 of 8 passed (36.2–40.3 s wall time; load 58–73);
+  - desktop 7 of 8 failed within 8–12 s, every one with 4–340 module
+    requests aborted by `ERR_NETWORK_CHANGED` (2340); a desktop-only rerun
+    after 15 s with no interface events lost all 8 the same way (46–227
+    aborts each). The one desktop run without aborts passed (17.1 s). The
+    desktop project was therefore not cleanly confirmed under parallel load
+    on this host.
+  - one worker, both projects, three runs: 6 of 6 passed (16.2–22.5 s;
+    load 44–62).
+- **Not run:** a nine-worker `mise run test:browser`. On this host Docker
+  churn from other builds aborts dev-server loads in any long browser run
+  (2340), so it would not have shown whether this owner recurs.

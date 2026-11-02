@@ -1,8 +1,12 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@/lib/native/backend";
+import type { Mock } from "bun:test";
 import type { Environment } from "@/types";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realSetupCommands from "@/lib/setup-commands";
+
+const invokeMock = invoke as unknown as Mock<typeof invoke>;
 
 const realSetupCommandsSnapshot = { ...realSetupCommands };
 const forceResolveSetupRuntime = mock(async () => undefined);
@@ -42,6 +46,8 @@ function createEnvironment(overrides: Partial<Environment> = {}): Environment {
 describe("SetupPendingOverlay", () => {
   afterEach(() => {
     cleanup();
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
   });
 
   beforeEach(() => {
@@ -80,7 +86,6 @@ describe("SetupPendingOverlay", () => {
         environmentId="env-1"
         setupPhase="running"
         subtext="Claude will connect automatically"
-        agentLabel="Claude"
         pendingPrompt={{ text: "Fix the login bug", createdAt: "2026-11-02T10:00:00.000Z" }}
       />,
     );
@@ -119,6 +124,163 @@ describe("SetupPendingOverlay", () => {
     expect(screen.getByTestId("setup-pending-prompt").textContent).toContain("Fix the login bug");
     fireEvent.click(screen.getByRole("button", { name: /^retry setup$/i }));
     await waitFor(() => expect(retrySetupRuntime).toHaveBeenCalledWith("env-1"));
+  });
+
+  test("held setup keeps the queued prompt above the approval panel instead of retry actions", async () => {
+    useEnvironmentStore.setState({
+      environments: [createEnvironment({ setupPhase: "failed", setupApprovalRequired: true })],
+    });
+    invokeMock.mockResolvedValueOnce({
+      environmentId: "env-1",
+      projectId: "project-1",
+      hash: "f".repeat(64),
+      commands: ["bun install"],
+      defaultBranch: "main",
+      defaultBranchCommands: [],
+      approvalRequired: true,
+    });
+    render(
+      <SetupPendingOverlay
+        environmentId="env-1"
+        setupPhase="failed"
+        subtext="x"
+        pendingPrompt={{ text: "Fix the login bug", createdAt: "2026-11-02T10:00:00.000Z" }}
+      />,
+    );
+
+    expect(await screen.findByText("bun install")).toBeTruthy();
+    const prompt = screen.getByTestId("setup-pending-prompt");
+    const panel = screen.getByTestId("setup-approval-panel");
+    expect(prompt.textContent).toContain("Fix the login bug");
+    expect(prompt.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Run once" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /retry setup/i })).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(invokeMock).toHaveBeenCalledWith("get_environment_setup_approval", {
+      environmentId: "env-1",
+    });
+    expect(retrySetupRuntime).not.toHaveBeenCalled();
+    expect(forceResolveSetupRuntime).not.toHaveBeenCalled();
+  });
+
+  for (const kind of ["retry", "override"] as const) {
+    test(`transcript ${kind} failure shows an inline error and allows another attempt`, async () => {
+      const command = kind === "retry" ? retrySetupRuntime : forceResolveSetupRuntime;
+      let rejectOperation!: (reason: Error) => void;
+      command.mockImplementationOnce(
+        () =>
+          new Promise<undefined>((_resolve, reject) => {
+            rejectOperation = reject;
+          }),
+      );
+      render(
+        <SetupPendingOverlay
+          environmentId="env-1"
+          setupPhase="failed"
+          subtext="x"
+          pendingPrompt={{ text: "Fix the login bug", createdAt: "2026-11-02T10:00:00.000Z" }}
+        />,
+      );
+      if (kind === "override") {
+        fireEvent.click(screen.getByRole("button", { name: /^skip setup$/i }));
+      }
+      const actionName = kind === "retry" ? /^retry setup$/i : /^skip anyway$/i;
+      const busyName = kind === "retry" ? /retrying setup/i : /skipping setup/i;
+      fireEvent.click(screen.getByRole("button", { name: actionName }));
+      const busyButton = screen.getByRole("button", { name: busyName }) as HTMLButtonElement;
+      expect(busyButton.disabled).toBe(true);
+      fireEvent.click(busyButton);
+      expect(command).toHaveBeenCalledTimes(1);
+      expect(command).toHaveBeenCalledWith("env-1");
+      if (kind === "override") {
+        expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+          true,
+        );
+      }
+
+      rejectOperation(new Error("Backend unavailable"));
+      expect((await screen.findByRole("alert")).textContent).toBe("Backend unavailable");
+      expect((screen.getByRole("button", { name: actionName }) as HTMLButtonElement).disabled).toBe(
+        false,
+      );
+      expect(screen.getByTestId("setup-pending-prompt").textContent).toContain("Fix the login bug");
+      if (kind === "override") {
+        expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+          false,
+        );
+      }
+
+      fireEvent.click(screen.getByRole("button", { name: actionName }));
+      await waitFor(() => expect(command).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      expect(
+        await screen.findByRole("button", {
+          name: kind === "retry" ? /^retry setup$/i : /^skip setup$/i,
+        }),
+      ).toBeTruthy();
+    });
+  }
+
+  test("transcript elapsed time uses the queued timestamp, ticks, and survives remounting", () => {
+    const startedAt = Date.parse("2026-11-02T10:00:00.000Z");
+    const now = spyOn(Date, "now").mockReturnValue(startedAt + 64_000);
+    const ticks: Array<() => void> = [];
+    const interval = spyOn(globalThis, "setInterval").mockImplementation(((
+      callback: () => void,
+    ) => {
+      ticks.push(callback);
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    }) as typeof setInterval);
+    const clear = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    try {
+      const overlay = (
+        <SetupPendingOverlay
+          environmentId="env-1"
+          setupPhase="running"
+          subtext="x"
+          pendingPrompt={{ text: "Fix the login bug", createdAt: "2026-11-02T10:00:00.000Z" }}
+        />
+      );
+      const { unmount } = render(overlay);
+      expect(screen.getByText("1m 4s")).toBeTruthy();
+      now.mockReturnValue(startedAt + 66_000);
+      act(() => ticks.forEach((tick) => tick()));
+      expect(screen.getByText("1m 6s")).toBeTruthy();
+      expect(screen.queryByText("1m 4s")).toBeNull();
+      unmount();
+      expect(clear).toHaveBeenCalledWith(1);
+      now.mockReturnValue(startedAt + 70_000);
+      render(overlay);
+      expect(screen.getByText("1m 10s")).toBeTruthy();
+    } finally {
+      cleanup();
+      interval.mockRestore();
+      clear.mockRestore();
+      now.mockRestore();
+    }
+  });
+
+  test("an invalid queued timestamp omits the clock and keeps the prompt and setup controls", () => {
+    const interval = spyOn(globalThis, "setInterval");
+    try {
+      const { container } = render(
+        <SetupPendingOverlay
+          environmentId="env-1"
+          setupPhase="running"
+          subtext="x"
+          pendingPrompt={{ text: "Fix the login bug", createdAt: "invalid-date" }}
+        />,
+      );
+      expect(interval).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("NaN");
+      expect(screen.getByTestId("setup-pending-prompt").textContent).toContain("Fix the login bug");
+      expect(screen.getByRole("status").textContent).toBe(
+        "Waiting for setup scripts to complete...",
+      );
+      expect(screen.getByRole("button", { name: /^skip setup wait$/i })).toBeTruthy();
+    } finally {
+      interval.mockRestore();
+    }
   });
 
   test("Skip button requires a confirmation step before firing the override", () => {

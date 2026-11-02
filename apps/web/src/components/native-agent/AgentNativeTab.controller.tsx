@@ -3052,7 +3052,6 @@ export function SharedNativeAgentController({
         setupPhase={environment?.setupPhase}
         subtext={`${label} will connect automatically once setup finishes`}
         pendingPrompt={startupPromptPreview ?? undefined}
-        agentLabel={label}
       />
     );
   }

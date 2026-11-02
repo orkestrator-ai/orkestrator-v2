@@ -21,8 +21,6 @@ interface SetupPendingOverlayProps {
    * sent user bubble, the setup status where the "is thinking" row would be.
    */
   pendingPrompt?: { text: string; createdAt: string };
-  /** Agent name for the transcript row's author label, e.g. "Claude". */
-  agentLabel?: string;
 }
 
 /**
@@ -40,7 +38,6 @@ export function SetupPendingOverlay({
   setupPhase,
   subtext,
   pendingPrompt,
-  agentLabel,
 }: SetupPendingOverlayProps) {
   const [confirming, setConfirming] = useState(false);
   const [operation, setOperation] = useState<"retry" | "override" | null>(null);
@@ -90,7 +87,6 @@ export function SetupPendingOverlay({
       <SetupPendingTranscript
         environmentId={environmentId}
         pendingPrompt={pendingPrompt}
-        agentLabel={agentLabel}
         showApproval={failed && approvalRequired}
         statusProps={statusProps}
       />
@@ -126,13 +122,11 @@ type SetupStatusProps = {
 function SetupPendingTranscript({
   environmentId,
   pendingPrompt,
-  agentLabel,
   showApproval,
   statusProps,
 }: {
   environmentId: string;
   pendingPrompt: { text: string; createdAt: string };
-  agentLabel?: string;
   showApproval: boolean;
   statusProps: SetupStatusProps;
 }) {
@@ -150,7 +144,7 @@ function SetupPendingTranscript({
   return (
     <div className="@container flex h-full min-h-0 flex-col overflow-y-auto bg-background py-4">
       <div data-testid="setup-pending-prompt">
-        <NativeMessage message={message} assistantLabel={agentLabel} />
+        <NativeMessage message={message} />
       </div>
       <div className="px-2 @sm:px-4">
         <div className="mx-auto max-w-3xl min-w-0">

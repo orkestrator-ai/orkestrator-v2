@@ -190,10 +190,29 @@ duration and the time outside the operation. The report is now written from
 not the warm stop's 1 s, because this path also stops the egress gateway
 (about 0.35–0.6 s on beelink).
 
+### Task 1: review fixes for EOF readers and suspended jobs
+
+The drain now sends SIGCONT after successfully sending SIGTERM so stopped
+jobs can run their handlers. After terminal hangup it waits for pipe readers
+within the original deadline, preserving EOF-driven log writers' final output.
+Waiting after hangup avoids holding an interactive producer's output pipe open.
+Non-reader processes ignoring TERM/HUP still count as remaining without a wait.
+Owned-process Linux regressions exercise these branches with real PTYs and the
+image log-writer script. C11 also covers a suspended producer's final partial
+line through the image writer and a terminal ignoring both TERM and HUP.
+
+### Task 2: report failures must not skip cleanup
+
+Reporting and resource cleanup now run through a teardown helper that always
+attempts cleanup and retains both errors if both fail. A regression injects a
+report error, checks owner-filtered Docker removals, and verifies the temporary
+directory was removed.
+
 ## Current state
 
 - `docker/orkestrator-drain.sh` hangs up interactive shells and waits only
-  for processes that can act on SIGTERM.
+  for processes that can act on SIGTERM and, after hangup, EOF-driven pipe
+  readers. Stopped workloads receive SIGCONT to handle their pending TERM.
 - `apps/backend/tests/container-benchmarks.test.ts` has the
   `stop_environment` case. Its target is in container-qualification.md.
 - `apps/backend/tests/container-live-qualification.test.ts` C11 opens a

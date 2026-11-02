@@ -127,7 +127,12 @@ went to `orkestrator-drain.sh`, which waited its whole 10 s grace for the
 interactive login shell of the setup terminal or a terminal tab. Interactive
 zsh and bash ignore SIGTERM. The drain now hangs those shells up with SIGHUP
 once everything that can act on SIGTERM has gone. It no longer waits for
-any process that ignores SIGTERM.
+SIGTERM-ignoring non-readers. EOF-driven pipe readers retain bounded time to
+finish after the hangup pass, and stopped jobs receive SIGCONT after SIGTERM.
+`docker/tests/drain-regression.py`, run by `container-drain.integration.test.ts` on Linux,
+uses owned processes and real PTYs to cover delayed cleanup before hangup,
+stopped jobs, delayed EOF flushing, ignored TERM/HUP survivors, and the shared
+deadline without requiring an image.
 
 - **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, 16 CPUs), Docker
   Engine 29.9.2 rootful, load average 7–20 from other builds.

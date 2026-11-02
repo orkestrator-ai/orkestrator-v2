@@ -205,6 +205,36 @@ describe("C11 explicit stop drains workload under init", () => {
       await docker(["exec", "-d", id, "sh", "-c", "sleep 600 & sleep 600 & wait"]);
       await docker(["exec", "-d", id, "sh", "-c", "trap '' TERM; while :; do sleep 1; done"]);
       await docker(["exec", "-d", "-it", id, "zsh", "-lc", "zsh -l"]);
+      // A suspended job must resume to handle TERM; its delayed final output
+      // flows through the image's EOF-driven writer before teardown.
+      await docker([
+        "exec",
+        "-d",
+        "-it",
+        id,
+        "sh",
+        "-c",
+        `trap '' TERM HUP; perl -e '$SIG{TERM}=sub { sleep 1; print "final partial"; exit }; open my $f, ">", "/tmp/drain-job-ready"; close $f; kill "STOP", $$; sleep 600' | /usr/local/bin/orkestrator-log-writer /tmp/drain-final.log`,
+      ]);
+      // A terminal explicitly ignoring both signals remains for Docker stop.
+      await docker([
+        "exec",
+        "-d",
+        "-it",
+        id,
+        "sh",
+        "-c",
+        "trap '' TERM HUP; touch /tmp/drain-ignorer-ready; while :; do sleep 1; done",
+      ]);
+      for (const marker of ["/tmp/drain-job-ready", "/tmp/drain-ignorer-ready"]) {
+        await docker([
+          "exec",
+          id,
+          "sh",
+          "-c",
+          `for i in $(seq 1 100); do test -f ${marker} && exit 0; sleep 0.1; done; exit 1`,
+        ]);
+      }
       await new Promise((resolve) => setTimeout(resolve, 1_000));
       expect(Number(await docker(["exec", id, "pgrep", "-c", "-x", "zsh"]))).toBe(1);
 
@@ -216,7 +246,8 @@ describe("C11 explicit stop drains workload under init", () => {
       expect(performance.now() - started).toBeLessThan(5_000);
       expect(drain).not.toBeNull();
       expect(drain!.signalled).toBeGreaterThanOrEqual(5);
-      expect(drain!.remaining).toBeGreaterThanOrEqual(1);
+      expect(drain!.remaining).toBeGreaterThanOrEqual(2);
+      expect(await docker(["exec", id, "cat", "/tmp/drain-final.log"])).toBe("final partial");
       expect(await docker(["exec", id, "sh", "-c", "pgrep -c -x zsh || true"])).toBe("0");
       const zombies = await docker(["exec", id, "sh", "-c", "ps -eo stat= | grep -c '^Z' || true"]);
       expect(Number(zombies)).toBe(0);

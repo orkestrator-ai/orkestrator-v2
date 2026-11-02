@@ -18,7 +18,8 @@
 # each process that ignores SIGTERM but has a controlling terminal gets
 # SIGHUP, the signal a closed terminal sends, and is waited for in turn. A
 # process that ignores SIGTERM with no terminal, or SIGHUP as well, is not
-# waited for: it counts as remaining and goes down with the container.
+# waited for unless it reads a pipe: EOF-driven log writers must finish after
+# their producers exit (including shells closed by the hangup pass).
 #
 # Output (one line): ORKESTRATOR_DRAIN signalled=<n> remaining=<n> hungup=<n>
 set -u
@@ -98,7 +99,9 @@ waited_pids() {
     for pid in $(workload_pids); do
         if ! ignores_signal "$pid" 15; then
             echo "$pid"
-        elif [ "$1" = hup ] && has_terminal "$pid" && ! ignores_signal "$pid" 1; then
+        elif [ "$1" = eof ] && [[ "$(readlink "/proc/$pid/fd/0" 2>/dev/null)" = pipe:* ]]; then
+            echo "$pid"
+        elif [ "$1" != term ] && has_terminal "$pid" && ! ignores_signal "$pid" 1; then
             echo "$pid"
         fi
     done
@@ -116,6 +119,8 @@ signalled=0
 for pid in $(workload_pids); do
     if kill -TERM "$pid" 2>/dev/null; then
         signalled=$((signalled + 1))
+        # A stopped job cannot handle its pending TERM until resumed.
+        kill -CONT "$pid" 2>/dev/null || true
     fi
 done
 
@@ -133,6 +138,9 @@ for pid in $(workload_pids); do
     fi
 done
 [ "$hungup" -gt 0 ] && wait_for hup
+# Readers ignore TERM/HUP deliberately and flush final partial lines at EOF.
+# Wait after hangup so an interactive producer cannot hold its pipe open.
+wait_for eof
 
 remaining="$(workload_pids | wc -l)"
 echo "ORKESTRATOR_DRAIN signalled=${signalled} remaining=${remaining} hungup=${hungup}"

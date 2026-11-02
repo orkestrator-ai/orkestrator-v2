@@ -11,6 +11,7 @@
  * resource it labelled. Results go to output/benchmarks/<run>.json and a table
  * on stdout; nothing here records commands, paths or file contents.
  */
+import { benchmarkTeardown, cleanupBenchmarkResources } from "./container-benchmark-teardown";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -140,18 +141,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!ENABLED) return;
-  if (Object.keys(results).length > 0) await writeReport();
-  const ids = (await docker(["ps", "-aq", "--filter", `label=orkestrator-owner=${owner}`]))
-    .split("\n")
-    .filter(Boolean);
-  if (ids.length > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
-  for (const kind of ["volume", "network"] as const) {
-    const names = (await docker([kind, "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`]))
-      .split("\n")
-      .filter(Boolean);
-    if (names.length > 0) await docker([kind, "rm", ...names]).catch(() => undefined);
-  }
-  if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
+  await benchmarkTeardown(
+    async () => {
+      if (Object.keys(results).length > 0) await writeReport();
+    },
+    () => cleanupBenchmarkResources(docker, owner, dataDir),
+  );
 }, 600_000);
 
 function benchContext(environments: Environment[]) {

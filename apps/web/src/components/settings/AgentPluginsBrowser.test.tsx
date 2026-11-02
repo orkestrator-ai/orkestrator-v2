@@ -270,7 +270,9 @@ test("plugin details explain pending and failed skill scans", async () => {
   await screen.findByText("Scanning plugin skills…");
   rejectScan(new Error("scan unavailable"));
   await screen.findByText("Skill scan failed: scan unavailable");
-  expect(screen.queryByText("No skills from this plugin are listed for this agent.")).toBeNull();
+  expect(screen.queryByText("No skills from this plugin are listed for this agent.") === null).toBe(
+    true,
+  );
 });
 
 test("same-name marketplace installations never claim each other's skills", async () => {
@@ -291,7 +293,7 @@ test("same-name marketplace installations never claim each other's skills", asyn
   for (const row of within(list).getAllByRole("button")) {
     fireEvent.click(row);
     expect(screen.getByText(/Multiple marketplaces provide/)).toBeTruthy();
-    expect(screen.queryByRole("list", { name: "Skills from vercel" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Skills from vercel" }) === null).toBe(true);
   }
 });
 
@@ -321,7 +323,7 @@ test("plugin caches and in-flight results stay with their selected machine", asy
     await act(async () => {
       resolveOld({ agent: "claude", plugins: [VERCEL] });
     });
-    await waitFor(() => expect(screen.queryByText("vercel")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("vercel") === null).toBe(true));
     expect(route.mock.calls.map((c) => c.slice(0, 3))).toEqual([
       ["first", "list_agent_plugins", { provider: "claude" }],
       ["second", "list_agent_plugins", { provider: "claude" }],
@@ -343,5 +345,5 @@ test("unsupported Cursor catalog remains a stable unavailable result", async () 
   clickTab(/^Skills/);
   clickTab(/^Plugins/);
   expect(pluginReads()).toHaveLength(1);
-  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("alert") === null).toBe(true);
 });

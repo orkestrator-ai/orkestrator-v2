@@ -11,33 +11,6 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
-  // The fake agent records its own argv, so these assert the exact command line
-  // the bridge builds. They cannot prove the real CLIs accept those flags —
-  // `docs/development/upgrade-agents.md` carries that as a manual step for version bumps.
-  async function readAgentArgs(env: NodeJS.ProcessEnv): Promise<string[]> {
-    const argsFile = resolve(await temporaryDirectory(), "args.log");
-    const { base, headers } = await spawnBridge({
-      env: { ...env, FAKE_ACP_ARGS_FILE: argsFile },
-    });
-
-    const created = await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    });
-    expect(created.status).toBe(201);
-
-    const recorded = await waitFor(
-      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
-      (value) => value.trim().length > 0,
-    );
-    // One session spawns one agent. A second line would mean the child was
-    // restarted, which should fail as itself rather than as a JSON parse error
-    // on two concatenated records.
-    const lines = recorded.trim().split("\n");
-    expect(lines).toHaveLength(1);
-    return JSON.parse(lines[0]!) as string[];
-  }
-
   test("reconciles stale pending tool parts after a restart", async () => {
     const stateDirectory = await temporaryDirectory();
     await fs.writeFile(
@@ -591,8 +564,18 @@ describe("ACP bridge", () => {
       // inspect the settled card. Removing it below completes the same close.
       const stateFile = resolve(stateDirectory, "state.json");
       if (action === "close") {
-        await fs.rm(stateFile, { force: true });
-        await fs.mkdir(stateFile);
+        // The live bridge keeps persisting while the retry card updates, so its
+        // atomic rename can recreate the file between rm and mkdir. Retry the
+        // swap; once the directory exists that rename can no longer replace it.
+        for (let attempt = 0; ; attempt += 1) {
+          await fs.rm(stateFile, { force: true });
+          try {
+            await fs.mkdir(stateFile);
+            break;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt >= 20) throw error;
+          }
+        }
         await fs.writeFile(resolve(stateFile, "occupied"), "");
       }
       const ended = await nativeFetch(`${base}/session/${created.id}/${action}`, {
@@ -791,7 +774,6 @@ describe("ACP bridge", () => {
   });
 
   test("recovers a structured turn interrupted by a flattened resource-exhausted error", async () => {
-    const directory = await temporaryDirectory();
     const { base, headers } = await spawnBridge({
       env: {
         ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",

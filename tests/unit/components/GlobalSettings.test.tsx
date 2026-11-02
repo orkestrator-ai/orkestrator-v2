@@ -2234,7 +2234,7 @@ describe("GlobalSettings", () => {
   test("says saving and detail apply live, and saves a level on its own", async () => {
     render(<GlobalSettings activeSection="debug" />);
     expect(await screen.findByText(/apply straight away/)).toBeTruthy();
-    expect(screen.queryByText(/restart to take effect/)).toBeNull();
+    expect(screen.queryByText(/restart to take effect/) === null).toBe(true);
     fireEvent.click(screen.getByRole("combobox", { name: "Default log level" }));
     fireEvent.click(await screen.findByRole("option", { name: "Debug" }));
     await flushAutoSave();

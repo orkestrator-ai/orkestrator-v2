@@ -154,8 +154,8 @@ describe("SetupPendingOverlay", () => {
     expect(prompt.textContent).toContain("Fix the login bug");
     expect(prompt.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "Run once" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /retry setup/i })).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button", { name: /retry setup/i }) === null).toBe(true);
+    expect(screen.queryByRole("status") === null).toBe(true);
     expect(invokeMock).toHaveBeenCalledWith("get_environment_setup_approval", {
       environmentId: "env-1",
     });
@@ -212,7 +212,7 @@ describe("SetupPendingOverlay", () => {
 
       fireEvent.click(screen.getByRole("button", { name: actionName }));
       await waitFor(() => expect(command).toHaveBeenCalledTimes(2));
-      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
       expect(
         await screen.findByRole("button", {
           name: kind === "retry" ? /^retry setup$/i : /^skip setup$/i,
@@ -246,7 +246,7 @@ describe("SetupPendingOverlay", () => {
       now.mockReturnValue(startedAt + 66_000);
       act(() => ticks.forEach((tick) => tick()));
       expect(screen.getByText("1m 6s")).toBeTruthy();
-      expect(screen.queryByText("1m 4s")).toBeNull();
+      expect(screen.queryByText("1m 4s") === null).toBe(true);
       unmount();
       expect(clear).toHaveBeenCalledWith(1);
       now.mockReturnValue(startedAt + 70_000);

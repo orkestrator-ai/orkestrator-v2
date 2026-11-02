@@ -2058,7 +2058,7 @@ printf "continued"
         `
 set -e
 log_progress() { :; }
-eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p; /^restrict_imported_login() {/,/^}$/p' ${shellQuote(entrypoint)})"
+eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p; /^copy_agent_directory_entries() {/,/^}$/p; /^restrict_imported_login() {/,/^}$/p' ${shellQuote(entrypoint)})"
 codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g; s#/tmp/orkestrator-codex-account#\\$AGENT_TEST_MARKER#g")"
 eval "$codex_setup"
 `,
@@ -2398,12 +2398,14 @@ eval "$opencode_setup"
     const commands = ["start_opencode_server", "start_claude_server", "start_codex_server"];
 
     for (const command of commands) {
-      const start = backend.indexOf(`register("${command}"`);
+      // Bridge-backed starts register through `registerBridgeStart`, which
+      // wraps `register` with the bridge's start lifecycle.
+      const start = backend.search(new RegExp(`\\bregister(?:BridgeStart)?\\("${command}"`));
       expect(start).toBeGreaterThan(0);
       // Bound the block at the next register(...) call, regardless of its
       // indentation, so these assertions can only be satisfied by THIS
       // command's block and never leak into a neighbouring one.
-      const nextRegister = backend.slice(start + 1).search(/\n\s*register\(/);
+      const nextRegister = backend.slice(start + 1).search(/\n\s*register(?:BridgeStart)?\(/);
       const registerBlock =
         nextRegister === -1 ? backend.slice(start) : backend.slice(start, start + 1 + nextRegister);
       // If the block references a shared start-command constant or delegates to

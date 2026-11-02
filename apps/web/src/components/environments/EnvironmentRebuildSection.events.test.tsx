@@ -137,13 +137,13 @@ describe("environment rebuild section lifecycle events", () => {
   test("follows a rebuild from events, ignoring other environments and stale revisions", async () => {
     renderSection();
     await waitFor(() => expect(reads).toBe(1));
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("status") === null).toBe(true);
 
     emitLifecycle(environment.id, snapshot(2, "preflight"));
     await screen.findByText(/Checking image and free space/);
 
     emitLifecycle("another-environment", snapshot(9, "copying"));
-    expect(screen.queryByText(/Copying and verifying files/)).toBeNull();
+    expect(screen.queryByText(/Copying and verifying files/) === null).toBe(true);
 
     emitLifecycle(environment.id, snapshot(4, "copying"));
     await screen.findByText(/Copying and verifying files/);
@@ -152,7 +152,7 @@ describe("environment rebuild section lifecycle events", () => {
     expect(screen.getByText(/Copying and verifying files/)).toBeTruthy();
 
     emitLifecycle(environment.id, snapshot(5, null));
-    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
     // Every step after the first read came from events.
     expect(reads).toBe(1);
   });
@@ -220,7 +220,7 @@ describe("environment rebuild section lifecycle events", () => {
     });
     expect(screen.getByText(/Copying and verifying files/)).toBeTruthy();
     emitLifecycle(nextEnvironment.id, snapshot(4, null));
-    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
   });
 
   test("polls only as a slow backstop while a rebuild runs with events live", async () => {
@@ -254,7 +254,7 @@ describe("environment rebuild section lifecycle events", () => {
 
     current = snapshot(3, null);
     await act(async () => tick());
-    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
     expect(reads).toBe(3);
   });
 

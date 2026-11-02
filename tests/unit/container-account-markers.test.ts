@@ -12,6 +12,7 @@ const helpers = [
   "agent_destination_path_has_symlink",
   "copy_agent_file",
   "copy_agent_directory",
+  "copy_agent_directory_entries",
   "restrict_imported_login",
 ]
   .map((name) => {

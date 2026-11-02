@@ -20,6 +20,13 @@ import { ChevronDown, ChevronRight, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
+import {
+  folderDragItem,
+  machineEnvironmentDragItem,
+  SidebarDragOverlay,
+  type SidebarDragItem,
+} from "@/components/sidebar/SidebarDragOverlay";
+import { SidebarEmptyState } from "@/components/sidebar/SidebarEmptyState";
 import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { activityRows, isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import {
@@ -209,13 +216,25 @@ function RemoteMachineBody({ machine }: { machine: MachineView }) {
       <MachineNotices machine={machine} />
       <UnknownOutcomesNotice connectionId={machine.connectionId} />
       {machine.loadedAt === null && machine.projects.length === 0 ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">
-          {machine.transport === "connected" || machine.transport === "connecting"
-            ? "Loading…"
-            : "Not available yet."}
-        </p>
+        machine.transport === "connected" || machine.transport === "connecting" ? (
+          <SidebarEmptyState loading />
+        ) : (
+          // Only another machine can be unreachable; its own sidebar has no such state.
+          <p className="px-3 py-2 text-xs text-muted-foreground">Not available yet.</p>
+        )
       ) : machine.projects.length === 0 ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">No projects</p>
+        <SidebarEmptyState
+          onAdd={
+            isMachineWritable(machine)
+              ? () =>
+                  openMachineWorkspace({
+                    connectionId: machine.connectionId,
+                    projectId: "",
+                    title: "Add project",
+                  })
+              : undefined
+          }
+        />
       ) : (
         <RemoteMachineTree machine={machine} />
       )}
@@ -362,6 +381,8 @@ export function MergedProjectList({
   mode,
   renderBoundProject,
   onBoundEnvironmentDragEnd,
+  boundLoading = false,
+  onAddProject,
 }: {
   /** Every known machine, in machine order. */
   machines: readonly MachineView[];
@@ -376,6 +397,10 @@ export function MergedProjectList({
   ) => ReactNode;
   /** An environment of this window's own machine was dropped. */
   onBoundEnvironmentDragEnd: (activeId: string, overId: string) => void;
+  /** This window's own projects are still loading. */
+  boundLoading?: boolean;
+  /** "Add your first project" while the list is empty: this window's Add Project dialog. */
+  onAddProject?: () => void;
 }) {
   const layout = usePortalLayout();
   const { portalState } = useFederation();
@@ -385,6 +410,7 @@ export function MergedProjectList({
   const setFolderKeyCollapsed = useMachineViewStore((state) => state.setFolderKeyCollapsed);
   const { environmentsOf, reorder } = useRemoteEnvironments();
   const [draggingProject, setDraggingProject] = useState(false);
+  const [dragItem, setDragItem] = useState<SidebarDragItem>(null);
   const sensors = useDragSensors();
 
   const { list, tree } = useMemo(
@@ -419,11 +445,20 @@ export function MergedProjectList({
   };
 
   const handleDragStart = ({ active }: DragStartEvent) => {
-    setDraggingProject(isProjectDrag(String(active.id)));
+    const id = String(active.id);
+    setDraggingProject(isProjectDrag(id));
+    const project = list.shown.find((item) => item.id === id);
+    setDragItem(
+      folderDragItem(tree, id, mode === "repository" ? repositoryLabel : undefined) ??
+        (project
+          ? { kind: "project", name: project.project.name }
+          : machineEnvironmentDragItem(machines, id)),
+    );
   };
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     setDraggingProject(false);
+    setDragItem(null);
     if (!over) return;
     const activeId = String(active.id);
     const overId = String(over.id);
@@ -556,19 +591,32 @@ export function MergedProjectList({
       data-testid={mode === "project" ? "federated-project-list" : "federated-repository-list"}
     >
       {list.shown.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">No projects yet</p>
+        <SidebarEmptyState
+          loading={
+            boundLoading ||
+            machines.some(
+              (machine) =>
+                !machine.bound && shownIds.has(machine.connectionId) && machine.loadedAt === null,
+            )
+          }
+          onAdd={onAddProject}
+        />
       ) : null}
       <DndContext
         sensors={sensors}
         collisionDetection={sidebarCollisionDetection}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
-        onDragCancel={() => setDraggingProject(false)}
+        onDragCancel={() => {
+          setDraggingProject(false);
+          setDragItem(null);
+        }}
       >
         <SortableContext items={sortableIds} strategy={sortingStrategy}>
           {tree.map(renderEntry)}
           <SidebarRootDropZone active={draggingProject && mode === "project"} />
         </SortableContext>
+        <SidebarDragOverlay item={dragItem} />
       </DndContext>
     </div>
   );

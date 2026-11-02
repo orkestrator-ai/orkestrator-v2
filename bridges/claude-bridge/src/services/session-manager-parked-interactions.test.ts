@@ -376,12 +376,68 @@ describe("tool approvals under an ask policy", () => {
       kind: "permission",
       toolName: "mcp__linear__create_issue",
       mcpServer: "linear",
+      mcpServerSource: "user",
       input: '{"title":"Bug"}',
     });
 
     respondToInteraction("req-3", { action: "cancel" });
     expect(await decision).toMatchObject({ behavior: "deny", interrupt: true });
 
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("forwards an MCP server's provenance only as a short token, and none without a server", async () => {
+    const session = createSession("ask-mcp-provenance");
+    track(session.id);
+    session.executionPolicy = ASK_POLICY;
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+
+    const decisions = [
+      call.options.canUseTool!(
+        "mcp__repo__deploy",
+        {},
+        context("req-p1", { mcpServer: { name: "repo", source: "project" } }),
+      ),
+      // The SDK's set of sources is open; a value the card could not show
+      // safely is dropped, and the server name still travels.
+      call.options.canUseTool!(
+        "mcp__odd__x",
+        {},
+        context("req-p2", { mcpServer: { name: "odd", source: "Not A Token" } }),
+      ),
+      call.options.canUseTool!(
+        "mcp__long__x",
+        {},
+        context("req-long", { mcpServer: { name: "x".repeat(300), source: "user" } }),
+      ),
+      // A CLI that predates the field sends no provenance at all.
+      call.options.canUseTool!("mcp__old__x", {}, context("req-p3")),
+      call.options.canUseTool!(
+        "WebSearch",
+        { query: "q" },
+        context("req-p4", { mcpServer: { name: "", source: "user" } }),
+      ),
+    ];
+    await waitFor(() => getPendingInteractions(session.id).length === 5);
+    const pending = new Map(getPendingInteractions(session.id).map((entry) => [entry.id, entry]));
+    expect(pending.get("req-long")).toMatchObject({ mcpServer: `${"x".repeat(256)}…` });
+    expect(pending.get("req-long")).not.toHaveProperty("mcpServerSource");
+    expect(pending.get("req-long")).not.toHaveProperty("ruleEligible");
+    expect(pending.get("req-p1")).toMatchObject({ mcpServer: "repo", mcpServerSource: "project" });
+    expect(pending.get("req-p2")).toMatchObject({ mcpServer: "odd" });
+    expect(pending.get("req-p2")).not.toHaveProperty("mcpServerSource");
+    expect(pending.get("req-p3")).not.toHaveProperty("mcpServer");
+    expect(pending.get("req-p3")).not.toHaveProperty("mcpServerSource");
+    expect(pending.get("req-p4")).not.toHaveProperty("mcpServer");
+    expect(pending.get("req-p4")).not.toHaveProperty("mcpServerSource");
+
+    for (const id of ["req-p1", "req-p2", "req-p3", "req-p4", "req-long"]) {
+      respondToInteraction(id, { action: "decline" });
+    }
+    await Promise.all(decisions);
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;

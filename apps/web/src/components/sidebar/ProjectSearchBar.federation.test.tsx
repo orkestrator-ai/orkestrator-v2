@@ -149,6 +149,55 @@ describe("ProjectSearchBar across machines", () => {
     localStorage.removeItem("machine-view-storage");
   });
 
+  for (const state of ["current", "stale", "blocked"] as const) {
+    test(`remote search hit reacts to the checks setting with an unchanged ${state} PR summary`, async () => {
+      const initialConfig = useConfigStore.getState().config;
+      try {
+        useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
+        renderSearch();
+        await openAndType("run-desktop");
+        await option("run-desktop-app, environment of orkestrator-v2 on mbp3");
+        act(() =>
+          portalStore.store.setState((current) => ({
+            nodes: current.nodes.map((node) =>
+              node.nodeId !== "bk_mbp3"
+                ? node
+                : {
+                    ...node,
+                    freshness: state === "stale" ? "stale" : "current",
+                    environments: node.environments.map((environment) => ({
+                      ...environment,
+                      environmentType: "local",
+                      prState: "open",
+                      prHasMergeConflicts: false,
+                      prMergeability: state === "blocked" ? "blocked" : "unstable",
+                      prMonitorConfirmed: true,
+                      prCheckSummary: { passed: 13, total: 14, pending: 0 },
+                    })),
+                  },
+            ),
+          })),
+        );
+        const nodes = portalStore.getState().nodes;
+        const row = await option(
+          new RegExp("run-desktop-app, environment of orkestrator-v2 on mbp3"),
+        );
+        for (const requireChecks of [true, false, true]) {
+          act(() =>
+            useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+          );
+          expect(row.querySelector("[data-merge-ready]") !== null).toBe(
+            state === "current" && !requireChecks,
+          );
+          expect(portalStore.getState().nodes).toBe(nodes);
+        }
+      } finally {
+        cleanup();
+        useConfigStore.setState({ config: initialConfig });
+      }
+    });
+  }
+
   test("finds another machine's project with no environments in the one merged list", async () => {
     const { onSelectMachineProject } = renderSearch();
     const input = await openAndType("tel");

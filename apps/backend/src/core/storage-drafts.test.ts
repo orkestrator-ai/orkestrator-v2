@@ -77,6 +77,98 @@ describe("StorageService drafts", () => {
     });
   });
 
+  test("a compose draft save reads and writes only its own row", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const draft = (draftKey: string, text: string) => ({
+        draftKey,
+        ownerType: "environment",
+        ownerId: "e1",
+        value: { text },
+        updatedAt: new Date(0).toISOString(),
+        revision: 3,
+      });
+      seedStore(dataDir, "compose-drafts.json", {
+        mine: draft("mine", "before"),
+        other: draft("other", "untouched"),
+        // A record this build cannot read stays exactly as stored.
+        opaque: { from: "a newer build" },
+      });
+      const database = storageDatabase(storage);
+      const rows = database.rows("compose-drafts");
+      const other = rows.entry("other");
+      const opaque = rows.entry("opaque");
+      const revision = database.storeRevision("compose-drafts")!;
+      const wholeReads = spyOn(database, "readStore");
+      const wholeWrites = spyOn(database, "writeStoreInTransaction");
+      try {
+        const saved = await storage.saveComposeDraft(
+          "mine",
+          "environment",
+          "e1",
+          { text: "after" },
+          3,
+        );
+        expect(saved).toMatchObject({ revision: 4, value: { text: "after" } });
+        await expect(
+          storage.saveComposeDraft("mine", "environment", "e1", { text: "stale" }, 3),
+        ).rejects.toThrow("Compose draft revision conflict");
+        await expect(
+          storage.saveComposeDraft("mine", "project", "p1", { text: "stolen" }),
+        ).rejects.toThrow("Compose draft belongs to another owner");
+        // The owner checks read other stores; the drafts store is never whole.
+        const drafts = (calls: unknown[][]) =>
+          calls.filter(([store]) => store === "compose-drafts");
+        expect(drafts(wholeReads.mock.calls)).toEqual([]);
+        expect(drafts(wholeWrites.mock.calls)).toEqual([]);
+      } finally {
+        wholeReads.mockRestore();
+        wholeWrites.mockRestore();
+      }
+      // One committed write; the refused saves wrote nothing.
+      expect(database.storeRevision("compose-drafts")).toBe(revision + 1);
+      expect(rows.entry("other")).toEqual(other);
+      expect(rows.entry("opaque")).toEqual(opaque);
+      expect(await storage.getComposeDraft("mine")).toMatchObject({ revision: 4 });
+
+      await storage.deleteComposeDraft("mine", 4);
+      expect(rows.has("mine")).toBe(false);
+      expect(rows.entry("other")).toEqual(other);
+      expect(rows.entry("opaque")).toEqual(opaque);
+    });
+  });
+
+  test("an owner's draft sweep removes only that owner's drafts and writes nothing otherwise", async () => {
+    await withStorage(async (storage, dataDir) => {
+      const draft = (draftKey: string, ownerType: string, ownerId: string) => ({
+        draftKey,
+        ownerType,
+        ownerId,
+        value: { text: draftKey },
+        updatedAt: new Date(0).toISOString(),
+        revision: 1,
+      });
+      seedStore(dataDir, "compose-drafts.json", {
+        a: draft("a", "environment", "e1"),
+        b: draft("b", "environment", "e1"),
+        c: draft("c", "project", "p1"),
+        opaque: { from: "a newer build" },
+      });
+      const database = storageDatabase(storage);
+      const revision = database.storeRevision("compose-drafts")!;
+      await storage.deleteComposeDraftsByEnvironment("e-without-drafts");
+      expect(database.storeRevision("compose-drafts")).toBe(revision);
+
+      await storage.deleteComposeDraftsByEnvironment("e1");
+      expect(
+        Object.keys(readStoredValue<Record<string, unknown>>(dataDir, "compose-drafts.json")!),
+      ).toEqual(["c", "opaque"]);
+      await storage.deleteComposeDraftsByProject("p1");
+      expect(readStoredValue(dataDir, "compose-drafts.json")).toEqual({
+        opaque: { from: "a newer build" },
+      });
+    });
+  });
+
   test("keeps an attachment-only image draft across a backend restart", async () => {
     await withStorage(async (storage, dataDir) => {
       const value = {

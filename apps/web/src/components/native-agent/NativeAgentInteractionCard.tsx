@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
-import { ExternalLink } from "lucide-react";
-import type {
-  AgentInteractionApplyOutcome,
-  AgentInteractionRequest,
-  AgentInteractionResolution,
+import { ExternalLink, Server } from "lucide-react";
+import {
+  agentInteractionSourceScopeLabel,
+  type AgentInteractionApplyOutcome,
+  type AgentInteractionRequest,
+  type AgentInteractionResolution,
+  type AgentInteractionSource,
 } from "@orkestrator/protocol/agent-interactions";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { Button } from "@/components/ui/button";
@@ -33,6 +35,30 @@ function safeExternalUrl(value: string | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Which MCP server asked. The name is the server's configured key, untrusted
+ * text, so it is only ever rendered as text; the scope says where its
+ * definition came from, which is what helps judge a request.
+ */
+function InteractionSourceLine({ source }: { source: AgentInteractionSource }) {
+  const scope = agentInteractionSourceScopeLabel(source.scope);
+  return (
+    <p
+      className="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground"
+      data-testid="interaction-source"
+    >
+      <Server className="mt-px size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0">
+        Requested by MCP server{" "}
+        <span className="break-all font-mono font-medium text-foreground" title={source.name}>
+          {source.name}
+        </span>
+        {scope ? <span> · from {scope}</span> : null}
+      </span>
+    </p>
+  );
 }
 
 export function coerceNativeFormFieldValue(raw: string, type: unknown): string | number {
@@ -309,6 +335,7 @@ export function NativeAgentInteractionCard({
       actions={actions}
     >
       <div className="px-4 py-3 text-sm">
+        {interaction.source ? <InteractionSourceLine source={interaction.source} /> : null}
         {remembering && ruleOffer ? (
           <RememberRulePanel
             offer={ruleOffer}

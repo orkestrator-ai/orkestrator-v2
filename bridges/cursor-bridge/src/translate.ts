@@ -25,6 +25,7 @@ import type { InteractionUpdate, NestedTaskUpdate } from "@cursor/sdk";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { recordObservedMcpTool } from "./mcp.js";
 import {
+  EncodedObjectSizes,
   jsonStringContentBytes,
   encodedJsonBytes,
 } from "@orkestrator/protocol/node/transcript-budget";
@@ -32,6 +33,7 @@ import { nextPartOrdinal } from "@orkestrator/protocol/transcript-part-ids";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {
   appendBounded,
+  appendTurnOutput,
   boundText,
   boundTranscriptDuringStreaming,
   chargeTranscript,
@@ -292,7 +294,7 @@ function applyTextDelta(
     message.content = appendBounded(message, message.content, text);
     chargeAppended(state, before, message.content);
     if (state.currentTurnOutput !== null) {
-      state.currentTurnOutput = appendBounded(message, state.currentTurnOutput, text);
+      state.currentTurnOutput = appendTurnOutput(message, state.currentTurnOutput, text);
     }
   }
   rowChanged(state, message);
@@ -1037,7 +1039,7 @@ export function completeStreamedProse(state: SessionState, row: BridgeMessage, t
   row.content = appendBounded(row, row.content, text);
   chargeAppended(state, before, row.content);
   if (state.currentTurnOutput !== null) {
-    state.currentTurnOutput = appendBounded(row, state.currentTurnOutput, text);
+    state.currentTurnOutput = appendTurnOutput(row, state.currentTurnOutput, text);
   }
   rowChanged(state, row);
 }
@@ -1260,16 +1262,20 @@ function createToolPart(
   return part;
 }
 
+const toolPartSizes = new EncodedObjectSizes();
+
 /**
  * Charge only what a patch added.
  *
  * Tool cards are rewritten in place on every streaming frame, so billing the
  * whole part each time would re-charge a one-megabyte diff per frame and force
- * a full transcript re-serialization behind it.
+ * a full transcript re-serialization behind it. The measurement itself skips
+ * string fields that did not change and pays only the new suffix of one that
+ * grew.
  */
 function chargeToolPart(state: SessionState, part: BridgeToolPart): void {
   const source = toolSourceStates.get(part) ?? {};
-  const size = Buffer.byteLength(JSON.stringify(part));
+  const size = toolPartSizes.measure(part);
   chargeTranscript(state, Math.max(0, size - (source.chargedBytes ?? 0)));
   source.chargedBytes = size;
   toolSourceStates.set(part, source);

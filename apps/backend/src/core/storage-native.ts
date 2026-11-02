@@ -102,6 +102,7 @@ import {
   type NativeAgentDisplayTailDeletion,
 } from "./native-agent-display-tail-store.js";
 import type { StorageContext } from "./storage-context.js";
+import { FrozenStoreSnapshot } from "./storage-frozen-snapshot.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 
@@ -170,11 +171,24 @@ export type StorageLayerTypes = [
 ];
 
 export class NativeAgentSessionsRepository {
+  private readonly sessionsSnapshot: FrozenStoreSnapshot<PersistedNativeAgentSession[]>;
+
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
     private readonly repos: StorageRepositories,
-  ) {}
+  ) {
+    this.sessionsSnapshot = new FrozenStoreSnapshot(context, {
+      filePath: files.nativeAgentSessionsFile(),
+      // Records this build cannot read are left out, as listNativeAgentSessions
+      // leaves them out.
+      build: (rows) =>
+        rows.flatMap((row) =>
+          isPersistedNativeAgentSession(row.decoded, row.key) ? [row.decoded] : [],
+        ),
+      load: () => this.listNativeAgentSessions(),
+    });
+  }
 
   /**
    * Gives every session whose environment exists an owner. Runs at each start
@@ -430,6 +444,17 @@ export class NativeAgentSessionsRepository {
    */
   async listNativeAgentSessions(): Promise<PersistedNativeAgentSession[]> {
     return Object.values((await this.loadNativeAgentSessions()).sessions);
+  }
+
+  /**
+   * {@link listNativeAgentSessions} from one decoded copy shared per store
+   * revision (`FrozenStoreSnapshot`), for read-only background callers such as
+   * the activity sweep. Every session object is frozen, so a caller that
+   * changes one must use {@link listNativeAgentSessions}. The array itself is
+   * a fresh copy.
+   */
+  async readNativeAgentSessionsSnapshot(): Promise<PersistedNativeAgentSession[]> {
+    return [...(await this.sessionsSnapshot.read())];
   }
 
   /**

@@ -263,9 +263,39 @@ function installBrowserPreviewPins(
       diagnostics.byRule[next.rule] = (diagnostics.byRule[next.rule] ?? 0) + 1;
     }
     if (budget.exhausted) diagnostics.budgetExhausted += 1;
+    observeShadowRoots();
     const moved = place();
     if (changed && !moved) revision += 1;
     return changed || moved;
+  };
+
+  // A document observer never sees inside a shadow root, so each open root
+  // the resolver entered is observed too (the kit bounds how many it reports).
+  let observer: MutationObserver | null = null;
+  const observedRoots: ShadowRoot[] = [];
+  const OBSERVE_OPTIONS = { childList: true, subtree: true, characterData: true };
+  const observeShadowRoots = (): void => {
+    if (!observer) return;
+    const current = kit
+      .shadowRootsSeen()
+      .filter((root) => root.host.isConnected)
+      .slice(0, 64);
+    if (
+      current.length === observedRoots.length &&
+      current.every((root, index) => root === observedRoots[index])
+    )
+      return;
+    observer.disconnect();
+    observedRoots.length = 0;
+    observer.observe(document.documentElement, OBSERVE_OPTIONS);
+    for (const root of current) {
+      try {
+        observer.observe(root, OBSERVE_OPTIONS);
+        observedRoots.push(root);
+      } catch {
+        // A root that cannot be observed still resolves on the next pass.
+      }
+    }
   };
 
   for (const query of config.queries.slice(0, 50)) pins.push(makePin(query));
@@ -345,7 +375,6 @@ function installBrowserPreviewPins(
     }
     return true;
   };
-  let observer: MutationObserver | null = null;
   const Observer = (window as unknown as { MutationObserver?: typeof MutationObserver })
     .MutationObserver;
   if (typeof Observer === "function" && pins.length > 0) {
@@ -360,11 +389,8 @@ function installBrowserPreviewPins(
       }
       schedulePass();
     });
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
+    observer.observe(document.documentElement, OBSERVE_OPTIONS);
+    observeShadowRoots();
   }
   const onVisibility = (): void => {
     if (!hidden() && dirty) schedulePass();

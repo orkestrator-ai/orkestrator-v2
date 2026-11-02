@@ -47,6 +47,11 @@ export interface LeadingPartReplacement {
 export interface OldestFirstTrimOptions<TMessage extends TrimCandidateMessage> {
   /** Custom measurement, for tests; defaults to {@link encodedJsonBytes}. */
   measure?: (value: unknown) => number;
+  /**
+   * Encoded size of each message, already known — from
+   * {@link TranscriptRowSizes} — so the plan measures only parts.
+   */
+  messageSizes?: readonly number[];
   /** The replacement for the message whose parts are about to be trimmed, if any. */
   leadingReplacement?: (message: TMessage) => LeadingPartReplacement;
 }
@@ -83,8 +88,12 @@ export function planOldestFirstTrim<TMessage extends TrimCandidateMessage>(
   options: OldestFirstTrimOptions<TMessage> = {},
 ): OldestFirstTrimPlan {
   const measure = options.measure ?? encodedJsonBytes;
-  const sizes = messages.map((message) => measure(message));
-  let measuredValues = sizes.length;
+  const known = options.messageSizes;
+  if (known && known.length !== messages.length) {
+    throw new Error("planOldestFirstTrim: messageSizes must describe every message");
+  }
+  const sizes = known ? known.slice() : messages.map((message) => measure(message));
+  let measuredValues = known ? 0 : sizes.length;
   let total = sizes.reduce((sum, size) => sum + size, 0);
   let count = messages.length;
   let bytes = jsonArrayBytes(count, total);
@@ -185,6 +194,7 @@ export interface TranscriptLimits {
 export function boundTranscriptInPlace(
   state: BoundableTranscriptState,
   limits: TranscriptLimits,
+  rowSizes?: TranscriptRowSizes,
 ): boolean {
   let changed = false;
 
@@ -201,6 +211,7 @@ export function boundTranscriptInPlace(
     if (message.parts.length <= limits.maxPartsPerMessage) continue;
     const removed = message.parts.length - limits.maxPartsPerMessage;
     (message.parts as unknown[]).splice(0, removed);
+    rowSizes?.invalidateRow(message);
     state.droppedParts += removed;
     state.transcriptTruncated = true;
     changed = true;
@@ -211,7 +222,9 @@ export function boundTranscriptInPlace(
   // large idle session does not pay a second full serialization.
   state.uncheckedTranscriptBytes = 0;
 
-  const plan = planOldestFirstTrim(state.messages, limits.maxTranscriptBytes);
+  const plan = planOldestFirstTrim(state.messages, limits.maxTranscriptBytes, {
+    messageSizes: rowSizes?.measureRows(state.messages),
+  });
   if (plan.droppedMessages > 0) {
     const dropped = state.messages.splice(0, plan.droppedMessages);
     state.droppedMessages += dropped.length;
@@ -224,9 +237,214 @@ export function boundTranscriptInPlace(
   // user is watching keeps its most recent output.
   if (plan.droppedParts > 0) {
     (state.messages[0]!.parts as unknown[]).splice(0, plan.droppedParts);
+    rowSizes?.invalidateRow(state.messages[0]!);
     state.droppedParts += plan.droppedParts;
     state.transcriptTruncated = true;
     changed = true;
   }
   return changed;
+}
+
+/**
+ * Verify every remembered size against a fresh measurement and throw on a
+ * mismatch. On under `bun test` (`NODE_ENV=test`), so each bridge suite proves
+ * its write paths note every row they change; off in production, where it
+ * would cost the serialization the cache exists to avoid.
+ */
+const VERIFY_REMEMBERED_SIZES = process.env.NODE_ENV === "test";
+
+export interface RememberedSizeOptions {
+  /** Re-measure every remembered size and throw when one is stale. */
+  verify?: boolean;
+}
+
+/** Thrown in verification mode when a remembered size no longer matches. Content-free. */
+export class StaleTranscriptSizeError extends Error {
+  constructor(kind: "row" | "part", remembered: number, measured: number) {
+    super(
+      `Remembered transcript ${kind} size is stale (${remembered} bytes remembered, ` +
+        `${measured} measured): a write path changed it without noting the change`,
+    );
+    this.name = "StaleTranscriptSizeError";
+  }
+}
+
+/**
+ * Encoded sizes of a transcript's rows, remembered between exact bounds.
+ *
+ * A dirty read used to serialize every retained row to learn whether the
+ * transcript was still inside its budget, although only the rows that changed
+ * since the last bound can have moved. This remembers each row's size and
+ * re-measures only:
+ *
+ * - the newest row, always, because streaming writes into it without noting
+ *   anything; and
+ * - any row whose id was passed to {@link invalidate} since it was measured.
+ *   The bridges call it from the same hook that records a row for
+ *   `revisedMessageIds` (`noteRowRevised`, ACP's `noteRevisedRow`), which every
+ *   in-place change to an older row must already reach, or readers would keep
+ *   a stale copy of it.
+ *
+ * A remembered size is also tied to the row object it was taken from and to
+ * the row that followed it, so a replaced history, a reused id, or a row that
+ * became the newest again when the rows after it were removed (and may have
+ * been streamed into since) is measured afresh.
+ *
+ * Bounds: one entry per retained row other than the newest, rebuilt on every
+ * measurement, so never more than the transcript's own message cap.
+ */
+export class TranscriptRowSizes {
+  #rows = new Map<string, RememberedRow>();
+  readonly #verify: boolean;
+
+  constructor(options: RememberedSizeOptions = {}) {
+    this.#verify = options.verify ?? VERIFY_REMEMBERED_SIZES;
+  }
+
+  /** The row `id` changed in place; measure it again next time. */
+  invalidate(id: string): void {
+    this.#rows.delete(id);
+  }
+
+  /** {@link invalidate} for a row object, when it has an id. */
+  invalidateRow(row: object): void {
+    const id = rowId(row);
+    if (id !== undefined) this.#rows.delete(id);
+  }
+
+  /** Forget every remembered size: the history was replaced. */
+  clear(): void {
+    this.#rows.clear();
+  }
+
+  /** Remembered entries, for tests of the count bound. */
+  get size(): number {
+    return this.#rows.size;
+  }
+
+  /**
+   * The encoded size of each of `messages`, exactly as {@link encodedJsonBytes}
+   * would report it, measuring only the rows that may have changed.
+   */
+  measureRows(messages: readonly object[], measure = encodedJsonBytes): number[] {
+    const previous = this.#rows;
+    const next = new Map<string, RememberedRow>();
+    const newest = messages.length - 1;
+    const sizes = messages.map((row, index) => {
+      const id = rowId(row);
+      const known = id === undefined ? undefined : previous.get(id);
+      const follower = messages[index + 1];
+      let bytes: number;
+      if (index < newest && known?.row === row && known.follower === follower) {
+        bytes = known.bytes;
+        if (this.#verify) {
+          const measured = measure(row);
+          if (measured !== bytes) throw new StaleTranscriptSizeError("row", bytes, measured);
+        }
+      } else {
+        bytes = measure(row);
+      }
+      if (follower && id !== undefined) next.set(id, { row, follower, bytes });
+      return bytes;
+    });
+    this.#rows = next;
+    return sizes;
+  }
+}
+
+interface RememberedRow {
+  row: object;
+  /** The row after it when measured; the newest row is never remembered. */
+  follower: object;
+  bytes: number;
+}
+
+function rowId(row: object): string | undefined {
+  const id = (row as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
+}
+
+/**
+ * Exact encoded sizes of flat objects rewritten in place — tool cards — that
+ * re-measure only the string fields that changed.
+ *
+ * A tool card is rewritten on every streaming frame, and charging it meant
+ * serializing the whole card each time: up to half a megabyte of output per
+ * frame of a running command. Strings are immutable, so a string field whose
+ * value is the one last measured costs nothing, and one that extends it (the
+ * usual streaming shape) costs its new suffix plus one prefix comparison.
+ * Object and array fields can be mutated in place, so they are measured every
+ * time.
+ *
+ * The result is exactly `encodedJsonBytes(object)`.
+ *
+ * Bounds: per live object (held weakly), one entry per string field it holds,
+ * each referencing a string the object held when last measured.
+ */
+export class EncodedObjectSizes {
+  #fields = new WeakMap<object, Map<string, { value: string; bytes: number }>>();
+  readonly #verify: boolean;
+
+  constructor(options: RememberedSizeOptions = {}) {
+    this.#verify = options.verify ?? VERIFY_REMEMBERED_SIZES;
+  }
+
+  measure(object: object): number {
+    let fields = this.#fields.get(object);
+    if (!fields) {
+      fields = new Map();
+      this.#fields.set(object, fields);
+    }
+    let bytes = 2;
+    let members = 0;
+    for (const key of Object.keys(object)) {
+      const value = (object as Record<string, unknown>)[key];
+      if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+        fields.delete(key);
+        continue;
+      }
+      let valueBytes: number;
+      if (typeof value === "string") {
+        valueBytes = encodedStringBytes(value, fields.get(key));
+        fields.set(key, { value, bytes: valueBytes });
+      } else {
+        fields.delete(key);
+        valueBytes = encodedJsonBytes(value);
+      }
+      bytes += encodedJsonBytes(key) + 1 + valueBytes;
+      members += 1;
+    }
+    if (fields.size > members) {
+      for (const key of Array.from(fields.keys())) {
+        if (!Object.hasOwn(object, key)) fields.delete(key);
+      }
+    }
+    bytes += Math.max(0, members - 1);
+    if (this.#verify) {
+      const measured = encodedJsonBytes(object);
+      if (measured !== bytes) throw new StaleTranscriptSizeError("part", bytes, measured);
+    }
+    return bytes;
+  }
+}
+
+/** Encoded bytes of `JSON.stringify(value)`, from the previous value when `value` extends it. */
+function encodedStringBytes(
+  value: string,
+  previous: { value: string; bytes: number } | undefined,
+): number {
+  if (previous) {
+    if (previous.value === value) return previous.bytes;
+    const before = previous.value;
+    if (value.length > before.length && value.startsWith(before)) {
+      const suffix = value.slice(before.length);
+      // JSON escapes each UTF-16 unit on its own except a surrogate pair:
+      // apart, each half is a six-byte `\uXXXX`; together, four UTF-8 bytes.
+      const high = before.charCodeAt(before.length - 1);
+      const low = suffix.charCodeAt(0);
+      const splitPair = high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+      return previous.bytes + jsonStringContentBytes(suffix) - (splitPair ? 8 : 0);
+    }
+  }
+  return Buffer.byteLength(JSON.stringify(value));
 }

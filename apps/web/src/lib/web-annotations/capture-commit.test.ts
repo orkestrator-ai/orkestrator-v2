@@ -11,6 +11,7 @@ import { useWebAnnotationStore } from "@/stores/webAnnotationStore";
 import {
   commitPendingCapture,
   resultCaptureMetadata,
+  withAdvertisedShadowScope,
   withAdvertisedSourceHints,
 } from "./capture-commit";
 import { forgetCaptureIntent, rememberCaptureIntent } from "./capture-intents";
@@ -144,6 +145,70 @@ describe("source hint capability gate", () => {
         capture: { evidence: { sourceHints?: unknown } };
       };
       expect(args.capture.evidence.sourceHints).toEqual(expected);
+    });
+  }
+});
+
+describe("shadow-root targets follow the backend's advertisement", () => {
+  const shadowScope = {
+    kind: "shadow" as const,
+    hosts: [{ tagName: "app-shell", cssPath: "html > body > app-shell" }],
+  };
+
+  beforeEach(() => {
+    backend = new FakeWebAnnotationBackend("env-1").install();
+  });
+  afterEach(() => {
+    invokeMock.mockImplementation(() => Promise.resolve());
+  });
+
+  function shadowRecord(captureId: string) {
+    const fake = createFakeCaptureApi();
+    const record = seedPending(fake.spool, { captureId, image: null });
+    const target = record.capture.target;
+    if (target.kind !== "element") throw new Error("expected an element fixture");
+    record.capture = {
+      ...record.capture,
+      target: { ...target, anchor: { ...target.anchor, scope: shadowScope } },
+    };
+    return { fake, record };
+  }
+
+  test("leaves non-shadow targets alone either way", () => {
+    const record = seedPending(createFakeCaptureApi().spool, { captureId: "cap-plain" });
+    expect(withAdvertisedShadowScope(record.capture, false)).toBe(record.capture);
+  });
+
+  for (const [label, advertised, expected] of [
+    ["sends the root path when the backend advertises it", true, shadowScope],
+    [
+      "sends the older unsupported scope when the backend does not advertise it",
+      false,
+      { kind: "unsupported", reason: "shadow-root" },
+    ],
+    [
+      "sends the older unsupported scope to a backend without the flag",
+      undefined,
+      { kind: "unsupported", reason: "shadow-root" },
+    ],
+  ] as const) {
+    test(label, async () => {
+      useWebAnnotationStore.getState().update("env-1", () => ({
+        capabilities: fixtureCapabilities({ shadowTargets: advertised }),
+        capabilityStatus: "available",
+      }));
+      const { fake, record } = shadowRecord(`cap-shadow-${String(advertised)}`);
+      await commitPendingCapture({
+        api: fake.api,
+        environmentId: "env-1",
+        captureId: record.descriptor.captureId,
+        record,
+        input: { body: "Inside a component." },
+      });
+      const args = backend.callsOf("web_annotation_create")[0]!.args as {
+        capture: { target: { anchor: { scope: unknown } } };
+      };
+      expect(args.capture.target.anchor.scope).toEqual(expected);
     });
   }
 });

@@ -17,7 +17,10 @@ import {
   EnvironmentNameShimmer,
   EnvironmentNameSignalMarker,
 } from "@/components/environments/EnvironmentNameShimmer";
-import { useEnvironmentIdNameSignal } from "@/hooks/useEnvironmentNameSignal";
+import {
+  useEnvironmentIdNameSignal,
+  useShimmerRequiresChecks,
+} from "@/hooks/useEnvironmentNameSignal";
 import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import { useConfigStore } from "@/stores/configStore";
@@ -281,6 +284,7 @@ export function ProjectSearchBar({
   const recentProjectIds = useUIStore((state) => state.recentProjectIds);
   const recentKeys = useMachineViewStore((state) => state.recentKeys);
   const repositories = useConfigStore((state) => state.config.repositories);
+  const requireChecks = useShimmerRequiresChecks();
   const federation = useFederation();
   const machineViews = useMachineViews();
   // Other machines are searched in a multi-machine view only; each row is
@@ -318,9 +322,17 @@ export function ProjectSearchBar({
         environments,
         defaultBranches,
       }),
-      ...remoteMachines.map(machineSearchSource),
+      ...remoteMachines.map((machine) => machineSearchSource(machine, requireChecks)),
     ],
-    [backendId, boundMachine, defaultBranches, environments, projects, remoteMachines],
+    [
+      backendId,
+      boundMachine,
+      defaultBranches,
+      environments,
+      projects,
+      remoteMachines,
+      requireChecks,
+    ],
   );
   // Recently used on any machine, newest first, then this machine's older
   // recent projects (recorded before cross-machine recents existed).

@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
   IMAGE_CAPABILITIES,
@@ -15,6 +16,7 @@ import {
 import * as dockerImage from "../src/core/docker-image";
 import { environmentInputStatus } from "../src/core/portable-input-status";
 import {
+  INPUT_LIMITS,
   SHARED_SKILLS_INPUT,
   SHARED_SKILL_READERS,
   portableInputSpec,
@@ -498,5 +500,173 @@ describe("linked skill entries (task 2)", () => {
       "fixture-shared/scripts/run.sh",
     ]);
     await expectNoSentinels(containerHome);
+  });
+});
+
+describe("review security regressions", () => {
+  for (const unsafe of ["home", "root", "ancestor", "profile"]) {
+    test(`shared source refuses ${unsafe}`, async () => {
+      const f = await sharedSkillsFixture();
+      const profile = path.join(f.root, "profile");
+      await fs.mkdir(profile);
+      await fs.rm(f.agents, { recursive: true });
+      const target =
+        unsafe === "home"
+          ? f.home
+          : unsafe === "root"
+            ? path.parse(f.home).root
+            : unsafe === "profile"
+              ? profile
+              : f.root;
+      await fs.symlink(target, f.agents);
+      const staged = await stagePortableInputs(
+        f.dataDir,
+        "unsafe",
+        new Set([SHARED_SKILLS_INPUT]),
+        {
+          home: profile,
+          agentTest: true,
+          agentTestHostHome: f.home,
+        },
+      );
+      expect(staged.mounts).toEqual([]);
+      expect(staged.providers[0]?.files).toBe(0);
+      expect(staged.providers[0]?.skipped.symlink).toBe(1);
+    });
+  }
+
+  test("safe relocated shared roots still stage", async () => {
+    const f = await sharedSkillsFixture();
+    const relocated = path.join(f.root, "dotfiles-skills");
+    await fs.rename(f.agents, relocated);
+    await fs.symlink(relocated, f.agents);
+    const staged = await stage(f, [SHARED_SKILLS_INPUT]);
+    expect(await listFiles(path.join(staged.directory, "agents-skills"))).toContain(
+      "fixture-shared/SKILL.md",
+    );
+  });
+
+  test("a benign alias cannot hide sensitive source ancestry", async () => {
+    const f = await sharedSkillsFixture();
+    for (const sensitive of ["credentials", "secrets", "tokens", ".ssh"]) {
+      const target = path.join(f.agents, sensitive, "skill");
+      await write(path.join(target, "SKILL.md"), skill("sensitive"));
+      await write(path.join(target, "data.txt"), "SENTINEL-OPAQUE");
+      await fs.symlink(target, path.join(f.claude, `helper-${sensitive}`));
+    }
+    const staged = await stage(f, ["claude"]);
+    expect(staged.providers[0]?.skipped["credential-withheld"]).toBe(5);
+    expect((await listFiles(staged.directory)).some((file) => file.includes("helper-"))).toBe(
+      false,
+    );
+    await expectNoSentinels(staged.directory);
+  });
+
+  for (const swap of ["inode", "ancestry"]) {
+    test(`mid-copy ${swap} swap discards the skill without consuming sibling budget`, async () => {
+      const f = await sharedSkillsFixture();
+      const parent = path.join(f.agents, "race-parent");
+      const target = path.join(parent, "race");
+      await write(path.join(target, "SKILL.md"), "race");
+      const codex = path.join(f.home, ".codex", "skills");
+      await fs.mkdir(codex, { recursive: true });
+      await fs.symlink(target, path.join(codex, "a-race"));
+      await write(path.join(codex, "z-sibling", "SKILL.md"), "ok");
+      const original = fsPromises.lstat;
+      let targetReads = 0;
+      let swapped = false;
+      const hook = spyOn(fsPromises, "lstat").mockImplementation((async (
+        ...args: Parameters<typeof original>
+      ) => {
+        if (args[0] === target && ++targetReads === 3) {
+          // before, initial ancestry, then post-copy identity check.
+          const moved = `${swap === "inode" ? target : parent}-old`;
+          await fs.rename(swap === "inode" ? target : parent, moved);
+          if (swap === "inode") await write(path.join(target, "SKILL.md"), "replacement");
+          else await fs.symlink(moved, parent);
+          swapped = true;
+        }
+        return original(...args);
+      }) as typeof original);
+      let staged;
+      try {
+        staged = await stagePortableInputs(
+          f.dataDir,
+          "race",
+          new Set(["codex"]),
+          { home: f.home, agentTest: false },
+          new Date(),
+          {
+            ...INPUT_LIMITS,
+            totalEntries: 1,
+            totalBytes: 4,
+          },
+        );
+      } finally {
+        hook.mockRestore();
+      }
+      expect(swapped).toBe(true);
+      await expect(
+        fs.lstat(path.join(staged.directory, "codex-home", "skills", "a-race")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await listFiles(path.join(staged.directory, "codex-home", "skills"))).toEqual([
+        "z-sibling/SKILL.md",
+      ]);
+      expect(staged.providers[0]).toMatchObject({
+        files: 1,
+        bytes: 2,
+        skipped: { "changed-while-reading": 1 },
+      });
+    });
+  }
+
+  test("Codex materializes cross-provider links and imports siblings per entry", async () => {
+    const f = await sharedSkillsFixture();
+    const codex = path.join(f.home, ".codex", "skills");
+    await fs.mkdir(codex, { recursive: true });
+    await write(path.join(f.grok, "grok-only", "SKILL.md"), "grok");
+    await fs.symlink(path.join(f.grok, "grok-only"), path.join(codex, "alias"));
+    await fs.symlink(f.home, path.join(codex, "rejected"));
+    await write(path.join(codex, "oversized", "SKILL.md"), "x".repeat(200));
+    await write(path.join(codex, "sibling", "SKILL.md"), "ok");
+    const staged = await stagePortableInputs(
+      f.dataDir,
+      "codex-links",
+      new Set(["codex", "grok"]),
+      { home: f.home, agentTest: false },
+      new Date(),
+      { ...INPUT_LIMITS, fileBytes: 100 },
+    );
+    const entrypoint = await fs.readFile(ENTRYPOINT, "utf8");
+    const copy = entrypoint
+      .split("\n")
+      .find((line) => line.includes("copy_agent_directory_entries /codex-home"))!;
+    expect(copy).toBeDefined();
+    // Exercise the entrypoint boundary independently of backend rejection.
+    await write(
+      path.join(staged.directory, "codex-home", "skills", "too-big.txt"),
+      "x".repeat(200),
+    );
+    await fs.symlink(f.home, path.join(staged.directory, "codex-home", "skills", "planted"));
+    const containerHome = path.join(f.root, "container-home");
+    runEntrypoint(
+      [entrypointHelpers(entrypoint), copy.replaceAll("/codex-home", '"$CODEX_SOURCE"')].join("\n"),
+      {
+        containerHome,
+        root: f.root,
+        env: {
+          CODEX_SOURCE: path.join(staged.directory, "codex-home"),
+          AGENT_COPY_MAX_FILE_BYTES: "100",
+        },
+      },
+    );
+    expect(await listFiles(path.join(containerHome, ".codex", "skills"))).toEqual([
+      "alias/SKILL.md",
+      "sibling/SKILL.md",
+    ]);
+    expect(staged.providers.find((p) => p.provider === "codex")?.skipped).toMatchObject({
+      symlink: 1,
+      "too-large": 1,
+    });
   });
 });

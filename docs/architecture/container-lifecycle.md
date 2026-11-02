@@ -675,7 +675,7 @@ provided by staging. Older extension trees retain their existing policy.
 A linked entry is skipped, like any link below a home entry, with one
 exception (input spec version 5, todo
 [2170](../todo/containers-and-environments/2170-shared-and-linked-skills-in-containers.md)):
-a top-level entry of a skill root (Claude's, Grok's and Pi's `skills`, and
+a top-level entry of a skill root (Claude's, Codex's, Grok's and Pi's `skills`, and
 `~/.agents/skills`) that links to a skill. It is staged as a real directory
 when its resolved target is a directory holding a regular `SKILL.md`, strictly
 inside `~/.agents/skills` or a skill root of a provider staged in the same
@@ -686,8 +686,10 @@ credential guard always applies to the copy, and the target's identity is
 checked again after copying, so a directory swapped in mid-copy is discarded
 (`changed-while-reading`). Every other link counts as `symlink`. This covers
 the `npx skills` layout, where `~/.claude/skills/<name>` links to
-`~/.agents/skills/<name>`. Codex's `skills` is copied as one tree, so a link
-inside it is still skipped.
+`~/.agents/skills/<name>`. Codex skills also copy per entry so rejected or
+oversized skills do not discard siblings. The shared source itself uses the
+same home/root refusal, and linked source ancestry is credential-checked
+before copying under an alias.
 Claude `skills` and Grok `commands` were added in input spec version 3; an
 image built before then copies neither until the environment is rebuilt on a
 newer image. `/agents-skills` needs `staged-inputs=4`: the backend stages it

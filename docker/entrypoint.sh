@@ -1075,13 +1075,14 @@ if [ -d /codex-home ]; then
     # (Mach-O on macOS) that cannot run inside the Linux container.
     for dir in \
         rules \
-        skills \
         prompts \
         vendor_imports \
         plugins/cache
     do
         copy_agent_directory /codex-home "$HOME/.codex" "$dir" Codex
     done
+
+    copy_agent_directory_entries /codex-home "$HOME/.codex" skills Codex
 
     chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.codex/auth.json" codex Codex

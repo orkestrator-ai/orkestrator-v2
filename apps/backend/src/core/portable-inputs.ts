@@ -374,9 +374,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           ],
           directories: [
             { path: "rules", mode: "tree" },
-            // A tree: its links are skipped, but a linked skill elsewhere may
-            // resolve into it.
-            { path: "skills", mode: "tree", skills: true },
+            { path: "skills", mode: "entries", skills: true },
             { path: "prompts", mode: "tree" },
             { path: "vendor_imports", mode: "tree" },
             // plugins/.plugin-appserver holds host-platform binaries.
@@ -691,6 +689,14 @@ function isStrictlyInside(child: string, parent: string): boolean {
   return relative !== "" && !path.isAbsolute(relative) && relative.split(path.sep)[0] !== "..";
 }
 
+/** Refuse roots broad enough to expose an entire source home. */
+function safeSkillRoot(real: string, homes: readonly string[]): boolean {
+  return (
+    real !== path.parse(real).root &&
+    !homes.some((home) => home === real || isStrictlyInside(home, real))
+  );
+}
+
 /**
  * The real paths a linked skill may resolve into: `~/.agents/skills` and the
  * skill roots of the providers staged in this run. A root that resolves to
@@ -713,8 +719,7 @@ async function linkedSkillRoots(
       for (const directory of source.directories ?? []) {
         if (!directory.skills) continue;
         const real = await realpath(path.join(source.root, directory.path)).catch(() => null);
-        if (!real || real === path.parse(real).root) continue;
-        if (realHomes.some((home) => home === real || isStrictlyInside(home, real))) continue;
+        if (!real || !safeSkillRoot(real, realHomes)) continue;
         roots.add(real);
       }
     }
@@ -839,9 +844,18 @@ class ProviderCopier {
     await assertNoSymlinkAncestry(container, `${path.relative(container, target)}/SKILL.md`);
     const marker = await lstat(path.join(target, "SKILL.md")).catch(() => null);
     if (!marker?.isFile()) throw new Skip("symlink");
+    const sourceRelative = path.relative(container, target).split(path.sep).join("/");
+    // Reject sensitive source ancestry even when the destination uses a benign alias.
+    extensionCredentialGuard(sourceRelative)(Buffer.alloc(0));
     await this.tree(target, destinationRoot, relative, [], true, async () => {
       const after = await lstat(target).catch(() => null);
       if (!after || after.ino !== before.ino || after.dev !== before.dev) {
+        throw new Skip("changed-while-reading");
+      }
+      try {
+        await assertNoSymlinkAncestry(container, `${sourceRelative}/SKILL.md`);
+        if ((await realpath(link)) !== target) throw new Skip("changed-while-reading");
+      } catch {
         throw new Skip("changed-while-reading");
       }
     });
@@ -935,9 +949,9 @@ class ProviderCopier {
       if (!stat) return;
       if (stat.isSymbolicLink()) throw new Skip("symlink");
       if (!stat.isDirectory()) throw new Skip("not-regular");
-      const names = (await readdir(directory)).filter(
-        (name) => !(spec.exclude ?? []).includes(name),
-      );
+      const names = (await readdir(directory))
+        .sort()
+        .filter((name) => !(spec.exclude ?? []).includes(name));
       if (names.length > this.limits.directoryEntries) throw new Skip("too-many-entries");
       for (const name of names) {
         try {
@@ -1001,10 +1015,12 @@ export async function stagePortableInputs(
   const mounts: StagedMount[] = [];
   try {
     const specs = portableInputSpec(roots);
-    const skillRoots = await linkedSkillRoots(specs, providers, [
-      roots.home,
-      ...(roots.agentTestHostHome ? [roots.agentTestHostHome] : []),
-    ]);
+    const homes = await Promise.all(
+      [roots.home, ...(roots.agentTestHostHome ? [roots.agentTestHostHome] : [])].map((home) =>
+        realpath(home).catch(() => path.resolve(home)),
+      ),
+    );
+    const skillRoots = await linkedSkillRoots(specs, providers, homes);
     for (const spec of specs) {
       if (!providers.has(spec.provider)) continue;
       const copier = new ProviderCopier(spec.provider, total, limits, skillRoots);
@@ -1014,6 +1030,10 @@ export async function stagePortableInputs(
         // was (a dotfiles manager may link it); nothing below it is followed.
         const root = await realpath(source.root).catch(() => null);
         if (!root) continue;
+        if (spec.provider === SHARED_SKILLS_INPUT && !safeSkillRoot(root, homes)) {
+          copier.skip("symlink");
+          continue;
+        }
         const stageRoot = path.join(partial, source.stage);
         for (const file of source.files ?? []) {
           await copier.file(root, file, stageRoot, source.filteredFiles?.[file]);

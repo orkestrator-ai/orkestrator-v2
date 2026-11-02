@@ -1,20 +1,4 @@
-# Shared and linked user skills do not reach containers
-
-Checked against `main` at `93b99bfba` (2026-11-01).
-
-Since 0015 task 3 (2026-11-01) a container gets the host's `~/.claude/skills`
-and `~/.grok/commands`, but only entries that are real directories and files.
-Two common layouts still leave a container's skill list shorter than the
-host's:
-
-- `~/.agents/skills`, the shared root Codex, Grok, OpenCode and Cursor read
-  (`rootSpecsFor` in `apps/backend/src/core/agent-skills.ts`), is not staged
-  for any provider.
-- A skill linked into a provider root, typically `~/.claude/skills/<name>`
-  linking to `~/.agents/skills/<name>` (an `npx skills` install), is a
-  symlink. Staging never follows a link below a home entry
-  (`portable-inputs.ts`, [`container-lifecycle.md`](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs)),
-  so it is skipped and counted as `symlink`.
+# Shared and linked user skills in containers
 
 ## Task analysis
 
@@ -170,13 +154,19 @@ keep their earlier policy, because a link reaches content that root did not
 hold. A refused link keeps the existing `symlink` reason rather than a new
 one, so the status UI and its counts are unchanged.
 
-### Task 2: Codex's tree-mode `skills` still skips links
+### Task 2: Codex skills copy per entry
 
-Codex's `skills` is copied as one tree (`copy_agent_directory` in the
-entrypoint), so a link inside it is still skipped. It is an allowed target
-root. Codex reads `~/.agents/skills` itself, so the `npx skills` layout does
-not need a link there; converting it to per-entry copying was left out of
-scope.
+Review repair: Codex now uses per-entry staging and entrypoint copying, including
+valid top-level links. This replaces the earlier tree-mode decision: a skill
+stored only in another provider root must reach Codex through its alias too.
+Per-entry bounds preserve siblings when one skill is rejected or oversized.
+
+### Tasks 1 and 2: shared-root and alias safety
+
+Review repair: apply the safe-root validator to direct shared staging as well
+as allowed link roots. Reject credential-bearing resolved source ancestry
+before copying a linked skill. Recheck ancestry and link resolution after the
+copy as well as target identity, with deterministic swap regression tests.
 
 ### Shared skills in the entrypoint stay self-contained
 

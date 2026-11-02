@@ -1,7 +1,14 @@
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
-import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { useEffect } from "react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  TerminalProvider,
+  useTerminalContext,
+  type CreateTabOptions,
+} from "@/contexts/TerminalContext";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { BuildChatTab } from "./BuildChatTab";
+import { keyInformation } from "./key-information-test-fixture";
 import {
   pipeline,
   renderTab,
@@ -15,63 +22,6 @@ import {
  */
 
 afterAll(restoreBuildChatTabMocks);
-
-const keyInformation: BuildPipelineKeyInformation = {
-  framing: "objective",
-  statement: "Show the pipeline's status at a glance.",
-  context: "The build tab only showed a temporary banner.",
-  solution: "A key information panel in the header.",
-  workDone: ["Added the panel", "Added the agent tools"],
-  decisions: [
-    {
-      decision: "Where to store the brief",
-      options: [
-        {
-          option: "On the pipeline record",
-          pros: ["One source of truth"],
-          cons: ["Bigger record"],
-        },
-        { option: "In a separate file", pros: ["Small record"], cons: ["Second store"] },
-      ],
-      chosen: "On the pipeline record",
-      rationale: "Every client already syncs the record.",
-    },
-  ],
-  notDone: ["Rich text formatting"],
-  tests: [
-    { name: "bun test key-information", result: "passed" },
-    { name: "mise run test:browser", result: "not-run", details: "Not needed here." },
-  ],
-  issues: [
-    {
-      round: 0,
-      issue: "Missing bound on decisions",
-      severity: "P1",
-      resolution: "Bounded to twelve decisions.",
-      status: "resolved",
-    },
-  ],
-  verifications: [
-    {
-      round: 0,
-      passed: false,
-      summary: "One criterion failed.",
-      checks: [
-        { check: "Header shows the timer", passed: true },
-        { check: "Panel lists decisions", passed: false, details: "Pros were missing." },
-      ],
-    },
-  ],
-  updatedAt: "2026-11-01T10:00:00.000Z",
-  updates: [
-    {
-      at: "2026-11-01T10:00:00.000Z",
-      author: "verify",
-      round: 0,
-      sections: ["verification"],
-    },
-  ],
-};
 
 function header(): HTMLElement {
   return screen.getByTestId("build-pipeline-header");
@@ -223,5 +173,106 @@ describe("BuildChatTab key information", () => {
     });
     const panel = screen.getByRole("dialog", { name: "Key information" });
     expect(within(panel).getByText(keyInformation.statement!)).toBeTruthy();
+  });
+});
+
+describe("BuildChatTab key information as a tab", () => {
+  let tabOpens = true;
+  const createTab = mock((_type: string, _options?: CreateTabOptions) => tabOpens);
+
+  /** Registers `createTab` the way the terminal container does. */
+  function TabOpener() {
+    const { setCreateTab } = useTerminalContext();
+    useEffect(() => {
+      setCreateTab(createTab);
+      return () => setCreateTab(null);
+    }, [setCreateTab]);
+    return null;
+  }
+
+  function renderWithTabs(next: BuildPipeline) {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[next.id, next]]),
+      buildEnvironmentIds: new Set([next.environmentId]),
+    });
+    render(
+      <TerminalProvider>
+        <TabOpener />
+        <BuildChatTab
+          data={{
+            pipelineId: next.id,
+            environmentId: next.environmentId,
+            taskId: next.taskId,
+            isLocal: true,
+          }}
+        />
+      </TerminalProvider>,
+    );
+  }
+
+  const expectedTab = (): [string, CreateTabOptions] => [
+    "key-information",
+    { keyInformation: { environmentId: reviewed.environmentId, pipelineId: reviewed.id } },
+  ];
+
+  beforeEach(() => {
+    cleanup();
+    createTab.mockClear();
+    tabOpens = true;
+  });
+
+  test("the panel's pop-out button turns the panel into the pipeline's tab", () => {
+    renderWithTabs({ ...reviewed, keyInformation, backendRevision: 96 });
+    const panel = openPanel();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Open key information in a tab" }));
+
+    expect(createTab).toHaveBeenCalledTimes(1);
+    expect(createTab.mock.calls[0]).toEqual(expectedTab());
+    expect(screen.queryByRole("dialog", { name: "Key information" }) === null).toBe(true);
+  });
+
+  test("keeps the panel open when the tab cannot be shown", () => {
+    tabOpens = false;
+    renderWithTabs({ ...reviewed, keyInformation, backendRevision: 97 });
+    const panel = openPanel();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Open key information in a tab" }));
+
+    expect(createTab).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog", { name: "Key information" })).toBeTruthy();
+  });
+
+  test("right-clicking the header button opens the tab without showing the panel", () => {
+    renderWithTabs({ ...reviewed, keyInformation, backendRevision: 98 });
+    const button = within(header()).getByRole("button", { name: /Key information/ });
+
+    const notPrevented = fireEvent.contextMenu(button);
+
+    expect(notPrevented).toBe(false);
+    expect(createTab).toHaveBeenCalledTimes(1);
+    expect(createTab.mock.calls[0]).toEqual(expectedTab());
+    expect(screen.queryByRole("dialog", { name: "Key information" }) === null).toBe(true);
+  });
+
+  test("right-clicking while the panel is open replaces the panel with the tab", () => {
+    renderWithTabs({ ...reviewed, keyInformation, backendRevision: 99 });
+    openPanel();
+
+    fireEvent.contextMenu(within(header()).getByRole("button", { name: /Key information/ }));
+
+    expect(createTab).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog", { name: "Key information" }) === null).toBe(true);
+  });
+
+  test("offers no pop-out where no tab can be opened", () => {
+    renderTab({ ...reviewed, keyInformation, backendRevision: 100 });
+    const button = within(header()).getByRole("button", { name: /Key information/ });
+    const panel = openPanel();
+
+    expect(
+      within(panel).queryByRole("button", { name: "Open key information in a tab" }) === null,
+    ).toBe(true);
+    expect(fireEvent.contextMenu(button)).toBe(true);
   });
 });

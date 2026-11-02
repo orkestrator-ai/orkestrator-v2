@@ -41,6 +41,7 @@ import { isDesignFilePath, openDesignFile } from "@/components/design/design-ope
 import { openDesignCanvasTab } from "@/components/design/design-open-tab";
 import { openGraphDesignerTab } from "@/components/graph-designer/graph-designer-open-tab";
 import { openGraphRunTab } from "@/components/graph-run/graph-run-open-tab";
+import { openKeyInformationTab } from "@/components/build-pipeline/key-information-open-tab";
 import {
   onGraphRunViewRequested,
   takePendingGraphRunView,
@@ -1306,6 +1307,19 @@ export function TerminalContainer({
           allTabs,
           maxTabs: MAX_TABS,
           run: options.graphRun,
+          addTab,
+          onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
+        });
+      }
+
+      if (type === "key-information") {
+        if (!options?.keyInformation) return false;
+        return openKeyInformationTab({
+          environmentId,
+          activePaneId,
+          allTabs,
+          maxTabs: MAX_TABS,
+          target: options.keyInformation,
           addTab,
           onTabLimit: () => showTabLimitReachedToast(MAX_TABS),
         });

@@ -1,0 +1,48 @@
+import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { KeyInformationTabData, TabInfo } from "@/types/paneLayout";
+
+/**
+ * Opens a build pipeline's key information in its own `key-information` tab.
+ * There is one tab per pipeline: opening it again focuses that tab rather
+ * than counting a new one, so it is resolved before the tab limit. Kept free
+ * of the tab view's own modules, which load lazily.
+ */
+export function openKeyInformationTab(options: {
+  environmentId: string;
+  activePaneId: string;
+  allTabs: readonly Pick<TabInfo, "id" | "type" | "keyInformationTabData">[];
+  maxTabs: number;
+  target: KeyInformationTabData;
+  addTab: (paneId: string, tab: TabInfo, environmentId: string) => void;
+  onTabLimit: () => void;
+}): boolean {
+  const { environmentId, target } = options;
+  if (!target.pipelineId || target.environmentId !== environmentId) return false;
+  const store = usePaneLayoutStore.getState();
+  const openTab = options.allTabs.find(
+    (tab) =>
+      tab.type === "key-information" && tab.keyInformationTabData?.pipelineId === target.pipelineId,
+  );
+  if (openTab) {
+    const pane = store.findPaneWithTab(openTab.id, environmentId);
+    if (!pane) return false;
+    store.setActivePane(pane.id, environmentId);
+    store.setActiveTab(pane.id, openTab.id, environmentId);
+    return true;
+  }
+  if (options.allTabs.length >= options.maxTabs) {
+    options.onTabLimit();
+    return false;
+  }
+  options.addTab(
+    options.activePaneId,
+    {
+      id: createUniqueTabId("key-information"),
+      type: "key-information",
+      keyInformationTabData: { environmentId, pipelineId: target.pipelineId },
+    },
+    environmentId,
+  );
+  return true;
+}

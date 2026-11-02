@@ -3,6 +3,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   FileCode,
+  FileText,
   GitPullRequest,
   Globe2,
   Paintbrush,
@@ -142,9 +143,14 @@ export function DraggableTab({
 
   // Get build pipeline title for claude-build tabs
   const buildPipelineTitle = useBuildPipelineStore((state) => {
-    if (tab.type !== "claude-build" || !tab.buildTabData) return undefined;
-    const pipeline = state.pipelines.get(tab.buildTabData.pipelineId);
-    return pipeline?.taskTitle;
+    const pipelineId =
+      tab.type === "claude-build"
+        ? tab.buildTabData?.pipelineId
+        : tab.type === "key-information"
+          ? tab.keyInformationTabData?.pipelineId
+          : undefined;
+    if (!pipelineId) return undefined;
+    return state.pipelines.get(pipelineId)?.taskTitle;
   });
   const multiReviewPhase = useMultiReviewStore((state) => {
     if (tab.type !== "multi-review" || !tab.multiReviewTabData) return undefined;
@@ -223,6 +229,11 @@ export function DraggableTab({
     if (isBuildTab(tab.type) && buildPipelineTitle) {
       return `Build: ${buildPipelineTitle}`;
     }
+    if (tab.type === "key-information") {
+      return buildPipelineTitle
+        ? `Key info: ${buildPipelineTitle}`
+        : `Key information ${tabNumber}`;
+    }
 
     if (tab.type === "agent-native") {
       const label =
@@ -273,6 +284,8 @@ export function DraggableTab({
     if (tab.type === "graph-designer")
       return <Network className="h-3 w-3 shrink-0 text-indigo-400" />;
     if (tab.type === "graph-run") return <Workflow className="h-3 w-3 shrink-0 text-indigo-400" />;
+    if (tab.type === "key-information")
+      return <FileText className="h-3 w-3 shrink-0 text-amber-400" />;
     if (tab.type === "browser") {
       return <Globe2 className="h-3 w-3 shrink-0 text-sky-400" />;
     }

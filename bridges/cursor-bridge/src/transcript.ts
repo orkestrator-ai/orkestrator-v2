@@ -15,12 +15,13 @@ import {
   MAX_PARTS_PER_MESSAGE,
   MAX_TRANSCRIPT_BYTES,
 } from "./config.js";
-import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
+import { createBridgeTranscriptBounds } from "@orkestrator/protocol/node/bridge-transcript-bounds";
 import {
-  boundTranscriptInPlace,
-  encodedJsonBytes,
-  type TranscriptLimits,
-} from "@orkestrator/protocol/node/transcript-budget";
+  BoundedTextAppender,
+  boundUtf8Text,
+  sliceUtf8,
+} from "@orkestrator/protocol/node/bridge-transcript-text";
+import { encodedJsonBytes } from "@orkestrator/protocol/node/transcript-budget";
 import {
   saturatedText,
   type BridgeMessage,
@@ -33,11 +34,18 @@ const TRUNCATION_NOTICE = "\n\n[output truncated]";
 /** Maximum charged growth between exact measurements while streaming. */
 export const STREAM_BOUND_INTERVAL_BYTES = Math.min(MAX_TRANSCRIPT_BYTES, 1024 * 1024);
 
-const TRANSCRIPT_LIMITS: TranscriptLimits = {
+const bounds = createBridgeTranscriptBounds<SessionState>({
   maxMessages: MAX_MESSAGES,
   maxPartsPerMessage: MAX_PARTS_PER_MESSAGE,
   maxTranscriptBytes: MAX_TRANSCRIPT_BYTES,
-};
+  streamIntervalBytes: STREAM_BOUND_INTERVAL_BYTES,
+});
+
+const appender = new BoundedTextAppender({
+  notice: TRUNCATION_NOTICE,
+  policy: "append-notice",
+  saturated: saturatedText,
+});
 
 /**
  * Append to a byte-capped buffer, returning the value to store.
@@ -45,6 +53,8 @@ const TRANSCRIPT_LIMITS: TranscriptLimits = {
  * Returns the original reference unchanged once saturated so callers can skip
  * the write entirely; `carrier` is what records saturation, so an already-full
  * part costs one WeakSet lookup per remaining chunk instead of a full re-encode.
+ * It also remembers the buffer's byte length, so a delta is not charged a
+ * fresh measurement of everything before it.
  */
 export function appendBounded(
   carrier: BridgeMessage | BridgeMessagePart,
@@ -52,46 +62,24 @@ export function appendBounded(
   addition: string,
   limit = MAX_MESSAGE_TEXT_BYTES,
 ): string {
-  if (!addition) return current;
-  if (saturatedText.has(carrier)) return current;
-  const currentBytes = Buffer.byteLength(current);
-  const additionBytes = Buffer.byteLength(addition);
-  if (currentBytes + additionBytes <= limit) return current + addition;
-
-  const available = limit - currentBytes - Buffer.byteLength(TRUNCATION_NOTICE);
-  saturatedText.add(carrier);
-  if (available <= 0) {
-    return current.endsWith(TRUNCATION_NOTICE) ? current : current + TRUNCATION_NOTICE;
-  }
-  return current + sliceToBytes(addition, available) + TRUNCATION_NOTICE;
+  return appender.append(current, addition, limit, carrier).value;
 }
 
 /** Truncate a standalone string to a byte budget, marking it when it trims. */
 export function boundText(value: string, limit: number): string {
-  if (Buffer.byteLength(value) <= limit) return value;
-  const available = Math.max(0, limit - Buffer.byteLength(TRUNCATION_NOTICE));
-  return sliceToBytes(value, available) + TRUNCATION_NOTICE;
+  return boundUtf8Text(value, limit, TRUNCATION_NOTICE);
 }
 
 /** Cut a string at a byte budget without splitting a UTF-8 code point. */
-export function sliceToBytes(value: string, limit: number): string {
-  if (limit <= 0) return "";
-  const buffer = Buffer.from(value);
-  if (buffer.length <= limit) return value;
-  // `toString` on a buffer cut mid-sequence yields U+FFFD; walk back to the
-  // last lead byte so the trimmed text stays valid rather than merely short.
-  let end = limit;
-  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end -= 1;
-  return buffer.subarray(0, end).toString("utf8");
-}
+export const sliceToBytes = sliceUtf8;
 
 /**
  * Bring the transcript back inside its budget.
  *
  * Runs the cheap structural bounds first (message count, parts per message)
- * and then measures each retained message exactly once — never the shrinking
- * transcript again per dropped entry. Returns true when anything was dropped,
- * so the caller can bump the revision the renderer watches.
+ * and then the byte bound, which re-measures only the newest row and the rows
+ * noted as changed since the last pass. Returns true when anything was
+ * dropped, so the caller can bump the revision the renderer watches.
  */
 export function boundTranscript(state: SessionState): boolean {
   // Sub-agent bounds first: they are finer-grained, and shedding a chatty
@@ -100,27 +88,10 @@ export function boundTranscript(state: SessionState): boolean {
   for (const row of liveRows(state)) {
     if (boundNestedParts(state, row, undefined, true)) childTrimmed = true;
   }
-  const rowsBefore = state.messages.slice();
-  const partsBefore = rowsBefore.map((row) => row.parts.length);
-  const trimmed = boundTranscriptInPlace(state, TRANSCRIPT_LIMITS);
-  if (trimmed) noteFrontTrimmedRows(state, rowsBefore, partsBefore);
+  // Notes the retained rows that shed parts from their front.
+  const trimmed = bounds.boundTranscript(state);
   if (trimmed || childTrimmed) forgetEvictedOpenText(state);
   return trimmed || childTrimmed;
-}
-
-/**
- * Note the retained rows a bound shed parts from. Rows go only from the front,
- * so what is left lines up with the tail of `rowsBefore`.
- */
-function noteFrontTrimmedRows(
-  state: SessionState,
-  rowsBefore: readonly BridgeMessage[],
-  partsBefore: readonly number[],
-): void {
-  const offset = rowsBefore.length - state.messages.length;
-  state.messages.forEach((row, index) => {
-    if (row.parts.length < partsBefore[index + offset]!) noteRowRevised(state, row.id);
-  });
 }
 
 /**
@@ -160,7 +131,6 @@ export function boundTranscriptDuringStreaming(
 ): void {
   const stats = statsFor(state);
   stats.checks += 1;
-  const newest = state.messages.at(-1);
   // A new nested part is the only thing that can raise a sub-agent's count,
   // so the count check runs exactly then, for exactly those sub-agents, on
   // the row that holds each one's launch card.
@@ -179,14 +149,7 @@ export function boundTranscriptDuringStreaming(
     }
     recordCheckDuration(stats, started);
   }
-  if (
-    grownRowsFit &&
-    state.messages.length <= MAX_MESSAGES &&
-    (newest?.parts.length ?? 0) <= MAX_PARTS_PER_MESSAGE &&
-    state.uncheckedTranscriptBytes < STREAM_BOUND_INTERVAL_BYTES
-  ) {
-    return;
-  }
+  if (grownRowsFit && !bounds.streamingBoundDue(state)) return;
   const started = performance.now();
   stats.exactChecks += 1;
   if (boundTranscript(state)) {
@@ -475,50 +438,31 @@ export function indexedToolCallRow(
  *
  * A late result, a measured command change or a settle can patch a row newer
  * steps have pushed out of the live window, and readers only re-read the
- * window. Held off the state object like the bound counters, so no
- * persistence path can pick it up; a restored session starts with none.
+ * window. Every in-place change to a row other than the newest must reach
+ * `noteRowRevised` (or `rowChanged`): it is also what tells the byte bound to
+ * measure that row again. Held off the state object like the bound counters,
+ * so no persistence path can pick it up; a restored session starts with none.
  */
-const revisedRows = new WeakMap<SessionState, RecentlyRevisedRows>();
-
-/** Note that the row `id` changed in place. */
-export function noteRowRevised(state: SessionState, id: string): void {
-  // The newest row is always inside the live window; only a row that changes
-  // once a newer one exists can be outside it.
-  if (state.messages.at(-1)?.id === id) return;
-  let rows = revisedRows.get(state);
-  if (!rows) {
-    rows = new RecentlyRevisedRows();
-    revisedRows.set(state, rows);
-  }
-  rows.note(id);
-}
+export const noteRowRevised = bounds.noteRowRevised;
 
 /**
  * Record a change to one row: note it and bump the revision readers compare.
  * Every in-place row change goes through here or `noteRowRevised`.
  */
-export function rowChanged(state: SessionState, row: BridgeMessage): void {
-  noteRowRevised(state, row.id);
-  state.revision += 1;
-}
+export const rowChanged: (state: SessionState, row: BridgeMessage) => void = bounds.rowChanged;
 
 /** Lost revision notes require retained-page reconciliation. */
-export function revisedRowsOverflowVersion(state: SessionState): number {
-  return revisedRows.get(state)?.overflowVersion ?? 0;
-}
+export const revisedRowsOverflowVersion = bounds.revisedRowsOverflowVersion;
 
 /** Recently changed row ids, newest first; undefined when there are none. */
-export function revisedRowIds(state: SessionState): string[] | undefined {
-  const ids = revisedRows.get(state)?.ids();
-  return ids && ids.length > 0 ? ids : undefined;
-}
+export const revisedRowIds = bounds.revisedRowIds;
 
 /**
  * Start a new transcript epoch: the history was replaced, not appended to.
  * Ids noted against the old one name nothing in the new one.
  */
 export function startTranscriptEpoch(state: SessionState): void {
-  revisedRows.get(state)?.clear();
+  bounds.forgetRevisedRows(state);
   state.transcriptEpoch = (state.transcriptEpoch ?? 0) + 1;
 }
 
@@ -548,9 +492,7 @@ function parentsByRow(
  * Charges must be upper bounds on encoded growth — see
  * {@link jsonStringContentBytes} — or the streaming bound can fall behind.
  */
-export function chargeTranscript(state: SessionState, bytes: number): void {
-  if (bytes > 0) state.uncheckedTranscriptBytes += bytes;
-}
+export const chargeTranscript = bounds.chargeTranscript;
 
 /**
  * The notice left where a sub-agent's oldest steps were dropped.

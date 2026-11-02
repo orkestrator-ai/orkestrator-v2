@@ -88,3 +88,10 @@ Artifact paths are below the host temporary directory:
 No unrelated implementation, assertion, timeout or skip was changed. The
 aggregate results remain non-green; passing owner reruns do not turn those
 results into passing aggregate runs.
+
+
+## MCP provenance review — 2026-11-02
+
+The four-worker `ORKESTRATOR_E2E_PORT=15473 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=4 mise run test:logged -- --name browser -- mise run test:browser` run repeated the missing Codex child card on desktop: `Agent Linus (worker)` count zero instead of one at five seconds (`CodexSubagentCards.spec.ts:84`, test at line 185). The complete desktop owner passed unchanged in the two-worker `browser-specific-owner` run (60.1 s, alongside the CreateEnvironmentDialog owner). The same two-owner desktop check passed on independently installed detached origin/main `38d55ee14` in 59.5 s (`main-browser-specific`). This is intermittent; the cause remains unestablished.
+
+Branch command: `ORKESTRATOR_E2E_PORT=15475 mise run test:logged -- --name browser-specific-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/CodexSubagentCards.spec.ts e2e/CreateEnvironmentDialog.spec.ts --project=desktop-chromium --workers=2 --output=output/visual-previews/browser-specific-results`. Aggregate evidence: host temporary directory `orkestrator-test-run.ZlAiMU/browser.log` (compressed at finalization). No owner, assertion, deadline or skip changed.

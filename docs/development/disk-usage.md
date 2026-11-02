@@ -77,11 +77,13 @@ destination folder; the worktree keeps its folder name inside it, and every
 file moves with it, including uncommitted changes, `node_modules` and other
 ignored files. The project home cannot be moved.
 
-- On the same disk this is `git worktree move` (a rename). Across disks the
-  worktree is copied to a staging folder next to the destination, renamed into
-  place, `git worktree repair` points the repository at it, and only then is
-  the old folder removed. Worktrees with submodules use this copy path even
-  on the same disk; nested submodule Git links are repaired at the destination.
+- On the same disk this is `git worktree move` (a rename). git will not move
+  a worktree with submodules, so that one is renamed directly, then
+  `git worktree repair` points the repository at it and its nested submodule
+  Git links are repaired; nothing is copied. Across disks (the rename reports
+  `EXDEV`) the worktree is copied to a staging folder next to the destination,
+  renamed into place and repaired the same way, and only then is the old
+  folder removed.
 - The move is refused while an agent in the environment is working or waiting
   for input, while setup runs, and while another lifecycle operation (delete,
   merge, rebuild) is in progress. An admitted file write or worker start must

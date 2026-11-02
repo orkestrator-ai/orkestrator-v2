@@ -1523,3 +1523,228 @@ test.each(["stop", "delete", "move"] as const)(
   },
   30_000,
 );
+
+// git refuses to move a worktree with submodules even within one disk; that
+// move is a rename, and only another disk copies.
+describe("same-disk move of a worktree git will not move", () => {
+  function countCopies() {
+    const run = shell.runCommand;
+    const calls = { copies: 0 };
+    spyOn(shell, "runCommand").mockImplementation(async (command, args, options) => {
+      if (command === "cp") calls.copies++;
+      return run(command, args, options);
+    });
+    return calls;
+  }
+
+  test("renames the folder instead of copying it", async () => {
+    const { root, projectPath, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const from = environment.worktreePath!;
+    await addNestedSubmodules(root, projectPath, from);
+    await fs.mkdir(path.join(from, "node_modules", "dep"), { recursive: true });
+    await fs.writeFile(path.join(from, "node_modules", "dep", "index.js"), "ignored");
+    const inode = (await fs.stat(path.join(from, "node_modules", "dep", "index.js"))).ino;
+    const calls = countCopies();
+    const destination = path.join(root, "deeper", "elsewhere");
+
+    const moved = await moveEnvironmentTask(environment.id, destination, context, {
+      sessionHomes: isolatedHomes(root),
+    });
+
+    const to = path.join(destination, path.basename(from));
+    expect(calls.copies).toBe(0);
+    expect(moved.worktreePath).toBe(to);
+    expect(moved.lifecycleError).toBeFalsy();
+    expect(moved.worktreeMove).toBeUndefined();
+    expect((await fs.stat(path.join(to, "node_modules", "dep", "index.js"))).ino).toBe(inode);
+    expect(await exists(from)).toBe(false);
+    expect(await registeredWorktrees(projectPath)).toContain(to);
+    expect(await registeredWorktrees(projectPath)).not.toContain(from);
+    await expectSubmodulesLinked(to);
+    expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(to);
+  });
+
+  test("copies only when the rename reports another disk", async () => {
+    const { root, projectPath, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const from = environment.worktreePath!;
+    await addNestedSubmodules(root, projectPath, from);
+    const destination = path.join(root, "elsewhere");
+    const to = path.join(destination, path.basename(from));
+    const rename = fs.rename.bind(fs);
+    spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      if (source === from && target === to) {
+        throw Object.assign(new Error("EXDEV: cross-device link not permitted"), {
+          code: "EXDEV",
+        });
+      }
+      return rename(source, target);
+    });
+    const calls = countCopies();
+
+    const moved = await moveEnvironmentTask(environment.id, destination, context, {
+      sessionHomes: isolatedHomes(root),
+    });
+
+    expect(calls.copies).toBe(1);
+    expect(moved.worktreePath).toBe(to);
+    expect(moved.lifecycleError).toBeFalsy();
+    expect(await exists(from)).toBe(false);
+    expect(await registeredWorktrees(projectPath)).toContain(to);
+    await expectSubmodulesLinked(to);
+  });
+
+  test("a failed repair after the rename puts the folder back", async () => {
+    const { root, projectPath, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const from = environment.worktreePath!;
+    await addNestedSubmodules(root, projectPath, from);
+    const destination = path.join(root, "elsewhere");
+    const to = path.join(destination, path.basename(from));
+    const run = shell.runCommand;
+    spyOn(shell, "runCommand").mockImplementation(async (command, args, options) => {
+      if (command === "git" && args?.includes("repair") && args.includes(to)) {
+        throw new Error("repair failed");
+      }
+      return run(command, args, options);
+    });
+
+    await expect(
+      moveEnvironmentTask(environment.id, destination, context, {
+        sessionHomes: isolatedHomes(root),
+      }),
+    ).rejects.toThrow("repair failed");
+
+    expect(await exists(to)).toBe(false);
+    const current = (await storage.getEnvironment(environment.id))!;
+    expect(current.worktreePath).toBe(from);
+    expect(current.worktreeMove).toBeUndefined();
+    expect(await registeredWorktrees(projectPath)).toContain(from);
+    await expectSubmodulesLinked(from);
+  });
+
+  test.each(["repair", "relink"])(
+    "a failed source %s after rename-back retains recovery until all links are repaired",
+    async (failure) => {
+      const { root, projectPath, storage, context, startLocal } = await setup();
+      const environment = await startLocal();
+      const from = environment.worktreePath!;
+      await addNestedSubmodules(root, projectPath, from);
+      const destination = path.join(root, "elsewhere");
+      const to = path.join(destination, path.basename(from));
+      const run = shell.runCommand;
+      let fail = true;
+      const commandSpy = spyOn(shell, "runCommand").mockImplementation(
+        async (command, args, options) => {
+          if (fail && command === "git") {
+            // Destination repair succeeds, but relinking fails. Rename-back then
+            // succeeds before either source repair or source relinking fails.
+            if (args?.[0] === "config" && args.includes("core.worktree"))
+              throw new Error("relink failed");
+            if (failure === "repair" && args?.includes("repair") && args.includes(from))
+              throw new Error("source repair failed");
+          }
+          return run(command, args, options);
+        },
+      );
+
+      await expect(
+        moveEnvironmentTask(environment.id, destination, context, {
+          sessionHomes: isolatedHomes(root),
+        }),
+      ).rejects.toThrow("relink failed");
+      expect(await exists(from)).toBe(true);
+      expect(await exists(to)).toBe(false);
+      expect((await storage.getEnvironment(environment.id))?.worktreeMove?.phase).toBe("moving");
+      expect(() =>
+        context.runtime.environments.fence.assertAcceptsAgentWork(environment.id),
+      ).toThrow("recovery");
+
+      // A restart while the source is still unrepairable must also keep the
+      // journal and fence, including when only a submodule relink fails.
+      await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+      expect((await storage.getEnvironment(environment.id))?.worktreeMove).toBeDefined();
+      expect(() =>
+        context.runtime.environments.fence.assertAcceptsAgentWork(environment.id),
+      ).toThrow("recovery");
+
+      fail = false;
+      await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+      commandSpy.mockRestore();
+      const recovered = (await storage.getEnvironment(environment.id))!;
+      expect(recovered.worktreePath).toBe(from);
+      expect(recovered.worktreeMove).toBeUndefined();
+      expect(() =>
+        context.runtime.environments.fence.assertAcceptsAgentWork(environment.id),
+      ).not.toThrow();
+      expect(await registeredWorktrees(projectPath)).toContain(from);
+      expect(await registeredWorktrees(projectPath)).not.toContain(to);
+      await expectSubmodulesLinked(from);
+    },
+  );
+
+  test("a rejected commit renames the folder back", async () => {
+    const { root, projectPath, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const from = environment.worktreePath!;
+    await addNestedSubmodules(root, projectPath, from);
+    const update = storage.updateEnvironment.bind(storage);
+    spyOn(storage, "updateEnvironment").mockImplementation(async (id, changes) => {
+      if ((changes.worktreeMove as { phase?: string } | undefined)?.phase === "committed")
+        throw new Error("commit rejected");
+      return update(id, changes);
+    });
+    const destination = path.join(root, "moved");
+
+    await expect(
+      moveEnvironmentTask(environment.id, destination, context, {
+        sessionHomes: isolatedHomes(root),
+      }),
+    ).rejects.toThrow("commit rejected");
+
+    expect(await exists(path.join(destination, path.basename(from)))).toBe(false);
+    const current = (await storage.getEnvironment(environment.id))!;
+    expect(current.worktreePath).toBe(from);
+    expect(current.worktreeMove).toBeUndefined();
+    expect(await registeredWorktrees(projectPath)).toContain(from);
+    await expectSubmodulesLinked(from);
+  });
+
+  test("restart recovery adopts a rename that was not repaired", async () => {
+    const { root, projectPath, storage, context, startLocal } = await setup();
+    const environment = await startLocal();
+    const from = environment.worktreePath!;
+    await addNestedSubmodules(root, projectPath, from);
+    const destination = path.join(root, "elsewhere");
+    const to = path.join(destination, path.basename(from));
+    // The folder moved, then the backend lost track before repairing git.
+    const rename = fs.rename.bind(fs);
+    const renameSpy = spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      await rename(source, target);
+      if (source === from && target === to) throw new Error("backend stopped");
+    });
+
+    await expect(
+      moveEnvironmentTask(environment.id, destination, context, {
+        sessionHomes: isolatedHomes(root),
+      }),
+    ).rejects.toThrow("backend stopped");
+    const pending = (await storage.getEnvironment(environment.id))!;
+    expect(pending.worktreePath).toBe(from);
+    expect(pending.worktreeMove?.phase).toBe("moving");
+    expect(pending.worktreeMove?.submodules?.map((entry) => entry.path)).toEqual([
+      "libs/sub",
+      "libs/sub/nested",
+    ]);
+    renameSpy.mockRestore();
+
+    await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+
+    const recovered = (await storage.getEnvironment(environment.id))!;
+    expect(recovered.worktreePath).toBe(to);
+    expect(recovered.worktreeMove).toBeUndefined();
+    expect(await registeredWorktrees(projectPath)).toContain(to);
+    await expectSubmodulesLinked(to);
+  });
+});

@@ -628,6 +628,8 @@ export interface PersistedBuildPipeline {
   environmentId: string;
   snapshot: unknown;
   updatedAt: string;
+  /** Entry into the current complete/failed/paused phase; metadata saves keep it. */
+  activityEndedAt?: string;
   revision: number;
 }
 

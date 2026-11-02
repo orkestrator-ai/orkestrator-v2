@@ -11,11 +11,26 @@
  * Debounced observations refresh the revision-validated shared store before
  * aggregating. Periodic reconciliation catches writes by other backends, and
  * dirty environments survive failed writes, including pipeline deletion.
+ *
+ * The `working -> idle` edge also says what the bell reads
+ * (`buildPipelineCompletionOutcome`): a failure as a failure, a completion as
+ * a completion, and a cancel, pause, stall or deletion as nothing. A stall is
+ * not an end, so a pipeline that stalls and then ends without moving again
+ * rings its real end once, keyed by its record (`recordEnvironmentSessionCompletion`).
  */
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
-import { isBuildPipeline, isWorkingBuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import {
+  type BuildPipeline,
+  isBuildPipeline,
+  isCancelledBuildPipeline,
+  isWorkingBuildPipeline,
+} from "@orkestrator/protocol/build-pipeline";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
-import type { Environment, PersistedBuildPipeline } from "./models.js";
+import type {
+  AgentActivityCompletionOutcome,
+  Environment,
+  PersistedBuildPipeline,
+} from "./models.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -38,6 +53,15 @@ export interface BuildPipelineActivityStorage {
     state: AgentActivityState,
     occurredAt: string,
     source: "build-pipeline",
+    observerId?: string,
+    stale?: boolean,
+    options?: { completionOutcome?: AgentActivityCompletionOutcome },
+  ): Promise<Environment>;
+  recordEnvironmentSessionCompletion(
+    environmentId: string,
+    occurredAt: string,
+    reason: "agent_finished" | "agent_failed",
+    completionKey: string,
   ): Promise<Environment>;
 }
 
@@ -55,16 +79,68 @@ const SYSTEM_TIMERS: BuildPipelineActivityTimers = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
+/**
+ * How a pipeline that is no longer active ended. `quiet` is a stop someone
+ * asked for (a cancel or a pause): they know, and nothing completed.
+ */
+export type BuildPipelineEnd = "complete" | "failed" | "quiet";
+
+export function buildPipelineEnd(
+  pipeline: Pick<BuildPipeline, "phase" | "error" | "failureContext">,
+): BuildPipelineEnd | undefined {
+  if (pipeline.phase === "complete") return "complete";
+  if (pipeline.phase === "failed") return isCancelledBuildPipeline(pipeline) ? "quiet" : "failed";
+  if (pipeline.phase === "paused") return "quiet";
+  return undefined;
+}
+
+/**
+ * What the bell says when the `build-pipeline` source stops working, from the
+ * pipelines that ended while it was: any failure is a failure, and a
+ * completion is a completion. Otherwise nothing completed (a cancel, a pause,
+ * a stall or a deletion), so nothing rings.
+ */
+export function buildPipelineCompletionOutcome(
+  ends: Iterable<BuildPipelineEnd>,
+): AgentActivityCompletionOutcome | undefined {
+  let completed = false;
+  for (const end of ends) {
+    if (end === "failed") return "failed";
+    if (end === "complete") completed = true;
+  }
+  return completed ? undefined : "none";
+}
+
 interface ObservedPipeline {
   environmentId: string;
   working: boolean;
+  /** Would be working but for a stall warning: not an end, so it rings nothing. */
+  stalled: boolean;
+  end?: BuildPipelineEnd;
+  endedAt: string;
+  revision: number;
+}
+
+/** A pipeline this process saw active and then saw end. */
+interface ObservedEnding {
+  environmentId: string;
+  end: BuildPipelineEnd;
+  /** It was stalled, so the source had already gone idle without ringing. */
+  fromStall: boolean;
+  key: string;
 }
 
 function observePipeline(record: PersistedBuildPipeline): ObservedPipeline | null {
   if (!record.environmentId) return null;
+  const snapshot = isBuildPipeline(record.snapshot) ? record.snapshot : null;
   return {
     environmentId: record.environmentId,
-    working: isBuildPipeline(record.snapshot) && isWorkingBuildPipeline(record.snapshot),
+    working: snapshot !== null && isWorkingBuildPipeline(snapshot),
+    stalled:
+      snapshot?.stallWarning !== undefined && isWorkingBuildPipeline({ phase: snapshot.phase }),
+    end: snapshot ? buildPipelineEnd(snapshot) : undefined,
+    endedAt: record.activityEndedAt ?? record.updatedAt,
+    revision: record.revision,
   };
 }
 
@@ -73,6 +149,8 @@ export class BuildPipelineActivity {
   private readonly debounceMs: number;
   private readonly changeTimers = new Map<string, unknown>();
   private readonly pipelines = new Map<string, ObservedPipeline>();
+  /** Ends not yet announced, by pipeline; cleared when their environment's edge is written. */
+  private readonly endings = new Map<string, ObservedEnding>();
   private readonly dirtyEnvironments = new Set<string>();
   private reconcileTimer: unknown = null;
   private retryTimer: unknown = null;
@@ -204,6 +282,7 @@ export class BuildPipelineActivity {
 
   private async refreshPipelines(): Promise<void> {
     const records = await this.storage.listAllBuildPipelines();
+    const previous = new Map(this.pipelines);
     for (const pipeline of this.pipelines.values()) {
       this.dirtyEnvironments.add(pipeline.environmentId);
     }
@@ -213,7 +292,66 @@ export class BuildPipelineActivity {
       if (!observed) continue;
       this.pipelines.set(record.id, observed);
       this.dirtyEnvironments.add(observed.environmentId);
+      this.noteEnding(record.id, previous.get(record.id), observed);
     }
+  }
+
+  /**
+   * Remembers an end this process watched happen. The store's timestamps
+   * alone can miss one: a pipeline can end between the read that saw it
+   * working and the activity write that went `working`.
+   */
+  private noteEnding(
+    pipelineId: string,
+    before: ObservedPipeline | undefined,
+    observed: ObservedPipeline,
+  ): void {
+    if (observed.end === undefined) {
+      // Active again: someone resumed or retried it, so its earlier end is old news.
+      this.endings.delete(pipelineId);
+      return;
+    }
+    const known = this.endings.get(pipelineId);
+    let fromStall: boolean;
+    if (before && before.end === undefined && (before.working || before.stalled)) {
+      fromStall = before.stalled;
+    } else if (known) {
+      fromStall = known.fromStall;
+    } else {
+      return;
+    }
+    this.endings.set(pipelineId, {
+      environmentId: observed.environmentId,
+      end: observed.end,
+      fromStall,
+      key: `build-pipeline:${pipelineId}:${observed.revision}`,
+    });
+  }
+
+  private endingsFor(environmentId: string): Array<[string, ObservedEnding]> {
+    return Array.from(this.endings).filter(([, ending]) => ending.environmentId === environmentId);
+  }
+
+  /**
+   * A stalled pipeline's source already went idle, ringing nothing, so the
+   * edge cannot announce its real end. Ring it once, keyed by the record.
+   */
+  private async announceStalledEnds(environmentId: string): Promise<void> {
+    for (const [pipelineId, ending] of this.endingsFor(environmentId)) {
+      if (ending.fromStall && ending.end !== "quiet") {
+        await this.storage.recordEnvironmentSessionCompletion(
+          environmentId,
+          this.now(),
+          ending.end === "failed" ? "agent_failed" : "agent_finished",
+          ending.key,
+        );
+      }
+      this.endings.delete(pipelineId);
+    }
+  }
+
+  private clearEndings(environmentId: string): void {
+    for (const [pipelineId] of this.endingsFor(environmentId)) this.endings.delete(pipelineId);
   }
 
   private async syncDirtyEnvironments(): Promise<void> {
@@ -236,21 +374,45 @@ export class BuildPipelineActivity {
 
   private async syncEnvironment(environmentId: string): Promise<void> {
     const environment = await this.storage.getEnvironment(environmentId);
-    if (!environment) return;
-    let desired: AgentActivityState = "idle";
-    for (const pipeline of this.pipelines.values()) {
-      if (pipeline.environmentId === environmentId && pipeline.working) {
-        desired = "working";
-        break;
-      }
+    if (!environment) {
+      this.clearEndings(environmentId);
+      return;
     }
-    const current = environment.agentActivitySources?.["build-pipeline"]?.state;
-    if (current === desired || (current === undefined && desired === "idle")) return;
+    const pipelines = Array.from(this.pipelines.values()).filter(
+      (pipeline) => pipeline.environmentId === environmentId,
+    );
+    const desired: AgentActivityState = pipelines.some((pipeline) => pipeline.working)
+      ? "working"
+      : "idle";
+    const source = environment.agentActivitySources?.["build-pipeline"];
+    const current = source?.state;
+    if (current === desired || (current === undefined && desired === "idle")) {
+      // While the source stays working, an end seen meanwhile waits for its edge.
+      if (desired === "idle") await this.announceStalledEnds(environmentId);
+      return;
+    }
+    let completionOutcome: AgentActivityCompletionOutcome | undefined;
+    if (source && current === "working" && desired === "idle") {
+      // The ends this process watched, plus stored phase transitions since the
+      // source went working: recovery after a restart or another backend.
+      // Metadata saves retain that transition time.
+      const since = Date.parse(source.observedAt ?? source.updatedAt);
+      completionOutcome = buildPipelineCompletionOutcome([
+        ...this.endingsFor(environmentId).map(([, ending]) => ending.end),
+        ...pipelines.flatMap((pipeline) =>
+          pipeline.end !== undefined && Date.parse(pipeline.endedAt) >= since ? [pipeline.end] : [],
+        ),
+      ]);
+    }
     await this.storage.setEnvironmentAgentActivity(
       environmentId,
       desired,
       this.now(),
       "build-pipeline",
+      undefined,
+      false,
+      { completionOutcome },
     );
+    if (desired === "idle") this.clearEndings(environmentId);
   }
 }

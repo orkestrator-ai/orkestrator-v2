@@ -214,3 +214,19 @@ artifact directory `orkestrator-test-run.N8qXT0`, `fsmonitor-isolated.log.gz`.
 This observation has no isolated passing result and is an outstanding
 validation limitation, not a newly established flake or an environmental
 excuse. No fsmonitor implementation, assertion, timeout or skip changed.
+
+
+## Backend logger main merge — 2026-11-02
+
+`mise run test:logged -- --name merge-default-tests-recheck -- mise run test`
+while merging `d7054dace` into `8f174e4db` repeated
+`git fsmonitor > a scan retries migration after a transient rev-parse failure`
+(5005.18 ms, 5000 ms budget). Default scheduler reservations for
+workspace/root/bridges/protocol were 5/1/2/1. The aggregate exited 1 in
+282.9 s; the workspace also retained four shifted-link failures and one
+desktop keepalive failure.
+
+The complete unchanged owner passed alone, exit 0 in 3.5 s:
+`mise run test:logged -- --name merge-rerun-git-fsmonitor -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures`.
+No Git implementation, assertion, timeout, or skip changed. Evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

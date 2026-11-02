@@ -464,3 +464,29 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+
+### Pipeline bell repair validation — 2026-11-02
+
+`mise run test:logged -- --name repair-full -- mise run test` at `2617fd20d`
+failed `a cold app-server child > a read already in flight when the settle timer fires does not settle the list` (2048.06ms; timed out).
+The bridge group reserved two workers; evidence is host temporary directory
+`orkestrator-test-run.Db1a7X/bridges.log` (compressed on finalization).
+Unchanged owning-file rerun passed: `mise run test:logged -- --name repair-command-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures`.
+No root cause or independence from the branch is claimed; this case remains open.
+
+
+## Backend logger main merge — 2026-11-02
+
+`mise run test:logged -- --name merge-default-tests-recheck -- mise run test`
+while merging `d7054dace` into `8f174e4db` failed
+`a cold app-server child > an explicit refresh cannot replace the baseline for an already armed delay`
+at line 293: expected `stale`, received `ready` (110.86 ms). Default scheduler
+reservations were workspace/root/bridges/protocol 5/1/2/1; bridges finished
+in 48.2 s. The preceding aggregate passed the bridge group.
+
+The complete unchanged owner passed alone, exit 0 in 1.1 s:
+`mise run test:logged -- --name merge-rerun-codex-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures`.
+No catalogue code, assertion, timeout, or skip changed. The existing settling
+race remains a hypothesis.
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/bridges.log.gz`.

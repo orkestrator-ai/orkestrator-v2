@@ -3,6 +3,7 @@ import {
   activeClaudeCredentials,
   syncContainerClaudeLogin,
   type ClaudeLoginHandover,
+  type ClaudeLoginPassSnapshot,
 } from "./agent-accounts-containers.js";
 import {
   TOKEN_REPLACEMENT_LEAD_MS,
@@ -58,8 +59,15 @@ export const CLAUDE_HOST_REFRESH_RETRY_MS = 60_000;
 export interface ClaudeLoginKeeperOptions {
   /** Have the host's own CLI refresh this account's login if it is about to expire. */
   refreshHostLogin?: (account: ResolvedAgentAccount) => Promise<void>;
-  /** `handover` is the login this pass read, so a sync need not read it again. */
-  syncContainer?: (containerId: string, handover?: ClaudeLoginHandover) => Promise<unknown>;
+  /**
+   * `handover` is the login this pass read and `snapshot` its configuration and
+   * environments, so a sync need not read them again.
+   */
+  syncContainer?: (
+    containerId: string,
+    handover?: ClaudeLoginHandover,
+    snapshot?: ClaudeLoginPassSnapshot,
+  ) => Promise<unknown>;
   readCredentials?: () => Promise<string | undefined>;
   /** The active login as local bridges read it, regardless of the container opt-out. */
   readLocalCredentials?: () => Promise<string | undefined>;
@@ -173,20 +181,24 @@ export class ContainerClaudeLoginKeeper {
     // A second backend on this data directory leaves containers to the writer.
     if (this.context.registryWriterLease?.isHeld() === false) return this.intervalMs;
     const { global } = await this.context.storage.loadConfig();
-    const containers =
+    // Read once per pass and handed to every sync, which re-reads both only
+    // before it actually writes.
+    const environments =
       global.useHostClaudeCredentials === false
         ? []
-        : (await this.context.storage.loadEnvironments()).filter(
-            (environment) =>
-              environment.containerId &&
-              environment.status === "running" &&
-              providerCredentialsAllowed(
-                this.context,
-                global.enabledAgentPlatforms,
-                environment,
-                "claude",
-              ),
-          );
+        : await this.context.storage.loadEnvironments();
+    const snapshot: ClaudeLoginPassSnapshot = { global, environments };
+    const containers = environments.filter(
+      (environment) =>
+        environment.containerId &&
+        environment.status === "running" &&
+        providerCredentialsAllowed(
+          this.context,
+          global.enabledAgentPlatforms,
+          environment,
+          "claude",
+        ),
+    );
     const localBridges =
       this.options.hasLocalTokenBridges?.() ?? hasLocalClaudeTokenBridges(this.context);
     if (containers.length === 0 && !localBridges) return this.intervalMs;
@@ -198,10 +210,13 @@ export class ContainerClaudeLoginKeeper {
     );
     const sync =
       this.options.syncContainer ??
-      ((containerId: string, read?: ClaudeLoginHandover) =>
-        syncContainerClaudeLogin(this.context, containerId, read ? { handover: read } : {}));
+      ((containerId: string, read?: ClaudeLoginHandover, pass?: ClaudeLoginPassSnapshot) =>
+        syncContainerClaudeLogin(this.context, containerId, {
+          ...(read ? { handover: read } : {}),
+          ...(pass ? { snapshot: pass } : {}),
+        }));
     for (const environment of containers) {
-      await sync(environment.containerId!, handover);
+      await sync(environment.containerId!, handover, snapshot);
     }
     return this.nextDelay(login);
   }

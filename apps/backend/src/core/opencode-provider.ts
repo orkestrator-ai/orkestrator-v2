@@ -1,4 +1,7 @@
-import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
+import {
+  HUMAN_PROMPT_OBSERVATION_ROWS,
+  humanPromptObservation,
+} from "@orkestrator/protocol/human-prompts";
 import { OpenCodeSessionPolicy } from "./opencode-session-policy.js";
 import { createOpenCodeSdkClient, type OpencodeClient } from "./opencode-sdk-client.js";
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
@@ -64,6 +67,7 @@ import {
   collectRawOpenCodeSubagentIds,
   hydrateNormalizedOpenCodeSubagents,
   normalizeOpenCodeTranscriptMessages,
+  normalizeOpenCodeTranscriptTail,
   normalizeOpenCodeTerminalState,
   openCodeStructuredPrompt,
 } from "./opencode-messages.js";
@@ -892,9 +896,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async humanPromptOutput(sessionId: string) {
-    const messages = normalizeOpenCodeTranscriptMessages(
+    // The observation scans only the newest rows, so only the messages they
+    // come from are normalised, not the whole retained history every pass.
+    const messages = normalizeOpenCodeTranscriptTail(
       this.streamState.retainedMessages(sessionId) ?? [],
       () => {},
+      HUMAN_PROMPT_OBSERVATION_ROWS,
     );
     return humanPromptObservation(messages);
   }

@@ -20,3 +20,17 @@ fails three related link-routing tests deterministically, alone, on clean `main`
 separate failure rather than a flake, and may share a cause.
 
 Hypothesis, not proven: state shared across the workspace run decides the routing.
+
+## Main merge recurrence, 2026-11-02
+
+Merging `origin/main` at `d7054dace` into backend logger branch `8f174e4db`
+repeated all four failures in `mise run test:logged -- --name merge-default-tests -- mise run test`
+(default scheduler: workspace five slots, root one, bridges two, protocol one).
+Each assertion failed in under 1 ms with no routed request. The unchanged owner
+passed through `test:logged` as `merge-rerun-terminal-links`, running
+`bun test --cwd apps/web ./src/lib/terminal-links.test.ts --parallel=1 --only-failures`
+(exit 0, 0.3 s). The separate Claude terminal owner still failed its three
+documented deterministic assertions when rerun alone (23 pass, three fail).
+
+Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.0XP13L/`
+(`workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`).

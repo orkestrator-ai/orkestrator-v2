@@ -123,11 +123,13 @@ import {
   grokStagingHome,
   stagePortableInputs,
   stagedInputMountArguments,
+  withSharedSkillsInput,
 } from "./portable-inputs.js";
 import { pruneEnvironmentInputRevisions, selectedInputProviders } from "./portable-input-status.js";
 import type { ContainerStorageIdentity } from "@orkestrator/protocol/container-lifecycle";
 import {
   imageCopiesCursorMcpConfig,
+  imageCopiesSharedSkills,
   imageRelaysStagedInputs,
 } from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
@@ -437,9 +439,14 @@ export async function createDockerContainer(
     : null;
   // An entrypoint older than Cursor's copy would ignore `/cursor-config`, and
   // staging it anyway would report Cursor's MCP servers as delivered.
-  const stagedProviders = imageCopiesCursorMcpConfig(stagingCapabilities)
-    ? inputProviders
-    : new Set([...inputProviders].filter((provider) => provider !== "cursor"));
+  // Likewise an entrypoint older than the shared-skills copy would ignore
+  // `/agents-skills`.
+  const stagedProviders = withSharedSkillsInput(
+    imageCopiesCursorMcpConfig(stagingCapabilities)
+      ? inputProviders
+      : new Set([...inputProviders].filter((provider) => provider !== "cursor")),
+    imageCopiesSharedSkills(stagingCapabilities),
+  );
   const stagedInputs = stagingCapabilities?.["staged-inputs"]
     ? await stagePortableInputs(context.storage.getDataDir(), environment.id, stagedProviders, {
         ...defaultInputSourceRoots(context.runtimeFlavor, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV),

@@ -656,6 +656,7 @@ Staged per provider (`portableInputSpec`):
 | Grok | `/grok-home`, `/grok-config` | `xai-api-key`, `auth.json` (access-only), `config.toml`, `trusted_folders.toml`, `agent_id`, `models_cache.json`, `hooks`, `skills`, `commands`; `~/.config/grok` |
 | Pi | `/pi-config` | `agent/auth.json` (access-only), `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills`, `prompts`, `extensions`, `themes` |
 | Cursor (`staged-inputs=2`) | `/cursor-config` | `mcp.json` only, copied to `~/.cursor/mcp.json` mode `0600`; never account or login state, IDE state, hooks, plugins, extensions, `sdk/` or `cli-config.json` (the login arrives through the key sync) |
+| Shared skills (`staged-inputs=4`) | `/agents-skills` | `~/.agents/skills`, one unit per top-level entry with the credential guard, copied to `~/.agents/skills`. Staged once, as the `shared-skills` summary entry, when Codex, Cursor, Grok, OpenCode or Pi is staged (`SHARED_SKILL_READERS`; Claude does not read it). It holds no login, so it has no revoke action |
 | Git | `/tmp/gitconfig` | `~/.gitconfig` (not in agent-test profiles) |
 
 User-authored extension directories (Claude's `commands`, `skills`,
@@ -671,14 +672,28 @@ or contents. This is defense in depth, not arbitrary-secret detection: keep
 credentials outside extension bundles and supply required secrets explicitly
 through the environment's credential configuration. No secret-file opt-in is
 provided by staging. Older extension trees retain their existing policy.
-A linked entry is skipped, like any link below a
-home entry, so a skill `~/.claude/skills` links in from `~/.agents/skills` (an
-`npx skills` install) is not staged and counts as `symlink`; `~/.agents/skills`
-itself is not staged for any provider (todo
-[2170](../todo/containers-and-environments/2170-shared-and-linked-skills-in-containers.md)).
+A linked entry is skipped, like any link below a home entry, with one
+exception (input spec version 5, todo
+[2170](../todo/containers-and-environments/2170-shared-and-linked-skills-in-containers.md)):
+a top-level entry of a skill root (Claude's, Codex's, Grok's and Pi's `skills`, and
+`~/.agents/skills`) that links to a skill. It is staged as a real directory
+when its resolved target is a directory holding a regular `SKILL.md`, strictly
+inside `~/.agents/skills` or a skill root of a provider staged in the same
+run (Codex's `skills` included), with no link between that root and the
+skill. A skill root that resolves to `/`, a home or an ancestor of one is
+never an allowed target. Links inside the skill are still skipped, the
+credential guard always applies to the copy, and the target's identity is
+checked again after copying, so a directory swapped in mid-copy is discarded
+(`changed-while-reading`). Every other link counts as `symlink`. This covers
+the `npx skills` layout, where `~/.claude/skills/<name>` links to
+`~/.agents/skills/<name>`. Codex skills also copy per entry so rejected or
+oversized skills do not discard siblings. The shared source itself uses the
+same home/root refusal, and linked source ancestry is credential-checked
+before copying under an alias.
 Claude `skills` and Grok `commands` were added in input spec version 3; an
 image built before then copies neither until the environment is rebuilt on a
-newer image.
+newer image. `/agents-skills` needs `staged-inputs=4`: the backend stages it
+only for an image whose entrypoint copies it (`imageCopiesSharedSkills`).
 
 An image at `staged-inputs=1` has no `/cursor-config` copy, so its Cursor
 sessions get no user MCP servers until the environment is rebuilt on a newer

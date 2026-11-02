@@ -67,7 +67,7 @@ Users and isolation:
   shared hook through `/etc/zsh/zshrc`, reads prompt configuration from
   `/etc/starship.toml` through `STARSHIP_CONFIG`, and retains repository-owned
   Git aliases plus native Zsh completion without Oh My Zsh.
-- Staged inputs (`staged-inputs=3`): the backend's staged mounts are
+- Staged inputs (`staged-inputs=4`, which adds `/agents-skills`): the backend's staged mounts are
   owner-only and belong to its user, so `node` cannot read them under
   rootless Docker (they are container root's) or on a rootful daemon whose
   host user is not uid 1000 (GitHub's runners). The root entrypoint relays

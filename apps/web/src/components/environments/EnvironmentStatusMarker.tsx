@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import { MachineDot } from "@/components/federation/MachineDot";
+import { useTimelineSyncedAnimations } from "@/hooks/useTimelineSyncedAnimations";
 import { cn } from "@/lib/utils";
 import type { AgentActivityState } from "@/types";
 
@@ -21,7 +23,8 @@ const HALO_CLASSES: Record<EnvironmentMarkerState, string> = {
  * environments have no halo. Only the ring around the dot moves; the machine
  * colour stays a steady identity. Forced colours replace both with static solid
  * (working) or dashed (waiting) system-colour outlines. Without a machine to
- * name (a single-machine client) the dot is a neutral fill.
+ * name (a single-machine client) the dot is a neutral fill. Every row's ring
+ * runs on the shared document timeline, so the spinners turn in step.
  */
 export function EnvironmentStatusMarker({
   local,
@@ -35,6 +38,8 @@ export function EnvironmentStatusMarker({
 }) {
   const shape = local ? "circle" : "square";
   const rounded = shape === "square" ? "rounded-[4px]" : "rounded-full";
+  const ringRef = useRef<HTMLSpanElement>(null);
+  useTimelineSyncedAnimations(ringRef, `${shape}:${state}`);
   return (
     <span
       data-testid="environment-status-marker"
@@ -43,6 +48,7 @@ export function EnvironmentStatusMarker({
       className="relative isolate inline-flex size-4 shrink-0 items-center justify-center"
     >
       <span
+        ref={ringRef}
         data-testid="environment-status-ring"
         aria-hidden="true"
         className={cn(

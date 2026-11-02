@@ -582,13 +582,23 @@ export class BuildPipelinesRepository {
       ) {
         throw new Error(`An active build already exists for ${reservation}`);
       }
+      const updatedAt = nowIso();
+      const phase = storedSnapshot.phase;
+      const ending = phase === "complete" || phase === "failed" || phase === "paused";
+      const previousPhase = isRecord(previous?.snapshot) ? previous.snapshot.phase : undefined;
+      const activityEndedAt = ending
+        ? previous && previousPhase === phase
+          ? (previous.activityEndedAt ?? previous.updatedAt)
+          : updatedAt
+        : undefined;
       const record: PersistedBuildPipeline = {
         version,
         id: pipelineId,
         projectId,
         environmentId,
         snapshot: storedSnapshot,
-        updatedAt: nowIso(),
+        updatedAt,
+        activityEndedAt,
         revision: (previous?.revision ?? 0) + 1,
       };
       await this.buildPipelineTranscriptStore().ensureReferencesImported(

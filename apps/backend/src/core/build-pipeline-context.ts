@@ -488,34 +488,46 @@ export class BuildPipelineContext {
     });
   }
 
-  async mutate(
-    pipelineId: string,
-    mutation: (pipeline: BuildPipeline) => void | Promise<void>,
-    reserveCodeRewind?: (pipeline: BuildPipeline) => boolean,
-  ): Promise<BuildPipeline> {
+  /**
+   * Runs `work` under the pipeline's lock, after any pass or mutation already
+   * holding it, without finishing a pending code rewind first. Everything that
+   * continues the build goes through `mutate` instead; this is for work that
+   * ends it, such as deleting a pipeline whose reset can never finish.
+   */
+  async withLock<T>(pipelineId: string, work: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(pipelineId) ?? Promise.resolve();
-    let result: BuildPipeline | undefined;
+    let result: T | undefined;
     const next = previous
       .catch(() => undefined)
       .then(async () => {
-        const record = await this.requireRecord(pipelineId);
-        const pipeline = record.snapshot as BuildPipeline;
-        pipeline.backendRevision = record.revision;
-        await this.finishPendingCodeRewind(pipeline);
-        const commit = async () => {
-          await mutation(pipeline);
-          await this.save(pipeline, pipeline.backendRevision);
-          await this.finishPendingCodeRewind(pipeline);
-          result = pipeline;
-        };
-        if (reserveCodeRewind?.(pipeline)) await this.withCodeRewindReservation(pipeline, commit);
-        else await commit();
+        result = await work();
       })
       .finally(() => {
         if (this.locks.get(pipelineId) === next) this.locks.delete(pipelineId);
       });
     this.locks.set(pipelineId, next);
     await next;
-    return result!;
+    return result as T;
+  }
+
+  async mutate(
+    pipelineId: string,
+    mutation: (pipeline: BuildPipeline) => void | Promise<void>,
+    reserveCodeRewind?: (pipeline: BuildPipeline) => boolean,
+  ): Promise<BuildPipeline> {
+    return this.withLock(pipelineId, async () => {
+      const record = await this.requireRecord(pipelineId);
+      const pipeline = record.snapshot as BuildPipeline;
+      pipeline.backendRevision = record.revision;
+      await this.finishPendingCodeRewind(pipeline);
+      const commit = async () => {
+        await mutation(pipeline);
+        await this.save(pipeline, pipeline.backendRevision);
+        await this.finishPendingCodeRewind(pipeline);
+      };
+      if (reserveCodeRewind?.(pipeline)) await this.withCodeRewindReservation(pipeline, commit);
+      else await commit();
+      return pipeline;
+    });
   }
 }

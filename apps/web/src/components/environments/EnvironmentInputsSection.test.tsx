@@ -93,6 +93,18 @@ describe("environment inputs section", () => {
     expect(revoke.mock.calls[0]?.[0]).toEqual({ environmentId: "env-inputs", provider: "claude" });
   });
 
+  test("labels the shared skills and offers no credential removal for them", async () => {
+    install({
+      get_environment_inputs: () => ({
+        ...staged,
+        providers: [{ provider: "shared-skills", files: 4, bytes: 512, skipped: {} }],
+      }),
+    });
+    render(<EnvironmentInputsSection environmentId="env-inputs" dockerAvailable />);
+    await screen.findByText(/Shared skills · 4 files/);
+    expect(screen.queryAllByRole("button", { name: "Remove credentials" })).toHaveLength(0);
+  });
+
   test("a revoked provider is listed apart and can be allowed again", async () => {
     const restore = mock((_args: Record<string, unknown>) => ({
       provider: "claude",

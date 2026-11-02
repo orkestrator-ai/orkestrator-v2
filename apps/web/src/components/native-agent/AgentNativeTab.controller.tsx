@@ -3051,7 +3051,8 @@ export function SharedNativeAgentController({
         environmentId={data.environmentId}
         setupPhase={environment?.setupPhase}
         subtext={`${label} will connect automatically once setup finishes`}
-        pendingPrompt={startupPromptPreview?.text}
+        pendingPrompt={startupPromptPreview ?? undefined}
+        agentLabel={label}
       />
     );
   }

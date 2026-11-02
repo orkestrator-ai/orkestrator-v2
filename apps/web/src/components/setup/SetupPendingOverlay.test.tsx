@@ -69,7 +69,7 @@ describe("SetupPendingOverlay", () => {
     expect(screen.getByText("Claude will connect automatically")).toBeTruthy();
   });
 
-  test("shows the queued opening prompt while setup runs", () => {
+  test("shows the queued opening prompt as a sent message with the wait beneath it", () => {
     const { rerender } = render(
       <SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="x" />,
     );
@@ -79,11 +79,46 @@ describe("SetupPendingOverlay", () => {
       <SetupPendingOverlay
         environmentId="env-1"
         setupPhase="running"
-        subtext="x"
-        pendingPrompt="Fix the login bug"
+        subtext="Claude will connect automatically"
+        agentLabel="Claude"
+        pendingPrompt={{ text: "Fix the login bug", createdAt: "2026-11-02T10:00:00.000Z" }}
       />,
     );
-    expect(screen.getByTestId("setup-pending-prompt").textContent).toBe("Fix the login bug");
+    const prompt = screen.getByTestId("setup-pending-prompt");
+    expect(prompt.textContent).toContain("Fix the login bug");
+    expect(prompt.textContent).toContain("You");
+    expect(screen.getByRole("status").textContent).toBe("Waiting for setup scripts to complete...");
+    // The transcript layout has no centered spinner or agent subtext.
+    expect(screen.queryByText("Claude will connect automatically") === null).toBe(true);
+  });
+
+  test("the transcript layout keeps skip confirmation and failed-setup recovery", async () => {
+    const pendingPrompt = { text: "Fix the login bug", createdAt: "2026-11-02T10:00:00.000Z" };
+    const { rerender } = render(
+      <SetupPendingOverlay
+        environmentId="env-1"
+        setupPhase="running"
+        subtext="x"
+        pendingPrompt={pendingPrompt}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^skip setup wait$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^skip anyway$/i }));
+    expect(forceResolveSetupRuntime).toHaveBeenCalledWith("env-1");
+    expect(await screen.findByRole("button", { name: /^skip setup wait$/i })).toBeTruthy();
+
+    rerender(
+      <SetupPendingOverlay
+        environmentId="env-1"
+        setupPhase="failed"
+        subtext="x"
+        pendingPrompt={pendingPrompt}
+      />,
+    );
+    expect(screen.getByText("Environment setup failed.")).toBeTruthy();
+    expect(screen.getByTestId("setup-pending-prompt").textContent).toContain("Fix the login bug");
+    fireEvent.click(screen.getByRole("button", { name: /^retry setup$/i }));
+    await waitFor(() => expect(retrySetupRuntime).toHaveBeenCalledWith("env-1"));
   });
 
   test("Skip button requires a confirmation step before firing the override", () => {

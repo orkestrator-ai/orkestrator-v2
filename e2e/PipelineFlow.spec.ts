@@ -645,14 +645,16 @@ test("running package validation keeps Prepare and its display clock live", asyn
   await expect.poll(() => runtime.textContent()).not.toBe(before);
 });
 
-test("Fit zooms the whole pipeline into view", async ({ page }) => {
+test("the zoom level toggles between 100% and the whole pipeline in view", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=loops");
   const controls = page.getByRole("group", { name: "Zoom" });
   const level = page.getByTestId("pipeline-zoom-level");
   const zoomIn = controls.getByRole("button", { name: "Zoom in" });
   while (await zoomIn.isEnabled()) await zoomIn.click();
   await expect(level).toHaveText("200%");
-  await controls.getByRole("button", { name: "Fit the whole pipeline" }).click();
+  await level.click();
+  await expect(level).toHaveText("100%");
+  await level.click();
   await expect
     .poll(async () => Number.parseInt((await level.textContent()) ?? "", 10))
     .toBeLessThanOrEqual(100);

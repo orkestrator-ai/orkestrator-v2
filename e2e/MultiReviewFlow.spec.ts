@@ -300,7 +300,7 @@ test("scrolls the 32-reviewer maximum and zooms within bounds", async ({ page })
   await expect(page.getByRole("tab", { name: /^Reviewer \d+ ·/ })).toHaveCount(32);
   const controls = page.getByRole("group", { name: "Zoom" });
   await expect(controls.getByRole("button")).toHaveCount(4);
-  await expect(page.getByRole("button", { name: "Fit the whole pipeline" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /fit to view/ })).toHaveCount(0);
   const level = page.getByTestId("multi-review-zoom-level");
   await expect(level).toHaveText("100%");
   const boxes = await nodeBoxes(page);

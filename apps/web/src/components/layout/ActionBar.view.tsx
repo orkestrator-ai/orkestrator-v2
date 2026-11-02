@@ -3,7 +3,6 @@ import { RunGraphButton } from "@/components/graph-launch/RunGraphButton";
 import {
   cloneElement,
   createContext,
-  lazy,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -37,10 +36,8 @@ import {
   AlertTriangle,
   Code2,
   Columns3,
-  Container,
   Copy,
   Eye,
-  FolderGit2,
   FolderTree,
   House,
   GitMerge,
@@ -80,7 +77,6 @@ import {
 import { AgentLaunchDialog } from "@/components/launch/AgentLaunchDialog";
 import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
-import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
 import { DEFAULT_MULTI_REVIEW_REVIEWER_COUNT } from "@orkestrator/protocol/agent-settings";
@@ -96,10 +92,6 @@ import {
 } from "./PullRequestCheckStatus";
 import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
 import { formatObservedAt, hydrationFreshnessNotice } from "@/lib/view-freshness";
-
-const LazyRepositorySettings = lazy(async () => ({
-  default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
-}));
 
 const ToolbarTooltipsEnabledContext = createContext(true);
 
@@ -231,7 +223,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     selectedEnvironment,
     workspaceReady,
     setupRunning,
-    updateProject,
     config,
     createTab,
     tabCount,
@@ -241,8 +232,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     hasChanges,
     sidebarOpen,
     toggleSidebar,
-    setRepoSettingsProjectId,
-    openEnvironmentSettings,
     isOpeningEditor,
     editorError,
     setEditorError,
@@ -287,12 +276,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     scrollContainerRef,
     isDragging,
     selectedProject,
-    repoSettingsProject,
     isProjectView,
     hasProjectCheckout,
     isCleanupTargetDeleting,
     isMerging,
-    repoName,
     isLocalEnvironment,
     isRunning,
     hasMergeConflicts,
@@ -702,46 +689,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     aria-pressed={sidebarOpen}
                   >
                     <PanelLeft className="h-4 w-4" />
-                  </Button>
-                </ToolbarTooltipTrigger>
-              )}
-
-              {(isGrid || repoName) && (
-                <ToolbarTooltipTrigger
-                  tooltip={selectedProject ? "Repository settings" : "Select a project first"}
-                >
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => setRepoSettingsProjectId(selectedProject?.id ?? null)}
-                    aria-label="Repository settings"
-                    disabled={!selectedProject}
-                  >
-                    <FolderGit2 className="h-4 w-4" />
-                    {isGrid && <span className="truncate text-xs">Repository settings</span>}
-                  </Button>
-                </ToolbarTooltipTrigger>
-              )}
-
-              {(isGrid || selectedEnvironment) && (
-                <ToolbarTooltipTrigger
-                  tooltip={
-                    selectedEnvironment ? "Environment settings" : "Select an environment first"
-                  }
-                >
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => {
-                      if (selectedEnvironment) openEnvironmentSettings(selectedEnvironment.id);
-                    }}
-                    aria-label="Environment settings"
-                    disabled={!selectedEnvironment}
-                  >
-                    <Container className="h-4 w-4" />
-                    {isGrid && <span className="truncate text-xs">Env. settings</span>}
                   </Button>
                 </ToolbarTooltipTrigger>
               )}
@@ -1691,26 +1638,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         error={resolveEligibilityError ?? resolveLaunchError}
         onConfirm={(selection) => void handleConfiguredResolve(selection)}
       />
-
-      {/*
-        Settings Dialogs. Global settings open from the sidebar and ⌘, and
-        render in `GlobalSettingsHost`, which `AppShell` mounts.
-      */}
-
-      {repoSettingsProject && (
-        <LazyLoadBoundary
-          loadingFallback={<LazyDialogLoadingFallback label="Loading repository settings…" />}
-        >
-          <LazyRepositorySettings
-            project={repoSettingsProject}
-            open
-            onOpenChange={(open) => {
-              if (!open) setRepoSettingsProjectId(null);
-            }}
-            onUpdateProject={updateProject}
-          />
-        </LazyLoadBoundary>
-      )}
 
       {/* Editor Error Dialog */}
       <AlertDialog open={!!editorError} onOpenChange={() => setEditorError(null)}>

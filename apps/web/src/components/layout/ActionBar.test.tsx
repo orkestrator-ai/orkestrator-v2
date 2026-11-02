@@ -8,7 +8,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
@@ -1104,16 +1103,17 @@ describe("ActionBar grid presentation", () => {
     try {
       render(<ActionBar presentation="grid" />);
 
-      const repositoryButton = screen.getByRole("button", { name: "Repository settings" });
+      const rootButton = screen.getByRole("button", { name: "New root terminal" });
       const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
-      fireEvent.mouseEnter(repositoryButton.parentElement!);
+      fireEvent.mouseEnter(rootButton.parentElement!);
       fireEvent.mouseEnter(nativeButton);
       await act(async () => {
         jest.advanceTimersByTime(550);
       });
 
       // Only the button's own label carries the text; no tooltip repeats it.
-      expect(screen.getAllByText("Repository settings")).toHaveLength(1);
+      expect(screen.getAllByText("Root terminal")).toHaveLength(1);
+      expect(screen.queryByText("New Root Terminal") === null).toBe(true);
       expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
     } finally {
       jest.useRealTimers();
@@ -1190,9 +1190,9 @@ describe("ActionBar grid presentation", () => {
     expect(toolbar).toBeTruthy();
     expect(toolbar?.querySelectorAll(".grid-cols-2").length).toBeGreaterThanOrEqual(2);
 
-    const repository = screen.getByRole("button", { name: "Repository settings" });
+    const root = screen.getByRole("button", { name: "New root terminal" });
     const native = screen.getByRole("button", { name: "New native agent tab" });
-    expect(repository.lastElementChild?.textContent).toBe("Repository settings");
+    expect(root.lastElementChild?.textContent).toBe("Root terminal");
     expect(native.lastElementChild?.textContent).toBe("New agent");
     expect(
       screen.getByRole("button", { name: "New terminal tab" }).lastElementChild?.textContent,
@@ -1210,11 +1210,11 @@ describe("ActionBar grid presentation", () => {
     currentSelectedEnvironmentId = null;
     render(<ActionBar presentation="grid" />);
 
-    // Global settings live in the sidebar's bottom bar, not in the tools.
-    expect(screen.queryByRole("button", { name: "Global settings" }) === null).toBe(true);
-    expect(
-      screen.getByRole("button", { name: "Repository settings" }).hasAttribute("disabled"),
-    ).toBe(true);
+    // Global, repository and environment settings live in the sidebar's
+    // bottom bar, not in the tools.
+    for (const name of ["Global settings", "Repository settings", "Environment settings"]) {
+      expect(screen.queryByRole("button", { name }) === null).toBe(true);
+    }
     expect(
       screen.getByRole("button", { name: "New native agent tab" }).hasAttribute("disabled"),
     ).toBe(true);
@@ -1230,7 +1230,7 @@ describe("ActionBar grid presentation", () => {
     );
   });
 
-  test("uses one visual variant for every mobile tool and shortens environment settings", () => {
+  test("uses one visual variant for every mobile tool", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1239,12 +1239,10 @@ describe("ActionBar grid presentation", () => {
     };
     render(<ActionBar presentation="grid" />);
 
-    const environmentSettings = screen.getByRole("button", { name: "Environment settings" });
     const createPr = screen.getByRole("button", { name: "Create PR" });
     const projectNotes = screen.getByRole("button", { name: "Project notes" });
     const kanban = screen.getByRole("button", { name: "Kanban" });
 
-    expect(environmentSettings.textContent).toContain("Env. settings");
     expect(projectNotes.textContent).toContain("Project notes");
     expect(projectNotes.hasAttribute("disabled")).toBe(false);
     expect(createPr.getAttribute("data-variant")).toBe("ghost");
@@ -2153,37 +2151,17 @@ describe("ActionBar editor and run commands", () => {
 });
 
 describe("ActionBar toolbar interactions", () => {
-  test("opens repository and environment settings", async () => {
-    const asyncDialogOptions = { timeout: 10_000 };
+  test("leaves global, repository and environment settings to the sidebar", () => {
     render(<ActionBar />);
 
-    // Global settings render in `GlobalSettingsHost` (its own test), not here.
-    expect(screen.queryByRole("button", { name: "Global settings" }) === null).toBe(true);
+    // All three open from the sidebar's bottom bar (`SidebarBottomBar.test.tsx`)
+    // and render in `GlobalSettingsHost` and `AppDialogHost`, not here.
+    for (const name of ["Global settings", "Repository settings", "Environment settings"]) {
+      expect(screen.queryByRole("button", { name }) === null).toBe(true);
+    }
     // Docker is a section of the global settings, not a toolbar control.
     expect(screen.queryByRole("button", { name: "Docker configuration" }) === null).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
-    expect(
-      await screen.findByText("Repository settings for repo", undefined, asyncDialogOptions),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Update mock repository" }));
-    await waitFor(
-      () =>
-        expect(updateProjectMock).toHaveBeenCalledWith({
-          ...selectedProject,
-          name: "updated-repo",
-        }),
-      asyncDialogOptions,
-    );
-
-    // Environment settings render in `AppDialogHost`, which `AppShell` mounts;
-    // `AppDialogHost.test.tsx` covers the dialog itself.
-    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(useAppDialogStore.getState().request).toEqual({
-      kind: "environment-settings",
-      environmentId: "env-1",
-    });
-  }, 60_000);
+  });
 
   test("preserves local controls when Docker stops", async () => {
     const renderActionBar = (available: boolean) => (
@@ -2213,71 +2191,11 @@ describe("ActionBar toolbar interactions", () => {
 
     const localEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
     expect((localEditorButton as HTMLButtonElement).disabled).toBe(false);
-    expect(
-      (screen.getByRole("button", { name: "Environment settings" }) as HTMLButtonElement).disabled,
-    ).toBe(false);
     fireEvent.click(localEditorButton);
     await waitFor(() => {
       expect(openLocalInEditorMock).toHaveBeenCalledWith("/tmp/feature-env", "vscode");
     });
     expect(openInEditorMock).not.toHaveBeenCalled();
-  });
-
-  test("dismisses repository settings through onOpenChange", async () => {
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
-    expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Close mock repository settings" }));
-    expect(screen.queryByText("Repository settings for repo") === null).toBe(true);
-  });
-
-  test("leaves environment settings to the app dialog host", () => {
-    const view = render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(useAppDialogStore.getState().request).toEqual({
-      kind: "environment-settings",
-      environmentId: "env-1",
-    });
-    // The toolbar renders no copy of its own, and a later selection change does
-    // not retarget the request.
-    expectDomAbsent(screen.queryByRole("status", { name: "Loading environment settings…" }));
-    currentOtherEnvironments = [{ ...selectedEnvironment }];
-    currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
-    currentSelectedEnvironmentId = currentEnvironment.id;
-    view.rerender(<ActionBar />);
-    expect(useAppDialogStore.getState().request).toEqual({
-      kind: "environment-settings",
-      environmentId: "env-1",
-    });
-  });
-
-  test("keeps repository settings pinned when project selection changes", async () => {
-    const view = render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
-    expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
-
-    currentSelectedProjectId = "project-2";
-    view.rerender(<ActionBar />);
-
-    expect(screen.getByText("Repository settings for repo")).toBeTruthy();
-  });
-
-  test("closes repository settings when the pinned project is deleted", async () => {
-    const view = render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
-    expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
-
-    currentDeletedProjectIds = new Set([selectedProject.id]);
-    currentSelectedProjectId = null;
-    view.rerender(<ActionBar />);
-
-    await waitFor(() => {
-      expect(screen.queryByText("Repository settings for repo") === null).toBe(true);
-    });
   });
 
   test("supports drag scrolling and ends dragging on mouse up or leave", () => {
@@ -2307,15 +2225,15 @@ describe("ActionBar toolbar interactions", () => {
 
   test("suppresses native menus while preserving custom menus and non-HTML targets", () => {
     const { container } = render(<ActionBar presentation="grid" />);
-    const repositorySettings = screen.getByRole("button", { name: "Repository settings" });
-    const repositorySettingsIcon = repositorySettings.querySelector("svg")!;
+    const rootTerminal = screen.getByRole("button", { name: "New root terminal" });
+    const rootTerminalIcon = rootTerminal.querySelector("svg")!;
     const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
     const nativeLabel = Array.from(nativeButton.querySelectorAll("span")).find(
       (element) => element.textContent === "New agent",
     )!;
 
-    expect(fireEvent.contextMenu(repositorySettings)).toBe(false);
-    expect(fireEvent.contextMenu(repositorySettingsIcon)).toBe(true);
+    expect(fireEvent.contextMenu(rootTerminal)).toBe(false);
+    expect(fireEvent.contextMenu(rootTerminalIcon)).toBe(true);
     fireEvent.contextMenu(nativeLabel);
 
     expect(screen.getByRole("button", { name: "Claude Tmux Tab" })).toBeTruthy();
@@ -2344,10 +2262,10 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     const panelToggle = screen.getByRole("button", { name: "Hide left panel" });
-    const repository = screen.getByRole("button", { name: "Repository settings" });
+    const native = screen.getByRole("button", { name: "New native agent tab" });
     // "First toolbar item": the toggle precedes the other left-side controls.
     expect(
-      panelToggle.compareDocumentPosition(repository) & Node.DOCUMENT_POSITION_FOLLOWING,
+      panelToggle.compareDocumentPosition(native) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     fireEvent.click(panelToggle);

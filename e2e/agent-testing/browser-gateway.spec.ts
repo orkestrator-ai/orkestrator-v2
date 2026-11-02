@@ -244,31 +244,21 @@ test.describe("host path browsing", () => {
               exact: true,
             });
             await drawer.getByText(fixture.name, { exact: true }).first().click();
-            if (await drawer.isVisible()) {
-              await drawer
-                .getByRole("button", { name: "Close projects and environments" })
-                .first()
-                .click();
-            }
-            // Selecting the project can finish after the drawer closes and
-            // collapse an early tools popover. Retry the complete user action
-            // with bounded clicks while that selection settles.
+            // Repository settings open from the drawer's bottom bar. Selecting
+            // the project can close the drawer or finish after it, so retry
+            // the complete user action with bounded clicks while it settles.
             await expect(async () => {
               const repository = page.getByRole("dialog", {
                 name: "Repository Settings",
                 exact: true,
               });
               if (!(await repository.isVisible())) {
-                if (
-                  !(await page
-                    .getByRole("button", { name: "Close tools", exact: true })
-                    .isVisible())
-                ) {
+                if (!(await drawer.isVisible())) {
                   await page
-                    .getByRole("button", { name: "Open tools", exact: true })
+                    .getByRole("button", { name: "Open projects and environments", exact: true })
                     .click({ timeout: 1_000 });
                 }
-                await page
+                await drawer
                   .getByRole("button", { name: "Repository settings", exact: true })
                   .click({ timeout: 1_000 });
               }

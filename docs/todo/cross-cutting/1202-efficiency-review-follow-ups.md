@@ -39,7 +39,7 @@ governs, marked "Decided".
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
-14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open.
+14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
 
@@ -498,21 +498,137 @@ Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), 
 
 ### 14. Docker image size
 
-**Problem.** A bridge release re-pulls about 225 MB of unchanged layers, Bun is installed twice, and npm caches are probably left in the image.
+**Problem.** A bridge release re-pulled every layer from the first bridge `COPY` to the end of the image, Bun was installed twice, npm's download cache stayed in the image, and a leftover `apt-get update` ran after the script `COPY`s.
 
-**Context.** `docker/Dockerfile` (confirmed 2026-11-01: bridge `COPY`s still precede starship and mise; no `npm cache clean`). 0022 decided against BuildKit cache mounts. Image changes need `bash docker/tests/final-image-smoke.sh <image>` and `mise run test:agent:docker`.
+**Context.** DK-7, DK-8, DK-9 and DK-11 done 2026-11-02 in one image change, together with Node 24.22.2 ([0032](0032-dependency-upgrades.md) task 7), measured on `main` at `38d55ee14` (before) and the same tree with the change (after), linux/amd64, beelink. What changed in `docker/Dockerfile`:
 
-**Investigation.** Sizes are from the report's reading of `docker history`; not re-measured. DK-10 (two Claude binaries) may be unfixable because the CLI and SDK follow separate release trains.
+- DK-7: starship and mise now sit above the bridges. The builder copies each bridge's sources just before its own build, least-changed first (pi, cursor, acp, claude, codex, by commits since 2026-08-01). The vendored SDKs (`dist/node_modules` of pi, cursor and claude) move to `/opt/bridge-deps/<bridge>` in the builder and ship in their own layers ahead of the bundles. The shell config `COPY`s moved below the bridges because they are small.
+- DK-8: the base image's `/usr/local/bin/bun` is registered in mise's system directory with `MISE_DATA_DIR=/usr/local/share/mise mise link bun@1.4.4 /opt/bun`, where `/opt/bun/bin/{bun,bunx}` are symlinks to it. Nothing is downloaded. A `node` user with a project that pins `bun = "1.4.4"` gets "already installed" offline.
+- DK-9: each `npm install -g` (Claude Code, Codex, Playwright) ends with `&& npm cache clean --force` in the same `RUN`.
+- DK-11: the late `apt-get update && apt-get install util-linux` is gone. `util-linux` is Essential in the Debian base and already present; it is now listed in the first apt layer, and the `setpriv` checks stay.
+
+Tests changed: `tests/unit/monorepo-scripts.test.ts` (layer order, npm cache), `version-drift.test.ts` (`mise link` instead of `mise install --system`), `runtime-env-wiring.test.ts` (mise above the bridges, below the browser; the old assertion compared against a comment that no longer existed) and `firewall-policy.test.ts` (one apt layer).
+
+**Investigation.** Measured with `docker image inspect`, `docker history` and `du -sxh` inside the image:
+
+| | Before | After |
+| --- | --- | --- |
+| Image size (uncompressed) | 6,411 MB | 5,452 MB (−959 MB, −15%) |
+| `/home/node/.npm` | 356 MB (`_cacache`) | 32 KB (logs only) |
+| Second Bun (`/usr/local/share/mise/installs/bun`) | 103 MB, plus 50 MB mise download cache in `/root/.cache/mise` | 16 KB of symlinks; no cache |
+| mise layer | 321 MB | 162 MB (the mise binary is 155 MB) |
+| Claude Code npm layer | 443 MB | 301 MB |
+| Codex npm layer | 647 MB | 456 MB |
+| Playwright npm layer | 58.8 MB | 19.1 MB |
+| Re-pulled bytes when all five bridges change | 895 MB (40 layers) | 22.8 MB (38 layers: bundles of 2.8 to 8.9 MB each, the rest small scripts) |
+
+The re-pull row comes from a probe: a runtime line appended to all five `bridges/*/src/index.ts`, both Dockerfiles rebuilt on the same builder, and changed layer digests (`RootFS.Layers`) compared against each unprobed image. The vendored SDK layers kept their digests across the rebuild. CI builds with `cache-from`/`cache-to: type=gha,mode=max` (`publish-container.yml`), so they reuse layers the same way. `bash docker/tests/final-image-smoke.sh` passed on the after image.
+
+`mise run test:agent:docker` ran on the after image, in a disposable profile (`--fixture-environments local,container --no-agent-credentials --agent-platforms codex,grok,opencode --headless-electron`). Load average was about 46 because about ten builds were sharing the host. Result: 17 passed, 4 skipped, 3 failed, and the same three failed again when rerun alone. The causes were not all established; these failures remain qualification blockers:
+
+- `web-annotations-gateway.spec.ts:958`: the "Docker containers can't reach Orkestrator" dialog covered the page. The host's ufw drops traffic from Docker networks to the agent tools port.
+- `native-draft-attachments.spec.ts:378`: the test's restricted container started from the new image. After that, the page showed "Orkestrator couldn't connect" before the sidebar loaded.
+- `container-app-wiring.spec.ts:447`: the profile's coordinator conversation was already assigned to Codex ("Coordinator, Codex"). The test expects "Coordinator, no agent chosen yet".
+
+The passing tests include container boot and restart with imported logins, rebuild, deletion, the root terminal, settings, Files, merge, Build-tab validation output, the Playwright launch for both container users and design export. The four skipped tests are live-provider opt-ins: Grok login renewal, a live agent note, and two live Claude cases.
+
+Rechecked after rebasing onto current `main` at `643ce87c4` on 2026-11-02: all four findings still applied before this change. Fresh linux/amd64 builds measured **6,411,820,583 → 5,452,072,222 bytes** (−959,748,361 bytes, −15%). `docker history --no-trunc` and container `du -sxh` reproduce the cache and mise savings above. Both builds and the final-image smoke passed; four focused unit test files passed. The Node drift check now enforces ≥24.22.1.
+
+The final amd64 qualification rebuilt the reviewed Dockerfile using
+`mise run docker:build:dev --profile dk1202-round2`. The resulting image was
+5,452,373,507 bytes with Node `v24.22.2`; `bash
+docker/tests/final-image-smoke.sh orkestrator-v2:dev-243dd588f5d7` passed,
+including health checks for all five bridges and offline Bun registration
+as `node` with a project pin of 1.4.4.
+
+Docker's default address pools were exhausted. Qualification used explicit
+`/29` subnets from otherwise unrouted `172.16.240.0/22` for the disposable
+profile's own networks, retrying only Docker overlap refusals. No foreign
+resources, daemon settings or firewall rules were changed. Reproduction needs
+available Docker address space or equivalent explicit subnet allocation;
+no untracked helper is required as durable evidence.
+
+The profile used `--fixture-environments local,container
+--no-agent-credentials --agent-platforms codex,grok,opencode
+--headless-electron`. Against that ready profile, the final qualifying command
+was `ORKESTRATOR_AGENT_TEST_PROFILE=dk1202-round2 mise run test:logged --
+--name round2-agent-docker-fixed -- mise run test:agent:docker`.
+**Result: 20 passed, 4 skipped, 0 failed, 0 flaky (510.5 s).** The skips
+are existing live-provider opt-ins; no billed turns or credentials were used.
+The suite covers inactive environments, hidden documents, reloads and second
+windows. The approval and annotation specs reuse `loadAppWithDevRetry` for
+the known dev import failure and host-connectivity warning. The coordinator
+check preserves the main conversation and compares its displayed agent with
+persisted state. Focused E2E types, lint, format and `git diff --check` passed.
+The disposable profile was stopped/reset and its image tag removed.
+
+Earlier attempts did not qualify the image: address exhaustion prevented
+fixture readiness, and a later UI attempt exposed stale startup and coordinator
+assertions. The successful run above supersedes those attempts. Original
+preparation artifacts were preserved.
+
+Review preparation must qualify the committed snapshot with `mise run
+test:agent:docker:isolated` (through `test:logged`). This one-shot task builds
+and smokes the image, provisions its own credential-free local/container
+profile, runs the same Docker fixture selection as `test:agent:docker`, then
+stops/resets the profile and removes its image tag. The scheduler declares
+coverage of `test:agent:docker`. Running that bare task after the earlier
+profile was reset produced a failed validation entry despite a separate later
+manual pass; that entry does not establish qualification. The one-shot path
+keeps setup, smoke, suite and cleanup in the preparation command's own result.
+Its tracked PATH shim handles exhausted pools for owned fixture networks only,
+checking host routes before explicit /29 allocation and preserving overlap
+refusals. No external helper or running profile is needed. Fresh qualification
+on 2026-11-02 passed through this one-shot path: image build and final-image
+smoke passed, followed by **20 passed, 4 live-provider skips, 0 failed, 0 flaky**
+(578.2 s suite; 608.3 s including build, smoke, setup and cleanup). The profile
+reported `missing` with no live processes after cleanup, and its image tag was
+absent. This focused pass does not replace the next preparation package's run
+against the committed snapshot.
+
+Native arm64 qualification remains open: an emulated build failed at the
+existing Chromium verifier after 273.2 seconds (GPU launch error 1002,
+QEMU target signal 5). No arm64 final image or smoke result exists; a native
+runner is needed. The Chromium check was preserved. DK-10 remains outside
+this completed subset.
+
+DK-10 is still open. The SDK's `claude-agent-sdk-linux-x64/claude` (0.3.314) and the CLI's `claude-code/bin/claude.exe` (2.1.314) are the same file today: SHA-256 `4487042b…5f84594`, 298 MB each. [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, so they can diverge.
+
+Not addressed, for a later pass: the Playwright layer (1.07 GB: Chromium, the headless shell and `--with-deps` apt packages), and the bridge `src/` trees that ship next to `dist` (about 16 MB, unused at runtime).
 
 **Decisions.**
 
-- **One change or several?**
+- **One change or several?** Decided and done: one change.
   - **DK-7, DK-8, DK-9 and DK-11 in one image change, with `docker history` and `du` before and after (recommended).**
     - Pros: one rebuild and one smoke run.
     - Cons: a regression is harder to attribute.
   - **One change per finding.**
     - Pros: each saving is measured alone.
     - Cons: four rebuilds and four pulls for users.
+- **How far should DK-7 go?** Done: split out the SDKs.
+  - **Reorder and split the vendored SDKs into their own layers (recommended).**
+    - Pros: a code-only release re-pulls 22.8 MB instead of 895 MB.
+    - Cons: three more `COPY` lines; the builder moves `dist/node_modules` out and the final stage merges it back.
+  - **Reorder only, as the report proposed.**
+    - Pros: smallest diff.
+    - Cons: the claude, pi and cursor layers (549 MB) still re-pull on every release that touches bridge code or `packages/protocol`.
+- **How to register Bun with mise (DK-8)?** Done: `mise link`.
+  - **`mise link` into the system directory, pointing at the base binary (recommended).**
+    - Pros: no download or second copy; mise writes its own runtime symlinks (`1`, `1.4`, `latest`), so `mise install` as `node` reports "already installed".
+    - Cons: `mise ls` shows `(symlink)`; mise creates `/usr/local/share/mise/shims`, which the build removes because nothing uses it.
+  - **Hand-made `installs/bun/1.4.4/bin` symlinks.**
+    - Pros: no mise invocation.
+    - Cons: tried; without the runtime symlinks, `mise install` as `node` failed trying to rebuild them through sudo.
+  - **Move the base binary into the mise directory.**
+    - Pros: one real file.
+    - Cons: a move in a later layer copies the 107 MB again, so nothing is saved.
+- **DK-10: the second Claude binary.** Open; needs the maintainer.
+  - **At build time, symlink the SDK binary to the CLI's when the two are byte-identical, otherwise copy it (recommended).** This needs a `RUN --mount=type=bind,from=bridge-build`. That is a bind mount, not the cache mount 0022 rejected.
+    - Pros: saves 298 MB while the pins agree, as they do today; no change when they diverge.
+    - Cons: the bridge's SDK would run whatever is at the CLI path, so a user's `npm i -g @anthropic-ai/claude-code@<other>` inside a container would change the bridge's engine too; adds BuildKit-only syntax.
+  - **Leave both copies.**
+    - Pros: the SDK stays self-contained and follows its own release train.
+    - Cons: 298 MB of identical bytes in every image.
 
 ### 15. Container data transfer
 
@@ -593,6 +709,43 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
 
 Made on 2026-11-01 while doing the first batch. Uncommitted at the time of
 writing, on the worktree branch `20261101-012617-580e11a7c62c`.
+
+### Task 14: preserve unrelated task records (review, 2026-11-02)
+
+Compared the complete document diff from the recorded review base
+`82598d869d6b79e44d6c6a1b0577cd261ab8b71f` to reviewed commit
+`a88ed87f5d7142222747ca00a213a41536ef2557`: only task 14's index line
+and section differ. Tasks 2, 3, 6, 7, 10, 11 and 15 already match that
+base. Preserve them; restoring older open statuses would undo records
+already present in the review base. Round 2 completed amd64 qualification
+(20 passed, 4 live-provider skips); retain only DK-10 as the open decision.
+
+### Task 14: qualification on the shared host (round 2, 2026-11-02)
+
+Chose explicit subnets for this disposable profile (recommended): it preserves
+foreign networks and daemon/firewall configuration, at the cost of a temporary
+test-only PATH wrapper. Removing foreign networks or changing daemon pools
+would reclaim default capacity but violates this run's constraints. Reuse the
+existing browser startup helper and assert the backend's current coordinator
+selection (recommended): this preserves the tested behavior and diagnoses real
+startup errors. Skipping those cases or loosening their behavior assertions
+would be less work but would leave acceptance coverage incomplete.
+
+### Task 14: review coverage and durable evidence (2026-11-02)
+
+Keep measurements, the final command, setup constraints and outcomes in this
+record (recommended): this remains readable after temporary artifacts expire.
+Keeping every failed attempt and local log path gives more chronology but no
+portable evidence. For subsequent preparation, choose the self-contained Docker
+task (recommended): it records actual qualification and cleanup together but
+adds a small supervised setup path. Keeping the manual-profile command is
+simpler but requires a live profile that cleanup deliberately removes and
+cannot reproduce the recorded pass unaided. The coordinator scenario now
+explicitly selects Codex and
+asserts it persists; deriving the expectation from each snapshot tested display
+consistency but could miss an unexpected selection. Final-image smoke now
+checks linked Bun and bunx offline as `node`, with both the image home and an
+empty mounted home, using default mise discovery instead of a forced data path.
 
 ### Task 2: unreadable rows
 

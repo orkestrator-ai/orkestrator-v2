@@ -15,7 +15,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 4. **hono 5**: move claude-bridge and codex-bridge once 5 is stable. Status: blocked (`next` is 5.0.0-rc.1).
 5. **`@dnd-kit/react` 1.0**: rewrite the drag-and-drop users once 1.0 ships. Status: blocked (latest is 0.5.1).
 6. **Accepted advisories**: `postcss-selector-parser` via `@tailwindcss/typography`, `undici` 8.10.2 via the Pi SDK. Status: blocked (on `@tailwindcss/typography` and the Pi SDK; both still latest).
-7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); open (24.22.1 is a security release).
+7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); 24.22.2 done 2026-11-02; amd64 image smoke and `test:agent:docker` passed (20 passed, 4 live-provider skips).
 
 ### 1. Electron 46
 
@@ -134,16 +134,23 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 
 ### 7. Node in the Docker image
 
-**Problem.** The image ships `NODE_VERSION=24.21.0` (`docker/Dockerfile:114`).
+**Problem.** The image shipped `NODE_VERSION=24.21.0`, below the 24.22.1 security release. Fixed 2026-11-02: the image ships 24.22.2. Node 26 is still to come.
 
-**Context.** The file defers Node 26 until its LTS settles (not before December 2026) and lets 24.22.1 ride with that or the next image change.
+**Context.** The file defers Node 26 until its LTS settles (not before December 2026). The 24 bump went out with the image-size change in [1202](1202-efficiency-review-follow-ups.md) task 14, so users pull one new image for both. `ARG NODE_VERSION` in `docker/Dockerfile` is the only pin. The tarball is checked against the release's `SHASUMS256.txt` at build time, so no digest is hard-coded, and `docker/image-manifest.ts` checks that the installed `node --version` matches the pin.
 
-**Investigation.** Newly found: Node 24.22.1 (2026-10-20) is flagged as a **security** release in `nodejs.org/dist/index.json`; 24.22.0 was not. Node 26.12.1 (2026-10-21) is also a security release, and 26 is not LTS yet. The container's Node runs the npm-installed agent CLIs and users' projects, so the fix reaches real workloads.
+**Investigation.** Newly found: Node 24.22.1 (2026-10-20) is flagged as a **security** release in `nodejs.org/dist/index.json`; 24.22.0 was not. Node 26.12.1 (2026-10-21) is also a security release, and 26 is not LTS yet. The container's Node runs the npm-installed agent CLIs and users' projects, so the fix reaches real workloads. Checked again 2026-11-02: 24.22.2 (2026-10-28, not flagged as security) is the newest 24 release. It adds V8 backports and a stream fix on top of 24.22.1. Built and checked on linux/amd64: `node --version` is `v24.22.2` and npm is 11.19.1; `docker/tests/final-image-smoke.sh` and `mise run test:agent:docker` ran against the image (results in 1202 task 14). Fresh builds on `main` at `643ce87c4` reproduce the Node version and pass image smoke; the fresh Docker suite is blocked by exhausted Docker network address pools, so that attempt did not qualify. Round 2 subsequently passed fresh amd64 image smoke and `test:agent:docker` (20 passed, 4 live-provider skips, 0 failed, 0 flaky) using explicitly allocated subnets for its own disposable networks; see 1202 task 14 for commands and the test repairs. Node remains `v24.22.2`.
 
 **Decisions.**
 
-- **When to take 24.22.1?**
-  - **Now, as its own small image change with the checksum update and `docker/tests/final-image-smoke.sh` (recommended).**
+- **Which 24 patch?** Decided 2026-11-02: 24.22.2.
+  - **24.22.2, the newest 24 LTS patch (recommended).**
+    - Pros: includes every 24.22.1 security fix plus the later V8 and stream fixes.
+    - Cons: six days old when taken.
+  - **24.22.1 exactly.**
+    - Pros: the release the advisory names.
+    - Cons: misses the later fixes; a second bump would follow soon.
+- **When to take 24.22.1?** Decided 2026-11-02: in the 1202 task 14 image change, which was the next image change.
+  - **Now, together with 1202 task 14 and `docker/tests/final-image-smoke.sh` (recommended).**
     - Pros: closes a security release in a runtime that runs agent CLIs; a patch bump on the same LTS line.
     - Cons: an image rebuild and smoke run on both architectures.
   - **Keep riding with Node 26 or the next image change.**
@@ -165,6 +172,21 @@ oxlint 1.88 landed in #964. The 2026-10-25 pass moved Electron to 45, cleared
 the React Compiler lint backlog, removed `tsx` and cleared the new in-range
 advisories. Everything left waits on an upstream release or a date.
 
+### Task 7: review qualification status (2026-11-02)
+
+The Node 24.22.2 pin and required amd64 qualification are complete. Round 2 passed fresh image smoke and the Docker suite (20 passed, 4 live-provider skips). Explicit subnets for the disposable profile avoided exhausted default pools without changing shared networks or daemon/firewall settings. The repaired specs reuse the existing startup helper; the coordinator scenario explicitly selects Codex and checks that selection against both backend state and the displayed label. Subsequent preparation uses `mise run test:agent:docker:isolated`, which builds
+and smokes the image and owns the credential-free Docker fixture lifecycle.
+The bare Docker task expects an already-running profile; its failed preparation
+entry cannot be superseded by a pass outside that validation package. The
+self-contained command is recommended over a manual profile: it adds setup
+code, but records reproducible qualification and cleanup in the same check.
+Fresh one-shot qualification on 2026-11-02 passed image build, final-image
+smoke and all 20 credential-free Docker cases (4 live-provider skips, no
+failures or flakes; 608.3 s overall). Profile and image cleanup were confirmed.
+Preparation must run this task against the committed snapshot for its own
+validation package. Node 26 remains deferred; native arm64 qualification is
+not claimed. See 1202 task 14 for the qualification command, setup constraints and cleanup outcome.
+
 ## Current state
 
 - **Landed.** Bun 1.4.4, Electron 45.0.0, electron-builder 26.18.0,
@@ -183,10 +205,10 @@ advisories. Everything left waits on an upstream release or a date.
   `@tiptap/markdown` 3.32.0 (still latest) depends on `marked ^17.0.1`
   (`marked` latest is 18.1.1). `test-fixtures/preview-vite` stays on Vite 7.3.6
   as a stand-in user app.
-- **Docker.** `NODE_VERSION=24.21.0`. Node 24.22.1 (2026-10-20) is the newest
-  24 LTS; the container's Node runs npm-installed agent CLIs and users'
-  projects, not Orkestrator code, and the drift test only asserts ≥22, so the
-  patch bump rides with item 9 or the next image change.
+- **Docker.** `NODE_VERSION=24.22.2` (2026-11-02), which includes the
+  24.22.1 security release. The container's Node runs npm-installed agent
+  CLIs and users' projects, not Orkestrator code; the drift test now enforces
+  ≥24.22.1. Node 26 is item 9.
 - **Pre-release upstream (2026-10-25).** Electron `alpha` is 46.0.0-alpha.1
   (stable due 2027-01-05); electron-builder `next` is 27.0.0-alpha.12
   (`latest`/`v26` 26.18.0); electron-updater `next` is 7.0.0-alpha.11; hono
@@ -292,8 +314,7 @@ advisories. Everything left waits on an upstream release or a date.
 ### Deferred
 
 9. **Node 26 in Docker** after Node 26 LTS (2026-10-28) has settled; not
-   before December 2026. Take Node 24.22.1 or later in the same image change
-   if this slips.
+   before December 2026. (Node 24.22.2 landed 2026-11-02 in the meantime.)
 
 ## Constraints and rationale
 
@@ -410,6 +431,15 @@ None. The update-manifest key question is decided below.
 5. **Rate the file Low.** Everything left is blocked upstream or deferred.
    Electron 46 is the most serious item; once it is stable (2027-01-05),
    re-rate to Medium because of 45's 2027-04-27 end of support.
+6. **Task 7: take Node 24.22.2 with the 1202 task 14 image change (2026-11-02).**
+   - Options: (a) 24.22.1 exactly; (b) 24.22.2, the newest 24 patch; (c) wait
+     for Node 26.
+   - Choice: (b), in the same image change as 1202 task 14.
+   - Why: it carries every 24.22.1 security fix plus later V8 backports, and
+     one image change means one pull for users.
+   - Pros: the security release is closed without a separate rebuild.
+   - Cons: if the image change regresses, the Node bump and the layer changes
+     have to be told apart.
 
 ## Related
 

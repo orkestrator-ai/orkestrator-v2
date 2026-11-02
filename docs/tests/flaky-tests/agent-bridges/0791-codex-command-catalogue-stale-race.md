@@ -398,3 +398,27 @@ unchanged owner then ran alone three times with `bun test
 src/commands/codex-command-catalogue.test.ts --only-failures` from `bridges/codex-bridge`:
 it passed twice and failed once, so it also fails solo. Neither the catalogue nor its
 test is touched by this change.
+
+
+## Live logging round 2 repair — 2026-11-02
+
+Preparation at `dccae0434` (`mise run test`, workspace/root/bridges/protocol
+reservations 5/1/2/1) failed the two-pre-plugin stale/ready assertion (64.87 ms)
+and the failed-settling-read wait (2,044.86 ms). The unchanged catalogue owner
+then failed its first-answer settling wait alone on this branch (29 pass,
+one fail, 3.31 s):
+
+`mise run test:logged -- --name branch-codex-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+
+An identical complete-owner confirmation with name `branch-codex-owner-confirm`
+passed (30 tests, exit 0, 1.3 s). On detached `origin/main` at `88c3c6bac`,
+with independently installed frozen dependencies, the same owner with
+`--rerun-each=20` reported 597 pass and three failures: two armed-delay
+stale/ready mismatches (51.26 and 82.31 ms), and the exact preparation
+pre-plugin mismatch (54.92 ms). A focused 30-repeat main run of the
+failed-settling-read case passed; that particular timeout was not reproduced
+on main. The real-clock settling investigation remains open. No catalogue
+code, assertion, timeout, or skip changed.
+
+Evidence preserved in `output/agent-testing/review-fix-53284689/`:
+`branch-codex-owner.log.gz` and `baseline-codex-catalogue.log.gz`.

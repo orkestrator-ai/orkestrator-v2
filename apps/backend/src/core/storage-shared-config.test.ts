@@ -734,6 +734,40 @@ describe("GitHub credential source config migration", () => {
   });
 });
 
+describe("terminal link default target config storage", () => {
+  test("is absent by default, persists a valid target and rejects an unknown one", async () => {
+    expect(defaultConfig().global.terminalLinkDefaultTarget).toBeUndefined();
+    await withTemporaryStorage(async (storage) => {
+      const config = defaultConfig();
+      await storage.saveConfig(config);
+      await storage.updateGlobalConfig({
+        ...config.global,
+        terminalLinkDefaultTarget: "browser-tab",
+      });
+      expect((await storage.loadConfig()).global.terminalLinkDefaultTarget).toBe("browser-tab");
+      await expect(
+        storage.updateGlobalConfig({
+          ...config.global,
+          terminalLinkDefaultTarget: "somewhere" as never,
+        }),
+      ).rejects.toThrow("terminalLinkDefaultTarget must be");
+    });
+  });
+
+  test("drops an unknown persisted target", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const persisted = structuredClone(defaultConfig()) as unknown as Record<string, unknown>;
+      (persisted.global as Record<string, unknown>).terminalLinkDefaultTarget = "somewhere";
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        `${JSON.stringify(persisted)}\n`,
+        "utf8",
+      );
+      expect((await storage.loadConfig()).global.terminalLinkDefaultTarget).toBeUndefined();
+    });
+  });
+});
+
 describe("session title generation config storage", () => {
   test("is absent by default and rejects an unknown policy on save", async () => {
     expect(defaultConfig().global.sessionTitleGeneration).toBeUndefined();

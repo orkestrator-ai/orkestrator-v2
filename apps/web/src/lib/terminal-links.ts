@@ -1,3 +1,10 @@
+import {
+  DEFAULT_TERMINAL_LINK_TARGET,
+  resolveTerminalLinkDefaultTarget,
+  type TerminalLinkDefaultTarget,
+} from "@orkestrator/protocol/terminal-link-target";
+import { useConfigStore } from "@/stores/configStore";
+
 export const TERMINAL_BROWSER_TAB_REQUEST_EVENT = "orkestrator:terminal-browser-tab-request";
 
 export interface TerminalBrowserTabRequest {
@@ -19,11 +26,18 @@ type LinkMouseModifiers = Pick<MouseEvent, "ctrlKey" | "metaKey" | "shiftKey">;
 
 export type TerminalLinkTarget = "none" | "external" | "browser-tab";
 
-export function getTerminalLinkTarget(event: LinkMouseModifiers): TerminalLinkTarget {
+/** A modifier click opens the default target; adding Shift opens the other one. */
+export function getTerminalLinkTarget(
+  event: LinkMouseModifiers,
+  defaultTarget: TerminalLinkDefaultTarget = DEFAULT_TERMINAL_LINK_TARGET,
+): TerminalLinkTarget {
   if (!event.metaKey && !event.ctrlKey) {
     return "none";
   }
-  return event.shiftKey ? "browser-tab" : "external";
+  if (!event.shiftKey) {
+    return defaultTarget;
+  }
+  return defaultTarget === "external" ? "browser-tab" : "external";
 }
 
 export function requestTerminalBrowserTab(request: TerminalBrowserTabRequest): void {
@@ -44,6 +58,8 @@ interface TerminalLinkActivatorOptions {
  * Builds the click handler shared by xterm's plain-URL addon and its OSC 8
  * `linkHandler` option. xterm's built-in OSC 8 handler falls back to
  * `confirm()` + `window.open()`, which never launches a browser in Electron.
+ * The default target is read on each click because a terminal outlives any one
+ * value of the setting.
  */
 export function createTerminalLinkActivator({
   environmentId,
@@ -54,7 +70,12 @@ export function createTerminalLinkActivator({
     if (event.button !== 0) {
       return;
     }
-    const target = getTerminalLinkTarget(event);
+    const target = getTerminalLinkTarget(
+      event,
+      resolveTerminalLinkDefaultTarget(
+        useConfigStore.getState().config.global.terminalLinkDefaultTarget,
+      ),
+    );
     if (target === "browser-tab") {
       requestTerminalBrowserTab({ environmentId, sourceTabId, url: uri });
       return;

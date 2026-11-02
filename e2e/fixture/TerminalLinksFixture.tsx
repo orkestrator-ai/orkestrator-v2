@@ -3,6 +3,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { BrowserPreviewServiceTarget } from "@orkestrator/protocol/browser-preview";
 import type { PreviewCapabilities } from "@orkestrator/protocol/preview-services";
 import type { Environment } from "../../apps/web/src/types";
+import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { usePreviewServiceStore } from "../../apps/web/src/stores/previewServiceStore";
 import { useTerminalPortalStore } from "../../apps/web/src/stores/terminalPortalStore";
@@ -25,7 +26,17 @@ export function TerminalLinksFixture() {
     const originalEnvironments = useEnvironmentStore.getState().environments;
     const { capabilities: originalCapabilities, status: originalStatus } =
       usePreviewServiceStore.getState();
-    const resolution = new URLSearchParams(location.search).get("remote");
+    const originalConfig = useConfigStore.getState().config;
+    const search = new URLSearchParams(location.search);
+    if (search.get("defaultTarget") === "browser-tab") {
+      useConfigStore.setState({
+        config: {
+          ...originalConfig,
+          global: { ...originalConfig.global, terminalLinkDefaultTarget: "browser-tab" },
+        },
+      });
+    }
+    const resolution = search.get("remote");
     if (resolution) {
       window.orkestratorGateway = {
         enabled: true,
@@ -88,6 +99,7 @@ export function TerminalLinksFixture() {
       store.disposeTerminal("osc-environment", "osc-source-tab");
       window.orkestrator = originalBackend;
       window.orkestratorGateway = originalGateway;
+      useConfigStore.setState({ config: originalConfig });
       useEnvironmentStore.setState({ environments: originalEnvironments });
       usePreviewServiceStore.setState({
         capabilities: originalCapabilities,

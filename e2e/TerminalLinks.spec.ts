@@ -51,6 +51,32 @@ for (const modifier of ["Control", "Meta"] as const) {
   });
 }
 
+test("a preview-tab default swaps the two link gestures", async ({ page }) => {
+  await page.goto("/terminal-links?defaultTarget=browser-tab");
+  await expect(page.getByTestId("osc-ready")).toHaveText("true");
+  const screen = page.getByTestId("osc-terminal").locator(".xterm-screen");
+  const bounds = await screen.boundingBox();
+  if (!bounds) throw new Error("Missing terminal screen");
+  const position = { x: 15, y: 10 };
+  await page.mouse.move(bounds.x + position.x, bounds.y + position.y);
+  await expect(screen).toHaveClass(/xterm-cursor-pointer/);
+
+  await screen.click({ position, modifiers: ["Meta"] });
+  await expect(page.getByTestId("internal-opens")).toHaveText(
+    JSON.stringify([
+      {
+        environmentId: "osc-environment",
+        sourceTabId: "osc-source-tab",
+        url: "https://example.com/osc-target",
+      },
+    ]),
+  );
+  await expect(page.getByTestId("external-opens")).toHaveText("[]");
+
+  await screen.click({ position, modifiers: ["Meta", "Shift"] });
+  await expect(page.getByTestId("external-opens")).toHaveText('["https://example.com/osc-target"]');
+});
+
 for (const kind of ["service", "unregistered", "ambiguous"]) {
   test(`a remote terminal OSC link resolves ${kind} through the service router`, async ({
     page,

@@ -1,4 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
+import { useConfigStore } from "@/stores/configStore";
 import {
   createTerminalLinkActivator,
   getTerminalLinkTarget,
@@ -53,8 +54,64 @@ describe("getTerminalLinkTarget", () => {
   });
 });
 
+describe("getTerminalLinkTarget with a preview-tab default", () => {
+  test("swaps the two targets and keeps plain clicks inside the terminal", () => {
+    const target = (modifiers: { metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }) =>
+      getTerminalLinkTarget(
+        { metaKey: false, ctrlKey: false, shiftKey: false, ...modifiers },
+        "browser-tab",
+      );
+    expect(target({})).toBe("none");
+    expect(target({ shiftKey: true })).toBe("none");
+    expect(target({ metaKey: true })).toBe("browser-tab");
+    expect(target({ ctrlKey: true })).toBe("browser-tab");
+    expect(target({ metaKey: true, shiftKey: true })).toBe("external");
+    expect(target({ ctrlKey: true, shiftKey: true })).toBe("external");
+  });
+});
+
 describe("createTerminalLinkActivator", () => {
   const click = (modifiers: MouseEventInit) => new MouseEvent("click", { button: 0, ...modifiers });
+
+  test("reads the default target on each click, so a live terminal follows the setting", () => {
+    const original = useConfigStore.getState().config;
+    const setDefaultTarget = (terminalLinkDefaultTarget: "external" | "browser-tab" | undefined) =>
+      useConfigStore.setState({
+        config: { ...original, global: { ...original.global, terminalLinkDefaultTarget } },
+      });
+    const openExternal = mock((_url: string) => Promise.resolve());
+    const listener = mock((_request: TerminalBrowserTabRequest) => undefined);
+    const stopListening = listenForTerminalBrowserTabRequests(listener);
+    const activate = createTerminalLinkActivator({
+      environmentId: "environment-1",
+      sourceTabId: "terminal-1",
+      openExternal,
+    });
+    const request = {
+      environmentId: "environment-1",
+      sourceTabId: "terminal-1",
+      url: "https://example.com/",
+    };
+
+    try {
+      setDefaultTarget("browser-tab");
+      activate(click({ metaKey: true }), request.url);
+      expect(listener).toHaveBeenCalledWith(request);
+      expect(openExternal).not.toHaveBeenCalled();
+
+      activate(click({ metaKey: true, shiftKey: true }), request.url);
+      expect(openExternal).toHaveBeenCalledWith(request.url);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      setDefaultTarget(undefined);
+      activate(click({ metaKey: true }), request.url);
+      expect(openExternal).toHaveBeenCalledTimes(2);
+      expect(listener).toHaveBeenCalledTimes(1);
+    } finally {
+      stopListening();
+      useConfigStore.setState({ config: original });
+    }
+  });
 
   test("opens modified clicks externally and ignores plain clicks", () => {
     const openExternal = mock((_url: string) => Promise.resolve());

@@ -34,6 +34,7 @@ import {
   isSupersededPipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { pipelineRestartSlot } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { flowAttemptKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
@@ -71,6 +72,7 @@ import { PipelineSessionTranscript, pipelineAcceptsMessages } from "./PipelineSe
 import { PipelineTicketView } from "./PipelineTicketView";
 import { PipelineAddressReport } from "./PipelineAddressReport";
 import { usePipelineCodeRewind } from "./PipelineCodeRewindDialog";
+import { usePipelineRestartIn } from "./PipelineRestartInDialog";
 import type { PipelineControls } from "./usePipelineControls";
 
 const NO_CLOCK_SUBSCRIPTION = () => {};
@@ -316,6 +318,12 @@ export function PipelineFlowView({
   };
 
   const codeRewind = usePipelineCodeRewind(pipeline.id, controls.rewindCode, controls.pending);
+  const restartIn = usePipelineRestartIn(
+    modelCatalog,
+    controls.restartStageIn,
+    controls.pending,
+    pipeline.agentType,
+  );
 
   const toggleAttempt = (attemptId: string, expanded: boolean) =>
     setAttemptExpanded(pipeline.id, attemptId, expanded);
@@ -395,6 +403,16 @@ export function PipelineFlowView({
         disabled,
         onSelect: () => controls.restartStage(node.session!.sdkSessionId),
       });
+      if (pipelineRestartSlot(pipeline, node.session)) {
+        const session = node.session;
+        actions.push({
+          key: "restart-in",
+          label: "Restart in…",
+          icon: RotateCcw,
+          disabled,
+          onSelect: () => restartIn.open(session, node.title),
+        });
+      }
     } else if (
       node.hasValidation &&
       !node.session &&
@@ -726,6 +744,7 @@ export function PipelineFlowView({
         </div>
       </OverviewScroll>
       {codeRewind.dialog}
+      {restartIn.dialog}
       {headerSlots?.progress ? createPortal(progress, headerSlots.progress) : null}
       {headerSlots?.graphToggle
         ? createPortal(

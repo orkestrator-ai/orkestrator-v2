@@ -89,6 +89,12 @@ import {
   readWorktreeStatus,
 } from "./build-pipeline-code-rewind.js";
 import { probeReviewWorktree } from "./review-worktree-probe.js";
+import {
+  applyBuildPipelineRestartSelection,
+  pipelineRestartSlot,
+  type BuildPipelineRestartSelection,
+  type BuildPipelineRestartSlot,
+} from "@orkestrator/protocol/build-pipeline-restart-selection";
 
 /** Stage IDs of this form ask to prepare the review package again from the named session. */
 const PACKAGE_STAGE_PREFIX = "review-package:";
@@ -999,8 +1005,23 @@ export class BuildPipelineLifecycle {
    * reset. Works from a failed or completed pipeline too. The request is
    * persisted before the supervisor opens a new session, so an unmounted
    * renderer or backend restart cannot lose the run.
+   *
+   * With a `selection` ("Restart in…") the step's configured harness, model,
+   * effort and speed are replaced first, so the new session and every later
+   * run of that step use them. Only an agent session's step can take one.
    */
-  async restartStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
+  async restartStep(
+    pipelineId: string,
+    stageId: string,
+    selection?: BuildPipelineRestartSelection,
+  ): Promise<BuildPipeline> {
+    if (selection) {
+      return this.restartLocatedStage(
+        pipelineId,
+        (candidate) => locateSessionStep(candidate, stageId),
+        { selection },
+      );
+    }
     return this.restartLocatedStage(pipelineId, (candidate) => {
       if (candidate.validationRun && stageId === `validation:${candidate.validationRun.id}`) {
         return { kind: "validation" };
@@ -1196,6 +1217,8 @@ export class BuildPipelineLifecycle {
         session: PipelineSession,
         rewindId: string,
       ) => Promise<PipelineCodeRewind | Error>;
+      /** "Restart in…": the step runs from now on under this selection. */
+      selection?: BuildPipelineRestartSelection;
     } = {},
   ): Promise<BuildPipeline> {
     let rejection: Error | undefined;
@@ -1214,8 +1237,11 @@ export class BuildPipelineLifecycle {
       if (named && isSupersededPipelineSession(named)) {
         // The same request again (a double click, a retried command) names the
         // step the newest rewind just superseded: that restart is already done.
+        // A selection is new intent; no saved rewind records it, so require a
+        // fresh session instead of claiming it was applied.
         const latest = candidate.rewinds?.at(-1);
         if (
+          options.selection ||
           latest?.id !== named.supersededBy ||
           latest?.sessionKey !== named.sessionKey ||
           (options.resetCode &&
@@ -1235,6 +1261,14 @@ export class BuildPipelineLifecycle {
           "This build's pull request has been merged. Start a new build for further changes.",
         );
         return;
+      }
+      let selectionSlot: BuildPipelineRestartSlot | null = null;
+      if (options.selection) {
+        selectionSlot = named ? pipelineRestartSlot(candidate, named) : null;
+        if (!selectionSlot) {
+          rejection = new Error("This step cannot be restarted with a different agent or model.");
+          return;
+        }
       }
       const rewindId = randomUUID();
       let code: PipelineCodeRewind | undefined;
@@ -1260,6 +1294,11 @@ export class BuildPipelineLifecycle {
       const iteration = named ? named.iteration : candidate.iteration;
       const rewindsRound = iteration < candidate.iteration;
       const previousFeedback = candidate.verificationFeedback;
+      // Every refusal is behind us, so the new selection cannot outlive a
+      // restart that did not happen.
+      if (selectionSlot && options.selection) {
+        applyBuildPipelineRestartSelection(candidate, selectionSlot, options.selection);
+      }
 
       // A late tool submission from the discarded generation must be denied;
       // otherwise it could become authoritative after the replacement starts.

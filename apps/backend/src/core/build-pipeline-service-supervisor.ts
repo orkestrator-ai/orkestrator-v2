@@ -1433,6 +1433,7 @@ export class BuildPipelineSupervisor {
             agent: pipeline.reviewPreparation.agent,
             model: pipeline.reviewPreparation.model,
             effort: pipeline.reviewPreparation.reasoningEffort,
+            fastMode: pipeline.reviewPreparation.fastMode,
           }
         : await this.agents.stepSettings(pipeline, "address"),
     });

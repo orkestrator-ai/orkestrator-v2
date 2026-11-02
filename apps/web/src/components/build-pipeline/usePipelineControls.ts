@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import * as backend from "@/lib/backend";
+import type { BuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -86,6 +87,30 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
       }
     });
 
+  /**
+   * "Restart in…": restarts a step on another agent or model. Resolves to the
+   * error message, or null once the backend restarted it, so the dialog can
+   * stay open with the reason.
+   */
+  const restartStageIn = async (
+    stageId: string,
+    selection: BuildPipelineRestartSelection,
+  ): Promise<string | null> => {
+    let failure: string | null = "Another pipeline control is still running";
+    await run(async () => {
+      try {
+        replacePipeline(await backend.restartBuildPipelineStep(pipeline!.id, stageId, selection));
+        failure = null;
+        onFollow();
+        toast.success("Stage restarted");
+      } catch (error) {
+        failure = describe(error);
+        toast.error("Failed to restart the stage", { description: failure });
+      }
+    });
+    return failure;
+  };
+
   /** Resolves true once the backend reset the code and restarted the step. */
   const rewindCode = async (stageId: string, expectedHead: string): Promise<boolean> => {
     let rewound = false;
@@ -131,6 +156,7 @@ export function usePipelineControls(pipeline: BuildPipeline | undefined, onFollo
     restartCurrentStage: (label: string | undefined) => void restartCurrentStage(label),
     retryStage: () => void retryStage(),
     restartStage: (stageId: string) => void restartStage(stageId),
+    restartStageIn,
     rewindCode,
     skipStage: (stageId: string) => void skipStage(stageId),
     retryReviewer: (reviewerId: string) => void retryReviewer(reviewerId),

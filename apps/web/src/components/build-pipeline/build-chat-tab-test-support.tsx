@@ -107,7 +107,7 @@ export const retryStageMock = mock(async (pipelineId: string): Promise<BuildPipe
   backendRevision: 14,
 }));
 export const restartStepMock = mock(
-  async (pipelineId: string, _stageId: string): Promise<BuildPipeline> => ({
+  async (pipelineId: string, _stageId: string, _selection?: unknown): Promise<BuildPipeline> => ({
     ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
     phase: "building" as const,
     backendRevision: 15,

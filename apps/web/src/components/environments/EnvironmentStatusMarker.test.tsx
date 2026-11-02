@@ -31,19 +31,21 @@ for (const local of [true, false]) {
         expect(screen.queryByTestId("machine-dot") === null).toBe(true);
       }
       const centerClasses = center.className;
-      const states: Array<[EnvironmentMarkerState, string, boolean]> = [
-        ["inactive", "border-muted-foreground/40", false],
-        ["idle", "opacity-0", false],
-        ["working", "bg-red-500/50", true],
-        ["waiting", "bg-yellow-400/50", true],
+      const states: Array<[EnvironmentMarkerState, string]> = [
+        ["inactive", "border-muted-foreground/40"],
+        ["idle", "opacity-0"],
+        ["working", "environment-working-spinner"],
+        ["waiting", "bg-yellow-400/50"],
       ];
-      for (const [state, color, pulsing] of states) {
+      for (const [state, look] of states) {
+        const active = state === "working" || state === "waiting";
         rerender(<EnvironmentStatusMarker local={local} state={state} machine={machine} />);
         expect(marker.getAttribute("data-state")).toBe(state);
-        expect(ring.classList).toContain(color);
-        expect(ring.classList.contains("animate-pulse")).toBe(pulsing);
-        expect(ring.classList.contains("forced-colors:hidden")).toBe(!pulsing);
-        if (pulsing) {
+        expect(ring.classList).toContain(look);
+        expect(ring.classList.contains("animate-pulse")).toBe(state === "waiting");
+        expect(ring.classList.contains("environment-working-spinner")).toBe(state === "working");
+        expect(ring.classList.contains("forced-colors:hidden")).toBe(!active);
+        if (active) {
           expect(ring.classList).toContain("forced-colors:border-[CanvasText]");
           expect(ring.classList).toContain(
             state === "working" ? "forced-colors:border-solid" : "forced-colors:border-dashed",

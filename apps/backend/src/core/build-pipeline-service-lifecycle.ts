@@ -1237,8 +1237,11 @@ export class BuildPipelineLifecycle {
       if (named && isSupersededPipelineSession(named)) {
         // The same request again (a double click, a retried command) names the
         // step the newest rewind just superseded: that restart is already done.
+        // A selection is new intent; no saved rewind records it, so require a
+        // fresh session instead of claiming it was applied.
         const latest = candidate.rewinds?.at(-1);
         if (
+          options.selection ||
           latest?.id !== named.supersededBy ||
           latest?.sessionKey !== named.sessionKey ||
           (options.resetCode &&

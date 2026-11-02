@@ -136,6 +136,49 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test.each([true, false])(
+    "reviewer and consolidation restarts forward explicit speed %s",
+    async (fastMode) => {
+      await withPipeline(async ({ service, storage, read, provider }) => {
+        const config = await storage.loadConfig();
+        config.global.agentSettings = { platforms: { claude: { fastMode: !fastMode } } };
+        await storage.saveConfig(config);
+        const started = await service.start(
+          startInput([
+            { agent: "claude", model: "opus" },
+            { agent: "claude", model: "sonnet" },
+          ]),
+        );
+        let current = await advanceUntil(service, read, started.id, "addressing");
+        const reviewer = current.sessions.find((session) => session.label === "Review 1")!;
+        await service.restartStep(started.id, reviewer.sdkSessionId, {
+          agent: "claude",
+          model: "opus",
+          reasoningEffort: "high",
+          fastMode,
+        });
+        current = await advanceUntil(service, read, started.id, "addressing");
+        expect(
+          provider.created.filter((entry) => entry.label === "Review 1").at(-1)?.options,
+        ).toMatchObject({ model: "opus", effort: "high", fastMode });
+        const consolidation = current.sessions
+          .filter((session) => session.label === "Consolidation" && !session.supersededBy)
+          .at(-1)!;
+        await service.restartStep(started.id, consolidation.sdkSessionId, {
+          agent: "claude",
+          model: "opus",
+          reasoningEffort: "high",
+          fastMode,
+        });
+        await advanceUntil(service, read, started.id, "addressing");
+        expect(
+          provider.created.filter((entry) => entry.label === "Review · Consolidation").at(-1)
+            ?.options,
+        ).toMatchObject({ model: "opus", effort: "high", fastMode });
+      });
+    },
+  );
+
   test("a single reviewer keeps the classic one-session review stage", async () => {
     await withPipeline(async ({ service, read, providers }) => {
       const started = await service.start(startInput([{ agent: "claude", model: "opus" }]));

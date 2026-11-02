@@ -428,3 +428,35 @@ test("a label bounds its names and leaves an omitted one as it was", async () =>
   expect(store.report({ days: 7 }).environments[0]?.name?.length).toBe(200);
   expect(store.labelEnvironment("missing", { environmentName: "Nobody" })).toBe(0);
 });
+
+for (const label of [{ environmentName: "New environment" }, { projectName: "New project" }]) {
+  test(`newest row's partial label wins as a whole: ${JSON.stringify(label)}`, async () => {
+    const clock: Clock = { value: new Date("2026-10-20T10:00:00Z") };
+    const { store } = await storeWithClock(clock);
+    store.recordTurns({
+      sessionKey: "env-1:claude:older",
+      environmentId: "env-1",
+      platform: "claude",
+      turns: [turn("old")],
+    });
+    store.labelEnvironment("env-1", {
+      environmentName: "Old environment",
+      projectName: "Old project",
+    });
+    clock.value = new Date("2026-10-21T10:00:00Z");
+    store.recordTurns({
+      sessionKey: "env-1:codex:newer",
+      environmentId: "env-1",
+      platform: "codex",
+      turns: [turn("new")],
+    });
+    // Stamp only the new partial name. The older row retains its other name.
+    store.labelEnvironment("env-1", label);
+    for (const platform of [undefined, "claude", "codex"] as const) {
+      const [entry] = store.report({ days: 7, platform }).environments;
+      expect(entry?.name).toBe(label.environmentName);
+      expect(entry?.projectName).toBe(label.projectName);
+      expect(entry?.totals.turns).toBe(platform ? 1 : 2);
+    }
+  });
+}

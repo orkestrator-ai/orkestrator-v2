@@ -160,3 +160,32 @@ mise run test:logged -- --name review-repair-tests -- mise run test
 ```
 
 The passing aggregate does not establish a timing fix; this case remains open.
+
+
+## Live logging round 2 repair — 2026-11-02
+
+`mise run test:logged -- --name fix-default -- mise run test` failed
+`git fsmonitor > a scan retries migration after a transient --unset failure`
+after 5,012.89 ms, with a SIGTERM `git diff --name-status` rejection between
+tests. Workspace used five worker slots (backend two), root one, bridges two,
+and protocol one. Backend totals were 13,069 pass, two fail, with the other
+failure in standalone-ready timing. The complete unchanged fsmonitor owner
+passed alone (23 tests, exit 0, 8.3 s):
+
+`mise run test:logged -- --name branch-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+
+Detached `origin/main` at `88c3c6bac`, using independently installed dependencies,
+also passed the complete owner (7.8 s). An attempted `--rerun-each=10` run
+reported nine failures in the preload-inheritance assertion after its first
+iteration (221 pass, nine fail); these are different failures and do not
+reproduce the aggregate scan timeout. Main has not reproduced that timeout,
+so this sighting is not an environmental excuse. No fsmonitor implementation,
+assertion, timeout or skip changed.
+
+Evidence: `output/agent-testing/review-fix-53284689/default-workspace.log.gz`.
+
+
+The final exact aggregate rerun (`fix-default-final`, 562.0 s) passed this
+owner unchanged. Its only failure was the independently reproduced design
+profile ledger race in case 1314. This passing rerun does not establish a
+timing fix for the earlier observation.

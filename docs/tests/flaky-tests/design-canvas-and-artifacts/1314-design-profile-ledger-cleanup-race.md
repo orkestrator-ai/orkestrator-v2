@@ -265,3 +265,30 @@ commit; the other owners listed here were unchanged. This green aggregate
 does not establish a root cause for the still-open intermittent cases.
 
 On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test` (69.12 ms). The owner passed alone: `bun test ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --only-failures` (37 pass, 0 fail).
+
+
+## Live logging round 2 final validation — 2026-11-02
+
+`mise run test:logged -- --name fix-default-final -- mise run test` finished
+in 562.0 s with one failure: `design service startup > removes the recorded
+profile of a backend that was killed` found `82613-82614-0123abcd.json` in the
+ledger at line 505 after the profile disappeared (247.91 ms). Backend totals
+were 13,070 pass, one fail; all other workspace packages and the root,
+bridges and protocol groups passed. Reservations were workspace/root/bridges/
+protocol 5/1/2/1, with two backend workers.
+
+The complete unchanged owner passed alone (37 tests, exit 0, 0.4 s):
+
+`mise run test:logged -- --name branch-design-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+
+Detached `origin/main` at `88c3c6bac`, with independently installed frozen
+dependencies, reproduced the exact line-505 ledger assertion twice in a
+20-repeat complete-owner run (738 pass, two fail, 4.7 s; failures at 127.79
+and 79.18 ms):
+
+`mise run test:logged -- --name baseline-design-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --rerun-each=20`
+
+Neither the implementation nor its test differs from main in this branch.
+No assertion, deadline or skip changed. This is evidence of the existing race,
+not a fix. Logs are preserved in `output/agent-testing/review-fix-53284689/`:
+`default-final-workspace.log.gz` and `baseline-design-profiles-owner.log.gz`.

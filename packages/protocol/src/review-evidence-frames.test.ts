@@ -5,6 +5,7 @@ import {
   REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE,
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
   escapeFramedEvidenceText,
@@ -116,6 +117,18 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
     expect(body).toContain(
       "Summarize deliberately omitted suites and why in one concise limitation.",
     );
+  });
+
+  test("still recognizes discovery bodies from before the worker exemption clarification", () => {
+    const previousBody = REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE.split(
+      "\n\nYou are review preparation",
+    )[0];
+    expect(previousBody).not.toBe(REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE);
+    expect(
+      isReviewValidationDiscoveryPrompt(
+        `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE}${previousBody}`,
+      ),
+    ).toBe(true);
   });
 
   test("still recognizes an unframed transcript of the earlier full-suite discovery body", () => {

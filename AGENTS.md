@@ -235,9 +235,19 @@ or iOS validation.
 
 ### Choosing validation for a change
 
+Only a pre-review implementation worker whose branch goes to Multi Review or
+a build pipeline next runs only focused checks: the tests that own its changes
+and static checks on the files it touched. Review preparation runs the plan
+below once against the committed branch, so a full pass just before it repeats the same work. Run `mise run test`
+yourself when no review follows, when you are told to, or when the suite's result
+is what you are investigating.
+
 Review preparation (the Build pipeline's package preparation and Multi Review)
-reads this file to decide which checks a change needs. Scale the plan to what
-the changed paths can affect instead of always running every suite:
+must discover and schedule every applicable validation command below, including
+`mise run test` when required, once against the committed branch. The pre-review
+implementation-worker exemption does not apply to review preparation; it must
+not defer validation to a later review. Scale the plan to what the changed paths
+can affect instead of always running every suite:
 
 - Documentation-only changes (prose in files such as `*.md`, `docs/**`, or
   `plans/**`, not content consumed by tests, builds, or tooling) need no test

@@ -21,7 +21,7 @@ import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow"
 import { testGeneratedReviewPackage } from "./build-pipeline-test-fixtures.js";
 import { rewritePipeline } from "./build-pipeline-review-fanout-test-support.js";
 
-async function harness() {
+async function harness(validationCommand = "project-check") {
   const directory = await mkdtemp(path.join(tmpdir(), "validation-controllers-"));
   const storage = new StorageService(directory);
   await storage.init();
@@ -62,7 +62,7 @@ async function harness() {
         commands: [
           {
             id: "check",
-            command: "project-check",
+            command: validationCommand,
             cwd: ".",
             dependsOn: [],
             resources: [],
@@ -133,6 +133,71 @@ test("discovery avoids a duplicate build when the full test stage already builds
   expect(prompt).toContain("First read the repository's agent instructions — AGENTS.md");
   expect(prompt).toContain("include it only when this change meets that condition");
   expect(prompt).toContain(SYSTEM_INSTRUCTIONS_FRAME_OPEN);
+});
+
+test("protocol changes hand off focused implementation checks to one required full-suite run", async () => {
+  // The provider fixture returns the repository-required plan. This verifies the
+  // discovery contract and controller handoff, not a live model's plan selection.
+  const h = await harness("mise run test");
+  const service = new BuildPipelineService(h.storage, h.invoke, {
+    autoAdvance: false,
+    provider: async () => h.provider,
+  });
+  try {
+    const started = await service.start({
+      taskId: "protocol-change",
+      projectId: "project-1",
+      existingEnvironmentId: "env-1",
+      environmentType: "local",
+      agentType: "claude",
+      taskTitle: "Update shared protocol",
+      taskSnapshot: {
+        title: "Update shared protocol",
+        description: "Change packages/protocol/src/review-evidence-frames.ts.",
+        acceptanceCriteria:
+          "Follow AGENTS.md validation requirements for packages/protocol changes.",
+        comments: [],
+        images: [],
+      },
+      reviewers: [
+        { agent: "claude", model: "reviewer-a" },
+        { agent: "claude", model: "reviewer-b" },
+      ],
+    });
+    const read = async () =>
+      (await h.storage.getBuildPipeline(started.id))!.snapshot as BuildPipeline;
+    for (let i = 0; i < 8 && (await read()).validationRun?.status !== "running"; i++)
+      await service.advanceNow(started.id);
+    expect((await read()).validationRun?.status).toBe("running");
+    expect(h.sends).toHaveLength(2);
+    const [implementation, discovery] = h.sends;
+    expect(implementation!.prompt).toContain("packages/protocol/src/review-evidence-frames.ts");
+    expect(implementation!.prompt).toContain("Run focused checks needed during implementation");
+    expect(implementation!.prompt).toContain(
+      "do not run a separate full test/typecheck/build pass",
+    );
+    expect(discovery!.options.schema).toBe(REVIEW_VALIDATION_PLAN_SCHEMA);
+    expect(discovery!.prompt).toContain(
+      "You are review preparation, not a pre-review implementation worker",
+    );
+    expect(discovery!.prompt).toContain(
+      "Exemptions that let implementation workers defer full validation until review do not apply to this discovery task",
+    );
+    expect(discovery!.prompt).toContain(
+      "Discover and schedule every applicable repository-required validation command, including required full suites, once against the committed branch",
+    );
+    h.finish();
+    await service.advanceNow(started.id);
+    const starts = h.calls.filter((call) => call.name === "start_review_validation");
+    expect(starts).toHaveLength(1);
+    expect(
+      (starts[0]!.args.run as ReviewValidationRun).plan.commands.map((c) => c.command),
+    ).toEqual(["mise run test"]);
+    expect((await read()).reviewPackage?.id).toBe((await read()).validationRun?.id);
+  } finally {
+    await service.shutdown();
+    await h.cleanup();
+  }
 });
 
 test("manual discovery hands off once; a replacement controller seals completed background evidence", async () => {

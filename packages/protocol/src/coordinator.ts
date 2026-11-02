@@ -516,6 +516,17 @@ export const COORDINATOR_PR_RULE =
   "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. You are woken when a pull request you raised opens, conflicts with its base branch, fails its checks, becomes ready to merge, or is merged or closed; when it conflicts, call resolve_conflicts, which opens the worker's Resolve tab and wakes you once it finishes. Never merge a pull request: the user does. A build pipeline (start_build_pipeline, including feature builds) has its own PR step, so never raise one for it.";
 
 /**
+ * Who runs full validation, told to every main coordinator verbatim.
+ *
+ * Coordinators otherwise closed a worker's brief with "run the full suite once
+ * and report", then started a Multi Review whose first step runs the same suite
+ * against the same commit. Build pipelines already avoid this through
+ * `IMPLEMENTATION_VALIDATION_HANDOFF`; this is the coordinator's equivalent.
+ */
+export const COORDINATOR_VALIDATION_RULE =
+  "Validation: Multi Review and build pipelines start by running the project's full validation once against the committed branch, so when review comes next never ask a worker for a full test suite, typecheck, lint or build pass, including in a last message before you start the review. Ask for the focused checks that cover its changes and for those results in its report. State in every worker prompt whether review follows. When no review follows, explicitly ask the worker to run all validation required by the repository before handoff. When review follows, ask for a full run only if the user asks for one or that run's result is what you need to learn, such as when diagnosing a suite failure.";
+
+/**
  * Self-timers and provider accounts, told to every main coordinator verbatim.
  *
  * "Check the workers in 2 hours and switch accounts if they hit a usage

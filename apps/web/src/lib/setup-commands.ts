@@ -1,6 +1,9 @@
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as backend from "@/lib/backend";
 import type { Environment } from "@/types";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("environment");
 
 /** Persist the user-facing setup override in the authoritative environment. */
 export async function forceResolveSetupRuntime(
@@ -43,9 +46,7 @@ export async function approveSetupRuntime(
 ): Promise<Environment | undefined> {
   const store = useEnvironmentStore.getState();
   if (!store.getEnvironmentById(environmentId)) {
-    console.warn("[setup-commands] approveSetupRuntime: unknown environment", {
-      environmentId,
-    });
+    log.warn("setup-approval.unknown-environment", { environmentId });
     return undefined;
   }
   const updated = await backend.approveEnvironmentSetup(environmentId, hash, remember);

@@ -1,4 +1,5 @@
 import { beforeEach, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import type { Environment } from "@/types";
 
 const overrideEnvironmentSetup = mock(
@@ -18,13 +19,25 @@ const runEnvironmentSetup = mock(
     }) as Environment,
 );
 
-mock.module("@/lib/backend", () => ({ overrideEnvironmentSetup, runEnvironmentSetup }));
+const approveEnvironmentSetup = mock(async () => ({}) as Environment);
+
+mock.module("@/lib/backend", () => ({
+  approveEnvironmentSetup,
+  overrideEnvironmentSetup,
+  runEnvironmentSetup,
+}));
 
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
-const { forceResolveSetupRuntime, isSetupBlocked, isSetupPending, retrySetupRuntime } =
-  await import("./setup-commands");
+const {
+  approveSetupRuntime,
+  forceResolveSetupRuntime,
+  isSetupBlocked,
+  isSetupPending,
+  retrySetupRuntime,
+} = await import("./setup-commands");
 
 beforeEach(() => {
+  approveEnvironmentSetup.mockClear();
   overrideEnvironmentSetup.mockClear();
   runEnvironmentSetup.mockClear();
   useEnvironmentStore.setState({ environments: [] });
@@ -94,4 +107,22 @@ test("retrySetupRuntime leaves the failed phase intact when retry rejects", asyn
 
   await expect(retrySetupRuntime("env-1")).rejects.toThrow("retry unavailable");
   expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("failed");
+});
+
+test("approveSetupRuntime approves nothing for an unknown environment, and says so", async () => {
+  const capture = captureLogs();
+  try {
+    await expect(approveSetupRuntime("missing", "hash", false)).resolves.toBeUndefined();
+    expect(approveEnvironmentSetup).not.toHaveBeenCalled();
+    expect(capture.records()).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        area: "environment",
+        event: "setup-approval.unknown-environment",
+        fields: { environmentId: "missing" },
+      }),
+    ]);
+  } finally {
+    capture.restore();
+  }
 });

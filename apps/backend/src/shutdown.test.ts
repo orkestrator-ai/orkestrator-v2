@@ -1,7 +1,17 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { createBackendExitHandler, createBackendShutdownHandler } from "./shutdown.js";
 
 describe("backend shutdown handler", () => {
+  let logs: LogCapture;
+  beforeEach(() => {
+    logs = captureLogs();
+  });
+  afterEach(() => {
+    logs.restore();
+  });
+  const warnings = () => logs.records().filter((record) => record.level === "warn");
+
   test("runs cleanup in order and preserves the service-manager SIGTERM exit code", async () => {
     const order: string[] = [];
     const exit = mock((code: number) => {
@@ -20,7 +30,6 @@ describe("backend shutdown handler", () => {
       stopBackend: async () => {
         order.push("backend");
       },
-      warn: mock(() => undefined),
       exit,
     });
 
@@ -40,7 +49,6 @@ describe("backend shutdown handler", () => {
     const handler = createBackendShutdownHandler({
       stopGateway: mock(async () => undefined),
       stopBackend,
-      warn: mock(() => undefined),
       exit,
     });
 
@@ -55,7 +63,6 @@ describe("backend shutdown handler", () => {
   });
 
   test("warns for optional cleanup failures but still exits successfully", async () => {
-    const warn = mock((_message: string) => undefined);
     const exit = mock(() => undefined);
     const handler = createBackendShutdownHandler({
       stopTailscaleServe: async () => {
@@ -66,20 +73,21 @@ describe("backend shutdown handler", () => {
       },
       stopGateway: async () => undefined,
       stopBackend: async () => undefined,
-      warn,
       exit,
     });
 
     await handler("SIGTERM");
 
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn.mock.calls[0]?.[0]).toContain("serve cleanup failed");
-    expect(warn.mock.calls[1]?.[0]).toContain("managed cleanup failed");
+    expect(warnings().map((record) => record.fields?.step)).toEqual([
+      "tailscale-serve",
+      "managed-web-client",
+    ]);
+    expect(logs.lines.join("\n")).toContain("serve cleanup failed");
+    expect(logs.lines.join("\n")).toContain("managed cleanup failed");
     expect(exit).toHaveBeenCalledWith(0);
   });
 
   test("attempts backend cleanup after a gateway failure and exits non-zero", async () => {
-    const warn = mock((_message: string) => undefined);
     const stopBackend = mock(async () => {
       throw new Error("local server cleanup failed");
     });
@@ -89,32 +97,30 @@ describe("backend shutdown handler", () => {
         throw new Error("gateway cleanup failed");
       },
       stopBackend,
-      warn,
       exit,
     });
 
     await handler("SIGTERM");
 
     expect(stopBackend).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warnings().map((record) => record.fields?.step)).toEqual(["gateway", "local-servers"]);
     expect(exit).toHaveBeenCalledWith(1);
   });
 
   test("logs the signal and the exit so a clean quit is distinguishable from a kill", async () => {
-    const info = mock((_message: string) => undefined);
     const handler = createBackendShutdownHandler({
       stopGateway: mock(async () => undefined),
       stopBackend: mock(async () => undefined),
-      warn: mock(() => undefined),
-      info,
       exit: mock(() => undefined),
     });
 
     await handler("SIGTERM");
 
-    expect(info.mock.calls.map(([message]) => message)).toEqual([
-      "[Backend] Received SIGTERM; shutting down",
-      "[Backend] Shutdown finished; exiting with 0",
+    expect(
+      logs.records().map(({ level, area, event, fields }) => [level, area, event, fields]),
+    ).toEqual([
+      ["info", "backend", "shutdown.signal-received", { signal: "SIGTERM" }],
+      ["info", "backend", "shutdown.finished", { code: 0 }],
     ]);
   });
 });

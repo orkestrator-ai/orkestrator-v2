@@ -1060,8 +1060,9 @@ describe("native-agent activity reconciliation lifecycle", () => {
       expect(tools.start).toHaveBeenCalledTimes(1);
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
-        "[backend] Failed to restore native agent activity:",
-        expect.objectContaining({ message: "activity snapshot unavailable" }),
+        expect.stringMatching(
+          /startup\.step-failed step=native-agent-activity .*activity snapshot unavailable/,
+        ),
       );
     } finally {
       warn.mockRestore();
@@ -1191,14 +1192,13 @@ describe("native-agent activity reconciliation lifecycle", () => {
       tick(2_000);
       await waitForCondition(
         () =>
-          warn.mock.calls.some(
-            ([message]) => message === "[backend] Failed to reconcile native agent activity:",
-          ),
+          warn.mock.calls.some(([message]) => String(message).includes("native-agent-activity")),
         "the failed sweep to be reported",
       );
       expect(warn).toHaveBeenCalledWith(
-        "[backend] Failed to reconcile native agent activity:",
-        expect.objectContaining({ message: "activity sweep unavailable" }),
+        expect.stringMatching(
+          /job\.failed scope=.*native-agent-activity .*activity sweep unavailable/,
+        ),
       );
 
       // The backend is still serving commands, and the interval survived its

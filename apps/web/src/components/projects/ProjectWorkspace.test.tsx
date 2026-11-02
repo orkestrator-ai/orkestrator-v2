@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useProjectStore, useUIStore } from "@/stores";
+import { useKanbanStore } from "@/stores/kanbanStore";
 import type { Project } from "@/types";
 import { ProjectWorkspace } from "./ProjectWorkspace";
 
@@ -21,4 +22,15 @@ test("Home placeholder exposes its panel, loading, error and no-checkout states"
   view.rerender(<ProjectWorkspace projectId="project" />);
   expect(screen.getByRole("tabpanel").textContent).toContain("Set a local checkout");
   expect(screen.queryByText("Opening project home…") === null).toBe(true);
+});
+
+test("Notes tab shows the project notes editor in its own panel", () => {
+  const loadNotes = mock(async (_projectId: string) => {});
+  useKanbanStore.setState({ loadNotes });
+  useUIStore.setState({ projectBoardTab: "notes" });
+  useProjectStore.setState({ projects: [{ id: "project", name: "Acme" } as Project] });
+  render(<ProjectWorkspace projectId="project" />);
+  expect(screen.getByRole("tabpanel").id).toBe("project-panel-notes");
+  expect(screen.getByText("Acme Notes")).toBeTruthy();
+  expect(loadNotes).toHaveBeenCalledWith("project");
 });

@@ -73,8 +73,16 @@ describe("ProjectNotesView", () => {
     });
   });
 
+  test("explains that notes live outside the repository", () => {
+    render(<ProjectNotesView projectId="project-1" />);
+    const notice = screen.getByRole("note").textContent ?? "";
+    expect(notice).toContain("not in the repository");
+    expect(notice).toContain("Unlike AGENTS.md");
+    expect(screen.queryByRole("button", { name: "Back" }) === null).toBe(true);
+  });
+
   test("loads notes, edits them, and saves explicitly", async () => {
-    render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 
@@ -93,7 +101,7 @@ describe("ProjectNotesView", () => {
   test("does not erase text typed while an older save is in flight", async () => {
     const pendingSave = deferred<void>();
     saveProjectNotesMock.mockImplementationOnce(() => pendingSave.promise);
-    render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 
@@ -118,7 +126,7 @@ describe("ProjectNotesView", () => {
       .mockImplementationOnce(async (_projectId, content) => {
         backendContent = content;
       });
-    render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 
@@ -139,7 +147,7 @@ describe("ProjectNotesView", () => {
   });
 
   test("does not schedule a project-notes autosave while typing", async () => {
-    render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
     const setTimeoutSpy = spyOn(globalThis, "setTimeout");
@@ -160,7 +168,7 @@ describe("ProjectNotesView", () => {
   });
 
   test("restores an unsaved durable draft after remount", async () => {
-    const firstView = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    const firstView = render(<ProjectNotesView projectId="project-1" />);
     const firstEditor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((firstEditor as HTMLTextAreaElement).value).toBe("saved notes"));
 
@@ -176,7 +184,7 @@ describe("ProjectNotesView", () => {
       updatedAt: "2026-08-28T00:00:00.000Z",
       revision: 1,
     });
-    render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    render(<ProjectNotesView projectId="project-1" />);
     const restoredEditor = await screen.findByPlaceholderText(/Write project notes here/);
 
     await waitFor(() =>
@@ -187,7 +195,7 @@ describe("ProjectNotesView", () => {
   });
 
   test("flushes the durable draft on unmount without saving project notes", async () => {
-    const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    const view = render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 
@@ -209,7 +217,7 @@ describe("ProjectNotesView", () => {
   test("warns when an unsaved draft cannot be persisted on unmount", async () => {
     const warning = spyOn(console, "warn").mockImplementation(() => undefined);
     saveComposeDraftMock.mockRejectedValueOnce(new Error("draft storage unavailable"));
-    const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    const view = render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 
@@ -230,13 +238,13 @@ describe("ProjectNotesView", () => {
   test("discards the draft of the project the save belonged to after a switch", async () => {
     const pendingSave = deferred<void>();
     saveProjectNotesMock.mockImplementationOnce(() => pendingSave.promise);
-    const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    const view = render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 
     fireEvent.change(editor, { target: { value: "project one edit" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    view.rerender(<ProjectNotesView projectId="project-2" onBack={() => {}} />);
+    view.rerender(<ProjectNotesView projectId="project-2" />);
     await act(async () => pendingSave.resolve());
 
     // The completed save belongs to project-1, so its recovery record is the one
@@ -252,13 +260,13 @@ describe("ProjectNotesView", () => {
     getProjectNotesMock
       .mockResolvedValueOnce({ content: "private project one notes" })
       .mockImplementationOnce(() => secondLoad.promise);
-    const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    const view = render(<ProjectNotesView projectId="project-1" />);
     const editor = (await screen.findByPlaceholderText(
       /Write project notes here/,
     )) as HTMLTextAreaElement;
     await waitFor(() => expect(editor.value).toBe("private project one notes"));
 
-    view.rerender(<ProjectNotesView projectId="project-2" onBack={() => {}} />);
+    view.rerender(<ProjectNotesView projectId="project-2" />);
     expect(editor.value).toBe("");
     expect(editor.disabled).toBe(true);
 
@@ -269,7 +277,7 @@ describe("ProjectNotesView", () => {
   });
 
   test("re-persists a draft that is edited again after a discard", async () => {
-    render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 
@@ -293,7 +301,7 @@ describe("ProjectNotesView", () => {
   test("keeps the editor disabled and saves nothing when the load fails", async () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
     getProjectNotesMock.mockRejectedValueOnce(new Error("notes unavailable"));
-    render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    render(<ProjectNotesView projectId="project-1" />);
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("notes unavailable");
@@ -320,7 +328,7 @@ describe("ProjectNotesView", () => {
   test("keeps failed edits visible and recoverable", async () => {
     const warning = spyOn(console, "warn").mockImplementation(() => undefined);
     saveProjectNotesMock.mockRejectedValueOnce(new Error("disk full"));
-    render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    render(<ProjectNotesView projectId="project-1" />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 

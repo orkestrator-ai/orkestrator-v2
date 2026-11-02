@@ -13,16 +13,12 @@ import type { BuildPhase, BuildPipeline } from "@/stores/buildPipelineStore";
 import type { Environment } from "@/types";
 
 const loadTasksMock = mock(async () => undefined);
-const loadNotesMock = mock(async () => undefined);
-const saveNotesMock = mock(async () => undefined);
 const loadGitHubIssuesMock = mock(async () => undefined);
 const initialConfig = useConfigStore.getState().config;
 
 beforeEach(() => {
   cleanup();
   loadTasksMock.mockClear();
-  loadNotesMock.mockClear();
-  saveNotesMock.mockClear();
   loadGitHubIssuesMock.mockClear();
   useProjectStore.setState({
     projects: [
@@ -40,15 +36,9 @@ beforeEach(() => {
   });
   useKanbanStore.setState({
     tasks: [],
-    notes: "",
     loadTasks: loadTasksMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadTasks"],
-    loadNotes: loadNotesMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadNotes"],
-    saveNotes: saveNotesMock as unknown as ReturnType<typeof useKanbanStore.getState>["saveNotes"],
   });
-  useUIStore.setState({
-    projectBoardTab: "kanban",
-    projectBoardNotesOpen: false,
-  });
+  useUIStore.setState({ projectBoardTab: "kanban" });
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.setState({ config: initialConfig });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
@@ -191,19 +181,8 @@ describe("KanbanBoard ticket sources", () => {
     });
   });
 
-  test("renders the project notes view instead of the board when notes are open", () => {
-    useUIStore.setState({ projectBoardTab: "kanban", projectBoardNotesOpen: true });
-
-    render(<KanbanBoard projectId="project-1" />);
-
-    // Board columns are replaced by the notes view.
-    expect(screen.queryByText("Backlog") === null).toBe(true);
-    expect(screen.getByText("Project Notes")).toBeTruthy();
-    expect(loadNotesMock).toHaveBeenCalledWith("project-1");
-  });
-
   test("mounts the GitHub issues view for the GitHub project-board tab", async () => {
-    useUIStore.setState({ projectBoardTab: "github", projectBoardNotesOpen: false });
+    useUIStore.setState({ projectBoardTab: "github" });
 
     render(<KanbanBoard projectId="project-1" />);
 

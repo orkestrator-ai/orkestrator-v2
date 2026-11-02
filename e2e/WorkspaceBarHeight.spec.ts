@@ -51,14 +51,16 @@ test("project search row matches the pane tab strip height", async ({ page }, te
   }
 });
 
-test("project navigation matches the search row and contains Kanban notes", async ({
+test("project navigation matches the search row and contains the Notes tab", async ({
   page,
 }, testInfo) => {
   await page.goto("/project-navigation");
   const row = page.getByTestId("project-navigation-bar");
   const search = page.getByTestId("project-search-bar");
-  const notes = row.getByRole("button", { name: "Project notes" });
+  const notes = row.getByRole("tab", { name: "Notes", exact: true });
   await expect(row).toBeVisible();
+  // The tab row scrolls horizontally when the window is too narrow for it.
+  await notes.scrollIntoViewIfNeeded();
   await expect(notes).toBeVisible();
   const rowBox = (await row.boundingBox())!;
   const searchBox = (await search.boundingBox())!;
@@ -86,14 +88,14 @@ for (const presentation of ["bar", "grid"]) {
     await page.keyboard.press("Tab");
     const first = tabs.getByRole("tab", { name: "Home", exact: true });
     await first.focus();
-    for (const label of ["Home", "Kanban", "Pull requests", "Features"]) {
+    for (const label of ["Home", "Kanban", "Pull requests", "Notes"]) {
       const tab = tabs.getByRole("tab", { name: label, exact: true });
       if (label === "Kanban") {
         await page.keyboard.press("ArrowRight");
         await page.keyboard.press("ArrowRight");
       } else if (label === "Pull requests") {
         await page.keyboard.press("End");
-      } else if (label === "Features") {
+      } else if (label === "Notes") {
         await page.keyboard.press("ArrowLeft");
       }
       await expect(tab).toBeFocused();

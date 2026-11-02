@@ -219,7 +219,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     selectedProjectId,
     projectBoardTab,
     openProjectBoardTab,
-    openProjectNotes,
     selectedEnvironment,
     workspaceReady,
     setupRunning,
@@ -558,10 +557,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         semantics={isProjectView ? "tabs" : "buttons"}
         ariaLabel="Project navigation"
         // Bare icon-and-label tabs, sized to sit within the workspace bar row
-        // alongside the sidebar's project search bar.
+        // alongside the sidebar's project search bar. The grid toolbar
+        // stretches every button to its cell, so there the tabs take two
+        // columns like its other tiles; a scrolling row would show only one.
         className={cn(
-          "max-w-[min(100%,40rem)] gap-0.5 overflow-x-auto rounded-none border-0 bg-transparent p-0",
-          isGrid && "col-span-2 w-full justify-start",
+          "rounded-none border-0 bg-transparent p-0",
+          isGrid
+            ? "col-span-2 grid w-full grid-cols-2 gap-2"
+            : "max-w-[min(100%,48rem)] gap-0.5 overflow-x-auto",
         )}
         buttonClassName="h-6 shrink-0 px-2 text-xs focus-visible:ring-inset"
         options={
@@ -607,6 +610,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               panelId: "project-panel-features",
             },
             {
+              value: "notes",
+              label: "Notes",
+              icon: <StickyNote className="size-3.5" />,
+              panelId: "project-panel-notes",
+            },
+            {
               value: "pull-requests",
               label: "Pull requests",
               icon: <GitPullRequest className="size-3.5" />,
@@ -620,20 +629,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           }>
         }
       />
-      {!isGrid && <div className="min-w-4 flex-1" />}
-      {(isGrid || projectBoardTab === "kanban") && (
-        <Button
-          variant={isGrid ? "ghost" : "outline"}
-          size={isGrid ? "icon" : "sm"}
-          className={cn("gap-1.5", !isGrid && "h-6 shrink-0 text-xs")}
-          onClick={openProjectNotes}
-          aria-label="Project notes"
-          disabled={!selectedProject}
-        >
-          <StickyNote className="h-3.5 w-3.5" />
-          {isGrid ? <span className="truncate text-xs">Project notes</span> : "Project Notes"}
-        </Button>
-      )}
     </>
   );
 

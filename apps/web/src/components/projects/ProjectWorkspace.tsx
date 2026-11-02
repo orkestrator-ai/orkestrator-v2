@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
-import { KanbanBoard } from "@/components/kanban";
+import { KanbanBoard, ProjectNotesView } from "@/components/kanban";
 import { useProjectStore, useUIStore } from "@/stores";
 import { CoordinatorPanel } from "./CoordinatorPanel";
 import { LeafModeCoordinatorGate } from "./LeafModeCoordinatorGate";
@@ -39,6 +39,13 @@ export function ProjectWorkspace({
         ) : (
           "Set a local checkout in repository settings to work in the project home."
         )}
+      </div>
+    );
+  }
+  if (tab === "notes") {
+    return (
+      <div id="project-panel-notes" role="tabpanel" className="h-full">
+        <ProjectNotesView projectId={projectId} />
       </div>
     );
   }

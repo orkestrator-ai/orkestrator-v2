@@ -184,7 +184,6 @@ const selectEnvironmentMock = mock((_environmentId: string | null) => {});
 const selectProjectMock = mock((_projectId: string | null) => {});
 const setProjectCollapsedMock = mock((_projectId: string, _collapsed: boolean) => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
-const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
 let projectBoardActionLog: string[] = [];
 const toggleFilesPanelMock = mock(() => {});
 const openFilesPanelOnAllFilesMock = mock(() => {});
@@ -295,7 +294,6 @@ let currentOtherProjects: Project[] = [];
 /** Projects removed from the store, to model a deletion while a dialog is open. */
 let currentDeletedProjectIds = new Set<string>();
 let currentProjectBoardTab: ProjectBoardTab = "kanban";
-let currentProjectBoardNotesOpen = false;
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
 let currentSidebarOpen = true;
@@ -721,7 +719,6 @@ mock.module("@/stores", () => ({
       setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
       projectBoardTab: ProjectBoardTab;
       setProjectBoardTab: (tab: ProjectBoardTab) => void;
-      setProjectBoardNotesOpen: (open: boolean) => void;
       sidebarOpen: boolean;
       toggleSidebar: () => void;
     }) => T,
@@ -736,7 +733,6 @@ mock.module("@/stores", () => ({
         setProjectCollapsed: setProjectCollapsedMock,
         projectBoardTab: currentProjectBoardTab,
         setProjectBoardTab: setProjectBoardTabMock,
-        setProjectBoardNotesOpen: setProjectBoardNotesOpenMock,
         sidebarOpen: currentSidebarOpen,
         toggleSidebar: toggleSidebarMock,
       },
@@ -969,7 +965,6 @@ beforeEach(() => {
   selectProjectMock.mockReset();
   setProjectCollapsedMock.mockReset();
   setProjectBoardTabMock.mockReset();
-  setProjectBoardNotesOpenMock.mockReset();
   projectBoardActionLog = [];
   selectEnvironmentMock.mockImplementation((environmentId) => {
     projectBoardActionLog.push(`environment:${environmentId}`);
@@ -986,11 +981,6 @@ beforeEach(() => {
   setProjectBoardTabMock.mockImplementation((tab) => {
     projectBoardActionLog.push(`tab:${tab}`);
     currentProjectBoardTab = tab as typeof currentProjectBoardTab;
-    currentProjectBoardNotesOpen = false;
-  });
-  setProjectBoardNotesOpenMock.mockImplementation((open) => {
-    projectBoardActionLog.push(`notes:${open}`);
-    currentProjectBoardNotesOpen = open;
   });
   toggleFilesPanelMock.mockReset();
   openFilesPanelOnAllFilesMock.mockReset();
@@ -1048,7 +1038,6 @@ beforeEach(() => {
   currentOtherProjects = [];
   currentDeletedProjectIds = new Set<string>();
   currentProjectBoardTab = "kanban";
-  currentProjectBoardNotesOpen = false;
   currentChanges = [];
   currentFilesPanelOpen = false;
   currentSidebarOpen = true;
@@ -1221,9 +1210,7 @@ describe("ActionBar grid presentation", () => {
     expect(screen.getByRole("button", { name: "New terminal tab" }).hasAttribute("disabled")).toBe(
       true,
     );
-    expect(screen.getByRole("button", { name: "Project notes" }).hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(screen.getByRole("button", { name: "Notes" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "Kanban" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "Show file panel" }).hasAttribute("disabled")).toBe(
       true,
@@ -1240,13 +1227,9 @@ describe("ActionBar grid presentation", () => {
     render(<ActionBar presentation="grid" />);
 
     const createPr = screen.getByRole("button", { name: "Create PR" });
-    const projectNotes = screen.getByRole("button", { name: "Project notes" });
     const kanban = screen.getByRole("button", { name: "Kanban" });
 
-    expect(projectNotes.textContent).toContain("Project notes");
-    expect(projectNotes.hasAttribute("disabled")).toBe(false);
     expect(createPr.getAttribute("data-variant")).toBe("ghost");
-    expect(projectNotes.getAttribute("data-variant")).toBe("ghost");
     expect(kanban.className).toContain("bg-primary");
   });
 
@@ -1310,20 +1293,20 @@ describe("ActionBar grid presentation", () => {
     currentSelectedEnvironmentId = null;
     render(<ActionBar presentation="grid" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
     fireEvent.click(screen.getByRole("tab", { name: "Coordinator" }));
     fireEvent.click(screen.getByRole("tab", { name: "Kanban" }));
     fireEvent.click(screen.getByRole("tab", { name: "GitHub" }));
     fireEvent.click(screen.getByRole("tab", { name: "Linear" }));
     fireEvent.click(screen.getByRole("tab", { name: "Features" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
 
-    expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
     expect(setProjectBoardTabMock.mock.calls.map(([tab]) => tab)).toEqual([
       "coordinator",
       "kanban",
       "github",
       "linear",
       "features",
+      "notes",
     ]);
   });
 
@@ -1331,20 +1314,16 @@ describe("ActionBar grid presentation", () => {
     currentProjectBoardTab = "coordinator";
     render(<ActionBar presentation="grid" />);
 
-    const projectNotes = screen.getByRole("button", { name: "Project notes" });
+    const projectNotes = screen.getByRole("button", { name: "Notes" });
     expect(projectNotes.hasAttribute("disabled")).toBe(false);
 
     fireEvent.click(projectNotes);
 
-    expect(setProjectBoardTabMock).toHaveBeenCalledWith("kanban");
-    expect(selectEnvironmentMock).toHaveBeenCalledWith(null);
-    expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
-    expect(projectBoardActionLog).toEqual(["tab:kanban", "environment:null", "notes:true"]);
+    expect(projectBoardActionLog).toEqual(["tab:notes", "environment:null"]);
     expect({
       tab: currentProjectBoardTab as string,
       environmentId: currentSelectedEnvironmentId,
-      notesOpen: currentProjectBoardNotesOpen,
-    }).toEqual({ tab: "kanban", environmentId: null, notesOpen: true });
+    }).toEqual({ tab: "notes", environmentId: null });
   });
 
   test("opens a project-board tab from an environment view", () => {
@@ -1354,18 +1333,6 @@ describe("ActionBar grid presentation", () => {
 
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("coordinator");
     expect(selectEnvironmentMock).toHaveBeenCalledWith(null);
-  });
-
-  test("opens project notes without resetting an already-selected Kanban tab", () => {
-    render(<ActionBar presentation="grid" />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
-
-    expect(setProjectBoardTabMock).not.toHaveBeenCalled();
-    expect(projectBoardActionLog).toEqual(["environment:null", "notes:true"]);
-    expect(currentProjectBoardTab).toBe("kanban");
-    expect(currentSelectedEnvironmentId).toBeNull();
-    expect(currentProjectBoardNotesOpen).toBe(true);
   });
 
   test("returns to an already-selected project-board tab from an environment view", () => {
@@ -2376,7 +2343,7 @@ describe("ActionBar toolbar interactions", () => {
     expect(toolbar.contains(screen.getByRole("button", { name: "Code review" }))).toBe(true);
     expect(projectRow.contains(screen.getByRole("tab", { name: "Home" }))).toBe(true);
     expect(projectRow.contains(screen.getByRole("tab", { name: "Kanban" }))).toBe(true);
-    expect(projectRow.contains(screen.getByRole("button", { name: "Project notes" }))).toBe(true);
+    expect(projectRow.contains(screen.getByRole("tab", { name: "Notes" }))).toBe(true);
     expect(
       toolbar.compareDocumentPosition(projectRow) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -2407,13 +2374,13 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Coordinator" }));
-    fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
 
     expect(projectBoardActionLog).toEqual([
       "tab:coordinator",
       `environment:${projectHomeEnvironment.id}`,
+      "tab:notes",
       `environment:${projectHomeEnvironment.id}`,
-      "notes:true",
     ]);
   });
 
@@ -2537,19 +2504,20 @@ describe("ActionBar workflow tabs", () => {
     ).toBe(true);
 
     expect(screen.queryByText("repo") === null).toBe(true);
-    const notesButton = screen.getByRole("button", { name: "Project notes" });
     expect(screen.getByRole("tab", { name: "Coordinator" })).toBeTruthy();
-    const kanbanTab = screen.getByRole("tab", { name: "Kanban" });
-    expect(kanbanTab).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Kanban" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "GitHub" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
-    expect(
-      kanbanTab.compareDocumentPosition(notesButton) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // Notes sits between Features and Pull requests.
+    const tabNames = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    expect(tabNames.slice(tabNames.indexOf("Features"))).toEqual([
+      "Features",
+      "Notes",
+      "Pull requests",
+    ]);
 
-    fireEvent.click(notesButton);
-    expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("notes");
   });
 
   test("selecting a board tab updates the project board tab", () => {
@@ -2602,16 +2570,6 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("tab", { name: "Features" }).getAttribute("aria-selected")).toBe(
       "false",
     );
-  });
-
-  test("hides the Project Notes button when the active board tab is not kanban", () => {
-    currentSelectedEnvironmentId = null;
-    currentProjectBoardTab = "features";
-
-    render(<ActionBar />);
-
-    expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Project notes" }) === null).toBe(true);
   });
 
   test("native and terminal context menus route neutral, tmux, and CLI tabs", () => {

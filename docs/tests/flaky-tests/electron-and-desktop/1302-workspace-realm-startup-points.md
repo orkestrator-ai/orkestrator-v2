@@ -46,3 +46,12 @@
   Evidence: `output/agent-testing/merge-main-session-import-realm-owner/electron/`;
   compressed log:
   `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.vuZwvC/merge-realm-owner.log.gz`.
+
+## 2026-11-02: fails alone on a clean main
+
+On the renderer logger migration branch it failed in the full Electron suite and again
+when run alone, with `locator.click: Timeout 20000ms exceeded` on the leaf project (line
+326). It then failed the same way, at the same line, alone on a clean, freshly installed
+`origin/main` worktree (`7b726a04a`), so that branch did not cause it. The cause was
+not investigated further.
+

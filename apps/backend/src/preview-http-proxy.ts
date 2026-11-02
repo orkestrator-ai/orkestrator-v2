@@ -19,7 +19,13 @@ import type { AuthenticatedPreviewAccess } from "./core/preview-access.js";
 import type { PreviewRuntime } from "./core/preview-runtime.js";
 import { PreviewAdmission } from "./preview-admission.js";
 import type { PreviewMetrics } from "./preview-metrics.js";
+import type { ResolvedPreviewTarget } from "./core/preview-service-registry.js";
 import { connectPreviewUpstream, type PreviewUpstreamOptions } from "./preview-upstream.js";
+import {
+  DEFAULT_PREVIEW_UPSTREAM_POOL_LIMITS,
+  PreviewUpstreamPool,
+  type PreviewUpstreamPoolLimits,
+} from "./preview-upstream-pool.js";
 
 export interface PreviewProxyContext {
   access: AuthenticatedPreviewAccess;
@@ -33,6 +39,8 @@ export interface PreviewHttpProxyOptions {
   metrics: PreviewMetrics;
   upstream?: Partial<PreviewUpstreamOptions>;
   limits?: Partial<PreviewForwardLimits>;
+  /** Idle upstream connection bounds; `perAccess: 0` turns reuse off. */
+  pool?: Partial<PreviewUpstreamPoolLimits>;
 }
 
 export function previewHeaderPolicy(
@@ -64,6 +72,8 @@ export class PreviewHttpProxy {
   readonly upgrades: PreviewAdmission;
   private readonly limits: PreviewForwardLimits;
   private readonly upstream: PreviewUpstreamOptions;
+  private readonly pool: PreviewUpstreamPool | null;
+  private readonly unsubscribe: () => void;
 
   constructor(private readonly options: PreviewHttpProxyOptions) {
     const limits = options.runtime.limits;
@@ -90,31 +100,70 @@ export class PreviewHttpProxy {
       relayConnect: (target, signal) => options.runtime.relayConnect(target, signal),
       ...options.upstream,
     };
+    const pool = { ...DEFAULT_PREVIEW_UPSTREAM_POOL_LIMITS, ...options.pool };
+    this.pool = pool.perAccess > 0 ? new PreviewUpstreamPool(options.runtime.access, pool) : null;
+    // Access revocation, expiry and a new endpoint generation reach the pool
+    // through access tracking; a registry revocation also drops it directly.
+    this.unsubscribe = options.runtime.registry.onRevoked((serviceIds) => {
+      for (const serviceId of serviceIds) this.pool?.dropService(serviceId);
+    });
   }
 
   stats() {
-    return { http: this.http.stats(), upgrades: this.upgrades.stats() };
+    return {
+      http: this.http.stats(),
+      upgrades: this.upgrades.stats(),
+      upstreamPool: this.pool?.stats() ?? null,
+    };
+  }
+
+  /** Close idle upstream connections; in-flight exchanges belong to their access. */
+  dispose(): void {
+    this.unsubscribe();
+    this.pool?.dispose();
   }
 
   private definition(context: PreviewProxyContext): PreviewServiceDefinition | null {
     return this.options.runtime.registry.getDefinition(context.access.serviceId);
   }
 
-  private hooks(context: PreviewProxyContext) {
+  /** Re-check the access and resolve its current target before any upstream use. */
+  private async authorizedTarget(context: PreviewProxyContext): Promise<ResolvedPreviewTarget> {
     const { runtime } = this.options;
+    runtime.access.assertCurrent(context.access);
+    return runtime.registry.acquireTarget(context.access.serviceId, context.access.generation);
+  }
+
+  private hooks(context: PreviewProxyContext, reusable: boolean) {
+    const { runtime, metrics } = this.options;
+    // The target this exchange's connection was opened for or taken under.
+    let target: ResolvedPreviewTarget | null = null;
+    const pool = reusable ? this.pool : null;
     return {
       connect: async (signal: AbortSignal): Promise<Duplex> => {
         const started = Date.now();
-        runtime.access.assertCurrent(context.access);
-        const target = await runtime.registry.acquireTarget(
-          context.access.serviceId,
-          context.access.generation,
-        );
+        target = await this.authorizedTarget(context);
         const socket = await connectPreviewUpstream(target, this.upstream, signal);
-        this.options.metrics.observe("http.connect_ms", Date.now() - started);
+        metrics.observe("http.connect_ms", Date.now() - started);
+        metrics.increment("upstream.opened");
         return socket;
       },
       track: (close: () => void) => runtime.access.track(context.access, { close }),
+      ...(pool
+        ? {
+            takeIdle: async (): Promise<Duplex | null> => {
+              target = await this.authorizedTarget(context);
+              const socket = pool.take(context.access, target);
+              if (socket) metrics.increment("upstream.reused");
+              return socket;
+            },
+            reuse: (socket: Duplex) => {
+              if (target) pool.put(context.access, target, socket);
+              else socket.destroy();
+            },
+            onStaleRetry: () => metrics.increment("upstream.stale_retry"),
+          }
+        : {}),
     };
   }
 
@@ -141,7 +190,7 @@ export class PreviewHttpProxy {
         response,
         previewHeaderPolicy(definition, context.publicOrigin, context.forwardedFor),
         this.limits,
-        this.hooks(context),
+        this.hooks(context, true),
       );
       if (result.firstByteMs !== undefined)
         this.options.metrics.observe("http.first_byte_ms", result.firstByteMs);
@@ -193,7 +242,8 @@ export class PreviewHttpProxy {
         head,
         previewHeaderPolicy(definition, context.publicOrigin, context.forwardedFor),
         { ...this.limits, headersTimeoutMs: Math.min(this.limits.headersTimeoutMs, 30_000) },
-        this.hooks(context),
+        // An upgraded connection is never returned to the pool.
+        this.hooks(context, false),
       );
       this.options.metrics.increment(
         result.outcome === "open"

@@ -135,6 +135,10 @@ export function MergedProjectListFixture() {
   const { type: _type, ...request } = latest ?? { type: "select" };
   const params = new URLSearchParams(location.search);
   const shownIds = new Set(params.has("fallback") ? ["bk_remote"] : ["bk_remote", "bk_self"]);
+  // `?empty`: no machine has a project yet.
+  const machines = params.has("empty")
+    ? [remote, command].map((view) => ({ ...view, projects: [], environmentsByProject: new Map() }))
+    : [remote, command];
   return (
     <main className="max-w-lg p-4">
       <output data-testid="updates">{JSON.stringify(state.updates)}</output>
@@ -146,11 +150,12 @@ export function MergedProjectListFixture() {
       <output data-testid="intent">{latest ? JSON.stringify(request) : null}</output>
       <FederationProvider>
         <MergedProjectList
-          machines={[remote, command]}
+          machines={machines}
           shownIds={shownIds}
           mode={params.get("mode") === "project" ? "project" : "repository"}
           renderBoundProject={() => null}
           onBoundEnvironmentDragEnd={() => {}}
+          onAddProject={() => {}}
         />
       </FederationProvider>
     </main>

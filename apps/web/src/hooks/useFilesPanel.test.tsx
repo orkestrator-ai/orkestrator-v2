@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
@@ -447,13 +448,16 @@ describe("useFilesPanel truncated folders", () => {
     getLocalFileSubtreeMock.mockImplementationOnce(async () => {
       throw new Error("unreadable");
     });
-    const consoleError = console.error;
-    console.error = () => undefined;
+    const logs = captureLogs();
     try {
       renderHook(() => useFilesPanel());
       await settle();
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({ level: "error", area: "web.files", event: "folder.load-failed" }),
+      );
+      expect(logs.lines.join("\n")).not.toContain("skills/release");
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
 
     expect(getLocalFileSubtreeMock).toHaveBeenCalledTimes(1);

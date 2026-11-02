@@ -787,10 +787,10 @@ export class ProjectsRepository {
         ...(project?.name ? { projectName: project.name } : {}),
       });
     } catch (error) {
-      console.warn(
-        `[backend] could not keep usage names for ${environment.id}:`,
-        error instanceof Error ? error.name : "unknown",
-      );
+      log.warn("usage.environment-label-failed", {
+        environmentId: environment.id,
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 

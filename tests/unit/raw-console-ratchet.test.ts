@@ -8,22 +8,12 @@ const repoRoot = join(import.meta.dir, "../..");
 const oxlint = join(repoRoot, "node_modules/.bin/oxlint");
 
 /**
- * Paths still excluded from the raw `console` lint rule while they wait to move
- * onto the shared logger (docs/architecture/logging.md), with the most sites
- * each may hold. Both only go down: a slice that migrates a path removes its
- * entry here and in `.oxlintrc.json`, and a change that needs a new log line
- * uses the logger, which needs no number raised.
- */
-const UNMIGRATED: Readonly<Record<string, number>> = {
-  "apps/web/**": 369,
-  "apps/web-public/**": 0,
-};
-
-/**
  * Paths excluded for good. A test's console is not the application log, and for
  * the rest `console` is the product: a CLI's and a script's output, a container
  * script with no logger to import, a bridge's build script, a live probe whose
- * stdout is the test's result channel, and the three files that wrap the console.
+ * stdout is the test's result channel, the renderer's build script, the four files
+ * that wrap the console, and the renderer's startup markers, whose exact text the
+ * desktop matches.
  * `fatal-rejections.ts` is serialized into workers, so it cannot import anything.
  */
 const PERMANENT: readonly string[] = [
@@ -49,6 +39,9 @@ const PERMANENT: readonly string[] = [
   "packages/protocol/src/node/application-logging.ts",
   "packages/protocol/src/fatal-rejections.ts",
   "apps/backend/src/bounded-console.ts",
+  "apps/web/scripts/**",
+  "apps/web/src/lib/desktop-startup-marker.ts",
+  "apps/web/src/lib/bug-report/renderer-errors.ts",
 ];
 
 const RAW_CONSOLE = /\bconsole\.(?:log|info|warn|error|debug|trace)\b/g;
@@ -126,31 +119,30 @@ const RESTRICTED = "eslint(no-restricted-globals)";
 
 describe("raw console ratchet", () => {
   test("the exclusions are exactly these lists, so a new one cannot slip in", () => {
-    expect(consoleExclusions()).toEqual([[...PERMANENT], Object.keys(UNMIGRATED)]);
+    expect(consoleExclusions()).toEqual([[...PERMANENT]]);
   });
 
-  test("no unmigrated path gains a raw console site", () => {
-    const sources = trackedSources();
-    const over = Object.entries(UNMIGRATED).flatMap(([pattern, limit]) => {
-      const sites = rawConsoleSites(pattern, sources);
-      return sites > limit ? [`${pattern}: ${sites} sites, limit ${limit}`] : [];
-    });
-    expect(over).toEqual([]);
-  });
-
-  test("a limit that has fallen is lowered, so the ground gained cannot be lost", () => {
-    const sources = trackedSources();
-    const slack = Object.entries(UNMIGRATED).flatMap(([pattern, limit]) => {
-      const sites = rawConsoleSites(pattern, sources);
-      // A little room for unrelated edits, so removing one line needs no change
-      // here. A migration removes far more than this.
-      return limit - sites > Math.max(10, limit / 10) ? [`${pattern}: ${sites} of ${limit}`] : [];
-    });
-    expect(slack).toEqual([]);
+  test("the backend holds no raw console site outside its permanent exclusions", () => {
+    const sources = trackedSources().filter(
+      (file) =>
+        !file.startsWith("apps/backend/scripts/") && file !== "apps/backend/src/bounded-console.ts",
+    );
+    expect(rawConsoleSites("apps/backend/**", sources)).toBe(0);
   });
 
   test("the electron main process holds no raw console site", () => {
     expect(rawConsoleSites("apps/desktop/electron/**", trackedSources())).toBe(0);
+  });
+
+  test("the renderer holds no raw console site outside the two files listed for good", () => {
+    const sources = trackedSources().filter(
+      (file) =>
+        !file.startsWith("apps/web/scripts/") &&
+        file !== "apps/web/src/lib/desktop-startup-marker.ts" &&
+        file !== "apps/web/src/lib/bug-report/renderer-errors.ts",
+    );
+    expect(rawConsoleSites("apps/web/**", sources)).toBe(0);
+    expect(rawConsoleSites("apps/web-public/**", sources)).toBe(0);
   });
 
   test("the bridges and their shared modules hold no raw console site", () => {
@@ -174,6 +166,9 @@ describe("raw console lint rule", () => {
     ["packages/protocol/src/probe.ts"],
     ["packages/toolchain/src/probe.ts"],
     ["bridges/claude-bridge/src/probe.ts"],
+    ["apps/backend/src/core/probe.ts"],
+    ["apps/web/src/lib/probe.ts"],
+    ["apps/web-public/src/probe.ts"],
     ["packages/protocol/src/bridge-lifecycle.ts"],
   ])("rejects console in %s, used directly or passed as a value", (path) => {
     expect(lintCodes(path, 'console.warn("x");\nexport const logger = console;\n')).toEqual([
@@ -196,7 +191,9 @@ describe("raw console lint rule", () => {
     ["packages/protocol/src/node/application-logging.ts"],
     ["apps/backend/src/bounded-console.ts"],
     ["apps/backend/scripts/probe.ts"],
-    ["apps/web/src/lib/probe.ts"],
+    ["apps/web/scripts/probe.ts"],
+    ["apps/web/src/lib/desktop-startup-marker.ts"],
+    ["apps/web/src/lib/bug-report/renderer-errors.ts"],
     ["bridges/claude-bridge/scripts/probe.ts"],
     ["bridges/claude-bridge/src/services/probe.live-probe.ts"],
     ["apps/desktop/tests/probe.test.ts"],

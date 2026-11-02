@@ -31,6 +31,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.pane-layout");
 
 interface DraggableTabBarProps {
   pane: PaneLeaf;
@@ -84,10 +87,11 @@ export function DraggableTabBar({
                         releaseFileDraftRevisionState(tabId);
                       })
                       .catch((retryError) => {
-                        console.warn(
-                          "[DraggableTabBar] Failed to resolve file draft conflict:",
-                          retryError,
-                        );
+                        log.warn("draft.file-conflict-resolve-failed", {
+                          environmentId,
+                          tabId,
+                          error: formatLogError(retryError),
+                        });
                         toast.error("The saved draft changed again. Try discarding it once more.");
                       });
                   },
@@ -118,10 +122,11 @@ export function DraggableTabBar({
               label: "Discard saved draft",
               onClick: () => {
                 void resolveComposeDraftDiscardConflict(draftKey).catch((retryError) => {
-                  console.warn(
-                    "[DraggableTabBar] Failed to resolve compose draft conflict:",
-                    retryError,
-                  );
+                  log.warn("draft.compose-conflict-resolve-failed", {
+                    environmentId,
+                    tabId,
+                    error: formatLogError(retryError),
+                  });
                   toast.error("The saved draft changed again. Try discarding it once more.");
                 });
               },
@@ -227,7 +232,11 @@ export function DraggableTabBar({
       try {
         await Promise.all(idsInPane.map(discardTabDraft));
       } catch (error) {
-        console.warn("[DraggableTabBar] Failed to discard file draft:", error);
+        log.warn("draft.discard-failed", {
+          environmentId,
+          tabCount: idsInPane.length,
+          error: formatLogError(error),
+        });
         return;
       }
 
@@ -308,7 +317,11 @@ export function DraggableTabBar({
     try {
       await Promise.all(confirmedTabIds.map(discardTabDraft));
     } catch (error) {
-      console.warn("[DraggableTabBar] Failed to discard file draft:", error);
+      log.warn("draft.discard-failed", {
+        environmentId,
+        tabCount: confirmedTabIds.length,
+        error: formatLogError(error),
+      });
       return;
     }
 

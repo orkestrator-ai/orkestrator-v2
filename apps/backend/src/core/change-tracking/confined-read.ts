@@ -1,5 +1,5 @@
 /** Descriptor-relative reads: no mutable pathname ancestor is followed. */
-import { constants, closeSync, fstatSync, openSync, read as readBytes } from "node:fs";
+import { constants, closeSync, fstatSync, openSync, read as readBytes, type Stats } from "node:fs";
 import { dlopen, FFIType, ptr, read as ffiRead, type Pointer } from "bun:ffi";
 
 export function validCapturePath(bytes: Uint8Array): boolean {
@@ -15,13 +15,22 @@ export function validCapturePath(bytes: Uint8Array): boolean {
   );
 }
 
-export async function confinedRead(
-  root: string,
-  relative: Uint8Array,
-  maxBytes: number,
-  signal?: AbortSignal,
-) {
-  if (!validCapturePath(relative)) throw new Error("unsafe-capture-path");
+type Libc = {
+  openat(dirfd: number, path: Pointer, flags: number, mode: number): number;
+  readlinkat(dirfd: number, path: Pointer, buffer: Pointer, size: number): number | bigint;
+  errno(): number;
+};
+
+let libc: Libc | null = null;
+const linkScratch = Buffer.alloc(64 * 1024);
+
+/**
+ * libc bound once per process. `dlopen` compiles its trampolines on every
+ * call, which cost more than the read itself for a small file; the library
+ * stays loaded for the life of the backend.
+ */
+function loadLibc(): Libc {
+  if (libc) return libc;
   if (process.platform !== "darwin" && process.platform !== "linux")
     throw new Error("unsupported-platform");
   const symbols = {
@@ -31,20 +40,54 @@ export async function confinedRead(
       returns: FFIType.i64,
     },
   } as const;
-  const lib =
-    process.platform === "darwin"
-      ? dlopen("/usr/lib/libSystem.B.dylib", {
-          ...symbols,
-          __error: { args: [], returns: FFIType.ptr },
-        })
-      : dlopen("libc.so.6", { ...symbols, __errno_location: { args: [], returns: FFIType.ptr } });
-  const missing = () => {
-    const pointer =
-      process.platform === "darwin"
-        ? (lib.symbols as { __error(): Pointer }).__error()
-        : (lib.symbols as { __errno_location(): Pointer }).__errno_location();
-    return ffiRead.i32(pointer, 0) === 2;
-  };
+  if (process.platform === "darwin") {
+    const lib = dlopen("/usr/lib/libSystem.B.dylib", {
+      ...symbols,
+      __error: { args: [], returns: FFIType.ptr },
+    });
+    libc = {
+      openat: lib.symbols.openat,
+      readlinkat: lib.symbols.readlinkat,
+      errno: () => ffiRead.i32(lib.symbols.__error()!, 0),
+    };
+  } else {
+    const lib = dlopen("libc.so.6", {
+      ...symbols,
+      __errno_location: { args: [], returns: FFIType.ptr },
+    });
+    libc = {
+      openat: lib.symbols.openat,
+      readlinkat: lib.symbols.readlinkat,
+      errno: () => ffiRead.i32(lib.symbols.__errno_location()!, 0),
+    };
+  }
+  return libc;
+}
+
+export interface ConfinedReadOptions {
+  /**
+   * Called with the opened file's `fstat`. Returning true skips the read:
+   * the result carries `bytes: null` and `skipped: true`, so the caller can
+   * reuse what it already knows about that exact stat stamp.
+   */
+  skipRead?: (info: Stats) => boolean;
+}
+
+export type ConfinedReadResult =
+  | { bytes: Uint8Array; info: null; after: null; symlink: true; skipped: false }
+  | { bytes: Uint8Array; info: Stats; after: Stats; symlink: false; skipped: false }
+  | { bytes: null; info: Stats; after: Stats; symlink: false; skipped: true };
+
+export async function confinedRead(
+  root: string,
+  relative: Uint8Array,
+  maxBytes: number,
+  signal?: AbortSignal,
+  options: ConfinedReadOptions = {},
+): Promise<ConfinedReadResult> {
+  if (!validCapturePath(relative)) throw new Error("unsafe-capture-path");
+  const lib = loadLibc();
+  const missing = () => lib.errno() === 2;
   const fds: number[] = [];
   const directoryFlags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
   try {
@@ -54,18 +97,26 @@ export async function confinedRead(
     const name = Buffer.concat([Buffer.from(parts.pop()!, "latin1"), Buffer.from([0])]);
     for (const part of parts) {
       const encoded = Buffer.concat([Buffer.from(part, "latin1"), Buffer.from([0])]);
-      const fd = lib.symbols.openat(parent, ptr(encoded), directoryFlags, 0);
+      const fd = lib.openat(parent, ptr(encoded), directoryFlags, 0);
       if (fd < 0) throw new Error(missing() ? "capture-file-missing" : "unsafe-capture-ancestor");
       fds.push(fd);
       parent = fd;
     }
-    const link = Buffer.alloc(Math.min(maxBytes + 1, 64 * 1024));
-    const linkSize = Number(lib.symbols.readlinkat(parent, ptr(name), ptr(link), link.length));
+    // Used synchronously, before any await, so one scratch buffer serves
+    // every concurrent read; a symlink target is copied out of it.
+    const linkLength = Math.min(maxBytes + 1, linkScratch.length);
+    const linkSize = Number(lib.readlinkat(parent, ptr(name), ptr(linkScratch), linkLength));
     if (linkSize >= 0) {
-      if (linkSize >= link.length || linkSize > maxBytes) throw new Error("capture-file-too-large");
-      return { bytes: link.subarray(0, linkSize), info: null, after: null, symlink: true };
+      if (linkSize >= linkLength || linkSize > maxBytes) throw new Error("capture-file-too-large");
+      return {
+        bytes: Buffer.from(linkScratch.subarray(0, linkSize)),
+        info: null,
+        after: null,
+        symlink: true,
+        skipped: false,
+      };
     }
-    const fd = lib.symbols.openat(
+    const fd = lib.openat(
       parent,
       ptr(name),
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -76,6 +127,8 @@ export async function confinedRead(
     const info = fstatSync(fd);
     if (!info.isFile()) throw new Error("capture-file-unsupported");
     if (info.size > maxBytes) throw new Error("capture-file-too-large");
+    if (options.skipRead?.(info))
+      return { bytes: null, info, after: info, symlink: false, skipped: true };
     // Reserve a fixed bound before reading, even if another writer grows it.
     const bytes = Buffer.alloc(Math.min(info.size + 1, maxBytes + 1));
     let size = 0;
@@ -96,9 +149,14 @@ export async function confinedRead(
       size += n;
     }
     if (size > maxBytes) throw new Error("capture-file-too-large");
-    return { bytes: bytes.subarray(0, size), info, after: fstatSync(fd), symlink: false };
+    return {
+      bytes: bytes.subarray(0, size),
+      info,
+      after: fstatSync(fd),
+      symlink: false,
+      skipped: false,
+    };
   } finally {
     for (const fd of fds.reverse()) closeSync(fd);
-    lib.close();
   }
 }

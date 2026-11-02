@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
@@ -897,8 +898,7 @@ describe("GlobalSettings", () => {
   });
 
   test("reports clipboard failures for the web URL and gateway token", async () => {
-    const originalConsoleError = console.error;
-    console.error = mock(() => undefined);
+    const logs = captureLogs();
     mockWriteText.mockRejectedValue(new Error("clipboard denied"));
     try {
       render(<GlobalSettings activeSection="web-client" />);
@@ -915,8 +915,23 @@ describe("GlobalSettings", () => {
         expect(mockToastError).toHaveBeenCalledWith("Failed to copy gateway token"),
       );
       expect(mockWriteText).toHaveBeenCalledTimes(2);
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.settings",
+          event: "web-client-url.copy-failed",
+        }),
+      );
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.settings",
+          event: "gateway-token.copy-failed",
+        }),
+      );
+      expect(logs.lines.join("\n")).not.toContain("gateway-token-123456");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -967,8 +982,7 @@ describe("GlobalSettings", () => {
   });
 
   test("reports gateway token persistence failures and keeps the edit retryable", async () => {
-    const originalConsoleError = console.error;
-    console.error = mock(() => undefined);
+    const logs = captureLogs();
     mockSetGatewayToken.mockRejectedValueOnce(new Error("credential write failed"));
     render(<GlobalSettings activeSection="web-client" />);
     const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
@@ -987,7 +1001,15 @@ describe("GlobalSettings", () => {
     fireEvent.focus(input);
     fireEvent.blur(input);
     await waitFor(() => expect(mockSetGatewayToken).toHaveBeenCalledTimes(2));
-    console.error = originalConsoleError;
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "web.settings",
+        event: "gateway-token.save-failed",
+      }),
+    );
+    expect(logs.lines.join("\n")).not.toContain("replacement-token-123456");
+    logs.restore();
   });
 
   test("does not let a remote client change the desktop web access lifecycle", async () => {
@@ -2087,8 +2109,7 @@ describe("GlobalSettings", () => {
   });
 
   test("keeps persisted settings and the PAT edit retryable when token storage fails", async () => {
-    const originalConsoleError = console.error;
-    console.error = mock(() => undefined);
+    const logs = captureLogs();
     mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
     try {
       const { rerender } = render(<GlobalSettings activeSection="version-control" />);
@@ -2117,8 +2138,16 @@ describe("GlobalSettings", () => {
       fireEvent.focus(token);
       fireEvent.blur(token);
       await waitFor(() => expect(mockSetGitHubToken).toHaveBeenCalledTimes(2));
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.settings",
+          event: "credential.save-failed",
+        }),
+      );
+      expect(logs.lines.join("\n")).not.toContain("replacement-token");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2200,14 +2229,22 @@ describe("GlobalSettings", () => {
   test("marks the backend as unreachable when it does not answer", async () => {
     // Without the marker an unreachable backend is indistinguishable from a
     // healthy one, on the single tab whose job is to say what is running.
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    const logs = captureLogs();
     mockGetAppVersion.mockRejectedValue(new Error("backend offline"));
     render(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("Unreachable")).toBeTruthy();
     expect(screen.getByText(BUNDLED_APP_VERSION)).toBeTruthy();
-    await waitFor(() => expect(consoleError).toHaveBeenCalled());
-    consoleError.mockRestore();
+    await waitFor(() =>
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.settings",
+          event: "backend-version.read-failed",
+        }),
+      ),
+    );
+    logs.restore();
   });
 
   test("never shows the client version as the backend's when it reports the unset placeholder", async () => {
@@ -2674,8 +2711,7 @@ describe("GlobalSettings", () => {
   });
 
   test("renders every DNS result state and recovers from a test failure", async () => {
-    const originalConsoleError = console.error;
-    console.error = mock(() => undefined);
+    const logs = captureLogs();
     mockTestDomainResolution
       .mockResolvedValueOnce([
         { domain: "resolved.example", valid: true, resolvable: true, ips: [], error: null },
@@ -2704,12 +2740,17 @@ describe("GlobalSettings", () => {
       fireEvent.click(screen.getByRole("button", { name: "Test DNS" }));
       await waitFor(() => expect(mockTestDomainResolution).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(screen.getByRole("button", { name: "Test DNS" })).toBeTruthy());
-      expect(console.error).toHaveBeenCalledWith(
-        "[settings] Failed to test domains:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.settings",
+          event: "domains.test-failed",
+          fields: { error: expect.objectContaining({ message: "resolver offline" }) },
+        }),
       );
+      expect(logs.lines.join("\n")).not.toContain("resolved.example");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -3098,8 +3139,7 @@ describe("GlobalSettings", () => {
   });
 
   test("keeps a rejected credential edit across an unrelated store write", async () => {
-    const originalConsoleError = console.error;
-    console.error = mock(() => undefined);
+    const logs = captureLogs();
     mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
     try {
       render(<GlobalSettings activeSection="version-control" />);
@@ -3126,7 +3166,7 @@ describe("GlobalSettings", () => {
 
       expect(token.value).toBe("replacement-token");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 });

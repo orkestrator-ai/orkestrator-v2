@@ -2,6 +2,10 @@
  * Canvas utilities for image processing.
  */
 
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
+
 // Claude SDK uses sharp to resize images >2000px — sharp fails in packaged apps (code signing).
 // Pre-resize in the frontend to avoid hitting the SDK's sharp dependency entirely.
 export const MAX_IMAGE_DIMENSION = 2000;
@@ -43,7 +47,7 @@ export function resizeCanvasIfNeeded(
 
   if (!ctx) {
     // Cannot resize - return original canvas unchanged
-    console.error("[canvas-utils] Failed to get 2D context for resized canvas");
+    log.error("canvas.context-unavailable", { resize: "bytes" });
     releaseCanvas(resizedCanvas);
     return canvas;
   }
@@ -86,7 +90,7 @@ export function resizeCanvasToMaxDimension(
   const ctx = resizedCanvas.getContext("2d");
 
   if (!ctx) {
-    console.error("[canvas-utils] Failed to get 2D context for dimension-resized canvas");
+    log.error("canvas.context-unavailable", { resize: "dimension" });
     releaseCanvas(resizedCanvas);
     return canvas;
   }

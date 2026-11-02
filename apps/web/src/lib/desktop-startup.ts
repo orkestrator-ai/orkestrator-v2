@@ -1,4 +1,7 @@
-import { desktopStartupMessage } from "@orkestrator/protocol/debug-logging";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { emitDesktopStartupMarker } from "./desktop-startup-marker";
+
+const log = createLogger("web.startup");
 
 type DesktopApi = Pick<NonNullable<Window["orkestrator"]>, "invoke" | "connections">;
 type ConnectionResult = "ready" | "bridge-unavailable" | "backend-unavailable";
@@ -110,22 +113,19 @@ export async function startDesktopRenderer({
   try {
     if (desktop) {
       showStartupScreen(target.document, false, () => target.location.reload());
-      console.info(desktopStartupMessage("checking"));
+      emitDesktopStartupMarker("checking");
       const result = await connect();
       if (result !== "ready") {
-        console.error(desktopStartupMessage(result));
+        emitDesktopStartupMarker(result);
         showStartupScreen(target.document, true, () => target.location.reload());
         return;
       }
-      console.info(desktopStartupMessage("ready"));
+      emitDesktopStartupMarker("ready");
     }
     await start();
   } catch (error) {
-    console.error(desktopStartupMessage("renderer-load-failed"));
-    console.error("[DesktopStartup] Renderer failed to load", {
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
+    emitDesktopStartupMarker("renderer-load-failed");
+    log.error("renderer.load-failed", { error: formatLogError(error) });
     showStartupScreen(target.document, true, () => target.location.reload());
   }
 }

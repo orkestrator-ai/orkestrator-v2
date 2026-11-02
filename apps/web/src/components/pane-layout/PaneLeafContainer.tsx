@@ -34,6 +34,10 @@ const LazyClaudeTmuxChatTab = lazy(async () => ({
 const LazyBuildChatTab = lazy(async () => ({
   default: (await import("@/components/build-pipeline/BuildChatTab")).BuildChatTab,
 }));
+const LazyPipelineKeyInformationTab = lazy(async () => ({
+  default: (await import("@/components/build-pipeline/PipelineKeyInformationTab"))
+    .PipelineKeyInformationTab,
+}));
 const LazyMultiReviewTab = lazy(async () => ({
   default: (await import("@/components/review/MultiReviewTab")).MultiReviewTab,
 }));
@@ -475,6 +479,25 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     isActive={isTabActive && isActive}
                     ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                   />
+                </LazyLoadBoundary>
+              </div>
+            );
+          }
+
+          if (tab.type === "key-information" && tab.keyInformationTabData) {
+            return (
+              <div
+                key={tab.id}
+                className={cn(
+                  "absolute inset-0",
+                  isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
+                )}
+              >
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyPipelineKeyInformationTab data={tab.keyInformationTabData} />
                 </LazyLoadBoundary>
               </div>
             );

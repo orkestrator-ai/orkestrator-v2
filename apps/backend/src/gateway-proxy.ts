@@ -60,6 +60,13 @@ import type { StaticContentEncoding } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
+import {
+  browserPreviewRewriteKey,
+  derivedProxyEtag,
+  mapIfNoneMatchForUpstream,
+  restoreDerivedEtag,
+} from "./gateway-proxy-etag.js";
+
 const log = createLogger("gateway");
 
 export function createSseGzipCompressor(): Gzip {
@@ -173,6 +180,11 @@ export class GatewayProxy {
       // Keeping the loopback hop decoded prevents double compression and lets
       // preview rewriting enforce its decoded-byte bound.
       targetHeaders["accept-encoding"] = "identity";
+      // Tags this gateway derived for transformed bytes go upstream as the
+      // upstream's own tags, so the application can still answer 304.
+      const rewriteKey =
+        browserPreview && proxyPrefix ? browserPreviewRewriteKey(proxyPrefix, target) : null;
+      const preconditions = mapIfNoneMatchForUpstream(targetHeaders, rewriteKey);
       const proxyRequest = http.request(
         {
           host: target.hostname,
@@ -190,6 +202,7 @@ export class GatewayProxy {
             proxyPrefix,
           );
           const responseStatus = proxyResponse.statusCode ?? 502;
+          if (responseStatus === 304) restoreDerivedEtag(responseHeaders, preconditions);
           const contentRange = headerValueToString(proxyResponse.headers["content-range"]);
           const transformableRepresentation = canTransformProxyRepresentation(
             request.method,
@@ -371,12 +384,19 @@ export class GatewayProxy {
               }
               bodySettled = true;
               delete responseHeaders["content-encoding"];
+              const upstreamEtag = responseHeaders.etag;
               stripTransformedRepresentationHeaders(responseHeaders);
               settleRewrittenProxyBodyResponse(
                 response,
                 proxyResponse.statusCode ?? 502,
                 responseHeaders,
-                prepareCompressedBody(rewritten, contentType, compressionContext),
+                prepareCompressedBody(rewritten, contentType, compressionContext).then(
+                  (prepared) => {
+                    const etag = derivedProxyEtag(upstreamEtag, prepared.encoding, rewriteKey);
+                    if (etag) responseHeaders.etag = etag;
+                    return prepared;
+                  },
+                ),
                 () => settled,
                 finish,
                 fail,
@@ -585,7 +605,9 @@ export class GatewayProxy {
                     delete responseHeaders["content-encoding"];
                   } else {
                     responseHeaders["content-encoding"] = prepared.encoding;
+                    const etag = derivedProxyEtag(responseHeaders.etag, prepared.encoding, null);
                     stripTransformedRepresentationHeaders(responseHeaders);
+                    if (etag) responseHeaders.etag = etag;
                   }
                   reservationOwnedByResponse = true;
                   releaseReservationOnResponseSettled(response, releaseReservation);

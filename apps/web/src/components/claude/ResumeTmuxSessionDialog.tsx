@@ -17,6 +17,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { listPreviousSessions, type PreviousSession } from "@/lib/claude-tmux-client";
 import { formatRelativeTimeFromUnixSeconds } from "@/lib/format-relative-time";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.claude-tmux");
 
 interface ResumeTmuxSessionDialogProps {
   open: boolean;
@@ -58,7 +61,7 @@ export function ResumeTmuxSessionDialog({
         },
         (err: unknown) => {
           if (cancelled) return;
-          console.error("[ResumeTmuxSessionDialog] Failed to list sessions:", err);
+          log.error("sessions.list-failed", { environmentId, error: formatLogError(err) });
           setError(String(err));
         },
       )

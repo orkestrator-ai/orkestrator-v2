@@ -53,6 +53,9 @@ import {
 import { MachineConfigProvider } from "./settings-config";
 import { SettingsMachineStrip } from "./SettingsMachineStrip";
 import type { GlobalSettingsSection } from "@/lib/settings-navigation";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.settings");
 
 const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
@@ -239,7 +242,7 @@ export function SettingsPage({
           setConfig(config);
           setInitialLoadDone(true);
         } catch (err) {
-          console.error("[settings-page] Failed to load config:", err);
+          log.error("config.load-failed", { error: formatLogError(err) });
         } finally {
           setLoading(false);
         }

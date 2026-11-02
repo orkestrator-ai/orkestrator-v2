@@ -54,3 +54,17 @@ The complete unchanged owner passed alone, exit 0 in 0.3 s:
 `mise run test:logged -- --name merge-rerun-desktop-keepalive -- bun test --cwd apps/desktop ./tests/backend-event-stream.test.ts --parallel=1 --only-failures`.
 No assertion, timeout, skip, or event-stream code changed. Evidence:
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Renderer-migration merge recurrence, 2026-11-02
+
+The merge of `0ec784293` into `08038e814` repeated the closed-controller
+failure at line 196 in
+`mise run test:logged -- --name merge-default-tests -- mise run test`.
+The failing test took 91.52 ms; the desktop group reported 1,615 pass,
+16 skip and 1 fail under the default scheduler.
+The complete unchanged owner passed alone in 0.3 seconds through
+`mise run test:logged -- --name merge-event-stream-alone -- bun test --cwd apps/desktop ./tests/backend-event-stream.test.ts --parallel=1 --only-failures`.
+No assertion or timeout changed. The known wall-clock scheduling hypothesis
+remains unproven by this recurrence.
+
+Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.6dWJ96/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
@@ -589,7 +590,7 @@ describe("EnvironmentSettingsDialog", () => {
 
   test("shows an error banner and no stale data when the load fails", async () => {
     mockSection = "extensions";
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    const logs = captureLogs();
     extensionHandler = async () => {
       throw new Error("backend unavailable");
     };
@@ -611,14 +612,24 @@ describe("EnvironmentSettingsDialog", () => {
       // The agent navigation and empty selected section remain available.
       expect(screen.getByRole("tab", { name: "Claude" })).toBeTruthy();
       expect(screen.getByRole("region", { name: "Claude extensions" })).toBeTruthy();
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.environment",
+          event: "settings.extensions-load-failed",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({ message: "backend unavailable" }),
+          }),
+        }),
+      );
     } finally {
-      consoleError.mockRestore();
+      logs.restore();
     }
   });
 
   test("does not surface backend error text to the user", async () => {
     mockSection = "extensions";
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    const logs = captureLogs();
     extensionHandler = async () => {
       throw new Error("spawn /usr/local/bin/claude --token sk-secret failed");
     };
@@ -638,7 +649,7 @@ describe("EnvironmentSettingsDialog", () => {
       });
       expect(document.body.textContent).not.toContain("sk-secret");
     } finally {
-      consoleError.mockRestore();
+      logs.restore();
     }
   });
 
@@ -862,7 +873,7 @@ describe("EnvironmentSettingsDialog", () => {
 
   test("discards a failed load that resolves after the dialog closed", async () => {
     mockSection = "extensions";
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    const logs = captureLogs();
     const failing = deferred<AgentExtensionCatalog[]>();
     extensionHandler = () => failing.promise;
 
@@ -904,7 +915,7 @@ describe("EnvironmentSettingsDialog", () => {
       expect(screen.queryByText(/Extension settings could not be loaded/) === null).toBe(true);
       expect(screen.getByText(/Reading each agent's configuration/)).toBeTruthy();
     } finally {
-      consoleError.mockRestore();
+      logs.restore();
     }
   });
 

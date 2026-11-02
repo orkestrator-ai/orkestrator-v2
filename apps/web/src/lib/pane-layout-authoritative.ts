@@ -485,6 +485,13 @@ export function collectPaneDependencyIds(root: unknown): {
             pipelineIds.add(pipelineId);
           }
         }
+        const brief = candidate.keyInformationTabData;
+        if (brief && typeof brief === "object" && !Array.isArray(brief)) {
+          const pipelineId = (brief as Record<string, unknown>).pipelineId;
+          if (typeof pipelineId === "string" && pipelineId.trim()) {
+            pipelineIds.add(pipelineId);
+          }
+        }
         const multi = candidate.multiReviewTabData;
         if (multi && typeof multi === "object" && !Array.isArray(multi)) {
           const data = multi as Record<string, unknown>;

@@ -4,6 +4,8 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
   storage: {
     description: "The SQLite-backed stores, their snapshots and imports from older formats.",
     events: {
+      "usage.environment-label-failed":
+        "Usage labels could not be retained for a removed environment; deletion continues.",
       "snapshot.integrity-failed":
         "An hourly database snapshot failed its integrity check and was discarded.",
       "snapshot.skipped-low-disk":

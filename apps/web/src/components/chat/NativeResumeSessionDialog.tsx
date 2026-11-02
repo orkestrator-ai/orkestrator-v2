@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Archive, ArchiveRestore, Clock, Loader2, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
@@ -13,6 +14,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { formatRelativeTime } from "@/lib/format-relative-time";
+
+const log = createLogger("web.chat");
 
 /** Agent-neutral row rendered by the picker. */
 export interface ResumableSession {
@@ -123,10 +126,10 @@ export function NativeResumeSessionDialog({
       } catch (err) {
         if (requestGeneration !== requestGenerationRef.current) return;
 
-        console.error(
-          `[${agentLabelRef.current}ResumeSessionDialog] Failed to fetch sessions:`,
-          err,
-        );
+        log.error("session-list.load-failed", {
+          platform: agentLabelRef.current,
+          error: formatLogError(err),
+        });
         setError("Failed to load sessions");
       } finally {
         if (requestGeneration === requestGenerationRef.current) {

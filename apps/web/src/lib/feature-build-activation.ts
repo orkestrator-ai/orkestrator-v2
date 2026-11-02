@@ -5,6 +5,9 @@ import { isActiveBuildPhase, useBuildPipelineStore } from "@/stores/buildPipelin
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
 import { armBuildPipelineTabActivation } from "@/lib/pane-layout-authoritative";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 interface PendingFeatureBuildActivation {
   projectId: string;
@@ -36,15 +39,16 @@ function activate(projectId: string, environmentId: string, pipelineId: string):
   void getEnvironment(environmentId)
     .then((environment) => {
       if (!environment) {
-        console.warn(
-          `[feature-build-activation] Environment ${environmentId} was not found after creation`,
-        );
+        log.warn("environment.not-found", { environmentId, projectId, pipelineId });
         return;
       }
       if (environment.projectId !== projectId) {
-        console.warn(
-          `[feature-build-activation] Ignoring environment ${environmentId} for an unexpected project`,
-        );
+        log.warn("environment.project-mismatch", {
+          environmentId,
+          pipelineId,
+          projectId,
+          actualProjectId: environment.projectId,
+        });
         return;
       }
       const store = useEnvironmentStore.getState();
@@ -54,10 +58,12 @@ function activate(projectId: string, environmentId: string, pipelineId: string):
       // The selection remains useful: manifest or live resource recovery can
       // still populate the environment store after a transient targeted-read
       // failure.
-      console.warn(
-        `[feature-build-activation] Failed to hydrate environment ${environmentId}:`,
-        error,
-      );
+      log.warn("environment.hydrate-failed", {
+        environmentId,
+        projectId,
+        pipelineId,
+        error: formatLogError(error),
+      });
     });
 }
 
@@ -69,9 +75,11 @@ function reconcilePendingActivation(pipelineId: string): void {
 
   if (pipeline.projectId !== pending.projectId) {
     pendingActivations.delete(pipelineId);
-    console.warn(
-      `[feature-build-activation] Ignoring pipeline ${pipelineId} for an unexpected project`,
-    );
+    log.warn("pipeline.project-mismatch", {
+      pipelineId,
+      projectId: pending.projectId,
+      actualProjectId: pipeline.projectId,
+    });
   } else if (pipeline.environmentId) {
     pendingActivations.delete(pipelineId);
     activate(pending.projectId, pipeline.environmentId, pipelineId);
@@ -127,7 +135,12 @@ export function scheduleBuildPipelineTabActivation(
     .catch((error) => {
       // Live resource synchronization remains subscribed and can still resolve
       // the intent after a transient point-read failure.
-      console.warn(`[feature-build-activation] Failed to hydrate pipeline ${pipelineId}:`, error);
+      log.warn("pipeline.hydrate-failed", {
+        source: "activation",
+        pipelineId,
+        projectId,
+        error: formatLogError(error),
+      });
     });
 }
 

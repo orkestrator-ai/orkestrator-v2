@@ -77,6 +77,8 @@ export function nodeEnvironmentRowFacts(
   const project = machine.projects.find(
     (candidate) => candidate.ref.projectId === environment.projectId,
   );
+  // Relayed by the machine; one that predates the field is treated as having Docker.
+  const dockerAvailable = environment.dockerAvailable !== false;
   return {
     environmentId: environment.ref.environmentId,
     name: environment.name,
@@ -89,8 +91,10 @@ export function nodeEnvironmentRowFacts(
     autoMerge: environment.autoMerge === true,
     // Pipeline sessions need not project agent activity onto their environment.
     activity: environment.buildActive ? "working" : environment.activity,
-    // The machine's Docker availability is not relayed; its status is.
-    running: environment.environmentType === "local" || environment.status === "running",
+    // As `useEnvironmentDisplayActivity` decides it on the machine itself.
+    running:
+      environment.environmentType === "local" ||
+      (dockerAvailable && environment.status === "running"),
     live: machine.transport === "connected",
     busy: actions.busy,
     hasUnreadWork: environment.hasUnreadWork,
@@ -109,7 +113,7 @@ export function nodeEnvironmentRowFacts(
       }),
     },
     writable: actions.writable,
-    dockerAvailable: true,
+    dockerAvailable,
     // A project summary names its checkout; one without has none to own a worktree.
     localCheckoutAvailable: project ? Boolean(project.pathName) : true,
   };

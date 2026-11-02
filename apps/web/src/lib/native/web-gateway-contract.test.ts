@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import {
   gatewayEventStreamContractScenarios,
   type EventStreamContractAdapter,
@@ -11,11 +12,16 @@ import { SseFrameDecoder } from "@orkestrator/protocol/gateway-event-stream";
 import { createBrowserGatewayApi } from "./web-gateway";
 
 const originalFetch = globalThis.fetch;
-const originalWarn = console.warn;
+let logs: LogCapture;
 const originalEventSource = globalThis.EventSource;
+beforeEach(() => {
+  // Malformed frames and closed connections are part of the contract.
+  logs = captureLogs();
+});
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  console.warn = originalWarn;
+  logs.restore();
   globalThis.EventSource = originalEventSource;
 });
 
@@ -38,8 +44,6 @@ const browserTerminalAdapter: TerminalContractAdapter = {
 /** The direct (bearer) client, whose authoritative stream is a fetch body. */
 const browserEventStreamAdapter: EventStreamContractAdapter = {
   start(server, observe, onEvent) {
-    // Malformed frames and closed connections are part of the contract.
-    console.warn = mock(() => undefined);
     let attempt = 0;
     globalThis.fetch = mock(async (input: RequestInfo | URL) => {
       attempt += 1;
@@ -89,7 +93,6 @@ describe("browser gateway event stream contract", () => {
 function sameOriginAdapter(nativeRetry: boolean): EventStreamContractAdapter {
   return {
     start(server, observe, onEvent) {
-      console.warn = mock(() => undefined);
       globalThis.fetch = mock(async () => new Response("{}")) as unknown as typeof fetch;
       let attempt = 0;
       const sources: ScriptedEventSource[] = [];

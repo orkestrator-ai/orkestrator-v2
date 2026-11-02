@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   createNativeObservationEvents,
   nativeObservationInvalidationMatches,
@@ -105,8 +106,7 @@ describe("native observation invalidations", () => {
 
   test("a throwing subscriber does not starve the others", async () => {
     const h = harness();
-    const error = console.error;
-    console.error = () => undefined;
+    const logs = captureLogs();
     try {
       h.events.subscribe(() => {
         throw new Error("boom");
@@ -115,8 +115,15 @@ describe("native observation invalidations", () => {
       await Promise.resolve();
       h.emit(stamped(1));
       expect(h.received).toHaveLength(1);
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.resource-sync",
+          event: "observation.listener-threw",
+        }),
+      );
     } finally {
-      console.error = error;
+      logs.restore();
     }
   });
 

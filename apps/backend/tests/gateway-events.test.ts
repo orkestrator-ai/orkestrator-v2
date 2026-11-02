@@ -3522,7 +3522,9 @@ describe("remote gateway", () => {
     expect(upstreamEncodings).toEqual(["identity"]);
     expect(result.headers["content-encoding"]).toBe("br");
     expect(result.headers.vary).toContain("Accept-Encoding");
-    expect(result.headers.etag).toBeUndefined();
+    // The upstream tag cannot describe the coded bytes; a weak tag derived
+    // from it lets the client revalidate (gateway-proxy-etag.ts).
+    expect(result.headers.etag).toBe('W/"identity-etag|ork:s:br"');
     expect(result.headers["content-md5"]).toBeUndefined();
     expect(result.headers["content-digest"]).toBeUndefined();
     expect(result.headers["repr-digest"]).toBeUndefined();
@@ -3660,7 +3662,7 @@ describe("remote gateway", () => {
     });
     expect(upstreamEncodings).toEqual(["identity"]);
     expect(result.headers["content-encoding"]).toBe("br");
-    expect(result.headers.etag).toBeUndefined();
+    expect(result.headers.etag).toMatch(/^W\/"upstream-identity\|ork:s:br:[0-9a-f]{16}"$/);
     expect(result.headers["content-md5"]).toBeUndefined();
     expect(result.headers["content-digest"]).toBeUndefined();
     expect(result.headers["repr-digest"]).toBeUndefined();

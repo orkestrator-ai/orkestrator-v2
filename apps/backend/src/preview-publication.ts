@@ -24,7 +24,7 @@ import type { PreviewPublicationPort } from "./core/preview-access.js";
 import type { PreviewRuntime } from "./core/preview-runtime.js";
 import type { PreviewSettings } from "./core/storage-preview-services.js";
 import { isLoopbackAddress, isTailscaleAddress } from "./gateway-internals.js";
-import { PreviewHttpProxy } from "./preview-http-proxy.js";
+import { PreviewHttpProxy, type PreviewHttpProxyOptions } from "./preview-http-proxy.js";
 
 export interface PreviewPublicationStatus {
   enabled: boolean;
@@ -41,6 +41,8 @@ export interface PreviewPublicationOptions {
   certificateCheckMs?: number;
   /** Test seam for the certificate expiry clock. */
   now?: () => number;
+  /** Test seam for the proxy's idle upstream connection bounds. */
+  upstreamPool?: PreviewHttpProxyOptions["pool"];
 }
 
 const log = createLogger("preview");
@@ -133,6 +135,7 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
       runtime: options.runtime,
       metrics: options.runtime.metrics,
       upstream: { ca: () => options.runtime.upstreamCa() },
+      ...(options.upstreamPool ? { pool: options.upstreamPool } : {}),
     });
     options.runtime.publicationStatus = () => this.capability();
     options.runtime.publicationDetail = () => this.status();
@@ -141,6 +144,10 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
     options.runtime.metrics.gauge(
       "publication.upgrades_active",
       () => this.proxy.stats().upgrades.active,
+    );
+    options.runtime.metrics.gauge(
+      "publication.upstream_idle",
+      () => this.proxy.stats().upstreamPool?.idle ?? 0,
     );
     this.unsubscribe = options.runtime.onSettingsChanged(() => {
       void this.reconfigure().catch((error: unknown) => {
@@ -403,6 +410,7 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
     this.unsubscribe();
     await this.reconfiguring.catch(() => undefined);
     await this.close();
+    this.proxy.dispose();
   }
 
   // Routing ------------------------------------------------------------------

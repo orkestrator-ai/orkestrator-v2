@@ -34,3 +34,16 @@ documented deterministic assertions when rerun alone (23 pass, three fail).
 
 Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.0XP13L/`
 (`workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`).
+
+## Renderer-migration merge recurrence, 2026-11-02
+
+The merge of `0ec784293` into `08038e814` repeated all four shifted-click
+failures (1.87, 0.73, 1.42 and 0.66 ms) in
+`mise run test:logged -- --name merge-default-tests -- mise run test`.
+The web group reported 11,384 pass, 10 skip and 4 fail under the default
+scheduler. The complete unchanged owner passed alone in 0.3 seconds through
+`mise run test:logged -- --name merge-terminal-links-alone -- bun test --cwd apps/web ./src/lib/terminal-links.test.ts --parallel=1 --only-failures`.
+The separate Claude terminal owner still failed its three assertions alone
+(23 pass, 3 fail), so those remain deterministic failures.
+
+Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.6dWJ96/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

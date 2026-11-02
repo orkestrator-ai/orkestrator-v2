@@ -13,6 +13,9 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import { SETTINGS_CARD_CLASS, SettingsPageLayout, SettingsRow } from "./SettingsPageLayout";
 import { cn } from "@/lib/utils";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.settings");
 
 // One write after a burst of edits, matching the shared settings form.
 const MESSAGING_AUTO_SAVE_DEBOUNCE_MS = 400;
@@ -86,7 +89,7 @@ export function MessagingSettings() {
       if (current.loading || current.saving || !current.changed) return;
       if (failedSignatureRef.current === current.signature) return;
       void backend.updateAgentMessagingSettings(current.settings).catch((error) => {
-        console.error("[settings] Failed to flush messaging settings:", error);
+        log.error("messaging.flush-failed", { error: formatLogError(error) });
       });
     };
   }, []);

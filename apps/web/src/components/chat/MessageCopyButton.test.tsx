@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
@@ -34,8 +35,7 @@ describe("MessageCopyButton", () => {
   });
 
   test("shows a toast when clipboard copy fails", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     mockWriteText.mockImplementationOnce(async () => {
       throw new Error("denied");
     });
@@ -48,7 +48,7 @@ describe("MessageCopyButton", () => {
         expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy message text");
       });
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 });

@@ -1,3 +1,4 @@
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
@@ -16,7 +17,7 @@ import {
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
-const realConsoleError = console.error;
+let logs: LogCapture;
 
 const mockGetGitStatus = mock<
   (
@@ -230,7 +231,7 @@ function resetStores(
 
 describe("useFilesPanel", () => {
   beforeEach(() => {
-    console.error = mock(() => {}) as typeof console.error;
+    logs = captureLogs();
     mockGetGitStatus.mockClear();
     mockGetLocalGitStatus.mockClear();
     mockGetFileTree.mockClear();
@@ -296,7 +297,7 @@ describe("useFilesPanel", () => {
   });
 
   afterEach(() => {
-    console.error = realConsoleError;
+    logs.restore();
     cleanup();
     resetStores();
   });

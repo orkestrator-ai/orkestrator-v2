@@ -196,8 +196,12 @@ export function registerEnvironmentCommands(
       .enabled
       ? environmentMailMarkers(await storage.getAgentMailSummary())
       : new Map();
+    // A machine-level fact, stamped on each row so a command node needs no
+    // extra read; absent while unknown.
+    const dockerAvailable = await runtime.dockerAvailability.forSummary();
     return environments.map((environment) => ({
       ...environment,
+      ...(dockerAvailable === undefined ? {} : { dockerAvailable }),
       ...runtime.prMonitor.relayedHealth(environment, announced),
       ...(buildEnvironmentIds.has(environment.id) ? { buildPipeline: true as const } : {}),
       ...(activeBuildEnvironmentIds.has(environment.id) ? { buildActive: true as const } : {}),

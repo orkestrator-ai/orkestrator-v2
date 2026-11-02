@@ -21,6 +21,9 @@ import {
 } from "@/lib/backend";
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.kanban");
 
 export type { KanbanTask, KanbanStatus, KanbanComment, KanbanImage, ProjectNotes };
 
@@ -109,7 +112,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         set({ tasks, isLoading: false });
       }
     } catch (error) {
-      console.error("[KanbanStore] Failed to load tasks:", error);
+      log.error("tasks.load-failed", { projectId, error: formatLogError(error) });
       if (get().currentProjectId === projectId) {
         set({ isLoading: false });
       }
@@ -122,7 +125,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
       set((state) => ({ tasks: [...state.tasks, task] }));
       return task.id;
     } catch (error) {
-      console.error("[KanbanStore] Failed to add task:", error);
+      log.error("task.add-failed", { projectId, error: formatLogError(error) });
       return undefined;
     }
   },
@@ -145,7 +148,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
     } catch (error) {
-      console.error("[KanbanStore] Failed to update task:", error);
+      log.error("task.update-failed", { taskId, error: formatLogError(error) });
     }
   },
 
@@ -157,7 +160,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
       }));
       return true;
     } catch (error) {
-      console.error("[KanbanStore] Failed to update task content:", error);
+      log.error("task.content-update-failed", { taskId, error: formatLogError(error) });
       toast.error("Could not save the ticket", {
         description: "Your edit is still in the editor, so you can retry.",
       });
@@ -173,7 +176,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
     } catch (error) {
-      console.error("[KanbanStore] Failed to clear task build status:", error);
+      log.error("task.build-status-clear-failed", { taskId, error: formatLogError(error) });
       toast.error("Could not clear build status", {
         description: "The task is still linked, so it is safe to retry.",
       });
@@ -185,7 +188,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
       await deleteKanbanTask(taskId);
       set((state) => ({ tasks: state.tasks.filter((t) => t.id !== taskId) }));
     } catch (error) {
-      console.error("[KanbanStore] Failed to delete task:", error);
+      log.error("task.delete-failed", { taskId, error: formatLogError(error) });
     }
   },
 
@@ -205,7 +208,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
     } catch (error) {
-      console.error("[KanbanStore] Failed to move task:", error);
+      log.error("task.move-failed", { taskId, error: formatLogError(error) });
       // Rollback on failure
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? { ...t, status: previousStatus } : t)),
@@ -220,7 +223,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
     } catch (error) {
-      console.error("[KanbanStore] Failed to add comment:", error);
+      log.error("comment.add-failed", { taskId, error: formatLogError(error) });
     }
   },
 
@@ -231,7 +234,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
     } catch (error) {
-      console.error("[KanbanStore] Failed to delete comment:", error);
+      log.error("comment.delete-failed", { taskId, commentId, error: formatLogError(error) });
     }
   },
 
@@ -242,7 +245,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
     } catch (error) {
-      console.error("[KanbanStore] Failed to add image:", error);
+      log.error("image.add-failed", { taskId, error: formatLogError(error) });
     }
   },
 
@@ -253,7 +256,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
     } catch (error) {
-      console.error("[KanbanStore] Failed to delete image:", error);
+      log.error("image.delete-failed", { taskId, imageId, error: formatLogError(error) });
     }
   },
 
@@ -273,7 +276,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         set({ notes: result.content, notesLoading: false, notesError: null });
       }
     } catch (error) {
-      console.error("[KanbanStore] Failed to load notes:", error);
+      log.error("notes.load-failed", { projectId, error: formatLogError(error) });
       // The empty notes above are not this project's content, so the editor has
       // to stay disabled: saving a keystroke into it could overwrite the real
       // backend notes.
@@ -293,7 +296,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         set({ notes: content });
       }
     } catch (error) {
-      console.error("[KanbanStore] Failed to save notes:", error);
+      log.error("notes.save-failed", { projectId, error: formatLogError(error) });
       throw error;
     }
   },

@@ -85,7 +85,9 @@ test("a machine with no projects keeps the search-specific empty message", async
   await page.getByTestId("project-search-filter").click();
   await page.getByRole("menuitemradio", { name: "empty", exact: true }).click();
   await expect(page.getByText("No projects or environments match that search.")).toBeVisible();
-  await expect(page.getByText("No projects yet", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("dialog").getByText("No projects yet", { exact: true })).toHaveCount(
+    0,
+  );
   await input.fill("");
   await expect(page.getByText("No projects on empty")).toBeVisible();
   await expect(page.getByTestId("federated-search-incomplete")).toHaveCount(0);

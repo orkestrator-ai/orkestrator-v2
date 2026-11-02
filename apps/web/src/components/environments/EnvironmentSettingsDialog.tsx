@@ -83,6 +83,9 @@ import {
   SettingsPageLayout,
   SettingsSectionHeader,
 } from "@/components/settings/SettingsPageLayout";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.environment");
 
 interface EnvironmentSettingsDialogProps {
   open: boolean;
@@ -541,7 +544,10 @@ export function EnvironmentSettingsDialog({
           },
           (err: unknown) => {
             if (!isCurrent()) return;
-            console.error("[EnvironmentSettingsDialog] Failed to fetch extensions:", err);
+            log.error("settings.extensions-load-failed", {
+              environmentId: environment.id,
+              error: formatLogError(err),
+            });
             setExtensionCatalogs(emptyExtensionCatalogs());
             setExtensionsError(
               "Extension settings could not be loaded. Check that the environment is available and try again.",
@@ -634,7 +640,10 @@ export function EnvironmentSettingsDialog({
       const results = await backend.testDomainResolution(domains);
       setTestResults(results);
     } catch (err) {
-      console.error("[EnvironmentSettingsDialog] Failed to test domains:", err);
+      log.error("domains.test-failed", {
+        environmentId: environment.id,
+        error: formatLogError(err),
+      });
     } finally {
       setIsTesting(false);
     }
@@ -718,7 +727,10 @@ export function EnvironmentSettingsDialog({
           : "A new container was created and setup is running again.",
       });
     } catch (err) {
-      console.error("[EnvironmentSettingsDialog] Failed to reset container:", err);
+      log.error("settings.container-reset-failed", {
+        environmentId: environment.id,
+        error: formatLogError(err),
+      });
       const lifecycle = parseContainerLifecycleError(err);
       const message = lifecycle?.message ?? (err instanceof Error ? err.message : String(err));
       toast.error(
@@ -795,7 +807,10 @@ export function EnvironmentSettingsDialog({
       });
       onOpenChange(false);
     } catch (err) {
-      console.error("[EnvironmentSettingsDialog] Failed to save:", err);
+      log.error("settings.save-failed", {
+        environmentId: environment.id,
+        error: formatLogError(err),
+      });
       const message = err instanceof Error ? err.message : "Failed to save settings";
       setNameError(message);
       toast.error("Failed to save settings", { description: message });

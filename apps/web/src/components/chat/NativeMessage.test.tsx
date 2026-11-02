@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect, useState } from "react";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -1148,9 +1149,7 @@ describe("NativeMessage task list rendering", () => {
 
   test("reports clipboard failures from a user prompt long press", async () => {
     const clipboardError = new Error("clipboard denied");
-    const consoleErrorMock = mock(() => {});
-    const originalConsoleError = console.error;
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => {
       throw clipboardError;
@@ -1183,13 +1182,21 @@ describe("NativeMessage task list rendering", () => {
       await waitFor(() => {
         expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy message text");
       });
-      expect(consoleErrorMock).toHaveBeenCalledWith(
-        "[NativeMessage] Failed to copy user prompt:",
-        clipboardError,
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.chat",
+          event: "message.copy-failed",
+          fields: expect.objectContaining({
+            role: "user",
+            error: expect.objectContaining({ message: clipboardError.message }),
+          }),
+        }),
       );
+      expect(logs.lines.join("\n")).not.toContain("Prompt that cannot be copied");
       expect(toastSuccessMock).not.toHaveBeenCalled();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -4723,8 +4730,7 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("shows an error toast when copying text fails", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => {
       throw new Error("clipboard denied");
@@ -4746,7 +4752,7 @@ describe("NativeMessage task list rendering", () => {
       });
       expect(screen.queryByRole("button", { name: "Copied text" }) === null).toBe(true);
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 

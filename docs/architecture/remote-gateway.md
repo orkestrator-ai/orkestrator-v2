@@ -188,6 +188,19 @@ for existing services that remote clients reach directly over the tailnet.
   `Cache-Control: no-transform`, or that already sent a coded body, is forwarded
   as it is.
 
+A proxied body the gateway compresses, or that the legacy browser preview
+route rewrites, no longer matches the upstream `ETag`, so the gateway sends a
+weak tag derived from it instead of dropping it:
+`W/"<upstream tag>|ork:<w|s>:<coding>[:<rewrite key>]"`
+(`apps/backend/src/gateway-proxy-etag.ts`). The rewrite key covers the route's
+prefix and port and the rewriter's own code, so a tag never revalidates bytes
+rewritten for another route or by another build. On `If-None-Match` the
+gateway sends the upstream's own tag, exactly as the application issued it,
+and answers the application's `304` with the tag the client holds; a derived
+tag for another route is not sent upstream. Reloads of a previewed dev server
+then revalidate instead of downloading, rewriting and compressing every
+module again.
+
 Streaming gzip contexts are shared by direct and proxied streams and capped at
 `MAX_CONCURRENT_STREAMING_COMPRESSIONS` (8); a stream that finds the pool full
 continues in identity and counts as declined. A browser holds two event

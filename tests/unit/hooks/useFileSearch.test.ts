@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { FileNode } from "@/lib/backend";
@@ -246,9 +247,7 @@ describe("useFileSearch", () => {
 
     test("contains a pending failure after unmount without reporting stale state", async () => {
       const load = deferred<FileNode[]>();
-      const originalConsoleError = console.error;
-      const consoleError = mock(() => {});
-      console.error = consoleError;
+      const logs = captureLogs();
       mockGetFileTree.mockImplementation(() => load.promise);
 
       try {
@@ -270,10 +269,10 @@ describe("useFileSearch", () => {
           await Promise.resolve();
         });
 
-        expect(consoleError).not.toHaveBeenCalled();
+        expect(logs.records()).toEqual([]);
         expect(mockGetFileTree).toHaveBeenCalledTimes(1);
       } finally {
-        console.error = originalConsoleError;
+        logs.restore();
       }
     });
 

@@ -32,6 +32,9 @@ import { destroyBrowserPreview } from "@/lib/native/browser-preview";
 import { forgetAgentHandoff } from "@/lib/agent-handoff";
 import { reportNativeTabTeardownFailure } from "@/lib/tab-teardown-notice";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.pane-layout");
 
 /**
  * Per-environment state for pane layout
@@ -366,11 +369,11 @@ function cleanupTerminalTab(envId: string, containerId: string | null, tabId: st
   const sessionKey = createTerminalSessionKey(containerId, tabId, envId);
   const sessionData = sessionStore.sessions.get(sessionKey);
   if (sessionData) {
-    console.debug(
-      "[PaneLayout] Cleaning up terminal session for closed tab:",
-      sessionKey,
-      sessionData.sessionId,
-    );
+    log.debug("terminal-session.cleanup-started", () => ({
+      environmentId: envId,
+      tabId,
+      sessionId: sessionData.sessionId,
+    }));
   }
   void backend
     .teardownTab({
@@ -381,7 +384,12 @@ function cleanupTerminalTab(envId: string, containerId: string | null, tabId: st
       persistentSessionId: sessionData?.persistentSessionId,
     })
     .catch((err) => {
-      console.debug("[PaneLayout] Terminal teardown remains pending:", err);
+      log.debug("teardown.pending", () => ({
+        environmentId: envId,
+        tabId,
+        source: "terminal",
+        error: formatLogError(err),
+      }));
     });
   if (sessionData) sessionStore.removeSession(sessionKey);
 }
@@ -420,15 +428,23 @@ function cleanupClaudeTmuxTab(envId: string, tabId: string) {
   // Also clear any legacy bare-key state that may exist from before the
   // (envId, tabId) composite key migration.
   store.resetTab(tabId);
-  void backend
-    .teardownTab({ environmentId: envId, tabId, kind: "claude-tmux" })
-    .catch((err) => console.debug("[PaneLayout] tmux teardown remains pending:", err));
+  void backend.teardownTab({ environmentId: envId, tabId, kind: "claude-tmux" }).catch((err) =>
+    log.debug("teardown.pending", () => ({
+      environmentId: envId,
+      tabId,
+      source: "tmux",
+      error: formatLogError(err),
+    })),
+  );
 }
 
 function cleanupTabResources(envId: string, containerId: string | null, tab: TabInfo) {
   if (tab.type === "browser") {
     destroyBrowserPreview(tab.id).catch((err) => {
-      console.debug("[PaneLayout] Error destroying browser preview:", err);
+      log.debug("browser-preview.destroy-failed", () => ({
+        tabId: tab.id,
+        error: formatLogError(err),
+      }));
     });
     return;
   }
@@ -473,7 +489,10 @@ function cleanupLocalTabResources(
 
   if (tab.type === "browser") {
     destroyBrowserPreview(tab.id).catch((err) => {
-      console.debug("[PaneLayout] Error destroying browser preview:", err);
+      log.debug("browser-preview.destroy-failed", () => ({
+        tabId: tab.id,
+        error: formatLogError(err),
+      }));
     });
     return;
   }
@@ -549,7 +568,10 @@ function pruneUnreferencedAgentHandoffs(envId: string, root: PaneNode): void {
       if (!capabilities.pruning) await backend.pruneAgentHandoffs(envId, referenced);
     })
     .catch((error) => {
-      console.debug("[PaneLayout] Error pruning agent handoffs:", error);
+      log.debug("handoffs.prune-failed", () => ({
+        environmentId: envId,
+        error: formatLogError(error),
+      }));
     });
 }
 
@@ -567,7 +589,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const state = get();
     if (state.activeEnvironmentId === environmentId) return;
 
-    console.debug("[PaneLayout] Setting active environment:", environmentId);
+    log.debug("environment.activated", () => ({ environmentId }));
 
     // Ensure the environment has state (create if not exists)
     if (!state.environments.has(environmentId)) {
@@ -588,16 +610,11 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const state = get();
     const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) {
-      console.warn("[PaneLayout] initialize called without active environment");
+      log.warn("environment.initialize-skipped");
       return;
     }
 
-    console.debug(
-      "[PaneLayout] Initializing environment:",
-      envId,
-      "with containerId:",
-      containerId,
-    );
+    log.debug("environment.initialized", () => ({ environmentId: envId, containerId }));
 
     const existing = state.environments.get(envId);
     const existingTabs = existing ? getAllLeaves(existing.root).flatMap((leaf) => leaf.tabs) : [];
@@ -640,7 +657,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     });
 
     // Clear all terminal instances from portal store for this environment
-    console.debug("[PaneLayout] Clearing terminal instances for environment on reset:", envId);
+    log.debug("environment.terminals-cleared", () => ({ environmentId: envId }));
     terminalPortalStore.clearTerminalsForEnvironment(envId);
 
     const newEnvs = new Map(state.environments);
@@ -737,12 +754,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const existingPane = findPaneWithTab(envState.root, tab.id);
     if (existingPane) {
       // Tab already exists - just activate it instead of duplicating
-      console.debug(
-        "[PaneLayout] Tab already exists, activating:",
-        tab.id,
-        "in pane:",
-        existingPane.id,
-      );
+      log.debug("tab.reactivated", () => ({ tabId: tab.id, paneId: existingPane.id }));
       const newRoot = updateLeaf(envState.root, existingPane.id, (leaf) => ({
         ...leaf,
         activeTabId: tab.id,
@@ -898,20 +910,27 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const state = get();
     const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) {
-      console.warn("[paneLayoutStore] moveTab failed: no activeEnvironmentId");
+      log.warn("tab.move-failed", { tabId, reason: "no-active-environment" });
       return;
     }
 
     const envState = state.environments.get(envId);
     if (!envState) {
-      console.warn("[paneLayoutStore] moveTab failed: no envState for", envId);
+      log.warn("tab.move-failed", {
+        environmentId: envId,
+        tabId,
+        reason: "no-environment-state",
+      });
       return;
     }
 
     const fromLeaf = findLeaf(envState.root, fromPaneId);
     const toLeaf = findLeaf(envState.root, toPaneId);
     if (!fromLeaf || !toLeaf) {
-      console.warn("[paneLayoutStore] moveTab failed: pane not found", {
+      log.warn("tab.move-failed", {
+        environmentId: envId,
+        tabId,
+        reason: "pane-not-found",
         fromPaneId,
         toPaneId,
         fromLeaf: !!fromLeaf,
@@ -922,14 +941,16 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     const tab = fromLeaf.tabs.find((t) => t.id === tabId);
     if (!tab) {
-      console.warn("[paneLayoutStore] moveTab failed: tab not found", {
+      log.warn("tab.move-failed", {
+        environmentId: envId,
         tabId,
-        availableTabs: fromLeaf.tabs.map((t) => t.id),
+        reason: "tab-not-found",
+        availableTabCount: fromLeaf.tabs.length,
       });
       return;
     }
 
-    console.debug("[paneLayoutStore] moveTab executing", { fromPaneId, toPaneId, tabId });
+    log.debug("tab.move-started", () => ({ fromPaneId, toPaneId, tabId }));
 
     // If moving within the same pane, just reorder
     if (fromPaneId === toPaneId) {
@@ -1064,7 +1085,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
-    console.debug("[PaneLayout] Cleared initialPrompt for tab:", tabId);
+    log.debug("tab.initial-prompt-cleared", () => ({ environmentId: envId, tabId }));
   },
 
   clearTabInitialAgentOptions: (tabId, environmentId) => {
@@ -1098,7 +1119,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
-    console.debug("[PaneLayout] Cleared initial agent options for tab:", tabId);
+    log.debug("tab.initial-agent-options-cleared", () => ({ environmentId: envId, tabId }));
   },
 
   consumeTabAgentHandoff: (tabId, environmentId) => {
@@ -1510,7 +1531,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     // Check depth limit
     const currentDepth = getDepth(envState.root);
     if (currentDepth >= MAX_SPLIT_DEPTH) {
-      console.debug("[PaneLayout] Max split depth reached");
+      log.debug("pane.split-depth-reached", () => ({ environmentId: envId, paneId }));
       return;
     }
 
@@ -1559,51 +1580,65 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const state = get();
     const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) {
-      console.warn("[paneLayoutStore] splitPaneAtEdge failed: no activeEnvironmentId");
+      log.warn("pane.edge-split-failed", { tabId, reason: "no-active-environment" });
       return;
     }
 
     const envState = state.environments.get(envId);
     if (!envState) {
-      console.warn("[paneLayoutStore] splitPaneAtEdge failed: no envState for", envId);
+      log.warn("pane.edge-split-failed", {
+        environmentId: envId,
+        tabId,
+        reason: "no-environment-state",
+      });
       return;
     }
 
     const targetLeaf = findLeaf(envState.root, targetPaneId);
     if (!targetLeaf) {
-      console.warn("[paneLayoutStore] splitPaneAtEdge failed: target pane not found", targetPaneId);
+      log.warn("pane.edge-split-failed", {
+        environmentId: envId,
+        tabId,
+        reason: "target-pane-not-found",
+        targetPaneId,
+      });
       return;
     }
 
     const sourceLeaf = findLeaf(envState.root, fromPaneId);
     if (!sourceLeaf) {
-      console.warn("[paneLayoutStore] splitPaneAtEdge failed: source pane not found", fromPaneId);
+      log.warn("pane.edge-split-failed", {
+        environmentId: envId,
+        tabId,
+        reason: "source-pane-not-found",
+        fromPaneId,
+      });
       return;
     }
 
     // Check depth limit
     const currentDepth = getDepth(envState.root);
     if (currentDepth >= MAX_SPLIT_DEPTH) {
-      console.debug("[PaneLayout] Max split depth reached");
+      log.debug("pane.split-depth-reached", () => ({
+        environmentId: envId,
+        paneId: targetPaneId,
+      }));
       return;
     }
 
     // Find the tab in the SOURCE pane
     const tab = sourceLeaf.tabs.find((t) => t.id === tabId);
     if (!tab) {
-      console.warn("[paneLayoutStore] splitPaneAtEdge failed: tab not found in source pane", {
+      log.warn("pane.edge-split-failed", {
+        environmentId: envId,
         tabId,
+        reason: "tab-not-found",
         fromPaneId,
       });
       return;
     }
 
-    console.debug("[paneLayoutStore] splitPaneAtEdge executing", {
-      targetPaneId,
-      edge,
-      tabId,
-      fromPaneId,
-    });
+    log.debug("pane.edge-split-started", () => ({ targetPaneId, edge, tabId, fromPaneId }));
 
     // Create the new pane with the moved tab
     const newPaneId = generateId("pane");
@@ -1713,7 +1748,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     // If no parent, this is the only pane - can't close it
     if (!parentSplit) {
-      console.debug("[PaneLayout] Cannot close the only pane");
+      log.debug("pane.close-refused", () => ({ environmentId: envId, paneId }));
       return;
     }
 

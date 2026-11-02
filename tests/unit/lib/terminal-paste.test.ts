@@ -1,4 +1,5 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
 // Import the shared mock function for readText.
@@ -98,20 +99,32 @@ describe("handleTerminalPaste", () => {
 
   test("text-only fallback handles clipboard read error", async () => {
     mockReadText.mockImplementation(() => Promise.reject(new Error("clipboard unavailable")));
-    const consoleSpy = mock(() => {});
-    const originalError = console.error;
-    console.error = consoleSpy;
+    const logs = captureLogs();
 
-    await handleTerminalPaste({
-      containerId: null,
-      writeToTerminal: mockWriteToTerminal,
-      focusTerminal: mockFocusTerminal,
-      componentName: "TestComp",
-    });
+    try {
+      await handleTerminalPaste({
+        containerId: null,
+        writeToTerminal: mockWriteToTerminal,
+        focusTerminal: mockFocusTerminal,
+        componentName: "TestComp",
+      });
 
-    expect(mockWriteToTerminal).not.toHaveBeenCalled();
-    expect(consoleSpy).toHaveBeenCalled();
-    console.error = originalError;
+      expect(mockWriteToTerminal).not.toHaveBeenCalled();
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "terminal",
+          event: "clipboard.paste-failed",
+          fields: expect.objectContaining({
+            source: "TestComp",
+            target: "text-only",
+            error: expect.objectContaining({ message: "clipboard unavailable" }),
+          }),
+        }),
+      );
+    } finally {
+      logs.restore();
+    }
   });
 
   test("prefers containerId over worktreePath when both provided", async () => {

@@ -561,10 +561,10 @@ describe("service browser tabs", () => {
 
     test("says nothing until the page is refused, and nothing on a client that cannot offer it", async () => {
       await renderWithState({ sessionImport: { state: "idle" } });
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("status") === null).toBe(true);
       cleanup();
       await renderWithState({ blockedNavigation: { host: "accounts.google.com" } });
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("status") === null).toBe(true);
     });
 
     test("names the refused site and opens the page in the browser at its own port", async () => {
@@ -599,19 +599,19 @@ describe("service browser tabs", () => {
       fireEvent.click(screen.getByRole("button", { name: "Bring sign-in back" }));
       await screen.findByRole("alertdialog");
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
       expect(browserPreview.startSessionImport).not.toHaveBeenCalled();
     });
 
     test("a waiting import can be cancelled", async () => {
       const { browserPreview } = await renderWithState({ sessionImport: { state: "waiting" } });
       expect(screen.getByRole("status").textContent).toContain("Waiting for your browser.");
-      expect(screen.queryByRole("button", { name: "Bring sign-in back" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Bring sign-in back" }) === null).toBe(true);
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       await waitFor(() =>
         expect(browserPreview.dismissSessionNotice).toHaveBeenCalledWith("browser-1"),
       );
-      await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+      await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
     });
 
     test.each([
@@ -633,7 +633,7 @@ describe("service browser tabs", () => {
     test("a copied sign-in reports its count, and what could not be used", async () => {
       await renderWithState({ sessionImport: { state: "imported", cookies: 2, skipped: 1 } });
       expect(screen.getByRole("status").textContent).toContain("Copied 2 cookies; 1 could not");
-      expect(screen.queryByRole("button", { name: "Bring sign-in back" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Bring sign-in back" }) === null).toBe(true);
     });
 
     test("a refusal after copying replaces success with the host and retry actions", async () => {
@@ -661,7 +661,7 @@ describe("service browser tabs", () => {
       renderTab();
       await waitFor(() => expect(backend.browserPreview.attach).toHaveBeenCalled());
       backend.emitState({ ...viewState("/sign-in", 3), ...blocked });
-      expect(screen.queryByRole("button", { name: "Open in browser" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open in browser" }) === null).toBe(true);
       screen.getByRole("button", { name: "Bring sign-in back" });
     });
   });

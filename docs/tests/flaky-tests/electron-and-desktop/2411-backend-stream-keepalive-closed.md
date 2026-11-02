@@ -1,6 +1,6 @@
 # Backend event-stream keepalive can arrive after the silence watchdog
 
-- **ID:** 2396
+- **ID:** 2411
 - **Status:** open
 - **Date observed:** 2026-11-01
 - **Test:** `a stream that stops its keepalives, or an attempt nothing answers, is given up on`

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
 
+import { createLogger } from "@orkestrator/protocol/logger";
+
 import { validateGitRefName } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { toClientEnvironment } from "./commands-terminal.js";
@@ -20,6 +22,8 @@ import { runCommand } from "./shell.js";
  * branch's, or one the user approved for the project on this machine
  * (`storage.setupApprovals`); otherwise setup is held and the user decides.
  */
+
+const log = createLogger("environment");
 
 /** Read and parse budget for `orkestrator-ai.json`; real ones are a few hundred bytes. */
 const MAX_PROJECT_CONFIG_BYTES = 256 * 1024;
@@ -238,13 +242,16 @@ export async function holdEnvironmentSetupForApproval(
       "setup_approval",
     )
     .catch((error: unknown) => {
-      console.warn("[setup] Could not record setup approval attention:", (error as Error)?.name);
+      log.warn("setup.attention-not-recorded", {
+        scope: environment.id,
+        errorName: (error as Error)?.name,
+      });
     });
   await context.coordinators?.noteWorkerSetupApproval(updated).catch((error: unknown) => {
-    console.warn(
-      "[setup] Could not tell the coordinator about held setup:",
-      (error as Error)?.name,
-    );
+    log.warn("setup.coordinator-not-notified", {
+      scope: environment.id,
+      errorName: (error as Error)?.name,
+    });
   });
   context.emit("environment-setup-complete", {
     environment_id: environment.id,

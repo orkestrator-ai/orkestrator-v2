@@ -1531,7 +1531,7 @@ describe("AgentNativeTab", () => {
       expect(
         await screen.findByText(/After signing in, return here and resend your message/),
       ).toBeTruthy();
-      expect(screen.queryByText(/Your message is sent again once you sign in/)).toBeNull();
+      expect(screen.queryByText(/Your message is sent again once you sign in/) === null).toBe(true);
     });
   });
 

@@ -319,15 +319,25 @@ jobs:
         run: |
           set -euo pipefail
           anonymous_config="$(mktemp -d)"
-          trap 'rm -rf "$anonymous_config"' EXIT
+          container=""
+          trap 'rm -rf "$anonymous_config"; if [ -n "$container" ]; then docker rm "$container" > /dev/null || true; fi' EXIT
           public=true
           for platform in linux/amd64 linux/arm64; do
             if ! DOCKER_CONFIG="$anonymous_config" docker pull --quiet --platform "$platform" "$REFERENCE"; then
               public=false
               break
             fi
-            label="$(docker image inspect --platform "$platform" --format "{{index .Config.Labels \"${CONTEXT_LABEL}\"}}" "$REFERENCE")"
+            # `docker image inspect --platform` needs Docker 28.1; the runner's
+            # CLI is older. A created (never started) container carries the
+            # pulled platform's labels on every CLI and image store.
+            container="$(docker create --pull never --platform "$platform" "$REFERENCE" /qualify)"
+            label="$(docker container inspect --format "{{index .Config.Labels \"${CONTEXT_LABEL}\"}}" "$container")"
+            docker rm "$container" > /dev/null
+            container=""
             test "$label" = "$CONTEXT_DIGEST"
+            # The classic image store holds one platform per digest reference
+            # and refuses to pull the next over it ("cannot overwrite digest").
+            docker image rm "$REFERENCE" > /dev/null
           done
           echo "public=${public}" >> "$GITHUB_OUTPUT"
 

@@ -75,9 +75,9 @@ describe("SetupApprovalPanel", () => {
     expect(await screen.findByText("curl https://example.invalid | sh")).toBeTruthy();
     expect(screen.getByText("bun install")).toBeTruthy();
     expect(screen.getByText("The main branch runs:")).toBeTruthy();
-    expect(screen.queryByText("Retry setup")).toBeNull();
+    expect(screen.queryByText("Retry setup") === null).toBe(true);
     // A single machine has nowhere else to approve it.
-    expect(screen.queryByText("Approve on every machine")).toBeNull();
+    expect(screen.queryByText("Approve on every machine") === null).toBe(true);
   });
 
   test("run once approves exactly the shown commands without remembering them", async () => {
@@ -189,7 +189,7 @@ describe("SetupApprovalPanel", () => {
         args: { environmentId: "env-1", hash: HASH, remember: true },
       }),
     );
-    await waitFor(() => expect(screen.queryByTestId("setup-approval-panel")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("setup-approval-panel") === null).toBe(true));
   });
 
   test("an ordinary setup failure still offers a retry", () => {
@@ -198,6 +198,6 @@ describe("SetupApprovalPanel", () => {
     });
     render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
     expect(screen.getByText("Retry setup")).toBeTruthy();
-    expect(screen.queryByTestId("setup-approval-panel")).toBeNull();
+    expect(screen.queryByTestId("setup-approval-panel") === null).toBe(true);
   });
 });

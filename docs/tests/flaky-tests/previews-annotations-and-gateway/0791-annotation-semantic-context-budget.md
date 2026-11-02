@@ -14,3 +14,5 @@
 ## Triage 2026-10-25
 
 - **Disposition:** resolved as a duplicate of [0780](0780-annotation-script-structural-html-custom-element.md). Both cases exhaust the same wall-clock traversal budget in `browser-preview-anchor-script.ts`. Its facts are folded into 0780's triage section, which is the case to follow.
+
+On 2026-11-02, the shared-logger bridge migration saw `two pre-plugin answers stay stale until late plugins are observed and confirmed` fail once in `mise run test` (expected `stale`, received `ready`, 54.49 ms). The owner passed alone twice: `bun test ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --only-failures` (30 pass, 0 fail).

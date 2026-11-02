@@ -17,6 +17,7 @@ at `79f3bc97e` (same tree as `main`).
 9. [Suggested order of work](#suggested-order-of-work)
 10. [Appendix: evidence and limits](#appendix-evidence-and-limits)
 11. [Addendum: log output shortened by R5](#addendum-log-output-shortened-by-r5)
+12. [Addendum: renderer levels changed by R1](#addendum-renderer-levels-changed-by-r1)
 
 ## Scope and method
 
@@ -1494,3 +1495,94 @@ and `index.ts:2656`.
 message and still print it. So do sites logging `error.message` or `String(error)`,
 such as the reapers' lines in `local-server-reaper.ts`. The R1 backend slice covers
 all of these when it moves them to `formatLogError`.
+
+## Addendum: renderer levels changed by R1
+
+Added 2026-11-02 for R1's renderer slice, which moved every `console.*` site in
+`apps/web/src` to the [shared logger](../architecture/logging.md#the-renderer). The
+persistent log did not change: only the seven `[DesktopStartup]` markers cross, as
+before. What did change is what a person sees in the browser console.
+
+**Who this affects.** The packaged desktop app has no DevTools (L7), so none of these
+lines were reachable there. This costs a developer running from source, or someone
+using the remote web client's browser console. Nothing below changes what a bug report
+holds at `error`: no `console.error` site moved down, so the recorder sees the same
+sites.
+
+### Moved to `debug`, losing a default line
+
+Each of these was visible in a normal browser console and now needs
+`localStorage["orkestrator:debug"]`. All 14 lose diagnostic evidence by default, and
+each was decided on the same ground: it fires per mount, per connect or per effect pass,
+so `info` ("a rare, meaningful lifecycle event") does not fit.
+
+| Old line | Old | Now | What a default console no longer shows |
+| --- | --- | --- | --- |
+| `[useTerminal] Cleanup on unmount` | `log` | `[terminal] session.unmounted` | A terminal hook unmounting. |
+| `[useTerminal] Unlistening from events` | `log` | `[terminal] listener.released` | The same unmount, from the listener. |
+| `[useTerminal] connect called` | `log` | `[terminal] connect.called` | Connect attempts and their ids. Failures still log at `warn` or `error`. |
+| `Reconnection buffer contains setup readiness marker` | `log` | `[terminal] reconnect.setup-marker-found` | Why a reconnected tab became ready. |
+| `Reconnected first container tab without setup marker` | `log` | `[terminal] reconnect.setup-marker-absent` | Why a tab may be waiting after a reconnect. This is the costliest of the group. |
+| `Reconnection complete, calling onReady` | `log` | `[terminal] reconnect.completed` | Reconnect completion. |
+| `First tab on new environment, waiting for setup detection` | `log` | `[terminal] setup.awaiting-detection` | The wait. `environment.ready-detected` stays at `info`, so its absence still shows. |
+| `Restored buffer contains setup readiness marker` | `log` | `[terminal] restore.setup-marker-found` | Why a restored tab became ready. |
+| `[setup-terminal] PersistentTerminal setup attach state` | `info` | `[terminal.setup] attach.state-changed` | A setup tab's attach inputs. |
+| `[setup-terminal] setup session bind skipped: already in flight` | `info` | `[terminal.setup] session.bind-skipped` | Overlapping binds. |
+| `[setup-terminal] requesting backend setup session` | `info` | `[terminal.setup] session.requested` | Lookup attempts. The outcome stays at `info`, and a failure at `error`. |
+| `[setup-terminal] reconciling backend-managed setup tabs` | `info` | `[terminal.setup] reconcile.started` | Which tabs were still unbound. |
+| `[setup-terminal] initial terminal layout decision` | `info` | `[terminal.setup] layout.initial-decided` | The inputs to the empty-layout decision. |
+| `[setup-terminal] waiting for setup session before adding setup tab` | `info` | `[terminal.setup] session.awaited` | The wait. `tab.added` stays at `info`. |
+
+`[setup-terminal] no backend setup session available` was kept at `info` as
+`session.unavailable`: it is an outcome, and it is written once per lookup that finds
+nothing, so it is the line that tells you a setup tab never got a session.
+
+### `console.debug` is now really off by default
+
+The 34 `console.debug` sites kept their level, but a level means something different
+now. Before, they always wrote, and DevTools hid them behind its Verbose filter. Now
+they are not written at all unless `orkestrator:debug` is set, and they cost one
+comparison. Choosing Verbose no longer shows them. They are in `paneLayoutStore.ts` (17),
+`PersistentTerminal.tsx` (9), `ClaudeTmuxChatTab.tsx` (2), `TerminalPortalHost.tsx` (2),
+`ClaudeTmuxChatTab.parts.tsx`, `AddProjectDialog.tsx`, `tab-teardown-notice.ts` and
+`sessionStore.ts`.
+
+Several report a failure rather than progress, and were already hidden unless Verbose
+was on: pending terminal and tmux teardown, a failed browser preview destroy, handoff
+pruning, session activity updates, tmux hydration, the mention file list and the
+AddProjectDialog git remote read. `[terminal.setup] reconnect-listener.install-failed`
+was `rendererDebugLog` and is unchanged.
+
+### `console.log` kept at `info`
+
+Six fire once per user action or lifecycle: the merge's start and finish
+(`[web.action-bar] merge.started`, `merge.completed`), and in the terminal
+`environment.ready-detected` (two sites), `setup.scripts-completed` and
+`setup.marked-complete`. No evidence is lost.
+
+### Detail a line no longer carries
+
+These were decided under AGENTS.md invariant 12, or follow from fields being scalars.
+
+- **Error objects.** Every thrown value now goes through `formatLogError`: name, code,
+  a redacted message of at most 1 KiB, and up to 8 relative frames. DevTools no longer
+  offers an expandable object, its other enumerable fields, more than 8 frames, or
+  source-mapped links. A rejection with a non-error reason is described, not dumped.
+- **Removed outright, with an id or a boolean in place:** environment names, branch
+  names, worktree paths, whole environment objects and event payloads
+  (`useEnvironments`, `HierarchicalSidebar`, `TerminalContainer`); the file path on
+  `[TerminalContainer] Creating file tab`, which costs which file a tab holds; the
+  directory on a failed folder load; and the path and URL on a failed image preview.
+- **`RichBlockFrame`.** It now logs the same bounded diagnostic as the other boundaries:
+  component name, allowlisted error type and fingerprint. A custom error class reads
+  `Error`, and the fingerprint tells failures apart.
+- **`[WindowError]`.** The `filename` keeps its last segment, so a script URL's
+  directories and query are gone. The stack still locates the failure.
+
+### A known limit
+
+`formatLogError` keeps an error's message, and a message can hold a path or URL: a
+failed clipboard image write reads `EACCES: permission denied, open '<path>'`. The
+logging guide documents this for every process. It reaches the browser console only,
+as the raw error did, so this slice leaves it there.
+

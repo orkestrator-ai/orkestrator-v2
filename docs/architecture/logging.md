@@ -1,8 +1,8 @@
 # Application logging
 
 Status: Living. The shared logger, its vocabulary, how entries reach the log file,
-and the live settings that control them. Electron's main process and all five
-bridges are fully on it. The backend and renderer are migrating;
+and the live settings that control them. Electron's main process, all five bridges
+and the renderer are fully on it. The backend is migrating;
 `tests/unit/raw-console-ratchet.test.ts` lists what is left.
 
 ## Using it
@@ -45,8 +45,8 @@ tidy-up.
 
 A level check is one integer comparison. To build no arguments when the level is
 off, pass a function for the fields; it runs only when the level is on. Use
-`log.isEnabled("debug")` to guard other work, which is what `rendererDebugLog`'s
-per-frame guard becomes. electron-updater's `debug` method reads as absent while
+`log.isEnabled("debug")` to guard other work, as a renderer site on a per-frame
+path does. electron-updater's `debug` method reads as absent while
 the level is off, because the library checks for it before serializing its plan.
 
 ## Repeating faults
@@ -673,7 +673,59 @@ The renderer's console does not reach the log. Only the seven allowlisted
 `[DesktopStartup]` markers cross, matched exactly in the main frame, as
 [bridge-diagnostics.md](bridge-diagnostics.md) describes. A renderer using the logger
 does not change that: `isDesktopStartupMessage` only accepts those exact strings. So
-the terminal's `input.undelivered` line stays in the browser console.
+every `web.*` and `terminal` line stays in the browser console.
+
+```mermaid
+flowchart LR
+  L["createLogger in the renderer"] -->|text line| C[browser console]
+  M["emitDesktopStartupMarker"] -->|exact marker text| C
+  O["React, libraries"] --> C
+  C -->|console-message, main frame| R{exactly one of the\nseven markers?}
+  R -->|yes| S[(saved log)]
+  R -->|no| D[dropped]
+```
+
+- **The markers are not logger lines.** `apps/web/src/lib/desktop-startup-marker.ts`
+  writes them with the raw console, the only renderer module that does, because the
+  text is a contract with the main process and must not depend on a level, sink or
+  format. The lint exclusion names that one file.
+- **The one way round the exact match.** A field-less logger line in the
+  `desktop.startup` area renders exactly as a marker, because that area's tag is
+  `DesktopStartup`. So the renderer never uses that area, and
+  `apps/desktop/tests/renderer-diagnostics.test.ts` scans for it, along with feeding
+  every other area's every event through the real listener.
+- **The real path.** `e2e/agent-testing/renderer-log-boundary-electron.spec.ts` runs
+  a real window with logs being saved and the renderer's level raised, and checks
+  the saved file holds the markers and no logger line.
+
+Whether more may be saved is undecided (recommendation R8 in the
+[review](../reports/2026-10-29-logging-and-database-efficiency.md)).
+
+## The renderer
+
+Everything renderer-only is in a `web.*` area, or `terminal` and `terminal.setup`,
+with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
+
+- **Its level.** The renderer has no environment, so `ORKESTRATOR_LOG_LEVEL` does not
+  reach it. Its default is `info`. Setting `localStorage["orkestrator:debug"]` and
+  reloading raises every area to `debug`: `applyRendererLogLevel`
+  (`apps/web/src/lib/debug-log.ts`) reads it once at startup. This is the old
+  `rendererDebugLog` gate, which every `debug` site now goes through, including those
+  that were plain `console.debug` and always wrote. It has no setting or UI, and
+  `trace` stays off.
+- **What a line now looks like.** One text line, not a console object: `error.name`,
+  `error.message` and up to 8 relative frames, with no expandable object or
+  source-mapped links in DevTools. Where a site logged an entity or a name, it now
+  logs its id.
+- **Bug reports.** `installRendererErrorRecorder` still wraps `console.error`, so it
+  sees whatever the logger writes at `error`, and a site moved below `error` leaves
+  bug reports. It classifies the two `web.window` lines by their text, which is why
+  that area's description names them.
+- **Other readers.** `e2e/agent-testing/dev-startup-retry.ts` and
+  `event-stream-outage.ts` read console text, and match the new lines.
+
+The [addendum to the review](../reports/2026-10-29-logging-and-database-efficiency.md#addendum-renderer-levels-changed-by-r1)
+lists every level this migration changed.
 
 ## The lint rule
 
@@ -716,6 +768,26 @@ record what was observed at the time and are left as they are.
 | `[agent-mail] waiting` | `[agent-mail] delivery.waiting` |
 | `[native-agent] ... older than the command catalogue` | `[native-agent] catalogue.outdated-bridge` |
 | `[ElectronBackend] Failed to rename ... git branch`, and the push and rollback lines | `[git] branch.rename-failed`, `branch.push-config-failed`, `branch.rollback-failed` |
+| `[RemoteGateway]` (the renderer's lines) | `[web.gateway]` |
+| `[WindowError]` | `[web.window] error.unhandled`, `rejection.unhandled` |
+| `[ReactRoot]`, `[LazyLoadBoundary]` | `[web.react]` |
+| `[DesktopStartup] Renderer failed to load` (the rich line, not the marker) | `[web.startup] renderer.load-failed` |
+| `[App]`, `[ActionBar]`, untagged session store lines | `[web.app]`, `[web.action-bar]`, `[web.session]` |
+| `[PaneLayout]`, `[paneLayoutStore]`, `[DraggableTabBar]` | `[web.pane-layout]` |
+| `[useEnvironments]`, `[HierarchicalSidebar]`, `[DockerSettings]` and the environment dialogs | `[web.environment]`, `[web.sidebar]`, `[web.docker]` |
+| `[setup-terminal]` | `[terminal.setup]` |
+| `[useTerminal]`, `[TerminalContainer]`, `[PersistentTerminal]`, `[ComposeBar]`, `[InitializationLogs]` | `[terminal]` |
+| `[ClaudeTmux...]`, `[ResumeTmuxSessionDialog]` | `[web.claude-tmux]` |
+| `[resource-sync]`, `[store-resource-sync]`, `[events]`, `[native-observation]` | `[web.resource-sync]` |
+| `[read-coordinator]`, `[node-events]`, `[Workspace]` | `[web.read-coordinator]`, `[web.federation]` |
+| `[KanbanStore]`, `[KanbanTaskDialog]`, `[ProjectNotesView]` | `[web.kanban]` |
+| `[FeaturePlanStore]`, `[FeaturesView]` | `[web.feature-plan]` |
+| `[BuildPipeline]`, `[feature-build-activation]`, `[BuildChatTab]`, `[PipelineReviewTab]` | `[web.build-pipeline]` |
+| `[settings]`, `[settings-page]` | `[web.settings]` |
+| `[MessageShell]`, `[NativeMessage]`, `[QuestionCard]` and other transcript components | `[web.chat]` |
+| `[AgentNativeTab]`, `[AgentModelPicker]` and the composer drafts | `[web.native-agent]` |
+| `[FileViewerTab]`, `[files-panel]`, `[useFileSearch]` | `[web.files]` |
+| `[GitHubIssueDetail]`, `[GitHubComment]`, `[pull-requests]`, `[LinearTicketsView]` | `[web.github]`, `[web.linear]` |
 | `[Backend]` (unmigrated backend output) | Unchanged until the backend migrates |
 | `[Backend] Event loop stalled for N ms` | `[event-loop] stalled lagMs=N` |
 | `[claude-bridge]`, `[session-manager]`, `[session]`, `[events]`, `[config]`, `[mcp]`, `[plugins]`, `[plugin-config]`, `[mcp-config]`, `[event-emitter]` | `[bridge.claude]` |

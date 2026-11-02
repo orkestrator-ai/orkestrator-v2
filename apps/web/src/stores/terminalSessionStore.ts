@@ -1,4 +1,7 @@
 import { create } from "zustand";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 /**
  * Creates a container-scoped session key for terminal sessions.
@@ -24,10 +27,7 @@ export function createSessionKey(
   }
   // Fallback for cases where environmentId is not available (should be rare)
   // Warn in development to help catch missing environmentId for local environments
-  console.warn(
-    `[terminalSessionStore] createSessionKey called for local environment without environmentId. ` +
-      `This may cause session collisions. tabId: ${tabId}`,
-  );
+  log.warn("session-key.environment-missing", { tabId });
   return `local:${tabId}`;
 }
 

@@ -2,6 +2,9 @@ import type { TabInfo } from "@/types/paneLayout";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUniqueTabId } from "@/components/terminal/TerminalContainer.helpers";
 import { decideDesignOpen, type DesignPlacement, type DesignTabLike } from "./design-open";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.design");
 
 /**
  * Applies a design-open decision to the pane store. A canvas already shown in
@@ -45,7 +48,7 @@ export function openDesignCanvasTab(options: {
   }
   const designTabId = options.requestedTabId?.trim() || createUniqueTabId("design");
   if (options.allTabs.some((tab) => tab.id === designTabId)) {
-    console.warn("[design] Refusing duplicate tab ID:", designTabId);
+    log.warn("tab.duplicate-refused", { environmentId, tabId: designTabId });
     return false;
   }
   const newTab: TabInfo = {

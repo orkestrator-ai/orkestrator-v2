@@ -106,6 +106,9 @@ import {
   projectSortableIds,
   type ProjectFolderEntry,
 } from "@/lib/project-folders";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.sidebar");
 
 const NO_ENVIRONMENTS: Environment[] = [];
 const LazyRepositorySettings = lazy(async () => ({
@@ -257,7 +260,7 @@ export async function forkSidebarEnvironment(
     options.selectProjectAndEnvironment(created.projectId, created.id);
     startEnvironmentInBackground(options.startEnvironment, created.id);
   } catch (error) {
-    console.error("[HierarchicalSidebar] Failed to fork environment:", error);
+    log.error("fork.failed", { environmentId, error: formatLogError(error) });
   }
 }
 
@@ -293,7 +296,10 @@ export async function deleteProjectAndEnvironments(
       try {
         await deleteEnvironment(environment.id);
       } catch (error) {
-        console.error(`Failed to delete environment ${environment.name}:`, error);
+        log.error("environment.delete-failed", {
+          environmentId: environment.id,
+          error: formatLogError(error),
+        });
         failedNames.push(environment.name);
       }
     }
@@ -595,7 +601,7 @@ export function HierarchicalSidebar() {
       );
       if (reorder) await reorderEnvironments(reorder.projectId, reorder.ids);
     } catch (err) {
-      console.error("Failed to persist sidebar reorder:", err);
+      log.error("reorder.persist-failed", { error: formatLogError(err) });
     }
   };
 
@@ -608,7 +614,7 @@ export function HierarchicalSidebar() {
 
   const handleRemoveFromFolder = (projectId: string): void => {
     void arrangeProjectsByIntent({ kind: "remove-from-folder", projectId }).catch((err) => {
-      console.error("Failed to remove project from folder:", err);
+      log.error("folder.project-remove-failed", { projectId, error: formatLogError(err) });
     });
   };
 
@@ -626,7 +632,7 @@ export function HierarchicalSidebar() {
         }
       })
       .catch((err) => {
-        console.error("Failed to rename project folder:", err);
+        log.error("folder.rename-failed", { error: formatLogError(err) });
       });
   };
 
@@ -634,13 +640,13 @@ export function HierarchicalSidebar() {
     void arrangeProjectsByIntent({ kind: "ungroup-folder", folder: folderName })
       .then(() => setProjectFolderCollapsed(folderName, false))
       .catch((err) => {
-        console.error("Failed to remove project folder:", err);
+        log.error("folder.ungroup-failed", { error: formatLogError(err) });
       });
   };
 
   const handleSortFolder = (folderName: string): void => {
     void arrangeProjectsByIntent({ kind: "sort-folder", folder: folderName }).catch((err) => {
-      console.error("Failed to sort project folder:", err);
+      log.error("folder.sort-failed", { error: formatLogError(err) });
     });
   };
 
@@ -648,7 +654,7 @@ export function HierarchicalSidebar() {
     try {
       await addProject(gitUrl, localPath, cloneOnly);
     } catch (err) {
-      console.error("Failed to add project:", err);
+      log.error("project.add-failed", { error: formatLogError(err) });
       throw err; // Re-throw so the dialog can handle it
     }
   };
@@ -657,7 +663,7 @@ export function HierarchicalSidebar() {
     try {
       await createProjectFromScratch(localPath);
     } catch (err) {
-      console.error("Failed to create project:", err);
+      log.error("project.create-failed", { error: formatLogError(err) });
       throw err;
     }
   };
@@ -670,7 +676,7 @@ export function HierarchicalSidebar() {
     try {
       await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
     } catch (err) {
-      console.error("Failed to delete project:", err);
+      log.error("project.delete-failed", { projectId, error: formatLogError(err) });
       throw err;
     }
   };
@@ -777,16 +783,18 @@ export function HierarchicalSidebar() {
         selectProjectAndEnvironment(environment.projectId, environmentId);
         // Auto-start local environments on selection so a terminal can open
         if (startsOnSelection(environment)) {
-          console.info("[HierarchicalSidebar] Auto-starting local environment:", {
+          log.info("auto-start.started", {
             environmentId: environment.id,
-            branch: environment.branch,
             status: environment.status,
-            worktreePath: environment.worktreePath,
+            hasWorktree: !!environment.worktreePath,
           });
           // Setup command handling (blocking, placeholder, resolve) is centralized
           // in useEnvironments.startEnvironment() for all code paths.
           startEnvironment(environment.id).catch((err) => {
-            console.error("[HierarchicalSidebar] Failed to auto-start local environment:", err);
+            log.error("auto-start.failed", {
+              environmentId: environment.id,
+              error: formatLogError(err),
+            });
           });
         }
         // Already-started local environments resume their backend-owned setup
@@ -848,7 +856,10 @@ export function HierarchicalSidebar() {
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to stop environment ${runningIds[index]}:`, result.reason);
+        log.error("environment.stop-failed", {
+          environmentId: runningIds[index],
+          error: formatLogError(result.reason),
+        });
       }
     });
   };
@@ -863,7 +874,10 @@ export function HierarchicalSidebar() {
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to restart environment ${runningIds[index]}:`, result.reason);
+        log.error("environment.restart-failed", {
+          environmentId: runningIds[index],
+          error: formatLogError(result.reason),
+        });
       }
     });
   };
@@ -875,7 +889,10 @@ export function HierarchicalSidebar() {
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to delete environment ${idsToDelete[index]}:`, result.reason);
+        log.error("environment.delete-failed", {
+          environmentId: idsToDelete[index],
+          error: formatLogError(result.reason),
+        });
       }
     });
 
@@ -1157,7 +1174,7 @@ export function HierarchicalSidebar() {
     );
     if (!reorder) return;
     reorderEnvironments(reorder.projectId, reorder.ids).catch((err: unknown) => {
-      console.error("Failed to persist sidebar reorder:", err);
+      log.error("reorder.persist-failed", { error: formatLogError(err) });
     });
   };
 

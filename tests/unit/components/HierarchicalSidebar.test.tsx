@@ -12,6 +12,7 @@ import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
 import { portalStore } from "@/lib/portal/portal-store";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ComponentProps } from "react";
 import type { CollisionDetection, DragEndEvent, DragStartEvent } from "@dnd-kit/core";
@@ -904,9 +905,7 @@ describe("HierarchicalSidebar", () => {
     ];
     forkEnvironmentMock.mockRejectedValueOnce(new Error("published to a remote"));
     useUIStore.getState().setEnvironmentSortMode("activity");
-    const consoleError = mock(() => undefined);
-    const originalConsoleError = console.error;
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
     render(<HierarchicalSidebar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
@@ -917,8 +916,18 @@ describe("HierarchicalSidebar", () => {
     });
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
     expect(startEnvironmentMock).not.toHaveBeenCalled();
-    expect(consoleError).toHaveBeenCalled();
-    console.error = originalConsoleError;
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "web.sidebar",
+        event: "fork.failed",
+        fields: expect.objectContaining({
+          environmentId: "env-source",
+          error: expect.objectContaining({ message: "published to a remote" }),
+        }),
+      }),
+    );
+    logs.restore();
   });
 
   test("warns when Docker is unavailable for a container fork", async () => {
@@ -1727,9 +1736,7 @@ describe("HierarchicalSidebar", () => {
     createEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("create failed");
     });
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
@@ -1737,16 +1744,22 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
 
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to create environment:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.environment",
+            event: "create.failed",
+            fields: expect.objectContaining({
+              error: expect.anything(),
+            }),
+          }),
         ),
       );
       expect(screen.getByText(/^Create Ork \(Environment\)/)).toBeTruthy();
       expect(updateEnvironmentAgentSettingsMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).not.toHaveBeenCalled();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -1973,9 +1986,7 @@ describe("HierarchicalSidebar", () => {
     updateEnvironmentAgentSettingsMock.mockImplementationOnce(async () => {
       throw new Error("settings failed");
     });
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
@@ -1983,9 +1994,15 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
 
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to create environment:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.environment",
+            event: "create.failed",
+            fields: expect.objectContaining({
+              error: expect.anything(),
+            }),
+          }),
         ),
       );
       expect(createEnvironmentMock).toHaveBeenCalledTimes(1);
@@ -1994,7 +2011,7 @@ describe("HierarchicalSidebar", () => {
       expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
       expect(screen.getByText(/^Create Ork \(Environment\)/)).toBeTruthy();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2002,9 +2019,7 @@ describe("HierarchicalSidebar", () => {
     startEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("start failed");
     });
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
@@ -2014,9 +2029,16 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to auto-start environment:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.environment",
+            event: "auto-start.failed",
+            fields: expect.objectContaining({
+              environmentId: "env-created",
+              error: expect.objectContaining({ message: "start failed" }),
+            }),
+          }),
         ),
       );
       expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
@@ -2032,7 +2054,7 @@ describe("HierarchicalSidebar", () => {
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-created");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2127,9 +2149,7 @@ describe("HierarchicalSidebar", () => {
     loadEnvironmentsMock.mockImplementationOnce(async () => {
       throw new Error("snapshot failed");
     });
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
@@ -2138,12 +2158,19 @@ describe("HierarchicalSidebar", () => {
         expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1");
         expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-2");
       });
-      expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to load environments for project project-1:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.sidebar",
+          event: "environments.load-failed",
+          fields: expect.objectContaining({
+            projectId: "project-1",
+            error: expect.objectContaining({ message: "snapshot failed" }),
+          }),
+        }),
       );
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2228,22 +2255,27 @@ describe("HierarchicalSidebar", () => {
     startEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("start failed");
     });
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
       fireEvent.click(screen.getByRole("button", { name: "Local Environment" }));
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "[HierarchicalSidebar] Failed to auto-start local environment:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.sidebar",
+            event: "auto-start.failed",
+            fields: expect.objectContaining({
+              environmentId: "env-local",
+              error: expect.objectContaining({ message: "start failed" }),
+            }),
+          }),
         ),
       );
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-local");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2408,39 +2440,56 @@ describe("HierarchicalSidebar", () => {
     deleteEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("delete failed");
     });
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Stop selected"));
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to stop environment env-running:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.sidebar",
+            event: "environment.stop-failed",
+            fields: expect.objectContaining({
+              environmentId: "env-running",
+            }),
+          }),
         ),
       );
 
       fireEvent.click(screen.getByTitle("Restart selected"));
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to restart environment env-running:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.sidebar",
+            event: "environment.restart-failed",
+            fields: expect.objectContaining({
+              environmentId: "env-running",
+            }),
+          }),
         ),
       );
 
       fireEvent.click(screen.getByTitle("Delete selected"));
       fireEvent.click(await screen.findByRole("button", { name: "Delete All" }));
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to delete environment env-running:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.sidebar",
+            event: "environment.delete-failed",
+            fields: expect.objectContaining({
+              environmentId: "env-running",
+              error: expect.objectContaining({ message: "delete failed" }),
+            }),
+          }),
         ),
       );
       expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2488,9 +2537,7 @@ describe("HierarchicalSidebar", () => {
 
   test("keeps the scratch dialog open and propagates creation errors", async () => {
     createProjectFromScratchMock.mockRejectedValueOnce(new Error("remote creation failed"));
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
@@ -2505,9 +2552,18 @@ describe("HierarchicalSidebar", () => {
       expect((await screen.findByRole("alert")).textContent).toContain("remote creation failed");
       expect(createProjectFromScratchMock).toHaveBeenCalledWith("/repos/new-project");
       expect(screen.getByRole("heading", { name: "Add project" })).toBeTruthy();
-      expect(consoleErrorMock).toHaveBeenCalledWith("Failed to create project:", expect.any(Error));
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.sidebar",
+          event: "project.create-failed",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({ message: "remote creation failed" }),
+          }),
+        }),
+      );
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2560,9 +2616,7 @@ describe("HierarchicalSidebar", () => {
     deleteEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("delete failed");
     });
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
@@ -2571,15 +2625,21 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to delete project:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.sidebar",
+            event: "project.delete-failed",
+            fields: expect.objectContaining({
+              projectId: "project-1",
+            }),
+          }),
         ),
       );
       expect(removeProjectMock).not.toHaveBeenCalled();
       expect(screen.getByRole("alertdialog")).toBeTruthy();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2637,9 +2697,7 @@ describe("HierarchicalSidebar", () => {
     arrangeProjectsMock.mockImplementationOnce(async () => {
       throw new Error("reorder failed");
     });
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(<HierarchicalSidebar />);
@@ -2655,13 +2713,19 @@ describe("HierarchicalSidebar", () => {
       });
 
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to persist sidebar reorder:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.sidebar",
+            event: "reorder.persist-failed",
+            fields: expect.objectContaining({
+              error: expect.objectContaining({ message: "reorder failed" }),
+            }),
+          }),
         ),
       );
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -2932,8 +2996,7 @@ describe("HierarchicalSidebar", () => {
     deleteEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("second failed");
     });
-    const originalConsoleError = console.error;
-    console.error = mock(() => undefined) as typeof console.error;
+    const logs = captureLogs();
 
     try {
       await expect(
@@ -2946,8 +3009,20 @@ describe("HierarchicalSidebar", () => {
       ).rejects.toThrow("Failed to delete some environments: First, Second");
       expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
       expect(removeProjectMock).not.toHaveBeenCalled();
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.sidebar",
+          event: "environment.delete-failed",
+          fields: expect.objectContaining({
+            environmentId: "env-1",
+            error: expect.objectContaining({ message: "first failed" }),
+          }),
+        }),
+      );
+      expect(logs.lines.join("\n")).not.toContain("First");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -3181,9 +3256,7 @@ describe("HierarchicalSidebar", () => {
         { ...secondProject, id: "project-alpha", name: "Alpha", folder: "Work", order: 1 },
       ];
       arrangeProjectsMock.mockRejectedValueOnce(new Error("sort failed"));
-      const originalConsoleError = console.error;
-      const consoleErrorMock = mock(() => undefined);
-      console.error = consoleErrorMock as typeof console.error;
+      const logs = captureLogs();
 
       try {
         render(<HierarchicalSidebar />);
@@ -3191,13 +3264,19 @@ describe("HierarchicalSidebar", () => {
         fireEvent.click(await screen.findByRole("menuitem", { name: "Sort" }));
 
         await waitFor(() =>
-          expect(consoleErrorMock).toHaveBeenCalledWith(
-            "Failed to sort project folder:",
-            expect.any(Error),
+          expect(logs.records()).toContainEqual(
+            expect.objectContaining({
+              level: "error",
+              area: "web.sidebar",
+              event: "folder.sort-failed",
+              fields: expect.objectContaining({
+                error: expect.objectContaining({ message: "sort failed" }),
+              }),
+            }),
           ),
         );
       } finally {
-        console.error = originalConsoleError;
+        logs.restore();
       }
     });
 

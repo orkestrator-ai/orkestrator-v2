@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -72,7 +73,7 @@ describe("InitializationLogs", () => {
   });
 
   test("shows an initial failure and recovers on a later poll", async () => {
-    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const logs = captureLogs();
     getContainerLogsMock
       .mockRejectedValueOnce(new Error("daemon unavailable"))
       .mockResolvedValueOnce("container ready");
@@ -83,7 +84,7 @@ describe("InitializationLogs", () => {
       await waitFor(() => expect(screen.getByText("container ready")).toBeTruthy());
       expect(screen.queryByText(/Failed to load container logs/) === null).toBe(true);
     } finally {
-      consoleError.mockRestore();
+      logs.restore();
     }
   });
 
@@ -178,7 +179,8 @@ describe("InitializationLogs", () => {
      * screen under the "Initializing Container" spinner with nothing to say it
      * had stopped tracking the container.
      */
-    const consoleWarn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const logs = captureLogs();
+    const warnings = () => logs.records().filter((record) => record.level === "warn");
     getContainerLogsMock
       .mockResolvedValueOnce("still useful")
       .mockRejectedValue(new Error("daemon unavailable"));
@@ -193,27 +195,33 @@ describe("InitializationLogs", () => {
       // The last good tail is still the best view of the container.
       expect(screen.getByText("still useful")).toBeTruthy();
       expect(screen.queryByText(/Failed to load container logs/) === null).toBe(true);
-      expect(consoleWarn).toHaveBeenCalledWith(
-        "[InitializationLogs] Container logs stopped refreshing:",
-        "daemon unavailable",
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "terminal",
+          event: "init-logs.refresh-stopped",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({ message: "daemon unavailable" }),
+          }),
+        }),
       );
 
       // A single warning, not one per failed poll.
-      const warnCalls = consoleWarn.mock.calls.length;
+      const warnCalls = warnings().length;
       await advance(60_000);
-      expect(consoleWarn.mock.calls.length).toBe(warnCalls);
+      expect(warnings().length).toBe(warnCalls);
 
       getContainerLogsMock.mockResolvedValue("recovered");
       await advance(30_000);
       await waitFor(() => expect(screen.getByText("recovered")).toBeTruthy());
       expect(screen.queryByRole("status") === null).toBe(true);
     } finally {
-      consoleWarn.mockRestore();
+      logs.restore();
     }
   });
 
   test("tolerates isolated polling failures without flagging staleness", async () => {
-    const consoleWarn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const logs = captureLogs();
     getContainerLogsMock
       .mockResolvedValueOnce("first")
       .mockRejectedValueOnce(new Error("blip"))
@@ -225,9 +233,9 @@ describe("InitializationLogs", () => {
       await advance(1_000);
       await waitFor(() => expect(screen.getByText("second")).toBeTruthy());
       expect(screen.queryByRole("status") === null).toBe(true);
-      expect(consoleWarn).not.toHaveBeenCalled();
+      expect(logs.records().filter((record) => record.level === "warn")).toEqual([]);
     } finally {
-      consoleWarn.mockRestore();
+      logs.restore();
     }
   });
 

@@ -69,6 +69,10 @@
  * in `view`, because a different subscriber's read would not be equivalent.
  */
 
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.read-coordinator");
+
 export type ReadPriority = "critical" | "standard" | "auxiliary";
 
 /**
@@ -475,7 +479,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
       try {
         subscriber.onState(state);
       } catch (error) {
-        console.error("[read-coordinator] State listener threw:", error);
+        log.error("listener.threw", { error: formatLogError(error) });
       }
     }
   };
@@ -649,7 +653,7 @@ export function createReadCoordinator(options: ReadCoordinatorOptions = {}): Rea
         (error: unknown) => settle(entry, flight, { ok: false, error }),
       )
       .catch((error: unknown) => {
-        console.error("[read-coordinator] Failed to settle a read:", error);
+        log.error("read.settle-failed", { error: formatLogError(error) });
       });
   };
 

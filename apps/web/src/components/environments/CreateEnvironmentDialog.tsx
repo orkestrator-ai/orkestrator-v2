@@ -118,6 +118,9 @@ import {
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.environment");
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -331,7 +334,7 @@ export function CreateEnvironmentDialog({
         if (Array.isArray(models) && models.length > 0) syncCachedAcpModels(models);
       })
       .catch((error) => {
-        console.warn("[CreateEnvironmentDialog] Failed to seed the Pi model catalogue:", error);
+        log.warn("models.pi-seed-failed", { error: formatLogError(error) });
       });
   }, [enabledAgentPlatforms, open, piModels.length]);
   const {
@@ -677,7 +680,7 @@ export function CreateEnvironmentDialog({
           }
         })
         .catch((error) => {
-          console.warn("[CreateEnvironmentDialog] Failed to load cached OpenCode models:", error);
+          log.warn("models.opencode-cache-load-failed", { error: formatLogError(error) });
         });
     }
 
@@ -1028,7 +1031,7 @@ export function CreateEnvironmentDialog({
             }
           } catch (error) {
             if (!isCurrentOperation()) return;
-            console.warn("[CreateEnvironmentDialog] Failed to read dropped attachment:", error);
+            log.warn("create.attachment-read-failed", { error: formatLogError(error) });
             if (dropIntent === "feature") {
               skippedFeatureFiles += 1;
             } else {
@@ -1356,7 +1359,7 @@ export function CreateEnvironmentDialog({
 
       // Validate port mappings before submission
       if (environmentType === "containerized" && !validatePortMappings()) {
-        console.error("Invalid port mappings: ports must be between 1 and 65535");
+        log.error("create.port-mappings-invalid");
         return;
       }
 
@@ -1448,7 +1451,7 @@ export function CreateEnvironmentDialog({
         resetForm();
         onOpenChange(false);
       } catch (err) {
-        console.error("Failed to create environment:", err);
+        log.error("create.failed", { error: formatLogError(err) });
         toast.error("Could not create environment", {
           description: err instanceof Error ? err.message : "An unexpected error occurred.",
         });

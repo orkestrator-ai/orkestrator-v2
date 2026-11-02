@@ -25,6 +25,9 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { useConfigStore, useProjectStore } from "@/stores";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
   if (!Array.isArray(value)) return null;
@@ -91,7 +94,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
         }
       })
       .catch((error) => {
-        console.warn("[useProjectModelCatalog] Failed to load cached OpenCode models:", error);
+        log.warn("opencode-catalog.load-failed", { projectId, error: formatLogError(error) });
       });
     return () => {
       cancelled = true;
@@ -217,7 +220,10 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
         }
       })
       .catch((error) => {
-        console.warn("[useBuildLaunchOptions] Failed to load OpenCode model preferences:", error);
+        log.warn("opencode-preferences.load-failed", {
+          projectId,
+          error: formatLogError(error),
+        });
       });
     return () => {
       cancelled = true;

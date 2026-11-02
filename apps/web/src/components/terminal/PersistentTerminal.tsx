@@ -62,6 +62,10 @@ import { isKeyboardShortcutsShortcut } from "@/lib/keyboard-shortcuts";
 import { MobileTerminalKeyBar, resolveTerminalKeyData } from "./MobileTerminalKeyBar";
 import { TerminalHistoryPanel } from "./TerminalHistoryPanel";
 import { TerminalCornerToolbar, useTerminalCornerHover } from "./TerminalCornerToolbar";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
+const setupLog = createLogger("terminal.setup");
 
 // Threshold for detecting intermediate/cleared buffer state during React mount cycles.
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
@@ -364,7 +368,7 @@ export function PersistentTerminal({
 
   useEffect(() => {
     if (!isSetupTab) return;
-    console.info("[setup-terminal] PersistentTerminal setup attach state", {
+    setupLog.debug("attach.state-changed", () => ({
       environmentId,
       tabId,
       sessionKey,
@@ -376,7 +380,7 @@ export function PersistentTerminal({
       containerId,
       initialCommandCount: initialCommands?.length ?? 0,
       serializedBufferChars: serializedBuffer?.length ?? 0,
-    });
+    }));
   }, [
     containerId,
     environmentId,
@@ -420,7 +424,10 @@ export function PersistentTerminal({
   );
 
   const handleImageError = useCallback((error: string) => {
-    console.error("[PersistentTerminal] Clipboard image error:", error);
+    log.error("clipboard.image-failed", {
+      source: "PersistentTerminal",
+      error: formatLogError(error),
+    });
   }, []);
 
   useClipboardImagePaste({
@@ -437,7 +444,10 @@ export function PersistentTerminal({
     try {
       await writeText(selection);
     } catch (err) {
-      console.error("[PersistentTerminal] Failed to copy selection:", err);
+      log.error("clipboard.copy-failed", {
+        source: "PersistentTerminal",
+        error: formatLogError(err),
+      });
     }
   }, [terminal]);
 
@@ -595,10 +605,7 @@ export function PersistentTerminal({
             strippedBuffer.length > 500 && /(?:\r?\n)$/.test(strippedBuffer);
 
           if (hasShellPrompt || hasGenericPrompt || hasLengthFallback) {
-            console.log(
-              "[PersistentTerminal] Local environment ready detected for first tab:",
-              tabId,
-            );
+            log.info("environment.ready-detected", { tabId, isFirstTab, isLocal: true });
             setIsEnvironmentReady(true);
             dataBufferRef.current = "";
             onReady?.({ persistSetupComplete: false, workspaceReady: true });
@@ -617,12 +624,7 @@ export function PersistentTerminal({
           );
 
           if (readyDetected) {
-            console.log(
-              "[PersistentTerminal] Environment ready detected for tab:",
-              tabId,
-              "isFirstTab:",
-              isFirstTab,
-            );
+            log.info("environment.ready-detected", { tabId, isFirstTab, isLocal: false });
             setIsEnvironmentReady(true);
             dataBufferRef.current = "";
             if (!workspaceReadySignaledRef.current) {
@@ -647,7 +649,7 @@ export function PersistentTerminal({
         const hasWorkspace = strippedBuffer.includes("/workspace");
 
         if (hasZshPrompt || hasWorkspace || strippedBuffer.length > 100) {
-          console.debug("[PersistentTerminal] Shell ready for non-first tab:", tabId);
+          log.debug("shell.ready-detected", () => ({ tabId }));
           setIsEnvironmentReady(true);
           dataBufferRef.current = "";
         }
@@ -796,12 +798,7 @@ export function PersistentTerminal({
       if (setupCompleteRef.current) return true;
       if (data === SETUP_DONE_OSC_DATA || data === SETUP_FAILED_OSC_DATA) {
         const succeeded = data === SETUP_DONE_OSC_DATA;
-        console.log(
-          "[PersistentTerminal] Setup scripts completed (OSC) for tab:",
-          tabId,
-          "succeeded:",
-          succeeded,
-        );
+        log.info("setup.scripts-completed", { tabId, succeeded });
         setupCompleteRef.current = true;
         onSetupComplete?.({ persistSetupComplete: succeeded });
       }
@@ -997,7 +994,10 @@ export function PersistentTerminal({
       }
       void loadSessionsForEnvironment(environmentId)
         .catch((err) => {
-          console.error("[PersistentTerminal] Failed to load persistent sessions:", err);
+          log.error("persistent-sessions.load-failed", {
+            environmentId,
+            error: formatLogError(err),
+          });
         })
         .then(() => {
           if (cancelled) return;
@@ -1053,10 +1053,9 @@ export function PersistentTerminal({
     if (existingPersistentSession) {
       hasRestoredFromPersistentRef.current = true;
 
-      console.debug(
-        "[PersistentTerminal] Restoring from persistent session:",
-        existingPersistentSession.id,
-      );
+      log.debug("persistent-session.restoring", () => ({
+        persistentSessionId: existingPersistentSession.id,
+      }));
 
       setSession(sessionKey, {
         persistentSessionId: existingPersistentSession.id,
@@ -1067,7 +1066,7 @@ export function PersistentTerminal({
         .then((buffer) => {
           persistentBufferLoadPendingRef.current = false;
           if (buffer) {
-            console.debug("[PersistentTerminal] Loaded persistent buffer, length:", buffer.length);
+            log.debug("persistent-buffer.loaded", () => ({ bufferLength: buffer.length }));
             setSerializedBuffer(sessionKey, buffer);
           } else {
             pendingDurableReplayRef.current = null;
@@ -1079,7 +1078,10 @@ export function PersistentTerminal({
           setReplayWarning(
             "Saved terminal history could not be loaded. Current output was retained.",
           );
-          console.error("[PersistentTerminal] Failed to load persistent buffer:", err);
+          log.error("persistent-buffer.load-failed", {
+            persistentSessionId: existingPersistentSession.id,
+            error: formatLogError(err),
+          });
         });
     } else {
       hasRestoredFromPersistentRef.current = true;
@@ -1099,11 +1101,7 @@ export function PersistentTerminal({
   // Store session ID when we get one
   useEffect(() => {
     if (sessionId && sessionId !== existingSessionId) {
-      console.debug(
-        "[PersistentTerminal] Storing new session ID for sessionKey:",
-        sessionKey,
-        sessionId,
-      );
+      log.debug("session.id-stored", () => ({ sessionKey, sessionId }));
       const currentSession = useTerminalSessionStore.getState().sessions.get(sessionKey);
       setSession(sessionKey, {
         ...currentSession,
@@ -1122,16 +1120,18 @@ export function PersistentTerminal({
     const existingPersistentSession = existingSessions.find((s) => s.tabId === tabId);
 
     if (existingPersistentSession) {
-      console.debug(
-        "[PersistentTerminal] Found existing persistent session:",
-        existingPersistentSession.id,
-      );
+      log.debug("persistent-session.found", () => ({
+        persistentSessionId: existingPersistentSession.id,
+      }));
       persistentSessionCreatedRef.current = true;
       persistentSessionIdRef.current = existingPersistentSession.id;
       setPersistentSessionId(sessionKey, existingPersistentSession.id);
       if (existingPersistentSession.status === "disconnected") {
         updateSessionStatus(existingPersistentSession.id, "connected").catch((err) => {
-          console.error("[PersistentTerminal] Failed to update session status:", err);
+          log.error("persistent-session.status-update-failed", {
+            persistentSessionId: existingPersistentSession.id,
+            error: formatLogError(err),
+          });
         });
       }
     } else {
@@ -1139,21 +1139,25 @@ export function PersistentTerminal({
       const sessionType = tabTypeToSessionType(tabType);
       const persistentContainerId = containerId ?? "";
 
-      console.debug("[PersistentTerminal] Creating persistent session:", {
+      log.debug("persistent-session.creating", () => ({
         sessionId,
         environmentId,
         tabType: sessionType,
         persistentContainerId,
-      });
+      }));
       createPersistentSession(environmentId, persistentContainerId, tabId, sessionType)
         .then((session) => {
-          console.debug("[PersistentTerminal] Persistent session created:", session.id);
+          log.debug("persistent-session.created", () => ({ persistentSessionId: session.id }));
           persistentSessionIdRef.current = session.id;
           persistentSessionCreatedRef.current = true;
           setPersistentSessionId(sessionKey, session.id);
         })
         .catch((err) => {
-          console.error("[PersistentTerminal] Failed to create persistent session:", err);
+          log.error("persistent-session.create-failed", {
+            environmentId,
+            tabId,
+            error: formatLogError(err),
+          });
         })
         .finally(() => {
           creationInProgressRef.current = false;
@@ -1184,7 +1188,9 @@ export function PersistentTerminal({
       if (persistentId && now - lastActivityUpdateRef.current > 30000) {
         lastActivityUpdateRef.current = now;
         updateSessionActivity(persistentId).catch((err) => {
-          console.debug("[PersistentTerminal] Failed to update session activity:", err);
+          log.debug("persistent-session.activity-update-failed", () => ({
+            error: formatLogError(err),
+          }));
         });
       }
     };
@@ -1210,34 +1216,22 @@ export function PersistentTerminal({
           const { ready, failed } = detectContainerSetupReadiness(serializedBuffer ?? "");
           if (ready) {
             setIsEnvironmentReady(true);
-            console.log(
-              "[PersistentTerminal] Reconnection buffer contains setup readiness marker for tab:",
-              tabId,
-            );
+            log.debug("reconnect.setup-marker-found", () => ({ tabId }));
             if (!workspaceReadySignaledRef.current) {
               workspaceReadySignaledRef.current = true;
               onReady?.({ persistSetupComplete: !failed, workspaceReady: true });
             }
           } else {
-            console.log(
-              "[PersistentTerminal] Reconnected first container tab without setup marker, keeping readiness detection active for tab:",
-              tabId,
-            );
+            log.debug("reconnect.setup-marker-absent", () => ({ tabId }));
           }
         } else {
           setIsEnvironmentReady(true);
-          console.log(
-            "[PersistentTerminal] Reconnection complete, calling onReady for tab:",
-            tabId,
-          );
+          log.debug("reconnect.completed", () => ({ tabId }));
           onReady?.({ persistSetupComplete: false, workspaceReady: false });
         }
       } else {
         // Leave isEnvironmentReady as false so handleData can detect setup completion
-        console.log(
-          "[PersistentTerminal] First tab on new environment, waiting for setup detection before calling onReady, tab:",
-          tabId,
-        );
+        log.debug("setup.awaiting-detection", () => ({ tabId }));
       }
     }
   }, [
@@ -1270,10 +1264,7 @@ export function PersistentTerminal({
     setIsEnvironmentReady(true);
     if (!workspaceReadySignaledRef.current) {
       workspaceReadySignaledRef.current = true;
-      console.log(
-        "[PersistentTerminal] Restored buffer contains setup readiness marker for tab:",
-        tabId,
-      );
+      log.debug("restore.setup-marker-found", () => ({ tabId }));
       onReady?.({ persistSetupComplete: !failed, workspaceReady: true });
     }
   }, [isFirstTab, isLocalEnvironment, isEnvironmentReady, serializedBuffer, tabId, onReady]);
@@ -1449,7 +1440,7 @@ export function PersistentTerminal({
               terminal.write(pendingBuffer);
               terminal.scrollToBottom();
             } catch (err) {
-              console.error(`[PersistentTerminal] Error restoring buffer for tab:${tabId}:`, err);
+              log.error("buffer.restore-failed", { tabId, error: formatLogError(err) });
               fitToLaidOutPane(fitAddon, terminalRef.current);
               terminal.refresh(0, terminal.rows - 1);
             } finally {
@@ -1611,13 +1602,16 @@ export function PersistentTerminal({
             const persistentId = persistentSessionIdRef.current;
             if (persistentId) {
               savePersistentSessionBuffer(persistentId, bufferContent).catch((err) => {
-                console.error("[PersistentTerminal] Failed to persist session buffer:", err);
+                log.error("persistent-buffer.save-failed", {
+                  persistentSessionId: persistentId,
+                  error: formatLogError(err),
+                });
               });
             }
           }
         }
       } catch (err) {
-        console.error(`[PersistentTerminal] Cleanup - failed to serialize buffer:`, err);
+        log.error("buffer.serialize-failed", { error: formatLogError(err) });
       }
 
       if (terminalInputDisposables.get(terminal) === dataDisposable) {
@@ -1879,7 +1873,7 @@ export function PersistentTerminal({
     let dispatched = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    console.debug("[PersistentTerminal] Launching command for tab:", tabId);
+    log.debug("command.launching", () => ({ tabId }));
 
     setBootstrapWarning(null);
     const scheduleAttempt = (attempt: number): void => {
@@ -1914,7 +1908,11 @@ export function PersistentTerminal({
           .catch((error) => {
             if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
             bootstrapRequestedForSessionRef.current = null;
-            console.error("[PersistentTerminal] Failed to bootstrap terminal:", error);
+            log.error("bootstrap.failed", {
+              sessionId: targetSessionId,
+              attempt,
+              error: formatLogError(error),
+            });
             if (attempt < TERMINAL_BOOTSTRAP_MAX_ATTEMPTS) {
               scheduleAttempt(attempt + 1);
               return;
@@ -1994,7 +1992,7 @@ export function PersistentTerminal({
   const cornerHover = useTerminalCornerHover();
   const handleMarkSetupComplete = useCallback(() => {
     if (!setupCompleteRef.current) {
-      console.log("[PersistentTerminal] Manually marking setup complete for tab:", tabId);
+      log.info("setup.marked-complete", { tabId });
       setupCompleteRef.current = true;
       setManuallyCompleted(true);
       onSetupComplete?.({ persistSetupComplete: false });
@@ -2047,7 +2045,7 @@ export function PersistentTerminal({
             terminal.options.scrollback,
           );
         } catch (error) {
-          console.warn("[setup-terminal] failed to preserve terminal before conversion", error);
+          setupLog.warn("terminal.preserve-failed", { tabId, error: formatLogError(error) });
         }
       }
       terminalStore.setSession(key, {

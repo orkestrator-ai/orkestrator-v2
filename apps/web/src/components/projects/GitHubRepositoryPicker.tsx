@@ -35,6 +35,9 @@ import { formatCompactRelativeTime } from "@/lib/format-relative-time";
 import { pickHostPath } from "@/lib/host-path-picker";
 import { joinHostPath, normalizeGitHubRemote, parentDirectory } from "@/lib/github-clone";
 import { cn } from "@/lib/utils";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.project");
 
 type LoadState<T> =
   | { status: "loading" }
@@ -320,7 +323,7 @@ export function GitHubRepositoryPicker({
       setLocalPath(joinHostPath(directory, repository.name));
       setCloneError(null);
     } catch (browseError) {
-      console.error("Failed to open directory picker:", browseError);
+      log.error("directory-picker.failed", { error: formatLogError(browseError) });
     }
   };
 

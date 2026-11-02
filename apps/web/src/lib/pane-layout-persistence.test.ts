@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import * as backend from "@/lib/backend";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -2226,8 +2227,7 @@ describe("pane layout persistence", () => {
 
   test("isolates a throwing settled handler from later handlers", async () => {
     const observed: string[] = [];
-    const warn = console.warn;
-    console.warn = mock(() => undefined);
+    const logs = captureLogs();
     const unsubscribeThrowing = onPaneLayoutWriteSettled(() => {
       throw new Error("listener failed");
     });
@@ -2247,15 +2247,22 @@ describe("pane layout persistence", () => {
       await waitForTimers();
 
       expect(observed).toEqual(["env-1"]);
-      expect(console.warn).toHaveBeenCalledWith(
-        "[PaneLayout] A write-settled handler threw:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.pane-layout",
+          event: "persist.settled-handler-failed",
+          fields: expect.objectContaining({
+            environmentId: "env-1",
+            error: expect.objectContaining({ message: "listener failed" }),
+          }),
+        }),
       );
       stop();
     } finally {
       unsubscribeThrowing();
       unsubscribeHealthy();
-      console.warn = warn;
+      logs.restore();
     }
   });
 
@@ -2313,7 +2320,7 @@ describe("pane layout persistence", () => {
 
   test("reports a production backend-intent failure and keeps later writes usable", async () => {
     let attempt = 0;
-    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
+    const logs = captureLogs();
     const applyIntent = spyOn(backend, "applyPaneLayoutIntent").mockImplementation(
       async (environmentId, _base, desired) => {
         attempt += 1;
@@ -2336,9 +2343,16 @@ describe("pane layout persistence", () => {
       store.finishHydration("env-1");
       store.addTab("default", { id: "first", type: "plain" }, "env-1");
       await waitForTimers();
-      expect(errorLog).toHaveBeenCalledWith(
-        "[PaneLayout] Failed to persist pane layout:",
-        expect.objectContaining({ message: "intent transport failed" }),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.pane-layout",
+          event: "persist.failed",
+          fields: expect.objectContaining({
+            environmentId: "env-1",
+            error: expect.objectContaining({ message: "intent transport failed" }),
+          }),
+        }),
       );
 
       usePaneLayoutStore.getState().addTab("default", { id: "second", type: "plain" }, "env-1");
@@ -2348,7 +2362,7 @@ describe("pane layout persistence", () => {
     } finally {
       stop();
       applyIntent.mockRestore();
-      errorLog.mockRestore();
+      logs.restore();
     }
   });
 

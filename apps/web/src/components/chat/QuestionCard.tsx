@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback, useMemo, useState } from "react";
 import { Check, Circle, X } from "lucide-react";
 import { toast } from "sonner";
@@ -10,6 +11,8 @@ import {
 } from "@/components/chat/BlockingPromptCard";
 import { usePromptDraftField } from "@/stores/promptDraftStore";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
+
+const log = createLogger("web.chat");
 
 /** Agent-neutral option shape. `value` falls back to `label` when absent. */
 export interface QuestionCardOption {
@@ -598,7 +601,7 @@ export function QuestionCard({
           });
         }
       } catch (error) {
-        console.error(`[${agentLabel}QuestionCard] Failed to submit answer:`, error);
+        log.error("question.submit-failed", { platform: agentLabel, error: formatLogError(error) });
         const message = `The response outcome is unknown. Reconnect or refresh ${agentLabel} to verify whether it was received.`;
         setInlineError(message);
         setRetryBlocked(true);
@@ -670,7 +673,7 @@ export function QuestionCard({
         });
       }
     } catch (error) {
-      console.error(`[${agentLabel}QuestionCard] Failed to dismiss question:`, error);
+      log.error("question.dismiss-failed", { platform: agentLabel, error: formatLogError(error) });
       setInlineError(`${agentLabel} is still waiting for a response. Please try again.`);
       setRetryBlocked(true);
       toast.error("Failed to dismiss this question", {

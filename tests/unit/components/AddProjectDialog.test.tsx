@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { configureLogger } from "@orkestrator/protocol/logger";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import * as realBackend from "@/lib/backend";
@@ -444,12 +446,8 @@ describe("AddProjectDialog", () => {
   });
 
   test("logs directory picker and repository inspection failures", async () => {
-    const originalConsoleError = console.error;
-    const originalConsoleDebug = console.debug;
-    const consoleErrorMock = mock(() => undefined);
-    const consoleDebugMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
-    console.debug = consoleDebugMock as typeof console.debug;
+    const logs = captureLogs();
+    configureLogger({ level: "debug" });
 
     try {
       openDialogMock.mockRejectedValueOnce(new Error("picker failed"));
@@ -460,9 +458,15 @@ describe("AddProjectDialog", () => {
         }),
       );
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to open directory picker:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.project",
+            event: "directory-picker.failed",
+            fields: expect.objectContaining({
+              error: expect.objectContaining({ message: "picker failed" }),
+            }),
+          }),
         ),
       );
 
@@ -474,14 +478,20 @@ describe("AddProjectDialog", () => {
         }),
       );
       await waitFor(() =>
-        expect(consoleDebugMock).toHaveBeenCalledWith(
-          "Could not get git remote URL:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "debug",
+            area: "web.project",
+            event: "git-remote.read-failed",
+            fields: expect.objectContaining({
+              error: expect.objectContaining({ message: "not a repository" }),
+            }),
+          }),
         ),
       );
+      expect(logs.lines.join("\n")).not.toContain("/Users/alice/not-git");
     } finally {
-      console.error = originalConsoleError;
-      console.debug = originalConsoleDebug;
+      logs.restore();
     }
   });
 
@@ -711,9 +721,7 @@ describe("AddProjectDialog", () => {
   });
 
   test("logs a scratch directory picker failure and preserves the entered path", async () => {
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as typeof console.error;
+    const logs = captureLogs();
 
     try {
       openDialogMock.mockRejectedValue(new Error("picker failed"));
@@ -726,16 +734,22 @@ describe("AddProjectDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Choose an empty project folder" }));
 
       await waitFor(() =>
-        expect(consoleErrorMock).toHaveBeenCalledWith(
-          "Failed to open directory picker:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.project",
+            event: "directory-picker.failed",
+            fields: expect.objectContaining({
+              error: expect.objectContaining({ message: "picker failed" }),
+            }),
+          }),
         ),
       );
       expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
         "/Users/alice/new-project",
       );
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 

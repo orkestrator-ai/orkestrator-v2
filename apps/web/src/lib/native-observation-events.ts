@@ -5,6 +5,9 @@ import {
 } from "@orkestrator/protocol/native-agent-observation";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { listen as nativeListen, type NativeEvent, type UnlistenFn } from "@/lib/native/events";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.resource-sync");
 
 /**
  * Backend observation invalidations for mounted native-agent views
@@ -50,7 +53,7 @@ export function createNativeObservationEvents(listen: Listen): NativeObservation
       try {
         listener(invalidation);
       } catch (error) {
-        console.error("[native-observation] Listener threw:", error);
+        log.error("observation.listener-threw", { error: formatLogError(error) });
       }
     }
   };
@@ -88,7 +91,7 @@ export function createNativeObservationEvents(listen: Listen): NativeObservation
         return unlisten;
       })
       .catch((error: unknown) => {
-        console.error("[native-observation] Could not subscribe:", error);
+        log.error("observation.subscribe-failed", { error: formatLogError(error) });
         attachment = null;
         return null;
       });

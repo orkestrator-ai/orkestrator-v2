@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
 import { MessageRenderBoundary, messageRenderResetKey } from "./MessageRenderBoundary";
@@ -41,6 +42,31 @@ describe("MessageRenderBoundary", () => {
     expect(text).toContain("third message");
     expect(text).toContain("One message could not be displayed");
     expect(text).not.toContain("rendered fine");
+  });
+
+  test("logs the bounded diagnostic and never the error's message", () => {
+    const logs = captureLogs();
+    try {
+      render(
+        <MessageRenderBoundary resetKey="a">
+          <Bomb shouldThrow />
+        </MessageRenderBoundary>,
+      );
+
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.chat",
+          event: "message.render-failed",
+          fields: expect.objectContaining({ kind: "render", errorType: "Error" }),
+        }),
+      );
+      const output = logs.lines.join("\n");
+      expect(output).not.toContain("message renderer exploded");
+      expect(output).not.toContain("MessageRenderBoundary.test");
+    } finally {
+      logs.restore();
+    }
   });
 
   test("retries when the reset key changes", () => {

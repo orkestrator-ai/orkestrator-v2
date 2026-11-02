@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { createBrowserGatewayApi } from "./web-gateway";
 import { clearDirectGatewayTransport } from "./gateway-auth-transport";
 
@@ -96,8 +97,8 @@ class Socket {
 
 for (const transport of ["http-sse", "websocket"] as const) {
   test(`direct ${transport} replaces an unanswered terminal fallback when the main stream recovers`, async () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-    restorers.push(() => warn.mockRestore());
+    const logs = captureLogs();
+    restorers.push(() => logs.restore());
     const timers = clock();
     const mains: Array<{ signal: AbortSignal; resolve(response: Response): void }> = [];
     const terminals: Array<{ signal: AbortSignal; resolve(response: Response): void }> = [];
@@ -184,8 +185,8 @@ for (const transport of ["http-sse", "websocket"] as const) {
 }
 
 test("unanswered direct terminal attempts keep retrying while the main stream is silent", async () => {
-  const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-  restorers.push(() => warn.mockRestore());
+  const logs = captureLogs();
+  restorers.push(() => logs.restore());
   const timers = clock();
   type Attempt = { signal: AbortSignal; resolve(response: Response): void };
   const mains: Attempt[] = [];

@@ -7,7 +7,7 @@ import {
   UnlistenFn,
 } from "@/lib/native/events";
 import { toast } from "sonner";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   TERMINAL_INPUT_CLOSED_MESSAGE,
   TERMINAL_INPUT_NOT_DELIVERED_MESSAGE,
@@ -154,7 +154,7 @@ function safelyUnlisten(unlisten: UnlistenFn | null): void {
   try {
     unlisten();
   } catch (error) {
-    console.error("[useTerminal] Failed to remove terminal listener:", error);
+    log.error("listener.remove-failed", { error: formatLogError(error) });
   }
 }
 
@@ -294,15 +294,13 @@ export function useTerminal({
   // actions own backend process teardown.
   useEffect(() => {
     return () => {
-      console.log(
-        "[useTerminal] Cleanup on unmount, sessionId:",
-        sessionIdRef.current,
-        "persist:",
-        persistSessionRef.current,
-      );
+      log.debug("session.unmounted", () => ({
+        sessionId: sessionIdRef.current,
+        persist: persistSessionRef.current,
+      }));
       connectGenerationRef.current += 1;
       if (unlistenRef.current) {
-        console.log("[useTerminal] Unlistening from events");
+        log.debug("listener.released", () => ({ sessionId: sessionIdRef.current }));
       }
       cleanupEventListener();
       isConnectedRef.current = false;
@@ -311,18 +309,13 @@ export function useTerminal({
   }, [cleanupEventListener]);
 
   const connect = useCallback(async () => {
-    console.log(
-      "[useTerminal] connect called, containerId:",
+    log.debug("connect.called", () => ({
       containerId,
-      "environmentId:",
       environmentId,
-      "isLocal:",
       isLocal,
-      "existingSessionId:",
       existingSessionId,
-      "attachExistingOnly:",
       attachExistingOnly,
-    );
+    }));
 
     if (attachExistingOnly && !existingSessionId) {
       setError(null);
@@ -577,10 +570,10 @@ export function useTerminal({
           }
         } catch (snapshotError) {
           if (disposed || !isCurrentConnect()) return;
-          console.warn(
-            "[useTerminal] Failed to reconcile terminal output snapshot:",
-            snapshotError,
-          );
+          log.warn("output.reconcile-failed", {
+            sessionId: id,
+            error: formatLogError(snapshotError),
+          });
           snapshotErrorActive = true;
           const message =
             snapshotError instanceof Error ? snapshotError.message : "Unknown snapshot error";
@@ -659,7 +652,7 @@ export function useTerminal({
         const status = await backend.getTerminalSession(id).catch(() => null);
         if (disposed || !isCurrentConnect() || !isConnectedRef.current) return;
         if (status?.id !== id || status.running !== false || sessionIdRef.current !== id) return;
-        console.warn("[useTerminal] Terminal session stopped while the stream was down:", id);
+        log.warn("session.stopped-while-disconnected", { sessionId: id });
         connectGenerationRef.current += 1;
         cleanupEventListener();
         sessionIdRef.current = null;
@@ -990,7 +983,10 @@ export function useTerminal({
         await backend.detachTerminal(activeSessionId);
       }
     } catch (err) {
-      console.error("Failed to disconnect terminal:", err);
+      log.error("session.disconnect-failed", {
+        sessionId: activeSessionId,
+        error: formatLogError(err),
+      });
     } finally {
       // Clear ref immediately to prevent stale writes
       // State was cleared before awaiting the close so stale writes and pending
@@ -1055,7 +1051,7 @@ export function useTerminal({
         // Session not found errors are expected during cleanup/tab switching
         const errMsg = String(err);
         if (!errMsg.includes("Session not found")) {
-          console.error("Failed to resize terminal:", err);
+          log.error("session.resize-failed", { sessionId, error: formatLogError(err) });
         }
       }
     },
@@ -1098,7 +1094,10 @@ export function useTerminal({
                 if (resumed) toast.dismiss(id);
               })
               .catch((err: unknown) => {
-                console.error("[useTerminal] Failed to resume terminal input:", err);
+                log.error("input.resume-failed", {
+                  sessionId: failedSessionId,
+                  error: formatLogError(err),
+                });
               });
           },
         },
@@ -1151,7 +1150,10 @@ export function useTerminal({
           );
         }
       } catch (err) {
-        console.error("[useTerminal] Failed to write to terminal:", err);
+        log.error("input.write-failed", {
+          sessionId: currentSessionId,
+          error: formatLogError(err),
+        });
         const message = err instanceof Error ? err.message : String(err);
         // Electron prefixes errors crossing invoke; the browser receives the
         // sequencer message directly. Both identify the same definitive refusal.

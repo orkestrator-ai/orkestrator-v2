@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { invoke } from "@/lib/native/backend";
@@ -62,7 +63,6 @@ const invokeMock = invoke as ReturnType<typeof mock>;
 // The machine list also reads the portal layout; only config loads count here.
 const configReads = () =>
   invokeMock.mock.calls.filter(([command]) => command === "get_config").length;
-const originalConsoleError = console.error;
 
 afterAll(() => {
   mock.module(
@@ -89,7 +89,6 @@ describe("SettingsPage", () => {
 
   afterEach(() => {
     cleanup();
-    console.error = originalConsoleError;
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(undefined);
   });
@@ -229,16 +228,27 @@ describe("SettingsPage", () => {
   });
 
   test("recovers from a config load failure and retries after reopening", async () => {
-    const consoleError = mock(() => undefined);
-    console.error = consoleError;
-    invokeMock.mockRejectedValue(new Error("config unavailable"));
-    const { rerender } = render(<SettingsPage open onOpenChange={() => undefined} />);
+    const logs = captureLogs();
+    try {
+      invokeMock.mockRejectedValue(new Error("config unavailable"));
+      const { rerender } = render(<SettingsPage open onOpenChange={() => undefined} />);
 
-    await waitFor(() => expect(consoleError).toHaveBeenCalled());
-    expect(screen.getByTestId("active-settings-section")).toBeTruthy();
+      await waitFor(() =>
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.settings",
+            event: "config.load-failed",
+          }),
+        ),
+      );
+      expect(screen.getByTestId("active-settings-section")).toBeTruthy();
 
-    rerender(<SettingsPage open={false} onOpenChange={() => undefined} />);
-    rerender(<SettingsPage open onOpenChange={() => undefined} />);
-    await waitFor(() => expect(configReads()).toBe(2));
+      rerender(<SettingsPage open={false} onOpenChange={() => undefined} />);
+      rerender(<SettingsPage open onOpenChange={() => undefined} />);
+      await waitFor(() => expect(configReads()).toBe(2));
+    } finally {
+      logs.restore();
+    }
   });
 });

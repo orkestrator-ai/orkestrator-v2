@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
@@ -232,9 +233,7 @@ describe("files panel views", () => {
 
   test("ChangedFileItem reports clipboard write failures", async () => {
     const writeError = new Error("Clipboard unavailable");
-    const originalConsoleError = console.error;
-    const consoleError = mock(() => undefined);
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
     mockWriteText.mockImplementation(async () => {
       throw writeError;
     });
@@ -247,12 +246,19 @@ describe("files panel views", () => {
 
       await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("Failed to copy path"));
       expect(mockToastSuccess).not.toHaveBeenCalled();
-      expect(consoleError).toHaveBeenCalledWith(
-        "[files-panel] Failed to copy file path:",
-        writeError,
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.files",
+          event: "path.copy-failed",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({ message: writeError.message }),
+          }),
+        }),
       );
+      expect(logs.lines.join("\n")).not.toContain("src/App.tsx");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 

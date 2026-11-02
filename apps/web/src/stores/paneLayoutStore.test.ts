@@ -1,5 +1,7 @@
 import { createSessionKey } from "@/lib/utils";
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { configureLogger } from "@orkestrator/protocol/logger";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import type { TabInfo } from "@/types/paneLayout";
 
 const closeLocalTerminalSession = mock(async (_sessionId: string) => {});
@@ -16,8 +18,13 @@ const getAgentHandoffCapabilities = mock(async () => ({
   delivery: false,
   pruning: false,
 }));
-let consoleDebugSpy: ReturnType<typeof spyOn> | undefined;
-let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
+let logCapture: LogCapture | undefined;
+
+function captureDebugLogs(): LogCapture {
+  logCapture = captureLogs();
+  configureLogger({ level: "debug" });
+  return logCapture;
+}
 const originalOrkestrator = window.orkestrator;
 
 const realBackend = await import("@/lib/backend");
@@ -60,10 +67,8 @@ afterAll(() => {
 
 afterEach(() => {
   window.orkestrator = originalOrkestrator;
-  consoleDebugSpy?.mockRestore();
-  consoleErrorSpy?.mockRestore();
-  consoleDebugSpy = undefined;
-  consoleErrorSpy = undefined;
+  logCapture?.restore();
+  logCapture = undefined;
 });
 
 const { getAllLeaves, usePaneLayoutStore } = await import("./paneLayoutStore");
@@ -298,7 +303,7 @@ describe("paneLayoutStore tab cleanup", () => {
   });
 
   test("logs browser-preview destruction failures after removing local state", async () => {
-    consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
+    const logs = captureDebugLogs();
     const destroy = mock(async () => {
       throw new Error("destroy failed");
     });
@@ -309,9 +314,16 @@ describe("paneLayoutStore tab cleanup", () => {
     await Promise.resolve();
 
     expect(usePaneLayoutStore.getState().getAllTabs("env-browser")).toEqual([]);
-    expect(consoleDebugSpy).toHaveBeenCalledWith(
-      "[PaneLayout] Error destroying browser preview:",
-      expect.objectContaining({ message: "destroy failed" }),
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "debug",
+        area: "web.pane-layout",
+        event: "browser-preview.destroy-failed",
+        fields: expect.objectContaining({
+          tabId: "browser-tab",
+          error: expect.objectContaining({ message: "destroy failed" }),
+        }),
+      }),
     );
   });
 
@@ -558,8 +570,7 @@ describe("paneLayoutStore tab cleanup", () => {
   });
 
   test("clears local and native state when asynchronous cleanup operations reject", async () => {
-    consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
-    consoleErrorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const logs = captureDebugLogs();
     const tabs = [
       { id: "terminal-tab", type: "plain" },
       { id: "tmux-tab", type: "claude-tmux" },
@@ -606,7 +617,18 @@ describe("paneLayoutStore tab cleanup", () => {
 
     expect(usePaneLayoutStore.getState().getAllTabs("env-cleanup-errors")).toEqual([]);
     expect(useTerminalSessionStore.getState().sessions.has(terminalKey)).toBe(false);
-    expect(consoleDebugSpy).toHaveBeenCalled();
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "debug",
+        area: "web.pane-layout",
+        event: "teardown.pending",
+        fields: expect.objectContaining({
+          environmentId: "env-cleanup-errors",
+          tabId: "terminal-tab",
+          source: "terminal",
+        }),
+      }),
+    );
   });
 
   test("closing a native tab drops its compose draft", () => {
@@ -1439,7 +1461,7 @@ describe("paneLayoutStore authoritative cleanup", () => {
 
   test("contains browser cleanup failures while installing the authoritative layout", async () => {
     const environmentId = "env-authoritative-browser-error";
-    consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
+    const logs = captureDebugLogs();
     const destroy = mock(async () => {
       throw new Error("destroy failed");
     });
@@ -1463,9 +1485,16 @@ describe("paneLayoutStore authoritative cleanup", () => {
     await Promise.resolve();
 
     expect(usePaneLayoutStore.getState().getAllTabs(environmentId)).toEqual([]);
-    expect(consoleDebugSpy).toHaveBeenCalledWith(
-      "[PaneLayout] Error destroying browser preview:",
-      expect.objectContaining({ message: "destroy failed" }),
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "debug",
+        area: "web.pane-layout",
+        event: "browser-preview.destroy-failed",
+        fields: expect.objectContaining({
+          tabId: "browser",
+          error: expect.objectContaining({ message: "destroy failed" }),
+        }),
+      }),
     );
   });
 });
@@ -3246,16 +3275,23 @@ describe("paneLayoutStore pane and tab actions", () => {
   });
 
   test("a failed hydration prune is logged without breaking hydration", async () => {
-    consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
+    const logs = captureDebugLogs();
     pruneAgentHandoffs.mockRejectedValueOnce(new Error("prune failed"));
 
     usePaneLayoutStore.getState().finishHydration("env-prune-fail");
     await Bun.sleep(0);
 
     expect(usePaneLayoutStore.getState().hydration.get("env-prune-fail")).toBe("done");
-    expect(consoleDebugSpy).toHaveBeenCalledWith(
-      "[PaneLayout] Error pruning agent handoffs:",
-      expect.objectContaining({ message: "prune failed" }),
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "debug",
+        area: "web.pane-layout",
+        event: "handoffs.prune-failed",
+        fields: expect.objectContaining({
+          environmentId: "env-prune-fail",
+          error: expect.objectContaining({ message: "prune failed" }),
+        }),
+      }),
     );
   });
 

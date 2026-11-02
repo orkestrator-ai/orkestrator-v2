@@ -16,6 +16,9 @@ import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { Environment, DomainTestResult } from "@/types";
 import { ALLOWLIST_ENTRY_HINT, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.environment");
 
 interface NetworkWhitelistDialogProps {
   open: boolean;
@@ -131,7 +134,10 @@ export function NetworkWhitelistDialog({
       const results = await backend.testDomainResolution(domains);
       setTestResults(results);
     } catch (err) {
-      console.error("[NetworkWhitelistDialog] Failed to test domains:", err);
+      log.error("domains.test-failed", {
+        environmentId: environment.id,
+        error: formatLogError(err),
+      });
     } finally {
       setIsTesting(false);
     }
@@ -155,7 +161,10 @@ export function NetworkWhitelistDialog({
       onUpdate(updated);
       onOpenChange(false);
     } catch (err) {
-      console.error("[NetworkWhitelistDialog] Failed to save:", err);
+      log.error("network-whitelist.save-failed", {
+        environmentId: environment.id,
+        error: formatLogError(err),
+      });
     } finally {
       setIsSaving(false);
     }

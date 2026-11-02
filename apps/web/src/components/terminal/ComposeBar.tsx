@@ -20,6 +20,7 @@ import {
   loadComposeDraft,
   persistComposeDraft,
 } from "@/lib/compose-draft-persistence";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 interface ImageAttachment {
   id: string;
@@ -42,6 +43,8 @@ interface ComposeBarProps {
   onAddressAll?: () => void;
   className?: string;
 }
+
+const log = createLogger("terminal");
 
 const MAX_LINES = 10;
 const LINE_HEIGHT = 20; // approximate line height in pixels
@@ -178,7 +181,7 @@ export function ComposeBar({
         }
       })
       .catch((error) => {
-        console.warn("[ComposeBar] Failed to restore compose draft:", error);
+        log.warn("compose.draft-restore-failed", { sessionKey, error: formatLogError(error) });
       })
       .finally(() => {
         if (!cancelled && (readSucceeded || locallyChanged)) {
@@ -203,7 +206,11 @@ export function ComposeBar({
             })
           : discardComposeDraft(key);
       void operation.catch((error) => {
-        console.warn("[ComposeBar] Failed to persist compose draft during cleanup:", error);
+        log.warn("compose.draft-persist-failed", {
+          sessionKey,
+          phase: "cleanup",
+          error: formatLogError(error),
+        });
       });
     };
   }, [environmentId, sessionKey]);
@@ -217,7 +224,11 @@ export function ComposeBar({
           ? persistComposeDraft(key, "environment", environmentId, { text, images })
           : discardComposeDraft(key);
       void operation.catch((error) => {
-        console.warn("[ComposeBar] Failed to persist compose draft:", error);
+        log.warn("compose.draft-persist-failed", {
+          sessionKey,
+          phase: "debounced",
+          error: formatLogError(error),
+        });
       });
     }, 400);
     return () => clearTimeout(timer);
@@ -277,7 +288,7 @@ export function ComposeBar({
 
           const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
           if (!encodedImage) {
-            console.error("[ComposeBar] Image could not be resized below the attachment limit");
+            log.error("compose.image-too-large", { maxBytes: MAX_IMAGE_SIZE });
             return "too-large";
           }
           canvas = encodedImage.canvas;
@@ -328,7 +339,7 @@ export function ComposeBar({
 
       pasteQueueRef.current = queuedPaste
         .catch((error) => {
-          console.error("[ComposeBar] Failed to add pasted image:", error);
+          log.error("compose.image-add-failed", { error: formatLogError(error) });
         })
         .finally(() => {
           if (pasteLifecycleRef.current !== pasteLifecycle) return;
@@ -433,7 +444,7 @@ export function ComposeBar({
             }
             savedImages.push({ ...img, id: fullPath });
           } catch (imgError) {
-            console.error("[ComposeBar] Failed to save image:", imgError);
+            log.error("compose.image-save-failed", { error: formatLogError(imgError) });
             // Continue with remaining images rather than failing entirely
           }
         }
@@ -450,7 +461,7 @@ export function ComposeBar({
       pasteLifecycleRef.current += 1;
       clearComposeDraft(sessionKey);
     } catch (error) {
-      console.error("[ComposeBar] Failed to send:", error);
+      log.error("compose.send-failed", { error: formatLogError(error) });
     } finally {
       isSendingRef.current = false;
       if (isMountedRef.current) {

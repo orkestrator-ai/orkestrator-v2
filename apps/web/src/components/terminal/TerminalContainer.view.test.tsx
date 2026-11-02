@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { useEffect, useRef, type ReactNode } from "react";
 
@@ -3131,8 +3132,7 @@ describe("TerminalContainer", () => {
         },
       },
     });
-    const originalWarn = console.warn;
-    console.warn = mock(() => undefined);
+    const logs = captureLogs();
 
     try {
       render(
@@ -3153,7 +3153,7 @@ describe("TerminalContainer", () => {
       expect(writeContainerFileMock).not.toHaveBeenCalled();
       expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 

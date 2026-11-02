@@ -1,4 +1,3 @@
-import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -16,6 +15,7 @@ import {
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { mockToastError, mockToastInfo, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import {
   BuildChatTab,
@@ -422,8 +422,7 @@ describe("BuildChatTab rehydration", () => {
 
   test("warns once when hydration rejects and does not retry on store changes", async () => {
     const hydrationError = new Error("snapshot unavailable");
-    const warnMock = mock((_entry: { line: string }) => {});
-    configureLogger({ sink: warnMock });
+    const logs = captureLogs();
     getBuildPipelineControlMock.mockRejectedValueOnce(hydrationError);
 
     try {
@@ -439,8 +438,17 @@ describe("BuildChatTab rehydration", () => {
       );
 
       await waitFor(() => {
-        expect(warnMock).toHaveBeenCalledWith(
-          expect.objectContaining({ line: expect.stringContaining("hydrate.failed") }),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "web.build-pipeline",
+            event: "pipeline.hydrate-failed",
+            fields: expect.objectContaining({
+              source: "chat-tab",
+              pipelineId: pipeline.id,
+              error: expect.objectContaining({ message: hydrationError.message }),
+            }),
+          }),
         );
       });
 
@@ -458,9 +466,9 @@ describe("BuildChatTab rehydration", () => {
 
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(getBuildPipelineControlMock).toHaveBeenCalledTimes(1);
-      expect(warnMock).toHaveBeenCalledTimes(1);
+      expect(logs.records().filter((record) => record.level === "warn")).toHaveLength(1);
     } finally {
-      resetLogger();
+      logs.restore();
     }
   });
 

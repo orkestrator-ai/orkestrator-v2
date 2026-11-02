@@ -1,5 +1,24 @@
 import { expect, test } from "@playwright/test";
 
+test("Log Detail offers only areas controlled by live policy", async ({ page }) => {
+  await page.goto("/global-settings?section=debug");
+  await page.getByRole("button", { name: "Levels by area" }).click();
+  for (const area of [
+    "backend.activity",
+    "desktop.startup",
+    "updater",
+    "bridge",
+    "bridge.diagnostics",
+  ]) {
+    await expect(
+      page.getByRole("combobox", { name: `Log level for ${area}`, exact: true }),
+    ).toHaveCount(1);
+  }
+  await expect(
+    page.getByRole("combobox", { name: /^Log level for (web\.|terminal(?:\.|$))/ }),
+  ).toHaveCount(0);
+});
+
 test("Claude background limit persists across reload and clears when reset to default", async ({
   page,
 }) => {

@@ -22,6 +22,9 @@ import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { LinearIssueDetail } from "@/types/linear";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 export type { GitHubIssueBuildInput };
 
@@ -107,7 +110,11 @@ export function useBuildPipeline() {
         toast.success("Build pipeline started");
         return pipeline.id;
       } catch (error) {
-        console.error("[useBuildPipeline] Failed to start build:", error);
+        log.error("build.start-failed", {
+          taskId: ticket.id,
+          projectId: ticket.projectId,
+          error: formatLogError(error),
+        });
         toast.error("Failed to start build pipeline", {
           description: error instanceof Error ? error.message : "Unknown error",
         });

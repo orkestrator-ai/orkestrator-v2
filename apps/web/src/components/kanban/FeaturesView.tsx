@@ -68,6 +68,9 @@ import type {
 } from "@/stores/featurePlanStore";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.feature-plan");
 
 type RightPaneTab = "chat" | "stories" | `story:${string}`;
 
@@ -253,7 +256,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           : persistComposeDraft(draftKey, "project", projectId, drafts);
       draftsChanged = false;
       void operation.catch((error) => {
-        console.warn("[FeaturesView] Failed to persist chat drafts:", error);
+        log.warn("drafts.persist-failed", { projectId, error: formatLogError(error) });
       });
     };
 
@@ -296,7 +299,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         }
       })
       .catch((error) => {
-        console.warn("[FeaturesView] Failed to restore chat drafts:", error);
+        log.warn("drafts.restore-failed", { projectId, error: formatLogError(error) });
       })
       .finally(async () => {
         const featureLoadSucceeded = await featureLoadPromise;
@@ -569,7 +572,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         void loadFeatures(projectId);
         if (!started.reused) toast.success("Build pipeline started");
       } catch (error) {
-        console.error("[FeaturesView] Failed to start feature build:", error);
+        log.error("build.start-failed", {
+          projectId,
+          featureId: feature.id,
+          error: formatLogError(error),
+        });
         const message = error instanceof Error ? error.message : "Unknown error";
         if (message === FEATURE_BUILD_ALREADY_ACTIVE) {
           toast.error(FEATURE_BUILD_ALREADY_ACTIVE);

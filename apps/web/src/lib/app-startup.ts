@@ -1,4 +1,7 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { hydrateAgentModelCatalogCache } from "./agent-model-catalog-cache";
+
+const log = createLogger("web.startup");
 
 interface StartupTimer {
   set(callback: () => void, delayMs: number): unknown;
@@ -10,7 +13,6 @@ export interface StartAppOptions {
   hydrate?: () => Promise<void>;
   timeoutMs?: number;
   timer?: StartupTimer;
-  warn?: (message: string, error: unknown) => void;
 }
 
 const browserTimer: StartupTimer = {
@@ -29,7 +31,6 @@ export async function startApp({
   hydrate = () => hydrateAgentModelCatalogCache({ seed: true }),
   timeoutMs = 2_000,
   timer = browserTimer,
-  warn = (message, error) => console.warn(message, error),
 }: StartAppOptions): Promise<void> {
   let cacheTimeout: unknown;
   try {
@@ -44,7 +45,7 @@ export async function startApp({
   } catch (error) {
     // A missing/corrupt cache is non-fatal; the stores retain their bundled
     // fallbacks and the normal bridge discovery path will repair it later.
-    warn("[App] Failed to restore the model catalogue cache:", error);
+    log.warn("model-catalogue.restore-failed", { error: formatLogError(error) });
   } finally {
     if (cacheTimeout !== undefined) timer.clear(cacheTimeout);
   }

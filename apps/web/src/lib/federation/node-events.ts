@@ -26,6 +26,9 @@ import {
 } from "@orkestrator/protocol/node-events";
 import { portalStore } from "@/lib/portal/portal-store";
 import { portalInvoke, portalListenAuthoritative } from "@/lib/portal/portal-transport";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.federation");
 
 export interface NodeEventSubscriber {
   /** Exact event names. */
@@ -58,7 +61,7 @@ function resync(subscribers: Iterable<NodeEventSubscriber>): void {
     try {
       subscriber.onResync();
     } catch (error) {
-      console.error("[node-events] A resync handler failed:", error);
+      log.error("resync-handler.failed", { error: formatLogError(error) });
     }
   }
 }
@@ -79,7 +82,10 @@ function ensureListening(): Promise<void> {
         try {
           subscriber.onEvent(payload.event, payload.payload);
         } catch (error) {
-          console.error("[node-events] An event handler failed:", error);
+          log.error("event-handler.failed", {
+            eventName: payload.event,
+            error: formatLogError(error),
+          });
         }
       }
     },

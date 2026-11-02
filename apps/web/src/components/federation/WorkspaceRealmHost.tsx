@@ -21,6 +21,9 @@ import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useUIStore } from "@/stores/uiStore";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.federation");
 
 /**
  * What a node's own sidebar would do for its workspace, in a realm that has
@@ -224,7 +227,10 @@ export function WorkspaceRealmHost() {
     }
     if (startsOnSelection(environment)) {
       startEnvironment(environment.id).catch((error: unknown) => {
-        console.error("[Workspace] Failed to start the opened environment:", error);
+        log.error("environment.start-failed", {
+          environmentId: environment.id,
+          error: formatLogError(error),
+        });
       });
     }
   }, [

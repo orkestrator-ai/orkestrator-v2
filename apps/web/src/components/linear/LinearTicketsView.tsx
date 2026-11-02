@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -59,6 +60,8 @@ import type {
   LinearIssueDetail,
   LinearIssueListItem,
 } from "@/types/linear";
+
+const log = createLogger("web.linear");
 
 interface LinearTicketsViewProps {
   projectId: string;
@@ -581,7 +584,7 @@ export function LinearTicketsViewContent({
             ? clearCommentDraft()
             : discardComposeDraft(composeDraftKey("linear-comment", projectId, submittedIssueId));
         void clearSubmittedDraft.catch((error) => {
-          console.warn("[LinearTicketsView] Failed to clear posted comment draft:", error);
+          log.warn("comment-draft.clear-failed", { error: formatLogError(error) });
         });
       }
       if (selectedIssueIdRef.current === submittedIssueId && submittedDraftIsCurrent) {

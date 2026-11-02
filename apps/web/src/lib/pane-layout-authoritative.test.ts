@@ -279,6 +279,32 @@ describe("hydratePaneLayoutDependencies", () => {
     expect(hydrateMultiReviewWorkflow).not.toHaveBeenCalled();
   });
 
+  test("hydrates a standalone key-information tab on cold restore and reload", async () => {
+    const root = leaf("default", [
+      {
+        id: "brief",
+        type: "key-information",
+        keyInformationTabData: { environmentId: "env-1", pipelineId: "pipeline-1" },
+      },
+    ]);
+    for (let reload = 0; reload < 2; reload++) {
+      useBuildPipelineStore.setState({ pipelines: new Map() });
+      hydrateBuildPipeline.mockImplementationOnce(async (id) => {
+        useBuildPipelineStore.setState({
+          pipelines: new Map([[id, { id, environmentId: "env-1" } as never]]),
+        });
+      });
+      await hydratePaneLayoutDependencies(root);
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(root),
+        paneState(leaf("default", [{ id: "plain", type: "plain" }])),
+      );
+      expect(restored?.root).toMatchObject({ tabs: [{ id: "brief", type: "key-information" }] });
+    }
+    expect(hydrateBuildPipeline.mock.calls.map(([id]) => id)).toEqual(["pipeline-1", "pipeline-1"]);
+  });
+
   test("loads only the records this client is missing", async () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([["known-pipeline", {} as never]]),

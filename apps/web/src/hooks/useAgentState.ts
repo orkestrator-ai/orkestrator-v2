@@ -1,10 +1,13 @@
 // Tab-level state is a presentation projection of the backend tmux monitor.
 // Environment-level activity and the polling lifecycle remain backend-owned.
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useEffect, useRef } from "react";
 import { getClaudeTerminalState } from "@/lib/backend";
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import type { UnlistenFn } from "@/lib/native/events";
 import { useAgentActivityStore, type AgentActivityState } from "@/stores/agentActivityStore";
+
+const log = createLogger("web.native-agent");
 
 interface AgentStateEvent {
   container_id: string;
@@ -64,7 +67,7 @@ export function useAgentState(containerId: string | null, tabId: string): void {
         }
       })
       .catch((error) => {
-        console.error("Failed to listen for agent state events:", error);
+        log.error("agent-state.listen-failed", { tabId, error: formatLogError(error) });
       });
 
     return () => {

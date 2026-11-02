@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePromptDraftStore } from "@/stores/promptDraftStore";
@@ -435,9 +436,7 @@ describe("QuestionCard submit contract", () => {
     const onSubmit = mock(async () => {
       throw new Error("bridge down");
     });
-    const consoleError = console.error;
-    const errorSpy = mock(() => {});
-    console.error = errorSpy;
+    const logs = captureLogs();
 
     try {
       renderCard(QUESTION, { onSubmit });
@@ -445,7 +444,15 @@ describe("QuestionCard submit contract", () => {
       fireEvent.click(screen.getByRole("button", { name: "Yes" }));
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
-      await waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(logs.records()).toHaveLength(1));
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.chat",
+          event: "question.submit-failed",
+          fields: expect.objectContaining({ platform: "Test" }),
+        }),
+      );
       const alert = screen.getByRole("alert");
       expect(alert.textContent).toContain(
         "The response outcome is unknown. Reconnect or refresh Test to verify whether it was received.",
@@ -459,7 +466,7 @@ describe("QuestionCard submit contract", () => {
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
       expect(onSubmit).toHaveBeenCalledTimes(1);
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 

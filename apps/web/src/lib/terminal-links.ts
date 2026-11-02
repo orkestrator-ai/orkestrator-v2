@@ -4,6 +4,9 @@ import {
   type TerminalLinkDefaultTarget,
 } from "@orkestrator/protocol/terminal-link-target";
 import { useConfigStore } from "@/stores/configStore";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 export const TERMINAL_BROWSER_TAB_REQUEST_EVENT = "orkestrator:terminal-browser-tab-request";
 
@@ -82,7 +85,7 @@ export function createTerminalLinkActivator({
     }
     if (target !== "none") {
       void openExternal(uri).catch((err) => {
-        console.error("[terminal-links] Failed to open URL:", err);
+        log.error("link.open-failed", { environmentId, error: formatLogError(err) });
       });
     }
   };

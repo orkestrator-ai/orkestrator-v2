@@ -24,22 +24,19 @@ import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { activityRows, isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
 import {
   arrangeMachines,
-  buildRepositoryTree,
   resolveRepositoryArrangement,
   mergedArrangementUpdate,
-  mergedProjectList,
+  mergedProjectView,
   repositoryArrangementUpdate,
   repositoryLabel,
   repositoryMemberLabel,
   repositoryOpenTarget,
-  repositoryProjectList,
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { projectLandingBoardTab } from "@/lib/federation/workspace-realm";
 import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
 import {
-  buildProjectTree,
   normalizeProjectFolderName,
   parseProjectFolderDragId,
   projectFolderKey,
@@ -347,6 +344,11 @@ export function MachineSectionList({
   );
 }
 
+/** Where a merged list's folder (or repository group) keeps its collapsed state. */
+export function mergedFolderCollapseKey(mode: "project" | "repository", name: string): string {
+  return sidebarFolderKey(mode, mode === "repository" ? name : projectFolderKey(name));
+}
+
 /**
  * "By project" and "by repository": every shown machine's projects in one
  * list, in the order the command node keeps. Projects and folders (or
@@ -385,20 +387,12 @@ export function MergedProjectList({
   const [draggingProject, setDraggingProject] = useState(false);
   const sensors = useDragSensors();
 
-  const list = useMemo(
-    () =>
-      mode === "project"
-        ? mergedProjectList(machines, shownIds, layout, portalState.selfId)
-        : repositoryProjectList(machines, shownIds, layout, portalState.selfId),
+  const { list, tree } = useMemo(
+    () => mergedProjectView(machines, shownIds, mode, layout, portalState.selfId),
     [layout, machines, mode, portalState.selfId, shownIds],
   );
-  const tree = useMemo(
-    () => (mode === "repository" ? buildRepositoryTree(list.shown) : buildProjectTree(list.shown)),
-    [list.shown, mode],
-  );
   const projectIds = useMemo(() => new Set(list.shown.map((item) => item.id)), [list.shown]);
-  const folderCollapseKey = (name: string) =>
-    sidebarFolderKey(mode, mode === "repository" ? name : projectFolderKey(name));
+  const folderCollapseKey = (name: string) => mergedFolderCollapseKey(mode, name);
   const isFolderCollapsed = (name: string) => collapsedFolderKeys.includes(folderCollapseKey(name));
   const sortableIds =
     mode === "repository"

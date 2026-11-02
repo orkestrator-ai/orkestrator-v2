@@ -74,11 +74,17 @@ import {
   FederatedActivityList,
   MachineSectionList,
   MergedProjectList,
+  mergedFolderCollapseKey,
 } from "@/components/federation/FederatedSidebarSections";
 import { useBoundCollapseSync } from "@/components/federation/useBoundCollapseSync";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
-import { isMachineShown } from "@/lib/federation/sidebar-layout";
+import {
+  isMachineShown,
+  mergedProjectView,
+  visibleBoundProjectIds,
+} from "@/lib/federation/sidebar-layout";
+import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
   DropdownMenu,
@@ -420,6 +426,8 @@ export function HierarchicalSidebar() {
     () => new Set(visibleMachines.filter(isMachineShown).map((machine) => machine.connectionId)),
     [visibleMachines],
   );
+  const portalLayout = usePortalLayout();
+  const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
   useBoundCollapseSync(
     federation.enabled ? (boundMachineView?.backendId ?? null) : null,
     projects,
@@ -703,6 +711,24 @@ export function HierarchicalSidebar() {
       if (collapsedProjects.includes(project.id)) return;
       for (const env of getProjectEnvironments(project.id)) orderedIds.push(env.id);
     };
+    // A merged list draws this window's projects in the command node's order
+    // and folders (`MergedProjectList`), so a range follows that tree.
+    if (federatedMode === "project" || federatedMode === "repository") {
+      const { tree } = mergedProjectView(
+        machineViews,
+        mergedShownIds,
+        federatedMode,
+        portalLayout,
+        federation.portalState.selfId,
+      );
+      for (const projectId of visibleBoundProjectIds(tree, (name) =>
+        collapsedFolderKeys.includes(mergedFolderCollapseKey(federatedMode, name)),
+      )) {
+        const project = projectsById.get(projectId);
+        if (project) collectFrom(project);
+      }
+      return orderedIds;
+    }
     for (const entry of projectTree) {
       if (entry.kind === "project") {
         collectFrom(entry.project);
@@ -721,6 +747,13 @@ export function HierarchicalSidebar() {
     collapsedProjectFolders,
     getProjectEnvironments,
     collapsedProjects,
+    federatedMode,
+    machineViews,
+    mergedShownIds,
+    portalLayout,
+    federation.portalState.selfId,
+    collapsedFolderKeys,
+    projectsById,
   ]);
 
   // useCallback so memo(EnvironmentItem) rows are not invalidated every render.

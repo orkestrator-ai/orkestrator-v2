@@ -197,17 +197,27 @@ describe("C11 explicit stop drains workload under init", () => {
       await waitForContainerBoot(id);
       // The network policy stays readable under init.
       expect(await docker(["exec", id, "cat", "/etc/orkestrator/network-mode"])).toBe("full");
-      // An orphaned grandchild (reparented to init), a process tree, and a
-      // shell that ignores SIGTERM.
+      // An orphaned grandchild (reparented to init), a process tree, a
+      // script that ignores SIGTERM, and an interactive login shell on a
+      // terminal, as the setup terminal and terminal tabs open (it ignores
+      // SIGTERM too).
       await docker(["exec", "-d", id, "sh", "-c", "sleep 600 & exit 0"]);
       await docker(["exec", "-d", id, "sh", "-c", "sleep 600 & sleep 600 & wait"]);
       await docker(["exec", "-d", id, "sh", "-c", "trap '' TERM; while :; do sleep 1; done"]);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await docker(["exec", "-d", "-it", id, "zsh", "-lc", "zsh -l"]);
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(Number(await docker(["exec", id, "pgrep", "-c", "-x", "zsh"]))).toBe(1);
 
-      const drain = await drainContainerProcesses(id, 3);
+      // The drain waits for neither SIGTERM-ignoring process: it hangs up the
+      // shell, as a closed terminal would, and reports the script as
+      // remaining, well inside the grace period (2150).
+      const started = performance.now();
+      const drain = await drainContainerProcesses(id, 10);
+      expect(performance.now() - started).toBeLessThan(5_000);
       expect(drain).not.toBeNull();
-      expect(drain!.signalled).toBeGreaterThanOrEqual(4);
+      expect(drain!.signalled).toBeGreaterThanOrEqual(5);
       expect(drain!.remaining).toBeGreaterThanOrEqual(1);
+      expect(await docker(["exec", id, "sh", "-c", "pgrep -c -x zsh || true"])).toBe("0");
       const zombies = await docker(["exec", id, "sh", "-c", "ps -eo stat= | grep -c '^Z' || true"]);
       expect(Number(zombies)).toBe(0);
       await docker(["stop", "-t", "3", id]);

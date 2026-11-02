@@ -283,7 +283,10 @@ An image with the `graceful-shutdown` capability runs under Docker's `--init`
    for that environment;
 2. runs `/usr/local/bin/orkestrator-drain.sh` as root, which sends SIGTERM to
    every workload process except PID 1 and the recorded keepalive and waits up
-   to 10 s;
+   to 10 s for those that can act on it. A process that ignores SIGTERM is not
+   waited for. When it has a controlling terminal, as the interactive shells
+   of the setup terminal and terminal tabs do, it gets SIGHUP once the others
+   have gone, the way a closed terminal would hang it up;
 3. runs `docker stop`, then records `forced: true` if anything survived the
    drain or Docker had to SIGKILL PID 1.
 

@@ -12,7 +12,15 @@
 # It does not escalate: the caller's `docker stop` does, and records a forced
 # outcome when it had to.
 #
-# Output (one line): ORKESTRATOR_DRAIN signalled=<n> remaining=<n>
+# An interactive shell (the setup terminal, a terminal tab) ignores SIGTERM,
+# so waiting for it used to hold every stop for the whole grace period. The
+# drain waits only for processes that can act on SIGTERM. Once they have gone,
+# each process that ignores SIGTERM but has a controlling terminal gets
+# SIGHUP, the signal a closed terminal sends, and is waited for in turn. A
+# process that ignores SIGTERM with no terminal, or SIGHUP as well, is not
+# waited for: it counts as remaining and goes down with the container.
+#
+# Output (one line): ORKESTRATOR_DRAIN signalled=<n> remaining=<n> hungup=<n>
 set -u
 
 GRACE_SECONDS="${1:-10}"
@@ -65,6 +73,45 @@ workload_pids() {
     done
 }
 
+# True when signal $2 is in process $1's ignored set.
+ignores_signal() {
+    local mask
+    mask="$(awk '/^SigIgn:/ {print $2}' "/proc/$1/status" 2>/dev/null)"
+    [ -n "$mask" ] && [ $(( (16#$mask >> ($2 - 1)) & 1 )) -eq 1 ]
+}
+
+# True when the process has a controlling terminal. The command name in
+# /proc/<pid>/stat may contain spaces, so fields are counted after it:
+# state ppid pgrp session tty_nr.
+has_terminal() {
+    local stat
+    stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+    # shellcheck disable=SC2086 # split into the fields after the command name
+    set -- ${stat##*) }
+    [ "${5:-0}" != 0 ]
+}
+
+# The processes worth waiting for: those that can act on SIGTERM and, after
+# the hangup (`hup`), those that were hung up.
+waited_pids() {
+    local pid
+    for pid in $(workload_pids); do
+        if ! ignores_signal "$pid" 15; then
+            echo "$pid"
+        elif [ "$1" = hup ] && has_terminal "$pid" && ! ignores_signal "$pid" 1; then
+            echo "$pid"
+        fi
+    done
+}
+
+now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
+
+wait_for() {
+    while [ -n "$(waited_pids "$1")" ] && [ "$(now_ms)" -lt "$deadline" ]; do
+        sleep 0.2
+    done
+}
+
 signalled=0
 for pid in $(workload_pids); do
     if kill -TERM "$pid" 2>/dev/null; then
@@ -72,11 +119,20 @@ for pid in $(workload_pids); do
     fi
 done
 
-deadline=$(( $(date +%s) + GRACE_SECONDS ))
-remaining="$(workload_pids | wc -l)"
-while [ "$remaining" -gt 0 ] && [ "$(date +%s)" -lt "$deadline" ]; do
-    sleep 0.2
-    remaining="$(workload_pids | wc -l)"
-done
+deadline=$(( $(now_ms) + GRACE_SECONDS * 1000 ))
+wait_for term
 
-echo "ORKESTRATOR_DRAIN signalled=${signalled} remaining=${remaining}"
+# Hang up interactive shells only now, so the jobs they ran have had the whole
+# grace period to finish on SIGTERM.
+hungup=0
+for pid in $(workload_pids); do
+    ignores_signal "$pid" 15 && has_terminal "$pid" || continue
+    ignores_signal "$pid" 1 && continue
+    if kill -HUP "$pid" 2>/dev/null; then
+        hungup=$((hungup + 1))
+    fi
+done
+[ "$hungup" -gt 0 ] && wait_for hup
+
+remaining="$(workload_pids | wc -l)"
+echo "ORKESTRATOR_DRAIN signalled=${signalled} remaining=${remaining} hungup=${hungup}"

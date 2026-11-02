@@ -30,3 +30,27 @@
 - **Evidence:** original `validation-04.stdout.txt` lines 3482–3498 in that artifact directory; output is preserved unchanged.
 - **Isolated rerun:** `mise run test:logged -- --name r5-readiness-owner -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures` passed (exit 0, 6.8 s) without changing this test or the readiness implementation.
 - **Assessment:** credible recurrence of the existing timing flake. This establishes isolated success, not its cause; no assertion, deadline or skip was changed. The exact failed command was rerun through `mise run test:logged -- --name r5-default-suite-rerun -- mise run test` and passed all four groups (exit 0, 338.5 s). No root-cause fix to this existing flake is claimed.
+
+
+## Safe error formatting second review — 2026-11-02
+
+Preparation ran `mise run test` at `de952cc0accc820c6d57425323428cc993794a54`.
+The backend used three isolated workers and reported 13,006 passed, 97 skipped,
+and five failed across 870 files (440.83 s). Original evidence is preserved at
+`.orkestrator/review-artifacts/review-validation-b03e0cc0-820a-4723-8d36-20d1666dfe82/validation-04.stdout.txt`.
+
+This case observed one probe rather than at least two at line 441 (881.83 ms).
+
+The complete unchanged owner passed on the fix branch as part of
+`mise run test:logged -- --name r5-round2-recorded-owners -- bun test --cwd apps/backend ./tests/container-readiness.test.ts ./src/core/commands-agent-tools.test.ts ./tests/codex-subagent-cards.test.ts ./src/core/nodes/node-files.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 14.2 s; passing per-file counts were not retained by the runner).
+
+A detached `origin/main` worktree at `9dbd7f1cc9981789ab352056bea84a1007c99959`
+used its own `mise exec -- bun install --frozen-lockfile` dependencies.
+Its complete owner check was `mise run test:logged -- --name r5-round2-main-readiness -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures` (7.6 s).
+The targeted repeat command was `mise run test:logged -- --name r5-round2-main-readiness-repeat -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --test-name-pattern 'a probe that comes back early' --rerun-each=20 --parallel=1 --only-failures`.
+Result: 17 passed, 3 failed (11.7 s); the same line-441 assertion received one probe. Failure evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.IhLGH8/`.
+
+The same failure on main establishes independence from this branch. The owner
+and implementation are unchanged relative to main. No assertion, delay, skip,
+or unrelated implementation was changed; the existing flake remains open.

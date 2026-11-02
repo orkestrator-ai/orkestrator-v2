@@ -77,7 +77,7 @@ function boundedText(value: string, maxChars: number): string {
  * at whitespace. It must start a word, so `Foo/bar` in a function name is left.
  */
 const FRAME_LOCATION =
-  /(^|[\s(])((?:[a-z][a-z0-9+.-]*:\/\/[^/\s)]*)?(?:\/|[a-z]:[\\/]).*?)(?=:\d+(?::\d+)?\)?(?:,|$)|\)(?:,|$)|,\s|$)/gi;
+  /(^|[\s(])((?:[a-z][a-z0-9+.-]*:\/\/[^/\s)]*)?(?:\/|[a-z]:[\\/]|\\\\).*?)(?=:\d+(?::\d+)?\)?(?:,|$)|\)(?:,|$)|,\s|$)/gi;
 const LOCATION_SCHEME = /^([a-z][a-z0-9+.-]*):\/\/[^/\s)]*/i;
 /** A workspace of this repository, or a bridge's own package when it is deployed alone. */
 const APP_PATH =

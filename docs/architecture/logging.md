@@ -259,7 +259,7 @@ worked example.
 `classifyCommandFailure(error, options)` returns exactly `{ reason, exitCode, signal }`.
 It reads the output to choose the label, and the output goes no further. It never
 throws, and it never looks at `stdout` directly: `CommandFailedError`'s message is
-already stderr, or stdout when stderr was empty. A first line of
+already stderr, or stdout when stderr was empty. A message beginning with
 `Command failed: <argv>` is skipped, so a branch named after an error cannot read
 as that error.
 
@@ -314,7 +314,7 @@ command-failure site checks that `reason` comes from the classifier.
 | `command-not-found` | A shell could not find the program. | `command not found`; exit 127 |
 | `not-executable` | A shell could not run the program. | Exit 126 |
 | `auth-failed` | No credentials, or they were refused. | `authentication failed` or `required`, `could not read username`, `terminal prompts disabled`, `bad credentials`, `permission denied (publickey)`, `host key verification failed`, `gh auth login`, `HTTP 401`, `returned error: 401` or `403`; `gh` exit 4 |
-| `network-failed` | Could not reach a host. | `could not resolve host`, `connection refused` or `reset`, `network is unreachable`, `early eof`, `remote end hung up`, `unable to access`, `i/o timeout` |
+| `network-failed` | Could not reach a host. | `could not resolve host`, `connection refused` or `reset`, `network is unreachable`, `early eof`, `remote end hung up`, `unable to access` an HTTP(S) URL, `i/o timeout` |
 | `disk-full` | No room to write. | `no space left`, `ENOSPC`, `disk quota exceeded` |
 | `permission-denied` | The OS refused access. | `permission denied`, `operation not permitted`, `read-only file system` |
 | `path-not-found` | A needed path does not exist. | `no such file or directory` |
@@ -324,7 +324,7 @@ command-failure site checks that `reason` comes from the classifier.
 | `branch-not-found` | The branch does not exist. | `no branch named`, `refname ... not found`, `did not match any file(s) known to git` |
 | `invalid-ref` | A name or revision is bad. | `not a valid branch name` or `object name`, `bad revision`, `unknown revision`, `ambiguous argument` |
 | `ref-conflict` | An existing ref occupies the path. | `exists; cannot create`, `cannot lock ref ... is at ... but expected` |
-| `lock-held` | A git lock is held. | `unable to create '....lock'`, `cannot lock ref`, `another git process`, `could not lock config file ...: File exists` |
+| `lock-held` | A git lock is held. | `unable to create '....lock'` or `cannot lock ref` with `File exists`, `another git process`, `could not lock config file ...: File exists` |
 | `not-a-repository` | Not inside a repository. | `not a git repository` |
 | `worktree-conflict` | Checked out in another worktree. | `already checked out`, `used by worktree` |
 | `merge-conflict` | Stopped on conflicts. | `CONFLICT (`, `merge conflict`, `could not apply`, `unmerged files` |

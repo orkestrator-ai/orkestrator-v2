@@ -42,7 +42,8 @@ const TOOL_RULES: Readonly<Record<CommandFailureTool, readonly Rule[]>> = {
     ["branch-exists", /a branch named .* already exists/i],
     ["ref-conflict", /exists; cannot create|cannot lock ref .* is at .* but expected/i],
     ["lock-held", /could not lock config file [^\n]*: File exists/i],
-    ["lock-held", /unable to create '.*\.lock'|cannot lock ref|another git process/i],
+    ["lock-held", /(?:unable to create '[^\n]*\.lock'|cannot lock ref)[^\n]*: File exists/i],
+    ["lock-held", /another git process/i],
     ["worktree-conflict", /already (?:checked out|used by worktree)|used by worktree at/i],
     ["invalid-ref", /not a valid (?:branch name|object name)|bad (?:revision|object)/i],
     ["invalid-ref", /unknown revision|ambiguous argument|invalid reference/i],
@@ -103,7 +104,8 @@ const SHARED_RULES: readonly Rule[] = [
   ["auth-failed", /gh auth login|not logged in|unauthorized|http 401|returned error: 40[13]/i],
   ["network-failed", /could not resolve host|connection (?:timed out|refused|reset)/i],
   ["network-failed", /network is unreachable|no route to host|temporary failure in name/i],
-  ["network-failed", /early eof|failed to connect|remote end hung up|unable to access/i],
+  ["network-failed", /early eof|failed to connect|remote end hung up/i],
+  ["network-failed", /unable to access ['"]?https?:\/\//i],
   ["network-failed", /tls handshake|i\/o timeout/i],
   [
     "network-failed",
@@ -147,8 +149,8 @@ function boundedForMatching(text: string): string {
 
 /**
  * The text to match. `CommandFailedError`'s message is already stderr, or stdout
- * when stderr was empty. A first line of "Command failed: <argv>" is dropped,
- * because a branch or file named after an error must not read as that error.
+ * when stderr was empty. A "Command failed: <argv>" message is ignored in full:
+ * argv can span lines, and only a separate stderr field is diagnostic evidence.
  */
 function failureText(error: object): string {
   const stderr = read(error, "stderr");
@@ -158,16 +160,16 @@ function failureText(error: object): string {
   if (typeof stderr === "string" && stderr.length > 0) return boundedForMatching(stderr);
   const message = read(error, "message");
   if (typeof message !== "string") return "";
-  return boundedForMatching(
-    message.startsWith("Command failed") ? message.split("\n").slice(1).join("\n") : message,
-  );
+  return message.startsWith("Command failed") ? "" : boundedForMatching(message);
 }
 
 /** An `fs` ENOENT passed here is a missing file, not a program that never started. */
 function isRawSpawnEnoent(error: object): boolean {
   const syscall = read(error, "syscall");
   return (
-    read(error, "code") === "ENOENT" && typeof syscall === "string" && syscall.startsWith("spawn")
+    read(error, "code") === "ENOENT" &&
+    typeof syscall === "string" &&
+    /^(?:spawn(?:Sync)?(?:\s|$)|posix_spawnp?$)/.test(syscall)
   );
 }
 

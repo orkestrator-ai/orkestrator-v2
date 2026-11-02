@@ -157,6 +157,13 @@ describe("failures runCommand produces", () => {
     expect(inspect(error)).toContain("reason=unclassified exitCode=3");
   });
 
+  posixOnly("a diagnostic phrase on a later argv line is not child output", async () => {
+    const error = await failed("exit 3\n# fatal: not a git repository");
+    expect(error.stdout).toBe("");
+    expect(error.message).toContain("Command failed:");
+    expect(inspect(error)).toContain("reason=unclassified exitCode=3");
+  });
+
   posixOnly("stderr picks the reason without reaching the print", async () => {
     const printed = inspect(await failed("echo 'fatal: not a git repository' >&2; exit 128"));
     expect(printed).toContain("reason=not-a-repository exitCode=128");

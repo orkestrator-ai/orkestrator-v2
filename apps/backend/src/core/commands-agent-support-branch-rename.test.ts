@@ -19,9 +19,10 @@ posixOnly("failed branch renames log a reason, not the command's output", () => 
   let worktree: string;
   let capture: LogCapture;
   const originalPath = process.env.PATH;
+  const realGit = Bun.which("git")!;
 
   function git(...args: string[]): void {
-    execFileSync("git", ["-C", worktree, ...args], { stdio: "pipe" });
+    execFileSync(realGit, ["-C", worktree, ...args], { stdio: "pipe" });
   }
 
   /** A `docker` on PATH that answers each call from a script, as the real one would. */
@@ -97,6 +98,74 @@ posixOnly("failed branch renames log a reason, not the command's output", () => 
     });
     expect(capture.lines.join("\n")).not.toContain("daemon");
   });
+
+  test.each([false, true])(
+    "local push-config failure with rollback failure=%s",
+    async (rollbackFails) => {
+      // Let real Git rename and probe refs; inject only the config/rollback failures.
+      const file = path.join(root, "git");
+      writeFileSync(
+        file,
+        `#!/bin/sh
+if [ "$3" = config ]; then
+  echo 'error: could not lock config file: Permission denied' >&2
+  exit 255
+fi
+if [ "${rollbackFails}" = true ] && [ "$3" = branch ] && [ "$6" = new-branch ]; then
+  echo "fatal: cannot lock ref 'refs/heads/old-branch': File exists." >&2
+  exit 128
+fi
+exec "${realGit}" "$@"
+`,
+      );
+      chmodSync(file, 0o755);
+      process.env.PATH = `${root}:${originalPath}`;
+      try {
+        const renamed = await renameLiveGitBranch(
+          environment({ worktreePath: worktree }),
+          "old-branch",
+          "new-branch",
+        );
+        expect(renamed).toBe(rollbackFails);
+        expect(
+          capture
+            .records()
+            .map(({ event, fields }) => [event, fields?.reason, fields?.exitCode, fields?.runtime]),
+        ).toEqual(
+          rollbackFails
+            ? [
+                ["branch.push-config-failed", "permission-denied", 255, "local"],
+                ["branch.rollback-failed", "lock-held", 128, "local"],
+              ]
+            : [["branch.push-config-failed", "permission-denied", 255, "local"]],
+        );
+        for (const record of capture.records()) {
+          expect(record).toMatchObject({
+            level: "warn",
+            area: "git",
+            fields: {
+              environmentId: "env-1",
+              signal: null,
+              error: { name: "CommandFailedError", outputOmitted: true },
+            },
+          });
+        }
+        for (const privateText of [
+          "old-branch",
+          "new-branch",
+          "fatal:",
+          "Permission denied",
+          root,
+        ]) {
+          expect(capture.lines.join("\n")).not.toContain(privateText);
+        }
+        git("show-ref", "--verify", `refs/heads/${rollbackFails ? "new-branch" : "old-branch"}`);
+      } finally {
+        // Use the real binary so injected failures cannot interfere with fixture cleanup.
+        if (rollbackFails) git("branch", "-m", "--", "new-branch", "old-branch");
+      }
+    },
+  );
 
   test("a container rename reads git's failure through the exec", async () => {
     fakeDocker(`echo "fatal: a branch named 'new-branch' already exists" >&2\nexit 128`);

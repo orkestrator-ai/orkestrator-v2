@@ -227,6 +227,26 @@ const FRAME_PATHS: ReadonlyArray<[label: string, frame: string, expected: string
     "    at k (C:\\Users\\private\\other\\main.js:1:1)",
     "at k (.../main.js:1:1)",
   ],
+  [
+    "a UNC path",
+    String.raw`    at k (\\private-server\private-share\repo\apps\desktop\main.js:1:1)`,
+    "at k (apps/desktop/main.js:1:1)",
+  ],
+  [
+    "an extended drive path",
+    String.raw`    at k (\\?\C:\Users\private\repo\apps\desktop\main.js:1:1)`,
+    "at k (apps/desktop/main.js:1:1)",
+  ],
+  [
+    "an extended UNC path",
+    String.raw`    at k (\\?\UNC\private-server\private-share\repo\apps\desktop\main.js:1:1)`,
+    "at k (apps/desktop/main.js:1:1)",
+  ],
+  [
+    "a UNC path outside the app",
+    String.raw`    at k (\\private-server\private-share\other\main.js:1:1)`,
+    "at k (.../main.js:1:1)",
+  ],
   ["a path outside the app", "    at l (/Users/private/other/x.ts:2:2)", "at l (.../x.ts:2:2)"],
   [
     "a web URL, losing its origin and query",
@@ -251,6 +271,9 @@ describe("stack frame paths", () => {
   test.each(FRAME_PATHS)("%s", (_label, frame, expected) => {
     const [relative] = framed(frame)!;
     expect(relative).toBe(expected);
+    const revived = logErrorFromWire({ name: "Error", stack: [frame] })!;
+    expect(revived.stack).toEqual([expected]);
+    expect(logErrorFromWire(revived)?.stack).toEqual([expected]);
     expect(relative).not.toContain("private");
   });
 

@@ -67,7 +67,7 @@ export function installFatalRejectionGuard(options: FatalRejectionGuardOptions):
   const MAX_RAW_FRAME_CHARS = 1024;
   const IDENTIFIER = /^[\w.:$-]{1,64}$/;
   const FRAME_LOCATION =
-    /(^|[\s(])((?:[a-z][a-z0-9+.-]*:\/\/[^/\s)]*)?(?:\/|[a-z]:[\\/]).*?)(?=:\d+(?::\d+)?\)?(?:,|$)|\)(?:,|$)|,\s|$)/gi;
+    /(^|[\s(])((?:[a-z][a-z0-9+.-]*:\/\/[^/\s)]*)?(?:\/|[a-z]:[\\/]|\\\\).*?)(?=:\d+(?::\d+)?\)?(?:,|$)|\)(?:,|$)|,\s|$)/gi;
   const LOCATION_SCHEME = /^([a-z][a-z0-9+.-]*):\/\/[^/\s)]*/i;
   const APP_PATH =
     /(?:^|\/)((?:apps\/(?:backend|desktop|web|web-public)|packages\/(?:protocol|cli|toolchain)|bridges\/[\w-]+|[\w-]+-bridge)\/.*)$/;

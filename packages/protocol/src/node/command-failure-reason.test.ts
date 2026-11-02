@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { openSync } from "node:fs";
 import {
   COMMAND_FAILURE_REASONS,
   type CommandFailureReason,
@@ -147,6 +149,45 @@ describe("classifyCommandFailure", () => {
     expect(classifyCommandFailure(error, git).reason).toBe("unclassified");
   });
 
+  test.each([
+    ["Permission denied", "permission-denied"],
+    ["No space left on device", "disk-full"],
+    ["File exists.", "lock-held"],
+  ] as const)("git lock failure: %s", (cause, reason) => {
+    for (const prefix of [
+      "fatal: Unable to create '/workspace/.git/index.lock'",
+      "fatal: cannot lock ref 'refs/heads/main': Unable to create '/workspace/.git/refs/heads/main.lock'",
+    ]) {
+      for (const options of [git, undefined]) {
+        expect(
+          classifyCommandFailure(failure(`${prefix}: ${cause}`, { exitCode: 128 }), options),
+        ).toEqual({ reason, exitCode: 128, signal: null });
+      }
+    }
+  });
+
+  test.each([
+    ["fatal: cannot lock ref 'refs/heads/main': is at abc but expected def", "ref-conflict"],
+    ["fatal: cannot lock ref 'refs/heads/main': unspecified failure", "unclassified"],
+    ["fatal: unable to access '/root/.config/git/config': Permission denied", "permission-denied"],
+    [
+      "warning: unable to access '/root/.config/git/config': Permission denied",
+      "permission-denied",
+    ],
+    [
+      "fatal: unable to access '/root/.config/git/config': No such file or directory",
+      "path-not-found",
+    ],
+    [
+      "fatal: unable to access 'https://example.test/repo': The requested URL returned error: 502",
+      "network-failed",
+    ],
+  ] as const)("git access diagnostic: %s", (message, reason) => {
+    for (const options of [git, undefined]) {
+      expect(classifyCommandFailure(failure(message), options).reason).toBe(reason);
+    }
+  });
+
   test("the result is only the label, the exit code and the signal", () => {
     const marker = "PRIVATE-MARKER";
     for (const [error, options] of Object.values(SAMPLES)) {
@@ -192,6 +233,44 @@ describe("classifyCommandFailure", () => {
   test("the argv in a Command failed line cannot read as the failure", () => {
     const named = failure("Command failed: git branch -m -- permission-denied no-space-left");
     expect(classifyCommandFailure(named, git).reason).toBe("unclassified");
+  });
+
+  test("multiline argv cannot supply a diagnostic, but separate stderr can", () => {
+    const error = failure("Command failed: sh -c exit 3\n# fatal: not a git repository", {
+      exitCode: 3,
+    });
+    expect(classifyCommandFailure(error, git).reason).toBe("unclassified");
+    expect(classifyCommandFailure(Object.assign(error, { exitCode: 127 }), git).reason).toBe(
+      "command-not-found",
+    );
+    expect(
+      classifyCommandFailure(Object.assign(error, { stderr: "Permission denied" }), git).reason,
+    ).toBe("permission-denied");
+  });
+
+  test.each([
+    "spawn",
+    "spawn missing-program",
+    "spawnSync missing-program",
+    "posix_spawn",
+    "posix_spawnp",
+  ])("raw ENOENT from %s means executable-missing", (syscall) => {
+    expect(classifyCommandFailure({ code: "ENOENT", syscall }).reason).toBe("executable-missing");
+  });
+
+  test("the runtime's raw spawn ENOENT differs from a filesystem ENOENT", () => {
+    const missing = `/orkestrator-missing-${crypto.randomUUID()}/program`;
+    const error = spawnSync(missing).error;
+    expect(error).toBeDefined();
+    expect(classifyCommandFailure(error).reason).toBe("executable-missing");
+    let fileError: unknown;
+    try {
+      openSync(missing, "r");
+    } catch (caught) {
+      fileError = caught;
+    }
+    expect(fileError).toMatchObject({ code: "ENOENT" });
+    expect(classifyCommandFailure(fileError).reason).toBe("path-not-found");
   });
 
   test("a killed process is reported as killed, whatever it last wrote", () => {

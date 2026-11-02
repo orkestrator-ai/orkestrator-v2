@@ -10,24 +10,16 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
-  DragOverlay,
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { Button } from "@/components/ui/button";
-import {
-  ArrowUpDown,
-  Folder,
-  Plus,
-  FolderGit2,
-  Square,
-  Trash2,
-  RotateCw,
-  RefreshCw,
-} from "lucide-react";
+import { ArrowUpDown, Plus, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
 import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { ActivityEnvironmentList } from "./ActivityEnvironmentList";
 import { SortableProjectGroup } from "./SortableProjectGroup";
+import { SidebarDragOverlay } from "./SidebarDragOverlay";
+import { SidebarEmptyState } from "./SidebarEmptyState";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 import { SidebarRootDropZone } from "./SidebarRootDropZone";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
@@ -74,11 +66,17 @@ import {
   FederatedActivityList,
   MachineSectionList,
   MergedProjectList,
+  mergedFolderCollapseKey,
 } from "@/components/federation/FederatedSidebarSections";
 import { useBoundCollapseSync } from "@/components/federation/useBoundCollapseSync";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
-import { isMachineShown } from "@/lib/federation/sidebar-layout";
+import {
+  isMachineShown,
+  mergedProjectView,
+  visibleBoundProjectIds,
+} from "@/lib/federation/sidebar-layout";
+import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
   DropdownMenu,
@@ -420,6 +418,8 @@ export function HierarchicalSidebar() {
     () => new Set(visibleMachines.filter(isMachineShown).map((machine) => machine.connectionId)),
     [visibleMachines],
   );
+  const portalLayout = usePortalLayout();
+  const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
   useBoundCollapseSync(
     federation.enabled ? (boundMachineView?.backendId ?? null) : null,
     projects,
@@ -703,6 +703,24 @@ export function HierarchicalSidebar() {
       if (collapsedProjects.includes(project.id)) return;
       for (const env of getProjectEnvironments(project.id)) orderedIds.push(env.id);
     };
+    // A merged list draws this window's projects in the command node's order
+    // and folders (`MergedProjectList`), so a range follows that tree.
+    if (federatedMode === "project" || federatedMode === "repository") {
+      const { tree } = mergedProjectView(
+        machineViews,
+        mergedShownIds,
+        federatedMode,
+        portalLayout,
+        federation.portalState.selfId,
+      );
+      for (const projectId of visibleBoundProjectIds(tree, (name) =>
+        collapsedFolderKeys.includes(mergedFolderCollapseKey(federatedMode, name)),
+      )) {
+        const project = projectsById.get(projectId);
+        if (project) collectFrom(project);
+      }
+      return orderedIds;
+    }
     for (const entry of projectTree) {
       if (entry.kind === "project") {
         collectFrom(entry.project);
@@ -721,6 +739,13 @@ export function HierarchicalSidebar() {
     collapsedProjectFolders,
     getProjectEnvironments,
     collapsedProjects,
+    federatedMode,
+    machineViews,
+    mergedShownIds,
+    portalLayout,
+    federation.portalState.selfId,
+    collapsedFolderKeys,
+    projectsById,
   ]);
 
   // useCallback so memo(EnvironmentItem) rows are not invalidated every render.
@@ -1027,18 +1052,9 @@ export function HierarchicalSidebar() {
   /** This window's own machine's projects and environments. */
   const localTree =
     projectsLoading && projects.length === 0 ? (
-      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-        <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
-        <p className="text-sm">Loading projects...</p>
-      </div>
+      <SidebarEmptyState loading />
     ) : projects.length === 0 ? (
-      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-        <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
-        <p className="text-sm">No projects yet</p>
-        <Button variant="link" size="sm" onClick={() => setShowAddProjectDialog(true)}>
-          Add your first project
-        </Button>
-      </div>
+      <SidebarEmptyState onAdd={() => setShowAddProjectDialog(true)} />
     ) : environmentSortMode === "activity" ? (
       <ActivityEnvironmentList
         testId="activity-environment-list"
@@ -1098,30 +1114,17 @@ export function HierarchicalSidebar() {
           <SidebarRootDropZone active={activeType === "project"} />
         </SortableContext>
 
-        {/* Drag overlay for visual feedback */}
-        <DragOverlay>
-          {activeProject && (
-            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-              <div className="flex items-center gap-2">
-                <FolderGit2 className="h-4 w-4" />
-                <span className="text-sm font-medium">{activeProject.name}</span>
-              </div>
-            </div>
-          )}
-          {activeFolder && (
-            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-              <div className="flex items-center gap-2">
-                <Folder className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
-                <span className="text-sm font-medium">{activeFolder.name}</span>
-              </div>
-            </div>
-          )}
-          {activeEnvironment && (
-            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-              <span className="text-sm">{activeEnvironment.name}</span>
-            </div>
-          )}
-        </DragOverlay>
+        <SidebarDragOverlay
+          item={
+            activeProject
+              ? { kind: "project", name: activeProject.name }
+              : activeFolder
+                ? { kind: "folder", name: activeFolder.name }
+                : activeEnvironment
+                  ? { kind: "environment", name: activeEnvironment.name }
+                  : null
+          }
+        />
       </DndContext>
     );
 
@@ -1398,6 +1401,8 @@ export function HierarchicalSidebar() {
               mode={federatedMode}
               renderBoundProject={renderMergedBoundProject}
               onBoundEnvironmentDragEnd={handleBoundEnvironmentDrop}
+              boundLoading={projectsLoading && projects.length === 0}
+              onAddProject={() => setShowAddProjectDialog(true)}
             />
           ) : federatedMode === "machine" && boundMachineView ? (
             <MachineSectionList

@@ -3,17 +3,20 @@
 ## Task analysis
 
 Analysed 2026-11-01 against `main` at `b965aea44`. Tasks 2–6 and part of 7
-were acted on the same day; see Assumptions and decisions.
+were acted on the same day. Rechecked 2026-11-02 against `main` at
+`38d55ee14`: the open parts of tasks 3 and 7 were still true, and the Docker
+part of task 3 and the rest of task 7 were acted on; see Assumptions and
+decisions.
 
 ### Tasks
 
 1. **Merged PR icon on another machine's rows**: the command node's rows for another machine never showed the merged icon. Status: done (2026-11-01).
 2. **One environment row component**: replace the duplicated `RemoteEnvironmentItem` JSX with the row `EnvironmentItem` renders, fed by one row model. Status: done (2026-11-01): `EnvironmentRow` plus `environmentRowModel`, with `localEnvironmentRowFacts` and `nodeEnvironmentRowFacts` as the two adapters; one delete dialog and one row frame.
-3. **Summary fields the row needs**: carry agent-mail counts, failed-mail state and the leaf's Docker availability in `NodeEnvironmentSummary`, and confirm the activity it carries is the runtime one. Status: done in part (2026-11-01): `agentMailUnread`, `agentMailFailed` and `buildActive` added and re-read on agent-mail changes. Open: Docker availability (not relayed) and live confirmation that the summary's activity keeps up with the machine's runtime activity.
+3. **Summary fields the row needs**: carry agent-mail counts, failed-mail state and the leaf's Docker availability in `NodeEnvironmentSummary`, and confirm the activity it carries is the runtime one. Status: done in part: `agentMailUnread`, `agentMailFailed` and `buildActive` added and re-read on agent-mail changes (2026-11-01); `dockerAvailable` relayed (2026-11-02). Open: live confirmation that the summary's activity keeps up with the machine's runtime activity.
 4. **One project header component**: replace `RemoteProjectGroup`'s copy of `SortableProjectGroup`. Status: done (2026-11-01): `ProjectGroupHeader`, with the hover card, mail badges and project-home activity on both.
 5. **One activity list and one priority order**: the bound machine's activity rows change order and lose their controls bar the moment another machine is visible. Status: done (2026-11-01): `compareActivity` and `ActivityEnvironmentList` serve both.
 6. **A parity guard for future changes**: a rule agents read before editing either path, and a test that renders both paths from one fixture. Status: done (2026-11-01): the rule in `docs/architecture/federation.md` and `environment-row-model.parity.test.ts`.
-7. **Smaller divergences**: shift-range selection order in merged views, empty states, drag overlay, chevron click propagation and the selected-row hover fade. Status: done in part (2026-11-01): chevron propagation, selected-row hover fade and shift-range order in the activity view are fixed by the shared components. Open: shift-range across projects in merged project/repository lists, empty states, drag overlay.
+7. **Smaller divergences**: shift-range selection order in merged views, empty states, drag overlay, chevron click propagation and the selected-row hover fade. Status: done (2026-11-02): chevron propagation, selected-row hover fade and shift-range order in the activity view were fixed by the shared components (2026-11-01); shift-range in merged project/repository lists follows the on-screen tree, and one empty state and one drag card serve every list (2026-11-02). Hiding unreachable machines in merged lists is kept as intended.
 
 ### 1. Merged PR icon on another machine's rows
 
@@ -160,7 +163,7 @@ Intended differences, not defects: clicking a remote row opens the owner's works
 **Context.** Found reading the code on 2026-11-01.
 
 **Investigation.**
-- Shift-click range selection uses the plain tree's order (`HierarchicalSidebar.tsx:829-858`), which differs from the on-screen order in merged and federated-activity views. Inferred from code, not reproduced.
+- Shift-click range selection uses the plain tree's order (`HierarchicalSidebar.tsx:829-858`), which differs from the on-screen order in merged and federated-activity views. Inferred from code on 2026-11-01; reproduced on 2026-11-02 for the merged lists by `HierarchicalSidebar.merged-selection.test.tsx`, whose three cases (merged order, a project in a collapsed merged folder, repository order) failed before the fix.
 - Empty states differ ("No projects yet" with an add button locally; plain text in merged lists and machine sections).
 - No `DragOverlay` in `RemoteMachineTree` or `MergedProjectList`, including for this window's projects inside a merged list.
 - Offline machines are hidden in "By project"/"By repository" but shown dimmed in "By machine" and "By activity".
@@ -178,23 +181,20 @@ Intended differences, not defects: clicking a remote row opens the owner's works
 ## Current state
 
 Every environment row, row frame, delete confirmation, project header, project
-home indicator and activity list is one component used for this window's
-machine and for other machines through a command node. The adapters gather
-facts; `environment-row-model.parity.test.ts` feeds one environment through
-both and requires the same row. The rule for future changes is in
+home indicator, activity list, empty project list and drag card is one
+component used for this window's machine and for other machines through a
+command node. The adapters gather facts; `environment-row-model.parity.test.ts`
+feeds one environment through both and requires the same row, including with
+the machine's Docker down. Another machine's rows read its Docker availability
+from the summary (`dockerAvailable`). Shift-click ranges in merged lists follow
+the merged tree. The rule for future changes is in
 `docs/architecture/federation.md`, "One presentation for both paths".
 
 ## Outstanding work
 
-- Task 3: relay a machine's Docker availability, or decide it stays a known
-  gap (container actions on another machine are gated by it being writable).
 - Task 3: confirm on two real machines that a remote row's activity keeps up
   with the owner's own row (the owner reads runtime activity events; the
   summary carries the persisted activity).
-- Task 7: shift-click range selection across projects in merged
-  project/repository lists follows the bound project tree's order, not the
-  on-screen order; empty states differ (no "Add your first project" in merged
-  lists); merged lists have no drag overlay.
 
 ## Constraints and rationale
 
@@ -207,7 +207,11 @@ Summaries stay bounded and content-free: counts and states, never prompts, mail 
   node: the merged icon, agent-mail badges, project home indicator, activity
   bar and the shared delete confirmation.
 - Whether the leaf's persisted activity lags its runtime activity (task 3).
-- The shift-range selection mismatch in merged lists (task 7).
+- Task 3: on two real machines, stop Docker on the leaf and confirm the command
+  node's rows for it disable Fork container, Start/Stop and Restart within
+  about 90 seconds (the leaf's 30-second cache plus the command node's
+  60-second reconcile), and re-enable after Docker returns. Unit tests cover
+  each step; the whole path has not been seen live.
 
 ## Assumptions and decisions
 
@@ -244,12 +248,12 @@ stores by environment ID.
 - The hover card's fallback details for another machine now include the
   creation date, which the summary already carried.
 
-### Task 3: Docker availability is not relayed
+### Task 3: Docker availability is not relayed (2026-11-01, superseded)
 
 This window learns it from a `check_docker` probe of its own; relaying it would
 add a machine-level field and a refresh path for a rare state. Another
 machine's container actions stay gated by the machine being writable. Recorded
-as outstanding.
+as outstanding, then relayed on 2026-11-02 (below).
 
 ### Task 3: agent-mail changes re-read every project of the machine
 
@@ -277,3 +281,81 @@ activity time) because snapshot writes are already filtered from it, and the
 sidebar's own tie-breaks (project order, then environment order) for both,
 after the machine ID. Every existing ordering test passed unchanged under the
 shared comparator.
+
+### Task 3: Docker availability rides on every summary row (2026-11-02)
+
+Chose an optional `dockerAvailable` on `NodeEnvironmentSummary`, stamped by the
+leaf on each row of its `get_environment_snapshots` summary read, as the
+recommended option says. A field on `NodeSummary` (machine level) was the
+alternative: it says the fact once, but needs a new machine-level read and
+refresh path in `NodeReadModel`, while the per-row field rides on reads the
+command node already makes per project. The cost is repetition (one boolean
+per row) and, briefly, rows of different projects disagreeing until the next
+re-read.
+
+### Task 3: where the leaf gets the value
+
+`DockerAvailabilityCache` (`BackendRuntime.dockerAvailability`) keeps the last
+answer for 30 seconds. Every `check_docker` answer, which this machine's own
+window asks for every 60 seconds, is recorded there; a stale cache probes once,
+shared by concurrent reads, and a summary read waits at most 1.5 seconds for
+it before answering with the last known value or omitting the field. Probing
+on every read was rejected: a command node reads every project at once, and
+`docker info` can take its full 10-second timeout when the daemon hangs.
+Backend unit tests (`NODE_ENV=test`) get no probe, so they relay only what
+`check_docker` answered.
+
+### Task 3: how a change reaches the command node
+
+No new event: the command node's 60-second reconcile and every environment
+change re-read the summaries, so a flip shows within about 90 seconds.
+Emitting a resource event when availability flips was rejected for now:
+there is no resource kind for it, and reusing `environment` or `config`
+would make every client reload for a rare state. A Docker outage usually
+also changes container statuses, which re-reads at once.
+
+### Task 3: what the remote row does with it
+
+`nodeEnvironmentRowFacts` passes it to the row model, which already gated
+Fork container, Start/Stop and Restart on it, and decides "running" the way
+`useEnvironmentDisplayActivity` does on the machine itself (local, or Docker
+up and status running). An absent field reads as available, so an older leaf's
+rows look as they did. `forkFederatedEnvironment` still asks the owner
+`check_docker` before forking a container, so the summary is never the only
+check.
+
+### Task 7: shift-click ranges in merged lists
+
+Reproduced first: `HierarchicalSidebar.merged-selection.test.tsx` failed in all
+three cases before the fix. `MergedProjectList` and the sidebar's range now
+build the same tree through `mergedProjectView`, and the range runs over
+`visibleBoundProjectIds` (this window's projects as drawn, skipping collapsed
+merged folders), then each project's environments unless the project is
+collapsed. Another machine's rows still take no part in multi-select, as
+recorded under task 2.
+
+### Task 7: empty states
+
+`SidebarEmptyState` is used by this window's tree, the merged lists and
+another machine's section. "Add your first project" in a merged list opens
+this window's Add Project dialog (the window's own machine is the one it can
+add to directly); in another machine's section it opens that machine's project
+launcher, the same path as the header's machine menu, and is absent while the
+machine does not accept writes. A machine section still loading shows the
+same "Loading projects..." state. Kept different: a machine never reached says
+"Not available yet.", which its own sidebar cannot show.
+
+### Task 7: drag card
+
+`SidebarDragOverlay` draws the card for this window's tree, another machine's
+tree and the merged lists, including this window's projects inside a merged
+list, which had none. The card names the project, folder (a repository group
+by its label) or environment being dragged.
+
+### Task 7: unreachable machines stay hidden in merged lists
+
+Kept as is: merged lists hide a machine that is not connected and keep its
+projects' places for when it returns (`isMachineShown`), because a merged
+project list has no machine heading to carry the offline state, while "By
+machine" and "By activity" show it dimmed under or beside one.
+

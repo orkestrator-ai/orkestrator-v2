@@ -59,6 +59,7 @@ for (const merged of [false, true]) {
     expect(targetBox.y + targetBox.height).toBeGreaterThanOrEqual(lastBox.y + lastBox.height);
 
     await holdDrag(page, active, targetHeading);
+    await expect(page.getByTestId("sidebar-drag-overlay")).toContainText("p2");
     await expect(target.locator(":scope > .relative")).toHaveClass(/border-primary/);
     for (const index of [0, 1, 3, 4, 5]) {
       await expectVerticalShift(rows[index]!, before[index]!, 0);
@@ -96,16 +97,8 @@ for (const merged of [false, true]) {
         .first();
       const sourceBox = (await source.boundingBox())!;
       const targetBox = (await target.boundingBox())!;
-      const sourceHandleBox = (await sourceHeading.boundingBox())!;
-      const targetHandleBox = (await targetHeading.boundingBox())!;
-      // The merged sidebar moves the active node with the pointer. Local
-      // uses a drag overlay and leaves the node at its sortable destination.
-      const sourceShift = merged
-        ? targetHandleBox.y +
-          targetHandleBox.height / 2 -
-          sourceHandleBox.y -
-          sourceHandleBox.height / 2
-        : targetBox.height;
+      // Both sidebars use an overlay; the source occupies its sortable destination.
+      const sourceShift = targetBox.height;
       const sourceMember = project(page, "p2");
       const sourceMemberTop = (await sourceMember.boundingBox())!.y;
       const members = collapsed ? [] : [project(page, "q"), project(page, "q2")];
@@ -113,6 +106,7 @@ for (const merged of [false, true]) {
         members.map(async (row) => (await row.boundingBox())!.y),
       );
       await holdDrag(page, sourceHeading, targetHeading);
+      await expect(page.getByTestId("sidebar-drag-overlay")).toContainText("Source");
       await expect(target.locator(":scope > .relative")).toHaveClass(/border-primary/);
       await expectVerticalShift(source, sourceBox.y, sourceShift);
       await expectVerticalShift(sourceMember, sourceMemberTop, sourceShift);

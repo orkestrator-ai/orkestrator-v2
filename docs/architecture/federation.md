@@ -522,6 +522,8 @@ component with two thin adapters:
 | Project header | `ProjectGroupHeader` | `SortableProjectGroup` | `RemoteProjectGroup` |
 | Project home activity | `ProjectHomeActivityButton`, `projectHomeStatus` | `ProjectHomeActivity` | `RemoteProjectGroup`, `RemoteActivityHome` |
 | Activity list | `ActivityEnvironmentList`, `compareActivity` | `HierarchicalSidebar` | `FederatedActivityList` |
+| Empty project list | `SidebarEmptyState` | `HierarchicalSidebar` | `MergedProjectList`, `RemoteMachineBody` |
+| Drag card | `SidebarDragOverlay` | `HierarchicalSidebar` | `MergedProjectList`, `RemoteMachineTree` |
 
 The adapters only gather facts (from this window's stores, or from
 `NodeEnvironmentSummary`/`NodeProjectSummary`) and actions. When changing what a
@@ -543,8 +545,16 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   exist, writes are disabled while it is unavailable, it takes no part in this
   window's multi-select, and items that need this window's own host ("Copy
   Address", "Copy Initial Prompt", the clickable port, the design-canvas
-  deletion notice) are absent. Its Docker availability is not relayed, so its
-  container actions are gated by the machine being writable instead.
+  deletion notice) are absent. A section of a machine that has never been
+  reached says "Not available yet.", a state its own sidebar cannot have.
+- Container actions are gated by the machine's own Docker availability, which
+  its summary read stamps on every row (`dockerAvailable`, from a 30-second
+  cache of `check_docker` answers and a bounded probe). A machine that predates
+  the field sends none, and its rows treat Docker as available, as before.
+- In the merged "By project" and "By repository" lists this window's projects
+  sit in the command node's order and folders, so a shift-click range runs
+  over that tree (`mergedProjectView`, `visibleBoundProjectIds`), never this
+  window's own project order.
 
 [2190](../todo/cross-cutting/2190-direct-and-command-node-sidebar-parity.md)
 records how the two paths were merged and what remains.

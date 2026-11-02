@@ -64,6 +64,8 @@ interface Markers {
   buildActive?: boolean;
   unreadMail?: number;
   failedMail?: boolean;
+  /** The machine's Docker availability; absent as from a leaf that predates it. */
+  dockerAvailable?: boolean;
   monitor?: PrMonitorEnvironmentState;
 }
 
@@ -107,11 +109,15 @@ const machine: MachineView = {
 function localRow(environment: Environment, markers: Markers): Row {
   const deleting =
     environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt);
+  const dockerAvailable = markers.dockerAvailable ?? true;
   return row(
     localEnvironmentRowFacts(environment, {
       deleting,
       activity: markers.buildActive ? "working" : (environment.agentActivityState ?? "idle"),
-      running: environment.environmentType === "local" || environment.status === "running",
+      // As `useEnvironmentDisplayActivity` decides it.
+      running:
+        environment.environmentType === "local" ||
+        (dockerAvailable && environment.status === "running"),
       buildPipeline: markers.buildPipeline === true,
       unreadMail: markers.unreadMail ?? 0,
       failedMail: markers.failedMail === true,
@@ -122,7 +128,7 @@ function localRow(environment: Environment, markers: Markers): Row {
         true,
       ),
       machine: { name: machine.name, colorToken: machine.colorToken },
-      dockerAvailable: true,
+      dockerAvailable,
       localCheckoutAvailable: true,
     }),
   );
@@ -136,6 +142,7 @@ function nodeRow(environment: Environment, markers: Markers): Row {
     ...(markers.buildActive ? { buildActive: true } : {}),
     ...(markers.unreadMail ? { agentMailUnread: markers.unreadMail } : {}),
     ...(markers.failedMail ? { agentMailFailed: true } : {}),
+    ...(markers.dockerAvailable === undefined ? {} : { dockerAvailable: markers.dockerAvailable }),
     ...(isPrReadingConfirmedByMonitor(environment, markers.monitor)
       ? { prMonitorConfirmed: true }
       : {}),
@@ -197,6 +204,17 @@ const cases: Array<[string, Partial<Environment>, Markers]> = [
     "unread work, unread mail and a failed delivery",
     { hasUnreadWork: true },
     { unreadMail: 3, failedMail: true },
+  ],
+  [
+    "a running container on a machine whose Docker is down",
+    { environmentType: "containerized", status: "running", agentActivityState: "working" },
+    { dockerAvailable: false },
+  ],
+  ["a local worktree on a machine whose Docker is down", {}, { dockerAvailable: false }],
+  [
+    "a stopped container on a machine with Docker",
+    { environmentType: "containerized", status: "stopped" },
+    { dockerAvailable: true },
   ],
 ];
 
@@ -271,4 +289,32 @@ test("Docker unavailable blocks container actions while local worktree actions r
   expect(model.menu.restartDisabled).toBe(true);
   expect(model.menu.forkLocalDisabled).toBe(false);
   expect(model.menu.deleteDisabled).toBe(false);
+});
+
+test("a machine's Docker availability gates another machine's container actions; an older leaf's rows do not", () => {
+  const container = { ...base, environmentType: "containerized", status: "running" };
+  const read = (extra: Record<string, unknown>) =>
+    environmentRowModel(
+      nodeEnvironmentRowFacts(
+        machine,
+        toNodeEnvironmentSummary(NODE, { ...container, ...extra })!,
+        {
+          busy: false,
+          writable: true,
+        },
+      ),
+    );
+  const down = read({ dockerAvailable: false });
+  expect(down.menu.forkContainerDisabled).toBe(true);
+  expect(down.menu.powerDisabled).toBe(true);
+  expect(down.menu.restartDisabled).toBe(true);
+  expect(down.isRunning).toBe(false);
+  expect(down.menu.forkLocalDisabled).toBe(false);
+  // A leaf that predates the field sends none: the row stays as it was.
+  for (const model of [read({}), read({ dockerAvailable: true })]) {
+    expect(model.menu.forkContainerDisabled).toBe(false);
+    expect(model.menu.powerDisabled).toBe(false);
+    expect(model.menu.restartDisabled).toBe(false);
+    expect(model.isRunning).toBe(true);
+  }
 });

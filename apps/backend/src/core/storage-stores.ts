@@ -477,7 +477,8 @@ export function pruneRemovedContent(archived: unknown, next: unknown): unknown {
 export type LegacyJsonCleanup =
   | { store: string; kind: "delete" }
   | { store: string; kind: "prune"; next: unknown }
-  | { store: string; kind: "prune-row"; key: string; next: unknown };
+  | { store: string; kind: "prune-row"; key: string; next: unknown }
+  | { store: string; kind: "delete-row"; key: string };
 
 const LEGACY_CLEANUPS_STORE = "storage-legacy-json-cleanups";
 const MAX_LEGACY_CLEANUPS = 1024;
@@ -530,16 +531,23 @@ function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boo
       cleanup.store,
       cleanup.kind === "prune"
         ? (copy) => pruneRemovedContent(copy, cleanup.next)
-        : cleanup.kind === "prune-row"
+        : cleanup.kind === "delete-row"
           ? (copy) => {
               if (!isJsonRecord(copy)) throw new Error("Unattributable legacy backup");
-              if (!Object.hasOwn(copy, cleanup.key)) return copy;
-              return {
-                ...copy,
-                [cleanup.key]: pruneRemovedContent(copy[cleanup.key], cleanup.next),
-              };
+              const kept = { ...copy };
+              delete kept[cleanup.key];
+              return kept;
             }
-          : undefined,
+          : cleanup.kind === "prune-row"
+            ? (copy) => {
+                if (!isJsonRecord(copy)) throw new Error("Unattributable legacy backup");
+                if (!Object.hasOwn(copy, cleanup.key)) return copy;
+                return {
+                  ...copy,
+                  [cleanup.key]: pruneRemovedContent(copy[cleanup.key], cleanup.next),
+                };
+              }
+            : undefined,
     );
   }
   database.deleteStoreInTransaction(LEGACY_CLEANUPS_STORE);

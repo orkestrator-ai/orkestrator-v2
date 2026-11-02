@@ -217,6 +217,91 @@ describe("retired JSON archive", () => {
     },
   );
 
+  for (const deletion of ["single", "environment", "project"] as const) {
+    test.each(["retry", "restart", "unrelated save", "readd", "atomic"])(
+      `recovers ${deletion} draft deletion pruning on %s`,
+      async (recovery) => {
+        const environment = createEnvironment("project-1");
+        const draft = {
+          ...composeDraft("draft", environment.id, "DELETED-DRAFT-SECRET"),
+          ...(deletion === "project" ? { ownerType: "project", ownerId: "project-1" } : {}),
+        };
+        const { storage, archive } = await migrated({
+          "environments.json": [environment],
+          "compose-drafts.json": {
+            draft,
+            other: composeDraft("other", "another-owner", "RETAINED-DRAFT"),
+          },
+        });
+        const remove = () =>
+          deletion === "single"
+            ? storage.deleteComposeDraft("draft", 1)
+            : deletion === "environment"
+              ? storage.deleteComposeDraftsByEnvironment(environment.id)
+              : storage.deleteComposeDraftsByProject("project-1");
+        const originalRename = syncFs.renameSync;
+        let renames = 0;
+        const rename = spyOn(syncFs, "renameSync").mockImplementation((from, to) => {
+          if (++renames === 2) throw new Error("archive rename failed");
+          return originalRename(from, to);
+        });
+        try {
+          await expect(
+            recovery === "atomic" ? storageInternals(storage).context.atomically(remove) : remove(),
+          ).rejects.toThrow("archive rename failed");
+          expect(storage.committed("compose-drafts")).not.toHaveProperty("draft");
+          expect(storage.committed("storage-legacy-json-cleanups")).toBeDefined();
+          const copies = Object.entries(await archiveFiles(archive)).filter(([name]) =>
+            name.startsWith("compose-drafts.json"),
+          );
+          expect(copies.filter(([, copy]) => copy.includes("DELETED-DRAFT-SECRET"))).toHaveLength(
+            1,
+          );
+        } finally {
+          rename.mockRestore();
+        }
+        if (recovery === "restart") {
+          await storage.close();
+          const reopened = new ArchiveProbe(storage.getDataDir());
+          services.push(reopened);
+          await reopened.init();
+        } else if (recovery === "unrelated save") {
+          await storage.kanban.saveLinearAuth("new-key");
+        } else if (recovery === "readd") {
+          await storage.saveComposeDraft("draft", "environment", environment.id, {
+            text: "new draft",
+          });
+        } else {
+          await remove();
+        }
+        for (const [name, copy] of Object.entries(await archiveFiles(archive))) {
+          if (!name.startsWith("compose-drafts.json")) continue;
+          expect(copy).not.toContain("DELETED-DRAFT-SECRET");
+          expect(copy).toContain("RETAINED-DRAFT");
+          expect(JSON.parse(copy)).not.toHaveProperty("draft");
+        }
+      },
+    );
+  }
+
+  test("rolled-back draft deletes leave the primary and archive intact", async () => {
+    const environment = createEnvironment("project-1");
+    const { storage, archive } = await migrated({
+      "environments.json": [environment],
+      "compose-drafts.json": { draft: composeDraft("draft", environment.id, "kept") },
+    });
+    const before = await archiveFiles(archive);
+    await expect(
+      storageInternals(storage).context.atomically(async () => {
+        await storage.deleteComposeDraft("draft", 1);
+        throw new Error("rollback deletion");
+      }),
+    ).rejects.toThrow("rollback deletion");
+    expect(storage.committed("compose-drafts")).toHaveProperty("draft");
+    expect(storage.committed("storage-legacy-json-cleanups")).toBeUndefined();
+    expect(await archiveFiles(archive)).toEqual(before);
+  });
+
   test("replacing a corrupt document prunes every archived draft against the replacement", async () => {
     const environment = createEnvironment("project-1");
     const { storage, archive } = await migrated({

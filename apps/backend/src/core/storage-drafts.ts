@@ -261,7 +261,7 @@ export class DraftsRepository {
       throw new Error("Compose draft expected revision must be a non-negative integer");
     }
     await this.repos.prompts.enqueueComposeDraftMutation(async () => {
-      const previous = this.context.updateStoreRow(
+      const previous = this.context.updateSensitiveStoreRow(
         this.files.composeDraftsFile(),
         draftKey,
         (stored) => {
@@ -270,9 +270,7 @@ export class DraftsRepository {
             throw new Error("Compose draft revision conflict");
           }
           // An unreadable record under the key is removed too.
-          return stored === undefined
-            ? { result: draft }
-            : { result: draft, delete: true as const };
+          return { result: draft, delete: true as const };
         },
       );
       if (previous) {
@@ -353,6 +351,7 @@ export class DraftsRepository {
         }
         return removed;
       },
+      { sensitive: true },
     );
   }
 

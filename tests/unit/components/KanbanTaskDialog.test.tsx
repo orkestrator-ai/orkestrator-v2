@@ -165,7 +165,7 @@ function launchBuild(
 ) {
   fireEvent.click(screen.getByRole("button", { name: "Build…" }));
   const environmentGroup = screen.getByRole("radiogroup", {
-    name: "Build environment",
+    name: "Where it runs",
   });
   fireEvent.click(
     within(environmentGroup).getByRole("radio", {
@@ -2038,7 +2038,7 @@ describe("KanbanTaskDialog", () => {
     openLauncher();
 
     // A project with a local path defaults to a worktree, not a container.
-    expect(isChecked(screen.getByRole("radiogroup", { name: "Build environment" }), /^Local/)).toBe(
+    expect(isChecked(screen.getByRole("radiogroup", { name: "Where it runs" }), /^Local/)).toBe(
       true,
     );
     expect(launcherPicker("Build").textContent).toContain("GPT-5.4-Mini");

@@ -166,7 +166,7 @@ export async function createFeatureBuild(
   context: FeatureBuildContext,
 ): Promise<CreateFeatureBuildResult> {
   if (!isCreateFeatureBuildInput(input)) {
-    throw new Error("Invalid feature build request");
+    throw new Error("Invalid pipeline environment request");
   }
   const { buildPipelines, storage } = context;
   if (!buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
@@ -338,7 +338,7 @@ async function resolveTaskOnce(
     );
     if (existing) {
       if (existing.featureBuildRequestHash !== fields.requestHash) {
-        throw new Error("Feature build requestId was already used with different arguments");
+        throw new Error("Pipeline environment requestId was already used with different arguments");
       }
       return existing;
     }

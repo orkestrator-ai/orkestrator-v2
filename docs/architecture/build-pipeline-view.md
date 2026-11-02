@@ -13,6 +13,26 @@ The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
 tab. The old PIPELINE stage list (`PipelineStageRail`) is gone.
 
+## Terms
+
+- **Build pipeline**: the durable workflow (build, review, fix, verify, PR,
+  conflict resolution) this tab shows.
+- **Pipeline environment**: an environment a build pipeline created and runs
+  in. A ticket's Build button, the Features view, `start_build_pipeline`, the
+  CLI's `build launch` and the New Environment dialog's "A feature" option all
+  make one. The sidebar marks it with the pipe icon (`PipeIcon.tsx`).
+- **Prompt environment**: an environment that runs one prompt, from the New
+  Environment dialog's "With a prompt" option or a coordinator's
+  `launch_environment`. Review and the PR are started by hand or by a
+  coordinator.
+
+The New Environment dialog keeps the "A feature" / "With a prompt" wording and
+says under it which of the two each choice creates. Internal names still say
+"feature build" (`BuildIntent = "feature" | "prompt"`, `createFeatureBuild`,
+the `create_feature_build` command, `featureBuildRequestHash`, the `feature-build.*` log
+events): they are persisted or part of the backend contract, so they were not
+renamed.
+
 ## Starting a build
 
 Every launcher sends only what the user explicitly chose, and the backend fills
@@ -37,7 +57,7 @@ link and naming prompt come from the mappers in
 plan, starts the pipeline and records the link, compensating on failure: a claim
 is released only while no pipeline is linked, and a new ticket deleted only
 while no pipeline record holds it. A plan claimed by a launch that stopped
-midway reuses that claim's ticket. Feature builds run on Codex unless the caller
+midway reuses that claim's ticket. A feature plan's build runs on Codex unless the caller
 names another agent, because the story prompt asks for Codex threads and the
 build reuses the plan's Codex planning environment.
 
@@ -247,7 +267,8 @@ renderer and stage mapping live in
 `packages/protocol/src/build-pipeline-stage-instructions.ts`
 (`@orkestrator/protocol/build-pipeline-stage-instructions`); `isBuildStepConfig`
 rejects a longer text, so every launch input that carries steps (the launcher,
-feature builds, the coordinator, the public `build.launch` action) is bounded by
+the New Environment dialog's feature option, the coordinator, the public
+`build.launch` action) is bounded by
 the same check.
 
 - **Prompt.** A stage with instructions gets one framed section after its own
@@ -274,8 +295,8 @@ the same check.
   dropped. Every stage prompt is rebuilt from the record, so a restart, a
   rewind, a retried stage, a fresh review panel and a backend restart all read
   the same text. Resume, reminders and repairs continue a session that already
-  has the opening prompt and do not repeat it. A feature build that pins
-  Address but not Verify copies Address's model to Verify, not its
+  has the opening prompt and do not repeat it. A pipeline environment from the
+  New Environment dialog's feature option that pins Address but not Verify copies Address's model to Verify, not its
   instructions.
 - **Launcher.** Each step card in `BuildLaunchDialog.tsx` has a collapsed
   "*Step* instructions" field (`BuildStepInstructionsField.tsx`) with a byte

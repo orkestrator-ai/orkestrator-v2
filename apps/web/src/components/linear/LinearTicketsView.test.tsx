@@ -724,7 +724,7 @@ describe("LinearTicketsView", () => {
     fireEvent.click(screen.getByRole("button", { name: /^build/i }));
 
     expect(await screen.findByRole("heading", { name: "Configure build" })).toBeTruthy();
-    expect(screen.getByRole("radiogroup", { name: "Build environment" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Where it runs" })).toBeTruthy();
     expect(
       within(screen.getByRole("list", { name: "Build steps" })).getAllByRole("listitem"),
     ).toHaveLength(8);

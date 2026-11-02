@@ -767,7 +767,7 @@ describe("useBuildPipeline", () => {
 
   test("a refused launch never falls back to the raw start", async () => {
     startBuildPipelineMock.mockImplementationOnce(async () => {
-      throw new Error("The selected build environment does not belong to this project");
+      throw new Error("The selected pipeline environment does not belong to this project");
     });
     const { result } = renderHook(() => useBuildPipeline());
 

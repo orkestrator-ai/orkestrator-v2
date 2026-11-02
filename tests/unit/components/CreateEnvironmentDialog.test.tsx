@@ -4290,7 +4290,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
         new File(["notes"], "notes.txt", { type: "text/plain" }),
       ]),
     });
-    expect(toastErrorMock).toHaveBeenCalledWith("Only images can be attached to a feature build");
+    expect(toastErrorMock).toHaveBeenCalledWith("Only images can be attached to a feature");
     expect(mockReadImage).not.toHaveBeenCalled();
   });
 
@@ -4705,7 +4705,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(screen.getByLabelText("Review 1 agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Review 2 agent, model and reasoning")).toBeTruthy();
     const modelCustomization = screen.getByRole("group", {
-      name: "Feature build model customization",
+      name: "Pipeline model customization",
     });
     expect(
       within(modelCustomization)

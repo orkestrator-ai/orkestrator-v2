@@ -3,7 +3,11 @@ import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
-import { defaultFeatureBuildModels, type FeatureBuildModelState } from "@/lib/feature-build-launch";
+import {
+  defaultFeatureBuildModels,
+  type BuildIntent,
+  type FeatureBuildModelState,
+} from "@/lib/feature-build-launch";
 import { FeatureBuildFields } from "./FeatureBuildFields";
 
 afterEach(cleanup);
@@ -35,10 +39,12 @@ const catalog: AgentModelCatalog = {
  * the only way to see a later edit overwrite an earlier one.
  */
 function Harness({
+  intent = "feature",
   onModels,
   deliveryPolicy,
   onDeliveryPolicyChange,
 }: {
+  intent?: BuildIntent;
   onModels: (models: FeatureBuildModelState) => void;
   deliveryPolicy?: DeliveryPolicy;
   onDeliveryPolicyChange?: (policy: DeliveryPolicy) => void;
@@ -56,7 +62,7 @@ function Harness({
   );
   return (
     <FeatureBuildFields
-      intent="feature"
+      intent={intent}
       onIntentChange={() => undefined}
       name=""
       onNameChange={() => undefined}
@@ -86,6 +92,24 @@ function openBuildPicker() {
   const picker = screen.getByRole("combobox", { name: "Build agent, model and reasoning" });
   return act(async () => fireEvent.pointerDown(picker));
 }
+
+describe("FeatureBuildFields intent guidance", () => {
+  test("keeps the feature wording and says a feature makes a pipeline environment", () => {
+    render(<Harness onModels={() => undefined} />);
+    expect(screen.getByRole("button", { name: "A feature" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "With a prompt" })).toBeTruthy();
+    expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
+      "Creates a pipeline environment: build, review, fix, verify, PR and conflict resolution run automatically.",
+    );
+  });
+
+  test("says a prompt makes a prompt environment whose review and PR are started separately", () => {
+    render(<Harness intent="prompt" onModels={() => undefined} />);
+    expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
+      "Creates a prompt environment: the agent runs one prompt; start review and the PR by hand or from a coordinator.",
+    );
+  });
+});
 
 describe("FeatureBuildFields When verified", () => {
   test("offers the same choices as the launch dialog and reports a change", () => {

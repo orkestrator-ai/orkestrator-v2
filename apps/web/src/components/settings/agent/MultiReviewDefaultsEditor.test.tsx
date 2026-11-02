@@ -161,13 +161,13 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
     expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoFix).toBe(true);
   });
 
-  test("says feature and ticket builds use the same reviewer count", () => {
+  test("says build pipelines use the same reviewer count", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness canInherit={false} onChange={onChange} />);
 
     expect(
       screen.getByText(
-        "Choose how many independent reviewers a Multi Review click, feature build, or ticket build starts, the model each one uses and its focus. Reviewer 1 and Reviewer 2 are shared with the Defaults page.",
+        "Choose how many independent reviewers a Multi Review click or a build pipeline starts, the model each one uses and its focus. Reviewer 1 and Reviewer 2 are shared with the Defaults page.",
       ),
     ).toBeTruthy();
   });

@@ -548,7 +548,7 @@ export class BuildPipelineLifecycle {
         existingEnvironment.projectId !== input.projectId ||
         existingEnvironment.deletionRequestedAt
       ) {
-        throw new Error("The selected build environment does not belong to this project");
+        throw new Error("The selected pipeline environment does not belong to this project");
       }
     }
     const taskSnapshot = await this.snapshotWithCriteria(input);

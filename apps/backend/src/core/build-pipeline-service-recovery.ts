@@ -452,7 +452,7 @@ export class BuildPipelineRecovery {
 
   async detectPullRequest(pipeline: BuildPipeline): Promise<PullRequestDetection | null> {
     const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
-    if (!environment) throw new Error("Build environment no longer exists");
+    if (!environment) throw new Error("Pipeline environment no longer exists");
     const result =
       environment.environmentType === "local"
         ? await this.ctx.invoke<PullRequestDetection | null>("detect_pr_local", {

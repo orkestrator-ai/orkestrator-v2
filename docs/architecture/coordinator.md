@@ -985,6 +985,14 @@ approves a `request_root_changes` request (see
 can start only from a commit published to a remote branch; unpublished commits
 remain available to local workers.
 
+Workers come in two kinds. A **prompt environment** runs one prompt
+(`launch_environment`, or "With a prompt" in the New Environment dialog); its
+review and PR are started by hand or by the coordinator. A **pipeline
+environment** is one a build pipeline created and runs in
+(`start_build_pipeline`, a ticket's Build button, or "A feature" in the New
+Environment dialog); the pipeline runs build, review, fix, verify, PR and
+conflict resolution itself.
+
 A worker never raises a pull request; a **PR tab** does, after review. In a
 prompt environment the flow is build → review or Multi Review → fix → PR →
 resolve conflicts:
@@ -996,7 +1004,9 @@ resolve conflicts:
   its fix finished. Pass `nodeId` for a worker on a connected node; that node
   validates its project and worker and uses its own PR base branch and agent
   defaults. Retries reuse the same PR job on that node.
-- A build pipeline, feature builds included, has its own PR step;
+- A pipeline environment (one a build pipeline runs, whether started by
+  `start_build_pipeline`, a ticket's Build button or a feature from the New
+  Environment dialog) has its own PR step;
   `create_pr` refuses its own worker while the pipeline can still raise the PR.
   Forks and workers left by a removed, failed, cancelled or completed pipeline
   can use `create_pr`.

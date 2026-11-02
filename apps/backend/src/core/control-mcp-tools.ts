@@ -1415,7 +1415,7 @@ export async function createControlMcp(
     {
       title: "Launch an agent environment",
       description:
-        "Create, configure, and start an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. " +
+        "Create, configure, and start a prompt environment: an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. " +
         `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort; advisory selections are pending startup. ` +
         (coordinatorScope
           ? `Coordinator launches require baseBranch and baseCommit from get_launch_options. ${COORDINATOR_WORKER_PROMPT_NOTE} `

@@ -172,6 +172,10 @@ oxlint 1.88 landed in #964. The 2026-10-25 pass moved Electron to 45, cleared
 the React Compiler lint backlog, removed `tsx` and cleared the new in-range
 advisories. Everything left waits on an upstream release or a date.
 
+### Task 7: review qualification status (2026-11-02)
+
+The Node 24.22.2 pin and required amd64 qualification are complete. Round 2 passed fresh image smoke and the Docker suite (20 passed, 4 live-provider skips). Explicit subnets for the disposable profile avoided exhausted default pools without changing shared networks or daemon/firewall settings. The repaired specs reuse the existing startup helper; the coordinator scenario explicitly selects Codex and checks that selection against both backend state and the displayed label. Node 26 remains deferred; native arm64 qualification is not claimed. See 1202 task 14 for the qualification command, setup constraints and cleanup outcome.
+
 ## Current state
 
 - **Landed.** Bun 1.4.4, Electron 45.0.0, electron-builder 26.18.0,
@@ -437,7 +441,3 @@ None. The update-manifest key question is decided below.
 ## Replaces
 
 - `docs/development/dependency-upgrade-schedule-2026-10-13.md`
-
-### Task 7: review qualification status (2026-11-02)
-
-The Node 24.22.2 pin and required amd64 qualification are complete. Round 2 passed fresh image smoke and the Docker suite (20 passed, 4 live-provider skips). Explicit subnets for the disposable profile avoided exhausted default pools without changing shared networks or daemon/firewall settings. The repaired specs reuse the existing startup helper and compare the coordinator label with current backend state. Node 26 remains deferred; native arm64 qualification is not claimed. See 1202 task 14 for the failed attempts, successful command and cleanup evidence.

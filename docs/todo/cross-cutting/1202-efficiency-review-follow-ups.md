@@ -534,97 +534,44 @@ The passing tests include container boot and restart with imported logins, rebui
 
 Rechecked after rebasing onto current `main` at `643ce87c4` on 2026-11-02: all four findings still applied before this change. Fresh linux/amd64 builds measured **6,411,820,583 → 5,452,072,222 bytes** (−959,748,361 bytes, −15%). `docker history --no-trunc` and container `du -sxh` reproduce the cache and mise savings above. Both builds and the final-image smoke passed; four focused unit test files passed. The Node drift check now enforces ≥24.22.1.
 
-The fresh `test:agent:docker` attempt could not qualify the image: disposable profile `dk1202-02340-final` failed startup with `ContainerLifecycleError:resource-exhausted` because Docker had no free address range for another environment network. The suite then reported 2 passed, 4 skipped and 18 failed against the unavailable profile (failure log `/tmp/orkestrator-test-run.2BLmVy/agent-docker-1202.log.gz`). These are infrastructure failures, not evidence of working UI paths. No shared networks, firewall settings or Docker configuration were changed. The profile was stopped and reset (0 containers, 2 volumes, 0 networks removed); no launcher remains. **A green `test:agent:docker` run remains required on a host with network capacity.** Full validation is deferred to pipeline preparation as requested. arm64 image smoke was not run on this amd64 host.
+The final amd64 qualification rebuilt the reviewed Dockerfile using
+`mise run docker:build:dev --profile dk1202-round2`. The resulting image was
+5,452,373,507 bytes with Node `v24.22.2`; `bash
+docker/tests/final-image-smoke.sh orkestrator-v2:dev-243dd588f5d7` passed,
+including health checks for all five bridges and offline Bun registration
+as `node` with a project pin of 1.4.4.
 
+Docker's default address pools were exhausted. Qualification used explicit
+`/29` subnets from otherwise unrouted `172.16.240.0/22` for the disposable
+profile's own networks, retrying only Docker overlap refusals. No foreign
+resources, daemon settings or firewall rules were changed. Reproduction needs
+available Docker address space or equivalent explicit subnet allocation;
+no untracked helper is required as durable evidence.
 
-Review repair on 2026-11-02, after `a88ed87f5`: rebuilt the reviewed
-Dockerfile with `mise run test:logged -- --name fix-docker-build -- mise run
-docker:build:dev --profile dk1202-fix-02340` (passed). The fresh amd64 image
-`orkestrator-v2:dev-243dd588f5d7` passed final-image smoke (all five bridges
-start and answer health) and an offline `node`-user check of `mise trust`,
-`mise install` and `mise exec -- bun --version` with a project pin of 1.4.4;
-the installed symlink resolves to the base binary. This directly exercises
-the split SDK/bundle runtime paths and Bun registration.
-
-A fresh credential-free disposable profile with `--fixture-environments
-local,container --agent-platforms codex,grok,opencode --headless-electron`
-again failed before readiness with `ContainerLifecycleError:resource-exhausted:
-Docker has no free address range for another environment network`.
-`ORKESTRATOR_AGENT_TEST_PROFILE=dk1202-fix-02340 mise run test:logged --
---name fix-agent-docker -- mise run test:agent:docker` then reported
-2 passed, 4 skipped and 18 failed (12.1 seconds; failure artifact
-`/tmp/orkestrator-test-run.K1Paf0/fix-agent-docker.log.gz`). This is still
-an unmet acceptance criterion, not an excused pass or a diagnosis of the
-three earlier failures. No shared networks or firewall settings were changed.
-`dev:stop` confirmed the launcher was stopped; `dev:reset` removed only the
-profile's two volumes and disposable state (no containers or networks).
-
-The arm64 attempt (`mise run test:logged -- --name fix-arm64-build -- docker
-build --platform linux/arm64 -t orkestrator-v2:fix-02340-arm64 -f
-docker/Dockerfile .`) failed after 273.2 seconds at the existing
-`verify-playwright.cjs` build check (Dockerfile line 336). Chromium reported
-GPU process launch failures (`error_code=1002`), then QEMU reported target
-signal 5. Evidence: `/tmp/orkestrator-test-run.raVo6x/fix-arm64-build.log.gz`.
-No arm64 final image was produced and no arm64 final-image smoke ran. This
-is an open qualification failure, not a waived check; a native arm64 runner
-is needed to establish whether it reproduces without emulation. The browser
-check was preserved. The original preparation package and logs were not changed;
-its passing format, lint, typecheck and default-suite checks were not rerun.
-
-
-Round-2 acceptance repair (2026-11-02, on `89afecd55` plus the test fixes):
-`mise run test:logged -- --name round2-image-build -- mise run docker:build:dev
---profile dk1202-round2` passed (17.8 s). The fresh amd64 image was
-5,452,373,507 bytes with Node `v24.22.2`.
-`mise run test:logged -- --name round2-image-smoke -- bash
-docker/tests/final-image-smoke.sh orkestrator-v2:dev-243dd588f5d7` passed
-(7.9 s). The before/after layer evidence above is preserved.
-
-Docker's default pools were still occupied by other profiles' reachability
-probe networks. Rather than remove foreign networks or change daemon settings,
-a temporary PATH wrapper supplied explicit `/29` subnets for this run's own
-`docker network create` calls. It searched 128 candidates in
-`172.16.240.0/22`, starting at a hash of the network name, and retried only
-Docker's overlap refusal. The host route table had no route in that range.
-All labels, isolation options and remaining Docker calls were unchanged;
-Docker itself admitted each subnet. This is a test setup workaround, not a
-change to production allocation or host firewall policy. The wrapper remains
-in the ignored `output/agent-testing/dk1202-round2/bin/docker` for repeat runs
-on this worktree. Both the profile launcher and test command used that PATH.
-
-The ready profile used `--fixture-environments local,container
+The profile used `--fixture-environments local,container
 --no-agent-credentials --agent-platforms codex,grok,opencode
---headless-electron`. The first suite attempt hit the 300-second silence
-watchdog during the approval UI check (failure artifact
-`/tmp/orkestrator-test-run.dxNXpw/round2-agent-docker.log.gz`); it was not
-accepted as a pass. The two affected browser specs now reuse the existing
-`loadAppWithDevRetry` helper, which acknowledges the real host-connectivity
-warning and retries only the known dev-entry dynamic-import failure. The
-coordinator test now checks the agent label against a fresh backend snapshot
-on each return, while asserting the original conversation still exists.
-A first focused run passed approval and annotation checks but exposed that
-agent selection could change later in the coordinator scenario (5 passed,
-1 skipped, 1 failed; `/tmp/orkestrator-test-run.30tnJJ/round2-focused-docker.log.gz`).
-Refreshing the snapshot on every return repaired that assumption.
+--headless-electron`. Against that ready profile, the final qualifying command
+was `ORKESTRATOR_AGENT_TEST_PROFILE=dk1202-round2 mise run test:logged --
+--name round2-agent-docker-fixed -- mise run test:agent:docker`.
+**Result: 20 passed, 4 skipped, 0 failed, 0 flaky (510.5 s).** The skips
+are existing live-provider opt-ins; no billed turns or credentials were used.
+The suite covers inactive environments, hidden documents, reloads and second
+windows. The approval and annotation specs reuse `loadAppWithDevRetry` for
+the known dev import failure and host-connectivity warning. The coordinator
+check preserves the main conversation and compares its displayed agent with
+persisted state. Focused E2E types, lint, format and `git diff --check` passed.
+The disposable profile was stopped/reset and its image tag removed.
 
-The final command was:
+Earlier attempts did not qualify the image: address exhaustion prevented
+fixture readiness, and a later UI attempt exposed stale startup and coordinator
+assertions. The successful run above supersedes those attempts. Original
+preparation artifacts were preserved.
 
-```bash
-PATH="$PWD/output/agent-testing/dk1202-round2/bin:$PATH" \
-ORKESTRATOR_AGENT_TEST_PROFILE=dk1202-round2 \
-mise run test:logged -- --name round2-agent-docker-fixed -- mise run test:agent:docker
-```
-
-**Passed: 20 passed, 4 skipped, 0 failed, 0 flaky (510.5 s).** The four
-skips are the existing live-provider opt-ins; no provider credentials or
-billed turns were used. The suite includes inactive-environment, hidden-document,
-reload and second-window checks. The host firewall remained unchanged; checks
-that do not require agent callbacks acknowledge its warning through the UI.
-Focused E2E typechecking, lint, formatting and `git diff --check` also passed.
-The disposable profile was stopped and reset, and only this round's image tag
-was removed. No launcher remains. This satisfies the outstanding amd64 Docker
-acceptance requirement; the earlier failed runs above remain historical evidence.
-Native arm64 qualification and DK-10 remain outside this completed subset.
+Native arm64 qualification remains open: an emulated build failed at the
+existing Chromium verifier after 273.2 seconds (GPU launch error 1002,
+QEMU target signal 5). No arm64 final image or smoke result exists; a native
+runner is needed. The Chromium check was preserved. DK-10 remains outside
+this completed subset.
 
 DK-10 is still open. The SDK's `claude-agent-sdk-linux-x64/claude` (0.3.314) and the CLI's `claude-code/bin/claude.exe` (2.1.314) are the same file today: SHA-256 `4487042b…5f84594`, 298 MB each. [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, so they can diverge.
 
@@ -764,6 +711,17 @@ existing browser startup helper and assert the backend's current coordinator
 selection (recommended): this preserves the tested behavior and diagnoses real
 startup errors. Skipping those cases or loosening their behavior assertions
 would be less work but would leave acceptance coverage incomplete.
+
+### Task 14: review coverage and durable evidence (2026-11-02)
+
+Keep measurements, the final command, setup constraints and outcomes in this
+record (recommended): this remains readable after temporary artifacts expire.
+Keeping every failed attempt and local log path gives more chronology but no
+portable evidence. The coordinator scenario now explicitly selects Codex and
+asserts it persists; deriving the expectation from each snapshot tested display
+consistency but could miss an unexpected selection. Final-image smoke now
+checks linked Bun and bunx offline as `node`, with both the image home and an
+empty mounted home, using default mise discovery instead of a forced data path.
 
 ### Task 2: unreadable rows
 

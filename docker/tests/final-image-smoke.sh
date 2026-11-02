@@ -94,6 +94,42 @@ done
 [ "$session_drained" = 1 ] || fail "log writer stopped after exec session closed"
 echo "ok   bounded log writer (node, detached exec session)"
 
+# Exercise the system-linked runtime offline, both with the image home and
+# with an empty home mount (the layout used by persisted provider homes).
+# Leave MISE_DATA_DIR unset so this tests mise's default system discovery.
+for home_mode in image mounted; do
+    home_args=()
+    if [ "$home_mode" = mounted ]; then
+        home_args=(--tmpfs /home/node:uid=1000,gid=1000,mode=700)
+    fi
+    docker run --rm -i --network none --user node "${home_args[@]}" \
+        --entrypoint bash "$IMAGE" -s -- "$(field '.runtimes.bun')" <<'BUN_CHECK' \
+        || fail "offline linked Bun checks failed ($home_mode home)"
+set -euo pipefail
+unset MISE_DATA_DIR
+expected="$1"
+project=$(mktemp -d)
+trap 'rm -rf "$project"' EXIT
+cd "$project"
+printf '[tools]\nbun = "%s"\n' "$expected" >mise.toml
+mise trust
+mise install
+runtime=$(mise where bun)
+test "$(readlink -f "$runtime/bin/bun")" = /usr/local/bin/bun
+test "$(readlink -f "$runtime/bin/bunx")" = /usr/local/bin/bun
+test "$(mise exec -- bun --version)" = "$expected"
+test "$(mise exec -- bunx --version)" = "$expected"
+test "$(/opt/bun/bin/bunx --version)" = "$expected"
+# A local executable proves bunx dispatch, not just Bun's version flag.
+mkdir -p node_modules/.bin
+printf '#!/bin/sh\nprintf linked-bunx-ok\n' >node_modules/.bin/linked-bunx-probe
+chmod +x node_modules/.bin/linked-bunx-probe
+test "$(/opt/bun/bin/bunx --no-install linked-bunx-probe)" = linked-bunx-ok
+test "$(mise exec -- bunx --no-install linked-bunx-probe)" = linked-bunx-ok
+BUN_CHECK
+    echo "ok   offline linked bun/bunx (node, $home_mode home)"
+done
+
 # Versions: the manifest must name what is installed.
 for entry in claude codex opencode grok pi playwright; do
     expected="$(field ".agents.\"$entry\"")"

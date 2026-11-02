@@ -471,6 +471,11 @@ test("Docker fixture coordinator view follows delegations and context across swi
   expect(snapshot.workspace.lifecycleState).toBe("ready");
   const main = snapshot.workspace.conversations.find((item) => item.role === "main");
   if (!main) throw new Error("The coordinator has no main conversation");
+  await invoke<CoordinatorSnapshot>("assign_coordinator_conversation_agent", {
+    projectId: container.projectId,
+    conversationId: main.id,
+    agent: "codex",
+  });
   // An interrupted earlier run may have left delegations open on this
   // conversation; each closes with its environment, as these do.
   const openOn = (environmentId: string) =>
@@ -511,13 +516,10 @@ test("Docker fixture coordinator view follows delegations and context across swi
     });
     const selected = current.workspace.conversations.find((item) => item.id === main.id);
     expect(selected, "The original main conversation is retained").toBeDefined();
-    // The backend can select a preferred agent without starting a provider.
-    // Assert the persisted selection rather than assuming an unassigned tab.
+    expect(selected?.agent, "The explicit coordinator selection survives returning").toBe("codex");
     await expect(
       panel.getByRole("button", {
-        name: selected?.agent
-          ? `Coordinator, ${AGENT_PLATFORM_LABELS[selected.agent]}`
-          : "Coordinator, no agent chosen yet",
+        name: `Coordinator, ${AGENT_PLATFORM_LABELS.codex}`,
         exact: true,
       }),
     ).toBeVisible({ timeout: 15_000 });

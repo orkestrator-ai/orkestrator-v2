@@ -33,6 +33,7 @@ import { nextPartOrdinal } from "@orkestrator/protocol/transcript-part-ids";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {
   appendBounded,
+  appendTurnOutput,
   boundText,
   boundTranscriptDuringStreaming,
   chargeTranscript,
@@ -293,7 +294,7 @@ function applyTextDelta(
     message.content = appendBounded(message, message.content, text);
     chargeAppended(state, before, message.content);
     if (state.currentTurnOutput !== null) {
-      state.currentTurnOutput = appendBounded(message, state.currentTurnOutput, text);
+      state.currentTurnOutput = appendTurnOutput(message, state.currentTurnOutput, text);
     }
   }
   rowChanged(state, message);
@@ -1038,7 +1039,7 @@ export function completeStreamedProse(state: SessionState, row: BridgeMessage, t
   row.content = appendBounded(row, row.content, text);
   chargeAppended(state, before, row.content);
   if (state.currentTurnOutput !== null) {
-    state.currentTurnOutput = appendBounded(row, state.currentTurnOutput, text);
+    state.currentTurnOutput = appendTurnOutput(row, state.currentTurnOutput, text);
   }
   rowChanged(state, row);
 }

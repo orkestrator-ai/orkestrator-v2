@@ -47,6 +47,23 @@ const appender = new BoundedTextAppender({
   saturated: saturatedText,
 });
 
+// Structured output spans rows while message.content is row-local. Keep its
+// length memo separate, but share the row's saturation flag to preserve the
+// existing truncation order and behavior.
+const turnOutputAppender = new BoundedTextAppender({
+  notice: TRUNCATION_NOTICE,
+  policy: "append-notice",
+  saturated: saturatedText,
+});
+
+export function appendTurnOutput(
+  carrier: BridgeMessage,
+  current: string,
+  addition: string,
+): string {
+  return turnOutputAppender.append(current, addition, MAX_MESSAGE_TEXT_BYTES, carrier).value;
+}
+
 /**
  * Append to a byte-capped buffer, returning the value to store.
  *

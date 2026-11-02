@@ -21,3 +21,12 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name retry-resume-dialog-isolated -- bun test --cwd apps/web ./src/components/chat/NativeResumeSessionDialog.test.tsx --parallel=1 --only-failures` passed in 6.3 s.
 - **Evidence:** `/tmp/orkestrator-test-run.IH1qlx/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** recurrence of the existing deadline symptom. No resume-dialog source, assertion, timeout or skip changed; the cause remains unconfirmed.
+
+## Delivery-policy main merge — 2026-11-02
+
+- **Original command:** `mise run test:logged -- --name merge-default-tests -- mise run test`, Bun 1.4.4, two web workers within a six-slot workspace group, alongside the root and bridge groups and a two-worker pipeline component-browser run.
+- **Failure:** the archived-history restoration case exceeded its 5,000 ms deadline at 5,270.49 ms.
+- **Counts:** web 11,367 passed, ten skipped and five failed across 755 files in 422.16 s. The other four web failures were terminal link-routing assertions, which also failed in their isolated owning-file rerun. Root tests had 3,434 passed, one skipped and four failed. The aggregate failed after 426.2 s.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-resume-dialog-rerun -- bun test --cwd apps/web ./src/components/chat/NativeResumeSessionDialog.test.tsx --parallel=1 --only-failures` passed in 4.0 s.
+- **Evidence:** `/tmp/orkestrator-test-run.YwLvvl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; aggregate wrapper evidence is under `/tmp/orkestrator-test-run.XCqUci/`.
+- **Assessment:** recurrence under aggregate load; the cause remains unconfirmed. No resume-dialog source, assertion, timeout or skip changed.

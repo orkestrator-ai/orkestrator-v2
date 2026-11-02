@@ -1415,6 +1415,10 @@ What an omitted choice resolves to:
 
 Every one of these can be overridden. A coordinator is told to override only
 when the user has asked for a specific model, agent, effort or reviewer set.
+A build's delivery is not among them: `start_build_pipeline` has no override, and
+the build follows the ticket's delivery policy when Verify passes
+([tickets](tickets.md#delivery)). A build that ends without a pull request says
+so in `get_build_pipeline` (`delivery`) and its completion notice.
 Overrides layer the way the launchers do. For `start_build_pipeline`:
 
 - A named step replaces only that step, and a step that names only an agent runs

@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 /**
  * Public build pipeline operations: init and shutdown, admission, and every
  * user control (pause, resume, messages, retries, restarts, cancel, remove).
@@ -6,7 +7,6 @@
  */
 import { DEFAULT_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline-stages.js";
 import { randomUUID } from "node:crypto";
-import { createLogger } from "@orkestrator/protocol/logger";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
   BUILD_CANCELLED_ERROR,
@@ -18,7 +18,9 @@ import {
   isActiveBuildPhase,
   isStartBuildPipelineInput,
   isReviewPackagePreparationSession,
+  BRANCH_PUSH_SESSION_LABEL,
   isSupersededPipelineSession,
+  pipelineReachedPullRequestStage,
   reviewValidationStage,
   REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
@@ -34,6 +36,7 @@ import {
   normalizeTicketContent,
   sectionsFromTicketText,
   TICKET_SECTION_LIMITS,
+  type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
 import { backfillBuildPipelineReviewReports } from "./storage-record-upgrades.js";
 import type { KanbanTask } from "./storage-shared-core.js";
@@ -89,6 +92,12 @@ import {
   readWorktreeStatus,
 } from "./build-pipeline-code-rewind.js";
 import { probeReviewWorktree } from "./review-worktree-probe.js";
+import {
+  applyBuildPipelineRestartSelection,
+  pipelineRestartSlot,
+  type BuildPipelineRestartSelection,
+  type BuildPipelineRestartSlot,
+} from "@orkestrator/protocol/build-pipeline-restart-selection";
 
 /** Stage IDs of this form ask to prepare the review package again from the named session. */
 const PACKAGE_STAGE_PREFIX = "review-package:";
@@ -254,7 +263,9 @@ export class BuildPipelineLifecycle {
         if (this.ctx.stopped) return;
         await this.ctx.storage.sweepBuildPipelineTranscripts();
       } catch (error) {
-        console.warn("[build-pipeline] Transcript maintenance failed:", errorMessage(error));
+        createLogger("build.pipeline").warn("transcript-maintenance.failed", {
+          error: formatLogError(error),
+        });
       }
     })();
   }
@@ -502,6 +513,28 @@ export class BuildPipelineLifecycle {
     };
   }
 
+  /**
+   * The policy to capture at launch, so a ticket deleted before Verify passes
+   * still has one to follow. A Kanban ticket's own policy wins.
+   */
+  private async launchDeliveryPolicy(
+    input: StartBuildPipelineInput,
+  ): Promise<DeliveryPolicy | undefined> {
+    const ticketId =
+      input.source?.type === "kanban"
+        ? input.source.taskId
+        : input.source
+          ? undefined
+          : input.taskId;
+    if (!ticketId) return input.deliveryPolicy;
+    const tasks = await this.ctx.invoke<KanbanTask[]>("get_kanban_tasks", {
+      projectId: input.projectId,
+    });
+    if (!Array.isArray(tasks)) throw new Error("Could not capture the ticket delivery policy");
+    const ticket = tasks.find((task) => task.id === ticketId);
+    return ticket?.sections?.delivery?.policy ?? input.deliveryPolicy;
+  }
+
   async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
@@ -519,6 +552,7 @@ export class BuildPipelineLifecycle {
       }
     }
     const taskSnapshot = await this.snapshotWithCriteria(input);
+    const deliveryPolicy = await this.launchDeliveryPolicy(input);
     const steps = normalizeSteps(input.steps);
     const reviewers = normalizeReviewers(input.reviewers);
     const reviewPreparation = normalizeReviewPreparation(input.reviewPreparation);
@@ -547,6 +581,7 @@ export class BuildPipelineLifecycle {
       taskTitle: input.taskTitle,
       taskSnapshot,
       source: input.source,
+      ...(deliveryPolicy ? { deliveryPolicy } : {}),
       featurePlanId: input.featurePlanId?.trim() || undefined,
       admissionKey: buildAdmissionKey(input),
       backendRevision: 0,
@@ -755,6 +790,7 @@ export class BuildPipelineLifecycle {
       const session = sessionForCurrentPhase(candidate);
       const resumePrompt = resumePromptFor(phase, {
         addressResult: session?.addressReportKind !== undefined,
+        deliveryPolicy: candidate.delivery?.policy,
       });
       const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;
       if (prompt && session?.status === "idle" && session.phase === sessionPhaseFor(phase)) {
@@ -962,6 +998,7 @@ export class BuildPipelineLifecycle {
         return;
       }
       candidate.reviewRetryRequested = true;
+      delete candidate.delivery;
       pruneKeyInformationAfterRewind(candidate, candidate.iteration, false, false);
       discardSessionReviewReports(candidate);
       delete candidate.reviewPackage;
@@ -999,8 +1036,23 @@ export class BuildPipelineLifecycle {
    * reset. Works from a failed or completed pipeline too. The request is
    * persisted before the supervisor opens a new session, so an unmounted
    * renderer or backend restart cannot lose the run.
+   *
+   * With a `selection` ("Restart in…") the step's configured harness, model,
+   * effort and speed are replaced first, so the new session and every later
+   * run of that step use them. Only an agent session's step can take one.
    */
-  async restartStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
+  async restartStep(
+    pipelineId: string,
+    stageId: string,
+    selection?: BuildPipelineRestartSelection,
+  ): Promise<BuildPipeline> {
+    if (selection) {
+      return this.restartLocatedStage(
+        pipelineId,
+        (candidate) => locateSessionStep(candidate, stageId),
+        { selection },
+      );
+    }
     return this.restartLocatedStage(pipelineId, (candidate) => {
       if (candidate.validationRun && stageId === `validation:${candidate.validationRun.id}`) {
         return { kind: "validation" };
@@ -1049,7 +1101,7 @@ export class BuildPipelineLifecycle {
     const block = (reason: string | undefined) => {
       if (reason) blockers.push(reason);
     };
-    const shipped = pipeline.sessions.some((candidate) => candidate.phase === "pr");
+    const shipped = pipelineReachedPullRequestStage(pipeline);
     const environment = pipeline.environmentId
       ? await this.ctx.storage.getEnvironment(pipeline.environmentId)
       : null;
@@ -1196,6 +1248,8 @@ export class BuildPipelineLifecycle {
         session: PipelineSession,
         rewindId: string,
       ) => Promise<PipelineCodeRewind | Error>;
+      /** "Restart in…": the step runs from now on under this selection. */
+      selection?: BuildPipelineRestartSelection;
     } = {},
   ): Promise<BuildPipeline> {
     let rejection: Error | undefined;
@@ -1214,8 +1268,11 @@ export class BuildPipelineLifecycle {
       if (named && isSupersededPipelineSession(named)) {
         // The same request again (a double click, a retried command) names the
         // step the newest rewind just superseded: that restart is already done.
+        // A selection is new intent; no saved rewind records it, so require a
+        // fresh session instead of claiming it was applied.
         const latest = candidate.rewinds?.at(-1);
         if (
+          options.selection ||
           latest?.id !== named.supersededBy ||
           latest?.sessionKey !== named.sessionKey ||
           (options.resetCode &&
@@ -1235,6 +1292,14 @@ export class BuildPipelineLifecycle {
           "This build's pull request has been merged. Start a new build for further changes.",
         );
         return;
+      }
+      let selectionSlot: BuildPipelineRestartSlot | null = null;
+      if (options.selection) {
+        selectionSlot = named ? pipelineRestartSlot(candidate, named) : null;
+        if (!selectionSlot) {
+          rejection = new Error("This step cannot be restarted with a different agent or model.");
+          return;
+        }
       }
       const rewindId = randomUUID();
       let code: PipelineCodeRewind | undefined;
@@ -1260,6 +1325,11 @@ export class BuildPipelineLifecycle {
       const iteration = named ? named.iteration : candidate.iteration;
       const rewindsRound = iteration < candidate.iteration;
       const previousFeedback = candidate.verificationFeedback;
+      // Every refusal is behind us, so the new selection cannot outlive a
+      // restart that did not happen.
+      if (selectionSlot && options.selection) {
+        applyBuildPipelineRestartSelection(candidate, selectionSlot, options.selection);
+      }
 
       // A late tool submission from the discarded generation must be denied;
       // otherwise it could become authoritative after the replacement starts.
@@ -1401,6 +1471,8 @@ export class BuildPipelineLifecycle {
         delete candidate.structuredReviewRequestId;
       }
       if (selectedOrder <= 4) {
+        // Verify runs again, so the next pass reads the ticket again.
+        delete candidate.delivery;
         delete candidate.verificationResult;
         if (!(restart.kind === "session" && restart.phase === "fix")) {
           delete candidate.verificationFeedback;
@@ -1575,7 +1647,9 @@ export class BuildPipelineLifecycle {
           stagePhase === "resolve-conflicts"
             ? "Conflict resolution cannot be skipped"
             : stagePhase === "pr"
-              ? "The pull request step cannot be skipped"
+              ? named.label === BRANCH_PUSH_SESSION_LABEL
+                ? "The push step cannot be skipped"
+                : "The pull request step cannot be skipped"
               : "Review preparation cannot be skipped: the review needs the package it prepares",
         );
         return;
@@ -1647,7 +1721,7 @@ export class BuildPipelineLifecycle {
    * Ship session belongs to a reused environment, not to this pipeline.
    */
   private async pullRequestMerged(pipeline: BuildPipeline): Promise<boolean> {
-    if (!pipeline.environmentId || !pipeline.sessions.some((session) => session.phase === "pr")) {
+    if (!pipeline.environmentId || !pipelineReachedPullRequestStage(pipeline)) {
       return false;
     }
     const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);

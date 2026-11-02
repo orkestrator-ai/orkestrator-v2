@@ -539,6 +539,7 @@ async function withBridgeService(
   const invocations: string[] = [];
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push(command);
+    if (command === "get_kanban_tasks") return [] as T;
     if (
       command === "start_environment" ||
       command === "run_environment_setup" ||

@@ -43,6 +43,8 @@ import {
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import { TicketKindBadge, TicketSectionsGrid } from "@/components/tickets/TicketSectionsGrid";
 import { ticketContentOf } from "@/components/tickets/ticket-content";
+import { pipelineDeliveryTooLateNote } from "@orkestrator/protocol/build-pipeline";
+import { sectionsFromTicketText, type DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
@@ -189,6 +191,14 @@ export function KanbanTaskDialog({
 
   const { startBuild, navigateToBuild } = useBuildPipeline();
   const getPipelineByTaskId = useBuildPipelineStore((s) => s.getPipelineByTaskId);
+  // The run the Delivery tile answers for: the ticket's linked one, once linked.
+  const ticketPipeline = useBuildPipelineStore((s) =>
+    task
+      ? ((task.buildPipelineId ? s.pipelines.get(task.buildPipelineId) : undefined) ??
+        s.getPipelineByTaskId(task.id))
+      : undefined,
+  );
+  const [isSavingDelivery, setIsSavingDelivery] = useState(false);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
   const [buildDialogOpen, setBuildDialogOpen] = useState(false);
   const [createdTaskForBuild, setCreatedTaskForBuild] = useState<KanbanTask | null>(null);
@@ -587,6 +597,15 @@ export function KanbanTaskDialog({
     if (saved) setIsEditing(false);
   };
 
+  const handleDeliveryPolicyChange = async (policy: DeliveryPolicy) => {
+    if (!task) return;
+    setIsSavingDelivery(true);
+    await updateTaskContent(task.id, {
+      sections: { delivery: { ...content?.sections.delivery, policy } },
+    });
+    setIsSavingDelivery(false);
+  };
+
   const handleCancelEdit = () => {
     setIsEditing(false);
   };
@@ -675,6 +694,7 @@ export function KanbanTaskDialog({
           steps: selection.steps,
           reviewers: selection.reviewers,
           reviewPreparation: selection.reviewPreparation,
+          deliveryPolicy: selection.deliveryPolicy,
         },
       );
       if (!pipelineId) return;
@@ -755,6 +775,7 @@ export function KanbanTaskDialog({
           steps: selection.steps,
           reviewers: selection.reviewers,
           reviewPreparation: selection.reviewPreparation,
+          deliveryPolicy: selection.deliveryPolicy,
         },
       );
       if (!pipelineId) return;
@@ -996,6 +1017,7 @@ export function KanbanTaskDialog({
           busy={isBuildStarting}
           localEnvironmentAvailable={localEnvironmentAvailable}
           returnFocusRef={buildLaunchTriggerRef}
+          deliveryPolicy={sectionsFromTicketText(editDescription, editAC).delivery?.policy}
           {...launchDefaults}
           onConfirm={(selection) => void handleCreateAndBuild(selection)}
         />
@@ -1108,6 +1130,16 @@ export function KanbanTaskDialog({
               ) : (
                 <TicketSectionsGrid
                   sections={content?.sections ?? {}}
+                  deliveryControl={{
+                    onChange: handleDeliveryPolicyChange,
+                    disabled: isSavingDelivery,
+                    tooLateNote:
+                      ticketPipeline &&
+                      pipelineDeliveryTooLateNote(
+                        ticketPipeline,
+                        content?.sections.delivery?.policy,
+                      ),
+                  }}
                   empty={
                     <button
                       type="button"
@@ -1280,6 +1312,7 @@ export function KanbanTaskDialog({
         busy={isBuildStarting}
         localEnvironmentAvailable={localEnvironmentAvailable}
         returnFocusRef={buildLaunchTriggerRef}
+        deliveryPolicy={content?.sections.delivery?.policy}
         {...launchDefaults}
         onConfirm={handleBuildConfirmed}
       />

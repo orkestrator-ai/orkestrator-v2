@@ -286,6 +286,7 @@ describe("BuildLaunchDialog", () => {
     };
     expect(onConfirm).toHaveBeenCalledWith({
       environmentType: "containerized",
+      deliveryPolicy: "open-pr",
       steps: {
         build: shared,
         review: shared,
@@ -294,6 +295,56 @@ describe("BuildLaunchDialog", () => {
         pr: shared,
         "resolve-conflicts": shared,
       },
+    });
+  });
+
+  describe("When verified", () => {
+    const whenVerified = () =>
+      within(document.querySelector<HTMLElement>('[data-build-step="pr"]')!).getByRole("combobox", {
+        name: "When verified",
+      }) as HTMLSelectElement;
+    const offered = () => Array.from(whenVerified().options).map((option) => option.text);
+
+    test("defaults to opening a PR and offers the two normal choices", () => {
+      const { onConfirm } = renderDialog();
+      expect(whenVerified().value).toBe("open-pr");
+      expect(offered()).toEqual(["Open a PR, don't merge", "Push, no PR"]);
+      submit();
+      expect(onConfirm.mock.calls[0]![0].deliveryPolicy).toBe("open-pr");
+    });
+
+    test("opens on the ticket's policy and submits a change", () => {
+      const { onConfirm } = renderDialog({ deliveryPolicy: "push-no-pr" });
+      expect(whenVerified().value).toBe("push-no-pr");
+      fireEvent.change(whenVerified(), { target: { value: "open-pr" } });
+      submit();
+      expect(onConfirm.mock.calls[0]![0].deliveryPolicy).toBe("open-pr");
+    });
+
+    test("the card says what the selection does", () => {
+      renderDialog({ deliveryPolicy: "push-no-pr" });
+      const card = document.querySelector<HTMLElement>('[data-build-step="pr"]')!;
+      expect(card.textContent).toContain("No pull request is opened.");
+      fireEvent.change(whenVerified(), { target: { value: "open-pr" } });
+      expect(card.textContent).toContain("opens the pull request");
+    });
+
+    test("commit-only is offered only to a ticket that has it, and launching keeps it", () => {
+      const { onConfirm } = renderDialog({ deliveryPolicy: "commit-only" });
+      expect(whenVerified().value).toBe("commit-only");
+      expect(offered()).toEqual(["Open a PR, don't merge", "Push, no PR", "Commit, don't push"]);
+      // Choosing away and back still finds it.
+      fireEvent.change(whenVerified(), { target: { value: "push-no-pr" } });
+      expect(offered()).toContain("Commit, don't push");
+      fireEvent.change(whenVerified(), { target: { value: "commit-only" } });
+      submit();
+      expect(onConfirm.mock.calls[0]![0].deliveryPolicy).toBe("commit-only");
+    });
+
+    test("no text promises a Multi Review", () => {
+      renderDialog({ deliveryPolicy: "push-no-pr" });
+      const card = document.querySelector<HTMLElement>('[data-build-step="pr"]')!;
+      expect(card.textContent).not.toContain("Multi Review");
     });
   });
 

@@ -220,9 +220,11 @@ describe("container runtime environment wiring", () => {
       }
     ).hooks;
 
-    for (const [event, expected] of [
-      ["UserPromptSubmit", "working"],
-      ["Stop", "waiting"],
+    // StopFailure (an API error) writes `failed`; the legacy file says idle.
+    for (const [event, expected, legacy] of [
+      ["UserPromptSubmit", "working", "working"],
+      ["Stop", "waiting", "waiting"],
+      ["StopFailure", "failed", "idle"],
     ] as const) {
       const command = hooks[event]?.[0]?.hooks[0]?.command;
       expect(command).toContain(`/usr/local/bin/orkestrator-state-signal ${expected}`);
@@ -240,7 +242,8 @@ describe("container runtime environment wiring", () => {
         expect(() => statSync(stateFile)).toThrow();
 
         expect(runShell(script, { PATH: path }).exitCode).toBe(0);
-        expect(readFileSync(stateFile, "utf8").trim()).toBe(expected);
+        expect(readFileSync(stateFile, "utf8").trim()).toBe(legacy);
+        expect(readFileSync(`${stateFile}-snapshot`, "utf8").trim()).toBe(`${expected} 1 0`);
       });
     }
   });
@@ -2398,12 +2401,14 @@ eval "$opencode_setup"
     const commands = ["start_opencode_server", "start_claude_server", "start_codex_server"];
 
     for (const command of commands) {
-      const start = backend.indexOf(`register("${command}"`);
+      // Bridge starts register through `registerBridgeStart` (#1583).
+      const plain = backend.indexOf(`register("${command}"`);
+      const start = plain >= 0 ? plain : backend.indexOf(`registerBridgeStart("${command}"`);
       expect(start).toBeGreaterThan(0);
       // Bound the block at the next register(...) call, regardless of its
       // indentation, so these assertions can only be satisfied by THIS
       // command's block and never leak into a neighbouring one.
-      const nextRegister = backend.slice(start + 1).search(/\n\s*register\(/);
+      const nextRegister = backend.slice(start + 1).search(/\n\s*register(?:BridgeStart)?\(/);
       const registerBlock =
         nextRegister === -1 ? backend.slice(start) : backend.slice(start, start + 1 + nextRegister);
       // If the block references a shared start-command constant or delegates to

@@ -225,7 +225,16 @@ test("snapshot parsing rejects malformed, oversized and impossible counters", ()
     revision: 2,
     completions: 1,
   });
+  // v3: a StopFailure reads as idle and says it failed.
+  expect(parseClaudeStateSnapshot("failed 3 1")).toEqual({
+    state: "idle",
+    revision: 3,
+    completions: 1,
+    failed: true,
+  });
   for (const value of [
+    "failed",
+    "failed 1 2",
     "waiting 1 2",
     "working -1 0",
     "idle 1.5 0",

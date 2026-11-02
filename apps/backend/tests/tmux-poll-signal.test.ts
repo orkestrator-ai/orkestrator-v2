@@ -43,6 +43,8 @@ function createSignalHarness(
   let completions = 0;
   const completed: string[] = [];
   const completionRecords: string[] = [];
+  const completionReasons: string[] = [];
+  const activityOutcomes: Array<string | undefined> = [];
   const probes: string[] = [];
   environment.prRecheckAfterAgentCompletionArmedAt = new Date(0).toISOString();
   const reads: number[] = [];
@@ -63,7 +65,12 @@ function createSignalHarness(
   const context = {
     storage: {
       loadEnvironments: async () => [environment],
-      recordEnvironmentSessionCompletion: async (id: string) => {
+      recordEnvironmentSessionCompletion: async (
+        id: string,
+        _occurredAt: string,
+        reason = "agent_finished",
+      ) => {
+        completionReasons.push(reason);
         completionRecords.push(id);
         return environment;
       },
@@ -71,13 +78,19 @@ function createSignalHarness(
         _environmentId: string,
         state: "idle" | "working" | "waiting",
         occurredAt: string,
-      ) =>
-        options.rejectPersistence?.()
+        _source: string,
+        _token: string | undefined,
+        _stale: boolean,
+        activityOptions?: { completionOutcome?: string },
+      ) => {
+        activityOutcomes.push(activityOptions?.completionOutcome);
+        return options.rejectPersistence?.()
           ? undefined
           : {
               ...environment,
               agentActivitySources: { "claude-terminal": { state, updatedAt: occurredAt } },
-            },
+            };
+      },
     },
     emit: (event: string, payload: { state: unknown }) =>
       emitted.push({ event, state: payload.state }),
@@ -144,6 +157,8 @@ function createSignalHarness(
     time,
     completed,
     completionRecords,
+    completionReasons,
+    activityOutcomes,
     probes,
     manager,
     context,
@@ -187,6 +202,56 @@ describe("Claude state signal", () => {
     expect(harness.completed).toHaveLength(1);
     expect(harness.probes).toHaveLength(1);
     expect(harness.completionRecords).toHaveLength(1);
+    harness.manager.shutdown(CONTAINER);
+  });
+
+  for (const ring of [true, false]) {
+    test(`a failed snapshot ${ring ? "rings immediately" : "is recovered by the safety read and demotes"}`, async () => {
+      const harness = createSignalHarness();
+      await harness.start();
+      expect(harness.manager.status().states.confirmed).toBe(1);
+      harness.hook("working");
+      await flushMicrotasks();
+      // Allow one unchanged safety read so a lost failure ring cannot be
+      // attributed to the preceding working ring.
+      await harness.time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+      const before = harness.reads.length;
+      harness.hook("failed", ring);
+      await flushMicrotasks();
+      expect(harness.reads.length - before).toBe(ring ? 1 : 0);
+      if (!ring) await harness.time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+      expect(harness.emitted.map((entry) => entry.state)).toEqual(["waiting", "working", "idle"]);
+      expect(harness.activityOutcomes.at(-1)).toBe("failed");
+      // Storage owns attention on the observed working edge, so recovery
+      // must not publish a second completion.
+      expect(harness.completionRecords).toEqual([]);
+      expect(harness.currentInterval()).toBe(
+        ring ? CLAUDE_STATE_SAFETY_READ_INTERVAL_MS : CLAUDE_STATE_POLL_INTERVAL_MS,
+      );
+      expect(harness.issued[0]!.revoked).toBe(!ring);
+      expect(harness.manager.status().demotions["missed-change"] ?? 0).toBe(ring ? 0 : 1);
+      const events = harness.emitted.length;
+      await harness.time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+      expect(harness.emitted).toHaveLength(events);
+      harness.manager.shutdown(CONTAINER);
+    });
+  }
+
+  test("the safety read recovers missed success then failure with one failure record", async () => {
+    const harness = createSignalHarness();
+    await harness.start();
+    harness.hook("working", false);
+    harness.hook("waiting", false);
+    harness.hook("working", false);
+    harness.hook("failed", false);
+    await harness.time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    expect(harness.emitted.at(-1)?.state).toBe("idle");
+    expect(harness.completionReasons).toEqual(["agent_failed"]);
+    expect(harness.completionRecords).toEqual(["env-signal"]);
+    expect(harness.manager.status().demotions["missed-change"]).toBe(1);
+    expect(harness.issued[0]!.revoked).toBe(true);
+    await harness.time.advance(CLAUDE_STATE_POLL_INTERVAL_MS);
+    expect(harness.completionReasons).toEqual(["agent_failed"]);
     harness.manager.shutdown(CONTAINER);
   });
 

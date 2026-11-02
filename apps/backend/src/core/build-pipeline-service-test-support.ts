@@ -1,3 +1,5 @@
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import type { BuildPipelineServiceOptions } from "./build-pipeline-context.js";
 import { expect } from "bun:test";
 
 import { promises as fs } from "node:fs";
@@ -202,11 +204,13 @@ export async function withService(
           prUrl?: string;
           prState?: string;
           comments: Array<{ text: string }>;
+          sections?: { delivery?: { policy?: DeliveryPolicy } };
         }
       >;
     },
   ) => Promise<void>,
   options: {
+    realKanban?: boolean;
     toolMode?: boolean;
     workflowResultsWithoutTools?: boolean;
     completeEmptyValidation?: boolean;
@@ -216,6 +220,8 @@ export async function withService(
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
     /** Git in the environment worktree, for code-rewind tests. */
     environmentGit?: EnvironmentGit;
+    /** Origin's copy of the branch, for `push-no-pr` Ship tests. */
+    branchPushState?: BuildPipelineServiceOptions["branchPushState"];
     environmentFence?: EnvironmentMutationFence;
     assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
     /** D3 across engines: the shared workspace-holder projection. */
@@ -255,6 +261,7 @@ export async function withService(
       prUrl?: string;
       prState?: string;
       comments: Array<{ text: string }>;
+      sections?: { delivery?: { policy?: DeliveryPolicy } };
     }
   >();
   const controls = {
@@ -320,6 +327,9 @@ export async function withService(
             : "running",
       } as T;
     }
+    if (options.realKanban && command === "create_environment") {
+      return (await storage.getEnvironment("env-1")) as T;
+    }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -327,10 +337,18 @@ export async function withService(
       return (await storage.getEnvironment("env-1")) as T;
     }
     if (command === "get_kanban_tasks") {
-      return [...kanbanTasks.values()] as T;
+      return (
+        options.realKanban
+          ? await storage.kanban.getKanbanTasks(String(args.projectId))
+          : [...kanbanTasks.values()]
+      ) as T;
     }
     if (command === "update_kanban_task") {
       const taskId = String(args.taskId);
+      if (options.realKanban) {
+        const { taskId: _taskId, ...updates } = args;
+        return (await storage.kanban.updateKanbanTask(taskId, updates)) as T;
+      }
       const task = kanbanTasks.get(taskId) ?? {
         id: taskId,
         status: "backlog",
@@ -342,6 +360,8 @@ export async function withService(
     }
     if (command === "add_kanban_comment") {
       const taskId = String(args.taskId);
+      if (options.realKanban)
+        return (await storage.kanban.addKanbanComment(taskId, String(args.text))) as T;
       const task = kanbanTasks.get(taskId) ?? {
         id: taskId,
         status: "backlog",
@@ -389,6 +409,7 @@ export async function withService(
       ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
       : {}),
     environmentGit: options.environmentGit,
+    branchPushState: options.branchPushState,
     environmentFence: options.environmentFence,
     assertEnvironmentQuiescent: options.assertEnvironmentQuiescent,
     ...(options.workspaceWriters ? { workspaceWriters: options.workspaceWriters(storage) } : {}),

@@ -1,3 +1,4 @@
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { createHash } from "node:crypto";
 import {
   resolveAgentPlatformSettings,
@@ -478,7 +479,7 @@ export function executionModeOverrideForPhase(
  */
 export function resumePromptFor(
   phase: ResumableBuildPhase,
-  options: { addressResult?: boolean } = {},
+  options: { addressResult?: boolean; deliveryPolicy?: DeliveryPolicy } = {},
 ): string | null {
   switch (phase) {
     case "building":
@@ -492,6 +493,9 @@ export function resumePromptFor(
     case "fixing":
       return `Resume fixing the verification failures from where you left off. Incorporate any messages sent while the pipeline was paused, finish the requested fixes, and validate the result as appropriate. ${REVIEW_PREPARATION_OUTPUT_CONTRACT} Do not ask questions; make sensible assumptions.`;
     case "creating-pr":
+      if (options.deliveryPolicy === "push-no-pr") {
+        return "Resume pushing the current branch to origin from where you left off. Incorporate messages sent while paused, commit the work as needed, and push the branch. Do not create, edit, or reopen a pull request. Do not merge. Do not ask questions; make sensible assumptions.";
+      }
       return "Resume creating the pull request from where you left off. Incorporate any messages sent while the pipeline was paused, push or prepare the branch as needed, and create the PR against the target branch if it is not already created. Do not ask questions; make sensible assumptions.";
     case "resolving-conflicts":
       return `Resume resolving PR merge conflicts from where you left off. Incorporate any messages sent while the pipeline was paused and finish the conflict resolution. ${MERGE_RESOLUTION_VALIDATION_INSTRUCTION} Do not ask questions; make sensible assumptions.`;

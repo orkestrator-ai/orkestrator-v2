@@ -1,3 +1,5 @@
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import * as realDndCore from "@dnd-kit/core";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -332,3 +334,38 @@ describe("KanbanCard", () => {
     expect(screen.queryByRole("button", { name: /Task actions/ }) === null).toBe(true);
   });
 });
+
+test.each([undefined, "current"])(
+  "the badge uses one current pipeline with link %s despite older runs",
+  (buildPipelineId) => {
+    const previous = useBuildPipelineStore.getState().pipelines;
+    const older = {
+      id: "old",
+      taskId: "task-1",
+      phase: "complete",
+      createdAt: "2026-01-01",
+      delivery: { policy: "push-no-pr" },
+    } as BuildPipeline;
+    const current = {
+      id: "current",
+      taskId: "task-1",
+      phase: "creating-pr",
+      createdAt: "2026-02-01",
+      delivery: { policy: "open-pr" },
+    } as BuildPipeline;
+    try {
+      useBuildPipelineStore.setState({
+        pipelines: new Map([
+          [older.id, older],
+          [current.id, current],
+        ]),
+      });
+      renderCard(makeTask({ buildPipelineId }), { buildPhase: "complete" });
+      expect(screen.getByText("Creating PR")).toBeTruthy();
+      expect(screen.queryByText("Pushing")).toBeNull();
+    } finally {
+      cleanup();
+      useBuildPipelineStore.setState({ pipelines: previous });
+    }
+  },
+);

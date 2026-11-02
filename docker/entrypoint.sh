@@ -816,6 +816,7 @@ chmod 700 "$HOME/.claude"
 # every second; the backend keeps a slow safety read for a missed signal
 # - UserPromptSubmit: fires when user sends a prompt (better than PreToolUse which fires on startup)
 # - Stop: fires when Claude finishes responding
+# - StopFailure: fires instead of Stop when the turn ends on an API error
 # These describe terminal Claude only. The native claude-bridge sets
 # ORKESTRATOR_NATIVE_AGENT_BRIDGE for every CLI it spawns; those processes
 # load these user settings too, and a zero-turn probe fires UserPromptSubmit
@@ -845,6 +846,11 @@ cat > "$HOME/.claude/settings.json" << 'EOF'
     "Stop": [
       {
         "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || { /usr/local/bin/orkestrator-state-signal waiting 2>/dev/null || true; }" }]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || { /usr/local/bin/orkestrator-state-signal failed 2>/dev/null || true; }" }]
       }
     ]
   }

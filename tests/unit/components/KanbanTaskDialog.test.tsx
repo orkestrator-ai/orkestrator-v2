@@ -835,8 +835,8 @@ describe("KanbanTaskDialog", () => {
     );
     expect(screen.getByTestId("ticket-kind").textContent).toBe("Work brief");
     expect(screen.getByTestId("ticket-tile-summary").textContent).toContain("A description");
-    expect(screen.getByTestId("ticket-delivery-policy").textContent).toBe(
-      "Push, no PR (Multi Review next)",
+    expect((screen.getByTestId("delivery-policy-select") as HTMLSelectElement).value).toBe(
+      "push-no-pr",
     );
     const statuses = screen
       .getAllByTestId("ticket-criterion")
@@ -846,6 +846,109 @@ describe("KanbanTaskDialog", () => {
       "1/4 passed · 1 failed · 1 not checked",
     );
     expect(screen.getByText("still broken", { exact: false })).toBeTruthy();
+  });
+
+  describe("Delivery tile", () => {
+    const select = () => screen.getByTestId("delivery-policy-select") as HTMLSelectElement;
+    const pipelineWith = (overrides: Record<string, unknown>) =>
+      new Map([
+        [
+          "pipeline-1",
+          { id: "pipeline-1", taskId: "task-1", phase: "creating-pr", ...overrides } as never,
+        ],
+      ]);
+
+    test("a ticket with no policy shows the default and can set one", async () => {
+      render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+      expect(select().value).toBe("open-pr");
+      expect(Array.from(select().options).map((option) => option.text)).toEqual([
+        "Open a PR, don't merge",
+        "Push, no PR",
+      ]);
+
+      fireEvent.change(select(), { target: { value: "push-no-pr" } });
+
+      await waitFor(() =>
+        expect(updateTaskContentMock).toHaveBeenCalledWith("task-1", {
+          sections: { delivery: { policy: "push-no-pr" } },
+        }),
+      );
+    });
+
+    test("changing the policy keeps the delivery note", async () => {
+      render(
+        <KanbanTaskDialog
+          task={makeTask({
+            description: "Text\n\n## Delivery\n\nPolicy: open-pr\n\nMail me.",
+            sections: { delivery: { policy: "open-pr", note: "Mail me." } },
+          })}
+          open
+          onOpenChange={() => {}}
+        />,
+      );
+
+      fireEvent.change(select(), { target: { value: "push-no-pr" } });
+
+      await waitFor(() =>
+        expect(updateTaskContentMock).toHaveBeenCalledWith("task-1", {
+          sections: { delivery: { policy: "push-no-pr", note: "Mail me." } },
+        }),
+      );
+    });
+
+    test("commit-only shows as the current selection only on a ticket that has it", () => {
+      render(
+        <KanbanTaskDialog
+          task={makeTask({
+            description: "Text\n\n## Delivery\n\nPolicy: commit-only",
+            sections: { delivery: { policy: "commit-only" } },
+          })}
+          open
+          onOpenChange={() => {}}
+        />,
+      );
+      expect(select().value).toBe("commit-only");
+      expect(Array.from(select().options).map((option) => option.value)).toContain("commit-only");
+    });
+
+    test("says so when the change comes too late for the running build", () => {
+      useBuildPipelineStore.setState({
+        pipelines: pipelineWith({
+          delivery: { policy: "open-pr", decidedAt: "2026-11-02T00:00:00.000Z" },
+        }),
+      });
+      render(
+        <KanbanTaskDialog
+          task={makeTask({
+            buildPipelineId: "pipeline-1",
+            description: "Text\n\n## Delivery\n\nPolicy: push-no-pr",
+            sections: { delivery: { policy: "push-no-pr" } },
+          })}
+          open
+          onOpenChange={() => {}}
+        />,
+      );
+      const note = screen.getByTestId("ticket-delivery-too-late").textContent;
+      expect(note).toContain("Too late for this build");
+      expect(note).toContain("Open a PR, don't merge");
+      expect(note).toContain("Push, no PR");
+    });
+
+    test("says nothing while the build still follows the ticket", () => {
+      useBuildPipelineStore.setState({ pipelines: pipelineWith({ phase: "building" }) });
+      render(
+        <KanbanTaskDialog
+          task={makeTask({
+            buildPipelineId: "pipeline-1",
+            description: "Text\n\n## Delivery\n\nPolicy: push-no-pr",
+            sections: { delivery: { policy: "push-no-pr" } },
+          })}
+          open
+          onOpenChange={() => {}}
+        />,
+      );
+      expect(screen.queryByTestId("ticket-delivery-too-late")).toBeNull();
+    });
   });
 
   test("a legacy ticket without sections still shows its text as tiles", () => {

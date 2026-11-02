@@ -277,6 +277,7 @@ export class BuildPipelineReviewFanout {
         agent: config.agent,
         model: config.model,
         effort: config.reasoningEffort,
+        fastMode: config.fastMode,
       })),
     );
     // Each record keeps its reviewer's lens, copied from the stored row, so a
@@ -865,6 +866,7 @@ export class BuildPipelineReviewFanout {
             agent: pipeline.reviewPreparation.agent,
             model: pipeline.reviewPreparation.model,
             effort: pipeline.reviewPreparation.reasoningEffort,
+            fastMode: pipeline.reviewPreparation.fastMode,
           })
         : await this.deps.stepSettings(pipeline, "address");
       const provider = await this.deps.provider(pipeline, step.agent);

@@ -7,6 +7,7 @@
  * payload. No part of the build itself happens in the renderer: the backend
  * creates the ticket, the environment and the pipeline from this one object.
  */
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   BuildStepConfig,
@@ -222,6 +223,7 @@ export interface FeatureBuildRequestInput {
   portMappings: PortMapping[];
   images?: TaskSnapshotImage[];
   models: FeatureBuildModelState;
+  deliveryPolicy?: DeliveryPolicy;
   requestId: string;
 }
 
@@ -251,6 +253,7 @@ export function featureBuildRequest(input: FeatureBuildRequestInput): CreateFeat
     reviewers: configured.reviewers,
     reviewPreparation: configured.reviewPreparation,
     ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
+    ...(input.deliveryPolicy ? { deliveryPolicy: input.deliveryPolicy } : {}),
     requestId: input.requestId,
   };
 }

@@ -66,9 +66,12 @@ export const IMAGE_CAPABILITIES = {
    * Claude terminal hooks ring the backend after writing `/tmp/.claude-state`
    * (`orkestrator-state-signal`), so the backend reads on change and keeps only
    * a slow safety read. Version 2 persists revision and completion counters
-   * atomically, so failed rings cannot hide a complete turn.
+   * atomically, so failed rings cannot hide a complete turn. Version 3 adds a
+   * `StopFailure` hook writing `failed`, which the backend reads as idle and
+   * rings `agent_failed` for, so a turn ending on an API error stops reading
+   * working. A backend that predates it reads `failed` as unreadable.
    */
-  "claude-state-signal": 2,
+  "claude-state-signal": 3,
   /**
    * `orkestrator-worktree-signal` watches `/workspace` with inotify and rings
    * the backend when it changes, so a quiet container's Files panel and diff

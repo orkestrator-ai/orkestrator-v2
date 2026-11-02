@@ -870,6 +870,8 @@ describe("Orkestrator control MCP server", () => {
       minimum: 1,
       maximum: MAX_BUILD_PIPELINE_ITERATIONS,
     });
+    // A coordinator's build follows the ticket's own delivery policy.
+    expect(tool?.inputSchema?.properties?.deliveryPolicy).toBeUndefined();
 
     const call = (requestId: string, maxIterations: number) =>
       rpc(credential.url, credential.token, "tools/call", {

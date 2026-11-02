@@ -25,6 +25,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { loadAppWithDevRetry } from "./dev-startup-retry";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 type Status = { status: string; profile?: string; browserUrl?: string; testProject?: string };
@@ -74,8 +75,10 @@ async function signIn(page: Page, status: Status) {
   if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
   const login = JSON.parse(command.stdout) as { loginUrl?: unknown };
   if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
-  expect(response?.ok() ?? false).toBe(true);
+  const loginUrl = login.loginUrl;
+  await loadAppWithDevRetry(page, test.info(), () =>
+    page.goto(loginUrl, { waitUntil: "domcontentloaded" }),
+  );
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     const invokeResponse = await page.request.post(
       new URL("/__orkestrator/invoke", status.browserUrl!).href,
@@ -431,7 +434,7 @@ test("Docker fixture restricted-network container launch describes provider appr
       value: { text: "", mentions: [], attachments: [], metadata: { platform: "codex" } },
     });
     for (const pass of ["initial", "reload"]) {
-      if (pass === "reload") await page.reload();
+      if (pass === "reload") await loadAppWithDevRetry(page, test.info(), () => page.reload());
       const expand = page.getByRole("button", {
         name: `Expand project ${fixture.name}`,
         exact: true,

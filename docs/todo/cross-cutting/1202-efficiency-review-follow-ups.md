@@ -39,7 +39,7 @@ governs, marked "Decided".
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
-14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 implemented 2026-11-02; Docker qualification pending; DK-10 left for a maintainer decision).
+14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
 
@@ -571,6 +571,61 @@ is needed to establish whether it reproduces without emulation. The browser
 check was preserved. The original preparation package and logs were not changed;
 its passing format, lint, typecheck and default-suite checks were not rerun.
 
+
+Round-2 acceptance repair (2026-11-02, on `89afecd55` plus the test fixes):
+`mise run test:logged -- --name round2-image-build -- mise run docker:build:dev
+--profile dk1202-round2` passed (17.8 s). The fresh amd64 image was
+5,452,373,507 bytes with Node `v24.22.2`.
+`mise run test:logged -- --name round2-image-smoke -- bash
+docker/tests/final-image-smoke.sh orkestrator-v2:dev-243dd588f5d7` passed
+(7.9 s). The before/after layer evidence above is preserved.
+
+Docker's default pools were still occupied by other profiles' reachability
+probe networks. Rather than remove foreign networks or change daemon settings,
+a temporary PATH wrapper supplied explicit `/29` subnets for this run's own
+`docker network create` calls. It searched 128 candidates in
+`172.16.240.0/22`, starting at a hash of the network name, and retried only
+Docker's overlap refusal. The host route table had no route in that range.
+All labels, isolation options and remaining Docker calls were unchanged;
+Docker itself admitted each subnet. This is a test setup workaround, not a
+change to production allocation or host firewall policy. The wrapper remains
+in the ignored `output/agent-testing/dk1202-round2/bin/docker` for repeat runs
+on this worktree. Both the profile launcher and test command used that PATH.
+
+The ready profile used `--fixture-environments local,container
+--no-agent-credentials --agent-platforms codex,grok,opencode
+--headless-electron`. The first suite attempt hit the 300-second silence
+watchdog during the approval UI check (failure artifact
+`/tmp/orkestrator-test-run.dxNXpw/round2-agent-docker.log.gz`); it was not
+accepted as a pass. The two affected browser specs now reuse the existing
+`loadAppWithDevRetry` helper, which acknowledges the real host-connectivity
+warning and retries only the known dev-entry dynamic-import failure. The
+coordinator test now checks the agent label against a fresh backend snapshot
+on each return, while asserting the original conversation still exists.
+A first focused run passed approval and annotation checks but exposed that
+agent selection could change later in the coordinator scenario (5 passed,
+1 skipped, 1 failed; `/tmp/orkestrator-test-run.30tnJJ/round2-focused-docker.log.gz`).
+Refreshing the snapshot on every return repaired that assumption.
+
+The final command was:
+
+```bash
+PATH="$PWD/output/agent-testing/dk1202-round2/bin:$PATH" \
+ORKESTRATOR_AGENT_TEST_PROFILE=dk1202-round2 \
+mise run test:logged -- --name round2-agent-docker-fixed -- mise run test:agent:docker
+```
+
+**Passed: 20 passed, 4 skipped, 0 failed, 0 flaky (510.5 s).** The four
+skips are the existing live-provider opt-ins; no provider credentials or
+billed turns were used. The suite includes inactive-environment, hidden-document,
+reload and second-window checks. The host firewall remained unchanged; checks
+that do not require agent callbacks acknowledge its warning through the UI.
+Focused E2E typechecking, lint, formatting and `git diff --check` also passed.
+The disposable profile was stopped and reset, and only this round's image tag
+was removed. No launcher remains. This satisfies the outstanding amd64 Docker
+acceptance requirement; the earlier failed runs above remain historical evidence.
+Native arm64 qualification and DK-10 remain outside this completed subset.
+
 DK-10 is still open. The SDK's `claude-agent-sdk-linux-x64/claude` (0.3.314) and the CLI's `claude-code/bin/claude.exe` (2.1.314) are the same file today: SHA-256 `4487042b…5f84594`, 298 MB each. [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, so they can diverge.
 
 Not addressed, for a later pass: the Playwright layer (1.07 GB: Chromium, the headless shell and `--with-deps` apt packages), and the bridge `src/` trees that ship next to `dist` (about 16 MB, unused at runtime).
@@ -696,8 +751,19 @@ Compared the complete document diff from the recorded review base
 `a88ed87f5d7142222747ca00a213a41536ef2557`: only task 14's index line
 and section differ. Tasks 2, 3, 6, 7, 10, 11 and 15 already match that
 base. Preserve them; restoring older open statuses would undo records
-already present in the review base. Keep task 14 marked implemented with
-qualification pending until a green Docker run is recorded.
+already present in the review base. Round 2 completed amd64 qualification
+(20 passed, 4 live-provider skips); retain only DK-10 as the open decision.
+
+### Task 14: qualification on the shared host (round 2, 2026-11-02)
+
+Chose explicit subnets for this disposable profile (recommended): it preserves
+foreign networks and daemon/firewall configuration, at the cost of a temporary
+test-only PATH wrapper. Removing foreign networks or changing daemon pools
+would reclaim default capacity but violates this run's constraints. Reuse the
+existing browser startup helper and assert the backend's current coordinator
+selection (recommended): this preserves the tested behavior and diagnoses real
+startup errors. Skipping those cases or loosening their behavior assertions
+would be less work but would leave acceptance coverage incomplete.
 
 ### Task 2: unreadable rows
 

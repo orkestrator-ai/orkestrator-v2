@@ -15,7 +15,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 4. **hono 5**: move claude-bridge and codex-bridge once 5 is stable. Status: blocked (`next` is 5.0.0-rc.1).
 5. **`@dnd-kit/react` 1.0**: rewrite the drag-and-drop users once 1.0 ships. Status: blocked (latest is 0.5.1).
 6. **Accepted advisories**: `postcss-selector-parser` via `@tailwindcss/typography`, `undici` 8.10.2 via the Pi SDK. Status: blocked (on `@tailwindcss/typography` and the Pi SDK; both still latest).
-7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); 24.22.2 implemented 2026-11-02; `test:agent:docker` qualification pending.
+7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); 24.22.2 done 2026-11-02; amd64 image smoke and `test:agent:docker` passed (20 passed, 4 live-provider skips).
 
 ### 1. Electron 46
 
@@ -138,7 +138,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 
 **Context.** The file defers Node 26 until its LTS settles (not before December 2026). The 24 bump went out with the image-size change in [1202](1202-efficiency-review-follow-ups.md) task 14, so users pull one new image for both. `ARG NODE_VERSION` in `docker/Dockerfile` is the only pin. The tarball is checked against the release's `SHASUMS256.txt` at build time, so no digest is hard-coded, and `docker/image-manifest.ts` checks that the installed `node --version` matches the pin.
 
-**Investigation.** Newly found: Node 24.22.1 (2026-10-20) is flagged as a **security** release in `nodejs.org/dist/index.json`; 24.22.0 was not. Node 26.12.1 (2026-10-21) is also a security release, and 26 is not LTS yet. The container's Node runs the npm-installed agent CLIs and users' projects, so the fix reaches real workloads. Checked again 2026-11-02: 24.22.2 (2026-10-28, not flagged as security) is the newest 24 release. It adds V8 backports and a stream fix on top of 24.22.1. Built and checked on linux/amd64: `node --version` is `v24.22.2` and npm is 11.19.1; `docker/tests/final-image-smoke.sh` and `mise run test:agent:docker` ran against the image (results in 1202 task 14). Fresh builds on `main` at `643ce87c4` reproduce the Node version and pass image smoke; the fresh Docker suite is blocked by exhausted Docker network address pools, so live qualification remains outstanding.
+**Investigation.** Newly found: Node 24.22.1 (2026-10-20) is flagged as a **security** release in `nodejs.org/dist/index.json`; 24.22.0 was not. Node 26.12.1 (2026-10-21) is also a security release, and 26 is not LTS yet. The container's Node runs the npm-installed agent CLIs and users' projects, so the fix reaches real workloads. Checked again 2026-11-02: 24.22.2 (2026-10-28, not flagged as security) is the newest 24 release. It adds V8 backports and a stream fix on top of 24.22.1. Built and checked on linux/amd64: `node --version` is `v24.22.2` and npm is 11.19.1; `docker/tests/final-image-smoke.sh` and `mise run test:agent:docker` ran against the image (results in 1202 task 14). Fresh builds on `main` at `643ce87c4` reproduce the Node version and pass image smoke; the fresh Docker suite is blocked by exhausted Docker network address pools, so that attempt did not qualify. Round 2 subsequently passed fresh amd64 image smoke and `test:agent:docker` (20 passed, 4 live-provider skips, 0 failed, 0 flaky) using explicitly allocated subnets for its own disposable networks; see 1202 task 14 for commands and the test repairs. Node remains `v24.22.2`.
 
 **Decisions.**
 
@@ -440,4 +440,4 @@ None. The update-manifest key question is decided below.
 
 ### Task 7: review qualification status (2026-11-02)
 
-The Node 24.22.2 pin is implemented; acceptance remains open until the required Docker qualification passes. Keep the task index explicit about that distinction instead of describing the upgrade as done.
+The Node 24.22.2 pin and required amd64 qualification are complete. Round 2 passed fresh image smoke and the Docker suite (20 passed, 4 live-provider skips). Explicit subnets for the disposable profile avoided exhausted default pools without changing shared networks or daemon/firewall settings. The repaired specs reuse the existing startup helper and compare the coordinator label with current backend state. Node 26 remains deferred; native arm64 qualification is not claimed. See 1202 task 14 for the failed attempts, successful command and cleanup evidence.

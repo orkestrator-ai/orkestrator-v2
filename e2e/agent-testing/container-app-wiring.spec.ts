@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   newReviewValidationRun,
@@ -74,7 +75,7 @@ type CoordinatorSnapshot = {
     id: string;
     lifecycleState: string;
     repositoryContextRevision: number;
-    conversations: Array<{ id: string; role?: string }>;
+    conversations: Array<{ id: string; role?: string; agent?: AgentPlatform }>;
   };
   workflows: Array<{
     conversationId: string;
@@ -505,9 +506,20 @@ test("Docker fixture coordinator view follows delegations and context across swi
     const panel = target.locator("#project-panel-coordinator");
     await expect(panel).toBeVisible({ timeout: 15_000 });
     await expect(panel.getByText("Coordinator unavailable")).toHaveCount(0);
-    // No provider was started for the main conversation.
+    const current = await invoke<CoordinatorSnapshot>("ensure_project_coordinator", {
+      projectId: container.projectId,
+    });
+    const selected = current.workspace.conversations.find((item) => item.id === main.id);
+    expect(selected, "The original main conversation is retained").toBeDefined();
+    // The backend can select a preferred agent without starting a provider.
+    // Assert the persisted selection rather than assuming an unassigned tab.
     await expect(
-      panel.getByRole("button", { name: "Coordinator, no agent chosen yet", exact: true }),
+      panel.getByRole("button", {
+        name: selected?.agent
+          ? `Coordinator, ${AGENT_PLATFORM_LABELS[selected.agent]}`
+          : "Coordinator, no agent chosen yet",
+        exact: true,
+      }),
     ).toBeVisible({ timeout: 15_000 });
     return panel;
   };

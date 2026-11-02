@@ -66,9 +66,13 @@ A record is never removed while something still reads it as live:
   coordinator wake has not been delivered (`wokenAt` unset), which is what
   `listOpenCoordinatorDelegations`, `listUnwokenCoordinatorDelegations` and the
   reconcile sweep read;
-- a review, pipeline, graph run or pull-request follow whose end the
-  coordinator has not been told (`terminalNotifiedAt` unset), which status wakes
-  still observe;
+- a review, pipeline or graph run whose persisted local state is active, even
+  if a previous attempt already set `terminalNotifiedAt`; unknown or remote
+  resource state is retained conservatively;
+- an unreported terminal local resource until 24 hours after its persisted
+  `updatedAt`. A confirmed missing local resource can be reclaimed without a
+  terminal notification. Missing/unreadable timestamps stay protected;
+- a pull-request follow whose end the coordinator has not been told;
 - a review that a live pull-request follow points at (`reviewAssociationId`);
 - an environment's launch record (it carries `baseCommit`, which makes the
   coordinator the worker's creator for mail routing and puts the worker's
@@ -78,14 +82,16 @@ A record is never removed while something still reads it as live:
 - the newest delegation record for each worker tab while its environment
   exists, which goal and tab actions read as the coordinator's ownership of
   that tab;
-- anything created in the last 24 hours, so a retried `requestId` (or a
-  request alias on that record) still finds its original record and replays it
-  instead of starting duplicate work.
+- anything created in the last 24 hours, or with a request alias received in
+  the last 24 hours. Alias arrival timestamps are written on review joins,
+  reservation merges and PR-follow joins. Legacy aliases without an arrival
+  timestamp remain protected because their expiry cannot be established.
 
 If nothing can be removed, the write is refused with an error saying that all
 2,000 records are still in use and that deleting finished worker environments
 or letting running work finish frees room. The limit stays shared across
-projects; with cleanup it is only reached when that many records are live.
+projects. Unknown remote state and legacy aliases can still consume capacity;
+cleanup never assumes that an unreachable remote resource has stopped.
 
 What removal changes for the user:
 

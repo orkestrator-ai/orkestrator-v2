@@ -363,7 +363,7 @@ export interface CoordinatorWorkflowAssociation {
   requestId: string;
   payloadHash?: string;
   /** Additional idempotency keys that reattached to this same resource. */
-  requestAliases?: Array<{ requestId: string; payloadHash: string }>;
+  requestAliases?: Array<{ requestId: string; payloadHash: string; receivedAt?: string }>;
   /** A durable reservation written before a work-creating side effect. */
   pending?: boolean;
   /** Process currently materializing a reservation; never exposed as authority. */

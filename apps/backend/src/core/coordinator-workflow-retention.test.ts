@@ -333,6 +333,129 @@ describe("coordinator workflow store cleanup", () => {
     });
   });
 
+  test("recent aliases survive cleanup and replay, including legacy aliases", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const old = finished("old-review");
+      seedWorkflows(dataDir, [old, ...history(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 1)]);
+      await storage.coordinators.addCoordinatorWorkflowRequestAlias(
+        old.id,
+        old.coordinatorId,
+        old.conversationId!,
+        "today",
+        "today-hash",
+      );
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("unrelated"));
+      const replay = await storage.coordinators.addCoordinatorWorkflowRequestAlias(
+        old.id,
+        old.coordinatorId,
+        old.conversationId!,
+        "today",
+        "today-hash",
+      );
+      expect(replay.id).toBe(old.id);
+      expect(replay.requestAliases?.[0]?.receivedAt).toBeString();
+      expect(
+        select([
+          finished("legacy", { requestAliases: [{ requestId: "legacy", payloadHash: "hash" }] }),
+        ]).size,
+      ).toBe(0);
+    });
+  });
+
+  test("joining an old PR follow protects the new request after the follow finishes", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const follow = finished("follow", {
+        kind: "pull-request",
+        resourceId: "env",
+        terminalNotifiedAt: undefined,
+        pullRequest: { source: "create-pr" },
+      });
+      seedWorkflows(dataDir, [follow, ...history(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 1)]);
+      const joined = await storage.coordinators.followCoordinatorPullRequest({
+        projectId: follow.projectId,
+        coordinatorId: follow.coordinatorId,
+        environmentId: "env",
+        requestId: "new-follow",
+        source: "create-pr",
+      });
+      expect(joined.id).toBe(follow.id);
+      expect(joined.requestAliases?.[0]?.receivedAt).toBeString();
+      seedWorkflows(
+        dataDir,
+        storedWorkflows(dataDir).map((item) =>
+          item.id === follow.id ? { ...item, terminalNotifiedAt: new Date().toISOString() } : item,
+        ),
+      );
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("new"));
+      const replay = await storage.coordinators.followCoordinatorPullRequest({
+        projectId: follow.projectId,
+        coordinatorId: follow.coordinatorId,
+        environmentId: "env",
+        requestId: "new-follow",
+        source: "create-pr",
+      });
+      expect(replay.id).toBe(follow.id);
+    });
+  });
+
+  test("current persisted resource state protects retries and reclaims unreported missing or terminal work", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      // These control records model the committed failed -> running retry transition.
+      for (const [kind, file] of [
+        ["multi-review", "multi-reviews.json"],
+        ["build-pipeline", "build-pipelines.json"],
+        ["graph-run", "graph-runs.json"],
+      ] as const) {
+        const running = finished("retry", {
+          kind,
+          resourceId: "retry",
+          createdAt: "2020-01-01T00:00:00Z",
+        });
+        const missing = finished("missing", {
+          kind,
+          resourceId: "missing",
+          terminalNotifiedAt: undefined,
+        });
+        const terminal = finished("terminal", {
+          kind,
+          resourceId: "terminal",
+          terminalNotifiedAt: undefined,
+        });
+        const remote = finished("remote", {
+          kind,
+          nodeId: "remote-node",
+          terminalNotifiedAt: undefined,
+        });
+        seedStore(dataDir, file, {
+          retry: { snapshot: { phase: "running" }, status: "running" },
+          terminal: { snapshot: { phase: "failed" }, status: "failed", updatedAt: OLD },
+          recent: {
+            snapshot: { phase: "failed" },
+            status: "failed",
+            updatedAt: new Date().toISOString(),
+          },
+        });
+        seedWorkflows(dataDir, [
+          running,
+          missing,
+          terminal,
+          remote,
+          finished("pending-missing", { kind, pending: true, resourceId: "absent" }),
+          finished("recent", { kind, resourceId: "recent", terminalNotifiedAt: undefined }),
+          ...active(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 6),
+        ]);
+        await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("new"));
+        const ids = storedWorkflows(dataDir).map((item) => item.id);
+        expect(ids).toContain("retry");
+        expect(ids).toContain("remote");
+        expect(ids).toContain("pending-missing");
+        expect(ids).toContain("recent");
+        expect(ids).not.toContain("missing");
+        expect(ids).not.toContain("terminal");
+      }
+    });
+  });
+
   test("a full store of records still in use refuses with an error that says so", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const workflows = active(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS);

@@ -1,3 +1,6 @@
+import { readStoredValue, seedStore } from "./storage-test-support.js";
+import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
 import { ControlMcpServer } from "./control-mcp-server.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
@@ -902,4 +905,66 @@ test("omitted model rows use the saved Multi Review defaults and an explicit row
     }),
     outcome.workflow.id,
   );
+});
+
+test("cleanup removes snapshot history and adoption ownership while an old review still opens", async () => {
+  const launched = await launch();
+  const associations = await storage.coordinators.listCoordinatorWorkflowAssociations(
+    scope.projectId,
+  );
+  const association = associations[0]!;
+  const saved = (await storage.getMultiReviewWorkflow(launched.workflow.id))!;
+  await storage.saveMultiReviewWorkflow(saved.id, saved.environmentId, saved.revision, {
+    ...(saved.snapshot as MultiReviewWorkflow),
+    phase: "cancelled",
+  });
+  const old = "2020-01-01T00:00:00.000Z";
+  const store = readStoredValue<Record<string, unknown>>(root + "/data", "coordinators.json")!;
+  seedStore(root + "/data", "coordinators.json", {
+    ...store,
+    workflows: [
+      { ...association, createdAt: old, terminalNotifiedAt: old },
+      ...Array.from(
+        { length: MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 1 },
+        (_, index): CoordinatorWorkflowAssociation => ({
+          ...association,
+          id: `history-${index}`,
+          requestId: `history-${index}`,
+          resourceId: `gone-${index}`,
+          createdAt: old,
+          terminalNotifiedAt: old,
+        }),
+      ),
+    ],
+  });
+  await storage.coordinators.saveCoordinatorWorkflowAssociation({
+    ...association,
+    id: "new",
+    requestId: "new",
+    resourceId: "new",
+    createdAt: new Date().toISOString(),
+  });
+  expect(
+    (await context.coordinators!.get(scope.projectId))!.workflows.some(
+      (item) => item.id === association.id,
+    ),
+  ).toBe(false);
+  await expect(
+    storage.coordinators.adoptCoordinatorWorkflowAssociation(
+      scope.projectId,
+      scope.coordinatorId,
+      association.id,
+      scope.conversationId,
+    ),
+  ).rejects.toThrow("not found");
+  const other = await context.coordinators!.createConversation(scope.projectId, "Other");
+  const opened = (await commands.get("open_coordinator_multi_review")!(
+    {
+      scope: { ...scope, conversationId: other.workspace.selectedConversationId },
+      workflowId: launched.workflow.id,
+    },
+    context,
+  )) as MultiReviewActionResult;
+  expect(opened.ui.status).toBe("opened");
+  expect(start).toHaveBeenCalledTimes(1);
 });

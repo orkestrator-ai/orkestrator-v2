@@ -2,8 +2,8 @@ import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coord
 
 /**
  * Coordinator workflow associations held across every project. The limit is
- * shared on purpose: cleanup keeps it free of finished history, so it is only
- * reached when this many records are all still in use.
+ * shared on purpose: cleanup reclaims eligible history while protecting live
+ * work, replay receipts and resources whose state cannot be established.
  */
 export const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 
@@ -23,13 +23,16 @@ export const COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR =
   `Coordinator workflow store is full: all ${MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS} records are still in use ` +
   "(running, pending, waiting to wake a coordinator, following a pull request, tied to an " +
-  "environment that still exists, or created in the last 24 hours). Delete finished worker " +
+  "environment that still exists, or protected by recent requests or unknown resource state). Delete finished worker " +
   "environments or wait for running work to finish, then try again.";
 
 export interface CoordinatorWorkflowCleanupInput {
   workflows: readonly CoordinatorWorkflowAssociation[];
   /** Whether a local environment still exists. Remote (`nodeId`) environments are never looked up. */
   environmentExists: (environmentId: string) => boolean;
+  resourceState?: (
+    association: CoordinatorWorkflowAssociation,
+  ) => "active" | "finished" | "missing" | "unknown";
   now?: number;
   batch?: number;
   replayWindowMs?: number;
@@ -42,15 +45,18 @@ export interface CoordinatorWorkflowCleanupInput {
  *
  * - a pending reservation (a launch is materializing it);
  * - a delegation that is running or whose coordinator wake was not delivered;
- * - a workflow or pull-request follow the coordinator was not yet told the
- *   end of (`terminalNotifiedAt` unset), which status wakes still observe;
+ * - an unreported pull-request follow, or workflow without authoritative
+ *   evidence that its resource is gone or its terminal grace period elapsed;
  * - a review a live pull-request follow points at (`reviewAssociationId`);
  * - an environment's launch record (it carries `baseCommit`, and makes the
  *   coordinator the worker's creator for mail routing) while that environment
  *   exists, or for any remote environment, whose existence is unknown here;
  * - the newest delegation record per worker tab while the environment exists,
  *   which is what goal and tab actions read as the coordinator's ownership;
- * - anything created inside the replay window.
+ * - anything created inside the replay window, or with a recent/undated alias.
+ * Current resource state overrides historical notifications: active and unknown
+ * resources stay protected; confirmed missing or expired terminal local work
+ * can be reclaimed without notification delivery.
  */
 export function selectCoordinatorWorkflowsToClear(
   input: CoordinatorWorkflowCleanupInput,
@@ -78,7 +84,23 @@ export function selectCoordinatorWorkflowsToClear(
     const createdAt = Date.parse(association.createdAt);
     // An unreadable timestamp cannot prove the record is recent.
     if (Number.isFinite(createdAt) && now - createdAt < replayWindowMs) return;
-    if (!isFinished(association)) return;
+    // Legacy aliases have no known arrival time: retain rather than invent an expiry.
+    if (
+      association.requestAliases?.some((alias) => {
+        const receivedAt = Date.parse(alias.receivedAt ?? "");
+        return !Number.isFinite(receivedAt) || now - receivedAt < replayWindowMs;
+      })
+    )
+      return;
+    if (association.pending || (association.delegation && !isFinished(association))) return;
+    const state = input.resourceState?.(association);
+    if (
+      state === "active" ||
+      (state === "unknown" &&
+        ["multi-review", "build-pipeline", "graph-run"].includes(association.kind))
+    )
+      return;
+    if (!isFinished(association) && state !== "missing" && state !== "finished") return;
     if (reviewsFollowed.has(association.id)) return;
     if (association.kind === "environment") {
       const exists = association.nodeId ? true : input.environmentExists(association.resourceId);

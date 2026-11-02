@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
+  agentInteractionTextBody,
   isAgentInteractionResolution,
   type AgentInteractionRequest,
   type AgentInteractionResolution,
@@ -556,6 +557,7 @@ function allowedActions(request: AgentInteractionRequest): PublicInteraction["ac
 }
 
 function publicInteraction(sessionId: string, request: AgentInteractionRequest): PublicInteraction {
+  const textBody = agentInteractionTextBody(request);
   return {
     id: request.id,
     sessionId,
@@ -574,7 +576,7 @@ function publicInteraction(sessionId: string, request: AgentInteractionRequest):
         }
       : {}),
     title: request.presentation.title.slice(0, 500),
-    ...(request.presentation.body ? { body: request.presentation.body.slice(0, 4_000) } : {}),
+    ...(textBody ? { body: textBody.slice(0, 4_000) } : {}),
     questions: request.presentation.questions.slice(0, 16).map((question) => ({
       id: question.id,
       prompt: question.prompt.slice(0, 2_000),

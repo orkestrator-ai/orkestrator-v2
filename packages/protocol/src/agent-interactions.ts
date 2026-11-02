@@ -71,6 +71,8 @@ export const AGENT_INTERACTION_LIMITS = Object.freeze({
   maxSerializedPayloadBytes: 256 * 1024,
   maxIdLength: 512,
   maxProviderValueLength: 4_096,
+  /** An {@link AgentInteractionSource} name; the Claude bridge bounds it the same. */
+  maxSourceNameLength: 256,
   maxJournalEntries: 512,
   maxWorkflowSummaries: 64,
 } as const);
@@ -284,6 +286,96 @@ export interface AgentInteractionHold {
   reason?: AgentInteractionHoldReason;
 }
 
+/**
+ * Kinds of {@link AgentInteractionSource}. Only MCP servers today; the field is
+ * a union so a provider can name another kind of requester later without a new
+ * top-level key.
+ */
+export const AGENT_INTERACTION_SOURCE_KINDS = ["mcp-server"] as const;
+export type AgentInteractionSourceKind = (typeof AGENT_INTERACTION_SOURCE_KINDS)[number];
+
+/**
+ * Where a provider says the definition of a source came from, as a short
+ * lowercase token (Claude: `user`, `project`, `local`, `dynamic`, `plugin`,
+ * `managed`, `enterprise`, `claudeai`, `agent`, `sdk`). An open set: a client
+ * shows an unknown value as an unrecognised configured source.
+ */
+const SOURCE_SCOPE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * Who asked, when the provider reports it: today the MCP server serving the
+ * tool a permission request is for. Optional and provenance only — it never
+ * changes how a request is answered, and requests without it render as they
+ * did before the field existed.
+ */
+export interface AgentInteractionSource {
+  kind: AgentInteractionSourceKind;
+  /** The server's name as configured: untrusted display text. */
+  name: string;
+  /** Where its definition came from; see {@link agentInteractionSourceScopeLabel}. */
+  scope?: string;
+}
+
+const SOURCE_SCOPE_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  user: "user settings",
+  project: "project settings",
+  local: "local settings",
+  dynamic: "session settings",
+  plugin: "a plugin",
+  managed: "managed settings",
+  enterprise: "enterprise settings",
+  claudeai: "a claude.ai connector",
+  agent: "an agent definition",
+  sdk: "the agent host",
+});
+
+/**
+ * Builds a source from provider-reported values, or `undefined` when the name
+ * is missing or too long to show exactly. A scope that is not a short
+ * lowercase token is dropped rather than shown.
+ */
+export function mcpServerInteractionSource(
+  name: unknown,
+  scope?: unknown,
+): AgentInteractionSource | undefined {
+  if (!isBoundedString(name, AGENT_INTERACTION_LIMITS.maxSourceNameLength)) return undefined;
+  return {
+    kind: "mcp-server",
+    name,
+    ...(typeof scope === "string" && SOURCE_SCOPE_PATTERN.test(scope) ? { scope } : {}),
+  };
+}
+
+/**
+ * Human wording for a source's scope, or `undefined` when there is none. An
+ * unknown scope reads as configuration, never as the agent host itself: the
+ * host scope (`sdk`) is the one a configured server cannot claim.
+ */
+export function agentInteractionSourceScopeLabel(scope: string | undefined): string | undefined {
+  if (!scope) return undefined;
+  return SOURCE_SCOPE_LABELS[scope] ?? "other configuration";
+}
+
+/** The one-line text form, for consumers that show a request as text only. */
+export function agentInteractionSourceLine(source: AgentInteractionSource): string {
+  const scope = agentInteractionSourceScopeLabel(source.scope);
+  return `MCP server: ${source.name}${scope ? ` (from ${scope})` : ""}`;
+}
+
+/**
+ * A request's body for consumers that show it as text only (the public CLI,
+ * workflow summaries): the source line, when there is one, then the body.
+ */
+export function agentInteractionTextBody(request: {
+  presentation: { body?: string };
+  source?: AgentInteractionSource;
+}): string | undefined {
+  const body = request.presentation.body;
+  if (!request.source) return body;
+  const line = agentInteractionSourceLine(request.source);
+  return body ? `${line}\n${body}` : line;
+}
+
 export interface AgentInteractionRequest {
   version: typeof AGENT_INTERACTION_CONTRACT_VERSION;
   /** Opaque, stable for this upstream request's lifetime. */
@@ -302,6 +394,8 @@ export interface AgentInteractionRequest {
   expiresAt?: number;
   /** Pause state of the deadline; only meaningful alongside `expiresAt`. */
   hold?: AgentInteractionHold;
+  /** Who asked, when the provider reports it. */
+  source?: AgentInteractionSource;
   /**
    * Whether the turn is waiting on this request.
    *
@@ -580,7 +674,10 @@ const REQUEST_KEYS = new Set([
   "updatedAt",
   "expiresAt",
   "hold",
+  "source",
 ]);
+const SOURCE_KEYS = new Set(["kind", "name", "scope"]);
+const SOURCE_KINDS = new Set<string>(AGENT_INTERACTION_SOURCE_KINDS);
 const HOLD_KEYS = new Set(["available", "heldAt", "reason"]);
 const HOLD_REASONS = new Set<string>(AGENT_INTERACTION_HOLD_REASONS);
 const PRESENTATION_KEYS = new Set([
@@ -836,6 +933,18 @@ export function isAgentInteractionHold(
   );
 }
 
+function isSource(value: unknown): value is AgentInteractionSource {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, SOURCE_KEYS) &&
+    typeof value.kind === "string" &&
+    SOURCE_KINDS.has(value.kind) &&
+    isBoundedString(value.name, AGENT_INTERACTION_LIMITS.maxSourceNameLength) &&
+    (value.scope === undefined ||
+      (typeof value.scope === "string" && SOURCE_SCOPE_PATTERN.test(value.scope)))
+  );
+}
+
 export function isAgentInteractionRequest(value: unknown): value is AgentInteractionRequest {
   if (!isRecord(value) || !hasOnlyKeys(value, REQUEST_KEYS)) return false;
   if (
@@ -852,6 +961,7 @@ export function isAgentInteractionRequest(value: unknown): value is AgentInterac
     !STATES.has(value.state) ||
     !isNonNegativeInteger(value.revision) ||
     (value.blocking !== undefined && typeof value.blocking !== "boolean") ||
+    (value.source !== undefined && !isSource(value.source)) ||
     !isEpochMilliseconds(value.createdAt) ||
     !isEpochMilliseconds(value.updatedAt) ||
     value.updatedAt < value.createdAt ||

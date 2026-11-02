@@ -278,6 +278,7 @@ describe("Claude interaction adapter", () => {
         kind: "permission",
         toolName: "mcp__linear__create_issue",
         mcpServer: "linear",
+        mcpServerSource: "user",
         input: '{"title":"Bug"}',
         requestedAt,
         expiresAt,
@@ -323,6 +324,12 @@ describe("Claude interaction adapter", () => {
     });
     expect(permission.presentation.title).toBe("Allow mcp__linear__create_issue");
     expect(permission.presentation.body).toContain('Input: {"title":"Bug"}');
+    // The serving server is a structured source the card shows on its own
+    // line, not a body line repeated beside it.
+    expect(permission.source).toEqual({ kind: "mcp-server", name: "linear", scope: "user" });
+    expect(permission.presentation.body).not.toContain("MCP server");
+    expect(command).not.toHaveProperty("source");
+    expect(form).not.toHaveProperty("source");
     expect(snapshot.requests.every((request) => request.blocking === true)).toBe(true);
 
     await expect(
@@ -431,6 +438,56 @@ describe("Claude interaction adapter", () => {
       { url: expect.stringContaining("/interactions/file-1"), body: { action: "accept" } },
       { url: expect.stringContaining("/interactions/file-2"), body: { action: "decline" } },
     ]);
+  });
+
+  test("Claude names the MCP server a bridge without provenance scope still reports", async () => {
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + 60_000;
+    // A bridge that predates `mcpServerSource` sends only the name; one with a
+    // name no source can hold keeps it in the body as before.
+    const interactions: Array<Record<string, unknown>> = [
+      {
+        id: "older-bridge",
+        kind: "permission",
+        toolName: "mcp__linear__create_issue",
+        mcpServer: "linear",
+        requestedAt,
+        expiresAt,
+      },
+      {
+        id: "long-name",
+        kind: "permission",
+        toolName: "mcp__x__y",
+        mcpServer: "x".repeat(300),
+        requestedAt,
+        expiresAt,
+      },
+      {
+        id: "no-provenance",
+        kind: "permission",
+        toolName: "WebSearch",
+        requestedAt,
+        expiresAt,
+      },
+    ];
+    const { provider } = httpProvider(async (url) => {
+      if (url.endsWith("/questions")) return Response.json({ questions: [] });
+      if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
+      return Response.json({ interactions });
+    });
+
+    const { requests } = await provider.interactions!.listPendingInteractions("session-1");
+    const [older, long, plain] = requests as [
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+    ];
+    expect(older.source).toEqual({ kind: "mcp-server", name: "linear" });
+    expect(older.presentation.body).toBe("Tool: mcp__linear__create_issue");
+    expect(long).not.toHaveProperty("source");
+    expect(long.presentation.body).toContain("MCP server: xxx");
+    expect(plain).not.toHaveProperty("source");
+    expect(plain.presentation.body).toBe("Tool: WebSearch");
   });
 
   test("a Claude bridge without the interactions route still serves its questions", async () => {

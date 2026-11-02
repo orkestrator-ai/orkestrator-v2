@@ -5,7 +5,10 @@ import type {
   PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
-import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_LIMITS,
+  mcpServerInteractionSource,
+} from "@orkestrator/protocol/agent-interactions";
 import type {
   ClaudeElicitationRequest,
   ClaudeInteractionOutcome,
@@ -260,6 +263,11 @@ export async function requestClaudeToolApproval(
   const reason = bounded(permissionContext?.decisionReason, 1_024);
   const blockedPath = bounded(permissionContext?.blockedPath, 1_024);
   const mcpServer = bounded(permissionContext?.mcpServer?.name, 256);
+  // Provenance for the card only. The SDK's set of sources is open, so the
+  // shared contract keeps only a short lowercase token and drops the rest.
+  const mcpServerSource = mcpServer
+    ? mcpServerInteractionSource(mcpServer, permissionContext?.mcpServer?.source)?.scope
+    : undefined;
   const rawCommand = typeof input.command === "string" ? input.command : undefined;
   const rawPath =
     typeof input.file_path === "string"
@@ -308,6 +316,7 @@ export async function requestClaudeToolApproval(
     ...(reason ? { reason } : {}),
     ...(blockedPath ? { blockedPath } : {}),
     ...(mcpServer ? { mcpServer } : {}),
+    ...(mcpServerSource ? { mcpServerSource } : {}),
     ...(networkHost ? { networkHost } : {}),
     ...(ruleEligible ? { ruleEligible: true } : {}),
     ...(proposedCommandPrefix ? { proposedCommandPrefix } : {}),

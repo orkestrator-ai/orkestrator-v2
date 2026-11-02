@@ -293,6 +293,39 @@ describe("coordinator messages to the project home", () => {
     }
   });
 
+  test("the window closes exactly three hours after the last sent message", async () => {
+    const held = await send(homeMessage());
+    await resolveRequest(String(held.approvalRequestId), "approve");
+    const sentAt = await storage.latestCoordinatorMailTo(homeId, scope.coordinatorId);
+    const clock = spyOn(Date, "now").mockReturnValue(
+      Date.parse(sentAt!) + COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS,
+    );
+    try {
+      expect(await send(homeMessage({ requestId: "boundary" }))).toMatchObject({
+        sent: false,
+        state: "pending",
+      });
+      expect(await mailTo(homeId)).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("concurrent retries create one approval and send no mail", async () => {
+    const results = await Promise.all([send(homeMessage()), send(homeMessage())]);
+    expect(results[0]).toEqual(results[1]);
+    expect(await pendingRequests()).toHaveLength(1);
+    expect(await mailTo(homeId)).toEqual([]);
+  });
+
+  test("malformed held message fields are refused instead of changing the recipient", async () => {
+    for (const overrides of [{ toTabId: "x".repeat(257) }, { subject: "x".repeat(201) }]) {
+      await expect(send(homeMessage(overrides))).rejects.toThrow("cannot be held");
+    }
+    expect(await pendingRequests()).toEqual([]);
+    expect(await mailTo(homeId)).toEqual([]);
+  });
+
   test("the approval-only send refuses anything but an approved request", async () => {
     const held = await send(homeMessage());
     await expect(

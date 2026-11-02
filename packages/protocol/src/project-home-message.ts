@@ -44,6 +44,21 @@ export function parseProjectHomeMessage(value: unknown): ProjectHomeMessage | nu
     new TextEncoder().encode(body).byteLength > PROJECT_HOME_MESSAGE_LIMITS.bodyBytes
   )
     return null;
+  // Refuse malformed optional fields rather than silently changing an approved
+  // message (especially its recipient tab). Empty subjects are valid mail.
+  for (const [key, max, allowEmpty] of [
+    ["toTabId", PROJECT_HOME_MESSAGE_LIMITS.idChars, false],
+    ["subject", PROJECT_HOME_MESSAGE_LIMITS.subjectChars, true],
+    ["replyToMessageId", 300, false],
+  ] as const) {
+    const field = raw[key];
+    if (
+      field !== undefined &&
+      (typeof field !== "string" || field.length > max || (!allowEmpty && !field.trim()))
+    )
+      return null;
+  }
+  if (raw.deliverNow !== undefined && typeof raw.deliverNow !== "boolean") return null;
   const toTabId = boundedText(raw.toTabId, PROJECT_HOME_MESSAGE_LIMITS.idChars);
   const subject = boundedText(raw.subject, PROJECT_HOME_MESSAGE_LIMITS.subjectChars);
   const replyToMessageId = boundedText(raw.replyToMessageId, 300);

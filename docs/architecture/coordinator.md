@@ -936,6 +936,8 @@ Every other coordinator action refuses the project home (see
 - **A reason is required.** Without `projectHomeReason` (why an isolated
   environment will not do) the call is refused with an error that names
   `start_build_pipeline` and `launch_environment`, and nothing is sent or held.
+  Held messages also validate optional delivery fields; malformed tab IDs,
+  subjects or reply IDs are refused rather than silently dropped.
 - **Within 3 hours of a sent message** to that project home from this
   coordinator (`COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS`), the message is
   sent at once and the tool result carries a `warning` that this is

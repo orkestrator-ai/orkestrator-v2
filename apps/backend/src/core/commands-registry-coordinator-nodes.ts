@@ -658,9 +658,19 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           throw new Error("Build pipeline creation is already in progress; retry this requestId");
         }
         // The node's admission key makes a resent start return the first pipeline.
+        // The node checks the ticket is one of its own and links the build to
+        // it; the source sent here also links the build on a node too old to.
         const workflow = await target.call<JsonRecord>(
           "start_controller_build_pipeline",
-          { input: { ...input, projectId: target.projectId } },
+          {
+            input: {
+              ...input,
+              projectId: target.projectId,
+              ...(typeof input.taskId === "string"
+                ? { source: { type: "kanban", taskId: input.taskId.trim() } }
+                : {}),
+            },
+          },
           `build:${caller.coordinatorId}:${stableRequestId}`,
         );
         if (!record(workflow) || typeof workflow.id !== "string") {

@@ -513,7 +513,12 @@ describe("workflows on a node", () => {
     expect(workflow).toMatchObject({ id: "pipeline-leaf" });
     expect(
       routed.find((entry) => entry.command === "start_controller_build_pipeline")!.args.input,
-    ).toMatchObject({ projectId: "p-leaf", taskId: "t1" });
+    ).toMatchObject({
+      projectId: "p-leaf",
+      taskId: "t1",
+      // Linked to the ticket, which the node itself checks is one of its own.
+      source: { type: "kanban", taskId: "t1" },
+    });
     expect(await associations()).toEqual([
       expect.objectContaining({ kind: "build-pipeline", resourceId: "pipeline-leaf" }),
     ]);

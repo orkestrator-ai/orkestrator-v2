@@ -35,6 +35,7 @@ import {
   settleCoordinatorDeliverNow,
 } from "./coordinator-deliver-now.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
+import { coordinatorBuildTicketSource } from "./build-pipeline-launch.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
@@ -758,6 +759,8 @@ export function registerCoordinatorCommands(
         if (!input.delegationBaseBranch || !input.delegationBaseCommit) {
           throw new Error("Coordinator build pipelines require an explicit base branch and commit");
         }
+        // Linked like a Build button launch, so the run reports back to its ticket.
+        const source = await coordinatorBuildTicketSource(context.storage, projectId, input.taskId);
         if (input.existingEnvironmentId) {
           const environment = await context.storage.getEnvironment(input.existingEnvironmentId);
           if (
@@ -802,7 +805,7 @@ export function registerCoordinatorCommands(
         }
         // BuildPipelineService has its own durable admission key, so reclaiming a
         // reservation after a crash returns the already-created workflow.
-        const workflow = await buildPipelines.start(input);
+        const workflow = await buildPipelines.start({ ...input, source });
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,

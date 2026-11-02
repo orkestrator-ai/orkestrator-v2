@@ -17,6 +17,7 @@ import { COORDINATOR_DELEGATION_PRESENTATION } from "@orkestrator/protocol/revie
 import type { CommandContext } from "./commands-context.js";
 import { conciseError } from "./commands-error-text.js";
 import { asNonBlankString, stripWorkflowSnapshotSecrets } from "./commands-helpers.js";
+import { coordinatorBuildTicketSource } from "./build-pipeline-launch.js";
 import { assertContainerDelegationCommitPublished } from "./commands-registry-coordinator.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -244,6 +245,8 @@ export function registerControllerWorkflowCommands(
     if (!input.delegationBaseBranch || !input.delegationBaseCommit) {
       throw new Error("Coordinator build pipelines require an explicit base branch and commit");
     }
+    // The ticket is this node's: the build links to it here, as on the command node.
+    const source = await coordinatorBuildTicketSource(context.storage, projectId, input.taskId);
     if (input.existingEnvironmentId) {
       const environment = await context.storage.getEnvironment(input.existingEnvironmentId);
       if (
@@ -263,7 +266,7 @@ export function registerControllerWorkflowCommands(
       );
     }
     // The pipeline's admission key makes a retried start return the first one.
-    return context.buildPipelines.start(input as StartBuildPipelineInput);
+    return context.buildPipelines.start({ ...(input as StartBuildPipelineInput), source });
   });
 
   /** The Multi Review button, under an ID the caller reserved for this request. */

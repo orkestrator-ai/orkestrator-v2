@@ -15,6 +15,9 @@ import { openCodeEnvironmentDependencies } from "./opencode-provider-environment
 import { resolveCodexBridgeDefaultModel } from "./session-held-model.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
 import type { WorkflowResultReader } from "./workflow-result-service.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 export * from "./agent-provider-contract.js";
 
@@ -272,10 +275,7 @@ export function createNativeAgentProvider(
             };
         if (lookup.result || lookup.registered) return lookup.result;
       } catch (error) {
-        console.warn(
-          "[native-agent] Workflow result store unavailable; using provider result:",
-          error,
-        );
+        log.warn("workflow-result.store-unavailable", { error: formatLogError(error) });
       }
       return providerStructured<T>(sessionId, requestId);
     };

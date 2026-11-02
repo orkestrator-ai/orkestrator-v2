@@ -37,6 +37,9 @@ import {
 } from "./native-agent-service-shared.js";
 import { sessionSignInResend } from "./storage-shared-native-sessions.js";
 import type { StorageService } from "./storage.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 /** Sessions with a remembered prompt; every entry is at most one prompt. */
 const MAX_CANDIDATES = 64;
@@ -159,10 +162,7 @@ export class NativeAgentSignInResends {
       this.settleCandidate(session).then(
         () => undefined,
         (error: unknown) => {
-          console.warn(
-            "[native-agent] Checking a turn for a login refusal failed:",
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("sign-in.check-failed", { error: formatLogError(error, { message: false }) });
         },
       ),
     );
@@ -238,10 +238,7 @@ export class NativeAgentSignInResends {
       this.resendHeldPrompts().then(
         () => undefined,
         (error: unknown) => {
-          console.warn(
-            "[native-agent] Sending refused prompts after sign-in failed:",
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("sign-in.resend-failed", { error: formatLogError(error, { message: false }) });
         },
       ),
     );
@@ -263,10 +260,9 @@ export class NativeAgentSignInResends {
         if (await this.resendOne(session, held)) dispatched += 1;
       } catch (error) {
         // Only the error's class: a provider message can quote the prompt.
-        console.warn(
-          "[native-agent] A refused prompt could not be sent again after sign-in:",
-          error instanceof Error ? error.name : "unknown error",
-        );
+        log.warn("sign-in.prompt-resend-failed", {
+          error: formatLogError(error, { message: false }),
+        });
       }
     }
     return dispatched;

@@ -28,6 +28,9 @@ import {
 } from "./native-agent-service-shared.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 /** What the interaction tracker needs from the service that wires it. */
 export interface NativeAgentInteractionTrackerHost {
@@ -703,10 +706,10 @@ export class NativeAgentInteractionTracker {
               this.host.now() + Math.min(60_000, base * 2 ** Math.max(0, attempts - 1)),
             );
             if (provider) this.host.evictProvider(session, provider);
-            console.warn(
-              `[native-agent] Interaction observation for ${session.agent} failed:`,
-              error instanceof Error ? error.name : "unknown error",
-            );
+            log.warn("interaction.observe-failed", {
+              agent: session.agent,
+              error: formatLogError(error, { message: false }),
+            });
           }
         }
       }

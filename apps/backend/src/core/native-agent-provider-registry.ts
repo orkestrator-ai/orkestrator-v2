@@ -23,6 +23,9 @@ import {
   type NativeAgentServiceOptions,
 } from "./native-agent-service-shared.js";
 import type { NativeAgentObservationBroker } from "./native-agent-observation.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 export interface ProviderRegistryDependencies {
   now(): number;
@@ -413,10 +416,7 @@ export class ProviderRegistry {
     try {
       await provider.dispose?.();
     } catch (error) {
-      console.warn(
-        "[native-agent] Retiring an obsolete provider failed:",
-        error instanceof Error ? error.name : "unknown error",
-      );
+      log.warn("provider.retire-failed", { error: formatLogError(error, { message: false }) });
     }
   }
 

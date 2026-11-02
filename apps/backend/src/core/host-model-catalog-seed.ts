@@ -5,6 +5,9 @@ import type {
   HostCatalog,
   refreshHostModelCatalog as RefreshHostModelCatalog,
 } from "./host-model-catalog-refresh.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("model-catalog");
 
 /**
  * How long a failed seed suppresses the next one. A signed-out host fails every
@@ -126,10 +129,7 @@ export function seedHostModelCatalogIfMissing(
       // still in use. Do not let that stale failure reinstate the cooldown.
       if ((generations.get(key) ?? 0) === generation) failedAt.set(key, now());
       // The message is the bridge's own error text; it carries no credentials.
-      console.warn(
-        `[ElectronBackend] Could not download the ${agent} model catalogue yet:`,
-        error instanceof Error ? error.message : "unknown error",
-      );
+      log.warn("download.deferred", { agent, error: formatLogError(error) });
       return false;
     }
   };

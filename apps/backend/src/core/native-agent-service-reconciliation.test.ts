@@ -1663,7 +1663,7 @@ describe("NativeAgentService", () => {
             await waitForCondition(() => recoveryTaskCount(service) === 0);
           });
           expect(send).toHaveBeenCalledTimes(1);
-          expect(warnings.join("\n")).toContain("incomplete again");
+          expect(warnings.join("\n")).toContain("turn-recovery.exhausted");
           expect(
             (await storage.getNativeAgentSession(key))?.openCodeIncompleteTurnNotice,
           ).toMatchObject({
@@ -2333,7 +2333,9 @@ describe("NativeAgentService", () => {
         storage.recordEnvironmentSessionCompletion = originalRecord;
 
         expect(attempts).toBe(2);
-        expect(warnings.some((warning) => warning.includes("Activity reconciliation"))).toBe(true);
+        expect(warnings.some((warning) => warning.includes("activity.reconcile-failed"))).toBe(
+          true,
+        );
         expect(launchInternals(service).observedSessionActivity.get(key)?.state).toBe("idle");
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "idle",

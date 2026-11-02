@@ -1,3 +1,7 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
+const nativeAgentGoalLog = createLogger("native-agent.goal");
 export * from "./native-agent-service-shared.js";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import * as shared from "./native-agent-service-shared.js";
@@ -1304,10 +1308,7 @@ export class NativeAgentService {
   private async initialize(): Promise<void> {
     await this.repairPersistedStartupTabs().catch(() => undefined);
     await this.goals.init().catch((error: unknown) => {
-      console.warn(
-        "[goals] Failed to recover goals:",
-        error instanceof Error ? error.message : error,
-      );
+      nativeAgentGoalLog.warn("recover.failed", { error: formatLogError(error) });
     });
     await Promise.allSettled([
       this.trackScan(this.launches.launchScan()),
@@ -1729,7 +1730,7 @@ export class NativeAgentService {
     try {
       await provider.refreshCatalog?.();
     } catch (error) {
-      console.warn(`[native-agent] ${input.agent} catalogue refresh failed:`, error);
+      log.warn("catalogue.refresh-failed", { agent: input.agent, error: formatLogError(error) });
     }
     return this.projections.refreshProjection(input, true);
   }
@@ -3472,10 +3473,7 @@ export class NativeAgentService {
       await provider
         .prepareDispatch?.(session.providerSessionId, { agentMcp: dispatchAgentMcp })
         .catch((error: unknown) => {
-          console.warn(
-            `[native-agent] Attaching ${input.agent} before dispatch failed:`,
-            error instanceof Error ? error.message : error,
-          );
+          log.warn("dispatch.attach-failed", { agent: input.agent, error: formatLogError(error) });
         });
       await this.prepareEnvironmentFirstPrompt(input, session, provider);
       const commandContextBlock = userCommands?.block || leadingUserCommandContext(input.prompt);
@@ -3730,10 +3728,7 @@ export class NativeAgentService {
                   : workspace,
               )
               .catch((error) =>
-                console.warn(
-                  "[native-agent] Failed to acknowledge coordinator repository context:",
-                  error instanceof Error ? error.message : error,
-                ),
+                log.warn("coordinator-context.ack-failed", { error: formatLogError(error) }),
               );
           }
         }
@@ -3773,10 +3768,10 @@ export class NativeAgentService {
         prompt: parseGoalCarrier(input.prompt)?.objective ?? input.prompt,
       });
     } catch (error) {
-      console.warn(
-        `[native-agent] Failed to prepare first-prompt naming for ${input.environmentId}:`,
-        error instanceof Error ? error.name : "unknown error",
-      );
+      log.warn("naming.prepare-failed", {
+        environmentId: input.environmentId,
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 

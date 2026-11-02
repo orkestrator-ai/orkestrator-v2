@@ -21,6 +21,8 @@ import {
   fetchClaudeBridgeModelCatalog,
 } from "./commands-containers.js";
 import type { CommandContext } from "./commands-context.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
 
 type ClaudeCatalogRefreshDependencies = {
   enqueueContainerBridgeOperation: typeof enqueueContainerBridgeOperation;

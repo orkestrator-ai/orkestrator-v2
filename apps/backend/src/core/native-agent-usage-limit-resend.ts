@@ -36,6 +36,9 @@ import {
   type PromptDispatchPreparation,
   type StorageService,
 } from "./native-agent-service-shared.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 const RETRY_MS = 15_000;
 /** A stop still undecided after this stays stopped, and the queue it holds is let go. */
@@ -203,9 +206,7 @@ export class NativeAgentUsageLimitResend {
         // A failed decision or send leaves the turn as it stopped: the user sees
         // the provider's own error, and an unknown send stays in the journal.
         if (this.candidates.get(session.key) === candidate) this.candidates.delete(session.key);
-        console.warn(
-          `[native-agent] Resend after a usage limit in ${session.environmentId} failed`,
-        );
+        log.warn("usage-limit.resend-failed", { environmentId: session.environmentId });
       })
       .finally(() => {
         if (this.tasks.get(session.key) === task) this.tasks.delete(session.key);

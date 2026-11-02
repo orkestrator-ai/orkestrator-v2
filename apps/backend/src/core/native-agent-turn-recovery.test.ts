@@ -322,8 +322,7 @@ describe("NativeAgentTurnRecovery", () => {
     });
     expect(recovery.hasCandidate(session.key)).toBe(true);
     expect(warn).toHaveBeenCalledWith(
-      "[native-agent] Pi incomplete-turn recovery for env-1 failed:",
-      "Error",
+      expect.stringContaining("turn-recovery.failed agent=pi environmentId=env-1 error.name=Error"),
     );
   });
 

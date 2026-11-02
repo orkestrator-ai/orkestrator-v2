@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7 and ST-8 done).
-3. **Renderer re-renders and refetches**: WEB-4 to WEB-19 and GW-13, plus WEB-2's narrower subscriptions. Status: open (WEB-2 and WEB-3 done).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests).
@@ -83,19 +83,42 @@ governs, marked "Decided".
 
 **Problem.** Several renderer paths serialise or re-render far more than changed.
 
-**Context.** Done: unchanged polls keep the identity object and the projection store's recency condition is gone (WEB-2); per-environment lists hydrate once per id and the status and PR setters skip no-ops (WEB-3, `useHydrateOncePerEnvironment.ts`).
+**Context.** Done 2026-11-01: unchanged polls keep the identity object and the projection store's recency condition is gone (WEB-2); per-environment lists hydrate once per id and the status and PR setters skip no-ops (WEB-3, `useHydrateOncePerEnvironment.ts`). Done 2026-11-02, each re-checked against `main` at `38d55ee1` first (all five were still true; #1585's transcript rework did not touch `AgentInfoButton`), each with a test that fails on the previous code:
 
-**Investigation.** Not re-checked since the report: pane-layout persistence serialises every layout before its identity check (WEB-4), background polls toggle loading flags (WEB-5), the live-head merge has no identity shortcut (WEB-6), broad store subscriptions in `AppShell` and `usePullRequest` (WEB-7), the agent-info header normalising the whole transcript (WEB-8), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), the smaller WEB-12 to WEB-19, and dialogs polling state the backend pushes (GW-13). WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done.
+- WEB-4: `pane-layout-persistence.ts` skips an environment whose object and hydration are both unchanged before sanitising and serialising it (`pane-layout-persistence.unchanged.test.ts`: a write to one environment serialised the other's layout once per write before).
+- WEB-5: a background read over an authoritative session state (`stateAvailability` current and a projection held) no longer raises and clears `isRefreshing` and `sessionStateRefreshing`, and both setters skip writes that would not change the value (`useNativeAgentSession.background-flags.test.tsx`: steady polls went from one hook render per tick to none; manual reads and reads before any authoritative state still raise the flags). The transcript skeleton flag had already been gated on `background`.
+- WEB-8: `AgentInfoButton` normalises the transcript only inside the rewind and undo handlers (`AgentInfoButton.transcript-reads.test.tsx`: six projection updates normalised six times before, now none until the click, then once).
+- WEB-15: the native tab's tail reads (latest assistant row, latest prompt, auth failure since it) are one memoised pass, `readTranscriptTail` in `components/native-agent/transcript-tail.ts` (`transcript-tail.test.ts` pins equality with the old expressions, goal turns included).
+- GW-13: `EnvironmentRebuildSection` follows `container-lifecycle-updated` through `listenAuthoritative` (subscribe, then read; re-read on resync), keeps the higher-revision snapshot when reads and events cross, and polls every 15 s while a rebuild runs instead of every 2 s (2 s again if the subscription fails). The event name and `ContainerLifecycleEvent` payload now live in `@orkestrator/protocol/container-lifecycle` (`EnvironmentRebuildSection.events.test.tsx`).
+
+**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the live-head merge has no identity shortcut (WEB-6), broad store subscriptions in `AppShell` and `usePullRequest` (WEB-7), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), and the smaller WEB-12 to WEB-14 and WEB-16 to WEB-19. WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
 
 **Decisions.**
 
-- **Order of work?**
+- **Order of work?** Decided 2026-11-02 (first batch done).
   - **WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 first, each a local change; then WEB-7 and WEB-9 (recommended).**
     - Pros: the report's Phase 1 items first; each is testable on its own.
     - Cons: WEB-9's bundle gain waits.
   - **WEB-9 first.**
     - Pros: every launch benefits.
     - Cons: needs a build-size check per step and touches many imports.
+- **What should still poll once the rebuild section follows lifecycle events (GW-13)?**
+  - **A 15 s backstop read while a rebuild runs, 2 s when the subscription failed (recommended, done).**
+    - Pros: progress arrives as it is written; a lost event costs at most 15 s even on a transport that cannot report a gap.
+    - Cons: still one read every 15 s per open dialog during a rebuild.
+  - **No polling at all; rely on events and resync.**
+    - Pros: no reads while nothing changes.
+    - Cons: a dropped event on a transport without a resync signal leaves the dialog stale until it is reopened.
+  - **Keep the 2 s poll and add the listener.**
+    - Pros: no behaviour risk.
+    - Cons: keeps the cost GW-13 is about.
+- **Should `ProjectCopyDialog` and `useUserCommands` lose their 3 s backstops too (GW-13)?**
+  - **Leave them (recommended, done).**
+    - Pros: both already update from events; each backstop runs only while work is in flight and covers a transport (portal) or resource (ephemeral `user-command`) whose missed hints nothing else detects.
+    - Cons: a few extra reads per in-flight copy or command.
+  - **Lengthen or remove them.**
+    - Pros: fewer reads.
+    - Cons: needs a gap signal for the portal stream and the ephemeral resource first.
 
 ### 4. Live agent view requests
 
@@ -373,6 +396,38 @@ it now fetches none, and the pin was updated.
 
 A failed restore is forgotten and retried on the next change to the
 environment list, and an environment that leaves and returns hydrates again.
+
+### Task 3: failed layout save cadence (WEB-4)
+
+Review correction on 2026-11-02: unchanged hydrated environments skip work even
+after a save failure. Retrying on every unrelated store update would introduce
+new behavior and repeated requests under persistent failure. The regression
+checks no retry after another environment changes, then a retry containing the
+unsaved layout when the failed environment itself changes.
+
+### Task 3: quiet background reads (WEB-5)
+
+Made on 2026-11-02, on the branch `renderer-paths-optimization-845c78394eb7-r1`.
+A background read stays quiet only while session state is `current` and a
+projection is held, because only then does the connection surface ignore the
+flags. A read before that, or any manual read, raises them as before. If a
+quiet read loses authority (missing state, an unavailable response, or a thrown
+read error), `isRefreshing` stays raised until the independent transcript read
+also settles. Deferred-transcript tests cover all three paths and recovery
+after both error forms. The first poll after
+a connecting read can still render once: React sometimes renders before it
+discards a same-value state write that follows a real update.
+
+### Task 3: snapshot ordering in the rebuild section (GW-13)
+
+Reads and events apply through one setter that keeps the snapshot with the
+higher revision for the same environment, so a read that started before an
+event cannot roll progress back. A snapshot for a different environment always
+replaces the held one, as the unconditional setter did. The 15 s backstop and
+the 2 s fallback are exported as `REBUILD_BACKSTOP_POLL_MS` and
+`REBUILD_POLL_MS`. A regression invokes the registered 15 s timer without
+emitting an event or resync and verifies both newer progress and completion
+are installed from snapshot reads.
 
 ### Task 6: ACP persistence interval
 

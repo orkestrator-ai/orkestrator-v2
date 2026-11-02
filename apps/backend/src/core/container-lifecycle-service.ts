@@ -1,4 +1,5 @@
 import {
+  CONTAINER_LIFECYCLE_EVENT,
   CONTAINER_LIFECYCLE_SCHEMA_VERSION,
   MAX_RECENT_OPERATION_OUTCOMES,
   TERMINAL_OPERATION_STATUSES,
@@ -9,6 +10,7 @@ import {
   parseContainerLifecycle,
   parseContainerLifecycleError,
   type ContainerLifecycleErrorCode,
+  type ContainerLifecycleEvent,
   type ContainerMutationIdentity,
   type ContainerOperationKind,
   type ContainerOperationOutcome,
@@ -48,8 +50,6 @@ const log = createLogger("docker");
  * Lock order: the environment lifecycle queue is taken first (by the caller);
  * this module never enqueues on it, so it cannot re-enter its own queue.
  */
-
-export const CONTAINER_LIFECYCLE_EVENT = "container-lifecycle-updated";
 
 type LifecycleContext = Pick<CommandContext, "storage" | "emit"> &
   Partial<Pick<CommandContext, "strictDockerOwner" | "registryWriterLease">>;
@@ -129,7 +129,7 @@ async function persist(
   context.emit(CONTAINER_LIFECYCLE_EVENT, {
     environmentId,
     snapshot: containerLifecycleSnapshot({ supported: true, record }),
-  });
+  } satisfies ContainerLifecycleEvent);
   return updated;
 }
 

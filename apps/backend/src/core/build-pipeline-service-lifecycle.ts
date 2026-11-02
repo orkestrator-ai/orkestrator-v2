@@ -6,6 +6,8 @@
  */
 import { DEFAULT_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline-stages.js";
 import { randomUUID } from "node:crypto";
+import { createLogger } from "@orkestrator/protocol/logger";
+import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
   type BuildPipeline,
   type PipelineSession,
@@ -89,6 +91,7 @@ import { probeReviewWorktree } from "./review-worktree-probe.js";
 
 /** Stage IDs of this form ask to prepare the review package again from the named session. */
 const PACKAGE_STAGE_PREFIX = "review-package:";
+const log = createLogger("backend.activity");
 
 type RestartTarget =
   | { kind: "validation" }
@@ -1927,6 +1930,16 @@ export class BuildPipelineLifecycle {
         return { deleted: false, record };
       }
       await this.ctx.storage.deleteBuildPipeline(pipelineId);
+      // Update the ticket without terminal reconciliation, which saves the
+      // pipeline and must never run after its record has been deleted.
+      try {
+        await this.recovery.updateKanbanLifecycle(
+          record.snapshot,
+          buildPipelineKanbanUpdate("failed"),
+        );
+      } catch {
+        log.warn("job.failed", { scope: "deleted-pipeline-kanban-update" });
+      }
       return { deleted: true, record };
     });
   }

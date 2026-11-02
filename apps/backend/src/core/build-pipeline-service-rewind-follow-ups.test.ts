@@ -696,52 +696,80 @@ describe("rewinding the code to a step", () => {
     }
   });
 
-  test("a pipeline whose pending reset can never run can still be deleted", async () => {
-    const fake = fakeGit();
-    let unavailable = false;
-    const git: EnvironmentGit = async (id, args) => {
-      if (unavailable && args[0] === "update-ref") {
-        throw new EnvironmentUnavailableError("The environment's container is not running.");
+  test.each(["in-progress", "review", "update-fails"] as const)(
+    "a pending-reset Kanban pipeline can be deleted (%s)",
+    async (ticketState) => {
+      const fake = fakeGit();
+      let unavailable = false;
+      const git: EnvironmentGit = async (id, args) => {
+        if (unavailable && args[0] === "update-ref") {
+          throw new EnvironmentUnavailableError("The environment's container is not running.");
+        }
+        return fake.git(id, args);
+      };
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        await withService(
+          async (service, storage, provider, invocations, controls) => {
+            fake.worktree.controls = controls;
+            const { started, build } = await completedOnC3(service, storage, controls);
+            const taskId = "pending-rewind-ticket";
+            controls.kanbanTasks.set(taskId, {
+              id: taskId,
+              status: ticketState === "update-fails" ? "review" : ticketState,
+              comments: [{ text: "Existing lifecycle comment" }],
+            });
+            await mutateStored(storage, started.id, (snapshot) => {
+              snapshot.source = { type: "kanban", taskId };
+            });
+            const created = provider.created.length;
+            unavailable = true;
+            await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(
+              "has not finished",
+            );
+            // The workspace came back on another commit: the reset now refuses
+            // for good, so the supervisor can never finish it.
+            unavailable = false;
+            controls.currentHead = C1;
+            await service.advanceNow(started.id);
+            const stuck = await pipeline(storage, started.id);
+            expect(stuck.rewinds?.at(-1)?.code?.pending).toBe(true);
+            expect(stuck.phase).toBe("building");
+            // Pause and cancel still wait for the confirmed reset.
+            await expect(service.pause(started.id)).rejects.toThrow("The branch moved");
+            await expect(service.cancel(started.id)).rejects.toThrow("The branch moved");
+
+            if (ticketState === "update-fails") controls.failCommands.add("update_kanban_task");
+            const invocationCount = invocations.length;
+            await service.remove(started.id);
+            const task = controls.kanbanTasks.get(taskId)!;
+            expect(task.status).toBe(ticketState === "update-fails" ? "review" : "backlog");
+            expect(task.comments).toEqual([{ text: "Existing lifecycle comment" }]);
+            expect(
+              invocations
+                .slice(invocationCount)
+                .filter((call) => call.command === "update_kanban_task")
+                .map((call) => call.args),
+            ).toEqual([{ taskId, status: "backlog" }]);
+            expect(
+              invocations
+                .slice(invocationCount)
+                .some((call) => call.command === "add_kanban_comment"),
+            ).toBe(false);
+
+            expect(await storage.getBuildPipeline(started.id)).toBeNull();
+            await service.advanceNow(started.id);
+            expect(fake.calls.some((call) => call[0] === "reset")).toBe(false);
+            expect(controls.currentHead).toBe(C1);
+            expect(provider.created.length).toBe(created);
+          },
+          { environmentGit: git },
+        );
+      } finally {
+        warn.mockRestore();
       }
-      return fake.git(id, args);
-    };
-    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      await withService(
-        async (service, storage, provider, _invocations, controls) => {
-          fake.worktree.controls = controls;
-          const { started, build } = await completedOnC3(service, storage, controls);
-          const created = provider.created.length;
-          unavailable = true;
-          await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(
-            "has not finished",
-          );
-          // The workspace came back on another commit: the reset now refuses
-          // for good, so the supervisor can never finish it.
-          unavailable = false;
-          controls.currentHead = C1;
-          await service.advanceNow(started.id);
-          const stuck = await pipeline(storage, started.id);
-          expect(stuck.rewinds?.at(-1)?.code?.pending).toBe(true);
-          expect(stuck.phase).toBe("building");
-          // Pause and cancel still wait for the confirmed reset.
-          await expect(service.pause(started.id)).rejects.toThrow("The branch moved");
-          await expect(service.cancel(started.id)).rejects.toThrow("The branch moved");
-
-          await service.remove(started.id);
-
-          expect(await storage.getBuildPipeline(started.id)).toBeNull();
-          await service.advanceNow(started.id);
-          expect(fake.calls.some((call) => call[0] === "reset")).toBe(false);
-          expect(controls.currentHead).toBe(C1);
-          expect(provider.created.length).toBe(created);
-        },
-        { environmentGit: git },
-      );
-    } finally {
-      warn.mockRestore();
-    }
-  });
+    },
+  );
 
   test("a delete waits for a reset already under way, then removes the pipeline as usual", async () => {
     const fake = fakeGit();

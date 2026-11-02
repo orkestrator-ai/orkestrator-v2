@@ -1,12 +1,5 @@
 # A pending code rewind blocks deleting its pipeline
 
-A build pipeline whose "Rewind code to here" was admitted (the reset journaled
-with `pending`) but whose Git reset cannot run could not be paused, cancelled or
-deleted until the reset finished. Found on 2026-11-01 while running
-[0405](0405-build-pipeline-rewind-follow-ups.md) task 7 in a real container.
-Fixed for delete on 2026-11-02: deleting now drops the record and its unrun
-reset; pause and cancel still wait for the reset, by decision.
-
 ## Task analysis
 
 Analysed 2026-11-01 against `main` at `93b99bfb`; rechecked 2026-11-02
@@ -124,16 +117,21 @@ finished while delete waited, the pipeline is active again with nothing
 pending, so delete cancels it as usual rather than dropping a build that may
 be about to start its step.
 
-### Task 1: no cancel side effects on the dropped pipeline
+### Task 1: preserve the Kanban column update after deletion
 
-The skipped `cancel` would have closed workflow result slots, posted the
-"failed" Kanban/ticket comment (`reconcileTerminalState`) and cleared provider
-attribution. Result slots were already closed when the rewind was admitted
-(the "workflow closure failure happens before any Git mutation" test), and the
-attribution map is cleared by `remove` itself. The completion comment is not
-posted: the record is gone, and the comment path saves the pipeline, which
-would fail or resurrect it. A deleted build's ticket therefore keeps its last
-lifecycle comment, as when an environment deletion removes its pipelines.
+Chose a best-effort failed/backlog lifecycle update using the deleted snapshot,
+under the pipeline lock. Unlike terminal reconciliation, this update never saves
+or recreates the pipeline. Failures are logged and do not block deletion. The
+alternative of skipping it leaves the ticket in In progress or Review after its
+build disappears. Updating before deletion would add a failure point to the
+escape path.
+
+Result slots were already closed when the rewind was admitted, and `remove`
+clears provider attribution. Completion comments remain unchanged: the failed
+Kanban lifecycle event only moves the column. Full terminal reconciliation and
+GitHub completion comments save the pipeline, so they remain skipped. Service
+regressions cover both ticket columns, unchanged comments and an update failure
+that leaves the pipeline deleted.
 
 ### Task 1: the confirmed reset is dropped without a trace
 

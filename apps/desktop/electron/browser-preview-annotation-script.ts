@@ -454,7 +454,10 @@ function installBrowserPreviewCaptureRuntime(
             shadowChildren && shadowChildren.length > 0 ? shadowChildren : candidate.children;
           for (let index = 0; index < Math.min(children.length, 200); index += 1) {
             const child = children[index]!;
-            if (!kit.isInspectorNode(child)) {
+            if (
+              !kit.isInspectorNode(child) &&
+              !["style", "script", "template", "link", "meta"].includes(child.tagName.toLowerCase())
+            ) {
               next = child;
               break;
             }

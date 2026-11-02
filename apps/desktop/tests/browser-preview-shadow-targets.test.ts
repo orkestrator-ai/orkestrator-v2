@@ -13,6 +13,7 @@ import { browserPreviewAnchorKit } from "../electron/browser-preview-anchor-scri
 import {
   BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT,
   BROWSER_PREVIEW_CAPTURE_STATUS_SCRIPT,
+  browserPreviewCaptureStartScript,
 } from "../electron/browser-preview-annotation-script";
 import { parseCaptureRuntimeStatus } from "../electron/browser-preview-capture-parse";
 import {
@@ -114,6 +115,7 @@ describe("capturing targets inside open shadow roots", () => {
     const target = captureAt(harness, harness.document.querySelector("app-shell")!);
 
     expect(target.label).toBe("link “Settings”");
+    expect(resolve(harness, target).state).toBe("matched");
     expect(target.anchor.scope.hosts).toEqual([
       { tagName: "app-shell", cssPath: "html > body > app-shell" },
       { tagName: "app-menu", cssPath: "nav > app-menu" },
@@ -182,6 +184,50 @@ describe("capturing targets inside open shadow roots", () => {
     expect(status.status).toBe("selected");
     expect(status.selection.target.label).toBe("region “Body”");
     expect(status.selection.target.anchor.scope.kind).toBe("shadow");
+  });
+
+  test("recapture restores a shadow-scoped initial target", () => {
+    const { harness, save } = shellPage();
+    const target = captureAt(harness, harness.document.querySelector("app-shell")!);
+    harness.point(harness.document.querySelector("#save"));
+    harness.window.eval(
+      browserPreviewCaptureStartScript({
+        captureId: "recapture",
+        nonce: "nonce-1",
+        mode: "element",
+        initialTarget: target,
+      }),
+    );
+    key(harness, "Enter");
+    expect(harness.status().selection.target.anchor).toEqual(target.anchor);
+    expect(save.isConnected).toBe(true);
+  });
+
+  test("keyboard enters rendered content past a leading style node", () => {
+    const harness = page("<x-panel tabindex='0'></x-panel>");
+    const host = harness.document.querySelector("x-panel")!;
+    const root = shadow(
+      harness,
+      "x-panel",
+      "<style>button { color: red }</style><button>Go</button>",
+    );
+    (host as unknown as { focus(): void }).focus();
+    harness.start("element");
+    key(harness, "ArrowDown"); // initialize from focused host
+    key(harness, "ArrowDown"); // enter its shadow root
+    key(harness, "Enter");
+    expect(harness.status().selection.target.label).toBe("button “Go”");
+    expect(root.querySelector("button")).not.toBeNull();
+  });
+
+  test("keyboard starts from focus inside an open root rather than the centre hit", () => {
+    const { harness, save } = shellPage();
+    harness.point(harness.document.querySelector("#save"));
+    (save as unknown as { focus(): void }).focus();
+    harness.start("element");
+    key(harness, "Enter");
+    expect(harness.status().selection.target.anchor.scope.kind).toBe("shadow");
+    expect(harness.status().selection.target.label).toBe("button “Save”");
   });
 
   test("source hints on the host apply to content inside its root", () => {
@@ -298,6 +344,92 @@ describe("resolving targets inside open shadow roots", () => {
     harness.document.body.innerHTML = `<main><x-card></x-card></main>`;
     shadow(harness, "x-card", `<button>Buy</button>`, "closed");
     expect(resolve(harness, target)).toMatchObject({ state: "missing", rule: "none" });
+  });
+
+  test("root-level sibling host paths stay unique unchanged and after reload", () => {
+    const build = () => {
+      const harness = page("<app-shell></app-shell>");
+      const outer = shadow(
+        harness,
+        "app-shell",
+        "<x-card></x-card><x-card></x-card><section><x-card></x-card><x-card></x-card></section>",
+      );
+      const hosts = Array.from(outer.querySelectorAll("x-card"));
+      for (const host of hosts)
+        host.attachShadow({ mode: "open" }).innerHTML = "<button id='save'>Save</button>";
+      hitInRoot(outer, hosts[1]!);
+      hitInRoot(hosts[1]!.shadowRoot!, hosts[1]!.shadowRoot!.querySelector("button"));
+      return harness;
+    };
+    const harness = build();
+    const target = captureAt(harness, harness.document.querySelector("app-shell")!);
+    expect(target.anchor.scope.hosts[1].cssPath).toBe("x-card:nth-of-type(2)");
+    expect(resolve(harness, target).state).toBe("matched");
+    expect(resolve(build(), target).state).toBe("matched");
+  });
+
+  test("host identity survives reorder and refuses substitution after removal", () => {
+    const harness = page(
+      "<x-card data-testid='alpha'></x-card><x-card data-testid='beta'></x-card>",
+    );
+    for (const host of Array.from(harness.document.querySelectorAll("x-card"))) {
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = "<button id='save'>Save</button>";
+      hitInRoot(root, root.querySelector("button"));
+    }
+    const alpha = harness.document.querySelector("[data-testid=alpha]")!;
+    const target = captureAt(harness, alpha);
+    harness.document.body.append(alpha);
+    expect(resolve(harness, target).state).toBe("matched");
+    alpha.remove();
+    expect(resolve(harness, target).state).toBe("missing");
+  });
+
+  test("replaced root chains release observer slots for current shadow-only changes", async () => {
+    const harness = page("<x-level></x-level>");
+    const build = () => {
+      let host = harness.document.querySelector("x-level")!;
+      let root: ShadowRoot;
+      for (let level = 0; level < 8; level += 1) {
+        root = host.attachShadow({ mode: "open" });
+        root.innerHTML = level === 7 ? "<button id='save'>Save</button>" : "<x-level></x-level>";
+        hitInRoot(root, root.firstElementChild);
+        host = root.firstElementChild!;
+      }
+      return root!;
+    };
+    let root = build();
+    const target = captureAt(harness, harness.document.querySelector("x-level")!);
+    harness.window.eval(
+      browserPreviewPinsShowScript({
+        queries: [{ annotationId: "annotation-1", number: 1, label: "Save", target }],
+        focusedAnnotationId: null,
+        scrollIntoView: false,
+        limits: { throttleMs: 20, maxPasses: 120 },
+      }),
+    );
+    const snapshot = () =>
+      JSON.parse(harness.window.eval(BROWSER_PREVIEW_PINS_SNAPSHOT_SCRIPT) as string) as Json;
+    const waitFor = async (predicate: (value: Json) => boolean) => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        await new Promise((done) => setTimeout(done, 10));
+        if (predicate(snapshot())) return;
+      }
+      throw new Error("pin observation did not reconcile");
+    };
+    for (let generation = 0; generation < 9; generation += 1) {
+      const passes = snapshot().diagnostics.passes;
+      const batches = snapshot().diagnostics.mutationBatches;
+      harness.document.body.querySelector("x-level")!.remove();
+      harness.document.body.insertAdjacentHTML("afterbegin", "<x-level></x-level>");
+      root = build();
+      await waitFor(
+        (value) => value.diagnostics.mutationBatches > batches && value.diagnostics.passes > passes,
+      );
+      expect(snapshot().results[0].state).toBe("matched");
+    }
+    root.querySelector("button")!.remove();
+    await waitFor((value) => value.results[0].state === "missing");
   });
 
   test("an over-long or malformed root path is unsupported", () => {

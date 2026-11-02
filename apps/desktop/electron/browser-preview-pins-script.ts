@@ -276,11 +276,22 @@ function installBrowserPreviewPins(
   const OBSERVE_OPTIONS = { childList: true, subtree: true, characterData: true };
   const observeShadowRoots = (): void => {
     if (!observer) return;
-    for (const root of kit.shadowRootsSeen()) {
-      if (observedRoots.includes(root) || observedRoots.length >= 64) continue;
-      observedRoots.push(root);
+    const current = kit
+      .shadowRootsSeen()
+      .filter((root) => root.host.isConnected)
+      .slice(0, 64);
+    if (
+      current.length === observedRoots.length &&
+      current.every((root, index) => root === observedRoots[index])
+    )
+      return;
+    observer.disconnect();
+    observedRoots.length = 0;
+    observer.observe(document.documentElement, OBSERVE_OPTIONS);
+    for (const root of current) {
       try {
         observer.observe(root, OBSERVE_OPTIONS);
+        observedRoots.push(root);
       } catch {
         // A root that cannot be observed still resolves on the next pass.
       }

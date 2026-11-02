@@ -706,10 +706,10 @@ export function browserPreviewAnchorKit() {
       }
       const parent: Element | null = current.parentElement;
       let segment = tag;
-      if (parent) {
+      if (parent || root !== document) {
         let count = 0;
         let position = 0;
-        const siblings = parent.children;
+        const siblings = (parent ?? root).children;
         for (let index = 0; index < Math.min(siblings.length, 1_000); index += 1) {
           const sibling = siblings[index]!;
           if (sibling.tagName === current.tagName) {
@@ -1335,7 +1335,27 @@ export function browserPreviewAnchorKit() {
       let matches: Element[] = host.stableId
         ? queryPage(root, stableIdSelector(host.stableId)).filter(sameTag)
         : [];
-      if (matches.length !== 1) matches = queryPage(root, host.cssPath).filter(sameTag);
+      if (matches.length !== 1) {
+        matches = queryPage(root, host.cssPath).filter((candidate) => {
+          if (!sameTag(candidate)) return false;
+          // Structural paths without an ID start at the root's direct children.
+          // ShadowRoot querySelectorAll otherwise also accepts descendant suffixes.
+          if (root !== document && !host.cssPath.includes("#")) {
+            let top = candidate;
+            for (let index = 1; index < host.cssPath.split(" > ").length; index += 1) {
+              if (!top.parentElement) return false;
+              top = top.parentElement;
+            }
+            if (top.parentNode !== root) return false;
+          }
+          // Never substitute a different component for a saved stable identity.
+          if (host.stableId) {
+            const attribute = host.stableId.kind === "test-id" ? "data-testid" : "id";
+            if (candidate.getAttribute(attribute) !== host.stableId.value) return false;
+          }
+          return true;
+        });
+      }
       if (matches.length > 1) return { failed: result("ambiguous", "none", matches.length) };
       const shadow: ShadowRoot | null = matches[0]?.shadowRoot ?? null;
       if (!shadow) return { failed: result("missing", "none", 0) };

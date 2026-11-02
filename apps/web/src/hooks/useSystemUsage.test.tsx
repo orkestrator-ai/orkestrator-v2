@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
@@ -11,9 +11,13 @@ import {
   SYSTEM_USAGE_STALE_AFTER_MS,
   useEnvironmentProcessUsage,
   useSystemUsage,
+  useMachineSystemUsage,
   type UsageView,
 } from "./useSystemUsage";
 import type { SystemUsageSnapshot } from "@/lib/backend";
+
+import { portalStore } from "@/lib/portal/portal-store";
+import type { BackendId } from "@orkestrator/protocol/federation";
 
 const nativeInvokeMock = nativeInvoke as ReturnType<typeof mock>;
 
@@ -75,6 +79,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetReadCoordinatorForTests();
+  mock.restore();
 });
 
 describe("useSystemUsage", () => {
@@ -205,3 +210,37 @@ describe("useSystemUsage", () => {
     expect(processCalls).toHaveLength(3);
   });
 });
+
+function MachineMeter({ id, bound }: { id: string; bound: boolean }) {
+  views.set(id, useMachineSystemUsage({ nodeId: id as BackendId, bound, intervalMs: 5_000 }));
+  return null;
+}
+
+for (const boundId of ["bk_self", "bk_workspace"]) {
+  test(`bound usage on ${boundId} shares the title meter; other nodes keep separate routed reads`, async () => {
+    const routed = spyOn(portalStore, "invokeOnNode").mockImplementation(
+      async (nodeId) =>
+        sample(nodeId === "bk_self" ? 21 : nodeId === "bk_workspace" ? 31 : 41) as never,
+    );
+    const remoteId = boundId === "bk_self" ? "bk_workspace" : "bk_self";
+    render(
+      <>
+        <Meter id="title" intervalMs={5_000} />
+        <MachineMeter id={boundId} bound />
+        <MachineMeter id={remoteId} bound={false} />
+        <MachineMeter id="bk_other" bound={false} />
+      </>,
+    );
+    await advance(0);
+    expect(usageCalls).toEqual([0]);
+    expect(views.get(boundId)?.sample).toEqual(views.get("title")?.sample);
+    expect(routed).toHaveBeenCalledWith(remoteId, "get_system_usage");
+    expect(routed).toHaveBeenCalledWith("bk_other", "get_system_usage");
+    expect(routed).toHaveBeenCalledTimes(2);
+    expect(views.get(remoteId)?.sample?.cpuPercent).toBe(remoteId === "bk_self" ? 21 : 31);
+    expect(views.get("bk_other")?.sample?.cpuPercent).toBe(41);
+    await advance(5_000);
+    expect(usageCalls).toEqual([0, 5_000]);
+    expect(routed).toHaveBeenCalledTimes(4);
+  });
+}

@@ -145,3 +145,42 @@ test("nothing shows, and nothing is read, with one machine", async () => {
   expect(screen.queryByTestId("machine-cpu-readings")).toBeNull();
   expect(usageCalls).toEqual([]);
 });
+
+test("a connected machine loses its figure and polling when it disconnects while mounted", async () => {
+  renderReadings();
+  await waitFor(() => expect(labels()).toContain("bk_b CPU usage: 93%"));
+  act(() =>
+    portalStore.store.setState((state) => ({
+      nodes: state.nodes.map((node) =>
+        node.nodeId === "bk_b"
+          ? {
+              ...node,
+              view: { ...node.view, connection: { ...node.view.connection, state: "unavailable" } },
+            }
+          : node,
+      ),
+    })),
+  );
+  expect(labels()).toContain("bk_b CPU usage: unavailable");
+  const before = usageCalls.filter((id) => id === "bk_b").length;
+  await act(async () => {
+    await reads.clock.advance(10_000);
+  });
+  expect(usageCalls.filter((id) => id === "bk_b")).toHaveLength(before);
+  expect(labels()).toContain("Desk CPU usage: 42%");
+  expect(labels()).toContain("bk_a CPU usage: 7%");
+});
+
+test("CPU readings merge a new first registry machine like Settings", async () => {
+  nodes.unshift(summary("bk_new", "teal"));
+  machineOrder = ["bk_a", "bk_self", "bk_b"];
+  renderReadings();
+  await waitFor(() =>
+    expect(labels()).toEqual([
+      "Desk CPU usage: 42%",
+      "bk_a CPU usage: 7%",
+      "bk_new CPU usage: 93%",
+      "bk_b CPU usage: 93%",
+    ]),
+  );
+});

@@ -322,9 +322,8 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
   // for them, then what only this device knows, by name. Which machine this
   // window works on never moves anything.
   return [
-    ...entries.filter((entry) => entry.role === "self"),
     ...inMachineOrder(
-      entries.filter((entry) => entry.role === "node"),
+      entries.filter((entry) => entry.role !== "device"),
       (entry) => entry.nodeId ?? entry.key,
       input.machineOrder ?? [],
       selfId,

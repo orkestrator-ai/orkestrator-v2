@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { NodeListResult, NodeStatus, NodeView } from "@orkestrator/protocol/command-nodes";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
+import { inMachineOrder, orderMachines } from "@/lib/federation/sidebar-layout";
 import { buildMachineList, maintenanceIssues } from "./machine-list";
 
 const status: NodeStatus = {
@@ -162,6 +163,45 @@ describe("buildMachineList", () => {
       "bk_b",
       "device",
     ]);
+  });
+
+  test("merges a newly registered first machine with a non-leading stored command node", () => {
+    const registry = nodes(node("new", "New"), node("a", "A"), node("b", "B"));
+    const machineOrder = ["bk_a", "bk_self", "bk_b"];
+    const entries = buildMachineList({
+      status,
+      nodes: registry,
+      connections: list(local, remote("device")),
+      selfProfile: null,
+      workspaceNodeId: null,
+      machineOrder,
+    });
+    const fleet = [status.nodeId, ...registry.nodes.map((item) => item.nodeId)];
+    const views = fleet.map((id) => ({
+      connectionId: id,
+      backendId: id,
+      name: id,
+      colorToken: "teal" as const,
+      bound: id === status.nodeId,
+      freshness: "current" as const,
+      transport: "connected" as const,
+      projects: [],
+      environmentsByProject: new Map(),
+      truncated: false,
+      loadedAt: 1,
+    }));
+    const orderedViews = orderMachines(views, { machineOrder }, status.nodeId);
+    const expected = inMachineOrder(
+      orderedViews,
+      (view) => view.connectionId,
+      machineOrder,
+      status.nodeId,
+    ).map((view) => String(view.backendId));
+    expect(expected).toEqual(["bk_self", "bk_a", "bk_new", "bk_b"]);
+    expect(entries.filter((entry) => entry.role !== "device").map((entry) => entry.nodeId)).toEqual(
+      expected,
+    );
+    expect(entries.at(-1)?.role).toBe("device");
   });
 
   test("describes unreachable nodes, SSH routes and machines saved on this device only", () => {

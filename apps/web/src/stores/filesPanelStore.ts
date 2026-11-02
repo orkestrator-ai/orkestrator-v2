@@ -23,6 +23,11 @@ export function pullRequestFilesPanelTab(ref: GitHubPullRequestRef): FilesPanelT
   return `pull-request:${gitHubPullRequestKey(ref)}`;
 }
 
+/** Pseudo target id used for the project root before its home environment exists. */
+export function projectRootFilesTargetId(projectId: string): string {
+  return `project-root:${projectId}`;
+}
+
 /** A pull request opened as a closable tab in the panel. */
 export interface FilesPanelPullRequestTab {
   key: string;

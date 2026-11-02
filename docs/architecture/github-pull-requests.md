@@ -81,6 +81,36 @@ URL, so the raw token is never stored. File pages and GraphQL requests are not
 cached. `resetGitHubPullRequestCache()` clears it, and every function accepts
 `{ fetchImpl, cache }` so tests inject their own.
 
+## Where an in-app pull request link opens
+
+Every in-app pull request link goes through `apps/web/src/lib/pull-request-opener.tsx`.
+Without a surrounding `PullRequestOpenerProvider`, `openPullRequestInApp` opens
+the pull request as a tab of the right-hand files panel (the PR pane) for
+whatever the main view shows now: the selected environment, or the selected
+project's root checkout (`project-root:<id>`). It never changes the selected
+project or environment, the project board tab, or a pane tab, so closing the
+panel leaves the user where they were. `openPullRequestUrl` wraps it for URL
+call sites.
+
+- **Surfaces.** Transcript, mail, Linear, GitHub issue and coordinator
+  Markdown (`MarkdownLink`), Kanban comment links, terminal links (the
+  default modifier click; adding Shift opens GitHub), the action bar's View
+  PR, the pipeline's Pull request step, Multi Review's PR node, and links
+  inside a pull request opened in the main area.
+- **Hosts with their own tabs.** Inside the files panel a linked pull request
+  opens as another panel tab. The project's Pull requests page is a pull
+  request browser of its own, so its list rows and links open as tabs of that
+  page.
+- **Another project.** The PR pane shows any GitHub pull request by
+  owner/repo/number, so a pull request from another project opens in the
+  current view's pane; the selection does not follow it.
+- **Another machine.** Under another node's workspace this window's selection
+  is cleared and the workspace has its own panel, so links inside it open in
+  that workspace's pane, and the window's own links fall back to the browser.
+- **Fallback.** A URL that is not a `github.com` pull request, or a view with
+  nothing selected to host the pane, opens in the browser as before.
+  Cmd/Ctrl-click and every "Open on GitHub" action always open the browser.
+
 ## Environments
 
 After a merge, close or reopen from the viewer, the backend asks the PR

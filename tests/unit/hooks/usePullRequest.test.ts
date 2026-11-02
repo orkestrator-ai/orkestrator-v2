@@ -4,6 +4,7 @@ import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { usePrMonitorStore } from "../../../apps/web/src/stores/prMonitorStore";
 import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { createMockEnvironment } from "../utils/testFactories";
 
 // Mock backend module BEFORE importing the hook
@@ -65,6 +66,8 @@ describe("usePullRequest", () => {
 
     usePrMonitorStore.setState({ states: new Map() });
     useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    // The main view shows env-1, so its files panel is the right-hand PR pane.
+    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
 
     // Reset mocks
     mockGetEnvironmentPrUrl.mockClear();
@@ -208,6 +211,48 @@ describe("usePullRequest", () => {
     const panel = useFilesPanelStore.getState();
     expect(panel.isOpen).toBe(true);
     expect(panel.activeTab).toBe("pull-request:test/repo#123");
+  });
+
+  test("viewPR falls back to GitHub when nothing is shown to host the pane", async () => {
+    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    useEnvironmentStore.setState({
+      environments: [
+        createMockEnvironment({ id: "env-1", prUrl: "https://github.com/test/repo/pull/123" }),
+      ],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.viewPR();
+    });
+
+    expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/test/repo/pull/123");
+    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+  });
+
+  test("viewPR falls back to the browser for a URL the viewer cannot show", async () => {
+    useEnvironmentStore.setState({
+      environments: [
+        createMockEnvironment({
+          id: "env-1",
+          prUrl: "https://gitlab.com/test/repo/-/merge_requests/1",
+        }),
+      ],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.viewPR();
+    });
+
+    expect(mockOpenInBrowser).toHaveBeenCalledWith(
+      "https://gitlab.com/test/repo/-/merge_requests/1",
+    );
+    expect(useFilesPanelStore.getState().pullRequestTabs).toEqual({});
   });
 
   test("viewPR reports browser rejection after fetching a missing URL", async () => {

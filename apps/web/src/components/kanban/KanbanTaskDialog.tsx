@@ -54,7 +54,8 @@ import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
 import { readImage } from "@/lib/native/clipboard";
-import { getKanbanImageData, openInBrowser } from "@/lib/backend";
+import { getKanbanImageData } from "@/lib/backend";
+import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import {
   composeDraftKey,
   discardComposeDraft,
@@ -132,7 +133,7 @@ function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
 }
 
 /** Renders comment text with clickable URLs */
-function CommentText({ text }: { text: string }) {
+export function CommentText({ text }: { text: string }) {
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
   if (parts.length === 1) return <>{text}</>;
   return (
@@ -144,7 +145,10 @@ function CommentText({ text }: { text: string }) {
             className="text-blue-400 hover:underline cursor-pointer inline"
             onClick={(e) => {
               e.preventDefault();
-              void openInBrowser(part);
+              // A pull request opens in the right-hand PR pane; Cmd/Ctrl-click opens GitHub.
+              void openPullRequestUrl(part, { external: e.metaKey || e.ctrlKey }).catch(() =>
+                toast.error("Could not open the link"),
+              );
             }}
           >
             {part}

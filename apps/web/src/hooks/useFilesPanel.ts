@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
 import { useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
-import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
+import { isFilesPanelFileTab, projectRootFilesTargetId } from "@/stores/filesPanelStore";
 import * as backend from "@/lib/backend";
 import {
   expandedDirectories,
@@ -147,10 +147,7 @@ export function findWorkspaceMoveConflicts(
   return [...conflicts];
 }
 
-/** Pseudo target id used for the project root before its home environment exists. */
-export function projectRootFilesTargetId(projectId: string): string {
-  return `project-root:${projectId}`;
-}
+export { projectRootFilesTargetId };
 
 /**
  * Returns the project's home environment, creating it on first use, and makes

@@ -1,15 +1,20 @@
-import { beforeEach, afterEach, expect, test } from "bun:test";
+import { beforeEach, afterEach, expect, mock, test } from "bun:test";
 import { cleanup, renderHook } from "@testing-library/react";
-import type { Environment } from "@/types";
+import type { Environment, Project } from "@/types";
 import { useUIStore } from "@/stores/uiStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
+import { useProjectStore } from "@/stores/projectStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import {
+  currentFilesPanelTargetId,
   openPullRequestInApp,
+  openPullRequestUrl,
   PullRequestOpenerProvider,
   usePullRequestOpener,
 } from "./pull-request-opener";
+
 const ref = { owner: "acme", repo: "repo", number: 7 };
 const environment: Environment = {
   id: "env",
@@ -26,6 +31,8 @@ const environment: Environment = {
   order: 0,
   environmentType: "containerized",
 };
+const project = { id: "project", name: "Project", localPath: "/repo" } as Project;
+
 beforeEach(() => {
   useUIStore.setState({
     selectedProjectId: null,
@@ -33,21 +40,44 @@ beforeEach(() => {
     projectBoardTab: "home",
   });
   useEnvironmentStore.setState({ environments: [] });
-  useFilesPanelStore.setState({ pullRequestTabs: {}, isOpen: false });
+  useProjectStore.setState({ projects: [project] });
+  useFilesPanelStore.setState({ pullRequestTabs: {}, isOpen: false, activeTab: "changes" });
   useProjectPullRequestsStore.setState({ projects: {} });
+  useRemoteWorkspaceStore.setState({ active: null });
 });
 afterEach(cleanup);
 
+/** What the main view shows; opening a pull request must leave all of it alone. */
+function mainView() {
+  const ui = useUIStore.getState();
+  return {
+    selectedProjectId: ui.selectedProjectId,
+    selectedEnvironmentId: ui.selectedEnvironmentId,
+    projectBoardTab: ui.projectBoardTab,
+    projectPullRequests: useProjectPullRequestsStore.getState().projects,
+  };
+}
+
 test("returns false for browser fallback without a selected host", () => {
+  expect(currentFilesPanelTargetId()).toBeNull();
   expect(openPullRequestInApp(ref)).toBe(false);
   expect(useFilesPanelStore.getState().isOpen).toBe(false);
 });
 
-test("project selection opens project tabs and selects Pull requests", () => {
-  useUIStore.setState({ selectedProjectId: "project" });
+test("a project page opens the pull request in the project root's pane, not its Pull requests tab", () => {
+  useUIStore.setState({ selectedProjectId: "project", projectBoardTab: "coordinator" as never });
+  const before = mainView();
   expect(openPullRequestInApp(ref, "timeline")).toBe(true);
-  expect(useProjectPullRequestsStore.getState().projects.project?.tabs[0]?.view).toBe("timeline");
-  expect(useUIStore.getState().projectBoardTab).toBe("pull-requests");
+  const panel = useFilesPanelStore.getState();
+  expect(panel.isOpen).toBe(true);
+  expect(panel.activeTab).toBe("pull-request:acme/repo#7");
+  expect(panel.pullRequestTabs["project-root:project"]?.[0]?.view).toBe("timeline");
+  expect(mainView()).toEqual(before);
+});
+
+test("an unknown selected project has no pane to host the pull request", () => {
+  useUIStore.setState({ selectedProjectId: "missing" });
+  expect(openPullRequestInApp(ref)).toBe(false);
 });
 
 test.each([false, true])(
@@ -55,22 +85,44 @@ test.each([false, true])(
   (projectHome) => {
     useEnvironmentStore.setState({ environments: [{ ...environment, projectHome }] });
     useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "other" });
+    const before = mainView();
     expect(openPullRequestInApp(ref, "code")).toBe(true);
     expect(useFilesPanelStore.getState().pullRequestTabs.env?.[0]?.view).toBe("code");
     expect(useFilesPanelStore.getState().isOpen).toBe(true);
-    expect(useProjectPullRequestsStore.getState().projects).toEqual({});
+    expect(mainView()).toEqual(before);
   },
 );
 
-test("project home on a board page routes to its own project", () => {
+test("project home on a board page opens in the pane and keeps the board tab", () => {
   useEnvironmentStore.setState({ environments: [{ ...environment, projectHome: true }] });
   useUIStore.setState({
     selectedEnvironmentId: "env",
-    selectedProjectId: "other",
+    selectedProjectId: "project",
     projectBoardTab: "features",
   });
+  const before = mainView();
   expect(openPullRequestInApp(ref)).toBe(true);
-  expect(useProjectPullRequestsStore.getState().projects.project?.tabs).toHaveLength(1);
+  expect(useFilesPanelStore.getState().pullRequestTabs.env).toHaveLength(1);
+  expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  expect(mainView()).toEqual(before);
+});
+
+test("a pull request from another project opens in the current view's pane", () => {
+  useEnvironmentStore.setState({ environments: [environment] });
+  useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
+  const foreign = { owner: "other-org", repo: "elsewhere", number: 3 };
+  expect(openPullRequestInApp(foreign)).toBe(true);
+  expect(useFilesPanelStore.getState().pullRequestTabs.env?.[0]?.ref).toEqual(foreign);
+  expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
+});
+
+test("another machine's workspace has its own pane, so the window falls back", () => {
+  useEnvironmentStore.setState({ environments: [environment] });
+  useUIStore.setState({ selectedEnvironmentId: "env", selectedProjectId: "project" });
+  useRemoteWorkspaceStore.setState({
+    active: { nodeId: "node-2", projectId: null, environmentId: null },
+  });
+  expect(openPullRequestInApp(ref)).toBe(false);
   expect(useFilesPanelStore.getState().isOpen).toBe(false);
 });
 
@@ -87,14 +139,41 @@ test("subtree providers route links to their host and acknowledge handling", () 
   expect(calls).toEqual([[ref, "code"]]);
 });
 
-test("an ordinary environment on another board tab still routes to the files panel", () => {
-  useEnvironmentStore.setState({ environments: [environment] });
-  useUIStore.setState({
-    selectedEnvironmentId: "env",
-    selectedProjectId: "project",
-    projectBoardTab: "features",
-  });
-  expect(openPullRequestInApp(ref)).toBe(true);
-  expect(useFilesPanelStore.getState().pullRequestTabs.env).toHaveLength(1);
-  expect(useUIStore.getState().projectBoardTab).toBe("features");
+/** Stands in for the desktop shell, which is how `openInBrowser` reaches a browser. */
+function withBrowser() {
+  const openExternal = mock((_url: string) => Promise.resolve());
+  const original = window.orkestrator;
+  window.orkestrator = { ...original, shell: { ...original?.shell, openExternal } } as never;
+  return { openExternal, restore: () => (window.orkestrator = original) };
+}
+
+test("openPullRequestUrl opens GitHub pull request links in the pane", async () => {
+  const browser = withBrowser();
+  try {
+    const opener = mock(() => true);
+    await openPullRequestUrl("https://github.com/acme/repo/pull/7/files", { opener });
+    expect(opener).toHaveBeenCalledWith(
+      { owner: "acme", repo: "repo", number: 7, view: "code" },
+      "code",
+    );
+    expect(browser.openExternal).not.toHaveBeenCalled();
+  } finally {
+    browser.restore();
+  }
+});
+
+test.each([
+  ["an explicit external open", "https://github.com/acme/repo/pull/7", true, true],
+  ["a URL the pane cannot show", "https://example.com/acme/repo/pull/7", false, false],
+  ["a pane with no host", "https://github.com/acme/repo/pull/7", false, true],
+])("openPullRequestUrl falls back to the browser for %s", async (_, url, external, isPr) => {
+  const browser = withBrowser();
+  try {
+    const opener = mock(() => false);
+    await openPullRequestUrl(url, { external, opener });
+    expect(opener).toHaveBeenCalledTimes(!external && isPr ? 1 : 0);
+    expect(browser.openExternal).toHaveBeenCalledWith(url);
+  } finally {
+    browser.restore();
+  }
 });

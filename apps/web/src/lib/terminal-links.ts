@@ -3,6 +3,8 @@ import {
   resolveTerminalLinkDefaultTarget,
   type TerminalLinkDefaultTarget,
 } from "@orkestrator/protocol/terminal-link-target";
+import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
+import { openPullRequestInApp, type PullRequestOpener } from "@/lib/pull-request-opener";
 import { useConfigStore } from "@/stores/configStore";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -55,6 +57,8 @@ interface TerminalLinkActivatorOptions {
   environmentId: string;
   sourceTabId: string;
   openExternal: (url: string) => Promise<void>;
+  /** Where a GitHub pull request link opens; defaults to the right-hand PR pane. */
+  openPullRequest?: PullRequestOpener;
 }
 
 /**
@@ -63,11 +67,16 @@ interface TerminalLinkActivatorOptions {
  * `confirm()` + `window.open()`, which never launches a browser in Electron.
  * The default target is read on each click because a terminal outlives any one
  * value of the setting.
+ *
+ * A GitHub pull request link opened with the default gesture shows in the
+ * right-hand PR pane instead, leaving the terminal in view; adding Shift
+ * opens it externally, and so does a pull request the pane cannot host.
  */
 export function createTerminalLinkActivator({
   environmentId,
   sourceTabId,
   openExternal,
+  openPullRequest = openPullRequestInApp,
 }: TerminalLinkActivatorOptions): (event: MouseEvent, uri: string) => void {
   return (event, uri) => {
     if (event.button !== 0) {
@@ -79,15 +88,20 @@ export function createTerminalLinkActivator({
         useConfigStore.getState().config.global.terminalLinkDefaultTarget,
       ),
     );
+    if (target === "none") {
+      return;
+    }
+    const pullRequest = event.shiftKey ? null : parseGitHubPullRequestLink(uri);
+    if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) {
+      return;
+    }
     if (target === "browser-tab" && isLoopbackUrl(uri)) {
       requestTerminalBrowserTab({ environmentId, sourceTabId, url: uri });
       return;
     }
-    if (target !== "none") {
-      void openExternal(uri).catch((err) => {
-        log.error("link.open-failed", { environmentId, error: formatLogError(err) });
-      });
-    }
+    void openExternal(uri).catch((err) => {
+      log.error("link.open-failed", { environmentId, error: formatLogError(err) });
+    });
   };
 }
 

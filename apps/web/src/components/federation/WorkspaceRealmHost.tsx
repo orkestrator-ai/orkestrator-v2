@@ -18,6 +18,7 @@ import {
 } from "@/lib/federation/workspace-realm";
 import { useConfigStore } from "@/stores/configStore";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -149,6 +150,16 @@ export function WorkspaceRealmHost() {
           type: "selection",
           projectId: state.selectedProjectId,
           environmentId: state.selectedEnvironmentId,
+          ...(useEnvironmentStore
+            .getState()
+            .environments.some(
+              (environment) =>
+                environment.id === state.selectedEnvironmentId &&
+                environment.projectId === state.selectedProjectId &&
+                environment.projectHome,
+            )
+            ? { projectHome: true }
+            : {}),
         });
       }),
     [],

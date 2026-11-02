@@ -150,3 +150,19 @@ skip changed; the isolated pass does not make the aggregate green.
 - **Complete unchanged owning-file rerun:** `mise run test:logged -- --name merge-codex-subagent-isolated -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed (one test, 1.1 s).
 - **Evidence:** `/tmp/orkestrator-test-run.egszoc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.DtSUk4/merge-tests-final.log.gz`.
 - **Assessment:** recurrence of the existing cold-restart observation mismatch. The first default aggregate's workspace group passed. No owning-test assertion, timeout or skip was changed; the isolated pass does not make the final aggregate green.
+
+## Live logging review repair validation — 2026-11-01/02
+
+`mise run test:logged -- --name review-repair-default -- mise run test` used
+workspace/root/bridges/protocol reservations 5/1/2/1 on a shared macOS host.
+The cold-restart card case expected `idle`, received `recovering` at line 170
+(1,745.45 ms). The complete unchanged owner passed alone, exit 0 in 3.7 s:
+`mise run test:logged -- --name codex-subagent-cards-owner -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures`.
+
+The outer command reached its 1,800-second guard after a 925-second capacity
+wait, so final workspace totals were unavailable. Evidence remains in the raw
+`orkestrator-test-run.BSqVX9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+and the outer compressed `orkestrator-test-run.JX4kAV/review-repair-default.log.gz`
+below the host temporary directory. No implementation, assertion, deadline or
+skip changed. This repeats the known intermittent cold-restart projection state;
+its cause remains unconfirmed.

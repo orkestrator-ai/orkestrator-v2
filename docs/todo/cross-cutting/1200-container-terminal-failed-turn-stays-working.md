@@ -5,11 +5,11 @@ Found on 2026-11-01 while finishing
 
 ## Task analysis
 
-Analysed 2026-11-01 against `main` at `0658de64`, from reading the code plus a probe of Claude Code 2.1.310 in print mode against a fake API; nothing here ran in a container. Re-checked 2026-11-02 against `main` at `38d55ee1`: the description still held (only `UserPromptSubmit` and `Stop` were installed, and the script accepted only `working` and `waiting`). Task 1 was acted on that day.
+Analysed 2026-11-01 against `main` at `0658de64`, from reading the code plus a probe of Claude Code 2.1.310 in print mode against a fake API; nothing here ran in a container. Re-checked 2026-11-02 against `main` at `38d55ee1`: the description still held (only `UserPromptSubmit` and `Stop` were installed, and the script accepted only `working` and `waiting`). Task 1 was acted on that day, and its image proof was made a committed test after the branch was rebased onto `main` at `ae7131f9`.
 
 ### Tasks
 
-1. **Report a failed turn from the container hooks**: a Claude CLI tab whose turn ends on an API error reads `working` until the next prompt. Status: done (2026-11-02), proved in a locally built image with the real Claude CLI against a fake API; a real provider error in the UI is still owed (see Needs verification).
+1. **Report a failed turn from the container hooks**: a Claude CLI tab whose turn ends on an API error reads `working` until the next prompt. Status: done (2026-11-02). `claude-terminal-failed-turn-docker.test.ts` proves it in a locally built image, with the real Claude CLI against a fake API; a real provider error in the UI is still owed (see Needs verification).
 
 ### 1. Report a failed turn from the container hooks
 
@@ -61,7 +61,15 @@ Made 2026-11-02 against `main` at `38d55ee1`.
 - In a container of that image, with `~/.claude/settings.json` taken from the image's own entrypoint, Claude Code 2.1.314 ran `claude -p` against a fake API inside the container (`ANTHROPIC_BASE_URL` on loopback, a fake key, `CLAUDE_CODE_MAX_RETRIES=0`). No provider was called.
   - A 401 answer left the snapshot at `failed 2 0` and the legacy file at `idle`. The real `ClaudeStatePollManager`, reading through `docker exec`, emitted `working` then `idle`, and real storage recorded the `claude-terminal` source as `idle` with `unreadReason: "agent_failed"`.
   - A streamed successful reply left `waiting 2 1`, and the same poll emitted `working` then `waiting` with `unreadReason: "agent_waiting"`, as before.
+- The same proof is now a committed test, `apps/backend/tests/claude-terminal-failed-turn-docker.test.ts`, skipped without `ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE` like the other live signal tests and run by the Linux Engine workflow (`container-live-qualification.yml`). It takes the hooks from the image's own `/usr/local/bin/entrypoint.sh`, checks the manifest declares `claude-state-signal=3`, holds each fake API answer until the plain one-second poll (real `docker exec` reads, real storage) has seen `working`, then checks a refused turn ends `failed 2 0` / `idle` with `agent_failed` and a normal turn ends `waiting 4 1` / `waiting` with `agent_waiting`. It needs no route from the container to the host.
+  - Passed on beelink against `orkestrator-v2:dev-94747542e191`, rebuilt from the rebased branch (`mise run docker:build:dev --profile failed-turn-1200`), in about 4 s.
+  - Negative control: the same image with `main`'s `entrypoint.sh` and `orkestrator-state-signal.sh` copied over (a throwaway tag, removed afterwards). There the refused turn left `working 1 0` / `working`, and the test failed.
 - The doorbell test (`claude-state-signal-docker.test.ts`) now drives `StopFailure` too. On beelink it times out before any of the new steps, because a container there cannot reach a host port at all (a plain `curl` to a host listener times out). It needs a host where containers reach the backend, as the Linux Engine CI workflow has.
+
+### Task 1: an image test that does not need the host
+
+- **Chose:** a separate live test file that reads through `docker exec`, rather than relying only on the `StopFailure` step added to the doorbell test.
+- **Why:** the doorbell test needs the container to reach the backend, which beelink's containers cannot, so on this host the image proof existed only as prose. The new test runs anywhere Docker runs, and drives the real Claude CLI rather than calling the hook command by hand. The doorbell test keeps its `StopFailure` step for the ring path on hosts that have it.
 
 ## Needs verification
 

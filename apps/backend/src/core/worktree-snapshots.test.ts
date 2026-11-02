@@ -93,7 +93,7 @@ function createOwner(
       if (event === DIFF_STATS_CHANGED_EVENT) diffEvents.push(payload);
       else if (event === WORKTREE_SNAPSHOT_CHANGED_EVENT) snapshotEvents.push(payload);
     },
-    onWarning: (message) => warnings.push(message),
+    onWarning: (warning) => warnings.push(`${warning.event} ${warning.environmentId}`),
     startWatcher: (watcherOptions) => {
       const record: FakeWatcher = {
         options: watcherOptions,
@@ -620,7 +620,7 @@ describe("failure, fallback and retry", () => {
     owner.autoScan(() => result([change("a.ts")]));
     track(owner, local());
     await flushMicrotasks();
-    expect(owner.warnings).toContain("Diff watcher failed for env-local");
+    expect(owner.warnings).toContain("scan.watcher-failed env-local");
     expect(owner.snapshotEvents.at(-1)).toMatchObject({ watched: false });
 
     await owner.time.advance(4_000);

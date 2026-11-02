@@ -413,11 +413,16 @@ export class PrMonitorRuntime {
           await this.requireStorage().kanban.updateKanbanTask(taskId, updates);
         },
       },
-      onWarning: (message, error) => {
-        log.warn("monitor.warning", {
-          detail: message,
-          ...classifyCommandFailure(error, { tools: ["docker", "gh"] }),
-          error: formatLogError(error),
+      onWarning: ({ event, environmentId, state }, error) => {
+        log.warn(event, {
+          environmentId,
+          state,
+          ...(error === undefined
+            ? {}
+            : {
+                ...classifyCommandFailure(error, { tools: ["docker", "gh"] }),
+                error: formatLogError(error),
+              }),
         });
       },
     });

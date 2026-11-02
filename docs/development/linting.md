@@ -103,17 +103,20 @@ not zero findings. Read the output.
 ## Raw `console`
 
 `no-restricted-globals` refuses `console`, used directly or passed as a value, so
-new code goes through the [shared logger](../architecture/logging.md). One
-permanent override in `.oxlintrc.json` turns it off for code whose console is its
-product or which wraps the console (tests, scripts, the CLI, container scripts,
-the logger itself). `tests/unit/raw-console-ratchet.test.ts` pins that list and
-checks that migrated application paths contain no raw console sites outside it.
-The bridges, their shared protocol modules, the renderer and the backend are
-migrated; a bridge's `scripts/` and
-`*.live-probe.ts` files are among those whose console is the product. The backend's
-`scripts/` and `bounded-console.ts` are excluded for good. In the renderer, two
-files keep it: the bug-report recorder wraps `console.error`, and
-`desktop-startup-marker.ts` writes the startup markers the desktop matches exactly.
+new code goes through the [shared logger](../architecture/logging.md). The
+migration is finished: every application path is covered, and one permanent
+override in `.oxlintrc.json` turns the rule off only for code whose console is its
+product or which wraps the console. That is tests, scripts (including a bridge's
+`scripts/` and `*.live-probe.ts` files, and the backend's, desktop's and renderer's
+`scripts/`), the CLI, `docker/`, the logger itself, the application log writer, the
+fatal rejection guard (serialized into workers, so it imports nothing), the
+backend's `bounded-console.ts`, the renderer's bug-report recorder, which wraps
+`console.error`, and `desktop-startup-marker.ts`, which writes the startup markers
+the desktop matches exactly. `tests/unit/raw-console.test.ts` pins that list and
+the lint ignore patterns. It scans other sources for the six common console
+methods and rejects directives disabling `no-restricted-globals`, including
+blanket disables, so lint continues to catch other methods and console aliases.
+Adding to the list needs the same case as these.
 
 ## Module boundaries
 

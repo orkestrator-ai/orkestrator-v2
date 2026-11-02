@@ -113,12 +113,12 @@ export class GatewayLifecycle {
         if (!controlListener && this.ctx.loopbackClientPort === undefined) throw error;
         browserFailure = error;
         browserError = error instanceof Error ? error.message : String(error);
-        log.error("browser.unavailable", { detail: browserError });
+        log.error("browser.unavailable", { error: formatLogError(error) });
       }
     } else {
       browserError = "No Tailscale address was found";
       log.warn("browser.unavailable-degraded", {
-        detail: browserError,
+        reason: "no-tailscale-address",
         remaining: controlListener ? "desktop-control" : "loopback-client",
       });
     }
@@ -142,7 +142,7 @@ export class GatewayLifecycle {
         log.error("loopback.unavailable", {
           address: LOOPBACK_CLIENT_BIND_ADDRESS,
           port: this.ctx.loopbackClientPort,
-          detail: loopbackClientError,
+          error: formatLogError(error),
         });
       }
     }

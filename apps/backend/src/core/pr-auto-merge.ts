@@ -128,7 +128,13 @@ export interface PrAutoMergeOptions {
   monitorState: (environmentId: string) => PrMonitorEnvironmentState | null;
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancel?: (timer: unknown) => void;
-  onWarning?: (message: string, error: unknown) => void;
+  onWarning?: (warning: PrAutoMergeWarning, error: unknown) => void;
+}
+
+/** A failed step. `event` is a `pull-request` log event; the environment is the only detail. */
+export interface PrAutoMergeWarning {
+  event: "auto-merge.evaluation-failed" | "auto-merge.merge-failed" | "auto-merge.resolve-failed";
+  environmentId: string;
 }
 
 interface RetryState {
@@ -215,7 +221,7 @@ export class PrAutoMergeController {
       return running;
     }
     const run = this.run(environmentId)
-      .catch((error) => this.warn(`Auto-merge evaluation failed for ${environmentId}`, error))
+      .catch((error) => this.warn("auto-merge.evaluation-failed", environmentId, error))
       .finally(() => {
         this.inFlight.delete(environmentId);
         if (this.recheck.delete(environmentId)) void this.evaluate(environmentId);
@@ -262,9 +268,8 @@ export class PrAutoMergeController {
       await this.recordError(environment, error instanceof Error ? error.message : String(error));
       this.holdAttempt(environmentId, key, true);
       this.warn(
-        decision.kind === "merge"
-          ? `Auto-merge could not merge the pull request of ${environmentId}`
-          : `Auto-merge could not launch Resolve in ${environmentId}`,
+        decision.kind === "merge" ? "auto-merge.merge-failed" : "auto-merge.resolve-failed",
+        environmentId,
         error,
       );
     }
@@ -389,13 +394,13 @@ export class PrAutoMergeController {
     this.retries.delete(environmentId);
   }
 
-  private warn(message: string, error: unknown): void {
+  private warn(event: PrAutoMergeWarning["event"], environmentId: string, error: unknown): void {
     if (this.options.onWarning) {
-      this.options.onWarning(message, error);
+      this.options.onWarning({ event, environmentId }, error);
       return;
     }
-    log.warn("auto-merge.warning", {
-      detail: message,
+    log.warn(event, {
+      environmentId,
       ...classifyCommandFailure(error, { tools: ["gh"] }),
       error: formatLogError(error),
     });

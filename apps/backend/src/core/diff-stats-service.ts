@@ -153,6 +153,21 @@ export type DiffScanEvent =
   | { kind: "removed"; environmentId: string; at: string }
   | { kind: "hint"; target: DiffStatsTarget; paths: readonly string[] | null; at: string };
 
+/**
+ * A scan step that failed. `event` is a `diff-stats` log event; the
+ * environment, when the step has one, is the only detail.
+ */
+export interface DiffStatsWarning {
+  event:
+    | "scan.watcher-failed"
+    | "scan.failed"
+    | "scan.freshness-read-failed"
+    | "scan.listener-failed"
+    | "emit.diff-stats-failed"
+    | "emit.worktree-snapshot-failed";
+  environmentId: string | null;
+}
+
 export interface DiffStatsServiceOptions {
   /** Runs the real git scan. Injected so the service is testable without git. */
   scan: (target: DiffStatsTarget, request?: ScanRequest) => Promise<DiffScanResult>;
@@ -198,7 +213,7 @@ export interface DiffStatsServiceOptions {
   startContainerWatcher?: (options: ContainerWatcherStartOptions) => WorktreeWatcher;
   /** Interval for a container whose watcher is qualified; only covers missed events. */
   containerSafetyNetIntervalMs?: number;
-  onWarning?: (message: string, error: unknown) => void;
+  onWarning?: (warning: DiffStatsWarning, error: unknown) => void;
   /**
    * Owner generation stamped on every event and snapshot. Defaults to a fresh
    * random token per service instance (see `packages/protocol/src/view-sync.ts`).
@@ -927,7 +942,7 @@ export class DiffStatsService {
       onError: (error) => {
         if (entry.watcherGeneration !== generation) return;
         failedSynchronously = true;
-        this.warn(`Diff watcher failed for ${entry.target.environmentId}`, error);
+        this.warn("scan.watcher-failed", entry.target.environmentId, error);
         // The interval is the fallback, so it has to go back to the fast cadence
         // now that change signals will no longer arrive.
         entry.watcher?.close();
@@ -1249,7 +1264,7 @@ export class DiffStatsService {
       epoch: attempt.epoch,
       retryAt: this.options.monotonicNow() + delayMs,
     };
-    this.warn(`Diff scan failed for ${attempt.target.environmentId}`, error);
+    this.warn("scan.failed", attempt.target.environmentId, error);
     this.notify({ kind: "failed", target: attempt.target, at: this.options.now() });
     if (entry.retryTimer !== undefined) this.options.cancelDelay(entry.retryTimer);
     entry.retryTimer = undefined;
@@ -1383,7 +1398,7 @@ export class DiffStatsService {
       const remote = this.options.remoteFreshness?.(entry.target);
       return remote ? { ...remote } : undefined;
     } catch (error) {
-      this.warn(`Failed to read remote freshness for ${entry.target.environmentId}`, error);
+      this.warn("scan.freshness-read-failed", entry.target.environmentId, error);
       return undefined;
     }
   }
@@ -1437,7 +1452,7 @@ export class DiffStatsService {
     try {
       this.options.onScanEvent?.(event);
     } catch (error) {
-      this.warn("Change-tracking scan listener failed", error);
+      this.warn("scan.listener-failed", null, error);
     }
   }
 
@@ -1456,14 +1471,23 @@ export class DiffStatsService {
     } catch (error) {
       // One faulty event sink must not turn a best-effort background refresh
       // into an unhandled rejection or stop future scans.
-      const what = event === DIFF_STATS_CHANGED_EVENT ? "diff stats" : "worktree snapshot";
-      this.warn(`Failed to emit ${what} for ${environmentId}`, error);
+      this.warn(
+        event === DIFF_STATS_CHANGED_EVENT
+          ? "emit.diff-stats-failed"
+          : "emit.worktree-snapshot-failed",
+        environmentId,
+        error,
+      );
     }
   }
 
-  private warn(message: string, error: unknown): void {
+  private warn(
+    event: DiffStatsWarning["event"],
+    environmentId: string | null,
+    error: unknown,
+  ): void {
     try {
-      this.options.onWarning?.(message, error);
+      this.options.onWarning?.({ event, environmentId }, error);
     } catch {
       // Warning reporters are observational. A broken logger must never break
       // the background scan lifecycle it is supposed to describe.

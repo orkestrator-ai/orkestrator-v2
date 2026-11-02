@@ -329,7 +329,7 @@ describe("PR monitor terminal lifecycle", () => {
     await harness.advance(0);
     expect(harness.calls.persist).toEqual([]);
     expect(harness.durable.get("env-1")).toEqual({ prUrl: PR1, prState: "merged" });
-    expect(harness.warnings.some((warning) => warning.includes("stale"))).toBe(true);
+    expect(harness.warnings).toContain("monitor.stale-reading-ignored");
   });
 
   test("task comments are not duplicated when timers, explicit commands and recovery converge", async () => {

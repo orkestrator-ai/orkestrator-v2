@@ -108,6 +108,27 @@ export interface PrMonitorTarget {
   prMergeability?: GitHubPullRequestMergeability | null;
 }
 
+/**
+ * A monitor step that failed. `event` is a `pull-request` log event, so the
+ * runtime logs it as it stands; the environment and PR state are the only
+ * detail, never a message.
+ */
+export interface PrMonitorWarning {
+  event:
+    | "monitor.detection-failed"
+    | "monitor.detection-admission-failed"
+    | "monitor.terminal-repair-failed"
+    | "monitor.terminal-resume-failed"
+    | "monitor.stale-reading-ignored"
+    | "monitor.state-persist-failed"
+    | "monitor.state-clear-failed"
+    | "monitor.task-reconcile-failed"
+    | "monitor.task-store-failed"
+    | "monitor.emit-failed";
+  environmentId: string;
+  state?: PrState;
+}
+
 export interface PrDetection {
   headSha?: string | null;
   baseBranch?: string;
@@ -195,7 +216,7 @@ export interface PrMonitorServiceOptions {
   /** One-shot timer; the service reschedules after every check. */
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancel?: (timer: unknown) => void;
-  onWarning?: (message: string, error: unknown) => void;
+  onWarning?: (warning: PrMonitorWarning, error: unknown) => void;
   /**
    * Owner generation stamped on every event and snapshot. Defaults to a fresh
    * random token per service instance, so a backend restart is observable as a
@@ -939,7 +960,7 @@ export class PrMonitorService {
         }
       } catch (error) {
         failure = classifyPrDetectionFailure(error);
-        this.warn(`PR detection failed for ${entry.target.environmentId}`, error);
+        this.warn("monitor.detection-failed", entry.target.environmentId, error);
       } finally {
         // The slot covers the physical `gh`/`docker exec` call only; local
         // persistence and task effects must not hold back other detections.
@@ -1036,7 +1057,7 @@ export class PrMonitorService {
           continue;
         }
         if (!(error instanceof AdmissionRejectedError)) {
-          this.warn(`PR detection admission failed for ${entry.target.environmentId}`, error);
+          this.warn("monitor.detection-admission-failed", entry.target.environmentId, error);
         }
         return null;
       } finally {
@@ -1095,7 +1116,7 @@ export class PrMonitorService {
       if (!this.isCurrent(entry, generation) || !complete) return;
       settled = await this.resumeTerminalEffects(entry, url, state, generation);
     } catch (error) {
-      this.warn(`Failed to repair terminal PR effects for ${environmentId}`, error);
+      this.warn("monitor.terminal-repair-failed", environmentId, error);
     } finally {
       entry.checkInProgress = false;
       entry.phase = "idle";
@@ -1138,7 +1159,7 @@ export class PrMonitorService {
       await resume(entry.target.environmentId, { url, state });
       return this.isCurrent(entry, generation);
     } catch (error) {
-      this.warn(`Failed to resume terminal PR effects for ${entry.target.environmentId}`, error);
+      this.warn("monitor.terminal-resume-failed", entry.target.environmentId, error);
       return false;
     }
   }
@@ -1173,10 +1194,9 @@ export class PrMonitorService {
       // a stale read (GitHub's eventual consistency, or a lookup that raced an
       // explicit merge confirmation). Never let it overwrite the terminal state
       // or re-arm side effects. Replacement PRs have a different URL.
-      this.warn(
-        `Ignored a stale non-merged reading for a merged PR on ${entry.target.environmentId}`,
-        new Error(detection.state),
-      );
+      this.warn("monitor.stale-reading-ignored", entry.target.environmentId, undefined, {
+        state: detection.state,
+      });
       return undefined;
     }
     if (entry.settledTerminal !== terminalKey(detection.url, detection.state)) {
@@ -1225,7 +1245,7 @@ export class PrMonitorService {
       } catch (error) {
         entry.persistencePending = true;
         entry.consecutiveErrors += 1;
-        this.warn(`Failed to persist PR state for ${entry.target.environmentId}`, error);
+        this.warn("monitor.state-persist-failed", entry.target.environmentId, error);
       }
     }
     // A newly discovered PR is not materialized until its authoritative
@@ -1363,7 +1383,7 @@ export class PrMonitorService {
     } catch (error) {
       entry.persistencePending = true;
       entry.consecutiveErrors += 1;
-      this.warn(`Failed to clear PR state for ${entry.target.environmentId}`, error);
+      this.warn("monitor.state-clear-failed", entry.target.environmentId, error);
     }
   }
 
@@ -1491,10 +1511,7 @@ export class PrMonitorService {
       }
       return true;
     } catch (error) {
-      this.warn(
-        `Failed to reconcile kanban task after PR ${terminalState} for ${environmentId}`,
-        error,
-      );
+      this.warn("monitor.task-reconcile-failed", environmentId, error, { state: terminalState });
       return false;
     }
   }
@@ -1524,7 +1541,7 @@ export class PrMonitorService {
       if (!this.isCurrent(entry, generation)) return false;
       return true;
     } catch (error) {
-      this.warn(`Failed to store PR on task for ${entry.target.environmentId}`, error);
+      this.warn("monitor.task-store-failed", entry.target.environmentId, error);
       return false;
     }
   }
@@ -1619,13 +1636,18 @@ export class PrMonitorService {
       this.options.emit(PR_MONITOR_CHANGED_EVENT, payload);
     } catch (error) {
       // One faulty event sink must not stop the background loop it describes.
-      this.warn(`Failed to emit PR monitor event for ${payload.environmentId}`, error);
+      this.warn("monitor.emit-failed", payload.environmentId, error);
     }
   }
 
-  private warn(message: string, error: unknown): void {
+  private warn(
+    event: PrMonitorWarning["event"],
+    environmentId: string,
+    error: unknown,
+    extra: Pick<PrMonitorWarning, "state"> = {},
+  ): void {
     try {
-      this.options.onWarning?.(message, error);
+      this.options.onWarning?.({ event, environmentId, ...extra }, error);
     } catch {
       // Warning reporters are observational; a broken logger must never break
       // the monitoring lifecycle it is supposed to describe.

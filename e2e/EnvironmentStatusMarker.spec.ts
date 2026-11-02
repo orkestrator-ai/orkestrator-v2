@@ -263,3 +263,85 @@ test("forced colors keep static system-color activity outlines and machine or ne
     }
   }
 });
+
+test("staggered rings share a phase and state changes preserve the colour fade", async ({
+  page,
+}) => {
+  // Advance the document beyond the default transition duration, and ensure
+  // the later rings really mount on a different animation frame.
+  await page.waitForFunction(() => Number(document.timeline.currentTime) > 500);
+  await page.getByRole("button", { name: "Mount second rings" }).click();
+  for (const shape of ["circle", "square"]) {
+    const pair = page.locator(
+      `[data-testid^="sync-${shape}-"] [data-testid="environment-status-ring"]`,
+    );
+    await expect
+      .poll(() =>
+        pair.evaluateAll((rings) => {
+          const animations = rings.map((ring) =>
+            ring.getAnimations().find((animation) => animation instanceof CSSAnimation),
+          );
+          return (
+            animations.length === 2 && animations.every((animation) => animation?.startTime === 0)
+          );
+        }),
+      )
+      .toBe(true);
+    const phases = await pair.evaluateAll((rings) =>
+      rings.map(
+        (ring) =>
+          ring
+            .getAnimations()
+            .find((animation) => animation instanceof CSSAnimation)!
+            .effect!.getComputedTiming().progress,
+      ),
+    );
+    expect(phases[0]).not.toBeNull();
+    expect(phases[0]).toBe(phases[1]);
+  }
+
+  // Lengthen only the fixture's transition to make inspection independent of
+  // test-host load; the property and state change are the production marker's.
+  await page
+    .locator('[data-testid^="sync-"] [data-testid="environment-status-ring"]')
+    .evaluateAll((rings) =>
+      rings.forEach((ring) => {
+        (ring as HTMLElement).style.transitionDuration = "10s";
+      }),
+    );
+  await page.getByRole("button", { name: "Wait for input" }).click();
+  const rings = page.locator('[data-testid^="sync-"] [data-testid="environment-status-ring"]');
+  await expect
+    .poll(() =>
+      rings.evaluateAll((elements) =>
+        elements.every((element) =>
+          element
+            .getAnimations()
+            .some(
+              (animation) =>
+                animation instanceof CSSTransition &&
+                animation.transitionProperty === "background-color" &&
+                Number(animation.startTime) > 0,
+            ),
+        ),
+      ),
+    )
+    .toBe(true);
+  const timing = await rings.evaluateAll((elements) =>
+    elements.map((element) => {
+      const animations = element.getAnimations();
+      const pulse = animations.find((animation) => animation instanceof CSSAnimation)!;
+      const transition = animations.find((animation) => animation instanceof CSSTransition)!;
+      return {
+        pulseStart: pulse.startTime,
+        pulsePhase: pulse.effect!.getComputedTiming().progress,
+        transitionPhase: transition.effect!.getComputedTiming().progress,
+      };
+    }),
+  );
+  expect(timing.every((value) => value.pulseStart === 0)).toBe(true);
+  expect(timing.every((value) => value.pulsePhase === timing[0]!.pulsePhase)).toBe(true);
+  expect(timing.every((value) => value.transitionPhase != null && value.transitionPhase < 1)).toBe(
+    true,
+  );
+});

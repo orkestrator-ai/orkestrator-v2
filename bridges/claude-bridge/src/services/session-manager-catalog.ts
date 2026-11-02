@@ -305,6 +305,21 @@ function retainedMcpInventory(session: SessionState): NativeAgentMcpServer[] | u
 }
 
 /**
+ * Rows served when no CLI can answer for them.
+ *
+ * A row keeps its last reported state while no CLI runs, but `connecting`
+ * claims work in progress, and with no CLI nothing is connecting: the init
+ * frame's `pending` rows would otherwise read `connecting` until the next
+ * turn. The stored row is left as it was, so a running CLI's next answer is
+ * what replaces it.
+ */
+function inventoryWithoutCli(rows: NativeAgentMcpServer[] | undefined): NativeAgentMcpServer[] {
+  return (rows ?? []).map((row) =>
+    row.status === "connecting" ? { ...row, status: "unknown" } : row,
+  );
+}
+
+/**
  * Put a probe's answer for the one server it acted on into the session's list.
  *
  * A probe is a bare CLI: it has none of the servers the bridge passes inline
@@ -339,10 +354,13 @@ export async function readSessionMcpServers(sessionId: string): Promise<NativeAg
       // Keep the last inventory rather than failing the read; the turn query
       // exited before it could answer.
       rethrowUnlessClosedTransport(error);
+      return inventoryWithoutCli(retainedMcpInventory(session));
     }
     return session.mcpInventory ?? [];
   }
-  return retainedMcpInventory(session) ?? [];
+  // Also the probe path: a probe is closed by the time its action returns, so
+  // a row it left `connecting`, and every row it did not touch, has no CLI.
+  return inventoryWithoutCli(retainedMcpInventory(session));
 }
 
 export async function performSessionMcpAction(

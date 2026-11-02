@@ -167,3 +167,18 @@ mise run test:logged -- --name transcript-review-failures-isolated -- bun test -
 - **Assessment:** recurrence of the existing intermittent failure; no owning
   implementation, assertion, timeout or skip changed. Shared-host contention
   remains a hypothesis, and the aggregate remains non-green.
+
+
+## Task 1202 review repair — 2026-11-02
+
+Original command: `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1 mise run test:logged -- --name address-default-suite-concurrent -- mise run test`, workspace/root/bridge/protocol grants 6/1/2/1.
+Group evidence: `orkestrator-test-run.WXZCOJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/`.
+
+Aggregate saw two reads instead of one (3,112.06 ms). Complete branch owner saw three (25 pass/1 fail, 21.0 s); complete detached-main owner at 38d55ee14 saw two (25 pass/1 fail, 19.7 s). Main dependencies were independently installed. Branch artifact Q93eMF; main CKb6Jx.
+
+The complete owner was rerun with `mise run test:logged -- --name address-native-commands-rerun -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures`. No implementation, assertion, wait, timeout or skip was changed. This recurrence remains open.
+
+Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
+13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
+3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
+The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.

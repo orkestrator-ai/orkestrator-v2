@@ -40,9 +40,11 @@ export const IMAGE_CAPABILITIES = {
    * 08). Version 2 also copies Cursor's `~/.cursor/mcp.json` from
    * `/cursor-config` (`CURSOR_MCP_STAGED_INPUTS_VERSION`). Version 3 relays a
    * mount the workload user cannot read, as under rootless Docker, through
-   * the root entrypoint (`STAGED_INPUT_RELAY_VERSION`).
+   * the root entrypoint (`STAGED_INPUT_RELAY_VERSION`). Version 4 copies the
+   * shared `~/.agents/skills` from `/agents-skills`
+   * (`SHARED_SKILLS_STAGED_INPUTS_VERSION`).
    */
-  "staged-inputs": 3,
+  "staged-inputs": 4,
   /**
    * Per-environment network with explicit host service rules and IPv6 policy
    * (step 09, version 2); allowed traffic as address, protocol and port tuples
@@ -104,6 +106,20 @@ export function imageRelaysStagedInputs(
   capabilities: Partial<Record<ImageCapability, number>> | null | undefined,
 ): boolean {
   return (capabilities?.["staged-inputs"] ?? 0) >= STAGED_INPUT_RELAY_VERSION;
+}
+
+/**
+ * The `staged-inputs` version from which an image's entrypoint copies the
+ * shared user skills (`~/.agents/skills`) from `/agents-skills`. An older
+ * image ignores that mount, so nothing is staged for it.
+ */
+export const SHARED_SKILLS_STAGED_INPUTS_VERSION = 4;
+
+/** Whether an image with these capabilities imports the shared `~/.agents/skills`. */
+export function imageCopiesSharedSkills(
+  capabilities: Partial<Record<ImageCapability, number>> | null | undefined,
+): boolean {
+  return (capabilities?.["staged-inputs"] ?? 0) >= SHARED_SKILLS_STAGED_INPUTS_VERSION;
 }
 
 export function isImageCapability(value: unknown): value is ImageCapability {

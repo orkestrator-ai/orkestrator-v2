@@ -414,7 +414,12 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(pins[0]).toMatch(
       new RegExp(`^${misePin.replaceAll(".", "\\.")}-debian@sha256:[0-9a-f]{64}$`),
     );
-    expect(dockerfile).toContain(`mise install --system bun@${misePin}`);
+    // The base image's Bun is registered with mise, never downloaded again.
+    expect(dockerfile).not.toContain("mise install --system bun@");
+    expect(dockerfile).toContain(
+      `MISE_DATA_DIR=/usr/local/share/mise mise link bun@${misePin} /opt/bun`,
+    );
+    expect(dockerfile).toContain("ln -s /usr/local/bin/bun /opt/bun/bin/bun");
     expect(dockerfile).toContain(`mise where bun@${misePin}`);
     expect(dockerfile).toContain(`mise exec bun@${misePin} -- bun --version`);
     expect(dockerfile).toContain('test -x "$BUN_INSTALL_DIR/bin/bun"');

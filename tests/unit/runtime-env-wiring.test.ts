@@ -95,9 +95,11 @@ describe("container runtime environment wiring", () => {
     expect(dockerfile).toContain(`'eval "$(/usr/local/bin/mise activate zsh)"'`);
     expect(dockerfile).toContain("ENV MISE_TRUSTED_CONFIG_PATHS=/workspace");
     expect(dockerfile).toContain("typeset -f _mise_hook >/dev/null");
-    expect(dockerfile.indexOf("ARG MISE_VERSION=")).toBeGreaterThan(
-      dockerfile.indexOf("# Build the Cursor SDK bridge"),
-    );
+    // Above the bridges, which change nearly every release, and below the
+    // agent CLIs and the browser, which a mise bump must not invalidate.
+    const mise = dockerfile.indexOf("ARG MISE_VERSION=");
+    expect(mise).toBeGreaterThan(dockerfile.indexOf("RUN playwright install --with-deps chromium"));
+    expect(mise).toBeLessThan(dockerfile.indexOf("COPY --from=bridge-build"));
   });
 
   test("Docker image uses a pinned two-line Starship prompt for Zsh terminals", () => {

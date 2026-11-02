@@ -1102,8 +1102,8 @@ bridge builds back into the final stage: the workspace install and build
 layers would ship in the image's history even when deleted later.
 
 Runtimes:
-- Bun, installed in mise's shared system tool directory. The matching base-image
-  runtime bootstraps the image build before mise is installed.
+- Bun, the base image's own binary, registered in mise's shared system tool
+  directory with `mise link` (never downloaded a second time).
 - Node.js 24 LTS, installed over the base image and verified against the
   published checksum. The agent CLIs need genuine Node, not bun's node shim.
 

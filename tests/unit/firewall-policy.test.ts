@@ -95,7 +95,10 @@ describe("container firewall policy", () => {
       "if [ ! -e /etc/orkestrator/network-mode ] && [ ! -e /etc/orkestrator/allowed-domains ]",
     );
     expect(bootstrap).toContain("exec setpriv --reuid=node --regid=node --init-groups");
-    expect(dockerfile).toContain("apt-get install -y --no-install-recommends util-linux");
+    // setpriv comes from util-linux, installed in the one apt layer; a later
+    // `apt-get update` would only re-download the package lists.
+    expect(dockerfile).toMatch(/^ {2}util-linux \\$/m);
+    expect(dockerfile.match(/apt-get update/g)).toHaveLength(1);
     expect(dockerfile).toContain("&& command -v setpriv");
     expect(dockerfile).toContain("setpriv --reuid=node --regid=node --init-groups id -u");
     expect(dockerfile).toContain("USER node\n\n# Default terminal settings");

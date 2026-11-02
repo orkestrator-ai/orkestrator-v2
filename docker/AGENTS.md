@@ -24,8 +24,8 @@ is pinned by an `ARG` in `docker/Dockerfile`, which is its container source of
 truth.
 
 Runtimes:
-- Bun, installed in mise's shared system tool directory. The matching base-image
-  runtime bootstraps the image build before mise is installed.
+- Bun, the base image's own binary, registered in mise's shared system tool
+  directory with `mise link` (never downloaded a second time).
 - Node.js 24 LTS, installed over the base image and verified against the
   published checksum. The agent CLIs need genuine Node, not bun's node shim.
 
@@ -45,6 +45,13 @@ Prebuilt bridge servers, so a container never builds them at runtime:
 Keep `COPY --chown=node:node patches /opt/bridge-build/patches` before the
 filtered `bun install`: Bun validates root `patchedDependencies` even when the
 filtered workspaces do not install OpenCode themselves.
+
+Layer order is by how often a layer changes, rarest first, because a changed
+layer re-pulls every layer after it: agent CLIs and the browser, then starship
+and mise, then the vendored bridge SDKs (`/opt/bridge-deps/*`, one layer each),
+then the bridge bundles, then the small scripts. Each global `npm install -g`
+ends with `npm cache clean --force` in the same `RUN`, and there is one apt
+layer; add packages to it rather than running `apt-get update` again.
 
 Developer tooling:
 - Git, GitHub CLI (`gh`), git-delta, and SSH with GitHub/GitLab/Bitbucket host

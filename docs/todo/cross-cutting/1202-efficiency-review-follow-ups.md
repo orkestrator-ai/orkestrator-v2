@@ -39,7 +39,7 @@ governs, marked "Decided".
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
-14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open.
+14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
 
@@ -498,21 +498,77 @@ Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), 
 
 ### 14. Docker image size
 
-**Problem.** A bridge release re-pulls about 225 MB of unchanged layers, Bun is installed twice, and npm caches are probably left in the image.
+**Problem.** A bridge release re-pulled every layer from the first bridge `COPY` to the end of the image, Bun was installed twice, npm's download cache stayed in the image, and a leftover `apt-get update` ran after the script `COPY`s.
 
-**Context.** `docker/Dockerfile` (confirmed 2026-11-01: bridge `COPY`s still precede starship and mise; no `npm cache clean`). 0022 decided against BuildKit cache mounts. Image changes need `bash docker/tests/final-image-smoke.sh <image>` and `mise run test:agent:docker`.
+**Context.** DK-7, DK-8, DK-9 and DK-11 done 2026-11-02 in one image change, together with Node 24.22.2 ([0032](0032-dependency-upgrades.md) task 7), measured on `main` at `38d55ee14` (before) and the same tree with the change (after), linux/amd64, beelink. What changed in `docker/Dockerfile`:
 
-**Investigation.** Sizes are from the report's reading of `docker history`; not re-measured. DK-10 (two Claude binaries) may be unfixable because the CLI and SDK follow separate release trains.
+- DK-7: starship and mise now sit above the bridges. The builder copies each bridge's sources just before its own build, least-changed first (pi, cursor, acp, claude, codex, by commits since 2026-08-01). The vendored SDKs (`dist/node_modules` of pi, cursor and claude) move to `/opt/bridge-deps/<bridge>` in the builder and ship in their own layers ahead of the bundles. The shell config `COPY`s moved below the bridges because they are small.
+- DK-8: the base image's `/usr/local/bin/bun` is registered in mise's system directory with `MISE_DATA_DIR=/usr/local/share/mise mise link bun@1.4.4 /opt/bun`, where `/opt/bun/bin/{bun,bunx}` are symlinks to it. Nothing is downloaded. A `node` user with a project that pins `bun = "1.4.4"` gets "already installed" offline.
+- DK-9: each `npm install -g` (Claude Code, Codex, Playwright) ends with `&& npm cache clean --force` in the same `RUN`.
+- DK-11: the late `apt-get update && apt-get install util-linux` is gone. `util-linux` is Essential in the Debian base and already present; it is now listed in the first apt layer, and the `setpriv` checks stay.
+
+Tests changed: `tests/unit/monorepo-scripts.test.ts` (layer order, npm cache), `version-drift.test.ts` (`mise link` instead of `mise install --system`), `runtime-env-wiring.test.ts` (mise above the bridges, below the browser; the old assertion compared against a comment that no longer existed) and `firewall-policy.test.ts` (one apt layer).
+
+**Investigation.** Measured with `docker image inspect`, `docker history` and `du -sxh` inside the image:
+
+| | Before | After |
+| --- | --- | --- |
+| Image size (uncompressed) | 6,411 MB | 5,452 MB (−959 MB, −15%) |
+| `/home/node/.npm` | 356 MB (`_cacache`) | 32 KB (logs only) |
+| Second Bun (`/usr/local/share/mise/installs/bun`) | 103 MB, plus 50 MB mise download cache in `/root/.cache/mise` | 16 KB of symlinks; no cache |
+| mise layer | 321 MB | 162 MB (the mise binary is 155 MB) |
+| Claude Code npm layer | 443 MB | 301 MB |
+| Codex npm layer | 647 MB | 456 MB |
+| Playwright npm layer | 58.8 MB | 19.1 MB |
+| Re-pulled bytes when all five bridges change | 895 MB (40 layers) | 22.8 MB (38 layers: bundles of 2.8 to 8.9 MB each, the rest small scripts) |
+
+The re-pull row comes from a probe: a runtime line appended to all five `bridges/*/src/index.ts`, both Dockerfiles rebuilt on the same builder, and changed layer digests (`RootFS.Layers`) compared against each unprobed image. The vendored SDK layers kept their digests across the rebuild. CI builds with `cache-from`/`cache-to: type=gha,mode=max` (`publish-container.yml`), so they reuse layers the same way. `bash docker/tests/final-image-smoke.sh` passed on the after image.
+
+`mise run test:agent:docker` ran on the after image, in a disposable profile (`--fixture-environments local,container --no-agent-credentials --agent-platforms codex,grok,opencode --headless-electron`). Load average was about 46 because about ten builds were sharing the host. Result: 17 passed, 4 skipped, 3 failed, and the same three failed again when rerun alone. None of the three depends on what is inside the image:
+
+- `web-annotations-gateway.spec.ts:958`: the "Docker containers can't reach Orkestrator" dialog covered the page. The host's ufw drops traffic from Docker networks to the agent tools port.
+- `native-draft-attachments.spec.ts:378`: the test's restricted container started from the new image. After that, the page showed "Orkestrator couldn't connect" before the sidebar loaded.
+- `container-app-wiring.spec.ts:447`: the profile's coordinator conversation was already assigned to Codex ("Coordinator, Codex"). The test expects "Coordinator, no agent chosen yet".
+
+The passing tests include container boot and restart with imported logins, rebuild, deletion, the root terminal, settings, Files, merge, Build-tab validation output, the Playwright launch for both container users and design export. The four skipped tests are live-provider opt-ins: Grok login renewal, a live agent note, and two live Claude cases.
+
+DK-10 is still open. The SDK's `claude-agent-sdk-linux-x64/claude` (0.3.314) and the CLI's `claude-code/bin/claude.exe` (2.1.314) are the same file today: SHA-256 `4487042b…5f84594`, 298 MB each. [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, so they can diverge.
+
+Not addressed, for a later pass: the Playwright layer (1.07 GB: Chromium, the headless shell and `--with-deps` apt packages), and the bridge `src/` trees that ship next to `dist` (about 16 MB, unused at runtime).
 
 **Decisions.**
 
-- **One change or several?**
+- **One change or several?** Decided and done: one change.
   - **DK-7, DK-8, DK-9 and DK-11 in one image change, with `docker history` and `du` before and after (recommended).**
     - Pros: one rebuild and one smoke run.
     - Cons: a regression is harder to attribute.
   - **One change per finding.**
     - Pros: each saving is measured alone.
     - Cons: four rebuilds and four pulls for users.
+- **How far should DK-7 go?** Done: split out the SDKs.
+  - **Reorder and split the vendored SDKs into their own layers (recommended).**
+    - Pros: a code-only release re-pulls 22.8 MB instead of 895 MB.
+    - Cons: three more `COPY` lines; the builder moves `dist/node_modules` out and the final stage merges it back.
+  - **Reorder only, as the report proposed.**
+    - Pros: smallest diff.
+    - Cons: the claude, pi and cursor layers (549 MB) still re-pull on every release that touches bridge code or `packages/protocol`.
+- **How to register Bun with mise (DK-8)?** Done: `mise link`.
+  - **`mise link` into the system directory, pointing at the base binary (recommended).**
+    - Pros: no download or second copy; mise writes its own runtime symlinks (`1`, `1.4`, `latest`), so `mise install` as `node` reports "already installed".
+    - Cons: `mise ls` shows `(symlink)`; mise creates `/usr/local/share/mise/shims`, which the build removes because nothing uses it.
+  - **Hand-made `installs/bun/1.4.4/bin` symlinks.**
+    - Pros: no mise invocation.
+    - Cons: tried; without the runtime symlinks, `mise install` as `node` failed trying to rebuild them through sudo.
+  - **Move the base binary into the mise directory.**
+    - Pros: one real file.
+    - Cons: a move in a later layer copies the 107 MB again, so nothing is saved.
+- **DK-10: the second Claude binary.** Open; needs the maintainer.
+  - **At build time, symlink the SDK binary to the CLI's when the two are byte-identical, otherwise copy it (recommended).** This needs a `RUN --mount=type=bind,from=bridge-build`. That is a bind mount, not the cache mount 0022 rejected.
+    - Pros: saves 298 MB while the pins agree, as they do today; no change when they diverge.
+    - Cons: the bridge's SDK would run whatever is at the CLI path, so a user's `npm i -g @anthropic-ai/claude-code@<other>` inside a container would change the bridge's engine too; adds BuildKit-only syntax.
+  - **Leave both copies.**
+    - Pros: the SDK stays self-contained and follows its own release train.
+    - Cons: 298 MB of identical bytes in every image.
 
 ### 15. Container data transfer
 

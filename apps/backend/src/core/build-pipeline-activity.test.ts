@@ -2,7 +2,7 @@
  * Pipe branches in the sidebar: the environment's `build-pipeline` activity
  * source follows its pipelines, on a real store.
  */
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -505,6 +505,85 @@ describe("what a pipeline's end rings", () => {
       observer.stop();
     }
   });
+
+  test("a stalled success preserves another session's unread failure and deduplicates", async () => {
+    const storage = await store();
+    const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+    await save(storage, pipeline("p1", "e1", "building", STALL));
+    await observer.start();
+    await storage.recordEnvironmentSessionCompletion(
+      "e1",
+      new Date().toISOString(),
+      "agent_failed",
+      "other",
+    );
+    await save(storage, pipeline("p1", "e1", "complete"));
+    await observer.observe("p1");
+    expect(await bell(storage, "e1")).toBe("agent_failed");
+    const completedAt = (await storage.getEnvironment("e1"))!.agentSessionCompletedAt;
+    await observer.reconcile();
+    expect((await storage.getEnvironment("e1"))!.agentSessionCompletedAt).toBe(completedAt);
+    expect((await storage.getEnvironment("e1"))!.agentAttentionKeys).toHaveLength(2);
+    observer.stop();
+  });
+
+  for (const phases of [
+    ["failed", "complete"],
+    ["complete", "failed"],
+  ] as const) {
+    test(`mixed stalled endings preserve failure (${phases.join(", ")})`, async () => {
+      const storage = await store();
+      const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+      for (const id of ["p1", "p2"]) await save(storage, pipeline(id, "e1", "building", STALL));
+      await observer.start();
+      for (const [index, phase] of phases.entries()) {
+        await save(
+          storage,
+          pipeline(`p${index + 1}`, "e1", phase, {
+            error: phase === "failed" ? "Failure" : undefined,
+          }),
+        );
+      }
+      await observer.reconcile();
+      expect(await bell(storage, "e1")).toBe("agent_failed");
+      expect((await storage.getEnvironment("e1"))!.agentAttentionKeys).toHaveLength(2);
+      observer.stop();
+    });
+  }
+
+  for (const phase of ["complete", "failed"] as const) {
+    for (const restart of [false, true]) {
+      test(`old ${phase} metadata cannot ring a later cancellation (restart=${restart})`, async () => {
+        const storage = await store();
+        let observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+        try {
+          setSystemTime(new Date("2026-11-02T00:00:00Z"));
+          const old = pipeline("p0", "e1", phase, {
+            error: phase === "failed" ? "Old failure" : undefined,
+          });
+          await save(storage, old);
+          const endedAt = (await storage.getBuildPipeline("p0"))!.activityEndedAt;
+          await observer.start();
+          setSystemTime(new Date("2026-11-02T00:01:00Z"));
+          await save(storage, pipeline("p1", "e1", "building"));
+          await observer.observe("p1");
+          setSystemTime(new Date("2026-11-02T00:02:00Z"));
+          await save(storage, { ...old, completionCommentStatus: "posted" });
+          expect((await storage.getBuildPipeline("p0"))!.activityEndedAt).toBe(endedAt);
+          await save(storage, pipeline("p1", "e1", "failed", { error: "Build cancelled" }));
+          if (restart) {
+            observer.stop();
+            observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+            await observer.start();
+          } else await observer.observe("p1");
+          expect(await bell(storage, "e1")).toBeNull();
+        } finally {
+          observer.stop();
+          setSystemTime();
+        }
+      });
+    }
+  }
 
   test("a stall that clears rings only for the pipeline's end", async () => {
     const storage = await store();

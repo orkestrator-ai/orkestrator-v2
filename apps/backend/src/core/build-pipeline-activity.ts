@@ -114,7 +114,7 @@ interface ObservedPipeline {
   /** Would be working but for a stall warning: not an end, so it rings nothing. */
   stalled: boolean;
   end?: BuildPipelineEnd;
-  updatedAt: string;
+  endedAt: string;
   revision: number;
 }
 
@@ -136,7 +136,7 @@ function observePipeline(record: PersistedBuildPipeline): ObservedPipeline | nul
     stalled:
       snapshot?.stallWarning !== undefined && isWorkingBuildPipeline({ phase: snapshot.phase }),
     end: snapshot ? buildPipelineEnd(snapshot) : undefined,
-    updatedAt: record.updatedAt,
+    endedAt: record.activityEndedAt ?? record.updatedAt,
     revision: record.revision,
   };
 }
@@ -393,16 +393,14 @@ export class BuildPipelineActivity {
     }
     let completionOutcome: AgentActivityCompletionOutcome | undefined;
     if (source && current === "working" && desired === "idle") {
-      // The ends this process watched, plus any the store shows since the
-      // source went working: the recovery path after a restart, or for a
-      // pipeline another backend drove.
+      // The ends this process watched, plus stored phase transitions since the
+      // source went working: recovery after a restart or another backend.
+      // Metadata saves retain that transition time.
       const since = Date.parse(source.observedAt ?? source.updatedAt);
       completionOutcome = buildPipelineCompletionOutcome([
         ...this.endingsFor(environmentId).map(([, ending]) => ending.end),
         ...pipelines.flatMap((pipeline) =>
-          pipeline.end !== undefined && Date.parse(pipeline.updatedAt) >= since
-            ? [pipeline.end]
-            : [],
+          pipeline.end !== undefined && Date.parse(pipeline.endedAt) >= since ? [pipeline.end] : [],
         ),
       ]);
     }

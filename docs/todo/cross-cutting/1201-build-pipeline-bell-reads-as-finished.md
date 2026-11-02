@@ -66,9 +66,15 @@ The supervisor has no `cancelled` phase, so the classification is:
 
 ### Task 1: which pipelines decide an edge
 
-- **Chose:** the ends this process watched happen while the source was working (a pipeline previously seen working or stalled, now ended), plus any pipeline in the environment whose record was saved since the source went `working` (`observedAt`). Any failure wins, then any completion; otherwise nothing rings.
+- **Chose:** the ends this process watched happen while the source was working (a pipeline previously seen working or stalled, now ended), plus any pipeline in the environment whose ending phase was entered since the source went `working` (`observedAt`). Any failure wins, then any completion; otherwise nothing rings.
 - **Why both:** the watched ends cover a pipeline that ends between the read that saw it working and the activity write that went `working`, which the timestamps would miss. The store window is the recovery path after a restart and for a pipeline another backend drove. The window also keeps an old pipeline that ended before this working period from colouring it. A pipeline that ends while a sibling keeps the source working is held until the source's own edge, as graph runs do, so its failure is not lost.
 - **Resumed after ending:** a pipeline that becomes active again drops its earlier end; someone resumed it.
+
+### Task 1: review repairs (2026-11-02)
+
+- **Unread failure precedence:** preserve an unread `agent_failed` when a success is recorded through `recordEnvironmentSessionCompletion`, inside the environment mutation lease. This retains durable keys and makes mixed stalled endings independent of order. An observer-side read would race other writers.
+- **Recovery evidence:** persist `activityEndedAt` on entry into complete, failed or paused. Same-phase metadata saves retain it, and becoming active clears it. Existing records acquire their previous `updatedAt` on the first same-phase save; untouched legacy records still use their last saved timestamp. This avoids treating completion-comment retries as new ends even after a restart. An in-memory exclusion alone would lose that protection after restart.
+- **Coverage:** real-storage regressions cover unread failures, both mixed stalled-ending orders, and old completed/failed metadata saves during a later cancellation, with and without observer restart.
 
 ### Task 1: whether pipelines already raise their own notice
 

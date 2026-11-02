@@ -695,8 +695,10 @@ flowchart LR
   `apps/desktop/tests/renderer-diagnostics.test.ts` scans for it, along with feeding
   every other area's every event through the real listener.
 - **The real path.** `e2e/agent-testing/renderer-log-boundary-electron.spec.ts` runs
-  a real window with logs being saved and the renderer's level raised, and checks
-  the saved file holds the markers and no logger line.
+  a real window with the renderer's level raised, and checks the main process's
+  console holds the markers and no logger line. That console is what the saved log
+  is made of, and `application-logging.test.ts` covers the file: the tee is installed
+  only for the production flavor, which no test may run against real data.
 
 Whether more may be saved is undecided (recommendation R8 in the
 [review](../reports/2026-10-29-logging-and-database-efficiency.md)).

@@ -4,7 +4,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication, Page } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -16,9 +16,14 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 /**
  * The boundary docs/architecture/logging.md promises, through the real Electron
- * main process, renderer and log file: with logs being saved and the renderer's
- * level raised, renderer logger lines reach the browser console and stop there,
- * and the startup markers are what crosses.
+ * main process and renderer: with the renderer's level raised, its logger lines
+ * reach the browser console and stop there, and the startup markers are what
+ * crosses.
+ *
+ * It reads the main process's console, because that is what the saved log is made
+ * of: `installProductionApplicationLogging` tees those same calls into the file,
+ * as application-logging.test.ts proves, and is installed only for the production
+ * flavor, which no test may run against the real data directory.
  */
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -38,17 +43,6 @@ async function waitForUrl(url: string): Promise<void> {
     .toBe(true);
 }
 
-async function savedLog(dataDir: string): Promise<string> {
-  const directory = path.join(dataDir, "logs");
-  const files = await readdir(directory).catch(() => [] as string[]);
-  const texts = await Promise.all(
-    files
-      .filter((file) => file.endsWith(".log"))
-      .map((file) => readFile(path.join(directory, file), "utf8")),
-  );
-  return texts.join("\n");
-}
-
 const count = (text: string, line: string): number => text.split(line).length - 1;
 
 test.beforeAll(() => {
@@ -59,7 +53,7 @@ test.beforeAll(() => {
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
 });
 
-test("a real window saves its startup markers and none of its logger lines", async () => {
+test("a real window sends its startup markers to the main process and none of its logger lines", async () => {
   test.setTimeout(240_000);
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-log-boundary-"));
   let vite: ChildProcess | null = null;
@@ -78,14 +72,6 @@ test("a real window saves its startup markers and none of its logger lines", asy
     },
   });
   const profilePath = await initializeProfile(profile);
-  const configPath = path.join(profile.dataDir, "config.json");
-  const config = await readFile(configPath, "utf8")
-    .then((text) => JSON.parse(text) as { global?: Record<string, unknown> })
-    .catch(() => ({ global: {} }));
-  await writeFile(
-    configPath,
-    JSON.stringify({ ...config, global: { ...config.global, debugLogging: true } }),
-  );
   const rendererUrl = `http://127.0.0.1:${rendererPort}`;
   try {
     vite = spawn("bun", ["run", "dev"], {
@@ -119,6 +105,12 @@ test("a real window saves its startup markers and none of its logger lines", asy
     });
     recordElectronDiagnostics(app);
     launchedApp = app;
+    let mainConsole = "";
+    const collect = (chunk: Buffer) => {
+      mainConsole += chunk.toString("utf8");
+    };
+    app.process().stdout?.on("data", collect);
+    app.process().stderr?.on("data", collect);
     dismissStartupDialogs(app);
     await expect
       .poll(() => app.windows().some((page) => page.url().startsWith(rendererUrl)), {
@@ -153,15 +145,12 @@ test("a real window saves its startup markers and none of its logger lines", asy
     await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
 
     await expect
-      .poll(async () => count(await savedLog(profile.dataDir), "[DesktopStartup] ready"), {
-        timeout: 30_000,
-      })
+      .poll(() => count(mainConsole, "[DesktopStartup] ready"), { timeout: 30_000 })
       .toBeGreaterThanOrEqual(3);
-    const saved = await savedLog(profile.dataDir);
-    expect(count(saved, "[DesktopStartup] checking")).toBeGreaterThanOrEqual(3);
-    expect(saved).not.toContain("[web.");
-    expect(saved).not.toContain("[terminal");
-    expect(saved).not.toContain("marker-with-more-text");
+    expect(count(mainConsole, "[DesktopStartup] checking")).toBeGreaterThanOrEqual(3);
+    expect(mainConsole).not.toContain("[web.");
+    expect(mainConsole).not.toContain("[terminal");
+    expect(mainConsole).not.toContain("marker-with-more-text");
     expect(browserConsole).toContain("[DesktopStartup] ready");
   } finally {
     await closeElectronWithin(launchedApp).catch(() => undefined);

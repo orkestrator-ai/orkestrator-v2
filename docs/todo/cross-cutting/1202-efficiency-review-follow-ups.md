@@ -27,7 +27,7 @@ governs, marked "Decided".
 ### Tasks
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
-2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7 and ST-8 done).
+2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
 3. **Renderer re-renders and refetches**: WEB-4 to WEB-19 and GW-13, plus WEB-2's narrower subscriptions. Status: open (WEB-2 and WEB-3 done).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
@@ -65,19 +65,58 @@ governs, marked "Decided".
 
 **Problem.** Some keyed paths still decode or rewrite a whole store for one row.
 
-**Context.** Done: `getEnvironment`, `getNativeAgentSession`, `getPromptQueue`, `getComposeDraft`, `getPaneLayout` and `getSession` read one row (`loadStoreRow`), and `updateStoreRow` carries a cached store forward (`storage-database.ts`). SQLite pragmas (ST-12) were decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task.
+**Context.** Done: `getEnvironment`, `getNativeAgentSession`, `getPromptQueue`, `getComposeDraft`, `getPaneLayout` and `getSession` read one row (`loadStoreRow`), and `updateStoreRow` carries a cached store forward (`storage-database.ts`). SQLite pragmas (ST-12) were decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task. Done 2026-11-02 (branch `keyed-storage-row-e11a908a8276-r1`, re-checked against `main` at `38d55ee14`):
 
-**Investigation.** Still whole-store: the lease-held native session mutations in `storage-native.ts` (more than 20 call sites load the store inside the key's lease), `workerProjection`'s `listNativeAgentSessions()` (`index.ts`), each background job decoding the environment and session stores on its own (BG-5), compose-draft saves taking a global lease and a full load while typing (ST-10, `storage-drafts.ts`), and `updateStoreRow` throwing for keyed array layouts (`storage-database.ts`). Inserts scan their collection for the next position (ST-11). #1423 gave agent mail a revision-keyed read model and dropped the pretty-printed size check, so ST-9's remainder (pending injects as their own collection, a body-free mailbox list) needs re-checking before work.
+- BG-5: `FrozenStoreSnapshot` (`storage-frozen-snapshot.ts`) keeps one deeply frozen decoded copy per committed revision, re-decoding only rows whose serialized value changed, one copy per store and none above 64 MiB of serialized rows. `readEnvironmentsSnapshot` and `readNativeAgentSessionsSnapshot` serve it to the activity sweep and its read-only helpers (`runtimeStopRequested`, `hasObservedLiveWork`, `hasActiveCheckoutWork`), the interaction tracker sweep, the tmux reconcile, the human-prompt monitor's `workingSessions`, `workerProjection`, `workerSessionActivity` and the pending-rename reconcile (`commands-registry.ts`, every 2 s while an environment has a rename intent, else 30 s).
+- ST-10, compose drafts: a save or single delete reads and writes only its row (`updateSensitiveStoreRow`, which keeps `saveSensitiveJson`'s archive pruning); owner sweeps are one `updateStore` that writes nothing when the owner has no draft. The store lease stays.
+- ST-11: `store_rows_position` on `(store, collection, position)`, created on open.
+
+**Investigation.** Re-checked 2026-11-02. Still whole-store: the lease-held native session mutations in `storage-native.ts` (22 call sites still load the whole store inside the key's lease, TX-4's rest), `updateStoreRow` throwing for keyed array layouts (`storage-database.ts`), and the record-store writers the report names under ST-10 (`storage-projects.ts`, `storage-sessions.ts`). Environments are an array store written whole under the environment lease by many paths, with attributable archive scrubs, so moving one writer to row writes breaks the one-kind-of-writer rule (`storage-writer-guards.test.ts`); every writer of the store has to move together, and array row writes have to exist first. Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
 
 **Decisions.**
 
-- **How to share decoded stores between background readers (BG-5)?**
+- **How to share decoded stores between background readers (BG-5)?** Done as recommended.
   - **One frozen decoded snapshot per store revision, the pattern #1423 used for mail (recommended).**
     - Pros: proven here; callers cannot mutate shared state.
     - Cons: callers that mutate their result must copy first, so each caller has to be checked.
   - **Pass one snapshot per sweep through each job's arguments.**
     - Pros: no cache.
     - Cons: touches every job signature; does not help unrelated jobs in the same second.
+- **BG-5: replace `listNativeAgentSessions` itself, or add snapshot reads beside it?** Decided 2026-11-02: beside it.
+  - **New `read*Snapshot` methods, moving callers one at a time once each is checked (recommended).**
+    - Pros: a caller is moved only when it is known not to write; the test harnesses of the moved callers return frozen data, so a write fails there.
+    - Cons: two read paths per store; unmoved callers still decode the store.
+  - **Make `listNativeAgentSessions` (and later `loadEnvironments`) return the frozen copy.**
+    - Pros: every caller benefits at once.
+    - Cons: 30 callers, several of which pass records to code that may write them; a missed one throws in production.
+- **ST-10, compose drafts: drop the store lease?** Decided 2026-11-02: keep it.
+  - **Keep the lease; one row read and write inside it (recommended).**
+    - Pros: saves stay ordered against the owner checks they await and against the owner deletion sweeps, exactly as before.
+    - Cons: still one lease claim and release per save.
+  - **A per-key lease, with the owner fences re-checked inside the row transaction.**
+    - Pros: drafts of different tabs save concurrently, and a save costs no store-wide lease.
+    - Cons: needs synchronous fences for project removal and coordinator conversation close that do not exist today.
+- **ST-10, compose drafts: how to keep the retired JSON archive pruning?** Decided 2026-11-02.
+  - **`updateSensitiveStoreRow`: prune that record's archived copies after the row commits, and every copy against the whole new value when the store was unreadable (recommended).**
+    - Pros: the same pruning a whole-value save did, for one record; nothing is read when no archive is left (it expires 14 days after migration).
+    - Cons: the pruning is not committed as durable intent with the write, the same as the deletion scrubs: a crash between the two leaves that copy until it expires.
+  - **Fall back to the whole-store save while an archive exists.**
+    - Pros: byte-for-byte the old behaviour.
+    - Cons: two kinds of writer for one store, which the writer guard refuses.
+- **ST-11: index or a stored next position?** Decided 2026-11-02.
+  - **An index on `(store, collection, position)`, created on open (recommended).**
+    - Pros: no stored value or schema version changes, so an older build still opens the database; ordered row fetches use it too.
+    - Cons: one more index to maintain on inserts and deletes; it is built once on the first open after the upgrade.
+  - **A numbered migration, or the next position kept in `stores`.**
+    - Pros: a migration follows the documented pattern.
+    - Cons: a new version locks every older build out of the database, and a stored counter is new stored data to keep consistent.
+- **ST-10's remaining writers: next step?**
+  - **Add array-layout `updateStoreRow` with tests, then move every environment writer at once (recommended).**
+    - Pros: environments are the largest store written whole for one field.
+    - Cons: one large change touching every environment mutation, its archive scrubs and the deletion fences.
+  - **Move the record stores (sessions, projects) first.**
+    - Pros: `updateStoreRow` already supports them.
+    - Cons: smaller stores, so less gained.
 
 ### 3. Renderer re-renders and refetches
 

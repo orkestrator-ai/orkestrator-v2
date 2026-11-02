@@ -16,7 +16,6 @@ import {
   uninstallDesktopFake,
   type MachineDataset,
 } from "@/test/federation-desktop-fake";
-import type { SidebarGrouping } from "@/lib/federation/aggregate";
 
 const initialView = useMachineViewStore.getState();
 const initialUI = useUIStore.getState();
@@ -24,7 +23,7 @@ const initialProjects = useProjectStore.getState();
 const initialEnvironments = useEnvironmentStore.getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
 
-function renderSidebar(grouping: SidebarGrouping, dataset: MachineDataset) {
+function renderSidebar(grouping: "machine" | "project", dataset: MachineDataset) {
   installDesktopFake({
     list: connectionList([remoteConnection("a", "Machine A", "teal")]),
     datasets: { a: dataset },

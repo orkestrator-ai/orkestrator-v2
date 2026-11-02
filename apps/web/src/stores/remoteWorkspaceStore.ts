@@ -219,6 +219,8 @@ function noteRemoteSelection(
   if (environmentId || views.revealedProject?.key !== selectedProjectKey) {
     views.revealProject(null);
   }
+  // A repository heading notes itself after opening; any other navigation ends it.
+  views.noteRepositoryOpened(null);
 }
 
 function clearLocalSelection(): void {

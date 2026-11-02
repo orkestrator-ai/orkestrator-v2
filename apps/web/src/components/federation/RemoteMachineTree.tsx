@@ -439,11 +439,16 @@ export function RemoteProjectGroup({
   const home = everyEnvironment.find(
     (environment) => environment.isProjectHome && !environment.deleting,
   );
-  const shown = useRemoteProjectHomeShown(
-    machine.connectionId,
-    project.ref.projectId,
-    home?.ref.environmentId,
+  // The repository heading that opened this project is highlighted in its place.
+  const openedByHeading = useMachineViewStore(
+    (state) => grouping === "repository" && state.openedRepository?.projectKey === project.key,
   );
+  const shown =
+    useRemoteProjectHomeShown(
+      machine.connectionId,
+      project.ref.projectId,
+      home?.ref.environmentId,
+    ) && !openedByHeading;
   const live = machine.transport === "connected";
   const homeStatus =
     home && live

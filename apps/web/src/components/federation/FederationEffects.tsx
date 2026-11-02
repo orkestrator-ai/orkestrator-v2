@@ -45,7 +45,7 @@ function FederationEffectsActive() {
  * used, by node-qualified key, next to other machines' (recorded when they
  * are opened), so the project search ranks every machine's recents together.
  * A local selection also ends the search's highlight of another machine's
- * project.
+ * project, and a repository heading's highlight.
  */
 function useRecentSelections(backendId: BackendId | null) {
   useEffect(() => {
@@ -67,6 +67,7 @@ function useRecentSelections(backendId: BackendId | null) {
       const views = useMachineViewStore.getState();
       views.recordRecent(keys);
       if (keys.length > 0) views.revealProject(null);
+      views.noteRepositoryOpened(null);
     });
   }, [backendId]);
 }

@@ -426,6 +426,7 @@ export function HierarchicalSidebar() {
   );
   const portalLayout = usePortalLayout();
   const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
+  const openedRepositoryKey = useMachineViewStore((state) => state.openedRepository?.projectKey);
   useBoundCollapseSync(
     federation.enabled ? (boundMachineView?.backendId ?? null) : null,
     projects,
@@ -974,6 +975,8 @@ export function HierarchicalSidebar() {
       machineIcon?: ReactNode;
       label?: string;
       labelClassName?: string;
+      /** Its repository heading opened it and is highlighted in its place. */
+      openedByHeading?: boolean;
     },
   ) => (
     <SortableProjectGroup
@@ -1000,7 +1003,9 @@ export function HierarchicalSidebar() {
       )}
       isCollapsed={collapsedProjects.includes(project.id)}
       isSelected={
-        selectedProjectId === project.id && (!selectedEnvironmentId || selectedProjectHomeActive)
+        !mixed?.openedByHeading &&
+        selectedProjectId === project.id &&
+        (!selectedEnvironmentId || selectedProjectHomeActive)
       }
       onToggleCollapse={() => toggleProjectCollapse(project.id)}
       selectedEnvironmentId={selectedEnvironmentId}
@@ -1159,6 +1164,7 @@ export function HierarchicalSidebar() {
         label,
         labelClassName: machineTextClass(boundMachineView?.colorToken),
         machineIcon: projectIconOnly(project),
+        openedByHeading: openedRepositoryKey === sortableId,
       });
     }
     return renderProjectGroup(project, { sortableId, label, machineIcon: boundHomeIcon(project) });

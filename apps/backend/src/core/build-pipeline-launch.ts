@@ -78,8 +78,11 @@ export async function coordinatorBuildTicketSource(
   const ticketId = typeof taskId === "string" ? taskId.trim() : "";
   const task = ticketId ? await storage.kanban.getKanbanTask(ticketId) : null;
   if (!task || task.projectId !== projectId) {
-    throw new Error(
-      `taskId ${JSON.stringify(ticketId)} is not a ticket in this project. Create the ticket with create_ticket first, then call start_build_pipeline with its id.`,
+    throw Object.assign(
+      new Error(
+        `taskId ${JSON.stringify(ticketId)} is not a ticket in this project. Create the ticket with create_ticket first, then call start_build_pipeline with its id.`,
+      ),
+      { code: "coordinator-build-ticket-required" },
     );
   }
   return { type: "kanban", taskId: task.id };

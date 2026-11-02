@@ -660,19 +660,30 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         // The node's admission key makes a resent start return the first pipeline.
         // The node checks the ticket is one of its own and links the build to
         // it; the source sent here also links the build on a node too old to.
-        const workflow = await target.call<JsonRecord>(
-          "start_controller_build_pipeline",
-          {
-            input: {
-              ...input,
-              projectId: target.projectId,
-              ...(typeof input.taskId === "string"
-                ? { source: { type: "kanban", taskId: input.taskId.trim() } }
-                : {}),
+        const workflow = await target
+          .call<JsonRecord>(
+            "start_controller_build_pipeline",
+            {
+              input: {
+                ...input,
+                projectId: target.projectId,
+                ...(typeof input.taskId === "string"
+                  ? { source: { type: "kanban", taskId: input.taskId.trim() } }
+                  : {}),
+              },
             },
-          },
-          `build:${caller.coordinatorId}:${stableRequestId}`,
-        );
+            `build:${caller.coordinatorId}:${stableRequestId}`,
+          )
+          .catch(async (error: unknown) => {
+            // Only this pre-start refusal proves no pipeline ran. Keep the
+            // reservation on ambiguous failures so a retry cannot duplicate work.
+            if (record(error) && error.code === "coordinator-build-ticket-required") {
+              await context.storage.coordinators.releasePendingCoordinatorWorkflowAssociation(
+                receipt.association.id,
+              );
+            }
+            throw error;
+          });
         if (!record(workflow) || typeof workflow.id !== "string") {
           throw new Error("Build pipeline returned no result");
         }

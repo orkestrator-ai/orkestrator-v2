@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
+import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
@@ -496,6 +497,101 @@ describe("send_coordinator_node_mail", () => {
 });
 
 describe("workflows on a node", () => {
+  for (const taskId of ["missing", "other-project"]) {
+    test(`a ${taskId} ticket refusal releases the reservation for a corrected retry`, async () => {
+      const leafCommands = new Map<string, CommandHandler>();
+      registerControllerWorkflowCommands((name, handler) => leafCommands.set(name, handler), {
+        commands: new Map(),
+      });
+      let starts = 0;
+      const leafContext = {
+        storage: {
+          getProject: async () => ({ id: "p-leaf", localPath: "/fixture" }),
+          loadConfig: async () => ({ global: {}, repositories: {} }),
+          kanban: {
+            getKanbanTask: async (id: string) =>
+              id === "missing"
+                ? null
+                : { id, projectId: id === "other-project" ? "p-other" : "p-leaf" },
+          },
+        },
+        buildPipelines: {
+          start: async () => {
+            starts++;
+            return { id: "pipeline-leaf", projectId: "p-leaf" };
+          },
+        },
+      } as unknown as CommandContext;
+      const { run, scope, associations } = await setup({
+        answers: {
+          start_controller_build_pipeline: (args: Record<string, unknown>) =>
+            leafCommands.get("start_controller_build_pipeline")!(args, leafContext),
+        },
+      });
+      const args = {
+        scope,
+        requestId: "build-refused",
+        nodeId: "bk_leaf",
+        input: {
+          projectId: scope.projectId,
+          taskId,
+          taskTitle: "Fix",
+          environmentType: "local",
+          agentType: "codex",
+          taskSnapshot: {
+            title: "Fix",
+            description: "",
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+          delegationBaseBranch: "main",
+          delegationBaseCommit: BASE,
+        },
+      };
+      await expect(run("start_coordinator_node_build_pipeline", args)).rejects.toMatchObject({
+        code: "coordinator-build-ticket-required",
+        message: expect.stringContaining("Create the ticket with create_ticket first"),
+      });
+      expect(starts).toBe(0);
+      expect(await associations()).toEqual([]);
+
+      const result = await run("start_coordinator_node_build_pipeline", {
+        ...args,
+        input: { ...args.input, taskId: "valid-ticket" },
+      });
+      expect(result.id).toBe("pipeline-leaf");
+      expect(starts).toBe(1);
+      expect(await associations()).toEqual([
+        expect.objectContaining({ resourceId: "pipeline-leaf", pending: false }),
+      ]);
+    });
+  }
+
+  test("an ambiguous build failure retains its reservation and blocks a changed retry", async () => {
+    const { run, scope, loseNext, associations, routed } = await setup();
+    const args = {
+      scope,
+      requestId: "build-lost",
+      nodeId: "bk_leaf",
+      input: { ...launchInput(scope.projectId), taskId: "t1", taskTitle: "Fix" },
+    };
+    loseNext("start_controller_build_pipeline");
+    await expect(run("start_coordinator_node_build_pipeline", args)).rejects.toMatchObject({
+      code: "outcome-unknown",
+    });
+    expect(await associations()).toEqual([expect.objectContaining({ pending: true })]);
+    await expect(
+      run("start_coordinator_node_build_pipeline", {
+        ...args,
+        input: { ...args.input, taskId: "t2" },
+      }),
+    ).rejects.toThrow("different payload");
+    expect(
+      routed.filter((entry) => entry.command === "start_controller_build_pipeline"),
+    ).toHaveLength(1);
+  });
+
   test("a build pipeline is reserved here and started on the node's copy", async () => {
     const { run, scope, routed, associations } = await setup();
     const workflow = await run("start_coordinator_node_build_pipeline", {

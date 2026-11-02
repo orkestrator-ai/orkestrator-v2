@@ -107,7 +107,10 @@ describe("controller workflow commands", () => {
     for (const taskId of ["missing", "other"]) {
       await expect(
         run("start_controller_build_pipeline", { input: { ...build, taskId } }),
-      ).rejects.toThrow("Create the ticket with create_ticket first");
+      ).rejects.toMatchObject({
+        code: "coordinator-build-ticket-required",
+        message: expect.stringContaining("Create the ticket with create_ticket first"),
+      });
     }
     expect(started).toEqual([]);
   });

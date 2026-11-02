@@ -1,5 +1,6 @@
 # Design duplicate capacity receipt aggregate deadline
 
+- **ID:** 2501
 - **Status:** open
 - **Date observed:** 2026-11-02
 - **Test:** `design operations: prepare, execute, status and cancel > concurrent duplicates at the frame limit settle with a capacity receipt`

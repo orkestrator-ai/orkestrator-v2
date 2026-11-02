@@ -302,6 +302,7 @@ test("a machine's Docker availability gates another machine's container actions;
           busy: false,
           writable: true,
         },
+        true,
       ),
     );
   const down = read({ dockerAvailable: false });

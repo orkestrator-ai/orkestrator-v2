@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 
+import * as agentSupport from "../src/core/commands-agent-support";
 import { homePath } from "../src/core/shell";
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -16,6 +17,33 @@ const {
 } = await createCommandFixtures();
 
 describe("agent skill commands", () => {
+  test("registered plugin discovery runs the normal host runner", async () => {
+    const runner = mock(async () => JSON.stringify([{ name: "example", enabled: true }]));
+    const factory = spyOn(agentSupport, "createHostExtensionCommandRunner").mockReturnValue(runner);
+    try {
+      const { context } = createContext(createEnvironment());
+      context.runtimeFlavor = "development";
+      const commands = createCommandRegistry();
+      await expect(
+        commands.get("list_agent_plugins")?.({ provider: "claude" }, context),
+      ).resolves.toMatchObject({
+        agent: "claude",
+        plugins: [expect.objectContaining({ name: "example" })],
+      });
+      expect(factory).toHaveBeenCalledWith(context);
+      expect(runner).toHaveBeenCalledWith("claude", ["plugin", "list", "--json"]);
+      await expect(
+        commands.get("list_agent_plugins")?.({ provider: "invalid" }, context),
+      ).rejects.toThrow();
+      await expect(
+        commands.get("list_agent_plugins")?.({ provider: "claude", extra: true }, context),
+      ).rejects.toThrow();
+      expect(runner).toHaveBeenCalledTimes(1);
+    } finally {
+      factory.mockRestore();
+    }
+  });
+
   test("lists and reads skills through the validated command boundary", async () => {
     const home = await createTempDir("ork-electron-agent-skills-");
     const skillDirectory = path.join(home, ".claude", "skills", "example");

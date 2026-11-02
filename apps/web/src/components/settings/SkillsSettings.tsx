@@ -477,7 +477,15 @@ export function SkillsSettings({
         <AgentPluginsBrowser
           key={provider}
           state={plugins.state}
-          onReload={plugins.reload}
+          onReload={() => {
+            plugins.reload();
+            void loadProvider(provider);
+          }}
+          skillsLoading={state.loading}
+          skillsError={
+            state.error ??
+            (state.scan?.errors.length ? "Some skill directories could not be read." : undefined)
+          }
           skills={state.scan?.skills}
           onOpenSkill={(skill) => {
             setSelectedByProvider((prev) => ({ ...prev, [provider]: skill.id }));

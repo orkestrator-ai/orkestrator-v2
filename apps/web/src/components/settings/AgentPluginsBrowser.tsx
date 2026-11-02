@@ -33,6 +33,11 @@ function normalizePluginCatalog(value: unknown, provider: AgentSkillProvider): A
   if (!Array.isArray(candidate?.plugins)) {
     throw new Error("The backend returned an unreadable plugin list");
   }
+  // Cursor has no plugin inventory API; its unavailable response is permanent.
+  // Other providers return pluginError for CLI failures, which must remain retryable.
+  if (candidate.pluginError && provider !== "cursor") {
+    throw new Error(candidate.pluginError);
+  }
   return {
     agent: provider,
     plugins: candidate.plugins,
@@ -43,8 +48,8 @@ function normalizePluginCatalog(value: unknown, provider: AgentSkillProvider): A
 /**
  * Loads a provider's plugins the first time they are shown, then keeps them until
  * a reload. Unlike the skill scan this starts the agent's CLI, so a tab visit does
- * not repeat it and nothing runs for someone who never opens the view. The page
- * remounts per machine, so results here never outlive the machine they came from.
+ * not repeat it and nothing runs for someone who never opens the view. Results
+ * are keyed by machine so a machine change cannot reuse another catalogue.
  */
 export function useAgentPlugins(
   provider: AgentSkillProvider,
@@ -57,28 +62,29 @@ export function useAgentPlugins(
 
   const load = useCallback(
     async (target: AgentSkillProvider) => {
-      const token = (tokens.current[target] ?? 0) + 1;
-      tokens.current[target] = token;
-      requested.current.add(target);
+      const key = JSON.stringify([typeof machine, machine, target]);
+      const token = (tokens.current[key] ?? 0) + 1;
+      tokens.current[key] = token;
+      requested.current.add(key);
       setStates((prev) => ({
         ...prev,
-        [target]: { ...prev[target], loading: true, error: undefined },
+        [key]: { ...prev[key], loading: true, error: undefined },
       }));
       try {
         const catalog = normalizePluginCatalog(
           await backend.listAgentPlugins(target, machine),
           target,
         );
-        if (tokens.current[target] !== token) return;
-        setStates((prev) => ({ ...prev, [target]: { catalog, loading: false } }));
+        if (tokens.current[key] !== token) return;
+        setStates((prev) => ({ ...prev, [key]: { catalog, loading: false } }));
       } catch (err) {
-        if (tokens.current[target] !== token) return;
+        if (tokens.current[key] !== token) return;
         // A failed read is not a result to keep; the next visit tries again.
-        requested.current.delete(target);
+        requested.current.delete(key);
         setStates((prev) => ({
           ...prev,
-          [target]: {
-            ...prev[target],
+          [key]: {
+            ...prev[key],
             loading: false,
             error: err instanceof Error ? err.message : String(err),
           },
@@ -89,11 +95,15 @@ export function useAgentPlugins(
   );
 
   useEffect(() => {
-    if (enabled && !requested.current.has(provider)) void load(provider);
-  }, [enabled, provider, load]);
+    if (enabled && !requested.current.has(JSON.stringify([typeof machine, machine, provider])))
+      void load(provider);
+  }, [enabled, provider, machine, load]);
 
   const reload = useCallback(() => void load(provider), [load, provider]);
-  return { state: states[provider] ?? { loading: enabled }, reload };
+  return {
+    state: states[JSON.stringify([typeof machine, machine, provider])] ?? { loading: enabled },
+    reload,
+  };
 }
 
 interface AgentPluginsBrowserProps {
@@ -101,6 +111,8 @@ interface AgentPluginsBrowserProps {
   onReload: () => void;
   /** The provider's scanned skills; undefined until a scan has completed. */
   skills: AgentSkill[] | undefined;
+  skillsLoading?: boolean;
+  skillsError?: string;
   onOpenSkill: (skill: AgentSkill) => void;
 }
 
@@ -108,6 +120,8 @@ export function AgentPluginsBrowser({
   state,
   onReload,
   skills,
+  skillsLoading,
+  skillsError,
   onOpenSkill,
 }: AgentPluginsBrowserProps) {
   const [query, setQuery] = useState("");
@@ -132,6 +146,9 @@ export function AgentPluginsBrowser({
     : plugins;
   const selected = (plugins.find((plugin) => plugin.id === selectedId) ?? filtered[0])?.item;
   const pluginError = state.catalog?.pluginError;
+  // Scans currently expose only the short plugin name. Do not guess the marketplace.
+  const ambiguous =
+    selected && plugins.filter(({ item }) => item.name === selected.name).length > 1;
   const pluginSkills = selected
     ? skills?.filter((skill) => skill.plugin === selected.name)
     : undefined;
@@ -276,35 +293,54 @@ export function AgentPluginsBrowser({
                 <p className="text-xs text-muted-foreground">
                   This plugin is disabled, so its skills are not loaded.
                 </p>
-              ) : pluginSkills === undefined ? null : pluginSkills.length === 0 ? (
+              ) : ambiguous ? (
                 <p className="text-xs text-muted-foreground">
-                  No skills from this plugin are listed for this agent.
+                  Multiple marketplaces provide this plugin name. Skills cannot be attributed to a
+                  specific installation.
                 </p>
               ) : (
                 <>
-                  <h5 className="mb-2 text-xs font-medium text-foreground">
-                    Skills from this plugin
-                  </h5>
-                  <ul aria-label={`Skills from ${selected.name}`} className="space-y-1">
-                    {pluginSkills.map((skill) => (
-                      <li key={skill.id}>
-                        <button
-                          type="button"
-                          onClick={() => onOpenSkill(skill)}
-                          className="flex w-full flex-col items-start gap-0.5 rounded-md border border-zinc-800 px-3 py-2 text-left transition-colors hover:bg-zinc-900/50"
-                        >
-                          <span className="w-full truncate text-xs font-medium text-foreground">
-                            {skill.name}
-                          </span>
-                          {skill.description && (
-                            <span className="line-clamp-2 text-[11px] text-muted-foreground">
-                              {skill.description}
-                            </span>
-                          )}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  {skillsLoading && (
+                    <p role="status" className="mb-2 text-xs text-muted-foreground">
+                      Scanning plugin skills…
+                    </p>
+                  )}
+                  {skillsError && (
+                    <p role="alert" className="mb-2 text-xs text-destructive">
+                      Skill scan failed: {skillsError}
+                    </p>
+                  )}
+                  {pluginSkills === undefined ? null : pluginSkills.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      No skills from this plugin are listed for this agent.
+                    </p>
+                  ) : (
+                    <>
+                      <h5 className="mb-2 text-xs font-medium text-foreground">
+                        Skills from this plugin
+                      </h5>
+                      <ul aria-label={`Skills from ${selected.name}`} className="space-y-1">
+                        {pluginSkills.map((skill) => (
+                          <li key={skill.id}>
+                            <button
+                              type="button"
+                              onClick={() => onOpenSkill(skill)}
+                              className="flex w-full flex-col items-start gap-0.5 rounded-md border border-zinc-800 px-3 py-2 text-left transition-colors hover:bg-zinc-900/50"
+                            >
+                              <span className="w-full truncate text-xs font-medium text-foreground">
+                                {skill.name}
+                              </span>
+                              {skill.description && (
+                                <span className="line-clamp-2 text-[11px] text-muted-foreground">
+                                  {skill.description}
+                                </span>
+                              )}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
                 </>
               )}
             </ScrollArea>

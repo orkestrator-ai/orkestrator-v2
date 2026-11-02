@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { AgentExtensionItem, AgentSkill } from "@/lib/backend";
 
 /** Per-command payloads, as in SkillsSettings.test.tsx; afterAll restores the setup.ts shape. */
@@ -9,13 +9,17 @@ let pluginResponse: (provider: string) => Promise<unknown> = async (agent) => ({
   plugins: [],
 });
 let skills: AgentSkill[] = [];
+let scanResponse: (() => Promise<unknown>) | undefined;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string, args?: Record<string, unknown>) => {
     invokeCalls.push({ command, args });
     if (command === "list_agent_plugins") return pluginResponse(String(args?.provider));
     if (command === "list_agent_skills") {
-      return Promise.resolve({ provider: args?.provider, roots: [], skills, errors: [] });
+      return (
+        scanResponse?.() ??
+        Promise.resolve({ provider: args?.provider, roots: [], skills, errors: [] })
+      );
     }
     if (command === "read_agent_skill") {
       return Promise.resolve({ path: args?.filePath, content: "# Body", truncated: false });
@@ -28,6 +32,7 @@ afterAll(() => {
   mock.module("@/lib/native/backend", () => ({ invoke: mock(() => Promise.resolve()) }));
 });
 
+const { useAgentPlugins } = await import("./AgentPluginsBrowser");
 const { SkillsSettings } = await import("./SkillsSettings");
 
 const VERCEL: AgentExtensionItem = { name: "vercel", status: "configured", source: "user" };
@@ -64,6 +69,7 @@ function pluginListText() {
 beforeEach(() => {
   invokeCalls.length = 0;
   skills = [];
+  scanResponse = undefined;
   pluginResponse = async (agent) => ({ agent, plugins: [VERCEL, STRIPE] });
 });
 
@@ -148,6 +154,11 @@ describe("the plugins view", () => {
   });
 
   for (const [label, response, message] of [
+    [
+      "a resolved failure",
+      () => Promise.resolve({ plugins: [], pluginError: "CLI failed" }),
+      "CLI failed",
+    ],
     ["a failed read", () => Promise.reject(new Error("Unknown command")), "Unknown command"],
     [
       "an unreadable response",
@@ -178,7 +189,7 @@ describe("the plugins view", () => {
     clickTab(/^Plugins/);
     await waitFor(() => expect(pluginListText()).toContain("vercel"));
 
-    pluginResponse = () => Promise.reject(new Error("timed out"));
+    pluginResponse = async () => ({ plugins: [], pluginError: "timed out" });
     fireEvent.click(screen.getByRole("button", { name: "Reload plugins" }));
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("timed out"));
@@ -234,4 +245,103 @@ describe("the plugins view", () => {
     );
     expect(screen.getByText("No skills from this plugin are listed for this agent.")).toBeTruthy();
   });
+});
+
+test("reload rescans skills and displays newly installed skills", async () => {
+  render(<SkillsSettings />);
+  clickTab(/^Plugins/);
+  await screen.findByText("No skills from this plugin are listed for this agent.");
+  const before = invokeCalls.filter((c) => c.command === "list_agent_skills").length;
+  skills = [pluginSkill("new-skill")];
+  fireEvent.click(screen.getByRole("button", { name: "Reload plugins" }));
+  await screen.findByRole("list", { name: "Skills from vercel" });
+  expect(screen.getByText("vercel:new-skill")).toBeTruthy();
+  expect(invokeCalls.filter((c) => c.command === "list_agent_skills")).toHaveLength(before + 1);
+});
+
+test("plugin details explain pending and failed skill scans", async () => {
+  let rejectScan!: (error: Error) => void;
+  scanResponse = () =>
+    new Promise((_, reject) => {
+      rejectScan = reject;
+    });
+  render(<SkillsSettings />);
+  clickTab(/^Plugins/);
+  await screen.findByText("Scanning plugin skills…");
+  rejectScan(new Error("scan unavailable"));
+  await screen.findByText("Skill scan failed: scan unavailable");
+  expect(screen.queryByText("No skills from this plugin are listed for this agent.")).toBeNull();
+});
+
+test("same-name marketplace installations never claim each other's skills", async () => {
+  pluginResponse = async (agent) => ({
+    agent,
+    plugins: [
+      { ...VERCEL, source: "market-a" },
+      { ...VERCEL, source: "market-b" },
+    ],
+  });
+  skills = [
+    pluginSkill("one"),
+    { ...pluginSkill("two"), filePath: "/market-b/skills/two/SKILL.md" },
+  ];
+  render(<SkillsSettings />);
+  clickTab(/^Plugins/);
+  const list = await screen.findByRole("list", { name: "Plugins" });
+  for (const row of within(list).getAllByRole("button")) {
+    fireEvent.click(row);
+    expect(screen.getByText(/Multiple marketplaces provide/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Skills from vercel" })).toBeNull();
+  }
+});
+
+test("plugin caches and in-flight results stay with their selected machine", async () => {
+  // A hook harness isolates machine routing from the settings parent's remount boundary.
+  const { portalStore } = await import("@/lib/portal/portal-store");
+  const { spyOn } = await import("bun:test");
+  let resolveOld!: (value: unknown) => void;
+  const route = spyOn(portalStore, "invokeOnNode").mockImplementation((async (node: string) =>
+    node === "first"
+      ? new Promise<unknown>((resolve) => {
+          resolveOld = resolve;
+        })
+      : {
+          agent: "claude",
+          plugins: [{ ...VERCEL, name: "second-plugin" }],
+        }) as typeof portalStore.invokeOnNode);
+  function Harness({ machine }: { machine: string }) {
+    const { state } = useAgentPlugins("claude", machine, true);
+    return <div>{state.catalog?.plugins.map((p) => p.name).join(",") ?? "pending"}</div>;
+  }
+  try {
+    const view = render(<Harness machine="first" />);
+    await waitFor(() => expect(route).toHaveBeenCalledTimes(1));
+    view.rerender(<Harness machine="second" />);
+    await screen.findByText("second-plugin");
+    await act(async () => {
+      resolveOld({ agent: "claude", plugins: [VERCEL] });
+    });
+    await waitFor(() => expect(screen.queryByText("vercel")).toBeNull());
+    expect(route.mock.calls.map((c) => c.slice(0, 3))).toEqual([
+      ["first", "list_agent_plugins", { provider: "claude" }],
+      ["second", "list_agent_plugins", { provider: "claude" }],
+    ]);
+  } finally {
+    route.mockRestore();
+  }
+});
+
+test("unsupported Cursor catalog remains a stable unavailable result", async () => {
+  pluginResponse = async (agent) => ({
+    agent,
+    plugins: [],
+    pluginError: "Cursor's SDK bridge does not expose a plugin list.",
+  });
+  render(<SkillsSettings provider="cursor" />);
+  clickTab(/^Plugins/);
+  await screen.findByText("Cursor's SDK bridge does not expose a plugin list.");
+  clickTab(/^Skills/);
+  clickTab(/^Plugins/);
+  expect(pluginReads()).toHaveLength(1);
+  expect(screen.queryByRole("alert")).toBeNull();
 });

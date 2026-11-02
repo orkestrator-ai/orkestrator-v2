@@ -6,6 +6,7 @@ import { useUIStore } from "../../apps/web/src/stores/uiStore";
 import { EnvironmentItem } from "../../apps/web/src/components/environments/EnvironmentItem";
 import { AppDialogHost } from "../../apps/web/src/components/layout/AppDialogHost";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
+import { SidebarBottomBar } from "../../apps/web/src/components/sidebar/SidebarBottomBar";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import type { Environment } from "../../apps/web/src/types";
 
@@ -64,7 +65,10 @@ function installBackend() {
   });
 }
 
-/** The phone shell with a real sidebar row and the dialog host, as `AppShell` composes them. */
+/**
+ * The phone shell with a real sidebar row, the sidebar's bottom bar and the
+ * dialog host, as `AppShell` composes them.
+ */
 export function EnvironmentSettingsDrawerFixture() {
   useState(installBackend);
   const environment = useEnvironmentStore((state) =>
@@ -84,16 +88,19 @@ export function EnvironmentSettingsDrawerFixture() {
           actionBar={<ActionBar presentation="grid" />}
           agentInfoButton={null}
           sidebar={
-            <div className="pt-12">
-              <EnvironmentItem
-                environment={environment}
-                isSelected={false}
-                onSelect={() => {}}
-                onDelete={() => {}}
-                onStart={() => {}}
-                onStop={() => {}}
-                onRestart={() => {}}
-              />
+            <div className="flex h-full flex-col">
+              <div className="min-h-0 flex-1 pt-12">
+                <EnvironmentItem
+                  environment={environment}
+                  isSelected={false}
+                  onSelect={() => {}}
+                  onDelete={() => {}}
+                  onStart={() => {}}
+                  onStop={() => {}}
+                  onRestart={() => {}}
+                />
+              </div>
+              <SidebarBottomBar />
             </div>
           }
           filesPanel={null}

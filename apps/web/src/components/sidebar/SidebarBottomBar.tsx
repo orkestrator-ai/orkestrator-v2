@@ -1,12 +1,18 @@
 import { useId } from "react";
-import { Bug, SlidersHorizontal } from "lucide-react";
+import { Bug, Container, FolderGit2, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useHostMaintenance } from "@/components/settings/useHostMaintenance";
 import { openBugReport } from "@/lib/bug-report/open-bug-report";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useProjectStore } from "@/stores/projectStore";
+import { useUIStore } from "@/stores/uiStore";
 
 const SETTINGS_LABEL = "Global settings";
+const REPOSITORY_SETTINGS_LABEL = "Repository settings";
+const ENVIRONMENT_SETTINGS_LABEL = "Environment settings";
 const UPDATE_AVAILABLE = "Update available";
 const BUG_REPORT_LABEL = "Report a bug";
 const DRAFT_IN_PROGRESS = "Draft in progress";
@@ -23,13 +29,16 @@ function IndicatorDot({ testId }: { testId: string }) {
 }
 
 /**
- * The static bar under the projects and environments list: global settings on
- * the left, the bug report on the right.
+ * The static bar under the projects and environments list: global, repository
+ * and environment settings on the left, the bug report on the right.
  *
- * Both open surfaces that live outside the sidebar (`GlobalSettingsHost` and
- * the bug report sheet, which `AppShell` hosts), because in the mobile drawer
- * the sidebar unmounts when the drawer closes for them. Settings go through
- * `requestGlobalSettings`, so every opener shares one path.
+ * Every button opens a surface that lives outside the sidebar
+ * (`GlobalSettingsHost`, `AppDialogHost` and the bug report sheet, which
+ * `AppShell` hosts), because in the mobile drawer the sidebar unmounts when the
+ * drawer closes for them. Global settings go through `requestGlobalSettings`,
+ * so every opener shares one path. Repository and environment settings target
+ * the selected project and environment, and stay in place but disabled while
+ * there is none, so the bar does not shift as the selection changes.
  *
  * The settings dot follows the connected host's updater: the snapshot behind
  * Settings → Machines, where the update is installed, and the host update toast.
@@ -40,31 +49,74 @@ export function SidebarBottomBar() {
   const draftInProgress = useBugReportStore((state) => state.draftInProgress);
   const { snapshot } = useHostMaintenance();
   const updateAvailable = snapshot?.updater.updateAvailable === true;
+  const openAppDialog = useAppDialogStore((state) => state.open);
+  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const hasProject = useProjectStore((state) =>
+    selectedProjectId ? state.projects.some((project) => project.id === selectedProjectId) : false,
+  );
+  const hasEnvironment = useEnvironmentStore((state) =>
+    selectedEnvironmentId
+      ? state.environments.some((environment) => environment.id === selectedEnvironmentId)
+      : false,
+  );
 
   return (
     <div
       data-sidebar-bottom-bar
       className="flex h-9 shrink-0 items-center justify-between border-t border-border/80 bg-chrome px-2"
     >
-      <Button
-        variant="ghost"
-        size="icon"
-        className="relative h-7 w-7"
-        onClick={() => requestGlobalSettings("general")}
-        title={updateAvailable ? `${SETTINGS_LABEL} · ${UPDATE_AVAILABLE}` : SETTINGS_LABEL}
-        aria-label={SETTINGS_LABEL}
-        aria-describedby={updateAvailable ? settingsDescriptionId : undefined}
-      >
-        <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-        {updateAvailable ? (
-          <>
-            <IndicatorDot testId="settings-update-dot" />
-            <span id={settingsDescriptionId} className="sr-only">
-              {UPDATE_AVAILABLE}
-            </span>
-          </>
-        ) : null}
-      </Button>
+      <div className="flex items-center gap-0.5">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative h-7 w-7"
+          onClick={() => requestGlobalSettings("general")}
+          title={updateAvailable ? `${SETTINGS_LABEL} · ${UPDATE_AVAILABLE}` : SETTINGS_LABEL}
+          aria-label={SETTINGS_LABEL}
+          aria-describedby={updateAvailable ? settingsDescriptionId : undefined}
+        >
+          <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+          {updateAvailable ? (
+            <>
+              <IndicatorDot testId="settings-update-dot" />
+              <span id={settingsDescriptionId} className="sr-only">
+                {UPDATE_AVAILABLE}
+              </span>
+            </>
+          ) : null}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => {
+            if (selectedProjectId) {
+              openAppDialog({ kind: "repository-settings", projectId: selectedProjectId });
+            }
+          }}
+          disabled={!hasProject}
+          title={hasProject ? REPOSITORY_SETTINGS_LABEL : "Select a project first"}
+          aria-label={REPOSITORY_SETTINGS_LABEL}
+        >
+          <FolderGit2 className="h-4 w-4" aria-hidden="true" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => {
+            if (selectedEnvironmentId) {
+              openAppDialog({ kind: "environment-settings", environmentId: selectedEnvironmentId });
+            }
+          }}
+          disabled={!hasEnvironment}
+          title={hasEnvironment ? ENVIRONMENT_SETTINGS_LABEL : "Select an environment first"}
+          aria-label={ENVIRONMENT_SETTINGS_LABEL}
+        >
+          <Container className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </div>
       <Button
         variant="ghost"
         size="icon"

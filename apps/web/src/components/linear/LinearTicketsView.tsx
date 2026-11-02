@@ -545,6 +545,7 @@ export function LinearTicketsViewContent({
         reviewers: selection.reviewers,
         reviewPreparation: selection.reviewPreparation,
         includeComments: selection.includeComments ?? true,
+        deliveryPolicy: selection.deliveryPolicy,
       });
     } finally {
       setIsBuildStarting(false);
@@ -873,6 +874,7 @@ export function LinearTicketsViewContent({
           commentContext={
             detail && detail.comments.length > 0 ? { count: detail.comments.length } : undefined
           }
+          deliveryPolicy={selectedPipeline?.deliveryPolicy}
           {...launchDefaults}
           onConfirm={(selection) => void handleStartBuild(selection)}
         />

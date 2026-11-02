@@ -114,6 +114,7 @@ async function environment(storage: StorageService, id: string) {
 
 function invokeFor(storage: StorageService) {
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+    if (command === "get_kanban_tasks") return [] as T;
     if (
       command === "start_environment" ||
       command === "run_environment_setup" ||

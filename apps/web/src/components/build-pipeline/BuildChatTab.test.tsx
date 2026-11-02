@@ -94,6 +94,79 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith("Stage restarted");
   });
 
+  test.each(["Build", "Reviewer 1", "Consolidation"])(
+    "restarts %s with a changed provider, model, effort and speed",
+    async (title) => {
+      const phase = title === "Build" ? "build" : "review";
+      const label = title === "Reviewer 1" ? "Review 1" : title;
+      useBuildPipelineStore.getState().replacePipeline({
+        ...pipeline,
+        reviewers: [
+          { agent: "claude", model: "opus" },
+          { agent: "codex", model: "gpt-test" },
+        ],
+        sessions: [
+          { ...pipeline.sessions[0]!, phase, label, agent: "opencode", model: "old-model" },
+        ],
+        currentSessionIndex: 0,
+      });
+      render(<BuildChatTab data={tabData} />);
+
+      fireEvent.contextMenu(graphNode(title));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
+
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByRole("heading", { name: `Restart ${title}` })).toBeTruthy();
+      const picker = within(dialog).getByRole("combobox");
+      fireEvent.pointerDown(picker);
+      fireEvent.click(screen.getByRole("button", { name: "codex models" }));
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      fireEvent.pointerDown(picker);
+      fireEvent.click(
+        within(screen.getByRole("group", { name: "Speed mode" })).getByRole("menuitemradio", {
+          name: /Fast/,
+        }),
+      );
+      fireEvent.click(
+        within(screen.getByRole("group", { name: "Reasoning" })).getByRole("menuitemradio", {
+          name: "High",
+        }),
+      );
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      fireEvent.click(within(dialog).getByRole("button", { name: `Restart ${title}` }));
+      await waitFor(() =>
+        expect(restartStepMock).toHaveBeenCalledWith(
+          pipeline.id,
+          "build-session",
+          expect.objectContaining({
+            agent: "codex",
+            model: expect.any(String),
+            reasoningEffort: "high",
+            fastMode: true,
+          }),
+        ),
+      );
+      await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+      expect(mockToastSuccess).toHaveBeenCalledWith("Stage restarted");
+    },
+  );
+
+  test("keeps the Restart in dialog open with the reason when the restart is refused", async () => {
+    restartStepMock.mockImplementationOnce(async () => {
+      throw new Error("This build's pull request has been merged.");
+    });
+    render(<BuildChatTab data={tabData} />);
+
+    fireEvent.contextMenu(graphNode("Build"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restart Build" }));
+
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(
+      "pull request has been merged",
+    );
+  });
+
   test("offers validation restart from a touch long press", async () => {
     useBuildPipelineStore.getState().replacePipeline({
       ...pipeline,

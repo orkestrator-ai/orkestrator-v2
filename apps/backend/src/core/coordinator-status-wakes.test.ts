@@ -1478,6 +1478,24 @@ describe("status classification and bounds", () => {
     });
   }
 
+  test("a finished build tells the coordinator how it was delivered", () => {
+    const decidedAt = "2026-11-02T00:00:00.000Z";
+    expect(
+      buildPipelineStatus({ phase: "complete", delivery: { policy: "push-no-pr", decidedAt } }, "p")
+        ?.details,
+    ).toContain("The branch was pushed and no pull request was opened.");
+    expect(
+      buildPipelineStatus(
+        { phase: "complete", delivery: { policy: "commit-only", decidedAt } },
+        "p",
+      )?.details.join(" "),
+    ).toContain("commits were kept in the environment");
+    expect(
+      buildPipelineStatus({ phase: "complete", delivery: { policy: "open-pr", decidedAt } }, "p")
+        ?.details,
+    ).toEqual([]);
+  });
+
   test("subjects, details and bodies stay bounded whatever the workflow holds", () => {
     const status = buildPipelineStatus(
       { phase: "failed", taskTitle: "t".repeat(5_000), error: "e".repeat(50_000) },

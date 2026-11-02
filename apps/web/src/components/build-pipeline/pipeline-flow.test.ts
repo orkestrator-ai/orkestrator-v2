@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { BRANCH_PUSH_SESSION_LABEL } from "@orkestrator/protocol/build-pipeline";
 import {
   REVIEW_PACKAGE_SESSION_LABEL,
   pipelineIndependentReviewLabel,
@@ -1289,6 +1290,74 @@ describe("pipelineFlowModel", () => {
       { ...pullRequest, state: "closed" },
     );
     expect(closed.nodes.at(-1)?.state).toBe("cancelled");
+  });
+
+  describe("a run that ends without a pull request", () => {
+    const decidedAt = "2026-11-02T00:00:00.000Z";
+    const pushSession = () => ({
+      ...session("pr", "push", 60),
+      label: BRANCH_PUSH_SESSION_LABEL,
+    });
+    const pullRequest = {
+      url: "https://github.com/acme/repo/pull/1",
+      state: "open" as const,
+      checks: null,
+    };
+
+    test("push-no-pr shows a Push step and no PR ahead", () => {
+      const model = pipelineFlowModel(
+        build({ sessions: [session("build", "build", 0)], deliveryPolicy: "push-no-pr" }),
+      );
+      const last = model.nodes.slice(-2);
+      expect(last.map((node) => node.title)).toEqual(["Push", "No PR"]);
+      expect(last.every((node) => node.placeholder)).toBe(true);
+      expect(last[1]?.noPullRequest).toBe("push-no-pr");
+      expect(model.columns.find((column) => column.kind === "ship")?.label).toBe("Push");
+    });
+
+    test("commit-only shows no Ship ahead and ends at the outcome", () => {
+      const model = pipelineFlowModel(
+        build({ sessions: [session("build", "build", 0)], deliveryPolicy: "commit-only" }),
+      );
+      expect(model.nodes.some((node) => node.kind === "ship")).toBe(false);
+      expect(model.nodes.at(-1)).toMatchObject({ title: "No PR", noPullRequest: "commit-only" });
+    });
+
+    test("a finished push reads as complete with no pull request", () => {
+      const pipeline = build({
+        phase: "complete",
+        sessions: [session("build", "build", 0), pushSession()],
+        delivery: { policy: "push-no-pr", decidedAt },
+      });
+      const model = pipelineFlowModel(pipeline, pullRequest);
+      expect(line(model).slice(-2)).toEqual([["Push:complete"], ["No PR:complete"]]);
+      const node = model.nodes.at(-1)!;
+      expect(
+        pipelineNodeView({
+          node,
+          pipeline,
+          pullRequest,
+          now: 0,
+          modelLabel: () => "",
+          canOpen: false,
+          onOpen: () => undefined,
+          contextMenu: null,
+        }).detail,
+      ).toBe("Branch pushed, no PR opened");
+    });
+
+    test("the decision wins over a later edit of the last-seen policy", () => {
+      const model = pipelineFlowModel(
+        build({
+          phase: "creating-pr",
+          sessions: [session("build", "build", 0), session("pr", "ship", 60)],
+          deliveryPolicy: "push-no-pr",
+          delivery: { policy: "open-pr", decidedAt },
+        }),
+      );
+      expect(model.nodes.at(-1)).toMatchObject({ title: "PR" });
+      expect(model.nodes.at(-1)?.noPullRequest).toBeUndefined();
+    });
   });
 
   test("conflict resolution appears after Ship only once it runs", () => {

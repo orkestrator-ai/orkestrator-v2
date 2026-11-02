@@ -1,3 +1,11 @@
+/** The environment's current branch and commit, and origin's copy of that branch. */
+export interface BranchPushState {
+  branch: string;
+  head: string;
+  /** Null when origin has no such branch. */
+  remoteHead: string | null;
+}
+
 /**
  * State and persistence shared by every build pipeline collaborator.
  *
@@ -116,6 +124,12 @@ export type BuildPipelineServiceOptions = {
    * the pipeline's own checks. Absent, the action reports itself unavailable.
    */
   environmentGit?: EnvironmentGit;
+  /**
+   * Reads whether origin's copy of the environment's branch has its HEAD, for
+   * a `push-no-pr` Ship, with the credentials an agent there would use. Absent:
+   * the push session's own report is taken as it stands.
+   */
+  branchPushState?: (environmentId: string) => Promise<BranchPushState>;
   /** The backend fence shared by file writes, commands and agent dispatch. */
   environmentFence?: EnvironmentMutationFence;
   /** Checks native/background writers while new work is excluded by the fence. */

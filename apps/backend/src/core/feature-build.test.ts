@@ -101,6 +101,23 @@ describe("createFeatureBuild", () => {
     expect(fallbackFeatureTitle("Add account export controls")).toBe("Add account export controls");
   });
 
+  test("saves the form's When verified choice on the ticket it creates", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+
+      const created = await createFeatureBuild(
+        { ...input, deliveryPolicy: "push-no-pr" },
+        { storage, runtime, buildPipelines: supervisor.service },
+      );
+
+      const ticket = await storage.kanban.getKanbanTask(created.taskId);
+      expect(ticket?.sections?.delivery?.policy).toBe("push-no-pr");
+      // Stages quote the ticket's saved text, so they see the same policy.
+      expect(supervisor.started[0]?.taskSnapshot.description).toBe(ticket!.description);
+      expect(supervisor.started[0]?.source).toEqual({ type: "kanban", taskId: created.taskId });
+    });
+  });
+
   test("creates immediately with a local title and refines it after naming", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
@@ -885,5 +902,22 @@ exit 2
       );
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
     });
+  });
+});
+
+test("idempotent feature retry preserves edited policy and passes it as launch fallback", async () => {
+  await withStorage(async (storage) => {
+    const supervisor = fakeSupervisor();
+    const request = { ...input, requestId: "delivery-retry", deliveryPolicy: "open-pr" as const };
+    const context = { storage, runtime, buildPipelines: supervisor.service };
+    const first = await createFeatureBuild(request, context);
+    await storage.kanban.updateKanbanTask(first.taskId, {
+      sections: { delivery: { policy: "commit-only" } },
+    });
+    await createFeatureBuild(request, context);
+    expect((await storage.kanban.getKanbanTask(first.taskId))?.sections?.delivery?.policy).toBe(
+      "commit-only",
+    );
+    expect(supervisor.started.at(-1)?.deliveryPolicy).toBe("commit-only");
   });
 });

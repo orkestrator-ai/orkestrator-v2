@@ -4,7 +4,11 @@ import type {
   FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
 import type { PrState } from "@/types";
-import type { TicketKind, TicketSections } from "@orkestrator/protocol/ticket-sections";
+import type {
+  TicketKind,
+  TicketSections,
+  TicketSectionsPatch,
+} from "@orkestrator/protocol/ticket-sections";
 /** PR detection result containing URL, state, and merge conflict status */
 
 // --- File System Utilities ---
@@ -205,7 +209,7 @@ export async function updateKanbanTask(
  */
 export async function updateKanbanTaskContent(
   taskId: string,
-  content: { title?: string; kind?: TicketKind; markdown?: string },
+  content: { title?: string; kind?: TicketKind; markdown?: string; sections?: TicketSectionsPatch },
 ): Promise<KanbanTask> {
   return invoke<KanbanTask>("update_kanban_task", { taskId, ...content });
 }

@@ -47,3 +47,17 @@ The separate Claude terminal owner still failed its three assertions alone
 (23 pass, 3 fail), so those remain deterministic failures.
 
 Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.6dWJ96/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Pipeline restart/delivery main merge recurrence, 2026-11-02
+
+Merging `508995a94` into `8b44911fb` repeated the four shifted-click routing
+failures (1.03, 0.60, 0.74 and 0.56 ms) in
+`mise run test:logged -- --name remerge-default -- mise run test`.
+The web group reported 11,400 pass, 10 skip and 4 fail under the default
+aggregate scheduler. The complete unchanged owner passed alone, exit 0 in
+0.2 seconds:
+`mise run test:logged -- --name remerge-terminal-links-alone -- bun test --cwd apps/web ./src/lib/terminal-links.test.ts --parallel=1 --only-failures`.
+The separate Claude terminal owner still failed its three assertions alone
+(23 pass, 3 fail). No test, assertion or timeout was changed.
+
+Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.GuWhdd/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

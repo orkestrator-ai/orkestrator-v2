@@ -25,6 +25,7 @@ import {
 } from "@orkestrator/protocol/feature-build";
 import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import { createHash } from "node:crypto";
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
 import { resizeKanbanImage, type KanbanTask } from "./storage-shared.js";
@@ -200,6 +201,7 @@ export async function createFeatureBuild(
     acceptanceCriteria,
     requestId,
     requestHash,
+    deliveryPolicy: input.deliveryPolicy,
   });
 
   let resolvedTask = task;
@@ -221,6 +223,7 @@ export async function createFeatureBuild(
   const pipeline = await buildPipelines.start({
     taskId: resolvedTask.id,
     projectId,
+    deliveryPolicy: resolvedTask.sections?.delivery?.policy,
     environmentType: input.environmentType,
     ...(input.environmentOptions ? { environmentOptions: input.environmentOptions } : {}),
     agentType: input.agentType,
@@ -306,6 +309,7 @@ async function resolveTask(
     acceptanceCriteria: string;
     requestId?: string;
     requestHash?: string;
+    deliveryPolicy?: DeliveryPolicy;
   },
 ): Promise<KanbanTask> {
   if (!fields.requestId) return resolveTaskOnce(storage, context, fields);
@@ -324,6 +328,7 @@ async function resolveTaskOnce(
     acceptanceCriteria: string;
     requestId?: string;
     requestHash?: string;
+    deliveryPolicy?: DeliveryPolicy;
   },
 ): Promise<KanbanTask> {
   if (fields.requestId) {
@@ -356,6 +361,7 @@ async function addKanbanTaskForRequest(
     acceptanceCriteria: string;
     requestId?: string;
     requestHash?: string;
+    deliveryPolicy?: DeliveryPolicy;
   },
 ): Promise<KanbanTask> {
   try {
@@ -364,6 +370,9 @@ async function addKanbanTaskForRequest(
       // The build starts immediately, so the column reflects what is happening.
       // The pipeline's own lifecycle updates then move it on from here.
       status: "in-progress",
+      ...(fields.deliveryPolicy
+        ? { sections: { delivery: { policy: fields.deliveryPolicy } } }
+        : {}),
       ...(fields.requestId ? { requestId: fields.requestId } : {}),
       ...(fields.requestHash ? { featureBuildRequestHash: fields.requestHash } : {}),
     });

@@ -14,6 +14,7 @@ import {
   isBuildPipeline,
   isActiveBuildPhase,
   reviewValidationStage,
+  BRANCH_PUSH_SESSION_LABEL,
   REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
   executionModeForSessionPhase,
@@ -36,6 +37,7 @@ import {
 } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
+  errorMessage,
   sessionForCurrentPhase,
   resumablePhase,
   discardPreparationResult,
@@ -479,7 +481,11 @@ export class BuildPipelineSupervisor {
       // Kanban failure must neither strand nor dispatch the replacement twice.
       pipeline.pendingKanbanReactivation = true;
       try {
-        await this.recovery.updateKanbanLifecycle(pipeline, { status: "in-progress" });
+        await this.recovery.updateKanbanLifecycle(
+          pipeline,
+          { status: "in-progress" },
+          { requireTicket: true },
+        );
         delete pipeline.pendingKanbanReactivation;
         delete pipeline.kanbanReactivationRetryAt;
       } catch (error) {
@@ -527,7 +533,7 @@ export class BuildPipelineSupervisor {
       if (phase === "verify") {
         delete pipeline.verificationResult;
         delete pipeline.verificationFeedback;
-        await this.startStage(pipeline, "pr", "creating-pr");
+        await this.recovery.deliverVerifiedWork(pipeline);
         return;
       }
       await this.startStage(pipeline, "verify", "verifying");
@@ -908,6 +914,7 @@ export class BuildPipelineSupervisor {
       delete pipeline.structuredReviewRequestId;
       delete pipeline.verificationResult;
       delete pipeline.verificationFeedback;
+      delete pipeline.delivery;
       await this.startVerifiedReviewOrPrepare(pipeline);
       return;
     }
@@ -1363,11 +1370,16 @@ export class BuildPipelineSupervisor {
   async ensureSourceLink(pipeline: BuildPipeline): Promise<void> {
     if (!pipeline.environmentId || pipeline.sourceLinkedAt) return;
     if (pipeline.source?.type === "kanban") {
-      await this.ctx.invoke("update_kanban_task", {
-        taskId: pipeline.source.taskId,
-        environmentId: pipeline.environmentId,
-        buildPipelineId: pipeline.id,
-      });
+      await this.ctx
+        .invoke("update_kanban_task", {
+          taskId: pipeline.source.taskId,
+          environmentId: pipeline.environmentId,
+          buildPipelineId: pipeline.id,
+        })
+        .catch((error: unknown) => {
+          // A ticket deleted during setup must not fail the build it started.
+          if (!errorMessage(error).startsWith("Kanban task not found")) throw error;
+        });
     }
     if (pipeline.featurePlanId) {
       await this.ctx.invoke("update_feature_plan", {
@@ -1442,6 +1454,7 @@ export class BuildPipelineSupervisor {
             agent: pipeline.reviewPreparation.agent,
             model: pipeline.reviewPreparation.model,
             effort: pipeline.reviewPreparation.reasoningEffort,
+            fastMode: pipeline.reviewPreparation.fastMode,
           }
         : await this.agents.stepSettings(pipeline, "address"),
     });
@@ -1575,7 +1588,11 @@ export class BuildPipelineSupervisor {
         ? await this.agents.settingsForSelection(pipeline, override.settings)
         : await this.agents.stepSettings(pipeline, sessionPhase);
       const provider = await this.agents.provider(pipeline, agent);
-      const label = override?.label ?? SESSION_LABELS[sessionPhase];
+      const label =
+        override?.label ??
+        (sessionPhase === "pr" && pipeline.delivery?.policy === "push-no-pr"
+          ? BRANCH_PUSH_SESSION_LABEL
+          : SESSION_LABELS[sessionPhase]);
       // Stated rather than left to each provider's own default, so the sandbox a
       // stage runs under is one decision in one place and does not move when a
       // step pins a different harness.

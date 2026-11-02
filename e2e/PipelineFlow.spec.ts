@@ -263,9 +263,7 @@ test("the Ticket inspector tiles the ticket's sections and stacks them when narr
     /Delivery/,
     /Rollout/,
   ]);
-  await expect(page.getByTestId("ticket-delivery-policy")).toHaveText(
-    "Push, no PR (Multi Review next)",
-  );
+  await expect(page.getByTestId("ticket-delivery-policy")).toHaveText("Push, no PR");
   // The newest Verify's ticks, on the inspector and the node face.
   const criteria = grid.getByTestId("ticket-criterion");
   await expect(criteria).toHaveCount(2);

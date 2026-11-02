@@ -185,23 +185,30 @@ export function claudeStateReadCommand(containerId: string): {
  * `absent` (no state file at all) is a successful read, not a failure: the
  * counters a first hook would start from (revision 0, no completions). It is
  * still no state to show, so it never emits or persists one.
+ *
+ * `failed` (v3, the StopFailure hook) is a turn that ended on an API error.
+ * It reads as `idle` with `failed` set, so the turn stops reading working and
+ * rings `agent_failed` instead of "finished". Only a counted snapshot carries
+ * it: the legacy file says `idle` for a failure.
  */
 export function parseClaudeStateSnapshot(value: string): {
   state: string;
   revision?: number;
   completions?: number;
   absent?: true;
+  failed?: true;
 } {
   if (value === CLAUDE_STATE_ABSENT_MARKER) {
     return { state: "", revision: 0, completions: 0, absent: true };
   }
   if (value === "working" || value === "waiting" || value === "idle") return { state: value };
   if (value.length > 255) return { state: "" };
-  const match = /^(working|waiting|idle) ([0-9]{1,15}) ([0-9]{1,15})$/.exec(value);
+  const match = /^(working|waiting|idle|failed) ([0-9]{1,15}) ([0-9]{1,15})$/.exec(value);
   if (!match) return { state: "" };
   const revision = Number(match[2]);
   const completions = Number(match[3]);
   if (completions > revision) return { state: "" };
+  if (match[1] === "failed") return { state: "idle", revision, completions, failed: true };
   return { state: match[1]!, revision, completions };
 }
 
@@ -525,7 +532,7 @@ export class ClaudeStatePollManager {
     // finds: that read may have run before the hook wrote the file.
     const ringsBeforePreviousRead = poll.ringsAtPreviousRead;
     const ringsAtReadStart = poll.rings;
-    const { state, revision, completions, absent } = parseClaudeStateSnapshot(
+    const { state, revision, completions, absent, failed } = parseClaudeStateSnapshot(
       (await this.readState(containerId).catch(() => "")).trim(),
     );
     if (!this.isCurrent(containerId, poll)) return;
@@ -595,11 +602,15 @@ export class ClaudeStatePollManager {
       return;
     }
     const occurredAt = this.now();
+    // Storage rings `agent_failed` on this source's own working edge.
     const persisted = await poll.context.storage.setEnvironmentAgentActivity(
       environment.id,
       state,
       occurredAt,
       "claude-terminal",
+      undefined,
+      false,
+      failed ? { completionOutcome: "failed" } : {},
     );
     if (!this.isCurrent(containerId, poll)) return;
     const persistedTerminal = persisted?.agentActivitySources?.["claude-terminal"];
@@ -611,13 +622,21 @@ export class ClaudeStatePollManager {
       // this must not emit: the renderer would adopt a state storage rejected.
       return;
     }
-    // Storage may have seen waiting both before and after a whole missed turn.
-    // Publish its durable completion token without inventing a working state.
-    if (
+    // Recover missed turn ends once, choosing attention from the latest snapshot.
+    // A successful turn followed by a failed one can advance both counters;
+    // recording success first would consume the unread edge and send the wrong toast.
+    const recoverSuccess =
       recoveredCompletion &&
-      !(poll.lastState === "working" && (state === "waiting" || state === "idle"))
-    ) {
-      await poll.context.storage.recordEnvironmentSessionCompletion(environment.id, occurredAt);
+      !(poll.lastState === "working" && (state === "waiting" || state === "idle"));
+    // A cold start cannot infer a missed edge; storage's persisted source owns it.
+    const recoverFailure =
+      failed && revisionChanged && poll.lastState !== "working" && poll.lastState !== "";
+    if (recoverSuccess || recoverFailure) {
+      await poll.context.storage.recordEnvironmentSessionCompletion(
+        environment.id,
+        occurredAt,
+        failed ? "agent_failed" : "agent_finished",
+      );
       if (!this.isCurrent(containerId, poll)) return;
     }
     if (
@@ -630,10 +649,11 @@ export class ClaudeStatePollManager {
       this.demoteSignal(containerId, poll, "missed-change");
     }
     this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
-    // Production hooks write `working` at UserPromptSubmit and `waiting` at
-    // Stop. `idle` is retained for older hook writers and recovery from a
-    // backend restart. Storage's durable PR-recheck intent is authoritative,
-    // so ordinary unarmed terminal turns do not manufacture monitor work.
+    // Production hooks write `working` at UserPromptSubmit, `waiting` at
+    // Stop and `failed` (read as idle) at StopFailure. `idle` is also retained
+    // for older hook writers and recovery from a backend restart. Storage's
+    // durable PR-recheck intent is authoritative, so ordinary unarmed
+    // terminal turns do not manufacture monitor work.
     const completedTurn =
       Boolean(environment.prRecheckAfterAgentCompletionArmedAt) &&
       (recoveredCompletion ||

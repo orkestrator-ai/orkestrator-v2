@@ -25,6 +25,8 @@
  * Progress is not a status: individual reviewers finishing never wake anyone,
  * and build-pipeline stages only do under the opt-in `stages` mode.
  */
+import { pipelineDeliverySummary } from "@orkestrator/protocol/build-pipeline";
+import { isDeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import {
   observePublicationAttempt,
   prAttemptActivity,
@@ -533,13 +535,24 @@ export function buildPipelineStatus(
       ? [`Last verification: ${snapshot.verificationResult}.`]
       : [];
   if (phase === "complete") {
+    const delivery =
+      record(snapshot.delivery) && isDeliveryPolicy(snapshot.delivery.policy)
+        ? [
+            pipelineDeliverySummary({
+              policy: snapshot.delivery.policy,
+              ...(typeof snapshot.delivery.uncommittedPaths === "number"
+                ? { uncommittedPaths: snapshot.delivery.uncommittedPaths }
+                : {}),
+            }),
+          ].filter((line): line is string => Boolean(line))
+        : [];
     return {
       key: "complete",
       state: "completed",
       tone: "success",
       terminal: true,
       headline: "completed",
-      details: [...task, ...verification],
+      details: [...task, ...verification, ...delivery],
       tools: [read],
       mode: "off",
     };

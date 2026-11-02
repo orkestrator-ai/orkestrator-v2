@@ -30,3 +30,19 @@ The corrected merge's second aggregate (`merge-default-tests-recheck`) repeated
 the same unnamed hook timeout at 5001.94 ms (root 3417 pass, five fail).
 Evidence is `orkestrator-test-run.LvO7CJ/root-and-agent-support-tests.log.gz`
 below the same host temporary directory. The aggregate exited 1 in 282.9 s.
+
+## Pipeline restart/delivery main merge recurrence, 2026-11-02
+
+Merging `508995a94` into `8b44911fb` repeated the unnamed startup-hook
+failure at 5003.24 ms in
+`mise run test:logged -- --name remerge-default -- mise run test`.
+The root group used one worker under the default aggregate scheduler.
+The complete unchanged owner passed alone, exit 0 in 5.1 seconds:
+`mise run test:logged -- --name remerge-perf-alone -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --only-failures`.
+No test, assertion or timeout was changed. This remains consistent with the
+existing host-load hypothesis without establishing a cause.
+
+Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.GuWhdd/root-and-agent-support-tests.log.gz`.
+
+The completed aggregate root group reported 3,441 pass and 5 fail; the full
+aggregate exited 1 after 294.0 seconds.

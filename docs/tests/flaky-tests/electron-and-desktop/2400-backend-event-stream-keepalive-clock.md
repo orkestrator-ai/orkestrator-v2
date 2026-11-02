@@ -10,3 +10,11 @@
 - **Owning-file rerun:** `mise run test:logged -- --name backend-event-stream-owner -- bun test --cwd apps/desktop ./tests/backend-event-stream.test.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 in 0.3 s.
 - **Evidence:** `orkestrator-test-run.haynoB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** intermittent keepalive/watchdog timing failure; exact scheduling cause is unconfirmed. No event-stream implementation, assertion, timeout or skip changed.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.

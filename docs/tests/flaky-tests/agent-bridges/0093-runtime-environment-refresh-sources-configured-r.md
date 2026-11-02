@@ -137,3 +137,11 @@ This confirms intermittence; the cause remains unknown.
 Evidence: aggregate `orkestrator-test-run.BSqVX9/bridges.log` (compressed at
 aggregate finalization), first owner `orkestrator-test-run.8in1Rk/codex-runtime-env-owner.log.gz`,
 below the host temporary directory.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.

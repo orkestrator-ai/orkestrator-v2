@@ -166,3 +166,11 @@ and the outer compressed `orkestrator-test-run.JX4kAV/review-repair-default.log.
 below the host temporary directory. No implementation, assertion, deadline or
 skip changed. This repeats the known intermittent cold-restart projection state;
 its cause remains unconfirmed.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.

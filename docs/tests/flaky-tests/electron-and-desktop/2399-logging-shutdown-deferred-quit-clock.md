@@ -12,3 +12,11 @@
 - **Fix:** the test controls the 10 ms pending-output deadline and the zero-delay quit callback with `installControlledTimeout`. It now asserts that the log stays open before the deadline, closes after it, and quits only when the separate macrotask runs. No product timeout or assertion was relaxed.
 - **Verification:** complete owner passed after the fix (`logging-shutdown-controlled`, 0.8 s). The exact case passed with `--rerun-each=20` (`logging-shutdown-controlled-stress`, 0.1 s). Desktop typecheck and focused format/lint passed.
 - **Evidence:** `orkestrator-test-run.haynoB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.

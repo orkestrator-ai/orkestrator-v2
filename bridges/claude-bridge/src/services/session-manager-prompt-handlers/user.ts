@@ -24,6 +24,9 @@ import {
 import { finishTurnInputIfSettled } from "../session-manager-prompt-turn-lifecycle.js";
 import type { TurnState } from "../session-manager-prompt-turn.js";
 import { appendTranscriptNotice } from "./transcript-notice.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 /** `user`: tool results and task reports settling the calls they answer. */
 export function handleUserMessage(turn: TurnState, message: SDKMessage): void {
@@ -104,10 +107,7 @@ export function handleUserMessage(turn: TurnState, message: SDKMessage): void {
   if (turn.planApprovedThisTurn) {
     for (const tool of toolTracker.getTools()) {
       if (tool.toolName === "ExitPlanMode" && tool.toolState === "failure" && tool.toolUseId) {
-        console.warn(
-          "[session-manager] ExitPlanMode reported failure despite user approval — overriding to success and scheduling continuation re-prompt",
-          { sessionId, toolUseId: tool.toolUseId, sdkError: tool.toolError },
-        );
+        log.warn("plan-exit.failure-overridden", { sessionId, toolUseId: tool.toolUseId });
         toolTracker.updateToolResult(tool.toolUseId, {
           state: "success",
           output: "Plan approved by the user. Proceeding with implementation.",

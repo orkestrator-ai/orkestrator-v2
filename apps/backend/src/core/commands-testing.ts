@@ -40,6 +40,7 @@ import {
   isMissingTargetRefResponse,
   configureOpenCodeAgentTools,
   createExtensionCommandRunner,
+  createHostExtensionCommandRunner,
   hasCursorSdkBridge,
   agentToolConnectionFingerprint,
 } from "./commands-helpers.js";
@@ -57,6 +58,7 @@ export const __testing = {
   shouldAddDockerHostGatewayAlias,
   agentToolConnectionFingerprint,
   createExtensionCommandRunner,
+  createHostExtensionCommandRunner,
   hasCursorSdkBridge,
   parseOpenCodeEnvironmentSkills,
   runEnvironmentAgentSkills,

@@ -249,6 +249,28 @@ export function startPreviewFixture(options: PreviewFixtureOptions = {}): Promis
     response.setHeader("x-service-marker", marker);
     const path = url.pathname;
 
+    if (path === "/app/session-check" || path === "/api/session-check") {
+      const cookie = request.headers.cookie ?? "";
+      const authenticated = cookie.includes("signed_in=from-browser.sig%3D");
+      const csrf =
+        cookie.includes("csrf=readable-token") &&
+        request.headers["x-csrf-token"] === "readable-token";
+      const allowed = authenticated && (request.method !== "POST" || csrf);
+      return send(
+        response,
+        allowed ? 200 : 403,
+        "application/json",
+        JSON.stringify({ authenticated, csrf, allowed }),
+      );
+    }
+    if (
+      path === "/app/needs-session" &&
+      !(request.headers.cookie ?? "").includes("signed_in=from-browser.sig%3D")
+    ) {
+      return send(response, 302, "text/plain", "", {
+        location: "https://accounts.google.invalid/auth",
+      });
+    }
     if (path === "/" || path.startsWith("/app/")) {
       return send(
         response,

@@ -30,8 +30,11 @@ export * from "./public.js";
 export * from "./http.js";
 export { server, shutdown, start } from "./server.js";
 
+import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { start } from "./server.js";
+
+configureBridgeLogger();
 
 // A dropped promise must not take this bridge — and every session it is
 // serving — down with it.

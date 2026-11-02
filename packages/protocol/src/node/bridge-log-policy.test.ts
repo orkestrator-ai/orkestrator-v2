@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createLogger, resetLogger } from "../logger.js";
+import { configureLogger, createLogger, parseLogRecordLine, resetLogger } from "../logger.js";
+import { captureLogs } from "../testing/log-capture.js";
 import { bridgeDebugEnabled } from "./bridge-diagnostics.js";
 import {
   applyBridgeLogPolicy,
@@ -14,6 +15,53 @@ afterEach(() => {
 });
 
 describe("applyBridgeLogPolicy", () => {
+  test.each([
+    ["bridge.claude", "prompt.accepted"],
+    ["bridge.codex", "app-server.exited"],
+    ["bridge.cursor", "agent.archive-failed"],
+    ["bridge.pi", "http.route-failed"],
+    ["bridge.acp", "evidence.record-failed"],
+  ] as const)("the next %s line follows the setting, up and down", (area, event) => {
+    const capture = captureLogs();
+    try {
+      const log = createLogger(area) as unknown as {
+        debug(event: string): void;
+        info(event: string): void;
+      };
+      const written = () => capture.records().map((record) => record.level);
+
+      log.debug(event);
+      expect(written()).toEqual([]);
+
+      applyBridgeLogPolicy({ seq: 1, level: "info", areaLevels: { bridge: "debug" } });
+      log.debug(event);
+      expect(written()).toEqual(["debug"]);
+      expect(capture.records()[0]).toMatchObject({ area, event });
+
+      applyBridgeLogPolicy({ seq: 2, level: "error", areaLevels: {} });
+      log.info(event);
+      log.debug(event);
+      expect(written()).toEqual(["debug"]);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  test("a relaying bridge keeps writing records the backend can parse", () => {
+    const capture = captureLogs();
+    try {
+      configureLogger({ format: "json" });
+      applyBridgeLogPolicy({ seq: 1, level: "debug", areaLevels: {} });
+      createLogger("bridge.codex").debug("app-server.exited");
+      expect(parseLogRecordLine(capture.lines[0]!)).toMatchObject({
+        level: "debug",
+        area: "bridge.codex",
+      });
+    } finally {
+      capture.restore();
+    }
+  });
+
   test("replaces this process's levels and its diagnostics switch at once", () => {
     const log = createLogger("updater");
     expect(log.isEnabled("debug")).toBe(false);

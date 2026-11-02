@@ -1,11 +1,14 @@
 import { describe, expect, spyOn, test } from "bun:test";
 
-import {
-  PENDING_RENAME_FAILED_MESSAGE,
-  PENDING_RENAME_RECOVERED_MESSAGE,
-  PENDING_RENAME_STILL_FAILING_MESSAGE,
-} from "../src/core/pending-rename-failure-log";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { createCommandFixtures } from "./command-fixtures";
+
+function renameEntries(logs: LogCapture) {
+  return logs
+    .records()
+    .filter((record) => record.event.startsWith("rename."))
+    .map((record) => [record.event, record.fields]);
+}
 
 const {
   ASYNC_TEST_BUDGET_MS,
@@ -456,7 +459,7 @@ printf '%s\n' '{"slug":"Concurrent Prompt"}' > "$out"
     const { context } = createContext(environment);
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
-    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const logs = captureLogs();
     const now = spyOn(Date, "now").mockReturnValue(100_000);
 
     try {
@@ -478,7 +481,7 @@ printf '%s\n' '{"slug":"Retry Recovered"}' > "$out"
 `,
         async (logPath) => {
           await commands.get("reconcile_pending_environment_renames")?.({}, context);
-          expect(warn).toHaveBeenCalledTimes(1);
+          expect(renameEntries(logs)).toHaveLength(1);
 
           now.mockReturnValue(129_999);
           await commands.get("reconcile_pending_environment_renames")?.({}, context);
@@ -489,12 +492,9 @@ printf '%s\n' '{"slug":"Retry Recovered"}' > "$out"
           expect(environment.name).toBe("retry-recovered");
           expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(2);
           // One content-free failure line, then one count when the retry succeeds.
-          expect(warn.mock.calls).toEqual([
-            [
-              PENDING_RENAME_FAILED_MESSAGE,
-              expect.objectContaining({ environmentId: environment.id }),
-            ],
-            [PENDING_RENAME_RECOVERED_MESSAGE, { environmentId: environment.id, failures: 1 }],
+          expect(renameEntries(logs)).toEqual([
+            ["rename.failed", expect.objectContaining({ environmentId: environment.id })],
+            ["rename.recovered", { environmentId: environment.id, failures: 1 }],
           ]);
 
           Object.assign(environment, {
@@ -509,7 +509,7 @@ printf '%s\n' '{"slug":"Retry Recovered"}' > "$out"
       );
     } finally {
       now.mockRestore();
-      warn.mockRestore();
+      logs.restore();
     }
   });
 
@@ -525,7 +525,7 @@ printf '%s\n' '{"slug":"Retry Recovered"}' > "$out"
     const { context } = createContext(environment);
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
-    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const logs = captureLogs();
     let clock = 1_000_000;
     const now = spyOn(Date, "now").mockImplementation(() => clock);
 
@@ -561,18 +561,18 @@ exit 1
           expect(environment.name).toBe("20260415-123456");
           expect(environment.pendingRenamePrompt).toBe("Name this while signed out");
           // One full line, then counts at the 2nd, 4th and 8th failure.
-          expect(warn.mock.calls.map(([message]) => message)).toEqual([
-            PENDING_RENAME_FAILED_MESSAGE,
-            PENDING_RENAME_STILL_FAILING_MESSAGE,
-            PENDING_RENAME_STILL_FAILING_MESSAGE,
-            PENDING_RENAME_STILL_FAILING_MESSAGE,
+          expect(renameEntries(logs).map(([event]) => event)).toEqual([
+            "rename.failed",
+            "rename.still-failing",
+            "rename.still-failing",
+            "rename.still-failing",
           ]);
-          expect(JSON.stringify(warn.mock.calls)).not.toContain("signed out");
+          expect(logs.lines.join("\n")).not.toContain("signed out");
         },
       );
     } finally {
       now.mockRestore();
-      warn.mockRestore();
+      logs.restore();
     }
   });
 

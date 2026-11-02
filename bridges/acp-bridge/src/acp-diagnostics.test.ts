@@ -1,5 +1,7 @@
+import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
 import { expect, test } from "bun:test";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import { parseLogRecordLine } from "@orkestrator/protocol/logger";
 import { nativeFetch, spawnBridge, stopChild } from "./acp-test-harness.js";
 
 test.each([false, true])(
@@ -16,23 +18,18 @@ test.each([false, true])(
     } finally {
       await stopChild(child);
     }
-    const lines = chunks
-      .join("")
-      .split("\n")
-      .filter((line) => line.startsWith("[bridge-diagnostics] "));
+    const snapshots = bridgeDiagnosticPayloads(chunks.join("").split("\n"));
     if (enabled) {
-      const closed = lines
-        .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
-        .find((entry) => entry.event === "closed");
+      const closed = snapshots.find((entry) => entry.event === "closed");
       expect(closed).toBeDefined();
       expect(closed.bridge).toBe("acp");
       expect(closed.counters.requestsSent).toBeGreaterThan(0);
       expect(closed.counters.responsesReceived).toBeGreaterThan(0);
       expect(closed.metrics.pendingRequests).toBe(0);
       expect(closed.stream).toBe("resolved");
-      expect(lines.join("\n")).not.toContain("integration-test-token");
+      expect(chunks.join("")).not.toContain("integration-test-token");
     } else {
-      expect(lines).toHaveLength(0);
+      expect(snapshots).toHaveLength(0);
     }
   },
 );
@@ -43,12 +40,7 @@ test("turning detail on reaches a running bridge process with no restart", async
   });
   const chunks: string[] = [];
   child.stdout.on("data", (chunk) => chunks.push(String(chunk)));
-  const snapshots = () =>
-    chunks
-      .join("")
-      .split("\n")
-      .filter((line) => line.startsWith("[bridge-diagnostics] "))
-      .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)));
+  const snapshots = () => bridgeDiagnosticPayloads(chunks.join("").split("\n"));
   try {
     const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers });
     expect(created.status).toBe(201);
@@ -66,10 +58,43 @@ test("turning detail on reaches a running bridge process with no restart", async
       await Bun.sleep(20);
     }
     const [snapshot] = snapshots();
-    expect(snapshot.event).toBe("heartbeat");
-    expect(snapshot.bridge).toBe("acp");
-    expect(snapshot.counters.requestsSent).toBeGreaterThan(0);
+    expect(snapshot?.event).toBe("heartbeat");
+    expect(snapshot?.bridge).toBe("acp");
+    expect(snapshot?.counters.requestsSent).toBeGreaterThan(0);
     expect(chunks.join("")).not.toContain("integration-test-token");
+  } finally {
+    await stopChild(child);
+  }
+});
+
+test("a bridge relaying to the backend keeps writing parseable records after a change", async () => {
+  const { child, base, headers } = await spawnBridge({
+    env: { ORKESTRATOR_BRIDGE_DEBUG: "0", ORKESTRATOR_BRIDGE_LOG_RELAY: "1" },
+  });
+  const chunks: string[] = [];
+  child.stdout.on("data", (chunk) => chunks.push(String(chunk)));
+  const records = () =>
+    chunks
+      .join("")
+      .split("\n")
+      .flatMap((line) => parseLogRecordLine(line) ?? [])
+      .filter((record) => record.area === "bridge.diagnostics");
+  try {
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers });
+    expect(created.status).toBe(201);
+    expect(records()).toHaveLength(0);
+
+    const applied = await nativeFetch(`${base}${BRIDGE_LOG_POLICY_ROUTE}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ seq: 1, level: "info", areaLevels: { bridge: "debug" } }),
+    });
+    expect(applied.status).toBe(200);
+    for (let waited = 0; waited < 2_000 && records().length === 0; waited += 20) {
+      await Bun.sleep(20);
+    }
+    expect(records()[0]).toMatchObject({ level: "info", event: "heartbeat" });
+    expect(records()[0]?.fields?.bridge).toBe("acp");
   } finally {
     await stopChild(child);
   }

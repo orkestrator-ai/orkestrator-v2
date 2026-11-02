@@ -804,10 +804,10 @@ describe("CL-05: machine identity visual rules", () => {
               : activity === "idle"
                 ? "opacity-0"
                 : activity === "working"
-                  ? "bg-red-500/50"
+                  ? "environment-working-spinner"
                   : "bg-yellow-400/50";
             expect(ring.classList).toContain(color);
-            expect(ring.classList.contains("animate-pulse")).toBe(active && activity !== "idle");
+            expect(ring.classList.contains("animate-pulse")).toBe(active && activity === "waiting");
             expect(within(row).getAllByTestId("machine-dot")).toHaveLength(1);
             expect(within(row).getByTestId("machine-dot").getAttribute("data-machine-color")).toBe(
               "teal",

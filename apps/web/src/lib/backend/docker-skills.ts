@@ -19,6 +19,7 @@ import type {
   ClaudeModelCatalogSnapshot,
 } from "@/types";
 import { machineInvoke, type AccountMachine } from "./agent-accounts";
+import type { AgentExtensionCatalog } from "./files-sessions";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export async function checkDocker(machine?: AccountMachine): Promise<DockerAvailability> {
@@ -470,6 +471,16 @@ export async function listAgentSkills(
   machine?: AccountMachine,
 ): Promise<AgentSkillScan> {
   return machineInvoke<AgentSkillScan>(machine, "list_agent_skills", { provider });
+}
+
+export type AgentPluginCatalog = Pick<AgentExtensionCatalog, "agent" | "plugins" | "pluginError">;
+
+/** List the plugins the given agent's own CLI reports on this machine */
+export async function listAgentPlugins(
+  provider: AgentSkillProvider,
+  machine?: AccountMachine,
+): Promise<AgentPluginCatalog> {
+  return machineInvoke<AgentPluginCatalog>(machine, "list_agent_plugins", { provider });
 }
 
 /** Read one SKILL.md; the backend rejects paths outside the agent's skill roots */

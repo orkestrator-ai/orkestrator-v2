@@ -537,11 +537,11 @@ body[data-orkestrator-dev-profile]::before {
 
 @keyframes text-shimmer {
   from {
-    background-position: 125% 50%;
+    background-position: var(--text-shimmer-travel) 50%;
   }
 
   to {
-    background-position: -125% 50%;
+    background-position: calc(var(--text-shimmer-travel) * -1) 50%;
   }
 }
 
@@ -553,7 +553,14 @@ body[data-orkestrator-dev-profile]::before {
  * `-webkit-text-fill-color` rather than `color: transparent`: `currentColor`
  * must stay the real colour for the gradient to use it.
  *
- * Presets set the two custom properties: `.agent-thinking-shimmer` (the
+ * The gradient tiles, so the loop only joins up if one iteration moves it by
+ * exactly one tile. For a tile of `size` that is a position change of
+ * `size / (size - 100%)`, which `--text-shimmer-travel` holds half of: stopping
+ * anywhere else leaves the next tile's band part-way across when the animation
+ * restarts, and it vanishes. The sizes are percentages of the element, so this
+ * holds at any name length.
+ *
+ * Presets set the custom properties: `.agent-thinking-shimmer` (the
  * transcript's "is thinking" status) and the environment name signals
  * (`EnvironmentNameShimmer`): `.needs-answer-name` (an agent waits for the
  * user), `.merge-conflicts-name` (its pull request has conflicts) and
@@ -563,18 +570,22 @@ body[data-orkestrator-dev-profile]::before {
 .agent-thinking-shimmer {
   --text-shimmer-base: currentColor;
   --text-shimmer-highlight: var(--color-foreground);
-  --text-shimmer-duration: 1.8s;
+  --text-shimmer-duration: 1.2s;
+  --text-shimmer-size: 250%;
+  --text-shimmer-travel: 83.333%;
+  --text-shimmer-band-start: 36%;
+  --text-shimmer-band-end: 64%;
   -webkit-text-fill-color: transparent;
   background-image: linear-gradient(
     100deg,
     var(--text-shimmer-base) 0%,
-    var(--text-shimmer-base) 36%,
+    var(--text-shimmer-base) var(--text-shimmer-band-start),
     var(--text-shimmer-highlight) 50%,
-    var(--text-shimmer-base) 64%,
+    var(--text-shimmer-base) var(--text-shimmer-band-end),
     var(--text-shimmer-base) 100%
   );
-  background-position: 125% 50%;
-  background-size: 250% 100%;
+  background-position: var(--text-shimmer-travel) 50%;
+  background-size: var(--text-shimmer-size) 100%;
   background-clip: text;
   -webkit-background-clip: text;
   animation: text-shimmer var(--text-shimmer-duration) linear infinite;
@@ -598,11 +609,18 @@ body[data-orkestrator-dev-profile]::before {
  * stay well above the name's current contrast on the dark surfaces. The names
  * sweep more slowly than the thinking status: they can sit in the sidebar for
  * a long time, so the band should read as a calm cue rather than activity.
+ *
+ * A name is never without a band: the tile is short enough, and the band wide
+ * enough, that the next one enters as the last one leaves.
  */
 .merge-ready-name,
 .merge-conflicts-name,
 .needs-answer-name {
-  --text-shimmer-duration: 5s;
+  --text-shimmer-duration: 1.9s;
+  --text-shimmer-size: 140%;
+  --text-shimmer-travel: 175%;
+  --text-shimmer-band-start: 25%;
+  --text-shimmer-band-end: 75%;
 }
 
 .merge-ready-name {
@@ -719,6 +737,104 @@ body[data-orkestrator-dev-profile]::before {
     animation: none;
     opacity: 1;
     filter: none;
+  }
+}
+
+/*
+ * The ring around a working environment's dot: a sweep from a light head through
+ * grey to nothing, painted through a ring-shaped mask so the dot inside is left
+ * alone. A circle turns as a whole, which the compositor runs without repainting,
+ * and carries a small rounded head. A square cannot turn, so a container's sweep
+ * animates the gradient's angle instead. The shape comes from the marker.
+ */
+@property --environment-working-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+
+@keyframes environment-working-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes environment-working-sweep {
+  to {
+    --environment-working-angle: 360deg;
+  }
+}
+
+.environment-working-spinner {
+  --environment-working-head: #d8dae0;
+  --environment-working-stroke: 1.5px;
+}
+
+.environment-working-spinner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--environment-working-angle),
+    rgb(255 255 255 / 0) 40deg,
+    rgb(113 113 122 / 0.45) 140deg,
+    rgb(170 170 178 / 0.9) 260deg,
+    var(--environment-working-head) 340deg
+  );
+}
+
+[data-shape="circle"] > .environment-working-spinner {
+  animation: environment-working-turn 1.2s linear infinite;
+}
+
+[data-shape="circle"] > .environment-working-spinner::before {
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--environment-working-stroke) - 0.5px),
+    #000 calc(100% - var(--environment-working-stroke)),
+    #000 calc(100% - 0.25px),
+    transparent 100%
+  );
+}
+
+[data-shape="circle"] > .environment-working-spinner::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--environment-working-stroke);
+  height: var(--environment-working-stroke);
+  margin-left: calc(var(--environment-working-stroke) / -2);
+  border-radius: 9999px;
+  background: var(--environment-working-head);
+}
+
+[data-shape="square"] > .environment-working-spinner {
+  animation: environment-working-sweep 1.2s linear infinite;
+}
+
+[data-shape="square"] > .environment-working-spinner::before {
+  padding: var(--environment-working-stroke);
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-shape] > .environment-working-spinner {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  [data-shape] > .environment-working-spinner {
+    animation: none;
+  }
+
+  [data-shape] > .environment-working-spinner::before,
+  [data-shape] > .environment-working-spinner::after {
+    display: none;
   }
 }
 

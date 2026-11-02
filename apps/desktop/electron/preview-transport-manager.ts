@@ -56,6 +56,18 @@ export interface PreviewServiceSession {
   };
   clearStorageData(options?: { storages?: string[] }): Promise<void>;
   clearCache?(): Promise<void>;
+  cookies?: {
+    set(details: {
+      url: string;
+      name: string;
+      value: string;
+      path: string;
+      httpOnly: boolean;
+      secure: boolean;
+      sameSite: "lax";
+      expirationDate: number;
+    }): Promise<void>;
+  };
 }
 
 export interface PreviewPortHints {
@@ -122,6 +134,9 @@ interface ServiceGroup {
 
 /** Holder id for a service's external-browser forward; at most one per group. */
 const EXTERNAL_FORWARD_HOLDER = "external-browser-forward";
+
+/** A copied cookie's attributes are unknown, so its partition copy gets a fixed week. */
+const IMPORTED_COOKIE_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
 
 /** This machine, its local networks, and carrier-grade NAT (tailnets). */
 const LOCAL_NETWORK = new BlockList();
@@ -343,6 +358,46 @@ export class PreviewTransportManager {
     const session = this.options.sessionFor(this.options.partitionFor(target));
     await session.clearStorageData();
     await session.clearCache?.();
+  }
+
+  /**
+   * A browser's sign-in can reach a service only on a local connection. Over a
+   * remote one it would hand this machine's `localhost` cookies to another machine.
+   */
+  sessionImportAvailable(): boolean {
+    return !this.disposed && !this.options.isRemote();
+  }
+
+  /**
+   * Store a browser's cookies in one service's partition. Ingress is always
+   * `127.0.0.1` and cookies ignore ports, so they outlive a change of listener.
+   * A `Cookie` header carries no attributes: HttpOnly comes from the one-time
+   * page, and session lifetime is the application's to enforce; **Reset site data** removes them.
+   * One the session refuses (a `__Host-` name over HTTP) counts as skipped.
+   */
+  async importSessionCookies(
+    target: Pick<BrowserPreviewServiceTarget, "backendInstanceId" | "serviceId">,
+    cookies: Array<{ name: string; value: string; httpOnly?: boolean }>,
+  ): Promise<{ imported: number; skipped: number }> {
+    const store = this.options.sessionFor(this.options.partitionFor(target)).cookies;
+    if (!store) throw previewFailure("unsupported");
+    const expirationDate = Math.floor(Date.now() / 1000) + IMPORTED_COOKIE_LIFETIME_SECONDS;
+    const results = await Promise.allSettled(
+      cookies.map((cookie) =>
+        store.set({
+          url: "http://127.0.0.1/",
+          name: cookie.name,
+          value: cookie.value,
+          path: "/",
+          httpOnly: cookie.httpOnly ?? true,
+          secure: false,
+          sameSite: "lax",
+          expirationDate,
+        }),
+      ),
+    );
+    const imported = results.filter((result) => result.status === "fulfilled").length;
+    return { imported, skipped: results.length - imported };
   }
 
   stats() {

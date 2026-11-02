@@ -21,6 +21,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import type { StorageService } from "./storage.js";
+import type { Environment } from "./models.js";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { resolveProjectGitRoot } from "./project-git-service.js";
 import {
@@ -1425,6 +1426,57 @@ export class CoordinatorService {
             state: "waiting",
             tone: "attention",
           },
+        },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
+        throw error;
+      });
+  }
+
+  /**
+   * Tell the coordinator that launched a worker that its setup was held for
+   * the user's approval (`setup-approval.ts`), so it reports a blocked worker
+   * instead of waiting for one that will never become ready on its own. A
+   * coordinator cannot approve setup itself; it can only tell the user.
+   * Idempotent per environment and held setup.
+   */
+  async noteWorkerSetupApproval(environment: Environment): Promise<void> {
+    const associations = (
+      await this.storage.coordinators.listCoordinatorWorkflowAssociations(environment.projectId)
+    ).filter(
+      (association) =>
+        association.kind === "environment" &&
+        association.resourceId === environment.id &&
+        !association.nodeId &&
+        !association.pending,
+    );
+    const owner = associations.at(-1);
+    if (!owner) return;
+    const workspace = await this.storage.coordinators.getCoordinatorWorkspaceById(
+      owner.coordinatorId,
+    );
+    const main = workspace ? coordinatorMainConversation(workspace) : undefined;
+    if (!workspace || !main) return;
+    const label = environment.name ?? environment.id;
+    await this.storage
+      .sendAgentMail(
+        {
+          kind: "system",
+          projectId: environment.projectId,
+          source: "workflow",
+          resourceId: environment.id,
+        },
+        {
+          requestId: `setup-approval-${owner.id}-${environment.setupCompletedAt ?? "held"}`,
+          toEnvironmentId: coordinatorRuntimeId(workspace.id, main.id),
+          toTabId: main.tabId,
+          subject: `Worker ${label} needs setup approval`,
+          body: [
+            `Setup did not run in worker environment ${label} (${environment.id}): its branch changes the project's setup commands, and this machine has not approved them.`,
+            "",
+            "Tell the user: they review the commands in the environment's setup tab and approve or skip them there. You cannot approve them. The worker is not ready until they do.",
+          ].join("\n"),
         },
       )
       .catch((error: unknown) => {

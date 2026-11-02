@@ -1,7 +1,7 @@
 /**
  * Scrubbing a local bridge's stdout and stderr before the backend logs it.
  *
- * The backend forwards that output to `console.debug`/`console.error`, and with
+ * The backend re-emits that output through its own logger, and with
  * Debug logging on `application-logging.ts` writes it to `<dataDir>/logs`. No
  * bridge prints auth data today, and the auth canary tests hold each auth path
  * to that; this covers a log line nobody has written yet.
@@ -15,6 +15,11 @@
  * Lines are reassembled before redaction, bounded so a bridge that never
  * prints a newline cannot grow the buffer.
  */
+import {
+  emitLogRecord,
+  parseLogRecordLine,
+  writeProcessOutputLine,
+} from "@orkestrator/protocol/logger";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 
 const EXTRA_RULES: Array<{ pattern: RegExp; replacement: string }> = [
@@ -68,4 +73,24 @@ export function createBridgeOutputForwarder(
       write(redactBridgeOutput(rest));
     },
   };
+}
+
+/**
+ * One forwarded chunk of already redacted output, which may hold several lines.
+ * Each is its own entry, because a bridge's multi-line chunk can mix records with
+ * unstructured output. Redacting first means a record's fields are scrubbed too;
+ * if redaction breaks a record it stays captured as output, like any other line.
+ */
+export function relayBridgeOutput(stream: "stdout" | "stderr", source: string, text: string): void {
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const record = parseLogRecordLine(line);
+    if (record) {
+      // First, so a record already at the field limit keeps it through the next relay.
+      const { source: _claimed, ...fields } = record.fields ?? {};
+      emitLogRecord({ ...record, fields: { source, ...fields } });
+    } else {
+      writeProcessOutputLine(stream, `[${source}] ${line}`);
+    }
+  }
 }

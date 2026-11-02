@@ -7,6 +7,7 @@ import {
   parseWebAnnotationRequestMarker,
   type WebAnnotationRequestOperation,
 } from "@orkestrator/protocol/web-annotations";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { fixtureDestination } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { WebAnnotationService } from "./web-annotation-service.js";
 import {
@@ -750,5 +751,40 @@ describe("web annotation environment deletion", () => {
     expect(readStoredEnvironment(harness.dir)).toBeUndefined();
     await expect(createAnnotation(harness.service)).rejects.toThrow("deleted");
     await createAnnotation(harness.service, ENV_B);
+  });
+
+  test("a lasting reconcile failure logs its type once and reports recovery", async () => {
+    harness = await createHarness();
+    const healthy = await createHarness();
+    const logs = captureLogs();
+    const reconciler = harness.service as unknown as {
+      storage: { loadedEnvironmentIds: () => string[] };
+    };
+    const loaded = reconciler.storage.loadedEnvironmentIds;
+    let passes = 0;
+    reconciler.storage.loadedEnvironmentIds = () => {
+      passes += 1;
+      throw new TypeError("request text that must stay out of the log");
+    };
+    const events = () => logs.records().map((record) => record.event);
+    try {
+      healthy.service.startReconciler(5);
+      harness.service.startReconciler(5);
+      while (passes < 4) await Bun.sleep(5);
+      expect(events()).toEqual(["reconcile.failed"]);
+      expect(logs.records()[0]?.fields).toMatchObject({
+        kind: "TypeError",
+        scope: expect.any(String),
+      });
+
+      reconciler.storage.loadedEnvironmentIds = loaded;
+      while (events().length < 2) await Bun.sleep(5);
+      expect(events()).toEqual(["reconcile.failed", "throttle.recovered"]);
+      expect(logs.lines.join("\n")).not.toContain("request text");
+    } finally {
+      harness.service.stopReconciler();
+      await healthy.cleanup();
+      logs.restore();
+    }
   });
 });

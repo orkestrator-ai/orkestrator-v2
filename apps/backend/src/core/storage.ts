@@ -7,6 +7,7 @@ export type { GraphRunsStorage } from "./storage-graph-runs.js";
 export type { GraphEffectsStorage } from "./storage-graph-effects.js";
 export type { GraphDescribeStorage } from "./storage-graph-describe.js";
 export type { ClientStateStorage } from "./storage-client-state.js";
+export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -33,6 +34,7 @@ import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphEffectsStorage } from "./storage-graph-effects.js";
 import type { GraphDescribeStorage } from "./storage-graph-describe.js";
 import type { ClientStateStorage } from "./storage-client-state.js";
+import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -157,6 +159,7 @@ export class StorageService {
   readonly graphEffects: GraphEffectsStorage;
   readonly graphDescribe: GraphDescribeStorage;
   readonly clientState: ClientStateStorage;
+  readonly setupApprovals: SetupApprovalsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -174,6 +177,7 @@ export class StorageService {
     this.graphEffects = this.repos.graphEffects;
     this.graphDescribe = this.repos.graphDescribe;
     this.clientState = this.repos.clientState;
+    this.setupApprovals = this.repos.setupApprovals;
   }
 
   async init(): Promise<void> {
@@ -544,11 +548,13 @@ export class StorageService {
     environmentId: string,
     attentionKeys: readonly string[],
     occurredAt: string,
+    reason?: "agent_question" | "setup_approval",
   ): Promise<{ environment: Environment; recorded: boolean }> {
     return this.repos.projects.recordEnvironmentAgentAttention(
       environmentId,
       attentionKeys,
       occurredAt,
+      reason,
     );
   }
 

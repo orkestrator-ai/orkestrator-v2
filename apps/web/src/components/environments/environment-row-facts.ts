@@ -36,6 +36,7 @@ export function localEnvironmentRowFacts(
   inputs: LocalEnvironmentRowInputs,
 ): EnvironmentRowFacts {
   return {
+    environmentId: environment.id,
     name: environment.name,
     projectHome: environment.projectHome === true,
     environmentType: environment.environmentType,
@@ -75,6 +76,7 @@ export function nodeEnvironmentRowFacts(
     (candidate) => candidate.ref.projectId === environment.projectId,
   );
   return {
+    environmentId: environment.ref.environmentId,
     name: environment.name,
     projectHome: environment.isProjectHome,
     environmentType: environment.environmentType,

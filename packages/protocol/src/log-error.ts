@@ -175,6 +175,20 @@ export function formatLogError(error: unknown, options: FormatLogErrorOptions = 
   }
 }
 
+/**
+ * What a throttled log call keys an error by: its code, else its type. Never its
+ * message, which varies and can hold content, and only names short enough to
+ * pass the same patterns `formatLogError` uses.
+ */
+export function logErrorKind(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "NonError";
+  if (!(error instanceof Error) && typeof read(error, "message") !== "string") return "NonError";
+  const code = read(error, "code");
+  const safeCode = finite(code) ?? matching(code, CODE_PATTERN);
+  if (safeCode !== undefined) return String(safeCode);
+  return matching(read(error, "name"), NAME_PATTERN) ?? "Error";
+}
+
 /** Rebuilds a relayed error, applying the same bounds; null if it is not one. */
 export function logErrorFromWire(value: unknown, depth = 0): SafeLogError | null {
   if (typeof value !== "object" || value === null) return null;

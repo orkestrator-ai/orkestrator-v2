@@ -36,6 +36,10 @@ const UNREAD_REASON_COPY: Record<EnvironmentUnreadReason, UnreadReasonCopy> = {
     title: "Marked unread",
     description: "This environment was marked unread.",
   },
+  setup_approval: {
+    title: "Setup needs your approval",
+    description: "This branch changes the setup commands. Review them before they run.",
+  },
 };
 
 const UNKNOWN_REASON_COPY: UnreadReasonCopy = {

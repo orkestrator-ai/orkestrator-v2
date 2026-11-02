@@ -47,7 +47,11 @@ import {
   isCoordinatorReadOnlyPolicy,
   readOnlyRefusalRole,
 } from "./read-only-policy.js";
-import { runtimeEnvironmentForSessionQuery, withUnattendedOverloadRetry } from "./runtime-env.js";
+import {
+  runtimeEnvironmentForSessionQuery,
+  withReadOnlyGitConfig,
+  withUnattendedOverloadRetry,
+} from "./runtime-env.js";
 import {
   claudeExecutableOptions,
   sdkSessionIdFromBridgeId,
@@ -290,9 +294,12 @@ export async function resolveQueryPlan(
   );
 
   // A graph agent's policy denies `github.write`: its CLI gets no GitHub credential.
-  const queryEnvironment = withUnattendedOverloadRetry(
-    session.executionPolicy,
-    await runtimeEnvironmentForSessionQuery(policy),
+  const queryEnvironment = withReadOnlyGitConfig(
+    policy,
+    withUnattendedOverloadRetry(
+      session.executionPolicy,
+      await runtimeEnvironmentForSessionQuery(policy),
+    ),
   );
   const liveSettings = claudeLiveSettings({
     model: options?.model,

@@ -582,7 +582,7 @@ test("Docker fixture coordinator view follows delegations and context across swi
         });
         await expect(
           target.getByRole("status").filter({ hasText: "Repository context changed to" }),
-        ).toContainText(`Repository context changed to ${contextBranch}`);
+        ).toHaveCount(0);
       }
     });
 

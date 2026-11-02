@@ -5,6 +5,7 @@ import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-age
 import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
 import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
 import { randomUUID } from "node:crypto";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import {
@@ -92,6 +93,8 @@ import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal } from "./claude-state-signal.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+
+const activityLog = createLogger("backend.activity");
 
 /** Former activity-bundle cadence, per named job. */
 const ACTIVITY_JOB_MS = 2_000;
@@ -255,6 +258,7 @@ function observeSweepStep(kind: RecurringJobKind, run: () => unknown): Promise<u
 }
 
 export class OrkestratorBackend {
+  private readonly logScope = crypto.randomUUID();
   private readonly commands = createCommandRegistry();
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
@@ -2251,12 +2255,16 @@ export class OrkestratorBackend {
     if (this.keyedActivityJobs && !this.activityJobs) {
       // Step 08: every part of the former 2 s bundle and the 60 s maintenance
       // is its own named due job (see backend-activity-jobs.ts).
-      const warn = (label: string) => (error: unknown) => {
-        console.warn(
-          `[backend] Failed to ${label}:`,
-          error instanceof Error ? error.message : error,
-        );
-      };
+      const jobLog = (name: string) => ({
+        onError: (error: unknown) => {
+          activityLog.throttled("warn", "job.failed", {
+            scope: `${this.logScope}:${name}`,
+            error,
+            fields: () => ({ error: formatLogError(error, { stack: false }) }),
+          });
+        },
+        onSuccess: () => activityLog.recovered("job.failed", `${this.logScope}:${name}`),
+      });
       const jobs: BackendActivityJob[] = [
         {
           name: "activity",
@@ -2265,7 +2273,7 @@ export class OrkestratorBackend {
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           run: () => this.nativeAgents.reconcileAgentActivity(),
-          onError: warn("reconcile native agent activity"),
+          ...jobLog("activity"),
         },
         {
           name: "tmux-queues",
@@ -2274,7 +2282,7 @@ export class OrkestratorBackend {
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           run: () => this.promptQueues.drainAll(),
-          onError: warn("drain tmux prompt queues"),
+          ...jobLog("tmux-queues"),
         },
         {
           name: "mail-presence",
@@ -2284,7 +2292,7 @@ export class OrkestratorBackend {
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           run: () => this.agentMail.refreshPresence(),
-          onError: warn("refresh agent mail presence"),
+          ...jobLog("mail-presence"),
         },
         {
           name: "mail-injection",
@@ -2293,7 +2301,7 @@ export class OrkestratorBackend {
           intervalMs: ACTIVITY_JOB_MS,
           fixedRate: true,
           run: () => this.agentMail.drainInjects(),
-          onError: warn("drain agent mail"),
+          ...jobLog("mail-injection"),
         },
         {
           name: "coordinator-repair",
@@ -2304,7 +2312,7 @@ export class OrkestratorBackend {
             reconcileCoordinatorWorkflows();
             await coordinatorWorkflowReconcileInFlight;
           },
-          onError: warn("reconcile coordinator workflow notifications"),
+          ...jobLog("coordinator-repair"),
         },
         {
           name: "mail-retention",
@@ -2322,7 +2330,7 @@ export class OrkestratorBackend {
                 ),
             );
           },
-          onError: warn("prune agent mail"),
+          ...jobLog("mail-retention"),
         },
         {
           name: "retired-looped-reviews",
@@ -2330,7 +2338,7 @@ export class OrkestratorBackend {
           priority: "maintenance",
           intervalMs: MAINTENANCE_JOB_MS,
           run: reconcileRetiredReviews,
-          onError: warn("stop retired Looped Review turns"),
+          ...jobLog("retired-looped-reviews"),
         },
         {
           name: "tab-teardowns",
@@ -2341,7 +2349,7 @@ export class OrkestratorBackend {
             reconcileTabTeardownsOnce();
             await tabTeardownReconcileInFlight;
           },
-          onError: warn("reconcile tab teardowns"),
+          ...jobLog("tab-teardowns"),
         },
         {
           name: "tab-orphans",
@@ -2352,7 +2360,7 @@ export class OrkestratorBackend {
             reconcileOrphanedTabResourcesOnce();
             await orphanReconcileInFlight;
           },
-          onError: warn("reconcile orphaned tab resources"),
+          ...jobLog("tab-orphans"),
         },
       ];
       if (reconcileClaudeState) {
@@ -2367,7 +2375,7 @@ export class OrkestratorBackend {
               reconcileClaudeState({}, this.context),
             );
           },
-          onError: warn("reconcile Claude terminal activity"),
+          ...jobLog("claude-state"),
         });
       }
       if (reconcilePendingEnvironmentRenames) {
@@ -2387,7 +2395,7 @@ export class OrkestratorBackend {
               ? RENAME_SAFETY_MS
               : undefined;
           },
-          onError: warn("reconcile pending environment renames"),
+          ...jobLog("pending-renames"),
         });
       }
       this.activityJobs = new BackendActivityJobs(

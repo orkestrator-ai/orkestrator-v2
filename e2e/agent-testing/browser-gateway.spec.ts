@@ -1443,6 +1443,68 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
     const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
     expect(active.worktreePath).toBeTruthy();
     const setupLog = path.join(active.worktreePath!, ".turbo", "turbo-setup.log");
+    expect(active).toMatchObject({ setupApprovalRequired: true, setupPhase: "failed" });
+    expect(await fs.stat(setupLog).catch(() => null)).toBeNull();
+    const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+      environmentId: environment.id,
+    });
+    await invoke("save_pane_layout", {
+      environmentId: environment.id,
+      expectedRevision: layout?.revision ?? 0,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane-setup",
+        root: {
+          kind: "leaf",
+          id: "pane-setup",
+          activeTabId: "tab-setup",
+          tabs: [
+            {
+              id: "tab-setup",
+              type: "agent-native",
+              nativeAgentData: { environmentId: environment.id, platform: "codex", isLocal: true },
+            },
+          ],
+        },
+      },
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(status.browserUrl!);
+    const openHeld = async () => {
+      const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
+      const entry = page.getByText(environment.name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      if (await expand.isVisible()) await expand.click();
+      await entry.click();
+    };
+    await openHeld();
+    const panel = page.getByTestId("setup-approval-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText(marker);
+    await fs.mkdir(path.join(repositoryRoot, "output/visual-previews"), { recursive: true });
+    await page.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/setup-held-desktop.png"),
+    });
+    await page.setViewportSize({ width: 640, height: 900 });
+    await page.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/setup-held-narrow.png"),
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.reload();
+    await openHeld();
+    await expect(panel).toBeVisible();
+    expect(await fs.stat(setupLog).catch(() => null)).toBeNull();
+    const approval = await invoke<{ hash: string; approvalRequired: boolean }>(
+      "get_environment_setup_approval",
+      { environmentId: environment.id },
+    );
+    expect(approval.approvalRequired).toBe(true);
+    await invoke("approve_environment_setup", {
+      environmentId: environment.id,
+      hash: approval.hash,
+      remember: false,
+    });
     await expect
       .poll(async () => (await fs.stat(setupLog).catch(() => null))?.size ?? 0, {
         timeout: 30_000,

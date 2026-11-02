@@ -110,6 +110,8 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "coordinator-pane-layouts": { kind: "record", owner: ownerField("projectId") },
   "coordinator-upstream-declines": { kind: "record", owner: ownerField("projectId") },
   "notice-dismissals": { kind: "record" },
+  // Setup commands the user approved, one row per project (`setup-approval.ts`).
+  "setup-approvals": { kind: "record", owner: ownerField("projectId") },
 };
 
 /**

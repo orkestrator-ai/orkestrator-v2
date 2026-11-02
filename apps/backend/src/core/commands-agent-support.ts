@@ -8,7 +8,7 @@ import {
   CODEX_BACKGROUND_TASK_REASONING_EFFORT,
 } from "@orkestrator/protocol/codex-background-task";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
-import { runCommand } from "./shell.js";
+import { homePath, runCommand } from "./shell.js";
 import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environment-agent-skills.js";
 import type { Environment } from "./models.js";
 import type { AgentSkillProvider } from "./agent-skills.js";
@@ -436,26 +436,45 @@ export function resolveAgentBinary(context: CommandContext, agent: AgentExtensio
 
 export const EXTENSION_DISCOVERY_TIMEOUT_MS = 20_000;
 
+function createLocalExtensionCommandRunner(
+  cwd: string,
+  context: CommandContext,
+  run: typeof runCommand,
+): ExtensionCommandRunner {
+  return async (agent, args) => {
+    if (agent === "cursor") {
+      throw new Error("Cursor SDK extension discovery is not available through a CLI.");
+    }
+    const { stdout } = await run(resolveAgentBinary(context, agent), args, {
+      cwd,
+      env: {
+        ...envWithManagedBinaries(context),
+        NO_COLOR: "1",
+      },
+      timeoutMs: EXTENSION_DISCOVERY_TIMEOUT_MS,
+    });
+    return stdout;
+  };
+}
+
+/**
+ * Runs from the home directory: this is the host's own view, with no project, so
+ * no repository's settings may change what it reports.
+ */
+export function createHostExtensionCommandRunner(
+  context: CommandContext,
+  run: typeof runCommand = runCommand,
+): ExtensionCommandRunner {
+  return createLocalExtensionCommandRunner(homePath(), context, run);
+}
+
 export function createExtensionCommandRunner(
   environment: Environment,
   context: CommandContext,
   run: typeof runCommand = runCommand,
 ): ExtensionCommandRunner {
   if (environment.environmentType === "local" && environment.worktreePath) {
-    return async (agent, args) => {
-      if (agent === "cursor") {
-        throw new Error("Cursor SDK extension discovery is not available through a CLI.");
-      }
-      const { stdout } = await run(resolveAgentBinary(context, agent), args, {
-        cwd: environment.worktreePath,
-        env: {
-          ...envWithManagedBinaries(context),
-          NO_COLOR: "1",
-        },
-        timeoutMs: EXTENSION_DISCOVERY_TIMEOUT_MS,
-      });
-      return stdout;
-    };
+    return createLocalExtensionCommandRunner(environment.worktreePath, context, run);
   }
 
   if (environment.containerId) {

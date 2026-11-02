@@ -270,6 +270,17 @@ interface Window {
       openServiceExternally?(
         target: import("@orkestrator/protocol/browser-preview").BrowserPreviewServiceTarget,
       ): Promise<void>;
+      /** Present on desktop builds that can copy a browser sign-in into a preview. */
+      startSessionImport?(
+        tabId: string,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      dismissSessionNotice?(
+        tabId: string,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      openServiceSignIn?(
+        tabId: string,
+        port: number,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
     };
   };
 }

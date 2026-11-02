@@ -17,6 +17,9 @@ import {
 import { readPersistedSessionTitleEntries } from "./session-title-index.js";
 import type { BridgeModel } from "./models-cache.js";
 import { toBridgeModel } from "./app-server-runtime-helpers.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 export class CodexRuntimeTail {
   constructor(
@@ -235,10 +238,7 @@ export class CodexRuntimeTail {
         };
       }
     } catch (error) {
-      console.warn(
-        "[codex-bridge] model/list failed; falling back to cache:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("models.list-failed", { error: formatLogError(error, { stack: false }) });
     }
     return this.ctx.options.loadCachedModels();
   }
@@ -299,10 +299,7 @@ export class CodexRuntimeTail {
         });
       }
     } catch (error) {
-      console.warn(
-        "[codex-bridge] thread/list failed; using rollout parser:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("threads.list-failed", { error: formatLogError(error, { stack: false }) });
     }
 
     // A failed archived listing only loses the id filter; the path filter stays.
@@ -413,10 +410,10 @@ export class CodexRuntimeTail {
       if (archived) await this.ctx.options.engine.archiveThread(threadId);
       else await this.ctx.options.engine.unarchiveThread(threadId);
     } catch (error) {
-      console.warn(
-        `[codex-bridge] thread/${archived ? "archive" : "unarchive"} failed:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("thread.archive-failed", {
+        archived,
+        error: formatLogError(error, { stack: false }),
+      });
       return "failed";
     } finally {
       // Codex moves the rollout between `sessions` and `archived_sessions`.

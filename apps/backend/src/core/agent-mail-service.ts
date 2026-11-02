@@ -6,6 +6,7 @@ import {
   renderAgentMailCarrier,
   type AgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
@@ -20,6 +21,8 @@ import type {
 } from "@orkestrator/protocol/agent-mail";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail-injects.js";
+
+const log = createLogger("agent-mail");
 
 const OBSERVED_PRESENCE_TTL_MS = 4_000;
 const HOURLY_RELEASE_INTERVAL_MS = 30_000;
@@ -142,13 +145,15 @@ export class AgentMailService {
   /**
    * Log why the drain passed over a pending message, once per change of
    * reason. The drain revisits every waiting message every pass; logging each
-   * visit would bury the one line that explains a stuck delivery.
+   * visit would bury the one line that explains a stuck delivery. Not
+   * `log.throttled`: waiting is a state rather than a fault, so a summary per
+   * window would add a line a minute per message and a delivery is no recovery.
    */
   private noteSkip(message: AgentMailMessageSummary, mailbox: MailboxDescriptor, reason: string) {
     if (this.skipReasons.get(message.id) === reason) return;
     if (this.skipReasons.size >= AGENT_MAIL_MAX_PENDING_INJECTS) this.skipReasons.clear();
     this.skipReasons.set(message.id, reason);
-    console.info("[agent-mail] waiting", {
+    log.info("delivery.waiting", {
       messageId: message.id,
       toEnvironmentId: mailbox.environmentId,
       toTabId: mailbox.tabId,

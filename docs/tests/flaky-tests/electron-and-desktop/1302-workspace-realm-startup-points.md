@@ -15,4 +15,34 @@
 - **Recurrence (2026-11-01):** the first symptom again in a full `ORKESTRATOR_AGENT_TEST_RUN_ID=t1170-electron-suite-1 mise run test:agent:electron` on branch `electron-focus-checks-a6790c5ff09d-r1` (based on `93b99bfba`, todo 1170), arktech-mini at load averages 40 to 48: `Target page, context or browser has been closed` in the realm-state poll (line 370) after the leaf project opened. This time the diagnostics show why: the Electron binary `exited with signal SIGSEGV` right after `[DesktopStartup] ready`. The spec's cleanup then threw 0941's `ENOTEMPTY` (on `data`), which Playwright reported in place of the poll failure; the trace has the poll failure. 45 passed, 1 failed, 3 skipped (9.2 min). The same owner passed alone 4/4 on that branch. Evidence: `output/agent-testing/t1170-electron-suite-1/electron/`.
 - **Recurrence and crash stack (2026-11-01):** the same `SIGSEGV` symptom in the second of three `--repeat-each=3` runs of the owner alone (`t1170-r2-realm-rep`, same branch with todo 1170's main-process focus tracker), at the realm-state poll (line 330, called from 371); the other two passed. macOS wrote a crash report for both crashes (`~/Library/Logs/DiagnosticReports/Electron-2026-11-01-040047.ips` for the suite run above, `…-045553.ips` for this one). Both have the same stack on the main thread: `EXC_BAD_ACCESS` at `0x2b4` in `node::async_context_frame::current(v8::Isolate*)`, called from JavaScript run by `v8::Function::Call` under `node::inspector::MainThreadInterface::DispatchMessages`. That is the Node inspector session Playwright's `electronApplication.evaluate` uses (`--inspect=0`). It points to Electron 45's Node runtime crashing while it runs a call from the test, not to app or spec code; not established further. The 04:00 crash predates the focus tracker, and a crash report with the same stack exists from 2026-10-28 19:12, the day this record was opened.
 - **Reproduced on `origin/main` (2026-11-01):** with `apps/web/src` and `e2e/agent-testing` restored to `origin/main` (`93b99bfba`; the desktop main process is unchanged on the branch), `ORKESTRATOR_AGENT_TEST_RUN_ID=t1170-main-realm-rep … workspace-realm-electron.spec.ts --retries=0 --repeat-each=8` passed 7 of 8 at load averages 4 to 12. Repeat 6 crashed the same way: `exited with signal SIGSEGV` in the diagnostics, crash report `Electron-2026-11-01-051524.ips` with the same `node::async_context_frame::current` stack, and 0941's `ENOTEMPTY` reported in its place. So the crash is not caused by todo 1170's changes.
+
+- **Session-import review recurrence (2026-11-01):** on the branch based on
+  `15f22fc6d`, both full runs of
+  `ORKESTRATOR_AGENT_TEST_PROFILE=agent-session-import-review-fixes ORKESTRATOR_AGENT_TEST_RUN_ID=session-import-review-fixes mise run test:logged -- --name electron-preview-session-import -- mise run test:agent:electron`
+  failed at the unchanged leaf-project click (line 326):
+  `locator.click: Timeout 20000ms exceeded`, waiting for
+  `getByRole('button', { name: /^leaf-app\s*\d*$/ })` after the startup-dialog
+  handler ran. The first full run had 31 passed, 3 failed, 3 skipped and 15 not
+  run (259.3 s); the corrected import-fixture rerun had 40 passed, 2 failed,
+  2 skipped and 8 not run (377.5 s), with all 21 service-preview tests passing.
+  The unchanged complete owner was rerun alone with
+  `ORKESTRATOR_AGENT_TEST_PROFILE=agent-session-import-review-fixes ORKESTRATOR_AGENT_TEST_RUN_ID=session-import-review-isolated-realm mise run test:logged -- --name realm-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts workspace-realm-electron.spec.ts`
+  and retained the same failure (1 failed, 28.4 s). This recurrence has no
+  isolated pass and is not newly classified as flaky. Evidence is under
+  `output/agent-testing/session-import-review-isolated-realm/electron/`; the
+  isolated compressed log is
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.EpGx5r/realm-owner.log.gz`.
 - **Recurrence on `origin/main` (2026-11-01):** the leaf-project symptom, `locator.click: Timeout 20000ms exceeded` on `getByRole('button', { name: /^leaf-app\s*\d*$/ })` at `e2e/agent-testing/workspace-realm-electron.spec.ts:326`, failed three times out of three: in `ORKESTRATOR_AGENT_TEST_RUN_ID=logger-slice1 mise run test:logged -- --name agent-electron -- mise run test:agent:electron` on branch `shared-logger-foundation-and-electron-r1-slice-1-2a438948d729` (based on `066fcb497`; 44 passed, 2 failed, 3 skipped, 8.7 min), alone on that branch, and alone in a clean detached `origin/main` worktree at `066fcb497` (`bun install --frozen-lockfile`, then `bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts workspace-realm-electron.spec.ts`). In this session it did not behave as a flake: nothing suggests the leaf project ever rendered, so it may have become a consistent failure on this host.
+
+- **Main-merge validation recurrence (2026-11-01):** merging `4626c4d7a`
+  into session-import branch `159157dcc` repeated the leaf-project click timeout
+  at `workspace-realm-electron.spec.ts:326`. The one-worker command
+  `ORKESTRATOR_AGENT_TEST_PROFILE=merge-main-session-import-b99be208 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-session-import-b99be208 mise run test:logged -- --name merge-agent-electron -- mise run test:agent:electron`
+  finished with 43 passed, 2 failed, 3 skipped and 4 not run (439.0 s); all
+  21 service-preview tests passed. The unchanged realm owner then failed the
+  same click in isolation with
+  `ORKESTRATOR_AGENT_TEST_PROFILE=merge-main-session-import-b99be208 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-session-import-realm-owner mise run test:logged -- --name merge-realm-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts workspace-realm-electron.spec.ts`
+  (1 failed, 28.9 s). This adds no isolated pass or new flake classification.
+  Evidence: `output/agent-testing/merge-main-session-import-realm-owner/electron/`;
+  compressed log:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.vuZwvC/merge-realm-owner.log.gz`.

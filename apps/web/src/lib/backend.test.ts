@@ -90,6 +90,7 @@ const {
   prepareEnvironmentAgentLaunch,
   writeInitialPromptAttachments,
   applyPaneLayoutIntent,
+  listAgentPlugins,
   listAgentSkills,
   readAgentSkill,
 } = backendWrappers;
@@ -151,6 +152,11 @@ describe("backend setup wrappers", () => {
     const scanFailure = new Error("skill scan failed");
     invokeMock.mockRejectedValueOnce(scanFailure);
     await expect(listAgentSkills("claude")).rejects.toBe(scanFailure);
+
+    const catalog = { agent: "codex" as const, plugins: [] };
+    invokeMock.mockResolvedValueOnce(catalog);
+    await expect(listAgentPlugins("codex")).resolves.toBe(catalog);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_agent_plugins", { provider: "codex" });
   });
 
   test("forwards backend-owned native job launches without reshaping their intent", async () => {

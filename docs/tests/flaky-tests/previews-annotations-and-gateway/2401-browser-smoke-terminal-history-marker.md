@@ -1,6 +1,6 @@
 # Browser smoke terminal history omits the completion marker
 
-- **ID:** 2396
+- **ID:** 2401
 - **Status:** open
 - **Date observed:** 2026-11-01
 - **Test:** `real browser gateway exercises an authoritative local environment`

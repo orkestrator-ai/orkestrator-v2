@@ -626,6 +626,37 @@ export async function runEnvironmentSetup(environmentId: string): Promise<Enviro
   return invoke<Environment>("run_environment_setup", { environmentId });
 }
 
+/** What a held setup would run, and what the default branch runs instead. */
+export interface EnvironmentSetupApproval {
+  environmentId: string;
+  projectId: string;
+  /** Pass back unchanged to approve exactly these commands. */
+  hash: string;
+  commands: string[];
+  defaultBranch: string;
+  /** `null` when the default branch could not be read. */
+  defaultBranchCommands: string[] | null;
+  approvalRequired: boolean;
+}
+
+export async function getEnvironmentSetupApproval(
+  environmentId: string,
+): Promise<EnvironmentSetupApproval> {
+  return invoke<EnvironmentSetupApproval>("get_environment_setup_approval", { environmentId });
+}
+
+/**
+ * Run a held setup's commands. `remember` also approves them for the project
+ * on this machine, so later environments with the same commands run them.
+ */
+export async function approveEnvironmentSetup(
+  environmentId: string,
+  hash: string,
+  remember: boolean,
+): Promise<Environment> {
+  return invoke<Environment>("approve_environment_setup", { environmentId, hash, remember });
+}
+
 export async function ensureEnvironmentSetup(
   environmentId: string,
 ): Promise<EnsureEnvironmentSetupResult> {

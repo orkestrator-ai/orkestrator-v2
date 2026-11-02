@@ -16,6 +16,9 @@ import { runTurnOnRuntime } from "./session-manager-prompt-launch.js";
 import { resolveQueryPlan } from "./session-manager-prompt-query.js";
 import { finalizeTurn, settleFailedTurn, settleTurnEnd } from "./session-manager-prompt-settle.js";
 import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 export { memoryRecallPart } from "./session-manager-messages.js";
 export { THINKING_TOKENS_EMIT_INTERVAL_MS } from "./session-manager-prompt-handlers/system.js";
 export { applyClaudeUsageReport } from "./session-manager-prompt-handlers/assistant.js";
@@ -97,7 +100,7 @@ export async function sendPrompt(
     try {
       await sendPrompt(sessionId, followUp.prompt, followUp.options);
     } catch (repromptError) {
-      console.error(followUp.failureLog, repromptError);
+      log.error(followUp.failureEvent, { error: formatLogError(repromptError) });
       return Promise.reject(repromptError);
     }
   } catch (error) {

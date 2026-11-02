@@ -50,6 +50,14 @@ export interface BrowserPreviewTransportState {
   message?: string;
 }
 
+/**
+ * Copying the user's browser sign-in into a service preview. Main owns it, so a
+ * tab that was unmounted while its browser opened learns the outcome on return.
+ */
+export type BrowserPreviewSessionImport =
+  | { state: "idle" | "waiting" | "empty" | "expired" | "failed" }
+  | { state: "imported"; cookies: number; skipped: number };
+
 export interface BrowserPreviewState {
   tabId: string;
   /** Actual view URL. For service previews this is a runtime transport URL; never persist it. */
@@ -70,6 +78,10 @@ export interface BrowserPreviewState {
    */
   navigation?: number;
   transport?: BrowserPreviewTransportState;
+  /** Present only where this client can offer the import: a service preview on a local connection. */
+  sessionImport?: BrowserPreviewSessionImport;
+  /** The site the page last tried to leave for and was refused, until the page navigates again. */
+  blockedNavigation?: { host: string };
 }
 
 export interface BrowserPreviewOpenLinkEvent {

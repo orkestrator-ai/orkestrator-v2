@@ -40,6 +40,9 @@ import {
 } from "./session-manager-background-tasks.js";
 import { appendInterruptedNotice } from "./session-manager-messages.js";
 import { syncTurnInFlightMark } from "./session-manager-turn-interruption.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 type SessionActivity = core.SessionActivity;
 type PromptDispatchHandle = core.PromptDispatchHandle;
 /**
@@ -487,10 +490,9 @@ export async function claimPromptDispatch(
           journalUpdate([...retainedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS)),
         );
       } catch (rollbackError) {
-        console.error(
-          "[session-manager] Failed to roll back prompt dispatch claim:",
-          rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
-        );
+        log.error("dispatch.rollback-failed", {
+          error: formatLogError(rollbackError, { stack: false }),
+        });
       }
       throw error;
     }

@@ -6,6 +6,7 @@ import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
+import { mockWriteText } from "../../mocks/clipboard";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { expectDomAbsent } from "../../bounded-test-diagnostics";
 
@@ -433,8 +434,8 @@ describe("EnvironmentItem activity marker", () => {
 
     const icon = getRowRing(container);
     expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
-    expect(icon.getAttribute("class")).toContain("bg-red-500/50");
-    expect(icon?.getAttribute("class")).toContain("animate-pulse");
+    expect(icon.getAttribute("class")).toContain("environment-working-spinner");
+    expect(icon?.getAttribute("class")).not.toContain("animate-pulse");
   });
 
   test("hydrates a working icon from the backend-owned environment snapshot", () => {
@@ -447,7 +448,7 @@ describe("EnvironmentItem activity marker", () => {
 
     const icon = getRowRing(container);
     expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
-    expect(icon.getAttribute("class")).toContain("bg-red-500/50");
+    expect(icon.getAttribute("class")).toContain("environment-working-spinner");
   });
 
   test("keeps a newer runtime observation over an older backend snapshot", () => {
@@ -661,7 +662,7 @@ describe("EnvironmentItem activity marker", () => {
     expect(icon.getAttribute("class")).toContain("border-muted-foreground/40");
     expect(icon.getAttribute("class")).not.toContain("opacity-0");
     expect(icon.getAttribute("class")).not.toContain("animate-pulse");
-    expect(icon.getAttribute("class")).not.toContain("bg-red-500/50");
+    expect(icon.getAttribute("class")).not.toContain("environment-working-spinner");
     expect(getRowMarker(container).getAttribute("data-state")).toBe("inactive");
   });
 });
@@ -839,6 +840,38 @@ describe("EnvironmentItem copy address", () => {
 
     const clickableSpan = document.body.querySelector('span[role="button"]');
     expect(clickableSpan).toBeNull();
+  });
+});
+
+describe("EnvironmentItem copy environment ID", () => {
+  beforeEach(() => {
+    mockWriteText.mockReset();
+    mockWriteText.mockResolvedValue(undefined);
+  });
+
+  test("context menu copies the environment's ID", async () => {
+    const env = makeEnvironment({ id: "env-copy-me" });
+    const { container } = renderItem(env);
+
+    fireEvent.click(findMenuItem(container, "Copy Environment ID")!);
+
+    expect(mockWriteText).toHaveBeenCalledWith("env-copy-me");
+    await waitFor(() => {
+      expect(toastSuccessMock).toHaveBeenCalledWith("Copied environment ID", {
+        description: "env-copy-me",
+      });
+    });
+  });
+
+  test("shows an error toast when copying the ID fails", async () => {
+    mockWriteText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    const { container } = renderItem(makeEnvironment());
+
+    fireEvent.click(findMenuItem(container, "Copy Environment ID")!);
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy environment ID");
+    });
   });
 });
 
@@ -1196,6 +1229,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
     expect(actionsMenuLabels(menu)).toEqual([
       "Settings",
+      "Copy Environment ID",
       "Copy Address",
       "Copy Initial Prompt",
       "Fork local",
@@ -1217,7 +1251,13 @@ describe("EnvironmentItem mobile actions menu", () => {
     await openActionsMenu();
     const menu = await findActionsMenu();
 
-    expect(actionsMenuLabels(menu)).toEqual(["Settings", "Fork local", "Fork container", "Delete"]);
+    expect(actionsMenuLabels(menu)).toEqual([
+      "Settings",
+      "Copy Environment ID",
+      "Fork local",
+      "Fork container",
+      "Delete",
+    ]);
     expect(actionsMenuLabels(menu)).toEqual(contextMenuLabels(container));
 
     await closeActionsMenu(menu);
@@ -1233,6 +1273,7 @@ describe("EnvironmentItem mobile actions menu", () => {
 
     expect(actionsMenuLabels(menu)).toEqual([
       "Settings",
+      "Copy Environment ID",
       "Fork local",
       "Fork container",
       "Start",
@@ -1413,6 +1454,7 @@ describe("EnvironmentItem on a desktop viewport", () => {
 
     expect(contextMenuLabels(container)).toEqual([
       "Settings",
+      "Copy Environment ID",
       "Copy Address",
       "Fork local",
       "Fork container",

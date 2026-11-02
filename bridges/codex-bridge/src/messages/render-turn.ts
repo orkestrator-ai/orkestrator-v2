@@ -44,6 +44,9 @@ import type {
   ItemAccumulator,
   TurnAccumulator,
 } from "../sessions/turn-accumulator.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /** Marker appended when a command's output hit the UI cap. */
 export const TRUNCATION_NOTICE = "\n… output truncated";
@@ -793,7 +796,7 @@ export async function renderTurn(
       }
     } catch (error) {
       // Sub-agent detail is additive; losing it must not blank the transcript.
-      console.error("[codex-bridge] Failed to load sub-agent activity:", error);
+      log.warn("subagent.activity-load-failed", { error: formatLogError(error) });
     }
   }
 

@@ -271,6 +271,13 @@ invariants keep it honest:
   also needs an explicit `required` sandbox decision: repository and ambient
   configuration can launch helpers even for `git diff` or `git status`, so
   hook-only turns use reading tools or delegate Git to a worker.
+- **Git runs against the checkout and nothing else.** Options before the
+  subcommand are an allowlist (`GIT_GLOBAL_OPTIONS`, exact match), because
+  `--git-dir`, `--work-tree`, `-c` and `-C` choose which repository's config
+  Git obeys, and a checkout can commit a bare-repo layout naming
+  `core.fsmonitor`. A read-only turn's CLI also runs with
+  `withReadOnlyGitConfig` (`runtime-env.ts`), which turns fsmonitor and hooks
+  off through `GIT_CONFIG_COUNT`, outranking the checkout's own config.
 
 ## Goals stay with the backend
 

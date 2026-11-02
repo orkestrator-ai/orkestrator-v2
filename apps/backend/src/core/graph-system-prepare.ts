@@ -51,7 +51,11 @@ export const prepareEnvironmentAction: GraphSystemActionHandler = {
             environment.setupPhase === "failed" &&
             !environment.setupOverride
           ) {
-            throw new GraphSystemActionError("The environment's setup script failed");
+            throw new GraphSystemActionError(
+              environment.setupApprovalRequired
+                ? (environment.lifecycleError ?? "Setup needs your approval")
+                : "The environment's setup script failed",
+            );
           }
         }
         ctx.throwIfAborted();

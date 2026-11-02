@@ -224,7 +224,8 @@ The same names shimmer in one of three colours, chosen by
 
 The effect is the shared `.text-shimmer` utility (`apps/web/src/index.css`)
 with each signal's colours (`EnvironmentNameShimmer`). The name keeps its own
-colour and the band passes over it. Under `prefers-reduced-motion` the name
+colour and bands pass over it without a pause, the next entering as the last
+one leaves. Under `prefers-reduced-motion` the name
 holds the band's colour still and a small icon appears (merge, merge conflict,
 or question). Under forced colours the sweep is removed. The row's
 `aria-describedby` reads "Ready to merge", "Merge conflicts to resolve" or

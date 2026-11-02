@@ -41,6 +41,21 @@ export function composerOccupiedError(options?: ErrorOptions): PromptQueueAction
 }
 
 /**
+ * Editing a queued prompt restores the settings it was queued with, and some
+ * providers refuse a settings change while a turn runs. Only reached when
+ * those settings differ from the composer's; otherwise no change is needed.
+ */
+export function queuedSettingsLockedError(
+  agentLabel: string,
+  options?: ErrorOptions,
+): PromptQueueActionError {
+  return new PromptQueueActionError(
+    `This prompt was queued with different settings, which can't be restored while ${agentLabel} is working. It is still queued; edit it once the turn finishes.`,
+    options,
+  );
+}
+
+/**
  * Shown instead of the backend's `WEB_ANNOTATION_QUEUE_ITEM_FROZEN` refusal.
  * An annotation request in the queue is a frozen snapshot of the brief the
  * user approved; its text is changed on the note, not in the chat queue.

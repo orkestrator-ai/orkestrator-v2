@@ -387,3 +387,14 @@ passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
 wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
 commit; the other owners listed here were unchanged. This green aggregate
 does not establish a root cause for the still-open intermittent cases.
+
+## Live logging merge with the bridge logger migration — 2026-11-02
+
+`mise run test:logged -- --name bridge-codex -- bun run --cwd bridges/codex-bridge test:bridge`
+failed `an explicit refresh cannot replace the baseline for an already armed delay`
+(expected `stale`, received `ready`, 76.78 ms) and `a failed settling read leaves the
+list stale until a read succeeds` (settling wait timed out at 2,053.76 ms). The
+unchanged owner then ran alone three times with `bun test
+src/commands/codex-command-catalogue.test.ts --only-failures` from `bridges/codex-bridge`:
+it passed twice and failed once, so it also fails solo. Neither the catalogue nor its
+test is touched by this change.

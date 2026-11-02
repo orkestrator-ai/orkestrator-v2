@@ -476,11 +476,13 @@ with `MachinesFilter`:
   when filtering to one machine too.
 - `EnvironmentStatusMarker` sits immediately before every environment name:
   federated rows and the bound machine's `EnvironmentItem`. Its 8 px
-  `MachineDot` center sits above a 16 px background halo, without a separate
-  outline. Only the halo pulses: red while working and yellow while waiting
-  for input. The machine colour stays steady throughout the animation; clients
-  without a machine identity use a neutral center. Stopped environments have
-  a faint outline, while running idle environments have no halo. Local
+  `MachineDot` center sits inside a 16 px ring, without a separate outline. While
+  working the ring is a spinner fading from light grey to nothing, in the
+  marker's own shape; while waiting for input it is a halo pulsing yellow. The
+  machine colour stays steady throughout the animation; clients without a
+  machine identity use a neutral center. Under reduced motion the spinner holds
+  still. Stopped environments have a faint outline, while running idle
+  environments have no halo. Local
   environments use a circle and containers a square. An unavailable machine's
   rows are dimmed and read "Connection lost; last observed …", never "stopped".
   The dot is decorative when the label names the machine, and an image otherwise. In

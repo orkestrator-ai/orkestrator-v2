@@ -1,12 +1,15 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 
-import {
-  PENDING_RENAME_FAILED_MESSAGE,
-  PENDING_RENAME_RECOVERED_MESSAGE,
-  PENDING_RENAME_STILL_FAILING_MESSAGE,
-} from "../src/core/pending-rename-failure-log";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { createCommandFixtures } from "./command-fixtures";
+
+function renameEntries(logs: LogCapture) {
+  return logs
+    .records()
+    .filter((record) => record.event.startsWith("rename."))
+    .map((record) => [record.event, record.fields]);
+}
 
 const {
   ASYNC_TEST_BUDGET_MS,
@@ -37,7 +40,7 @@ describe("pending environment rename recovery", () => {
         await isolateCodexBinaryLookup(context);
         const commands = createCommandRegistry();
         const reconcile = () => commands.get("reconcile_pending_environment_renames")!({}, context);
-        const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+        const logs = captureLogs();
         const realNow = Date.now.bind(Date);
         let elapsed = 0;
         const now = spyOn(Date, "now").mockImplementation(() => realNow() + elapsed);
@@ -63,11 +66,8 @@ out=""`,
             ),
             async (logPath) => {
               await reconcile();
-              expect(warn.mock.calls).toEqual([
-                [
-                  PENDING_RENAME_FAILED_MESSAGE,
-                  expect.objectContaining({ environmentId: environment.id }),
-                ],
+              expect(renameEntries(logs)).toEqual([
+                ["rename.failed", expect.objectContaining({ environmentId: environment.id })],
               ]);
 
               elapsed += 30_000;
@@ -91,7 +91,7 @@ out=""`,
               expect(emitted.filter(({ event }) => event === "environment-renamed")).toHaveLength(
                 0,
               );
-              expect(warn).toHaveBeenCalledTimes(1);
+              expect(renameEntries(logs)).toHaveLength(1);
 
               // Resuming the same intent proves a declined retry kept its history.
               await context.storage.updateEnvironment(environment.id, {
@@ -100,15 +100,15 @@ out=""`,
               await reconcile();
               expect(environment.name).toBe("retry-recovered");
               expect(environment.pendingRenamePrompt).toBeUndefined();
-              expect(warn.mock.calls.at(-1)).toEqual([
-                PENDING_RENAME_RECOVERED_MESSAGE,
+              expect(renameEntries(logs).at(-1)).toEqual([
+                "rename.recovered",
                 { environmentId: environment.id, failures: 1 },
               ]);
             },
           );
         } finally {
           now.mockRestore();
-          warn.mockRestore();
+          logs.restore();
         }
       },
       ASYNC_TEST_BUDGET_MS,
@@ -131,7 +131,7 @@ out=""`,
       await isolateCodexBinaryLookup(context);
       const commands = createCommandRegistry();
       const reconcile = () => commands.get("reconcile_pending_environment_renames")!({}, context);
-      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      const logs = captureLogs();
       const now = spyOn(Date, "now").mockReturnValue(100_000);
 
       try {
@@ -140,41 +140,35 @@ out=""`,
           environment.status = "stopped";
           now.mockReturnValue(130_000);
           await reconcile();
-          expect(warn).toHaveBeenCalledTimes(1);
+          expect(renameEntries(logs)).toHaveLength(1);
 
           environment.status = "running";
           await reconcile();
-          expect(warn.mock.calls.at(-1)).toEqual([
-            PENDING_RENAME_STILL_FAILING_MESSAGE,
+          expect(renameEntries(logs).at(-1)).toEqual([
+            "rename.still-failing",
             { environmentId: environment.id, failures: 2, reason: "command-failed" },
           ]);
 
           environment.pendingRenamePrompt = undefined;
           await reconcile();
-          expect(warn).toHaveBeenCalledTimes(2);
+          expect(renameEntries(logs)).toHaveLength(2);
 
           // Reuse the same prompt to distinguish pruning from intent replacement.
           environment.pendingRenamePrompt = prompt;
           now.mockReturnValue(160_000);
           await reconcile();
-          expect(warn.mock.calls).toEqual([
+          expect(renameEntries(logs)).toEqual([
+            ["rename.failed", expect.objectContaining({ environmentId: environment.id })],
             [
-              PENDING_RENAME_FAILED_MESSAGE,
-              expect.objectContaining({ environmentId: environment.id }),
-            ],
-            [
-              PENDING_RENAME_STILL_FAILING_MESSAGE,
+              "rename.still-failing",
               { environmentId: environment.id, failures: 2, reason: "command-failed" },
             ],
-            [
-              PENDING_RENAME_FAILED_MESSAGE,
-              expect.objectContaining({ environmentId: environment.id }),
-            ],
+            ["rename.failed", expect.objectContaining({ environmentId: environment.id })],
           ]);
         });
       } finally {
         now.mockRestore();
-        warn.mockRestore();
+        logs.restore();
       }
     },
     ASYNC_TEST_BUDGET_MS,

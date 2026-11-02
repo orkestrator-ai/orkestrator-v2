@@ -25,6 +25,8 @@ export interface EnvironmentRowMachine {
 
 /** The facts a row is drawn from, whichever machine the environment is on. */
 export interface EnvironmentRowFacts {
+  /** The environment's ID on its owning machine. */
+  environmentId: string;
   name: string;
   projectHome: boolean;
   environmentType: string | undefined;
@@ -57,6 +59,7 @@ export interface EnvironmentRowFacts {
 }
 
 export interface EnvironmentRowModel {
+  environmentId: string;
   /** The environment's name for cards and dialogs ("Project home" for a home). */
   displayName: string;
   /** The name in the row, without a build pipeline's "Build:" prefix. */
@@ -122,6 +125,7 @@ export function environmentRowModel(facts: EnvironmentRowFacts): EnvironmentRowM
   const blocked = !facts.writable || facts.busy;
   const machine = facts.machine;
   return {
+    environmentId: facts.environmentId,
     displayName,
     rowName: facts.buildPipeline ? displayName.replace(/^Build:\s*/, "") : displayName,
     isLocal,

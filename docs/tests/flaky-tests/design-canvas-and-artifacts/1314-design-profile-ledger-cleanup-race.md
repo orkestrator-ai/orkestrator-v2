@@ -263,3 +263,5 @@ passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
 wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
 commit; the other owners listed here were unchanged. This green aggregate
 does not establish a root cause for the still-open intermittent cases.
+
+On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test` (69.12 ms). The owner passed alone: `bun test ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --only-failures` (37 pass, 0 fail).

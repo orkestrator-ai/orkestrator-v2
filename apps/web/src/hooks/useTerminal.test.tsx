@@ -1,3 +1,5 @@
+import { isDesktopStartupMessage } from "@orkestrator/protocol/debug-logging";
+import { resetLogger } from "@orkestrator/protocol/logger";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
@@ -2728,6 +2730,77 @@ describe("useTerminal reconnect behavior", () => {
       description: "The shell for this terminal is no longer running.",
       action: { label: "Reconnect", onClick: expect.any(Function) },
     });
+  });
+
+  it("reports a no-session fault once and recovers after a connected write", async () => {
+    resetLogger();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const { result } = renderHook(() =>
+      useTerminal({ containerId: "container-1", persistSession: true }),
+    );
+    try {
+      await act(async () => {
+        await result.current.write("x");
+        await result.current.write("x");
+      });
+      expect(warn.mock.calls.map(([line]) => line)).toEqual([
+        "[terminal] input.undelivered scope=container-1 kind=no-session",
+      ]);
+      expect(writeTerminalMock).not.toHaveBeenCalled();
+      await act(async () => {
+        await result.current.connect();
+        await result.current.write("x");
+      });
+      expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
+        "[terminal] input.undelivered scope=container-1 kind=no-session",
+        expect.stringContaining(
+          "throttle.recovered site=input.undelivered scope=container-1 failures=2 kinds=1 suppressed=1",
+        ),
+      ]);
+    } finally {
+      warn.mockRestore();
+      resetLogger();
+    }
+  });
+
+  it("keeps one warning for a dead terminal however many keystrokes, in the console only", async () => {
+    resetLogger();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    writeTerminalMock.mockImplementation(async () => false);
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+    const lines = () => warn.mock.calls.map(([line]) => String(line));
+
+    try {
+      await act(async () => {
+        await result.current.connect();
+        for (let keystroke = 0; keystroke < 25; keystroke += 1) {
+          await result.current.write("x");
+        }
+      });
+      expect(writeTerminalMock).toHaveBeenCalledTimes(25);
+      expect(lines()).toEqual([
+        "[terminal] input.undelivered scope=container-1 kind=not-delivered sessionId=session-new-container",
+      ]);
+      // The desktop saves only its exact startup markers from a renderer.
+      expect(isDesktopStartupMessage(lines()[0]!)).toBe(false);
+
+      writeTerminalMock.mockImplementation(async () => true);
+      await act(async () => {
+        await result.current.write("x");
+        await result.current.write("x");
+      });
+      expect(lines().slice(1)).toEqual([
+        "[terminal] throttle.recovered site=input.undelivered scope=container-1 failures=25 kinds=1 suppressed=24 faultSeconds=0",
+      ]);
+    } finally {
+      warn.mockRestore();
+      resetLogger();
+    }
   });
 
   for (const isLocal of [false, true]) {

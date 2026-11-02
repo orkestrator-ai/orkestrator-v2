@@ -52,6 +52,9 @@ import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results"
 import { promptThreadConfig } from "./prompt-thread-config.js";
 
 import { toEngineInput, withSkillInput } from "./app-server-runtime-helpers.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /**
  * `422` is a selected command that no longer matches this bridge's registry.
@@ -1141,10 +1144,11 @@ export class CodexRuntimePrompt {
         accumulator.providerRequestId,
       );
     } catch (error) {
-      console.warn(
-        `[codex-bridge] Could not reconcile ${requestId} on thread ${context.threadId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("dispatch.reconcile-failed", {
+        requestId,
+        threadId: context.threadId,
+        error: formatLogError(error, { stack: false }),
+      });
       return "recovering";
     }
 
@@ -1550,9 +1554,7 @@ export class CodexRuntimePrompt {
     while (this.hasActiveWorkOtherThan(options.excludeThreadId)) {
       if (this.ctx.stopping || this.shouldAbandonDrain(expectedGeneration)) return;
       if (Date.now() >= deadline) {
-        console.warn(
-          "[codex-bridge] Restarting app-server with turns still in flight: the drain deadline expired.",
-        );
+        log.warn("app-server.drain-expired");
         return;
       }
       await this.waitForThreadActivity();

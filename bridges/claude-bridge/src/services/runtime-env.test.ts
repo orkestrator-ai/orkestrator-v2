@@ -5,10 +5,12 @@ import { join } from "node:path";
 import {
   GITHUB_CREDENTIAL_FILE_ENV,
   GITHUB_MCP_TOKEN_ENV,
+  READ_ONLY_GIT_CONFIG,
   readGitHubCliToken,
   runtimeEnvironmentForAgentQuery,
   runtimeEnvironmentForSessionQuery,
   UNATTENDED_OVERLOAD_RETRY_ENV,
+  withReadOnlyGitConfig,
   withUnattendedOverloadRetry,
 } from "./runtime-env.js";
 
@@ -316,5 +318,47 @@ describe("withUnattendedOverloadRetry", () => {
       CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS: "4000",
       CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS: "32000",
     });
+  });
+});
+
+describe("withReadOnlyGitConfig", () => {
+  test("disables repository-configured Git programs for a read-only turn", () => {
+    expect(withReadOnlyGitConfig({ id: "coordinator-read-only" }, { PATH: "/bin" })).toEqual({
+      PATH: "/bin",
+      GIT_OPTIONAL_LOCKS: "0",
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "core.fsmonitor",
+      GIT_CONFIG_VALUE_0: "false",
+      GIT_CONFIG_KEY_1: "core.hooksPath",
+      GIT_CONFIG_VALUE_1: "/dev/null",
+    });
+  });
+
+  test("appends after entries already in the environment", () => {
+    const environment = {
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "",
+    };
+    expect(withReadOnlyGitConfig({ id: "coordinator-read-only" }, environment)).toMatchObject({
+      GIT_CONFIG_COUNT: String(1 + READ_ONLY_GIT_CONFIG.length),
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "",
+      GIT_CONFIG_KEY_1: "core.fsmonitor",
+      GIT_CONFIG_KEY_2: "core.hooksPath",
+    });
+    expect(environment.GIT_CONFIG_COUNT).toBe("1");
+  });
+
+  test("leaves every other turn's environment alone", () => {
+    const environment = { PATH: "/bin" };
+    for (const policy of [
+      undefined,
+      { id: "pipeline" },
+      { id: "interactive-host" },
+      { id: "interactive-container" },
+    ] as const) {
+      expect(withReadOnlyGitConfig(policy, environment)).toBe(environment);
+    }
   });
 });

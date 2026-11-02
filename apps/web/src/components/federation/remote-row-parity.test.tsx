@@ -30,6 +30,7 @@ import {
   sharedIdDataset,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
+import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { FederatedActivityList } from "./FederatedSidebarSections";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteEnvironmentItem, RemoteProjectGroup } from "./RemoteMachineTree";
@@ -259,6 +260,16 @@ test("deleting without hovering reads remote details and warns about the open PR
   await screen.findByRole("alertdialog");
   await waitFor(() => expect(calls).toContain("get_environment"));
   await screen.findByText("This environment has an associated PR that will remain open.");
+});
+
+test("another machine's row copies the environment's ID, not its machine-qualified key", async () => {
+  mockWriteText.mockReset();
+  mockWriteText.mockResolvedValue(undefined);
+  const row = environment("feature");
+  render(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
+  fireEvent.contextMenu(screen.getByRole("button", { name: "feature, on Machine A, Idle" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy Environment ID" }));
+  expect(mockWriteText).toHaveBeenCalledWith("feature");
 });
 
 test("a machine-qualified row describes change counts along with unread work and PR state", () => {

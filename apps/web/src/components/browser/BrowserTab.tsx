@@ -221,6 +221,10 @@ function ManualBrowserTab({
         if (urlBasis === undefined && state.navigation !== undefined) setUrlBasis(state.navigation);
         return;
       }
+      // The view has not navigated since this URL was chosen, so the state still
+      // reports the page being left (main sends one as the load starts). Adopting
+      // it would re-attach that page and cancel the load.
+      if (state.navigation !== undefined && state.navigation === urlBasis) return;
       setAddress(navigatedDisplayUrl);
       setCurrentUrl(navigatedDisplayUrl);
       setUrlBasis(state.navigation);

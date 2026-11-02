@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import http from "node:http";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { createCommandFixtures } from "./command-fixtures";
 import type { CommandContext } from "./command-fixtures";
@@ -158,11 +159,28 @@ describe("local bridge reuse under load", () => {
       () => true,
     );
     await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
+    const logs = captureLogs();
+    const events = () =>
+      logs
+        .records()
+        .filter((record) => record.area === "local-server")
+        .map((record) => record.event);
 
     await expect(
       commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
     ).rejects.toMatchObject({ retryable: true });
     expect(isProcessRunning(first.pid)).toBe(true);
+
+    // Each retry costs one count, not one line.
+    await expect(
+      commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+    ).rejects.toMatchObject({ retryable: true });
+    expect(events()).toEqual(["bridge.not-answering"]);
+    expect(logs.records().find((record) => record.area === "local-server")?.fields).toMatchObject({
+      scope: `codex:${environmentId}`,
+      kind: "work-in-progress",
+      pid: first.pid,
+    });
 
     // The activity sweep must not read the stalled bridge as absent, which
     // would record its running turn as idle.
@@ -177,6 +195,46 @@ describe("local bridge reuse under load", () => {
       context,
     )) as Started;
     expect(recovered).toMatchObject({ wasRunning: true, pid: first.pid });
+    expect(events()).toEqual(["bridge.not-answering", "throttle.recovered"]);
+    logs.restore();
+  });
+
+  test("successful replacement clears a warned child without needing a peek", async () => {
+    const { commands, context, environmentId, first } = await startControllableBridge(
+      "env-bridge-replacement-log",
+      () => true,
+    );
+    const logs = captureLogs();
+    const events = () =>
+      logs
+        .records()
+        .filter((record) => record.area === "local-server")
+        .map((record) => record.event);
+    try {
+      await requestOk(first.port, "/stall");
+      await expect(
+        commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+      ).rejects.toMatchObject({ retryable: true });
+      markLocalServerUnresponsiveSince(context, `codex:${environmentId}`, Date.now() - 3 * 60_000);
+      const replacement = (await commands.get("start_local_codex_server_cmd")!(
+        { environmentId },
+        context,
+      )) as Started;
+      expect(replacement.wasRunning).toBe(false);
+      expect(replacement.pid).not.toBe(first.pid);
+      expect(events()).toEqual(["bridge.not-answering", "throttle.recovered"]);
+      await requestOk(replacement.port, "/stall");
+      await expect(
+        commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),
+      ).rejects.toMatchObject({ retryable: true });
+      expect(events()).toEqual([
+        "bridge.not-answering",
+        "throttle.recovered",
+        "bridge.not-answering",
+      ]);
+    } finally {
+      logs.restore();
+    }
   });
 
   test("keeps the bridge while a provider send has not yet produced an activity observation", async () => {
@@ -227,9 +285,17 @@ describe("local bridge reuse under load", () => {
     ).rejects.toMatchObject({ retryable: true });
     markLocalServerUnresponsiveSince(context, `codex:${environmentId}`, Date.now() - 3 * 60_000);
     await expect(requestOk(first.port, "/recover")).resolves.toBe(true);
-    await expect(
-      commands.get("peek_local_agent_bridge")?.({ environmentId, agent: "codex" }, context),
-    ).resolves.toMatchObject({ port: first.port });
+    const logs = captureLogs();
+    try {
+      await expect(
+        commands.get("peek_local_agent_bridge")?.({ environmentId, agent: "codex" }, context),
+      ).resolves.toMatchObject({ port: first.port });
+      expect(logs.records().filter((record) => record.event === "throttle.recovered")).toHaveLength(
+        1,
+      );
+    } finally {
+      logs.restore();
+    }
     await expect(requestOk(first.port, "/stall")).resolves.toBe(true);
     await expect(
       commands.get("start_local_codex_server_cmd")?.({ environmentId }, context),

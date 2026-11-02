@@ -8,6 +8,7 @@ import { defaultDataDir } from "../data-dir.js";
 import { OrkestratorBackend } from "./index.js";
 import { RECURRING_JOB_CATALOGUE } from "@orkestrator/protocol/recurring-work";
 import type { BackendActivityJob } from "./backend-activity-jobs.js";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { ManualTime } from "./recurring-test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -1394,6 +1395,101 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await backend.shutdown().catch(() => undefined);
       restore();
       await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("activity fault wiring isolates backend owners and reports suppression and recovery", async () => {
+    const { restore } = controlledIntervals();
+    const create = async () => {
+      const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-activity-jobs-"));
+      const time = new ManualTime(0);
+      const backend = new OrkestratorBackend({
+        dataDir,
+        toolchainBinDir: "",
+        appRoot: "",
+        resourceRoot: "",
+        emit: () => undefined,
+        agentTools: fakeAgentTools(),
+        startupReapers: {
+          localServers: async () => [],
+          claudeTmuxRuntimes: async () => [],
+        },
+        keyedActivityJobs: true,
+        activityJobClock: { now: time.now, timers: time.timerFactory },
+      });
+      const internals = backend as unknown as {
+        context: { storage: StorageService };
+        commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
+        buildPipelines: { init: () => Promise<void> };
+        nativeAgents: {
+          init: () => Promise<void>;
+          reconcileAgentActivity: () => Promise<void>;
+        };
+        promptQueues: { drainAll: () => Promise<void> };
+        agentMail: {
+          refreshPresence: () => Promise<void>;
+          drainInjects: () => Promise<void>;
+        };
+        coordinators: {
+          reconcileWorkflowNotifications: () => Promise<void>;
+          reconcileWorkerDelegations: () => Promise<void>;
+        };
+      };
+      internals.buildPipelines.init = mock(async () => undefined);
+      internals.nativeAgents.init = mock(async () => undefined);
+      internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
+      internals.promptQueues.drainAll = mock(async () => undefined);
+      internals.agentMail.refreshPresence = mock(async () => undefined);
+      internals.agentMail.drainInjects = mock(async () => undefined);
+      internals.coordinators.reconcileWorkflowNotifications = mock(async () => undefined);
+      internals.coordinators.reconcileWorkerDelegations = mock(async () => undefined);
+      const renames = mock(async () => undefined);
+      internals.commands.set("reconcile_pending_environment_renames", renames);
+      const teardowns = mock(async () => ({ completed: 0 }));
+      internals.commands.set("reconcile_tab_teardowns", teardowns);
+      await backend.init();
+      return { backend, dataDir, internals, time };
+    };
+    const owners: Awaited<ReturnType<typeof create>>[] = [];
+    const logs = captureLogs();
+    let clock: ReturnType<typeof spyOn> | undefined;
+    try {
+      owners.push(await create());
+      owners.push(await create());
+      const [failed, healthy] = owners;
+      let broken = true;
+      failed!.internals.nativeAgents.reconcileAgentActivity = async () => {
+        if (broken) throw new TypeError("activity unavailable");
+      };
+      let now = Date.now();
+      clock = spyOn(Date, "now").mockImplementation(() => now);
+      const events = () => logs.records().filter((record) => record.area === "backend.activity");
+      for (let tick = 0; tick < 3; tick += 1) {
+        await failed!.time.advance(2_000);
+        await healthy!.time.advance(2_000);
+      }
+      expect(events().map((record) => record.event)).toEqual(["job.failed"]);
+      expect(events()[0]?.fields?.scope).toEqual(expect.stringMatching(/:activity$/));
+      now += 60_000;
+      await failed!.time.advance(2_000);
+      await healthy!.time.advance(2_000);
+      expect(events().map((record) => record.event)).toEqual(["job.failed", "throttle.suppressed"]);
+      broken = false;
+      await failed!.time.advance(2_000);
+      expect(events().map((record) => record.event)).toEqual([
+        "job.failed",
+        "throttle.suppressed",
+        "throttle.recovered",
+      ]);
+      expect(events().at(-1)?.fields?.scope).toBe(events()[0]?.fields?.scope);
+    } finally {
+      clock?.mockRestore();
+      for (const owner of owners) {
+        await owner.backend.shutdown();
+        await fs.rm(owner.dataDir, { recursive: true, force: true });
+      }
+      logs.restore();
+      restore();
     }
   });
 

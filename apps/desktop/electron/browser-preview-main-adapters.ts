@@ -32,10 +32,14 @@ export function createBrowserPreviewMainAdapters({
     // Content-free hint; the renderer reads status and the spool for content.
     emitCaptureEvent: (event: BrowserPreviewCaptureEvent) =>
       emitToRenderers(BROWSER_PREVIEW_CAPTURE_EVENT, event),
-    openExternal: (url: string) => {
-      void openExternal(url).catch((error: unknown) => {
-        logError(error);
-      });
+    openExternal: async (url: string) => {
+      try {
+        await openExternal(url);
+      } catch {
+        const failure = new Error("Could not open your browser.");
+        logError(failure);
+        throw failure;
+      }
     },
     writeClipboardText,
   };

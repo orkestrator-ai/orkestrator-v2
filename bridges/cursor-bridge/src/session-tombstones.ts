@@ -9,6 +9,9 @@ import { CANCEL_ACK_TIMEOUT_MS, CLOSE_ACK_TIMEOUT_MS } from "./config.js";
 import { cancelSurvivingRuns, SessionConflictError } from "./cursor-runs.js";
 import { persistBarrier } from "./persistence.js";
 import { closingTombstones } from "./state.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.cursor");
 
 export type CloseOutcome = "closed" | "pending";
 
@@ -151,9 +154,7 @@ export async function finishRestoredTombstones(): Promise<{
   };
   await Promise.all(Array.from({ length: STARTUP_TOMBSTONE_CONCURRENCY }, worker));
   if (result.pending > 0 || result.failed > 0) {
-    console.warn(
-      `[cursor-bridge] ${result.pending + result.failed} restored close(s) could not finish at startup; a retried close finishes them`,
-    );
+    log.warn("startup.closes-incomplete", { closes: result.pending + result.failed });
   }
   return result;
 }

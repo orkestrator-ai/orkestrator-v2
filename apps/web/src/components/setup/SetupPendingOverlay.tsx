@@ -2,6 +2,8 @@ import { useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { forceResolveSetupRuntime, retrySetupRuntime } from "@/lib/setup-commands";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { SetupApprovalPanel } from "./SetupApprovalPanel";
 import type { Environment } from "@/types";
 
 interface SetupPendingOverlayProps {
@@ -36,6 +38,13 @@ export function SetupPendingOverlay({
   const [operation, setOperation] = useState<"retry" | "override" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const failed = setupPhase === "failed";
+  // A held setup is recorded as failed; its panel replaces retry, which would
+  // only hold it again.
+  const approvalRequired = useEnvironmentStore(
+    (state) =>
+      state.environments.find((environment) => environment.id === environmentId)
+        ?.setupApprovalRequired === true,
+  );
 
   const runOperation = async (kind: "retry" | "override") => {
     setError(null);
@@ -68,6 +77,42 @@ export function SetupPendingOverlay({
           {pendingPrompt}
         </div>
       ) : null}
+      {failed && approvalRequired ? (
+        <SetupApprovalPanel key={environmentId} environmentId={environmentId} />
+      ) : (
+        <SetupStatus
+          failed={failed}
+          subtext={subtext}
+          confirming={confirming}
+          operation={operation}
+          setConfirming={setConfirming}
+          runOperation={runOperation}
+          error={error}
+        />
+      )}
+    </div>
+  );
+}
+
+function SetupStatus({
+  failed,
+  subtext,
+  confirming,
+  operation,
+  setConfirming,
+  runOperation,
+  error,
+}: {
+  failed: boolean;
+  subtext: string;
+  confirming: boolean;
+  operation: "retry" | "override" | null;
+  setConfirming: (confirming: boolean) => void;
+  runOperation: (kind: "retry" | "override") => Promise<void>;
+  error: string | null;
+}) {
+  return (
+    <>
       {failed ? (
         <AlertTriangle className="h-8 w-8 text-destructive" />
       ) : (
@@ -132,6 +177,6 @@ export function SetupPendingOverlay({
           {error}
         </p>
       )}
-    </div>
+    </>
   );
 }

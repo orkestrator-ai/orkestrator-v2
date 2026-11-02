@@ -1,9 +1,7 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import {
-  PENDING_RENAME_FAILED_MESSAGE,
-  PENDING_RENAME_RECOVERED_MESSAGE,
   PENDING_RENAME_RETRY_MAX_MS,
-  PENDING_RENAME_STILL_FAILING_MESSAGE,
   PendingRenameFailureLog,
   pendingRenameRetryDelayMs,
   summarizePendingRenameFailure,
@@ -69,8 +67,17 @@ describe("pendingRenameRetryDelayMs", () => {
 });
 
 describe("PendingRenameFailureLog", () => {
+  let logs: LogCapture;
+  const entries = () => logs.records().map((record) => [record.event, record.fields]);
+
+  beforeEach(() => {
+    logs = captureLogs();
+  });
+
+  afterEach(() => logs.restore());
+
   test("returns the consecutive failure count for the intent", () => {
-    const log = new PendingRenameFailureLog(() => undefined);
+    const log = new PendingRenameFailureLog();
     expect(log.failed("env-1", PROMPT, codexFailure())).toBe(1);
     expect(log.failed("env-1", PROMPT, codexFailure())).toBe(2);
     expect(log.failed("env-2", PROMPT, codexFailure())).toBe(1);
@@ -80,13 +87,12 @@ describe("PendingRenameFailureLog", () => {
   });
 
   test("logs the first failure in full, then counts at powers of two, never the prompt", () => {
-    const warn = mock((..._data: unknown[]) => undefined);
-    const log = new PendingRenameFailureLog(warn);
+    const log = new PendingRenameFailureLog();
     for (let attempt = 0; attempt < 9; attempt += 1) log.failed("env-1", PROMPT, codexFailure());
 
-    expect(warn.mock.calls).toEqual([
+    expect(entries()).toEqual([
       [
-        PENDING_RENAME_FAILED_MESSAGE,
+        "rename.failed",
         {
           environmentId: "env-1",
           reason: "command-failed",
@@ -95,68 +101,54 @@ describe("PendingRenameFailureLog", () => {
           signal: null,
         },
       ],
-      [
-        PENDING_RENAME_STILL_FAILING_MESSAGE,
-        { environmentId: "env-1", failures: 2, reason: "command-failed" },
-      ],
-      [
-        PENDING_RENAME_STILL_FAILING_MESSAGE,
-        { environmentId: "env-1", failures: 4, reason: "command-failed" },
-      ],
-      [
-        PENDING_RENAME_STILL_FAILING_MESSAGE,
-        { environmentId: "env-1", failures: 8, reason: "command-failed" },
-      ],
+      ["rename.still-failing", { environmentId: "env-1", failures: 2, reason: "command-failed" }],
+      ["rename.still-failing", { environmentId: "env-1", failures: 4, reason: "command-failed" }],
+      ["rename.still-failing", { environmentId: "env-1", failures: 8, reason: "command-failed" }],
     ]);
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("OAuth");
+    expect(logs.lines.join("\n")).not.toContain("OAuth");
+    expect(logs.outputs.every((output) => output.method === "warn")).toBe(true);
   });
 
   test("a new intent or environment logs its first failure again", () => {
-    const warn = mock((..._data: unknown[]) => undefined);
-    const log = new PendingRenameFailureLog(warn);
+    const log = new PendingRenameFailureLog();
     log.failed("env-1", PROMPT, codexFailure());
     log.failed("env-2", PROMPT, codexFailure());
     log.failed("env-1", "A different first prompt", codexFailure());
 
-    expect(warn.mock.calls.map(([message]) => message)).toEqual([
-      PENDING_RENAME_FAILED_MESSAGE,
-      PENDING_RENAME_FAILED_MESSAGE,
-      PENDING_RENAME_FAILED_MESSAGE,
+    expect(logs.records().map((record) => record.event)).toEqual([
+      "rename.failed",
+      "rename.failed",
+      "rename.failed",
     ]);
   });
 
   test("a success after failures logs the count once and resets the streak", () => {
-    const warn = mock((..._data: unknown[]) => undefined);
-    const log = new PendingRenameFailureLog(warn);
+    const log = new PendingRenameFailureLog();
     log.succeeded("env-1");
-    expect(warn).not.toHaveBeenCalled();
+    expect(logs.records()).toEqual([]);
 
     log.failed("env-1", PROMPT, codexFailure());
     log.failed("env-1", PROMPT, codexFailure());
     log.failed("env-1", PROMPT, codexFailure());
     log.succeeded("env-1");
     log.succeeded("env-1");
-    expect(warn.mock.calls.at(-1)).toEqual([
-      PENDING_RENAME_RECOVERED_MESSAGE,
-      { environmentId: "env-1", failures: 3 },
-    ]);
-    expect(warn).toHaveBeenCalledTimes(3);
+    expect(entries().at(-1)).toEqual(["rename.recovered", { environmentId: "env-1", failures: 3 }]);
+    expect(logs.records()).toHaveLength(3);
 
     log.failed("env-1", PROMPT, codexFailure());
-    expect(warn.mock.calls.at(-1)?.[0]).toBe(PENDING_RENAME_FAILED_MESSAGE);
+    expect(entries().at(-1)?.[0]).toBe("rename.failed");
   });
 
   test("forgets environments that no longer hold an intent", () => {
-    const warn = mock((..._data: unknown[]) => undefined);
-    const log = new PendingRenameFailureLog(warn);
+    const log = new PendingRenameFailureLog();
     log.failed("env-1", PROMPT, codexFailure());
     log.failed("env-2", PROMPT, codexFailure());
     log.retainOnly(new Set(["env-2"]));
     log.succeeded("env-1");
     log.succeeded("env-2");
 
-    expect(warn.mock.calls.slice(2)).toEqual([
-      [PENDING_RENAME_RECOVERED_MESSAGE, { environmentId: "env-2", failures: 1 }],
+    expect(entries().slice(2)).toEqual([
+      ["rename.recovered", { environmentId: "env-2", failures: 1 }],
     ]);
   });
 });

@@ -1,4 +1,5 @@
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
+import { BRIDGE_LOG_RELAY_ENV } from "@orkestrator/protocol/node/logger-environment";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
   COORDINATOR_WEB_RESEARCH_ENV,
@@ -7,6 +8,7 @@ import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
 } from "@orkestrator/protocol/coordinator-web-research";
+import { createLogger } from "@orkestrator/protocol/logger";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -99,7 +101,7 @@ import {
   resolveCursorHostCredentialMaterial,
 } from "./host-agent-credentials.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
-import { createBridgeOutputForwarder } from "./bridge-output-redaction.js";
+import { createBridgeOutputForwarder, relayBridgeOutput } from "./bridge-output-redaction.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -161,6 +163,8 @@ import {
 export const LOCAL_SERVER_BUSY_UNRESPONSIVE_GRACE_MS = 2 * 60_000;
 /** A gap this long starts a new run of failed health checks. */
 export const LOCAL_SERVER_UNRESPONSIVE_FAILURE_GAP_MS = 30_000;
+
+const log = createLogger("local-server");
 
 /** Deletion drains briefly: the container is removed right after. */
 const DELETION_DRAIN_GRACE_SECONDS = 5;
@@ -520,6 +524,7 @@ export async function peekLocalAgentBridgeState(
   if (healthy) {
     const key = `${kind}:${environmentId}`;
     localServers.clearUnresponsive(key, child);
+    log.recovered("bridge.not-answering", key);
     return { status: "running", port, authToken };
   }
   return child.exitCode === null && child.signalCode === null
@@ -835,6 +840,7 @@ async function startLocalServerAttempt(
       const health = await confirmRunningServerHealth(port, healthHeaders, isAlive);
       if (health.healthy) {
         localServers.clearUnresponsive(key);
+        log.recovered("bridge.not-answering", key);
         const reconcileConnection =
           kind === "opencode" && env?.worktreePath
             ? openCodeReconcileConnection(environmentId, env, context)
@@ -875,10 +881,14 @@ async function startLocalServerAttempt(
           // Replacing the bridge would kill a running turn or its background
           // work (a test suite, a dev server). A loaded host stalls a healthy
           // bridge far more often than a bridge wedges, so wait it out.
-          console.warn(
-            `[local-server] ${key} (pid ${existing.pid}) is not answering health checks ` +
-              `(${Math.round(unresponsiveForMs / 1000)}s) but has work in progress; not restarting it yet`,
-          );
+          log.throttled("warn", "bridge.not-answering", {
+            scope: key,
+            kind: "work-in-progress",
+            fields: () => ({
+              pid: existing.pid,
+              unresponsiveSeconds: Math.round(unresponsiveForMs / 1000),
+            }),
+          });
           throw retryableBridgeStartupError(
             "The agent bridge is busy and not responding yet. Retrying shortly.",
             2_000,
@@ -955,6 +965,8 @@ async function startLocalServerAttempt(
     // watch for that and drain itself instead of orphaning its children.
     ORKESTRATOR_PARENT_PID: String(process.pid),
     ORKESTRATOR_BRIDGE_DEBUG: bridgeDebugEnvValue(bridgeConfig.global),
+    // forwardBridgeOutput below reads this process's stdio and carries each level.
+    [BRIDGE_LOG_RELAY_ENV]: "1",
     ...(agentToolConnection
       ? {
           [ORKESTRATOR_AGENT_MCP_URL_ENV]: agentToolConnection.url,
@@ -1279,7 +1291,7 @@ async function startLocalServerAttempt(
     loginless: launchedLoginless,
   });
   if (coordinatorId) coordinatorResearchLaunches.set(child, researchSignature);
-  forwardBridgeOutput(child, `[${kind}:${environmentId}]`);
+  forwardBridgeOutput(child, `${kind}:${environmentId}`);
   child.once("exit", () => {
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
@@ -1324,6 +1336,7 @@ async function startLocalServerAttempt(
     } finally {
       releaseOpenCodeHostStart();
     }
+    log.recovered("bridge.not-answering", key);
     if (kind === "opencode" && authToken && agentToolConnection) {
       localServers.openCodeAgentTools.recordLaunchConnection(
         `local:${environmentId}`,
@@ -1960,15 +1973,17 @@ export async function allocateLocalPort(): Promise<number> {
 }
 
 /**
- * Forward a local bridge's output to the console, which Debug logging writes
- * to disk, scrubbed of credential-shaped text and reassembled into whole lines.
+ * Forward a local bridge's output to this process's log, which Debug logging
+ * writes to disk, scrubbed of credential-shaped text and reassembled into whole
+ * lines. A logger record is re-emitted at its own level, naming the bridge in
+ * `source`; anything else (a crash, a runtime panic) stays captured as output.
  */
 export function forwardBridgeOutput(
   child: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
-  prefix: string,
+  source: string,
 ): void {
-  const stdout = createBridgeOutputForwarder((text) => console.debug(`${prefix} ${text}`));
-  const stderr = createBridgeOutputForwarder((text) => console.error(`${prefix} ${text}`));
+  const stdout = createBridgeOutputForwarder((text) => relayBridgeOutput("stdout", source, text));
+  const stderr = createBridgeOutputForwarder((text) => relayBridgeOutput("stderr", source, text));
   child.stdout.on("data", stdout.push);
   child.stderr.on("data", stderr.push);
   child.stdout.once("end", stdout.flush);

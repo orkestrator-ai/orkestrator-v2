@@ -821,6 +821,10 @@ describe("Orkestrator control MCP server", () => {
       "answer_controller_worker_question",
       "resolve_native_agent_interaction",
       "resolve_node_action_request",
+      // Setup commands run on the host; only the user approves them.
+      "approve_environment_setup",
+      "approve_project_setup_commands",
+      "approve_setup_commands_on_nodes",
     ];
     for (const command of approvalOnly) {
       await expect(checked.invoke(command, {})).rejects.toThrow("Coordinator capability denied");

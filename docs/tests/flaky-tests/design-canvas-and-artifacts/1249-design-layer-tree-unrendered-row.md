@@ -149,3 +149,20 @@ mise run test:logged -- --name review-browser-canvas-owner -- bunx playwright te
 No source, assertion, timeout or skip in this owner changed. The earlier
 combined picker/accessibility rerun had a different mobile keyboard-journey
 failure; it is not the isolated pass used for this classification.
+
+## Session-import review validation — 2026-11-01
+
+`mise run test:logged -- --name review-fixes-component-browser -- mise run test:browser`
+on the branch based on `15f22fc6d` reproduced the same mobile `plans (h2)`
+attachment deadline at line 613. The nine-worker component run had 1,052 passed,
+108 skipped and six failed (629.1 seconds); the remaining failures were the
+Claude route-disposal case and four Cursor retention fixtures.
+
+The complete unchanged owner was rerun with
+`mise run test:logged -- --name design-accessibility-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --workers=1 --output=output/playwright/session-import-review-design-owner`.
+It retained the same failure: nine passed, four skipped, one failed, 64.9 seconds.
+This recurrence has no isolated pass and is not newly classified as flaky. The
+historical open status remains; no assertion, timeout or skip was changed.
+
+Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.P117Rf/review-fixes-component-browser.log.gz`
+and `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.wI7nDh/design-accessibility-owner.log.gz`.

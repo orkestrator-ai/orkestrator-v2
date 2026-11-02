@@ -90,3 +90,20 @@ run (147 passed, three skipped, two unrelated AgentLaunchDialog failures).
 This was a combined owner run, not a new standalone qualification. No assertion,
 deadline or implementation changed. Exact commands and evidence are recorded in
 [session history validation](../aggregate-validation-runs/1166-session-titles-0006-validation.md#structured-review-fixes--2026-10-31).
+
+## Session-import review validation — 2026-11-01
+
+`mise run test:logged -- --name review-fixes-component-browser -- mise run test:browser`
+reproduced the desktop `apiRequestContext.fetch: Request context disposed`
+error in the snapshot route callback at line 107. The nine-worker component run
+had 1,052 passed, 108 skipped and six failed (629.1 seconds); the other failures
+were the existing design layer-tree case and four Cursor retention fixtures.
+This owner and the Claude implementation were unchanged by the preview fixes.
+
+The complete unchanged owner passed alone with
+`mise run test:logged -- --name claude-interactions-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1 --output=output/playwright/session-import-review-claude-owner`
+in 17.7 seconds. This confirms another intermittent recurrence; no assertion,
+timeout or skip was changed. Evidence is the aggregate compressed log
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.P117Rf/review-fixes-component-browser.log.gz`
+and the isolated owner's passing `.last-run.json` under
+`output/playwright/session-import-review-claude-owner/`.

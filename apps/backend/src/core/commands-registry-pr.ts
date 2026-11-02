@@ -610,11 +610,12 @@ export function registerPullRequestCommands(
             return {
               status: "failed",
               error: {
-                message:
-                  environment.setupPhase === "failed"
+                message: environment.setupApprovalRequired
+                  ? (environment.lifecycleError ?? "Setup needs your approval")
+                  : environment.setupPhase === "failed"
                     ? "Environment setup failed"
                     : "Environment is not running",
-                retryable: false,
+                retryable: environment.setupApprovalRequired === true,
               },
             };
           }
@@ -678,8 +679,10 @@ export function registerPullRequestCommands(
                 return {
                   status: "failed",
                   error: {
-                    message: "Environment setup failed",
-                    retryable: false,
+                    message: refreshed.setupApprovalRequired
+                      ? (refreshed.lifecycleError ?? "Setup needs your approval")
+                      : "Environment setup failed",
+                    retryable: refreshed.setupApprovalRequired === true,
                   },
                 };
               }

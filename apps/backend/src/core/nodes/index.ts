@@ -11,6 +11,7 @@ export { NodeUnavailableError, type NodeLink } from "./node-link.js";
 export { NodePortal } from "./node-portal.js";
 export { listProjectCopyCandidates, listProjectCopyFiles } from "./node-project-copy-files.js";
 export { NODE_RELAY_PREFIX, parseRelayPath, relayHttp, relayUpgrade } from "./node-relay.js";
+export { approveSetupCommandsOnNodes } from "./node-setup-approvals.js";
 export { isWorkspaceExcludedCommand } from "./node-routing.js";
 export { readSeedManifest } from "./node-seed.js";
 export { errorCode, NodeService, type NodeServiceOptions } from "./node-service.js";

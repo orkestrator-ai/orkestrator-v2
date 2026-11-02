@@ -31,16 +31,30 @@ No arguments are built for a snapshot while it is off.
 | Pi | The turn's scope reports at once, with its pending tools and approvals. | None. |
 | ACP/Grok | The process scope reports at once, with its counters and pending requests. | None. |
 
-A bridge without the route (an older container image) keeps its startup setting until
-its next start. A level change reaches only what is on the shared logger, so it has no
-visible effect on a bridge's own `console.*` lines until those migrate.
+A bridge's other log lines (`bridge.claude`, `bridge.codex`, `bridge.cursor`,
+`bridge.pi`, `bridge.acp`) are on the same logger and read their level per call, so on
+every bridge a level change applies to the next line, in a running turn as anywhere
+else. A line skipped while its level was off is not written later.
 
-Search for `[bridge-diagnostics]`. These lines have not moved onto the
-[shared logger](logging.md) yet, so they keep this format; they reach the desktop
-log through the relay as unmigrated backend output. The JSON `bridge` field identifies `claude`,
-`codex`, `cursor`, `pi`, or `acp` (Grok). Local output uses the existing application
-log sink and its rotation and retention. Docker output goes to the existing
-`/tmp/<provider>-bridge.log` files (`/tmp/grok-acp-bridge.log` for Grok).
+A bridge without the route (an older container image) keeps its startup setting until
+its next start.
+
+Search for `[bridge-diagnostics]`. These are `bridge.diagnostics` entries on the
+[shared logger](logging.md), written at `info`, so `ORKESTRATOR_LOG_LEVEL` can also
+narrow them (`bridge.diagnostics=warn` silences them even with the setting on). In
+the text log a line is:
+
+```text
+[bridge-diagnostics] heartbeat source=claude:env-1 bridge=claude payload="{\"bridge\":\"claude\",\"event\":\"heartbeat\",...}"
+```
+
+`payload` is the snapshot as JSON, one string field because nested JSON is not a
+logger field. The `bridge` field identifies `claude`, `codex`, `cursor`, `pi`, or
+`acp` (Grok), and `source` names the local bridge process and environment. Local
+output keeps its level across [the bridge hop](logging.md#the-bridge-hop) and uses
+the existing application log sink and its rotation and retention. Docker output goes
+to the existing `/tmp/<provider>-bridge.log` files (`/tmp/grok-acp-bridge.log` for
+Grok), as JSON lines.
 
 ## Desktop startup failures
 
@@ -85,7 +99,7 @@ records with `"area":"desktop.startup"` and the event name, such as `ready`.
 
 `packages/protocol/src/node/bridge-diagnostics.ts` owns flag interpretation, periodic
 snapshots, correlation ID hashing, metadata filtering, pending-operation bounds,
-event batching and log formatting. Bridge adapters describe their own events;
+event batching and the handover to the logger. Bridge adapters describe their own events;
 they do not own logging timers or copy the privacy and size policies.
 `src/node/bridge-log-policy.ts` is the route every bridge shares.
 
@@ -165,7 +179,7 @@ Tracking is bounded to 16 transports and 128 simultaneous executions per turn.
 Snapshots show four transports, eight pending executions, and the eight most
 recent settled executions. Dropped observation counts and total counts expose
 incomplete coverage. Transport objects are held weakly; argument/response
-payloads are never retained by the diagnostic records. Each line is capped at
+payloads are never retained by the diagnostic records. Each snapshot is capped at
 8 KiB, with an explicit overflow record if necessary. Closing a bridge turn
 releases its observations even if the SDK fails to close; renderer unmounts do
 not close the scope.
@@ -184,7 +198,9 @@ bounded SHA-256 prefixes. Provider strings use fixed vocabularies, or become
 Pending operations are bounded to 128, with eight shown per snapshot. Claude's
 legacy debug events are batched into at most 16 distinct labels per minute,
 with omitted observations counted in `dropped`. Emitted JSON is limited to
-8 KiB; oversized snapshots become an explicit `snapshot-overflow` record.
+8 KiB; oversized snapshots become an explicit `snapshot-overflow` record. That is
+the limit: the logger's usual 2 KiB string bound is raised to the same 8 KiB for
+this area alone, so a snapshot within it is never cut, including through a relay.
 No per-token output or raw vendor debug logger is enabled.
 
 Codex notification recordings remain a separate, explicitly acknowledged

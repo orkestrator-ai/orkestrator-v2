@@ -124,6 +124,7 @@ describe("StorageService store writers", () => {
       "nodes",
       "previewServices",
       "publicOperations",
+      "setupApprovals",
     ]);
     expect(areas.get("kanban")).toContain("KanbanRepository.saveLinearAuth");
     // Omitted from the area: only other repositories call it.

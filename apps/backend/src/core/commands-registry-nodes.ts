@@ -15,6 +15,7 @@ import {
   settleCoordinatorDeliverNow,
 } from "./coordinator-deliver-now.js";
 import {
+  approveSetupCommandsOnNodes,
   parseNodeActionApproval,
   parseNodeFileScope,
   type NodeCoordination,
@@ -496,6 +497,26 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   register("list_node_transfers", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return coordination(context).projectFiles.transfer.list();
+  });
+
+  // Command node: record an approved setup command list on every machine that
+  // has the project (`nodes/node-setup-approvals.ts`). The user's action only.
+  register("approve_setup_commands_on_nodes", async (args, context) => {
+    assertOnlyKeys(args, ["nodeId", "projectId", "hash"], "arguments");
+    if (
+      typeof args.nodeId !== "string" ||
+      typeof args.projectId !== "string" ||
+      typeof args.hash !== "string"
+    ) {
+      throw new Error("Expected nodeId, projectId and hash.");
+    }
+    return approveSetupCommandsOnNodes(
+      {
+        summaries: () => portal(context).summaries(undefined, true),
+        invokerFor: coordination(context).projectFiles.invokerFor,
+      },
+      { nodeId: args.nodeId, projectId: args.projectId, hash: args.hash },
+    );
   });
 
   register("compare_project_files", async (args, context) => {

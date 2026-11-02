@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import type { CommandContext } from "./commands-context.js";
 import {
   closeEnvironmentCleanupStorage,
@@ -309,6 +310,55 @@ describe("environment branch cleanup", () => {
 });
 
 describe("environment cleanup steps", () => {
+  test("logs a kept branch once, though a step can run again", async () => {
+    const { context, dataDir } = await cleanupContext();
+    const { projectPath, base } = await project();
+    await branchWithCommits(projectPath, "feature", base, ["a.txt"]);
+    const cleanup = entry({
+      environmentId: "env-kept-branch",
+      projectPath,
+      branch: "feature",
+      createdFromCommit: base,
+      pending: ["branch"],
+    });
+    await environmentCleanupLedger(dataDir).record(cleanup);
+    const logs = captureLogs();
+    try {
+      expect(await runEnvironmentCleanupStep(cleanup, "branch", context)).toBe(true);
+      expect(await runEnvironmentCleanupStep(cleanup, "branch", context)).toBe(true);
+      expect(logs.outputs.map((output) => output.method)).toEqual(["info"]);
+      expect(logs.records()[0]).toMatchObject({
+        area: "environment",
+        event: "cleanup.branch-kept",
+        fields: { scope: "env-kept-branch" },
+      });
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("513 kept-branch notices do not consume shared fault keys", async () => {
+    const { context, dataDir } = await cleanupContext();
+    const { projectPath } = await project();
+    const logs = captureLogs();
+    try {
+      for (let n = 0; n < 513; n += 1) {
+        const cleanup = entry({
+          environmentId: `kept-${n}`,
+          projectPath,
+          branch: "invalid..ref",
+          pending: ["branch"],
+        });
+        await environmentCleanupLedger(dataDir).record(cleanup);
+        expect(await runEnvironmentCleanupStep(cleanup, "branch", context)).toBe(true);
+      }
+      expect(logs.records()).toHaveLength(513);
+      expect(logs.records().every((record) => record.event === "cleanup.branch-kept")).toBe(true);
+    } finally {
+      logs.restore();
+    }
+  });
+
   test("removes a registered worktree and records completion", async () => {
     const { context, dataDir, worktreeDir } = await cleanupContext();
     const { projectPath, base } = await project();

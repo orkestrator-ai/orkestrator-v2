@@ -1,7 +1,6 @@
 /**
- * Dismissals of backend-sent notices (native agent notices, coordinator
- * repository-context notices), stored by the backend so a notice dismissed on
- * one client stays dismissed on every client.
+ * Dismissals of backend-sent native agent notices, stored by the backend so
+ * a notice dismissed on one client stays dismissed on every client.
  *
  * A dismissal is keyed by a session identity (the client's composite of
  * platform, environment and provider session) and a notice occurrence id.

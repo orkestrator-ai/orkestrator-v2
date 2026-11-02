@@ -232,6 +232,23 @@ const OPTION_ALLOWLISTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["awk", new Set(["-F", "-v", "--field-separator", "--assign"])],
 ]);
 
+/**
+ * Git's own options that may come before the subcommand, matched exactly.
+ *
+ * An allowlist, because the options in that position choose what Git runs
+ * against rather than what it prints: `--git-dir=<dir>` and `--work-tree=<dir>`
+ * point an admitted `git status` at a repository whose `config` the checkout
+ * supplies (a committed bare-repo layout naming `core.fsmonitor`), and
+ * `--namespace`, `--attr-source`, `-c` and `-C` are the same shape. Git does
+ * not abbreviate these, so an exact match is the whole test.
+ */
+const GIT_GLOBAL_OPTIONS: ReadonlySet<string> = new Set([
+  "-P",
+  "--literal-pathspecs",
+  "--no-optional-locks",
+  "--no-pager",
+]);
+
 /** Git options that redirect output to a file or choose a program to run. */
 const GIT_MUTATING_ARGUMENTS: ReadonlySet<string> = new Set([
   "--config-env",
@@ -612,6 +629,8 @@ const REFUSALS = {
       `Coordinator is read-only, so \`${described}\` is not available here. Delegate it to a worker environment.`,
     gitArgument: (described: string) =>
       `Coordinator is read-only, so \`${described}\` cannot be used with an argument that writes a file or runs another program. Delegate it to a worker environment.`,
+    gitGlobalOption: (option: string) =>
+      `Coordinator Git commands run against this checkout only, so the Git option \`${option}\` is not available before the subcommand. Delegate it to a worker environment.`,
     argument: (program: string) =>
       `Coordinator is read-only, so \`${program}\` cannot be used with an argument that writes or runs another program. Delegate it to a worker environment.`,
     program: (program: string) =>
@@ -637,6 +656,8 @@ const REFUSALS = {
       `This session is read-only, so \`${described}\` is not available here.`,
     gitArgument: (described: string) =>
       `This session is read-only, so \`${described}\` cannot be used with an argument that writes a file or runs another program.`,
+    gitGlobalOption: (option: string) =>
+      `Git commands in this session run against this checkout only, so the Git option \`${option}\` is not available before the subcommand.`,
     argument: (program: string) =>
       `This session is read-only, so \`${program}\` cannot be used with an argument that writes or runs another program.`,
     program: (program: string) =>
@@ -687,6 +708,9 @@ export function isReadOnlyShellCommand(
     const subcommandIndex = tokens.findIndex((token, index) => index > 0 && !token.startsWith("-"));
     const subcommand = subcommandIndex > 0 ? tokens[subcommandIndex] : undefined;
     const args = subcommandIndex > 0 ? tokens.slice(subcommandIndex + 1) : [];
+    const globalOptions = tokens.slice(1, subcommandIndex > 0 ? subcommandIndex : undefined);
+    const unlisted = globalOptions.find((option) => !GIT_GLOBAL_OPTIONS.has(option));
+    if (unlisted) return { allowed: false, reason: refusals.gitGlobalOption(unlisted) };
     if (
       subcommand &&
       (NETWORK_GIT_SUBCOMMANDS.has(subcommand) ||

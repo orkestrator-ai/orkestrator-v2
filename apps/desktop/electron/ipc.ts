@@ -124,6 +124,12 @@ export type BrowserPreviewController = {
   /** Clear one service's partition (cookies, storage, cache). */
   resetServiceSiteData?(target: BrowserPreviewServiceTarget): Promise<void>;
   openServiceExternally?(target: BrowserPreviewServiceTarget): Promise<void>;
+  startSessionImport?(tabId: string): Promise<BrowserPreviewState>;
+  dismissSessionNotice?(tabId: string): BrowserPreviewState;
+  openServiceSignIn?(
+    tabId: string,
+    port: number,
+  ): Promise<BrowserPreviewState> | BrowserPreviewState;
 };
 
 export type MainIpcDependencies = {
@@ -483,6 +489,22 @@ export function registerMainIpc({
     const controller = previews(event);
     if (!controller.resetServiceSiteData) throw new Error("Service previews are unavailable");
     return controller.resetServiceSiteData(browserPreviewServiceTarget(target));
+  });
+  handle("orkestrator:browser-preview:session-import-start", (event, tabId: unknown) => {
+    const controller = previews(event);
+    if (!controller.startSessionImport) throw new Error("Service previews are unavailable");
+    return controller.startSessionImport(browserPreviewTabId(tabId));
+  });
+  handle("orkestrator:browser-preview:session-import-dismiss", (event, tabId: unknown) => {
+    const controller = previews(event);
+    if (!controller.dismissSessionNotice) throw new Error("Service previews are unavailable");
+    return controller.dismissSessionNotice(browserPreviewTabId(tabId));
+  });
+  handle("orkestrator:browser-preview:open-sign-in", (event, tabId: unknown, port: unknown) => {
+    const controller = previews(event);
+    if (!controller.openServiceSignIn) throw new Error("Service previews are unavailable");
+    if (typeof port !== "number") throw new Error("Expected a service port");
+    return controller.openServiceSignIn(browserPreviewTabId(tabId), port);
   });
   handle("orkestrator:browser-preview:set-bounds", (event, tabId: unknown, bounds: unknown) =>
     previews(event).setBounds(browserPreviewTabId(tabId), browserPreviewBounds(bounds)),

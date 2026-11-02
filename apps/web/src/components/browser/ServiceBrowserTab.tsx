@@ -7,6 +7,7 @@ import {
   Globe2,
   Link2,
   Loader2,
+  LogIn,
   MoreHorizontal,
   Pencil,
   RefreshCw,
@@ -48,7 +49,10 @@ import {
   hasNativeBrowserPreview,
   openBrowserPreviewDevTools,
   reloadBrowserPreview,
+  dismissBrowserPreviewSessionNotice,
+  openBrowserPreviewSignIn,
   resetBrowserPreviewServiceSiteData,
+  startBrowserPreviewSessionImport,
   setBrowserPreviewVisible,
 } from "@/lib/native/browser-preview";
 import { openServiceExternally } from "@/lib/preview-external";
@@ -80,6 +84,7 @@ import {
 } from "./browser-tab-hooks";
 import { PreviewDiagnostics } from "./PreviewDiagnostics";
 import { PreviewServiceDialog } from "./PreviewServiceDialog";
+import { PreviewSessionBanner, PreviewSessionImportDialog } from "./PreviewSessionImport";
 import { PreviewServicePicker, ReadinessDot } from "./PreviewServicePicker";
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
@@ -206,6 +211,7 @@ function ServicePreview({
   const [attachNonce, setAttachNonce] = useState(0);
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<null | "register" | "edit" | "settings">(null);
+  const [confirmingSessionImport, setConfirmingSessionImport] = useState(false);
   const [iframeRevision, setIframeRevision] = useState(0);
   const locallyPersistedRequest = useRef<string | null>(null);
   const previewHostRef = useRef<HTMLDivElement | null>(null);
@@ -356,7 +362,11 @@ function ServicePreview({
             nextPath = `${parsed.pathname}${parsed.search}${parsed.hash}`;
         }
       }
-      if (nextPath !== undefined && nextPath !== routeRef.current.path) {
+      // The view has not navigated since this path was chosen, so the state still
+      // reports the page being left (main sends one as the load starts). Adopting
+      // it would re-attach that page and cancel the load.
+      const awaitingCommit = navigation !== undefined && navigation === routeRef.current.basis;
+      if (nextPath !== undefined && nextPath !== routeRef.current.path && !awaitingCommit) {
         setRoute({ path: nextPath, basis: navigation });
         persistPath(nextPath);
       } else if (
@@ -532,9 +542,15 @@ function ServicePreview({
       setAttachError(null);
       if (parsed.kind === "path") {
         stopAnnotationForPageChange();
+        const resubmitted = parsed.path === routeRef.current.path;
         setPath(parsed.path);
         persistPath(parsed.path);
-        if (mode === "compatibility") setIframeRevision((value) => value + 1);
+        if (resubmitted && nativeAttachedRef.current) {
+          void reloadBrowserPreview(tabId)
+            .then(applyNativeState)
+            .catch((error: unknown) => setAttachError(errorMessage(error)));
+        } else if (resubmitted) setAttachNonce((value) => value + 1);
+        if (!nativeBrowserPreview) setIframeRevision((value) => value + 1);
         return;
       }
       try {
@@ -565,7 +581,9 @@ function ServicePreview({
     },
     [
       address,
-      mode,
+      applyNativeState,
+      nativeBrowserPreview,
+      tabId,
       persistPath,
       retarget,
       service,
@@ -599,6 +617,31 @@ function ServicePreview({
       });
     });
   }, [nativeBrowserPreview, path, serviceRef]);
+
+  const reportSessionImportError = useCallback((error: unknown) => {
+    toast.error("Could not copy your sign-in", {
+      description: previewErrorFromUnknown(error)?.message ?? errorMessage(error),
+    });
+  }, []);
+  const startSessionImport = useCallback(() => {
+    void startBrowserPreviewSessionImport(tabId)
+      .then(applyNativeState)
+      .catch(reportSessionImportError);
+  }, [applyNativeState, reportSessionImportError, tabId]);
+  const dismissSessionNotice = useCallback(() => {
+    void dismissBrowserPreviewSessionNotice(tabId)
+      .then(applyNativeState)
+      .catch(reportSessionImportError);
+  }, [applyNativeState, reportSessionImportError, tabId]);
+  // Where the user's own browser reaches this service. An unpublished container
+  // service has no such address, so the sign-in cannot start from here.
+  const browserPort = service?.endpoint.hostPort ?? null;
+  const openSignInInBrowser = useCallback(() => {
+    if (browserPort === null) return;
+    void openBrowserPreviewSignIn(tabId, browserPort)
+      .then(applyNativeState)
+      .catch(reportSessionImportError);
+  }, [applyNativeState, browserPort, reportSessionImportError, tabId]);
 
   const onAction = useCallback(
     (action: DiagnosisAction) => {
@@ -874,6 +917,18 @@ function ServicePreview({
                 <RotateCcw className="h-3.5 w-3.5" />
                 Reset this site's data
               </DropdownMenuItem>
+              {nativeState?.sessionImport && (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    dialogOpenerRef.current = optionsTriggerRef.current;
+                    setConfirmingSessionImport(true);
+                  }}
+                  className="gap-2"
+                >
+                  <LogIn className="h-3.5 w-3.5" />
+                  Bring sign-in from browser…
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -887,6 +942,16 @@ function ServicePreview({
         onAction={onAction}
         busy={busy}
       />
+      {nativeState?.sessionImport && (
+        <PreviewSessionBanner
+          sessionImport={nativeState.sessionImport}
+          blockedHost={nativeState.blockedNavigation?.host}
+          canOpenInBrowser={browserPort !== null}
+          onOpenInBrowser={openSignInInBrowser}
+          onBringBack={() => setConfirmingSessionImport(true)}
+          onDismiss={dismissSessionNotice}
+        />
+      )}
       {(attachError || nativeState?.error) && (
         <div
           role="alert"
@@ -939,6 +1004,19 @@ function ServicePreview({
         )}
       </AnnotatedPreviewArea>
 
+      <PreviewSessionImportDialog
+        open={confirmingSessionImport}
+        applicationPort={service?.definition.applicationPort}
+        onOpenChange={setConfirmingSessionImport}
+        onConfirm={startSessionImport}
+        onCloseAutoFocus={(event) => {
+          const opener = dialogOpenerRef.current;
+          dialogOpenerRef.current = null;
+          if (!opener?.isConnected) return;
+          event.preventDefault();
+          opener.focus();
+        }}
+      />
       {dialog === "register" || dialog === "edit" ? (
         <PreviewServiceDialog
           open

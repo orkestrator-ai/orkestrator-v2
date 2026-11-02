@@ -2,6 +2,8 @@ import path from "node:path";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { readAgentSkillFile, scanAgentSkills } from "./agent-skills.js";
+import { createHostExtensionCommandRunner } from "./commands-agent-support.js";
+import { discoverAgentPlugins } from "./extension-discovery.js";
 import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./agent-credential-files.js";
 import {
   cancelGitHubCliLogin,
@@ -56,6 +58,14 @@ export function registerToolingCommands(
       return { provider, roots: [], skills: [], errors: [] };
     }
     return scanAgentSkills(provider);
+  });
+  register("list_agent_plugins", async (args, context) => {
+    assertOnlyKeys(args, ["provider"], "list_agent_plugins argument");
+    const provider = asAgentSkillProvider(args.provider);
+    if (context.runtimeFlavor === "agent-test") {
+      return { agent: provider, plugins: [] };
+    }
+    return discoverAgentPlugins(provider, createHostExtensionCommandRunner(context));
   });
   register("read_agent_skill", async (args, context) => {
     assertOnlyKeys(args, ["provider", "filePath"], "read_agent_skill argument");

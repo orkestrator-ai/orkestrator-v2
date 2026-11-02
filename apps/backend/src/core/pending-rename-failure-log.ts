@@ -1,10 +1,7 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import { CommandFailedError } from "./shell.js";
 
-const PREFIX = "[ElectronBackend]";
-
-export const PENDING_RENAME_FAILED_MESSAGE = `${PREFIX} Failed to rename environment from pending prompt`;
-export const PENDING_RENAME_STILL_FAILING_MESSAGE = `${PREFIX} Environment rename from pending prompt is still failing`;
-export const PENDING_RENAME_RECOVERED_MESSAGE = `${PREFIX} Renamed environment from pending prompt after failures`;
+const log = createLogger("environment");
 
 export interface PendingRenameFailureSummary {
   reason: "command-timed-out" | "command-missing" | "command-failed" | "error";
@@ -62,13 +59,15 @@ function isPowerOfTwo(value: number): boolean {
  * otherwise log on every retry. The first failure for an intent is logged in
  * full; later ones only as a count, at the 2nd, 4th, 8th... failure, and once
  * more when a retry succeeds.
+ *
+ * Not `log.throttled`, which has no such semantics. Its retries back off to 30
+ * minutes, so a 60-second window would write a line on every retry where powers
+ * of two stay quiet. A changed intent also restarts the count without any
+ * success, and the count itself decides the retry delay, so it must exist even
+ * while the level is off.
  */
 export class PendingRenameFailureLog {
   private readonly failures = new Map<string, { intent: string; count: number }>();
-
-  constructor(
-    private readonly warn: (...data: unknown[]) => void = (...data) => console.warn(...data),
-  ) {}
 
   /** Records a failure and returns how many in a row this intent has had. */
   failed(environmentId: string, intent: string, error: unknown): number {
@@ -76,12 +75,12 @@ export class PendingRenameFailureLog {
     const previous = this.failures.get(environmentId);
     if (previous?.intent !== intent) {
       this.failures.set(environmentId, { intent, count: 1 });
-      this.warn(PENDING_RENAME_FAILED_MESSAGE, { environmentId, ...summary });
+      log.warn("rename.failed", { environmentId, ...summary });
       return 1;
     }
     previous.count += 1;
     if (isPowerOfTwo(previous.count)) {
-      this.warn(PENDING_RENAME_STILL_FAILING_MESSAGE, {
+      log.warn("rename.still-failing", {
         environmentId,
         failures: previous.count,
         reason: summary.reason,
@@ -94,7 +93,7 @@ export class PendingRenameFailureLog {
     const previous = this.failures.get(environmentId);
     if (!previous) return;
     this.failures.delete(environmentId);
-    this.warn(PENDING_RENAME_RECOVERED_MESSAGE, { environmentId, failures: previous.count });
+    log.warn("rename.recovered", { environmentId, failures: previous.count });
   }
 
   /** Forget environments that no longer hold a pending rename intent. */

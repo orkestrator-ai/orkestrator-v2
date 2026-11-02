@@ -6,7 +6,7 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 
-import { PENDING_RENAME_FAILED_MESSAGE } from "../src/core/pending-rename-failure-log";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -212,9 +212,12 @@ describe("Electron backend command registry", () => {
       });
       const { context, emitted } = createContext(environment);
       await isolateCodexBinaryLookup(context);
-      const originalConsoleWarn = console.warn;
-      const consoleWarnMock = mock((..._data: unknown[]) => undefined);
-      console.warn = consoleWarnMock;
+      const logs = captureLogs();
+      const renameEntries = () =>
+        logs
+          .records()
+          .filter((record) => record.event.startsWith("rename."))
+          .map((record) => [record.event, record.fields]);
 
       try {
         // Like a signed-out Codex, the stub echoes its prompt into stderr, which
@@ -231,21 +234,15 @@ exit 1
               context,
             );
             await waitForCondition(
-              () =>
-                consoleWarnMock.mock.calls.some(
-                  ([message]) => message === PENDING_RENAME_FAILED_MESSAGE,
-                ),
+              () => renameEntries().some(([event]) => event === "rename.failed"),
               "failed pending rename to settle",
             );
           },
         );
 
-        const renameWarnings = consoleWarnMock.mock.calls.filter(([message]) =>
-          String(message).includes("pending prompt"),
-        );
-        expect(renameWarnings).toEqual([
+        expect(renameEntries()).toEqual([
           [
-            PENDING_RENAME_FAILED_MESSAGE,
+            "rename.failed",
             {
               environmentId: environment.id,
               reason: "command-failed",
@@ -255,7 +252,7 @@ exit 1
             },
           ],
         ]);
-        const logged = JSON.stringify(consoleWarnMock.mock.calls);
+        const logged = logs.lines.join("\n");
         expect(logged).not.toContain("OAuth callback");
         expect(logged).not.toContain("slug generator");
         expect(environment.pendingRenamePrompt).toBe("Please review the OAuth callback flow");
@@ -278,7 +275,7 @@ exit 1
         expect(environment.name).toBe("review-oauth-flow");
         expect(environment.pendingRenamePrompt).toBeUndefined();
       } finally {
-        console.warn = originalConsoleWarn;
+        logs.restore();
       }
     },
     ASYNC_TEST_BUDGET_MS,

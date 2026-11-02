@@ -95,7 +95,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
     label: "Pi",
     icon: <AgentPlatformIcon platform="pi" accent className="h-4 w-4" />,
   },
-  { id: "skills", label: "Skills", icon: <Sparkles className="h-4 w-4" /> },
+  { id: "skills", label: "Skills and plugins", icon: <Sparkles className="h-4 w-4" /> },
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },

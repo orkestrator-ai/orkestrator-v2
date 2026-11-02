@@ -9990,7 +9990,10 @@ describe("AgentNativeTab", () => {
         sessionId: overrides.sessionId ?? `${input.agent}-session`,
         connection: overrides.connection ?? ("connected" as const),
         turn: {
-          phase: overrides.phase ?? "idle",
+          // Explicit undefined exercises an incomplete provider snapshot.
+          phase: (Object.hasOwn(overrides, "phase")
+            ? overrides.phase
+            : "idle") as NativeAgentSessionProjection["turn"]["phase"],
           ...(overrides.turnActivity ? { activity: overrides.turnActivity } : {}),
         },
         messages: overrides.messages ?? [
@@ -12732,6 +12735,113 @@ describe("AgentNativeTab", () => {
         ).text,
       ).toBe("Still usable");
     });
+
+    test("inline edit mid-turn skips the settings change when they already match", async () => {
+      // Claude refuses any settings change while a turn runs, so a prompt
+      // queued with the composer's own settings must not ask for one.
+      seedProjection({
+        phase: "running",
+        composer: { selectedReasoningId: "high" },
+        queue: {
+          items: [
+            {
+              id: "queued-1",
+              text: "Queued task",
+              model: "model-a",
+              reasoningEffort: "high",
+              mode: "build",
+              fastMode: false,
+            },
+          ],
+        },
+      });
+      render(<AgentNativeTab tabId="tab-inline-edit-running" data={identity("claude")} isActive />);
+      const input = await screen.findByRole("textbox");
+      updateNativeAgentControlsMock.mockClear();
+      mockToastError.mockClear();
+      fireEvent.click(await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" }));
+      await waitFor(() => expect(input.textContent).toBe("Queued task"));
+      expect(removePromptQueueMessageMock).toHaveBeenCalled();
+      expect(updateNativeAgentControlsMock).not.toHaveBeenCalled();
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    test("inline edit mid-turn explains a refused settings restore and keeps the prompt", async () => {
+      seedProjection({
+        phase: "running",
+        queue: { items: [{ id: "queued-1", text: "Queued task", mode: "plan" }] },
+      });
+      render(
+        <AgentNativeTab
+          tabId="tab-inline-edit-running-refused"
+          data={identity("claude")}
+          isActive
+        />,
+      );
+      const input = await screen.findByRole("textbox");
+      updateNativeAgentControlsMock.mockRejectedValueOnce(
+        new Error("Claude session config update failed (HTTP 409): Session is running"),
+      );
+      mockToastError.mockClear();
+      fireEvent.click(await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" }));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "This prompt was queued with different settings, which can't be restored while Claude is working. It is still queued; edit it once the turn finishes.",
+        ),
+      );
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { mode: "plan" },
+      });
+      expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(input.textContent).toBe("");
+      await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
+      fireEvent.input(input, { target: { textContent: "Still usable" } });
+      expect(
+        nativeComposeDraft(
+          useNativeComposeStore.getState(),
+          createSessionKey("env-1", "tab-inline-edit-running-refused"),
+        ).text,
+      ).toBe("Still usable");
+    });
+
+    test.each([
+      ["claude", "running", "Disconnected"],
+      ["claude", "running", "Invalid model selection"],
+      ["claude", "running", "Invalid reasoning selection"],
+      ["claude", "running", "Native agent controls are unavailable"],
+      ["claude", "running", "Session is running"],
+      ["codex", "running", "Claude session config update failed (HTTP 409): Session is running"],
+      ["codex", "running", "Disconnected"],
+      ["claude", undefined, "Disconnected"],
+    ] as const)(
+      "inline edit preserves unrelated %s settings failure (%s, %s)",
+      async (platform, phase, errorMessage) => {
+        const tabId = "tab-inline-edit-unrelated-failure";
+        seedProjection({
+          phase,
+          queue: { items: [{ id: "queued-1", text: "Queued task", mode: "plan" }] },
+        });
+        render(<AgentNativeTab tabId={tabId} data={identity(platform)} isActive />);
+        const input = await screen.findByRole("textbox");
+        updateNativeAgentControlsMock.mockRejectedValueOnce(new Error(errorMessage));
+        mockToastError.mockClear();
+        fireEvent.click(await screen.findByRole("button", { name: "Edit queued prompt 1 of 1" }));
+        await waitFor(() =>
+          expect(mockToastError).toHaveBeenCalledWith(
+            "Could not confirm the prompt queue update. Wait for the queue to refresh before retrying.",
+          ),
+        );
+        expect(mockToastError).toHaveBeenCalledTimes(1);
+        expect(removePromptQueueMessageMock).not.toHaveBeenCalled();
+        expect(input.textContent).toBe("");
+        await waitFor(() => expect(input.getAttribute("contenteditable")).toBe("true"));
+        fireEvent.input(input, { target: { textContent: "Still usable" } });
+        expect(
+          nativeComposeDraft(useNativeComposeStore.getState(), createSessionKey("env-1", tabId))
+            .text,
+        ).toBe("Still usable");
+      },
+    );
 
     test.each(["steer", "edit", "remove"] as const)(
       "inline %s uses queue error toasts",

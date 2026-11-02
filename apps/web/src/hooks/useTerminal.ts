@@ -7,12 +7,17 @@ import {
   UnlistenFn,
 } from "@/lib/native/events";
 import { toast } from "sonner";
+import { createLogger } from "@orkestrator/protocol/logger";
 import {
   TERMINAL_INPUT_CLOSED_MESSAGE,
   TERMINAL_INPUT_NOT_DELIVERED_MESSAGE,
 } from "@orkestrator/protocol/terminal-input-sequencer";
 import * as backend from "@/lib/backend";
 import { createTerminalTargetIdentity } from "./terminal-target-identity";
+
+// Reaches the browser console only: the desktop saves nothing from the renderer
+// but the allowlisted startup markers (docs/architecture/logging.md).
+const log = createLogger("terminal");
 
 const RESUME_ADVICE =
   "Check the terminal before resuming: part of your last input may have reached the shell.";
@@ -1103,6 +1108,9 @@ export function useTerminal({
     [containerId, environmentId, terminalKey],
   );
 
+  // One terminal, across the sessions it holds, so a replacement shell clears it.
+  const inputLogScope = terminalKey ?? environmentId ?? containerId ?? "unknown";
+
   // Use ref-based write function to always have access to current sessionId
   const write = useCallback(
     async (data: string) => {
@@ -1115,7 +1123,7 @@ export function useTerminal({
         // Not an error state the user can see anywhere else: the terminal keeps
         // rendering whatever was replayed into it, so without this it just
         // stops accepting input for no stated reason.
-        console.warn("[useTerminal] write called but no sessionId");
+        log.throttled("warn", "input.undelivered", { scope: inputLogScope, kind: "no-session" });
         reportInputFailure("This terminal is not connected to a running shell.", null);
         return;
       }
@@ -1126,8 +1134,14 @@ export function useTerminal({
           : await backend.writeTerminal(currentSessionId, data);
         // The backend refuses in band rather than throwing when the PTY is
         // gone, so a resolved promise is not proof the keystroke landed.
-        if (!delivered) {
-          console.warn("[useTerminal] Terminal input was not delivered:", currentSessionId);
+        if (delivered) {
+          log.recovered("input.undelivered", inputLogScope);
+        } else {
+          log.throttled("warn", "input.undelivered", {
+            scope: inputLogScope,
+            kind: "not-delivered",
+            fields: () => ({ sessionId: currentSessionId }),
+          });
           reportInputFailure(
             "The shell for this terminal is no longer running.",
             currentSessionId,
@@ -1152,7 +1166,7 @@ export function useTerminal({
         });
       }
     },
-    [reportInputFailure], // Otherwise refs, for sessionId and isLocal
+    [inputLogScope, reportInputFailure], // Otherwise refs, for sessionId and isLocal
   );
 
   // Auto-connect when containerId changes

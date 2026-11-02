@@ -405,6 +405,8 @@
         "**/*test-fixtures*",
         "scripts/**",
         "apps/desktop/scripts/**",
+        "bridges/*/scripts/**",
+        "**/*.live-probe.ts",
         "packages/cli/**",
         "docker/**",
         "packages/protocol/src/logger.ts",
@@ -417,19 +419,7 @@
       }
     },
     {
-      "files": [
-        "apps/backend/**",
-        "apps/web/**",
-        "apps/web-public/**",
-        "bridges/acp-bridge/**",
-        "bridges/claude-bridge/**",
-        "bridges/codex-bridge/**",
-        "bridges/cursor-bridge/**",
-        "bridges/pi-bridge/**",
-        "packages/protocol/src/bridge-lifecycle.ts",
-        "packages/protocol/src/event-loop-stall-monitor.ts",
-        "packages/protocol/src/node/bridge-diagnostics.ts"
-      ],
+      "files": ["apps/backend/**", "apps/web/**", "apps/web-public/**"],
       "rules": {
         "no-restricted-globals": "off"
       }

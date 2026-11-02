@@ -1,5 +1,7 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
+import { resetLogger } from "@orkestrator/protocol/logger";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import {
   nativeAgentCapabilities,
@@ -162,7 +164,8 @@ describe("HTTP bridge command transport", () => {
 
   test("a 404 from a bridge older than the contract is outdated-bridge, counted, never a global list", async () => {
     resetOutdatedBridgeCatalogueReadCounts();
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    resetLogger();
+    const logs = captureLogs();
     try {
       const { provider, requests } = httpProvider((url) => {
         if (url.endsWith("/session/session-1/commands")) return new Response(null, { status: 404 });
@@ -179,12 +182,68 @@ describe("HTTP bridge command transport", () => {
         "/session/session-1/commands",
       ]);
       expect(outdatedBridgeCatalogueReadCounts()).toEqual({ codex: 2 });
-      // One content-free warning per provider instance: no names, no session.
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]![0])).not.toContain("session-1");
-      expect(String(warn.mock.calls[0]![0])).not.toContain("/legacy");
+      // One content-free warning, however many reads: no names, no session.
+      expect(logs.records().map((record) => record.event)).toEqual(["catalogue.outdated-bridge"]);
+      expect(logs.records()[0]?.fields).toMatchObject({ agent: "codex", readsSoFar: 1 });
+      expect(logs.lines.join("\n")).not.toContain("session-1");
+      expect(logs.lines.join("\n")).not.toContain("/legacy");
     } finally {
-      warn.mockRestore();
+      logs.restore();
+      resetOutdatedBridgeCatalogueReadCounts();
+    }
+  });
+
+  test("a legacy session success does not recover another session's outdated-bridge fault", async () => {
+    resetLogger();
+    const logs = captureLogs();
+    const { provider } = httpProvider(
+      (url) =>
+        url.endsWith("/session/missing/commands")
+          ? new Response(null, { status: 404 })
+          : Response.json({ commands: [] }),
+      codexConnection,
+    );
+    try {
+      for (let n = 0; n < 4; n += 1) {
+        await expect(provider.commandCatalogue!("missing")).rejects.toMatchObject({
+          catalogueErrorCode: "outdated-bridge",
+        });
+        await provider.commandCatalogue!("present");
+      }
+      expect(logs.records().map((record) => record.event)).toEqual(["catalogue.outdated-bridge"]);
+    } finally {
+      logs.restore();
+      resetOutdatedBridgeCatalogueReadCounts();
+    }
+  });
+
+  test("a bridge upgraded in place reports recovery, and another bridge's success does not", async () => {
+    resetLogger();
+    const logs = captureLogs();
+    let outdated = true;
+    const respond = (url: string) =>
+      outdated && url.endsWith("/session/session-1/commands")
+        ? new Response(null, { status: 404 })
+        : Response.json({ catalogueVersion: 1, status: "ready", commands: [] });
+    try {
+      const { provider } = httpProvider(respond, codexConnection);
+      const { provider: other } = httpProvider(respond, {
+        ...codexConnection,
+        baseUrl: "http://127.0.0.1:59999",
+      });
+      await expect(provider.commandCatalogue!("session-1")).rejects.toMatchObject({
+        catalogueErrorCode: "outdated-bridge",
+      });
+      outdated = false;
+      await other.commandCatalogue!("session-1");
+      expect(logs.records().map((record) => record.event)).toEqual(["catalogue.outdated-bridge"]);
+      await provider.commandCatalogue!("session-1");
+      expect(logs.records().map((record) => record.event)).toEqual([
+        "catalogue.outdated-bridge",
+        "throttle.recovered",
+      ]);
+    } finally {
+      logs.restore();
       resetOutdatedBridgeCatalogueReadCounts();
     }
   });

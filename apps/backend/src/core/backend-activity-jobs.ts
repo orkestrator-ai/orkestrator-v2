@@ -53,6 +53,8 @@ export interface BackendActivityJob {
    */
   run(): Promise<number | undefined | void>;
   onError(error: unknown): void;
+  /** A pass finished without throwing, so a fault `onError` reported has cleared. */
+  onSuccess?(): void;
 }
 
 export class BackendActivityJobs {
@@ -99,6 +101,7 @@ export class BackendActivityJobs {
             if (typeof result === "number" && Number.isFinite(result) && result >= 0) {
               requested = result;
             }
+            job.onSuccess?.();
           } catch (error) {
             job.onError(error);
           }

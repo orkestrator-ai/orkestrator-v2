@@ -298,6 +298,47 @@ describe("Claude coordinator read-only policy", () => {
     }
   });
 
+  test("git options before the subcommand cannot choose another repository", async () => {
+    for (const command of [
+      // A committed bare-repo layout whose `config` names `core.fsmonitor`.
+      "git --git-dir=vendor/evil status",
+      "git --git-dir vendor/evil status",
+      "git --work-tree=../other diff",
+      "git --namespace=x log",
+      "git --attr-source=HEAD diff",
+      "git --glob-pathspecs log",
+      "git --bare log",
+      "git -c core.fsmonitor=touch status",
+      "git -C ../other status",
+      // Allowlisted options do not carry an unlisted one through.
+      "git --no-pager --git-dir=vendor/evil log",
+      // Git does not abbreviate its own options, so neither does the allowlist.
+      "git --no-p log",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
+      expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: false });
+      expect(verdict.reason).toContain("before the subcommand");
+      expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+    for (const command of [
+      "git --no-pager log --oneline",
+      "git -P diff --stat",
+      "git --no-optional-locks status",
+      "git --literal-pathspecs ls-files",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
+      expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: true });
+    }
+    expect(
+      isReadOnlyShellCommand("git --git-dir=vendor/evil status", {
+        commandSandbox: "required",
+        role: "read-only",
+      }).reason,
+    ).toBe(
+      "Git commands in this session run against this checkout only, so the Git option `--git-dir=vendor/evil` is not available before the subcommand.",
+    );
+  });
+
   test("hook-only Git inspection cannot invoke configured helpers", async () => {
     expect(isReadOnlyShellCommand("git diff").allowed).toBe(false);
     const options = { commandSandbox: "unavailable" } as const;

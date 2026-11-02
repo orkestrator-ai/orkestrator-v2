@@ -77,10 +77,36 @@ export async function copyConfiguredProjectFilesToDirectory(
       throw new Error(`Configured path to copy is not a file: ${relativePath}`);
     }
 
-    const destinationPath = path.join(destinationRoot, relativePath);
+    const destinationPath = await unlinkedDestination(destinationRoot, relativePath);
     await fs.mkdir(path.dirname(destinationPath), { recursive: true });
     await fs.copyFile(realSourcePath, destinationPath);
   }
+}
+
+/**
+ * Where a copied file lands, refused when the destination or any directory
+ * above it inside `root` is a link. The destination is a fresh worktree of a
+ * branch, which can commit `config -> /home/me/.ssh` or a link in place of
+ * the file itself; following either would write project files, `.env`
+ * secrets included, outside the worktree. Nothing runs in the worktree yet,
+ * so checking before the copy is enough.
+ */
+async function unlinkedDestination(root: string, relativePath: string): Promise<string> {
+  const parts = relativePath.split(/[\\/]+/).filter(Boolean);
+  let current = root;
+  for (const part of parts) {
+    current = path.join(current, part);
+    const stats = await fs.lstat(current).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    // Everything below a missing directory is created by this copy.
+    if (!stats) break;
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Configured file to copy would be written through a link: ${relativePath}`);
+    }
+  }
+  return path.join(root, relativePath);
 }
 
 export async function stageConfiguredProjectFilesForContainer(

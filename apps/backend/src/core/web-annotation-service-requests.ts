@@ -9,6 +9,7 @@
  * frozen selections, reservations, the persisted enqueue intent, and the
  * lifecycle projection. The storage queue is never held across a port call.
  */
+import { createLogger } from "@orkestrator/protocol/logger";
 import {
   WEB_ANNOTATION_LIMITS,
   WEB_ANNOTATION_TERMINAL_REQUEST_STATES,
@@ -64,6 +65,8 @@ import type {
   WebAnnotationTransaction,
 } from "./web-annotation-storage.js";
 
+const log = createLogger("web-annotations");
+
 const MAX_PREPARATIONS = 64;
 const BRIEF_ENTRY_LIMIT = 50;
 const MAX_MATERIALIZE_FAILURES = 5;
@@ -116,6 +119,7 @@ function isInteractionId(value: unknown): value is string {
 }
 
 export class WebAnnotationRequests {
+  private readonly logScope = crypto.randomUUID();
   private readonly preparations = new Map<string, PreparationCandidate>();
   private preparing = 0;
   private readonly driving = new Map<string, Promise<void>>();
@@ -1359,11 +1363,12 @@ export class WebAnnotationRequests {
   ): void {
     if (this.reconcileTimer || this.stopped) return;
     this.reconcileTimer = setInterval(() => {
-      void this.reconcileOnce().catch((error: unknown) => {
-        console.warn(
-          `[web-annotations] Reconcile pass failed: ${error instanceof Error ? error.name : "unknown"}`,
-        );
-      });
+      void this.reconcileOnce()
+        .then(() => log.recovered("reconcile.failed", this.logScope))
+        .catch((error: unknown) => {
+          // Only the error's type: a request's text can reach its message.
+          log.throttled("warn", "reconcile.failed", { error, scope: this.logScope });
+        });
     }, intervalMs);
     this.reconcileTimer.unref?.();
     void this.reconcileOnce().catch(() => undefined);

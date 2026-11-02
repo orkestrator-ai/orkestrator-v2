@@ -4,16 +4,21 @@ import { cn } from "@/lib/utils";
 
 /**
  * `default` suits forms and lists. `wide` is for content with columns of its own:
- * tables, charts and card grids. Every width stays against the left edge; nothing
+ * tables, charts and card grids. `browser` is for a list beside a reading pane, where
+ * the list takes its share first. Every width stays against the left edge; nothing
  * centers a page.
  */
 const SETTINGS_PAGE_WIDTHS = {
   default: "max-w-3xl",
   wide: "max-w-5xl",
+  browser: "max-w-6xl",
 } as const;
 
 /** The default page width, for chrome the shell draws above a page. */
 export const SETTINGS_PAGE_DEFAULT_WIDTH_CLASS = SETTINGS_PAGE_WIDTHS.default;
+
+/** The browser page width, for a viewport-height page that lays out its own spacing. */
+export const SETTINGS_PAGE_BROWSER_WIDTH_CLASS = SETTINGS_PAGE_WIDTHS.browser;
 
 /** The surface of a settings card. Rows inside it add `divide-y divide-zinc-800`. */
 export const SETTINGS_CARD_CLASS = "rounded-lg border border-zinc-800 bg-zinc-950/40";

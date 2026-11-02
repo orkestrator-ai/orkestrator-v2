@@ -168,4 +168,29 @@ describe("BackendActivityJobs", () => {
     jobs.stop();
     expect(jobs.status()).toBeNull();
   });
+
+  test("a pass that finishes reports success, so a fault's recovered line can fire", async () => {
+    const time = new ManualTime(0);
+    const reports: string[] = [];
+    let failing = true;
+    const jobs = new BackendActivityJobs(
+      [
+        job(time, [], {
+          name: "activity",
+          run: async () => {
+            if (failing) throw new Error("boom");
+          },
+          onError: () => reports.push("error"),
+          onSuccess: () => reports.push("success"),
+        }),
+      ],
+      { now: time.now, timers: time.timerFactory, diagnostics: null },
+    );
+    jobs.start();
+    await time.advance(4_000);
+    failing = false;
+    await time.advance(2_000);
+    expect(reports).toEqual(["error", "error", "success"]);
+    jobs.stop();
+  });
 });

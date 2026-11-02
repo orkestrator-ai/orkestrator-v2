@@ -275,7 +275,8 @@ describe("sign-in routes carry no credential", () => {
           return { status: failed.status, body: await failed.text() };
         });
         expect(response).toEqual({ status: 500, body: "Internal Server Error" });
-        expect(output).toContain("[codex-bridge] GET /global/auth failed: AppServerRpcError");
+        expect(output).toContain("[bridge.codex] http.request-failed method=GET path=/global/auth");
+        expect(output).toContain("error.name=AppServerRpcError");
         expectNothingSecretLogged(output, "Codex auth failure");
       },
     );
@@ -296,8 +297,8 @@ describe("sign-in routes carry no credential", () => {
           return { status: failed.status, body: await failed.text() };
         });
         expect(response).toEqual({ status: 500, body: "Internal Server Error" });
-        expect(output).toContain("Error: account read failed:");
-        expect(output).toMatch(/\n\s+at unexpectedAccountRead/);
+        expect(output).toContain("account read failed:");
+        expect(output).toContain("at unexpectedAccountRead");
         expectNothingSecretLogged(output, "Codex unexpected route failure");
       },
     );

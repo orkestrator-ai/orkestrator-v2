@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { EnvironmentItem } from "../../apps/web/src/components/environments/EnvironmentItem";
+import { Toaster } from "../../apps/web/src/components/ui/sonner";
 import { useAgentActivityStore } from "../../apps/web/src/stores/agentActivityStore";
 import type { Environment } from "../../apps/web/src/types";
 
@@ -36,6 +37,7 @@ export function SidebarActivityProbeFixture() {
   );
   return (
     <main className="p-4">
+      <Toaster />
       <div className="flex flex-wrap gap-4">
         {(["working", "waiting", "idle"] as const).map((activity) => (
           <button

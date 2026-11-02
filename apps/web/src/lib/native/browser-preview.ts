@@ -118,3 +118,27 @@ export function resetBrowserPreviewServiceSiteData(
   if (!reset) return Promise.reject(new Error("Resetting preview site data needs the desktop app"));
   return reset(target);
 }
+
+/** Open the one-time page that copies the browser's `localhost` sign-in into this preview. */
+export function startBrowserPreviewSessionImport(tabId: string): Promise<BrowserPreviewState> {
+  const start = api()?.startSessionImport;
+  if (!start) return Promise.reject(new Error("Copying a sign-in needs the desktop app"));
+  return start(tabId);
+}
+
+/** Cancel an import still waiting and clear the preview's sign-in notices. */
+export function dismissBrowserPreviewSessionNotice(tabId: string): Promise<BrowserPreviewState> {
+  const dismiss = api()?.dismissSessionNotice;
+  if (!dismiss) return Promise.reject(new Error("Copying a sign-in needs the desktop app"));
+  return dismiss(tabId);
+}
+
+/** Open this preview's page at the application's own `localhost` address in the user's browser. */
+export function openBrowserPreviewSignIn(
+  tabId: string,
+  port: number,
+): Promise<BrowserPreviewState> {
+  const open = api()?.openServiceSignIn;
+  if (!open) return Promise.reject(new Error("Opening a sign-in needs the desktop app"));
+  return open(tabId, port);
+}

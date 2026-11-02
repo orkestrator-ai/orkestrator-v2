@@ -6,6 +6,7 @@ import {
   boundedBackgroundLaunch,
   boundedTailCommand,
   boundDiagnosticTail,
+  bridgeLogEnvironmentExports,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -432,6 +433,7 @@ export function registerServerCommands(
           export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
           export CODEX_BRIDGE_TOKEN=${quoteShell(authToken)}
           export ORKESTRATOR_BRIDGE_DEBUG=${bridgeDebugEnvValue(config.global)}
+          ${bridgeLogEnvironmentExports()}
           ${
             agentToolConnection
               ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
@@ -586,6 +588,7 @@ export function registerServerCommands(
           export HOSTNAME=0.0.0.0
           export CWD=/workspace
           export ORKESTRATOR_BRIDGE_DEBUG=${bridgeDebugEnvValue(bridgeConfig.global)}
+          ${bridgeLogEnvironmentExports()}
           ${
             useCursorSdk
               ? `export CURSOR_BRIDGE_TOKEN=${quoteShell(token)}
@@ -724,6 +727,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
           export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state
           export PI_BRIDGE_TOKEN=${quoteShell(token)}
           export ORKESTRATOR_BRIDGE_DEBUG=${bridgeDebugEnvValue(config.global)}
+          ${bridgeLogEnvironmentExports()}
           ${boundedBackgroundLaunch("bun /opt/pi-bridge/dist/index.js", logFile)}
         `,
         [token],

@@ -5,23 +5,23 @@ import type { AgentActivityState } from "@/types";
 /** What the halo shows: a stopped environment, or a running one's agent activity. */
 export type EnvironmentMarkerState = "inactive" | AgentActivityState;
 
-// Stopped environments have a faint outline; only running agents pulse.
+// Stopped environments have a faint outline; only running agents animate.
 const HALO_CLASSES: Record<EnvironmentMarkerState, string> = {
   inactive: "border border-muted-foreground/40 forced-colors:hidden",
   idle: "opacity-0 forced-colors:hidden",
-  working: "bg-red-500/50 animate-pulse forced-colors:border-solid",
+  working: "environment-working-spinner forced-colors:border-solid",
   waiting: "bg-yellow-400/50 animate-pulse forced-colors:border-dashed",
 };
 
 /**
  * An environment row's leading marker: the owning machine's dot (a square for
- * a container, a circle for a local environment) over a halo that pulses red
- * while the agent works and yellow while it awaits input. Stopped environments
- * have a faint outline; running idle environments have no halo. Only the halo
- * pulses; the machine colour stays a steady identity. Forced colours replace
- * activity halos with static solid (working) or dashed (waiting) system-colour
- * outlines. Without a machine to name (a single-machine client) the dot is a
- * neutral fill.
+ * a container, a circle for a local environment) inside a spinner of the same
+ * shape while the agent works, and over a halo that pulses yellow while it
+ * awaits input. Stopped environments have a faint outline; running idle
+ * environments have no halo. Only the ring around the dot moves; the machine
+ * colour stays a steady identity. Forced colours replace both with static solid
+ * (working) or dashed (waiting) system-colour outlines. Without a machine to
+ * name (a single-machine client) the dot is a neutral fill.
  */
 export function EnvironmentStatusMarker({
   local,

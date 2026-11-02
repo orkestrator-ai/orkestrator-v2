@@ -328,6 +328,11 @@ Updates that have a single destination are routed intelligently:
 - If that command node is unreachable, the update waits in the leaf's
   outbox until a command node collects it; it is not dropped or sent to a
   different command node silently.
+- The leaf's own main coordinator uses the same outbox. Its reply to a
+  command node coordinator's mail goes back to that conversation; a new
+  message to `"command-node-coordinator"` goes to the command node that last
+  mailed this project's coordinator, else the most recent one, for its main
+  coordinator of the repository (`LeafNodeMail.routeCoordinator`).
 
 ## Leaf mode
 
@@ -338,7 +343,11 @@ A command node attached to another command node operates in leaf mode:
   (controlling other nodes, creating environments elsewhere, file transfer
   to other nodes) are unavailable. If one receives a message, it handles it
   as an agent on a leaf would — acting on its own node and replying — and
-  does not start acting as a command node.
+  does not start acting as a command node. Its one cross-node action is
+  mail to the command node's coordinator for the repository: a reply to
+  that coordinator's request, or a new message to
+  `"command-node-coordinator"`, both through the outbox. Every other node
+  tool still refuses.
 - Its coordinator conversations are kept, because they may hold important
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
@@ -570,6 +579,9 @@ Coordinators run on the top-level command node only. A coordinator can:
 - **Message** agents in environments on every connected node, and receive
   their messages. Mail addresses are node-qualified; the command node
   delivers the coordinator's messages to the leaf and collects replies.
+  With `toEnvironmentId: "coordinator"` it asks that node's main
+  coordinator for the repository, which answers by mail
+  ([coordinator.md](coordinator.md#coordinators-on-two-nodes)).
 - **Interrogate** any environment on any connected node through a direct
   read-only link: status, activity, transcripts, diffs, files, test results.
 - **Transfer files** to and from environments on connected nodes through a
@@ -765,7 +777,7 @@ Built in milestones with tested commits on one branch, reviewed as one PR.
 | Agent chat | Direct between client and leaf; the command node can read it. Coordinator and agent communicate by message, or the coordinator reads the agent's transcript directly. |
 | Fallback | Relaying through the command node is acceptable when the client cannot reach the leaf; the info panel shows the path in use. |
 | Selected files on both | The leaf's copy wins; coordinators can compare and update project files across leaves. |
-| Command node in leaf mode | Coordinators know they are in leaf mode and lose cross-node tools; their conversations stay accessible behind a warning. |
+| Command node in leaf mode | Coordinators know they are in leaf mode and lose cross-node tools except mail to the command node's coordinator; their conversations stay accessible behind a warning. |
 | Leaf permissions | Full control first; permissions later. |
 | Deleting environments | Only on the user's request, which may come through coordinator chat, always with an explicit confirmation. |
 | Files for leaf environments | Same as local environments: worktree or container, then `.env` and selected files copied from the project root (the leaf's, else the command node's). |

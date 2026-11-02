@@ -1746,6 +1746,8 @@ export class StorageService {
     input: AgentMailSendInput,
     options: {
       newDelegation?: boolean;
+      nodePrefix?: string;
+      nodeParent?: { id: string; threadId: string; hopCount: number };
       /** Structured facts for a workflow notice; ignored for any other sender. */
       notice?: AgentMailNotice;
       /**

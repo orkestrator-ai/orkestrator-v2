@@ -61,6 +61,7 @@ describe("authenticated hello handshake", () => {
         const hello = parseBackendHello(response.json());
         expect(hello.nodeMode).toBe(nodeMode);
         expect(hello.capabilities[BACKEND_CAPABILITIES.nodeMailSteer]).toBe(1);
+        expect(hello.capabilities[BACKEND_CAPABILITIES.nodeCoordinatorMail]).toBe(1);
       }
     });
   }

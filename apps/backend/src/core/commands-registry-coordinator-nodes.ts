@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   COORDINATOR_MAIL_ADDRESS,
+  coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
   type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
@@ -25,6 +26,10 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 
 import { beginWorkerTabDelegation } from "./worker-tab-close-admission.js";
+import {
+  nodeCoordinatorMailbox,
+  sendToNodeCoordinator,
+} from "./coordinator-node-coordinator-mail.js";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -495,6 +500,45 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       throw new Error('A side agent can only message the main coordinator. Send to "coordinator".');
     }
     const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
+    // That node's main coordinator for this project, not a worker: no
+    // delegation, and its answer comes back as mail.
+    if (
+      toEnvironmentId === COORDINATOR_MAIL_ADDRESS ||
+      coordinatorIdFromRuntimeId(toEnvironmentId)
+    ) {
+      const target = await coordinatorNodeTarget(
+        context,
+        caller.projectId,
+        asNonBlankString(args.nodeId, "nodeId"),
+      );
+      const own = await mailbox(context, caller);
+      const parent =
+        typeof args.replyToMessageId === "string"
+          ? await context.storage.getAgentMailMessage(
+              own.coordinatorEnvironmentId,
+              own.coordinatorTabId,
+              args.replyToMessageId,
+            )
+          : undefined;
+      if (parent && (parent.from.kind !== "node" || parent.from.nodeId !== target.nodeId))
+        throw new Error("Reply parent is not from that node");
+      return sendToNodeCoordinator(target, {
+        coordinatorId: caller.coordinatorId,
+        mailbox: own,
+        ...(parent
+          ? {
+              nodeParent: {
+                id: parent.id,
+                threadId: parent.threadId,
+                hopCount: parent.hopCount ?? 0,
+              },
+            }
+          : {}),
+        requestId: asNonBlankString(args.requestId, "requestId"),
+        ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
+        body: asNonBlankString(args.body, "body"),
+      });
+    }
     return context.storage.withAgentMailWorkerAdmission(
       `node:${args.nodeId}:${toEnvironmentId}`,
       async () => {
@@ -610,6 +654,17 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         }
       },
     );
+  });
+
+  /** Whether that node's copy of this project has a coordinator to mail. */
+  register("get_coordinator_node_mailbox", async (args, context) => {
+    const caller = await identity(args.scope, context);
+    const target = await coordinatorNodeTarget(
+      context,
+      caller.projectId,
+      asNonBlankString(args.nodeId, "nodeId"),
+    );
+    return nodeCoordinatorMailbox(target);
   });
 
   register(

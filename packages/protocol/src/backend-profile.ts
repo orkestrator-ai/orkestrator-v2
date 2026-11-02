@@ -194,6 +194,14 @@ export const BACKEND_CAPABILITIES = {
    * the field is sent only to a leaf that advertises this.
    */
   nodeMailSteer: "node-mail-steer",
+  /**
+   * `deliver_node_mail` accepts `toEnvironmentId: "coordinator"` with the
+   * leaf's `projectId`, delivering a command node coordinator's mail to the
+   * leaf's main coordinator for that project, and the leaf answers
+   * `get_node_project_coordinator`. An older leaf would look "coordinator" up
+   * as an environment and refuse, so the command node checks this first.
+   */
+  nodeCoordinatorMail: "node-coordinator-mail",
 } as const;
 
 const MAX_CAPABILITIES = 64;

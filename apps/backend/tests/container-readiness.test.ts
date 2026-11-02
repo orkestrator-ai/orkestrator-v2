@@ -481,6 +481,20 @@ printf 'ORKESTRATOR_DRAIN signalled=4 remaining=1\\n'
       },
     );
   });
+
+  test("reads a drain report that also counts hung-up shells", async () => {
+    await withDockerScript(
+      `#!/bin/sh
+printf 'ORKESTRATOR_DRAIN signalled=2 remaining=0 hungup=1\\n'
+`,
+      async () => {
+        expect(await drainContainerProcesses("container-1", 5)).toEqual({
+          signalled: 2,
+          remaining: 0,
+        });
+      },
+    );
+  });
 });
 
 describe("setup completion currency", () => {

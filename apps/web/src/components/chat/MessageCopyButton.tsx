@@ -1,9 +1,12 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { writeText } from "@/lib/native/clipboard";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+const log = createLogger("web.chat");
 
 interface MessageCopyButtonProps {
   content: string;
@@ -30,7 +33,7 @@ export function MessageCopyButton({
       await writeText(content);
       setCopied(true);
     } catch (error) {
-      console.error("[MessageCopyButton] Failed to copy message text:", error);
+      log.error("message.copy-failed", { error: formatLogError(error) });
       toast.error("Failed to copy message text");
     }
   }, [content]);

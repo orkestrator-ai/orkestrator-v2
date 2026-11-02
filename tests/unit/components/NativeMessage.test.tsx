@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -419,9 +420,7 @@ describe("NativeMessage", () => {
   });
 
   test("reports system-browser failures without throwing from link clicks", async () => {
-    const consoleError = console.error;
-    const mockConsoleError = mock(() => {});
-    console.error = mockConsoleError as typeof console.error;
+    const logs = captureLogs();
     mockOpenInBrowser.mockImplementationOnce(async () => {
       throw new Error("browser unavailable");
     });
@@ -438,13 +437,20 @@ describe("NativeMessage", () => {
       fireEvent.click(screen.getByRole("link", { name: "the docs" }));
 
       await waitFor(() => {
-        expect(mockConsoleError).toHaveBeenCalledWith(
-          "[MessageMarkdown] Failed to open link:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.chat",
+            event: "message.link-open-failed",
+            fields: expect.objectContaining({
+              error: expect.objectContaining({ message: "browser unavailable" }),
+            }),
+          }),
         );
       });
+      expect(logs.lines.join("\n")).not.toContain("example.com");
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 
@@ -1243,8 +1249,7 @@ describe("NativeMessage", () => {
   });
 
   test("rejects a container file URL that resolves outside the workspace", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     const message: NativeMessageType = {
       id: "msg-container-unsafe-file-url",
       role: "assistant",
@@ -1266,14 +1271,23 @@ describe("NativeMessage", () => {
       await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.chat",
+          event: "image-preview.load-failed",
+          fields: expect.objectContaining({ hasPath: true, hasFileUrl: true }),
+        }),
+      );
+      expect(logs.lines.join("\n")).not.toContain("secret.png");
+      expect(logs.lines.join("\n")).not.toContain("safe-looking.png");
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 
   test("rejects the workspace directory itself as a container image path", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     const message: NativeMessageType = {
       id: "msg-container-workspace-root",
       role: "assistant",
@@ -1290,13 +1304,12 @@ describe("NativeMessage", () => {
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 
   test("does not fall back to host file reads for unsafe container image paths", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     const message: NativeMessageType = {
       id: "msg-unsafe-container-file-preview",
       role: "user",
@@ -1323,13 +1336,12 @@ describe("NativeMessage", () => {
       expect(mockReadFileBase64).not.toHaveBeenCalled();
       expect(screen.queryByAltText("passwd.png") === null).toBe(true);
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 
   test("rejects traversal and control-character variants in container image paths", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     const unsafePaths = [
       "../secrets.png",
       "/workspace/../secrets.png",
@@ -1368,7 +1380,7 @@ describe("NativeMessage", () => {
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 
@@ -1571,8 +1583,7 @@ describe("NativeMessage", () => {
   });
 
   test("shows an error for a relative local image without a container", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     const message: NativeMessageType = {
       id: "msg-relative-local-image",
       role: "assistant",
@@ -1589,13 +1600,12 @@ describe("NativeMessage", () => {
       expect(mockReadFileBase64).not.toHaveBeenCalled();
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 
   test("shows an error state when local image preview loading fails", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     mockReadFileBase64.mockImplementationOnce(async () => {
       throw new Error("not found");
     });
@@ -1623,13 +1633,12 @@ describe("NativeMessage", () => {
       expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/missing.png");
       expect(screen.queryByAltText("missing.png") === null).toBe(true);
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 
   test("retries a failed local image preview read", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     mockReadFileBase64
       .mockImplementationOnce(async () => {
         throw new Error("transient read failure");
@@ -1656,7 +1665,7 @@ describe("NativeMessage", () => {
       expect(screen.queryByText("preview unavailable") === null).toBe(true);
       expect(mockReadFileBase64).toHaveBeenCalledTimes(2);
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 
@@ -3396,8 +3405,7 @@ describe("NativeMessage", () => {
   });
 
   test("shows the error state when an image read rejects with a non-Error value", async () => {
-    const consoleError = console.error;
-    console.error = mock(() => {}) as typeof console.error;
+    const logs = captureLogs();
     mockReadFileBase64.mockImplementationOnce(async () => {
       throw "boom";
     });
@@ -3420,7 +3428,7 @@ describe("NativeMessage", () => {
         "false",
       );
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 

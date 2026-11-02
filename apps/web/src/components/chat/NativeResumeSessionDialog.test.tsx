@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
@@ -606,9 +607,7 @@ describe("NativeResumeSessionDialog", () => {
 
   test("does not report a request failure after unmount", async () => {
     const pending = deferred<ResumableSession[]>();
-    const consoleError = console.error;
-    const errorSpy = mock(() => {});
-    console.error = errorSpy;
+    const logs = captureLogs();
 
     try {
       const { unmount } = render(
@@ -631,9 +630,9 @@ describe("NativeResumeSessionDialog", () => {
         }
       });
 
-      expect(errorSpy).not.toHaveBeenCalled();
+      expect(logs.records()).toEqual([]);
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
   });
 });

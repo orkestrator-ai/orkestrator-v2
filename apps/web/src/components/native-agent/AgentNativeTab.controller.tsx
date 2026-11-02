@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { getNativeAgentGoal, runNativeAgentGoalCommand, runUserCommand } from "@/lib/backend";
@@ -252,6 +253,8 @@ import {
   nextStartupPromptPreviewState,
   startupPromptPreviewMessageId,
 } from "./startup-prompt-preview";
+
+const log = createLogger("web.native-agent");
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
@@ -1595,7 +1598,7 @@ export function SharedNativeAgentController({
     const discard = (namespace: "agent-native" | typeof platform) =>
       discardComposeDraft(composeDraftKey(namespace, data.environmentId, sessionKey)).catch(
         (error) => {
-          console.warn("[AgentNativeTab] Failed to discard compose draft:", error);
+          log.warn("compose-draft.discard-failed", { error: formatLogError(error) });
         },
       );
     void discard("agent-native");

@@ -1,3 +1,4 @@
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { useRef } from "react";
@@ -44,7 +45,6 @@ if (typeof globalThis.ImageData === "undefined") {
 
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-const originalConsoleError = console.error;
 const originalOrkestrator = window.orkestrator;
 const originalGateway = window.orkestratorGateway;
 const originalActiveElementDescriptor = Object.getOwnPropertyDescriptor(
@@ -53,7 +53,21 @@ const originalActiveElementDescriptor = Object.getOwnPropertyDescriptor(
 );
 const putImageData = mock(() => {});
 const onAttach = mock((_attachment: PastedImageAttachment) => {});
-const consoleError = mock(() => {});
+let logs: LogCapture;
+
+function expectPasteFailure(source: string, message?: string): void {
+  expect(logs.records()).toContainEqual(
+    expect.objectContaining({
+      level: "error",
+      area: "web.native-agent",
+      event: "paste.failed",
+      fields: expect.objectContaining({
+        source,
+        ...(message === undefined ? {} : { error: expect.objectContaining({ message }) }),
+      }),
+    }),
+  );
+}
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -178,9 +192,8 @@ describe("useNativeComposeBarPaste", () => {
     mockWriteLocalFile.mockReset();
     toastError.mockReset();
     onAttach.mockReset();
-    consoleError.mockReset();
     putImageData.mockReset();
-    console.error = consoleError;
+    logs = captureLogs();
     delete window.orkestrator;
     delete window.orkestratorGateway;
 
@@ -201,7 +214,7 @@ describe("useNativeComposeBarPaste", () => {
     cleanup();
     HTMLCanvasElement.prototype.getContext = originalGetContext;
     HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
-    console.error = originalConsoleError;
+    logs.restore();
     window.orkestrator = originalOrkestrator;
     window.orkestratorGateway = originalGateway;
     delete (document as { activeElement?: Element }).activeElement;
@@ -329,7 +342,7 @@ describe("useNativeComposeBarPaste", () => {
     expect(pasteEvent.defaultPrevented).toBe(true);
     await waitFor(() => expect(input.value).toBe("hello pasted world"));
     expect(inputEvent).toHaveBeenCalledTimes(1);
-    expect(consoleError).not.toHaveBeenCalled();
+    expect(logs.records()).toEqual([]);
     expect(onAttach).not.toHaveBeenCalled();
   });
 
@@ -363,7 +376,7 @@ describe("useNativeComposeBarPaste", () => {
 
     expect(pasteEvent.defaultPrevented).toBe(true);
     await waitFor(() => expect(input.textContent).toBe("hello pasted world"));
-    expect(consoleError).not.toHaveBeenCalled();
+    expect(logs.records()).toEqual([]);
     expect(onAttach).not.toHaveBeenCalled();
   });
 
@@ -575,9 +588,9 @@ describe("useNativeComposeBarPaste", () => {
     setActiveElement(input);
 
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
-    await waitFor(() => expect(consoleError).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(logs.records()).toHaveLength(1));
 
-    expect(consoleError).toHaveBeenCalledWith("[CustomPaste] Unexpected paste error:", writeError);
+    expectPasteFailure("CustomPaste", "disk full");
     expect(onAttach).not.toHaveBeenCalled();
   });
 
@@ -590,11 +603,8 @@ describe("useNativeComposeBarPaste", () => {
     setActiveElement(getByTestId("compose-input"));
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
-    await waitFor(() => expect(consoleError).toHaveBeenCalledTimes(1));
-    expect(consoleError).toHaveBeenCalledWith(
-      "[HookHarness] Unexpected paste error:",
-      "native clipboard failure",
-    );
+    await waitFor(() => expect(logs.records()).toHaveLength(1));
+    expectPasteFailure("HookHarness", "native clipboard failure");
     expect(onAttach).not.toHaveBeenCalled();
   });
 
@@ -612,8 +622,8 @@ describe("useNativeComposeBarPaste", () => {
     setActiveElement(getByTestId("compose-input"));
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
-    await waitFor(() => expect(consoleError).toHaveBeenCalledTimes(1));
-    expect(consoleError).toHaveBeenCalledWith("[HookHarness] Unexpected paste error:", writeError);
+    await waitFor(() => expect(logs.records()).toHaveLength(1));
+    expectPasteFailure("HookHarness");
     expect(onAttach).not.toHaveBeenCalled();
   });
 
@@ -647,7 +657,7 @@ describe("useNativeComposeBarPaste", () => {
 
       await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
       await Promise.resolve();
-      expect(consoleError).not.toHaveBeenCalled();
+      expect(logs.records()).toEqual([]);
       expect(onAttach).not.toHaveBeenCalled();
     });
   }
@@ -712,7 +722,7 @@ describe("useNativeComposeBarPaste", () => {
       expect(mockWriteContainerFile).not.toHaveBeenCalled();
       expect(mockWriteLocalFile).not.toHaveBeenCalled();
       expect(onAttach).not.toHaveBeenCalled();
-      expect(consoleError).not.toHaveBeenCalled();
+      expect(logs.records()).toEqual([]);
     });
 
     test("refuses a local-worktree paste without writing the file", async () => {
@@ -802,7 +812,7 @@ describe("useNativeComposeBarPaste", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(mockWriteContainerFile).not.toHaveBeenCalled();
       expect(onAttach).not.toHaveBeenCalled();
-      expect(consoleError).not.toHaveBeenCalled();
+      expect(logs.records()).toEqual([]);
     });
 
     test("restores the Electron text fallback when the gate refuses", async () => {
@@ -921,10 +931,7 @@ describe("useNativeComposeBarPaste", () => {
       document.dispatchEvent(pasteEvent);
 
       await waitFor(() => expect(input.value).toBe("hello pasted world"));
-      expect(consoleError).toHaveBeenCalledWith(
-        "[HookHarness] Unexpected paste error:",
-        writeError,
-      );
+      expectPasteFailure("HookHarness", "disk full");
       expect(onAttach).not.toHaveBeenCalled();
     });
   });

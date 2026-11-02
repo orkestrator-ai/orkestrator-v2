@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -28,6 +29,8 @@ import {
   restorableDraftAttachments,
   type NativeDraftNamespace,
 } from "@/lib/native-draft-attachments";
+
+const log = createLogger("web.native-agent");
 
 interface NativeComposeDraftState<TMention, TAttachment> {
   draftText: Map<string, string>;
@@ -153,7 +156,10 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
             });
           return;
         }
-        console.warn(`[${namespace}] Failed to persist compose draft:`, error);
+        log.warn("compose-draft.persist-failed", {
+          source: namespace,
+          error: formatLogError(error),
+        });
         return;
       }
       const draftAnnotations = readDraft(store.getState(), sessionKey).annotations;
@@ -363,7 +369,10 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         }
       })
       .catch((error) => {
-        console.warn(`[${namespace}] Failed to restore compose draft:`, error);
+        log.warn("compose-draft.restore-failed", {
+          source: namespace,
+          error: formatLogError(error),
+        });
       })
       .finally(() => {
         if (readSucceeded || locallyChanged) {

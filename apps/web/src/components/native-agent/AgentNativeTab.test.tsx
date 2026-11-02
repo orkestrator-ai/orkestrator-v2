@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { nativeAgentSteerRejectionMessage } from "@orkestrator/protocol/native-agent";
 /**
@@ -4240,7 +4241,7 @@ describe("AgentNativeTab", () => {
     useNativeComposeStore
       .getState()
       .updateDraft(createSessionKey("env-1", "tab-pi-retry"), { platform: "pi" });
-    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const logs = captureLogs();
     let attempts = 0;
     getNativeAgentModelCatalogMock.mockImplementation(async () => {
       attempts += 1;
@@ -4267,8 +4268,15 @@ describe("AgentNativeTab", () => {
       expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
         "openai-codex/gpt-5.4",
       ]);
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.native-agent",
+          event: "model-catalogue.load-failed",
+        }),
+      );
     } finally {
-      warn.mockRestore();
+      logs.restore();
     }
   });
 

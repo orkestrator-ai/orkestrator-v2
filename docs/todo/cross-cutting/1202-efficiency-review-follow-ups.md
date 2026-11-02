@@ -35,7 +35,7 @@ governs, marked "Decided".
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open.
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
-10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: open (BG-3's messaging-disabled gate done).
+10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
@@ -207,21 +207,40 @@ governs, marked "Decided".
 
 ### 10. Other background jobs
 
-**Problem.** Some 2 s and 5 s jobs still do per-item work that could be skipped.
+**Problem.** Some 2 s and 5 s jobs still did per-item work that could be skipped.
 
-**Context.** Done: mail presence returns early while messaging is disabled. It still refreshes while paused (see Assumptions and decisions).
+**Context.** Done on 2026-11-01: mail presence returns early while messaging is disabled; it still refreshes while paused (see Assumptions and decisions). Done on 2026-11-02, re-checked against `main` at `38d55ee14` first (all four were still true there):
 
-**Investigation.** Still to do: BG-3's skip of environments that are not running before any store read, and reuse of the tmux loop's liveness result instead of another `has-session`; BG-9 (`contentRevision` for the human-prompt monitor); BG-11; BG-12.
+- BG-3. `refreshPresenceOnce` (`agent-mail-service.ts`) reads each environment once per pass and records a stopped one's presence without any per-mailbox read: native `environment_stopped` when the environment is missing, being deleted or not running; tmux `environment_unready` when it is not ready for agents. Those are the answers the per-mailbox reads give, so the inject-backoff reset on a change is unchanged. Coordinator runtimes and unreadable rows still take the per-mailbox read. Tmux presence passes `livenessMaxAgeMs: 3000` to `claude_tmux_status`, which takes the session's last `has-session` answer (`TmuxSession.recentLiveness`, recorded by every `tmuxAlive`) when it is that recent and probes otherwise. A dispatch still probes.
+- BG-9. `AgentHumanPromptMonitor` reuses a working session's last observation while `NativeAgentService.humanPromptContentRevision` (provider session id plus the activity sweep's `contentRevision`) is unchanged, for at most 30 s (`HUMAN_PROMPT_PROJECTION_REUSE_MS`). Background task files are still read every pass. Providers that report no revision (OpenCode, Cursor, Pi, Grok) are read every pass as before. OpenCode's `humanPromptOutput` normalises only the newest 64 rows (`normalizeOpenCodeTranscriptTail`, `HUMAN_PROMPT_OBSERVATION_ROWS`) instead of the whole retained history.
+- BG-11. `BuildPipelineReviewFanout.reviewHost` builds the shared package prompt (review instruction plus project notes) once per pass for the package it describes; a failed build is dropped.
+- BG-12. `syncContainerClaudeLoginUnlocked` compares the pushed digest of a matching keeper handover before the marker `docker exec`; the keeper passes its one read of configuration and environments (`ClaudeLoginPassSnapshot`) for the first gate, and delivery still re-reads its fences after host I/O.
+
+**Investigation.** Counted with the new tests run against the old code: a stopped environment's native mailbox did 1 presence read per pass (now 0), a stopped tmux mailbox 1 (now 0); a four-reviewer dispatch pass read the project notes 5 times (now 2, one of which is the pass's own); four human-prompt passes over a session whose revision changed once made 4 bridge reads (now 2); an unchanged Claude login cost one marker `docker exec` per container per keeper pass (now none). These are unit counts, not the live `recurringWork` diagnostics task 1 asks for.
 
 **Decisions.**
 
 - **BG-3: where does a stopped environment get skipped?**
-  - **In `refreshPresenceOnce`, from the environment's status before any per-mailbox read (recommended).**
+  - **In `refreshPresenceOnce`, from the environment's status before any per-mailbox read (recommended, done).**
     - Pros: one place; no reads for stopped environments.
-    - Cons: needs the environment list once per pass, which task 2's shared snapshot makes cheap.
+    - Cons: one environment read per environment per pass; defers the native read's backstop that clears a refused mail dispatch (see Assumptions and decisions).
   - **Compute presence lazily on `list_mailboxes`.**
     - Pros: no periodic work at all.
     - Cons: delivery decisions in the inject drain also read presence, so it changes their timing.
+- **BG-9: what may the monitor skip on an unchanged revision?**
+  - **The bridge observation only, reusing the last one for at most 30 s; task files are read every pass (recommended, done).**
+    - Pros: an unchanged session costs no request; a file that grows outside the revision is still seen.
+    - Cons: only Claude and Codex report a revision; the cache holds up to 256 bounded observations.
+  - **Skip the whole session, files included.**
+    - Pros: no work at all.
+    - Cons: misses a background task's sign-in prompt, which only appears in its output file.
+- **BG-12: what does the digest check skip?**
+  - **The marker read, and only when the keeper's handover is for the pinned account and generation (recommended, done).**
+    - Pros: no extra host credential read; every path past it would have written nothing.
+    - Cons: the handover's MCP digests are remembered before the marker check.
+  - **Read the login afresh to compare even without a matching handover.**
+    - Pros: covers every caller.
+    - Cons: adds a host credential read (a `security` call on macOS) where the marker would have stopped the sync.
 
 ### 11. Gateway and preview proxy
 
@@ -371,6 +390,38 @@ interval to be seen, within the 2 s approval budget.
 
 Presence still refreshes while messaging is paused, because pausing only holds
 delivery and the mail surfaces stay visible.
+
+### Task 10: refused mail dispatch on a stopped environment
+
+Made on 2026-11-02. The native presence read also clears a session's refused
+mail dispatch when the refusal could not clear it itself. Skipping that read
+for a stopped environment defers this backstop until the environment runs
+again; the drain never dispatches to a stopped environment and calls the same
+read before any delivery, so mail is not affected. Chosen because keeping the
+session read would leave a per-mailbox read for every stopped environment,
+which is what BG-3 removes.
+
+### Task 10: tmux liveness age
+
+Made on 2026-11-02. Presence reuses a `has-session` answer up to 3 s old. The
+poll loop checks about every 2 s busy or idle and removes a session it finds
+dead, so a dead session reads `working` (status null) within about 2 s either
+way. Mail dispatch keeps its own probe, so a stale answer can only delay a
+presence change, never send mail to a dead session.
+
+### Task 10: reviewer prompt failures
+
+Made on 2026-11-02. A rejected shared-prompt build is dropped from the pass's
+memo, so the next reviewer reads the instruction and notes again, as each did
+before.
+
+### Task 10: digest-first MCP digests
+
+Made on 2026-11-02. Building the handoff remembers the active login's MCP
+refresh-token digests (`hostMcpRefreshDigests`). It now does so before the
+marker check, for a container on another account too. The digests are the
+active account's and the call is idempotent for the same login, so a later
+handoff carries the same list it would have carried anyway.
 
 ## Current state
 

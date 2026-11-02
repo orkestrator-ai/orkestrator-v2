@@ -112,3 +112,13 @@ mise run test:logged -- --name mcp-source-store-isolated -- bun test --cwd apps/
 ```
 
 Evidence: `output/agent-testing/env-kinds-review-fix/repair-default-suite.log.gz` in the terminology worktree; original inner artifact directory `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Ktt62a`. The setup-delay hypothesis remains unproven. No lock-store code, assertion, timeout or skip changed; the aggregate remains failed. A separately installed detached `origin/main` at `d7cdfaa8b` also passed the complete owner with `mise run test:logged -- --name baseline-mcp-source-store -- bun test --cwd apps/backend ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures` (exit 0, 0.5 s). The two aggregate failures were not reproduced on the target branch and are not excused as environmental.
+
+## Environment-kind terminology fix round — 2026-11-02
+
+Further target-branch evidence for the recurrence above, on a detached `origin/main` at `d7cdfaa8b` (differs from the branch base `82598d869` only in `AGENTS.md`; `source-store.ts` and its test are identical on both):
+
+- The complete owner, `--parallel=1`, eight runs back to back while 54 `yes` processes saturated the 18-core host: all passed. CPU saturation alone does not reproduce it.
+- `ORKESTRATOR_BACKEND_TEST_WORKERS=4 mise run test:logged -- --name baseline-backend-workspace -- bun run --cwd apps/backend test:workspace`: 13,341 passed, 98 skipped, one failed (the unrelated PreviewUpstreamPool case, to-do [2920](../../../todo/previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md)); both lock-store cases passed.
+- `mise run test:logged -- --name baseline-default-suite -- mise run test` (188.8 s, no capacity queue): backend 13,340 passed, one failed (PreviewUpstreamPool again); web 11,407 passed; every other group passed. Both lock-store cases passed.
+
+The branch's own preparation aggregate at `9940fb04a` (277.6 s) also failed only PreviewUpstreamPool. The lock-store cases have failed only in runs queued behind other worktrees' suites for host capacity (about 638 s on 2026-11-02), as in every earlier recurrence here. The failure has still not been reproduced on the target branch, so it stays open and unexcused. No lock-store code, assertion, timeout or skip changed. Evidence: `output/agent-testing/env-kinds-review-fix/baseline-backend-workspace-r2.log.gz` and `baseline-default-suite-r2.log.gz` in the terminology worktree.

@@ -171,3 +171,24 @@ The final exact aggregate rerun (`fix-default-final`, 562.0 s) passed this
 owner unchanged. Its only failure was the independently reproduced design
 profile ledger race in case 1314. This passing rerun does not establish a
 timing fix for the earlier observation.
+
+## Key information merge validation — 2026-11-02
+
+At merge `9099bfb59` (parents `f2c8249c6` and `16b3f9e83`),
+`mise run test:logged -- --name merge-suite -- mise run test` failed
+`waitForStandaloneBackendReady > times out with a named diagnostic without waiting for stdout to close`
+in `apps/backend/tests/standalone-ready.test.ts:70`: expected elapsed time below
+200 ms, received 239.527 ms (239.90 ms case duration). Workspace reserved six
+worker slots (default backend worker plan); root reserved one and bridges two.
+Backend totals: 13,246 pass, 98 skip, one fail across 889 files (454.46 s).
+The aggregate finished with exit 1 in 609.8 s; separate terminal-link and
+account-marker failures also reproduced in their own files.
+
+The complete unchanged owner passed alone (exit 0, 1.1 s):
+`mise run test:logged -- --name merge-ready-rerun -- bun test --cwd apps/backend ./tests/standalone-ready.test.ts --parallel=1 --only-failures`.
+Passing raw output was deleted by the logged runner. Aggregate evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.T9W6jQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+This repeats the recorded elapsed-time sensitivity; scheduling pressure is a
+hypothesis, not an established cause. No implementation, assertion, deadline or
+skip changed. The isolated pass does not make the aggregate green.

@@ -28,6 +28,9 @@ import {
   type PreviewServicesStorage,
   type PreviewSettings,
 } from "./storage-preview-services.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("preview");
 
 export interface PreviewRuntimeStorage extends PreviewRegistryStorage {
   getDataDir(): string;
@@ -179,9 +182,7 @@ export class PreviewRuntime {
     try {
       this.upstreamCaPem = await readFile(file, "utf8");
     } catch (error) {
-      console.warn(
-        `[previews] Could not read the upstream CA bundle: ${error instanceof Error ? error.message : "error"}`,
-      );
+      log.warn("ca-bundle.read-failed", { error: formatLogError(error) });
     }
   }
 

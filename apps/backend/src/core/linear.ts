@@ -1,3 +1,6 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("linear");
 type LinearGraphQLError = {
   message?: string;
 };
@@ -378,10 +381,13 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
   try {
     comments = await listLinearIssueComments(apiKey, issueId);
   } catch (error) {
-    console.warn(
-      `[linear] Failed to load comments for issue ${issueId}:`,
-      sanitizeLinearError(error, apiKey),
-    );
+    log.warn("comments.load-failed", {
+      issueId,
+      error: formatLogError(
+        { name: "LinearError", message: sanitizeLinearError(error, apiKey) },
+        { stack: false },
+      ),
+    });
   }
 
   return { ...issue, comments };

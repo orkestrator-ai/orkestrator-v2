@@ -8,6 +8,9 @@ import {
 import { DesignError } from "./errors.js";
 import { cloneRecord } from "./records.js";
 import type { DesignService } from "./service.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("design");
 
 /**
  * Canvas-to-conversation links. A link stores only the association (tab,
@@ -247,10 +250,10 @@ export async function recordTabSession(
       })
       .catch((error: unknown) => {
         // One unreadable canvas must not keep the others, or the close, waiting.
-        console.warn(
-          "[backend] Could not record a closing conversation on a design link:",
-          (error as { failure?: { code?: string } })?.failure?.code ?? "error",
-        );
+        log.warn("session-link.record-failed", {
+          code: (error as { failure?: { code?: string } })?.failure?.code ?? "error",
+          error: formatLogError(error, { message: false }),
+        });
       });
   }
   return recorded;

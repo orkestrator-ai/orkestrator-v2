@@ -72,6 +72,9 @@ import {
   type WebAnnotationManifest,
   type WebAnnotationTransaction,
 } from "./web-annotation-storage.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web-annotations");
 
 export {
   composeDraftSessionKey,
@@ -230,7 +233,7 @@ export class WebAnnotationMigration {
         await this.migrateDraft(store, environment, draft, legacy, ownership, host);
       } catch (error) {
         const reason = errorOutcome(error);
-        console.warn(`[web-annotations] Migration of one draft failed (code=${reason})`);
+        log.warn("migration.draft-failed", { code: reason });
         this.ctx.metrics.recordMigration("failed");
         await store
           .mutate((tx) => {
@@ -616,7 +619,7 @@ export class WebAnnotationMigration {
     try {
       imported = await this.importLegacy(store, environment, batch);
     } catch (error) {
-      console.warn(`[web-annotations] Draft reconciliation deferred (code=${errorOutcome(error)})`);
+      log.warn("draft-reconcile.deferred", { code: errorOutcome(error) });
       for (const item of batch) failed.add(item.id);
     }
     const mapping = new Map<string, string>();

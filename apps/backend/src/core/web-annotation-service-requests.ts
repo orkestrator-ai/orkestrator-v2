@@ -9,7 +9,7 @@
  * frozen selections, reservations, the persisted enqueue intent, and the
  * lifecycle projection. The storage queue is never held across a port call.
  */
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   WEB_ANNOTATION_LIMITS,
   WEB_ANNOTATION_TERMINAL_REQUEST_STATES,
@@ -762,9 +762,7 @@ export class WebAnnotationRequests {
     });
     if (!result.value.deduplicated) this.dropCandidate(candidate.preparationId);
     await this.drive(input.environmentId, input.requestId).catch((error: unknown) => {
-      console.warn(
-        `[web-annotations] Request handoff deferred: ${error instanceof Error ? error.name : "unknown"}`,
-      );
+      log.warn("request.handoff-deferred", { error: formatLogError(error, { message: false }) });
     });
     const latest = (await this.ctx.env(input.environmentId)).manifest.requests[input.requestId];
     return {
@@ -888,9 +886,10 @@ export class WebAnnotationRequests {
       } catch (error) {
         this.backoff(key);
         const failures = this.failures.get(key) ?? 0;
-        console.warn(
-          `[web-annotations] Evidence materialization failed (${failures}): ${error instanceof Error ? error.name : "unknown"}`,
-        );
+        log.warn("evidence.materialize-failed", {
+          failures,
+          error: formatLogError(error, { message: false }),
+        });
         if (failures >= MAX_MATERIALIZE_FAILURES) {
           await this.updateRequestState(store, requestId, {
             state: "failed",
@@ -946,9 +945,7 @@ export class WebAnnotationRequests {
     } catch (error) {
       // Publication is idempotent by request id; retry later, never a new id.
       this.backoff(key);
-      console.warn(
-        `[web-annotations] Queue publication deferred: ${error instanceof Error ? error.name : "unknown"}`,
-      );
+      log.warn("queue.publish-deferred", { error: formatLogError(error, { message: false }) });
       return;
     }
     this.clearBackoff(key);
@@ -1412,9 +1409,9 @@ export class WebAnnotationRequests {
       while (cursor < work.length && !this.stopped) {
         const item = work[cursor++]!;
         await this.reconcileRequest(item.environmentId, item.requestId).catch((error: unknown) => {
-          console.warn(
-            `[web-annotations] Request reconcile failed: ${error instanceof Error ? error.name : "unknown"}`,
-          );
+          log.warn("request.reconcile-failed", {
+            error: formatLogError(error, { message: false }),
+          });
         });
       }
     };
@@ -1454,9 +1451,7 @@ export class WebAnnotationRequests {
     for (const requestId of matching) {
       if (this.stopped) return;
       await this.reconcileRequest(input.environmentId, requestId).catch((error: unknown) => {
-        console.warn(
-          `[web-annotations] Turn-end reconcile failed: ${error instanceof Error ? error.name : "unknown"}`,
-        );
+        log.warn("turn-end.reconcile-failed", { error: formatLogError(error, { message: false }) });
       });
     }
   }
@@ -1466,9 +1461,7 @@ export class WebAnnotationRequests {
     for (const environmentId of this.ctx.storage.loadedEnvironmentIds()) {
       if (Date.now() >= deadline || this.stopped) return;
       await this.storeOps.collectGarbage(environmentId, { deadline }).catch((error: unknown) => {
-        console.warn(
-          `[web-annotations] Garbage collection failed: ${error instanceof Error ? error.name : "unknown"}`,
-        );
+        log.warn("gc.failed", { error: formatLogError(error, { message: false }) });
       });
     }
   }

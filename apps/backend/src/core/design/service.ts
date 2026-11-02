@@ -82,6 +82,9 @@ import { descriptorSchema, designId, operationToken, revision } from "./schemas.
 import { buildSync, snapshotEnvelope, tombstone } from "./sync.js";
 import * as lifecycle from "./service-lifecycle.js";
 import * as validation from "./validation.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("design");
 
 // Portable schemas remain importable from their historic module.
 export { canvasSchema, designId, frameSchema, htmlSchema, revision } from "./schemas.js";
@@ -236,7 +239,10 @@ export class DesignService {
   /** Tracks fire-and-forget work so close() can settle it and nothing rejects unhandled. */
   track(work: Promise<unknown>): void {
     const tracked = work.catch((error: unknown) => {
-      console.warn("[backend] Design background task failed:", toDesignFailure(error).code);
+      log.warn("task.failed", {
+        code: toDesignFailure(error).code,
+        error: formatLogError(error, { message: false }),
+      });
     });
     this.background.add(tracked);
     void tracked.finally(() => this.background.delete(tracked));
@@ -321,7 +327,10 @@ export class DesignService {
           this.libraryRevision = revision;
         })
         .catch((error: unknown) => {
-          console.warn("[backend] Design library refresh failed:", toDesignFailure(error).code);
+          log.warn("library.refresh-failed", {
+            code: toDesignFailure(error).code,
+            error: formatLogError(error, { message: false }),
+          });
         })
         .finally(() => {
           if (this.libraryScan === scan) this.libraryScan = undefined;
@@ -379,7 +388,7 @@ export class DesignService {
       );
     } else if (read.kind === "problem") {
       const environmentId = await lifecycle.problemEnvironment(this, id);
-      console.warn(`[backend] Design canvas needs recovery: ${read.problem}`);
+      log.warn("canvas.needs-recovery", { problem: read.problem });
       this.library.entries.set(id, {
         id,
         environmentId: environmentId ?? "",
@@ -441,7 +450,11 @@ export class DesignService {
     try {
       await step();
     } catch (error) {
-      console.warn(`[backend] Design ${label} failed:`, toDesignFailure(error).code);
+      log.warn("startup.step-failed", {
+        step: label,
+        code: toDesignFailure(error).code,
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 
@@ -622,10 +635,7 @@ export class DesignService {
     else this.forget(record.canvasId);
     if (legacy) {
       await this.store.retireLegacy(record.canvasId).catch((error: unknown) => {
-        console.warn(
-          "[backend] Could not retire a migrated legacy design:",
-          (error as NodeJS.ErrnoException)?.code,
-        );
+        log.warn("legacy.retire-failed", { error: formatLogError(error, { message: false }) });
       });
     }
     this.library.upsert(summarizeRecord(record, written ?? { size: bytes, mtimeMs: Date.now() }));
@@ -2040,10 +2050,7 @@ export class DesignService {
   /** Profiles of design browsers whose backend was killed before it could close them. */
   private async sweepStaleBrowserProfiles(): Promise<void> {
     const removed = (await this.renderer.sweepStaleProfiles?.()) ?? 0;
-    if (removed > 0)
-      console.warn(
-        `[backend] Design startup removed ${removed} stale browser profile${removed === 1 ? "" : "s"}`,
-      );
+    if (removed > 0) log.info("profiles.swept", { removed });
   }
 
   private async collectStartupOrphans(): Promise<void> {

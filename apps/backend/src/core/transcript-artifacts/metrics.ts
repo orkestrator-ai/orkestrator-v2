@@ -1,3 +1,7 @@
+import { createLogger, type LogEventOf } from "@orkestrator/protocol/logger";
+
+const log = createLogger("transcript-artifacts");
+
 /**
  * Content-free counters for transcript artifacts.
  *
@@ -75,12 +79,15 @@ export class ArtifactMetrics {
 
 /** Logs a content-free event: identifiers, kinds, sizes, durations and reason codes only. */
 export function logArtifactEvent(
-  event: string,
+  event: LogEventOf<"transcript-artifacts">,
   fields: Record<string, string | number | boolean | undefined>,
+  level: "warn" | "info" = "warn",
 ): void {
-  const safe = Object.entries(fields)
-    .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `${key}=${typeof value === "string" ? value.slice(0, 80) : value}`)
-    .join(" ");
-  console.warn(`[transcript-artifacts] ${event} ${safe}`.trim());
+  log[level](event, () => {
+    const safe: Record<string, string | number | boolean> = {};
+    for (const [key, value] of Object.entries(fields)) {
+      if (value !== undefined) safe[key] = typeof value === "string" ? value.slice(0, 80) : value;
+    }
+    return safe;
+  });
 }

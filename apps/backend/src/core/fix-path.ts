@@ -1,6 +1,9 @@
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("host");
 
 /**
  * Directories where CLI tools (docker, git, gh, bun, node, …) commonly live but
@@ -78,16 +81,13 @@ export function fixPath(): void {
   // Content-free startup evidence: paths themselves can contain usernames or
   // private directory names, but the source/count metadata is enough to tell
   // whether an updater relaunch lost the login-shell environment.
-  console.info(
-    [
-      "[Backend] Host executable discovery ready:",
-      `version=${process.env.ORKESTRATOR_VERSION?.trim() || "unknown"}`,
-      `platform=${process.platform}`,
-      `shellSet=${Boolean(process.env.SHELL?.trim())}`,
-      `loginShellPathResolved=${loginPath !== null}`,
-      `inheritedPathEntries=${existing.length}`,
-      `loginShellPathEntries=${fromShell.length}`,
-      `mergedPathEntries=${merged.length}`,
-    ].join(" "),
-  );
+  log.info("path.discovered", {
+    version: process.env.ORKESTRATOR_VERSION?.trim() || "unknown",
+    platform: process.platform,
+    shellSet: Boolean(process.env.SHELL?.trim()),
+    loginShellPathResolved: loginPath !== null,
+    inheritedPathEntries: existing.length,
+    loginShellPathEntries: fromShell.length,
+    mergedPathEntries: merged.length,
+  });
 }

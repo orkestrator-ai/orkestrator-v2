@@ -8,6 +8,9 @@ import {
 } from "@orkestrator/protocol/design-operations";
 import { DESIGN_MAX_CANVASES } from "@orkestrator/protocol/design-canvas";
 import { readBounded, writeAtomically, type DesignPrivateRecord } from "./records.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("design");
 
 export interface DesignSummary {
   id: string;
@@ -153,10 +156,9 @@ export class DesignLibraryIndex {
       .catch(() => undefined)
       .then(() => writeAtomically(this.file, Buffer.from(JSON.stringify({ version: 1, entries }))))
       .catch((error: unknown) => {
-        console.warn(
-          "[backend] Design library index write failed:",
-          (error as NodeJS.ErrnoException)?.code ?? "error",
-        );
+        log.warn("library.index-write-failed", {
+          error: formatLogError(error, { message: false }),
+        });
       });
     await this.persisting;
   }

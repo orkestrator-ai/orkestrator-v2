@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { UserCommandCard } from "./UserCommandCard";
 import { PermissionRuleNote } from "./PermissionRuleNote";
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
@@ -48,6 +49,8 @@ import { GoalStatusRow, GoalTurnTile } from "./GoalTile";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
 import { RichMessageContext } from "@/lib/chat/rich-identity";
+
+const log = createLogger("web.chat");
 
 export const NativeMessage = memo(function NativeMessage({
   message: rawMessage,
@@ -163,7 +166,7 @@ export const NativeMessage = memo(function NativeMessage({
       await writeText(userCopyContent);
       toast.success("copied");
     } catch (error) {
-      console.error("[NativeMessage] Failed to copy user prompt:", error);
+      log.error("message.copy-failed", { role: "user", error: formatLogError(error) });
       toast.error("Failed to copy message text");
     }
   }, [userCopyContent]);

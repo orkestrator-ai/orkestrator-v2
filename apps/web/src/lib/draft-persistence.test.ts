@@ -1,4 +1,5 @@
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createStore } from "zustand/vanilla";
 import * as realBackend from "@/lib/backend";
@@ -717,7 +718,7 @@ describe("useDurableComposeDraft", () => {
   });
 
   test("rethrows a failed discard of the persisted record", async () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const logs = captureLogs();
     getComposeDraft.mockResolvedValueOnce(null);
     deleteComposeDraft.mockRejectedValueOnce(new Error("delete failed"));
     const { result, unmount } = renderHook(() =>
@@ -746,13 +747,21 @@ describe("useDurableComposeDraft", () => {
     // Unlike the debounce, the caller of a submit-time discard is told: it is
     // the only signal that the recovery record outlived the submit.
     expect((rejection as Error).message).toBe("delete failed");
-    expect(warn).toHaveBeenCalled();
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        area: "web.native-agent",
+        event: "compose-draft.persist-failed",
+        fields: expect.objectContaining({ source: "test" }),
+      }),
+    );
+    expect(logs.lines.join("\n")).not.toContain("submitted text");
     expect(toastError).toHaveBeenCalledWith("Draft could not be cleared", {
       id: "compose-draft-persistence:test:project-hook-discard-failure:value",
       description:
         "The saved recovery draft could not be removed. It may reappear the next time you open this view.",
     });
-    warn.mockRestore();
+    logs.restore();
     unmount();
   });
 

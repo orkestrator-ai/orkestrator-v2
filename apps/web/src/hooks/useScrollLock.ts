@@ -1,4 +1,7 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import { useEffect, useState, useCallback, useRef, type RefObject } from "react";
+
+const log = createLogger("web.chat");
 
 /** Pixels from bottom to consider "at bottom" */
 const SCROLL_THRESHOLD = 50;
@@ -136,11 +139,7 @@ export function useScrollLock(
         // Only warn if we're searching after a mountTrigger change (i.e., when we expect to find it)
         // mountTrigger is used to indicate the scroll area should be available
         if (mountTrigger !== undefined) {
-          console.warn(
-            "[useScrollLock] Failed to find viewport after",
-            VIEWPORT_POLL_MAX_ATTEMPTS,
-            "attempts",
-          );
+          log.warn("scroll-viewport.not-found", { attempts: VIEWPORT_POLL_MAX_ATTEMPTS });
         }
         clearInterval(interval);
       }

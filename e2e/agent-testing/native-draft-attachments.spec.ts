@@ -122,7 +122,7 @@ for (const { platform, assigned, text } of CASES) {
     // Startup diagnostics only (bounded, content-free): if the renderer fails
     // to start, the reason is in these lines rather than lost with the page.
     page.on("console", (message) => {
-      if (/DesktopStartup/.test(message.text())) {
+      if (/DesktopStartup|\[web\.startup\]/.test(message.text())) {
         testInfo.annotations.push({ type: "startup", description: message.text().slice(0, 200) });
       }
     });

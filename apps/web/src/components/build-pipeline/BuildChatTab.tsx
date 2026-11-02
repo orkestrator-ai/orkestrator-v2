@@ -29,6 +29,9 @@ import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { PipelineFlowView } from "./PipelineFlowView";
 import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
 import { usePipelineControls } from "./usePipelineControls";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 interface BuildChatTabProps {
   data: BuildTabData;
@@ -117,7 +120,11 @@ export function BuildChatTab({
     if (pipeline || hydrationAttemptedFor.current === data.pipelineId) return;
     hydrationAttemptedFor.current = data.pipelineId;
     void hydrateBuildPipeline(data.pipelineId).catch((error) => {
-      console.warn("[BuildChatTab] Failed to hydrate build pipeline:", error);
+      log.warn("pipeline.hydrate-failed", {
+        source: "chat-tab",
+        pipelineId: data.pipelineId,
+        error: formatLogError(error),
+      });
     });
   }, [data.pipelineId, pipeline]);
 

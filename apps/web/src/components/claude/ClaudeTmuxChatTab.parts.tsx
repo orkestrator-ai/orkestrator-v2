@@ -74,6 +74,9 @@ import { moveAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import type { FileCandidate, FileMention } from "@/types";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.claude-tmux");
 
 /** The renderer's shared Claude fallback catalogue; see claude-fallback-models.ts. */
 export const TMUX_FALLBACK_MODELS: ClaudeModel[] = FALLBACK_CLAUDE_MODELS;
@@ -963,7 +966,7 @@ export function TmuxComposeBar({
 
   useEffect(() => {
     if (fileSearchError) {
-      console.debug("[ClaudeTmuxChatTab] Failed to load files for @mentions", fileSearchError);
+      log.debug("files.load-failed", () => ({ error: formatLogError(fileSearchError) }));
     }
   }, [fileSearchError]);
 

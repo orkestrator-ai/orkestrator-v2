@@ -49,10 +49,20 @@ export function recentRendererErrors(): BugReportRendererError[] {
   return recent.map((entry) => ({ ...entry }));
 }
 
+/** What the first `console.error` argument says it reports. */
+export function rendererErrorKind(first: unknown): BugReportRendererError["kind"] {
+  if (typeof first !== "string") return "console";
+  // The logger's text form of the bootstrap handlers' two `web.window` events.
+  if (first.startsWith("[web.window] rejection.unhandled")) return "unhandledrejection";
+  if (first.startsWith("[web.window] error.unhandled")) return "error";
+  return "console";
+}
+
 /**
  * Start recording. Idempotent. Window errors and unhandled rejections reach
- * `console.error` through the renderer bootstrap's handlers, so wrapping it
- * sees them too; the original keeps logging everything as before.
+ * `console.error` through the logger's console sink, which reads the method at
+ * call time, so wrapping it sees them too; the original keeps logging everything
+ * as before. This wraps the console itself, so it stays on the raw global.
  */
 export function installRendererErrorRecorder(): void {
   if (installed) return;
@@ -60,14 +70,7 @@ export function installRendererErrorRecorder(): void {
   const original = console.error.bind(console);
   console.error = (...values: unknown[]) => {
     try {
-      const [first] = values;
-      const kind =
-        typeof first === "string" && first.startsWith("[WindowError] Unhandled promise")
-          ? "unhandledrejection"
-          : typeof first === "string" && first.startsWith("[WindowError]")
-            ? "error"
-            : "console";
-      recordRendererError(kind, ...values);
+      recordRendererError(rendererErrorKind(values[0]), ...values);
     } catch {
       // Recording must never break logging.
     }

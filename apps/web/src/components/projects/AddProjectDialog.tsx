@@ -20,6 +20,9 @@ import {
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { GitHubRepositoryPicker, type GitHubRepositoryPickerProps } from "./GitHubRepositoryPicker";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.project");
 
 type ProjectSource = "existing" | "scratch";
 
@@ -166,7 +169,7 @@ export function AddProjectDialog({
       // A fresh request also restarts detection when the selected path is unchanged.
       setPickedPath({ path: repositoryPath.trim() });
     } catch (browseError) {
-      console.error("Failed to open directory picker:", browseError);
+      log.error("directory-picker.failed", { error: formatLogError(browseError) });
     }
   }, [localPath]);
 
@@ -231,7 +234,7 @@ export function AddProjectDialog({
             lastInspectedPathRef.current = repositoryPath;
             if (fromPicker) setPickedPath(null);
           }
-          console.debug("Could not get git remote URL:", remoteError);
+          log.debug("git-remote.read-failed", () => ({ error: formatLogError(remoteError) }));
         }
       },
       fromPicker ? 0 : PATH_DETECTION_DEBOUNCE_MS,
@@ -255,7 +258,7 @@ export function AddProjectDialog({
         setError(null);
       }
     } catch (browseError) {
-      console.error("Failed to open directory picker:", browseError);
+      log.error("directory-picker.failed", { error: formatLogError(browseError) });
     }
   }, [newProjectPath]);
 

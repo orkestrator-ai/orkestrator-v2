@@ -11,6 +11,7 @@ import {
   parseLogDetail,
   resolveLogDetail,
 } from "./log-policy.js";
+import { LOG_VOCABULARY } from "./log-vocabulary/index.js";
 
 describe("the upgrade from a single debug switch", () => {
   test("whoever had it on keeps bridge detail, and nothing else changes", () => {
@@ -108,12 +109,32 @@ describe("effective levels", () => {
 });
 
 describe("logDetailAreas", () => {
-  test("offers the bridge scope first and every listed area once", () => {
+  test("offers the bridge scope first and controllable areas once", () => {
     const areas = logDetailAreas().map((entry) => entry.area);
     expect(areas.slice(0, 2)).toEqual(["bridge", "bridge.diagnostics"]);
     expect(areas).toContain("updater");
     expect(new Set(areas).size).toBe(areas.length);
     for (const entry of logDetailAreas()) expect(entry.description.length).toBeGreaterThan(0);
+  });
+
+  test("keeps renderer areas registered without offering ineffective live controls", () => {
+    const offered = logDetailAreas().map((entry) => entry.area);
+    const rendererAreas = Object.keys(LOG_VOCABULARY).filter(
+      (area) => area.startsWith("web.") || area === "terminal" || area.startsWith("terminal."),
+    );
+    expect(rendererAreas).toContain("web.window");
+    expect(rendererAreas).toContain("terminal");
+    expect(rendererAreas).toContain("terminal.setup");
+    for (const area of rendererAreas) expect(offered).not.toContain(area);
+    for (const area of [
+      "backend.activity",
+      "desktop.startup",
+      "updater",
+      "bridge",
+      "bridge.diagnostics",
+    ]) {
+      expect(offered).toContain(area);
+    }
   });
 });
 

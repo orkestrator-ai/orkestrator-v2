@@ -17,6 +17,9 @@ import {
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { primePrefetchedCommandResponses } from "@/lib/prefetched-command-responses";
 import { notifyReadCoordinatorReconnected } from "@/lib/read-coordinator";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.resource-sync");
 
 /**
  * Client half of the backend change feed.
@@ -136,12 +139,12 @@ async function deliverResourceResync(request: ResourceResyncRequest): Promise<bo
       pending.push(
         Promise.resolve(handler(request)).catch((error) => {
           succeeded = false;
-          console.error("[resource-sync] Resync handler threw:", error);
+          log.error("resync-handler.threw", { error: formatLogError(error) });
         }),
       );
     } catch (error) {
       succeeded = false;
-      console.error("[resource-sync] Resync handler threw:", error);
+      log.error("resync-handler.threw", { error: formatLogError(error) });
     }
   }
   await Promise.all(pending);
@@ -177,7 +180,7 @@ export function requestViewSafetyChecks(reason: ViewSafetyCheckReason): void {
     try {
       handler(reason);
     } catch (error) {
-      console.error("[resource-sync] View safety check threw:", error);
+      log.error("view-safety-check.threw", { reason, error: formatLogError(error) });
     }
   }
 }
@@ -198,12 +201,12 @@ async function deliver(change: ResourceChange): Promise<boolean> {
       deliveries.push(
         Promise.resolve(handler(change)).catch((error) => {
           succeeded = false;
-          console.error(`[resource-sync] Handler for ${change.resource} threw:`, error);
+          log.error("handler.threw", { resource: change.resource, error: formatLogError(error) });
         }),
       );
     } catch (error) {
       succeeded = false;
-      console.error(`[resource-sync] Handler for ${change.resource} threw:`, error);
+      log.error("handler.threw", { resource: change.resource, error: formatLogError(error) });
     }
   }
   await Promise.all(deliveries);
@@ -319,10 +322,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
             scopedSnapshotsDisabled = true;
             break;
           }
-          console.warn(
-            "[resource-sync] Scoped snapshot batch failed; using individual reads:",
-            error,
-          );
+          log.warn("snapshots.batch-failed", { error: formatLogError(error) });
         }
       }
       clearPrefetched = primePrefetchedCommandResponses(prefetched);
@@ -441,10 +441,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
               ) {
                 scopedDisabled = true;
               } else {
-                console.warn(
-                  "[resource-sync] Scoped manifest check failed; using full reconciliation:",
-                  error,
-                );
+                log.warn("manifest.scoped-check-failed", { error: formatLogError(error) });
                 await deliverResourceResync({ resources: null, reason: "explicit" });
                 continue;
               }
@@ -462,10 +459,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
             }
           } catch (error) {
             if (disposed) break;
-            console.warn(
-              "[resource-sync] Manifest check failed; using full reconciliation:",
-              error,
-            );
+            log.warn("manifest.check-failed", { error: formatLogError(error) });
             await deliverResourceResync({ resources: null, reason: "explicit" });
             continue;
           }
@@ -518,13 +512,20 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
         }
       })
       .catch((error) => {
-        console.error(`[resource-sync] Failed to subscribe to ${event}:`, error);
+        log.error("subscribe.failed", { eventName: event, error: formatLogError(error) });
       });
   };
 
   attach(RESOURCE_CHANGED_EVENT, (event) => {
     if (!isResourceChange(event.payload)) {
-      console.warn("[resource-sync] Dropping malformed resource-changed payload:", event.payload);
+      // Shape facts only: the payload itself is never logged.
+      log.warn("change.malformed", {
+        payloadType: typeof event.payload,
+        hasResource:
+          typeof event.payload === "object" &&
+          event.payload !== null &&
+          "resource" in event.payload,
+      });
       return;
     }
     const revision = event.payload.revision;

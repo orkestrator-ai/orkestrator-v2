@@ -41,6 +41,9 @@ import { formatBytes, formatRelativeTime } from "./docker-stats-format";
 import { DockerImageStatusPanel } from "./DockerImageStatusPanel";
 import { DockerCleanupReview } from "./DockerCleanupReview";
 import { SettingsPageLayout } from "@/components/settings/SettingsPageLayout";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.docker");
 
 /** Refresh interval while the section is shown. */
 const STATS_REFRESH_MS = 5_000;
@@ -182,7 +185,7 @@ function DockerSettingsPanel() {
           if (background) setError(null);
         })
         .catch((err: unknown) => {
-          console.error("[DockerSettings] Failed to load data:", err);
+          log.error("data.load-failed", { error: formatLogError(err) });
           setError(err instanceof Error ? err.message : String(err));
         })
         .finally(() => {
@@ -221,7 +224,7 @@ function DockerSettingsPanel() {
       const containersData = await backend.getOrkestratorContainers(machine);
       setContainers(containersData);
     } catch (err) {
-      console.error("[DockerSettings] Stop container failed:", err);
+      log.error("container.stop-failed", { containerId, error: formatLogError(err) });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setStoppingContainerId(null);
@@ -237,7 +240,7 @@ function DockerSettingsPanel() {
       const containersData = await backend.getOrkestratorContainers(machine);
       setContainers(containersData);
     } catch (err) {
-      console.error("[DockerSettings] Delete container failed:", err);
+      log.error("container.delete-failed", { containerId, error: formatLogError(err) });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeletingContainerId(null);
@@ -276,7 +279,11 @@ function DockerSettingsPanel() {
       setSelectedProjectId("");
       setReattachName("");
     } catch (err) {
-      console.error("[DockerSettings] Reattach failed:", err);
+      log.error("container.reattach-failed", {
+        containerId: reattachingContainer.id,
+        projectId: selectedProjectId,
+        error: formatLogError(err),
+      });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsReattaching(false);

@@ -24,6 +24,7 @@ export default defineConfig({
     "design-canvas-electron.spec.ts",
     "workspace-realm-electron.spec.ts",
     "connection-outage-electron.spec.ts",
+    "renderer-log-boundary-electron.spec.ts",
   ],
   workers: 1,
   timeout: 120_000,

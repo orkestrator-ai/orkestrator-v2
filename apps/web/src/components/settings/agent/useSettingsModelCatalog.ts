@@ -15,6 +15,9 @@ import {
   refreshSettingsModelCatalog,
   resolveSettingsCatalogProjectId,
 } from "./refresh-model-catalog";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.settings");
 
 /** Other machines' catalogues and project IDs never enter workspace stores. */
 export function useSettingsModelCatalog() {
@@ -62,7 +65,7 @@ export function useSettingsModelCatalog() {
   useEffect(() => {
     if (!own)
       void load().catch((error: unknown) =>
-        console.warn("[settings] Failed to read model catalogues:", error),
+        log.warn("model-catalogues.read-failed", { error: formatLogError(error) }),
       );
     return () => {
       generation.current += 1;

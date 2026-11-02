@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { configureLogger } from "@orkestrator/protocol/logger";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { toast } from "sonner";
 import { TAB_TEARDOWN_BRIDGE_UPGRADE_REQUIRED_MARKER } from "@orkestrator/protocol/tab-teardown";
 import type { TabInfo } from "@/types/paneLayout";
@@ -23,7 +25,7 @@ const { tabTeardownBridgeUpgradeToastId } = await import("@/lib/tab-teardown-not
 type ToastSpy = ReturnType<typeof spyOn>;
 let toastSpies: ToastSpy[] = [];
 let warningSpy: ToastSpy;
-let consoleDebugSpy: ToastSpy;
+let logs: LogCapture;
 
 function nativeTab(id: string, platform: string): TabInfo {
   return {
@@ -60,7 +62,8 @@ beforeEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
+  logs = captureLogs();
+  configureLogger({ level: "debug" });
   warningSpy = spyOn(toast, "warning").mockImplementation(() => "");
   toastSpies = [
     warningSpy,
@@ -73,7 +76,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const spy of toastSpies) spy.mockRestore();
-  consoleDebugSpy.mockRestore();
+  logs.restore();
 });
 
 describe("paneLayoutStore native teardown failure notice", () => {
@@ -120,6 +123,17 @@ describe("paneLayoutStore native teardown failure notice", () => {
 
     expect(teardownTab).toHaveBeenCalledTimes(2);
     for (const spy of toastSpies) expect(spy).not.toHaveBeenCalled();
-    expect(consoleDebugSpy).toHaveBeenCalled();
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "debug",
+        area: "web.pane-layout",
+        event: "teardown.pending",
+        fields: expect.objectContaining({
+          environmentId: "env-old-bridge",
+          source: "Codex",
+          error: expect.objectContaining({ message: "backend teardown unavailable" }),
+        }),
+      }),
+    );
   });
 });

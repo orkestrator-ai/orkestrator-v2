@@ -23,9 +23,11 @@ export function watchEventStream(page: Page, trace?: (line: string) => void) {
     return parsed.pathname.endsWith("/events") && !parsed.searchParams.has("includeEvents");
   };
   page.on("console", (message) => {
-    if (!message.text().includes("[RemoteGateway]")) return;
-    if (message.text().includes("Event stream disconnected")) counts.drops += 1;
-    trace?.(`console: ${message.text()}`);
+    const text = message.text();
+    if (!text.includes("[web.gateway]")) return;
+    // The main stream only: a terminal stream logs `terminal-stream.disconnected`.
+    if (text.includes("[web.gateway] events.disconnected")) counts.drops += 1;
+    trace?.(`console: ${text}`);
   });
   page.on("request", (request) => {
     if (!isMainStream(request.url())) return;

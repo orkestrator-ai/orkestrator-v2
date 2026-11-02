@@ -4,6 +4,9 @@ import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { PipelineFlowView } from "./PipelineFlowView";
 import { usePipelineControls } from "./usePipelineControls";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 /**
  * One review pass of a build pipeline, opened as a Multi Review tab: its
@@ -31,7 +34,11 @@ export function PipelineReviewTab({
     if (pipeline || hydrationAttemptedFor.current === pipelineId) return;
     hydrationAttemptedFor.current = pipelineId;
     void hydrateBuildPipeline(pipelineId).catch((error) => {
-      console.warn("[PipelineReviewTab] Failed to hydrate build pipeline:", error);
+      log.warn("pipeline.hydrate-failed", {
+        source: "review-tab",
+        pipelineId,
+        error: formatLogError(error),
+      });
     });
   }, [pipeline, pipelineId]);
 

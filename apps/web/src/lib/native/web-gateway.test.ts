@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import {
   createBrowserGatewayApi,
   installBrowserGatewayApi,
@@ -18,6 +19,11 @@ import {
 } from "@orkestrator/protocol/terminal-websocket";
 
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
+
+/** Every warning, as the old console spies counted them. */
+function gatewayWarnings(logs: LogCapture) {
+  return logs.records().filter(({ level }) => level === "warn");
+}
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -2772,9 +2778,7 @@ describe("web gateway browser API", () => {
 
   test("reconnects a direct event stream while listeners remain", async () => {
     const encoder = new TextEncoder();
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     let attempt = 0;
     globalThis.fetch = mock(async () => {
       attempt += 1;
@@ -2808,11 +2812,17 @@ describe("web gateway browser API", () => {
       });
       expect(payload).toBe("reconnected");
       expect(attempt).toBe(2);
-      expect(warning).toHaveBeenCalledTimes(1);
+      expect(gatewayWarnings(logs)).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          area: "web.gateway",
+          event: "events.disconnected",
+        }),
+      ]);
       expect(connected).toHaveBeenCalledTimes(1);
     } finally {
       stopConnected();
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -2831,9 +2841,7 @@ describe("web gateway browser API", () => {
           { status: 200 },
         ),
     ) as unknown as typeof fetch;
-    const error = mock(() => undefined);
-    const originalError = console.error;
-    console.error = error;
+    const logs = captureLogs();
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
       token: "direct-token-123456",
@@ -2849,11 +2857,21 @@ describe("web gateway browser API", () => {
         poll();
       });
       expect(received).toHaveBeenCalledWith("delivered");
-      expect(error).toHaveBeenCalledTimes(1);
+      expect(logs.records().filter(({ level }) => level === "error")).toEqual([
+        expect.objectContaining({
+          level: "error",
+          area: "web.gateway",
+          event: "event-listener.failed",
+          fields: {
+            eventName: "changed",
+            error: expect.objectContaining({ message: "listener failed" }),
+          },
+        }),
+      ]);
     } finally {
       stopThrowing();
       stopReceived();
-      console.error = originalError;
+      logs.restore();
     }
   });
 
@@ -2880,9 +2898,7 @@ describe("web gateway browser API", () => {
         { status: 200 },
       );
     }) as unknown as typeof fetch;
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
       token: "direct-token-123456",
@@ -2895,10 +2911,16 @@ describe("web gateway browser API", () => {
         poll();
       });
       expect(firstRequest.signal?.aborted).toBe(true);
-      expect(warning).toHaveBeenCalledTimes(1);
+      expect(gatewayWarnings(logs)).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          area: "web.gateway",
+          event: "events.disconnected",
+        }),
+      ]);
     } finally {
       unsubscribe();
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -3039,9 +3061,7 @@ describe("web gateway browser API", () => {
 
   test("reconciles only fresh streams and explicit replay misses across direct reconnects", async () => {
     const encoder = new TextEncoder();
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     let attempt = 0;
     const attemptsAtConnect: number[] = [];
     const requestUrls: string[] = [];
@@ -3107,7 +3127,7 @@ describe("web gateway browser API", () => {
       expect(new URL(requestUrls[2]!).searchParams.get("since")).toBe("12345678:2");
       expect(new URL(requestUrls[3]!).searchParams.get("since")).toBe("12345678:3");
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -3491,14 +3511,19 @@ describe("web gateway browser API", () => {
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback).toHaveBeenCalledWith("in");
 
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     try {
       source.onerror?.();
-      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Event stream disconnected");
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.gateway",
+          event: "events.disconnected",
+          fields: { transport: "event-source" },
+        }),
+      );
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
 
     unsubscribeConnected();
@@ -3509,9 +3534,7 @@ describe("web gateway browser API", () => {
 
   test("retains the newest browser cursor across a dropped stream and stream recreation", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     try {
       const api = createBrowserGatewayApi({ eventReconnectDelayMs: 0 });
       const cursorCallback = mock(() => undefined);
@@ -3561,15 +3584,13 @@ describe("web gateway browser API", () => {
       );
       stopReplacement();
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
   test("rebuilds the authoritative browser stream after a fatal error", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     try {
       const api = createBrowserGatewayApi({ eventReconnectDelayMs: 0 });
       const unsubscribe = api.listen("menu-zoom", () => undefined);
@@ -3608,15 +3629,13 @@ describe("web gateway browser API", () => {
       stopStale();
       unsubscribe();
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
   test("takes a dropped browser stream's retry over instead of leaving it to the browser", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     try {
       const api = createBrowserGatewayApi({ eventReconnectDelayMs: 0 });
       const unsubscribe = api.listen("menu-zoom", () => undefined);
@@ -3632,7 +3651,7 @@ describe("web gateway browser API", () => {
       );
       unsubscribe();
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -3929,9 +3948,7 @@ describe("web gateway browser API", () => {
 
   test("rebuilds the shared terminal stream only after a fatal disconnect", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     const api = createBrowserGatewayApi({ eventReconnectDelayMs: 1 });
     const output = mock(() => undefined);
 
@@ -3948,7 +3965,14 @@ describe("web gateway browser API", () => {
       expect(source.closed).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(MockEventSource.instances).toHaveLength(2);
-      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Terminal event stream disconnected");
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.gateway",
+          event: "terminal-stream.disconnected",
+          fields: { transport: "event-source" },
+        }),
+      );
       const replacement = MockEventSource.instances[1]!;
       expect(replacement.url).toBe(
         "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-session-1",
@@ -3963,15 +3987,13 @@ describe("web gateway browser API", () => {
       await Promise.resolve();
       expect(replacement.closed).toBe(true);
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
   test("does not rebuild a dead shared stream once its last listener has left", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     const api = createBrowserGatewayApi({ eventReconnectDelayMs: 1 });
 
     try {
@@ -3989,7 +4011,7 @@ describe("web gateway browser API", () => {
 
       expect(MockEventSource.instances).toHaveLength(1);
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -4023,14 +4045,13 @@ describe("web gateway browser API", () => {
 
     // A late fatal error on the stale socket must not schedule a rebuild of the
     // live one either.
-    const originalWarn = console.warn;
-    console.warn = mock(() => undefined);
+    const logs = captureLogs();
     try {
       staleSource.fail(EVENT_SOURCE_CLOSED);
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(MockEventSource.instances).toHaveLength(2);
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
 
     stopFirst();
@@ -4040,9 +4061,7 @@ describe("web gateway browser API", () => {
 
   test("tells a reconnected direct terminal stream to resynchronize", async () => {
     const encoder = new TextEncoder();
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     let attempt = 0;
     globalThis.fetch = mock(async () => {
       attempt += 1;
@@ -4093,7 +4112,7 @@ describe("web gateway browser API", () => {
       expect(payloads[1]).toEqual({ desynced: true });
       expect(attempt).toBeGreaterThanOrEqual(2);
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -4129,9 +4148,7 @@ describe("web gateway browser API", () => {
   });
 
   test("reconnects a direct terminal stream on its configured delay and stops once its listener leaves", async () => {
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     let attempt = 0;
     globalThis.fetch = mock(async () => {
       attempt += 1;
@@ -4176,14 +4193,12 @@ describe("web gateway browser API", () => {
       // rather than reconnecting a stream forever in the background.
       expect(attempt).toBe(attemptsAtStop);
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
   test("retries direct terminal streams after non-ok and bodyless responses, then cleans up", async () => {
-    const warning = mock((_message: string, _error?: unknown) => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     const signals: AbortSignal[] = [];
     let attempt = 0;
     globalThis.fetch = mock(async (_input, init) => {
@@ -4204,13 +4219,30 @@ describe("web gateway browser API", () => {
       await api.eventStreamReady("terminal-output-session-1");
 
       expect(attempt).toBe(3);
-      expect(warning).toHaveBeenCalledTimes(2);
-      expect((warning.mock.calls[0]![1] as Error).message).toBe(
-        "Gateway terminal event stream failed with HTTP 503",
-      );
-      expect((warning.mock.calls[1]![1] as Error).message).toBe(
-        "Gateway terminal event stream failed with HTTP 200",
-      );
+      expect(gatewayWarnings(logs)).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          area: "web.gateway",
+          event: "terminal-stream.disconnected",
+          fields: {
+            transport: "fetch",
+            error: expect.objectContaining({
+              message: "Gateway terminal event stream failed with HTTP 503",
+            }),
+          },
+        }),
+        expect.objectContaining({
+          level: "warn",
+          area: "web.gateway",
+          event: "terminal-stream.disconnected",
+          fields: {
+            transport: "fetch",
+            error: expect.objectContaining({
+              message: "Gateway terminal event stream failed with HTTP 200",
+            }),
+          },
+        }),
+      ]);
       expect(signals[2]?.aborted).toBe(false);
 
       stop();
@@ -4218,15 +4250,13 @@ describe("web gateway browser API", () => {
       await new Promise((resolve) => originalSetTimeout(resolve, 2));
       expect(attempt).toBe(3);
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
   test("leaves terminal readiness pending when a browser stream errors before opening", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    const warning = mock(() => undefined);
-    const originalWarn = console.warn;
-    console.warn = warning;
+    const logs = captureLogs();
     const api = createBrowserGatewayApi();
 
     try {
@@ -4245,14 +4275,21 @@ describe("web gateway browser API", () => {
       // therefore bound their own wait (see NATIVE_EVENT_STREAM_READY_TIMEOUT_MS)
       // instead of assuming this promise always settles while the tab lives.
       expect(ready).toBe(false);
-      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Terminal event stream disconnected");
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.gateway",
+          event: "terminal-stream.disconnected",
+          fields: { transport: "event-source" },
+        }),
+      );
 
       // Dropping the listener still releases anyone already waiting.
       stop();
       await readyPromise;
       expect(ready).toBe(true);
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 

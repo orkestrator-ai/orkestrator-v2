@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useState, type KeyboardEvent, type ReactNode, type TimeHTMLAttributes } from "react";
 import type { Components, ExtraProps } from "react-markdown";
 import remarkBreaks from "remark-breaks";
@@ -15,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { isCredentialError } from "./pull-request-format";
 import { remarkGitHubHtml } from "./remark-github-html";
 
+const log = createLogger("web.github");
+
 export function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
   if (typeof error === "string" && error.trim()) return error;
@@ -26,7 +29,7 @@ export async function copyToClipboard(text: string, label: string): Promise<void
     await writeText(text);
     toast.success(`${label} copied`, { description: text });
   } catch (error) {
-    console.error("[pull-requests] Failed to copy:", error);
+    log.error("pull-request.copy-failed", { error: formatLogError(error) });
     toast.error(`Could not copy ${label.toLowerCase()}`);
   }
 }

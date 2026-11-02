@@ -138,6 +138,8 @@ export function logDetailAreas(): LogDetailArea[] {
   const areas = new Map(BRIDGE_DETAIL_AREAS.map((entry) => [entry.area, entry]));
   const vocabulary = LOG_VOCABULARY as Readonly<Record<string, LogAreaSpec>>;
   for (const area of Object.keys(vocabulary).sort()) {
+    // Renderer levels come from orkestrator:debug at startup, not live policy.
+    if (area.startsWith("web.") || area === "terminal" || area.startsWith("terminal.")) continue;
     if (!areas.has(area)) areas.set(area, { area, description: vocabulary[area]!.description });
   }
   return Array.from(areas.values());

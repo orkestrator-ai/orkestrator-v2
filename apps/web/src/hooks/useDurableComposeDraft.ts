@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   type Dispatch,
   type SetStateAction,
@@ -19,6 +20,8 @@ import {
   resolveComposeDraftDiscardConflict,
   resolveComposeDraftSaveConflict,
 } from "@/lib/compose-draft-persistence";
+
+const log = createLogger("web.native-agent");
 
 interface DurableComposeDraftOptions<T> {
   ownerType: "environment" | "project";
@@ -113,7 +116,10 @@ export function useDurableComposeDraft<T>({
     function reportPersistenceError(error: unknown, draftKey: string): void {
       const discarding = clearedKeyRef.current === draftKey || isEmptyRef.current(valueRef.current);
       if (!(error instanceof DraftRevisionConflictError)) {
-        console.warn(`[${namespace}] Failed to persist draft:`, error);
+        log.warn("compose-draft.persist-failed", {
+          source: namespace,
+          error: formatLogError(error),
+        });
         toast.error(discarding ? "Draft could not be cleared" : "Draft could not be saved", {
           id: `compose-draft-persistence:${draftKey}`,
           description: discarding
@@ -174,7 +180,10 @@ export function useDurableComposeDraft<T>({
         setValue(persisted.value);
       })
       .catch((error) => {
-        console.warn(`[${namespace}] Failed to restore draft:`, error);
+        log.warn("compose-draft.restore-failed", {
+          source: namespace,
+          error: formatLogError(error),
+        });
       })
       .finally(() => {
         if (!disposed && loadSucceeded) {

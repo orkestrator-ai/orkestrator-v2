@@ -1,9 +1,12 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { patchGlobalConfig } from "@/lib/backend";
 import { useConfigStore } from "@/stores/configStore";
+
+const log = createLogger("web.native-agent");
 
 const EMPTY_FAVORITE_MODELS: AgentModelRef[] = [];
 const DEFAULT_ENABLED_PLATFORMS: AgentPlatform[] = ["claude", "codex", "opencode"];
@@ -97,7 +100,7 @@ function persistFavoriteModels(favoriteModels: AgentModelRef[]): void {
         useConfigStore.getState().updateGlobalConfig({
           favoriteModels: favoriteWriteCommitted ?? previous,
         });
-        console.warn("[AgentModelPicker] Failed to persist favorites:", error);
+        log.warn("model-favorites.persist-failed", { error: formatLogError(error) });
         toast.error("Could not save model favorites");
       }
     } finally {

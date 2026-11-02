@@ -236,10 +236,11 @@ describe("desktop startup screen", () => {
         },
       });
       expect(view.document.querySelector("button")?.textContent).toBe("Reload window");
-      expect(error.mock.calls).toContainEqual([
-        "[DesktopStartup] Renderer failed to load",
-        expect.objectContaining({ message: "chunk missing", stack: expect.any(String) }),
-      ]);
+      const lines = error.mock.calls.map(([line]) => String(line));
+      expect(lines[0]).toBe("[DesktopStartup] renderer-load-failed");
+      expect(lines[1]).toStartWith("[web.startup] renderer.load-failed error.name=Error");
+      expect(lines[1]).toContain('error.message="chunk missing"');
+      expect(lines[1]).toContain("error.stack=");
     } finally {
       error.mockRestore();
     }

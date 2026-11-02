@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useUIStore } from "@/stores/uiStore";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.sidebar");
 
 /** Defaults apply once per project, after its authoritative environment result. */
 export function useSidebarHydration(
@@ -28,7 +31,10 @@ export function useSidebarHydration(
           setSettled((previous) => new Set(previous).add(project.id));
         },
         (error: unknown) => {
-          console.error(`Failed to load environments for project ${project.id}:`, error);
+          log.error("environments.load-failed", {
+            projectId: project.id,
+            error: formatLogError(error),
+          });
           started.current.delete(project.id);
         },
       );

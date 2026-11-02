@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -601,9 +602,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
   test("leaves null targeted hydration recoverable by resource synchronization", async () => {
     getEnvironmentMock.mockResolvedValueOnce(null);
-    const originalWarn = console.warn;
-    const warn = mock(() => undefined);
-    console.warn = warn;
+    const logs = captureLogs();
     try {
       render(
         <CreateEnvironmentFlowDialog
@@ -619,8 +618,13 @@ describe("CreateEnvironmentFlowDialog", () => {
       startFeatureBuild("Dark mode toggle");
 
       await waitFor(() =>
-        expect(warn).toHaveBeenCalledWith(
-          "[feature-build-activation] Environment env-feature was not found after creation",
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "web.build-pipeline",
+            event: "environment.not-found",
+            fields: expect.objectContaining({ environmentId: "env-feature" }),
+          }),
         ),
       );
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
@@ -634,7 +638,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       });
       expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeTruthy();
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -643,9 +647,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       id: "env-feature",
       projectId: "project-other",
     } as Environment);
-    const originalWarn = console.warn;
-    const warn = mock(() => undefined);
-    console.warn = warn;
+    const logs = captureLogs();
     try {
       render(
         <CreateEnvironmentFlowDialog
@@ -661,8 +663,17 @@ describe("CreateEnvironmentFlowDialog", () => {
       startFeatureBuild("Dark mode toggle");
 
       await waitFor(() =>
-        expect(warn).toHaveBeenCalledWith(
-          "[feature-build-activation] Ignoring environment env-feature for an unexpected project",
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "web.build-pipeline",
+            event: "environment.project-mismatch",
+            fields: expect.objectContaining({
+              environmentId: "env-feature",
+              projectId: "project-1",
+              actualProjectId: "project-other",
+            }),
+          }),
         ),
       );
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
@@ -678,16 +689,14 @@ describe("CreateEnvironmentFlowDialog", () => {
         projectId: "project-1",
       });
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
   test("contains a rejected targeted read without blocking resource recovery", async () => {
     const hydrationError = new Error("environment read unavailable");
     getEnvironmentMock.mockRejectedValueOnce(hydrationError);
-    const originalWarn = console.warn;
-    const warn = mock(() => undefined);
-    console.warn = warn;
+    const logs = captureLogs();
     try {
       render(
         <CreateEnvironmentFlowDialog
@@ -703,9 +712,16 @@ describe("CreateEnvironmentFlowDialog", () => {
       startFeatureBuild("Dark mode toggle");
 
       await waitFor(() =>
-        expect(warn).toHaveBeenCalledWith(
-          "[feature-build-activation] Failed to hydrate environment env-feature:",
-          hydrationError,
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "web.build-pipeline",
+            event: "environment.hydrate-failed",
+            fields: expect.objectContaining({
+              environmentId: "env-feature",
+              error: expect.objectContaining({ message: hydrationError.message }),
+            }),
+          }),
         ),
       );
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
@@ -719,7 +735,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       });
       expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeTruthy();
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -988,9 +1004,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       throw startError;
     });
     const onOpenChange = mock(() => {});
-    const originalConsoleError = console.error;
-    const consoleError = mock(() => undefined);
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(
@@ -1008,10 +1022,20 @@ describe("CreateEnvironmentFlowDialog", () => {
 
       await waitFor(() => {
         expect(onOpenChange).toHaveBeenCalledWith(false);
-        expect(consoleError).toHaveBeenCalledWith("Failed to auto-start environment:", startError);
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.environment",
+            event: "auto-start.failed",
+            fields: expect.objectContaining({
+              environmentId: "env-rejected",
+              error: expect.objectContaining({ message: "background admission rejected" }),
+            }),
+          }),
+        );
       });
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 

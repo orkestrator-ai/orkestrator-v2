@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -27,6 +28,8 @@ import { type AgentNativeTabProps, findNativeAgentAdapter } from "./adapter";
 import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
 import { PreviewLinkSourceContext } from "@/components/chat/link-source-context";
+
+const log = createLogger("web.native-agent");
 
 function firstPromptDraftKeys(
   environmentId: string,
@@ -180,7 +183,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         setPendingDurabilityOperation(null);
         setAwaitingDurability(false);
       } catch (error) {
-        console.warn("[AgentNativeTab] Failed to persist provider lock:", error);
+        log.warn("provider-lock.persist-failed", { error: formatLogError(error) });
         setDurabilityError("The agent choice is locked, but could not be saved.");
         setAwaitingDurability(false);
         if (submission) {

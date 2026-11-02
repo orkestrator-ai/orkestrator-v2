@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   Children,
   isValidElement,
@@ -50,6 +51,8 @@ import {
 } from "@/lib/chat/rich-markdown/incremental-parse";
 import { SourceViewerDialog } from "@/components/chat/rich/CodeBlockViewer";
 import { cn } from "@/lib/utils";
+
+const log = createLogger("web.chat");
 
 export {
   MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS,
@@ -231,7 +234,7 @@ export function MarkdownLink({
             })
           : openInBrowser(href);
       void opened.catch((error) => {
-        console.error("[MessageMarkdown] Failed to open link:", error);
+        log.error("message.link-open-failed", { error: formatLogError(error) });
       });
     },
     [createFileTab, href, linkSource, onClick, openPullRequest, previewable],

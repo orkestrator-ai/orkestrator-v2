@@ -3,9 +3,12 @@ import {
   MAX_BUG_REPORT_RENDERER_ERROR_CHARS,
   MAX_BUG_REPORT_RENDERER_ERRORS,
 } from "@orkestrator/protocol/bug-report";
+import { createLogger } from "@orkestrator/protocol/logger";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   recentRendererErrors,
   recordRendererError,
+  rendererErrorKind,
   resetRendererErrorsForTests,
 } from "./renderer-errors";
 
@@ -28,5 +31,17 @@ describe("renderer error recorder", () => {
     const [first, second] = recentRendererErrors();
     expect(first?.message).toContain("bad thing");
     expect(second?.message.length).toBe(MAX_BUG_REPORT_RENDERER_ERROR_CHARS);
+  });
+
+  test("classifies the window handlers' logger lines by their text form", () => {
+    const logs = captureLogs();
+    const log = createLogger("web.window");
+    log.error("error.unhandled");
+    log.error("rejection.unhandled");
+    createLogger("web.react").error("root.caught-error");
+    logs.restore();
+
+    expect(logs.lines.map(rendererErrorKind)).toEqual(["error", "unhandledrejection", "console"]);
+    expect(rendererErrorKind({ not: "text" })).toBe("console");
   });
 });

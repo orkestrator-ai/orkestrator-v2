@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 
@@ -43,7 +44,12 @@ function deferred<T>() {
 }
 
 describe("ProjectNotesView", () => {
+  let logs: LogCapture;
+
+  afterEach(() => logs.restore());
+
   beforeEach(() => {
+    logs = captureLogs();
     getProjectNotesMock.mockReset();
     getProjectNotesMock.mockResolvedValue({ content: "saved notes" });
     saveProjectNotesMock.mockReset();
@@ -207,7 +213,6 @@ describe("ProjectNotesView", () => {
   });
 
   test("warns when an unsaved draft cannot be persisted on unmount", async () => {
-    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
     saveComposeDraftMock.mockRejectedValueOnce(new Error("draft storage unavailable"));
     const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
@@ -224,7 +229,6 @@ describe("ProjectNotesView", () => {
       }),
     );
     expect(saveProjectNotesMock).not.toHaveBeenCalled();
-    warning.mockRestore();
   });
 
   test("discards the draft of the project the save belonged to after a switch", async () => {
@@ -291,7 +295,6 @@ describe("ProjectNotesView", () => {
   });
 
   test("keeps the editor disabled and saves nothing when the load fails", async () => {
-    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
     getProjectNotesMock.mockRejectedValueOnce(new Error("notes unavailable"));
     render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
 
@@ -314,11 +317,17 @@ describe("ProjectNotesView", () => {
     await waitFor(() => expect(editor.value).toBe("recovered notes"));
     expect(editor.disabled).toBe(false);
     expect(screen.queryByRole("alert") === null).toBe(true);
-    consoleError.mockRestore();
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "web.kanban",
+        event: "notes.load-failed",
+        fields: expect.objectContaining({ projectId: "project-1" }),
+      }),
+    );
   });
 
   test("keeps failed edits visible and recoverable", async () => {
-    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
     saveProjectNotesMock.mockRejectedValueOnce(new Error("disk full"));
     render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
@@ -327,9 +336,24 @@ describe("ProjectNotesView", () => {
     fireEvent.change(editor, { target: { value: "unsaved edit" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(warning).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.kanban",
+          event: "notes.draft-retained",
+          fields: expect.objectContaining({
+            projectId: "project-1",
+            error: expect.objectContaining({ message: "disk full" }),
+          }),
+        }),
+      ),
+    );
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({ level: "error", area: "web.kanban", event: "notes.save-failed" }),
+    );
+    expect(logs.lines.join("\n")).not.toContain("unsaved edit");
     expect((editor as HTMLTextAreaElement).value).toBe("unsaved edit");
     expect(deleteComposeDraftMock).not.toHaveBeenCalled();
-    warning.mockRestore();
   });
 });

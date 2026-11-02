@@ -3,6 +3,9 @@ import { readImage, readText } from "@/lib/native/clipboard";
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 type AsyncPasteCallback<T> = (value: T) => void | Promise<void>;
 
@@ -100,7 +103,7 @@ export async function processClipboardPaste(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to process paste";
-    console.error("[processClipboardPaste] Error:", message);
+    log.error("clipboard.process-failed", { target: "container", error: formatLogError(error) });
     await onError?.(message);
   }
   return false;
@@ -166,7 +169,7 @@ export async function processLocalClipboardPaste(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to process paste";
-    console.error("[processLocalClipboardPaste] Error:", message);
+    log.error("clipboard.process-failed", { target: "local", error: formatLogError(error) });
     await onError?.(message);
   }
   return false;
@@ -249,7 +252,7 @@ export function useClipboardImagePaste({
         await onImageSaved?.(fullPath);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to save image";
-        console.error("[useClipboardImagePaste] Error:", message);
+        log.error("clipboard.image-save-failed", { error: formatLogError(error) });
         await onError?.(message);
       } finally {
         isProcessingRef.current = false;

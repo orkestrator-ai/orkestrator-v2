@@ -3,6 +3,9 @@ import { showEnvironmentUnreadToast } from "@/components/environments/environmen
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.environment");
 
 /**
  * Clears an environment's unread badge once this client opens it.
@@ -66,10 +69,10 @@ export function useUnreadEnvironmentSync(): void {
         // Keep the optimistic clear for the client currently viewing this
         // environment. The authoritative resource snapshot will restore and
         // retry the badge if the backend mutation did not commit.
-        console.warn(
-          `[UnreadSync] Failed to clear unread work for ${selectedEnvironmentId}:`,
-          error,
-        );
+        log.warn("unread.clear-failed", {
+          environmentId: selectedEnvironmentId,
+          error: formatLogError(error),
+        });
       });
   }, [selectedEnvironmentId, environments]);
 }

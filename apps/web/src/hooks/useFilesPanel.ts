@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useEffect, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
@@ -24,6 +25,8 @@ import {
   FILES_PANEL_DATA_SAVING_BACKOFF_MS,
   FILES_PANEL_DATA_SAVING_UNWATCHED_BACKOFF_MS,
 } from "@/lib/data-saving-policy";
+
+const log = createLogger("web.files");
 
 // Auto-refresh interval in milliseconds (5 seconds)
 const AUTO_REFRESH_INTERVAL = 5000;
@@ -512,7 +515,7 @@ export function useFilesPanel() {
             publishChanges(environmentSnapshotKey, snapshot.value, snapshot.digest);
           }
         } catch (err) {
-          console.error("Failed to load git changes:", err);
+          log.error("git-changes.load-failed", { error: formatLogError(err) });
           // Only clear on non-silent (manual) refresh to avoid flickering
           if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
             publishChanges(environmentSnapshotKey, []);
@@ -597,7 +600,7 @@ export function useFilesPanel() {
             publishFileTree(environmentSnapshotKey, snapshot.value, snapshot.digest);
           }
         } catch (err) {
-          console.error("Failed to load file tree:", err);
+          log.error("file-tree.load-failed", { error: formatLogError(err) });
           if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
             publishFileTree(environmentSnapshotKey, []);
           }
@@ -700,7 +703,7 @@ export function useFilesPanel() {
           useChangeProjectionStore.getState().applyProjection(result.projection);
         }
       } catch (err) {
-        console.error("Failed to refresh changes:", err);
+        log.error("changes.refresh-failed", { error: formatLogError(err) });
       } finally {
         if (showLoading && activeSnapshotKeyRef.current === environmentSnapshotKey) {
           setLoadingChanges(false);

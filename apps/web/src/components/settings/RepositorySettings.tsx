@@ -47,6 +47,9 @@ import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/typ
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { SettingsPageLayout } from "./SettingsPageLayout";
 import { repositorySettingsPatch } from "./repository-settings-patch";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.settings");
 
 interface RepositorySettingsProps {
   project: Project;
@@ -297,7 +300,7 @@ export function RepositorySettings({
         setLocalPath(selected);
       }
     } catch (err) {
-      console.error("Failed to open directory picker:", err);
+      log.error("directory-picker.failed", { error: formatLogError(err) });
     }
   };
 
@@ -361,7 +364,7 @@ export function RepositorySettings({
         }
       }
     } catch (err) {
-      console.error("Failed to open file picker:", err);
+      log.error("file-picker.failed", { error: formatLogError(err) });
     }
   };
 
@@ -489,7 +492,7 @@ export function RepositorySettings({
       toast.success("Settings saved");
       onOpenChange(false);
     } catch (err) {
-      console.error("Failed to save settings:", err);
+      log.error("repository.save-failed", { error: formatLogError(err) });
       const message = err instanceof Error ? err.message : "Failed to save settings";
       toast.error("Failed to save settings", { description: message });
     } finally {

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import {
   act,
   cleanup,
@@ -229,6 +230,7 @@ const setEnvironmentAutoMergeMock = mock(
     autoMerge: enabled,
   }),
 );
+let logs: LogCapture;
 const originalConsoleError = console.error;
 const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
@@ -895,6 +897,7 @@ beforeEach(() => {
   currentDeletingProjects.clear();
   setLongPressTimingsForTests(15, CLICK_SUPPRESSION_MS);
   cleanup();
+  logs = captureLogs();
   console.error = mock(() => {}) as typeof console.error;
   console.log = mock(() => {}) as typeof console.log;
   console.warn = mock(() => {}) as typeof console.warn;
@@ -1076,6 +1079,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  logs.restore();
   console.error = originalConsoleError;
   console.log = originalConsoleLog;
   console.warn = originalConsoleWarn;
@@ -1925,9 +1929,13 @@ describe("ActionBar editor and run commands", () => {
     readContainerFileMock.mockRejectedValueOnce(new Error("read failed"));
     render(<ActionBar />);
     await waitFor(() => {
-      expect(console.error).toHaveBeenCalledWith(
-        "[ActionBar] Failed to read orkestrator-ai.json:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.action-bar",
+          event: "run-commands.read-failed",
+          fields: { error: expect.objectContaining({ message: "read failed" }) },
+        }),
       );
     });
     fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
@@ -6423,9 +6431,12 @@ describe("ActionBar run commands", () => {
     rerender(<ActionBar />);
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
     await waitFor(() =>
-      expect(console.error).toHaveBeenCalledWith(
-        "[ActionBar] Failed to read orkestrator-ai.json:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.action-bar",
+          event: "run-commands.read-failed",
+        }),
       ),
     );
     expect(runButton.getAttribute("aria-disabled")).toBe("false");

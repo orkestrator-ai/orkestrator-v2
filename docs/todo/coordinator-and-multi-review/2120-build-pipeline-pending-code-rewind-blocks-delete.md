@@ -141,3 +141,15 @@ The dropped reset leaves the backup ref, if `update-ref` ever ran, and nothing
 else; the pipeline record that described it is deleted. That is the con the
 to-do accepted. Error text for pause and cancel is unchanged (it does not yet
 tell the user that delete is the way out); see Open questions.
+
+### Task 1: the branch's default-suite failures are not caused by this change
+
+The review-preparation `mise run test` at `7414ea213` failed in eleven tests,
+none in a build-pipeline owner. Seven terminal link-routing tests
+(`terminalPortalStore.test.ts`, `ClaudeTmuxInteractiveTerminal.test.tsx`) fail
+identically when run alone on `main` at `38d55ee14`. The other four are known
+timing flakes (cases 1314, 0310, 0280/0320, 2409/2411). They passed alone on the
+branch, and the keepalive one also failed alone on `main` under the same load.
+Recorded in flake case
+[2710](../../tests/flaky-tests/aggregate-validation-runs/2710-pending-code-rewind-delete-validation.md);
+no unrelated test or code was changed to hide them.

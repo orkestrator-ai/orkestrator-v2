@@ -5,7 +5,8 @@ Checked against `main` at `2459b05c` (2026-10-15).
 ## Task analysis
 
 Analysed 2026-10-27 against `main` at `863b5782`; statuses rechecked
-2026-10-30 against `main` at `cd7bbe3e`.
+2026-10-30 against `main` at `cd7bbe3e`, and task 5 on 2026-11-02 against
+`main` at `38d55ee1`.
 
 ### Tasks
 
@@ -22,7 +23,10 @@ Analysed 2026-10-27 against `main` at `863b5782`; statuses rechecked
    `operations.sourceHints` capability landed on branch
    `todo-0047-web-annotation-extensions`).
 5. **Open shadow roots and same-origin iframes**: code item 4. Status: open
-   (not started; the anchor script still marks both `unsupported`).
+   (open shadow roots done on 2026-11-02 on branch
+   `shadow-root-annotations-583af4c65646-r1`; same-origin iframes not
+   started; follow-ups in
+   [2580](2580-shadow-root-annotation-follow-ups.md)).
 6. **Non-desktop capture**: code item 5 and the second open question. Status:
    open (depends on [0042](0042-service-preview-rollout.md) task 3 passing,
    per the embedding deferral recorded by
@@ -186,6 +190,16 @@ resolution rules rather than add a score.
 reason of `iframe`, `shadow-root`, `closed-root` or `cross-origin`
 (`apps/desktop/electron/browser-preview-anchor-script.ts:167`, `:701-707`).
 `CaptureModePicker.tsx` offers Region.
+
+Rechecked 2026-11-02 against `main` at `38d55ee1`: still true. `scopeFor`
+marked an element with a `shadowRoot` (the host) and any element whose root
+was not the document `unsupported`, and Element mode only asked
+`document.elementsFromPoint`, which retargets a hit inside a shadow root to
+its host, so content inside a root could not be picked at all. The resolver
+refused every non-document scope. Electron main does not filter scopes; it
+passes anchors to the page. A document-level `MutationObserver` (the pin
+layer's only observer) does not see changes inside shadow roots. Open shadow
+roots were built on this date; see Assumptions and decisions.
 
 **Decisions.**
 
@@ -356,6 +370,83 @@ Kept non-desktop capture blocked rather than choosing a backend-owned browser
 session, because the recorded deferral does not choose that separate-session
 design. The embedding go or no-go is no longer an outstanding decision.
 
+### Task 5: open shadow roots first, as recommended
+
+Built open shadow roots only, on branch
+`shadow-root-annotations-583af4c65646-r1` (2026-11-02). Same-origin iframes
+were not started: they need per-frame navigation generations, coordinate
+transforms and cross-frame messaging, and nothing in the shadow-root work
+depends on them. Task 5 stays `open` for them.
+
+### Task 5: the anchor records a root path, not a composed selector
+
+A new scope `{ kind: "shadow", hosts }` (`WebAnnotationAnchorScope`) lists
+each open shadow root's host, outermost first, as its tag, a stable id when
+unique in the containing root, and a CSS path within that root. The rest of
+the anchor (stable id, semantics, CSS path) is scoped to the innermost root.
+Considered instead: one "deep" CSS path with a separator per root, which is
+not a selector the browser can run and would need its own parser; and
+reusing a full anchor per host, which would run the semantic rules once per
+level for little gain, since hosts are usually unique custom elements. The
+path is bounded by `WEB_ANNOTATION_MAX_SHADOW_DEPTH` (8), validated in the
+protocol and mirrored in the page kit (a test checks they agree); a deeper
+target is `unsupported` (`shadow-root`).
+
+### Task 5: resolution extends rule 1 rather than adding a score
+
+As the context asks, the ordered rules were extended. In the page, a `shadow`
+scope first resolves each host in its containing root: exactly one element
+with the host's tag, found by stable id when that is unique and otherwise by
+CSS path, that still has an open shadow root. None, or a host that is closed
+or not yet attached, is `missing`; several are `ambiguous`; an empty or
+over-long path is `unsupported`. Rules 2 to 5 then run inside the innermost
+root only, so a document element with the same id or name is never a
+candidate. Ancestors are read in the composed tree, so a host's name and id
+corroborate (or contradict) a candidate inside it: a repeated component whose
+host moved is told apart by the same ancestor rule as any repeated card. No
+new rule name was added; a host failure reports rule `none`.
+
+### Task 5: hit-testing descends through open roots
+
+`document.elementsFromPoint` retargets a hit inside a shadow root to its host,
+so Element mode now asks each open root under the point in turn, up to the
+depth limit. A hit a root reports outside itself (slotted light content) is
+not followed. Keyboard ↑ leaves a root through its host and ↓ enters a host's
+open root; the keyboard start uses the focused element inside open roots.
+Closed roots expose no `shadowRoot`, so their host is still the target with a
+`document` scope, exactly as before. Frames are never entered.
+
+### Task 5: a shadow host is now an ordinary element
+
+Before, selecting a host with an open root gave `unsupported` (`shadow-root`).
+Now its content is reachable on its own, so the host is anchored like any
+element in its root and gets a live pin. Kept the old `unsupported` marking
+was considered: it would leave whole-component notes without a pin for no
+remaining reason. The existing test that asserted the old marking was changed
+to say so.
+
+### Task 5: capability gate and fallback for older backends
+
+The backend advertises `operations.shadowTargets` (with authoring) because
+its validation accepts the new scope. The renderer
+(`withAdvertisedShadowScope` in `capture-commit.ts`) replaces a `shadow`
+scope with the older `{ kind: "unsupported", reason: "shadow-root" }` for a
+backend that does not advertise it, so the note still saves there and its pin
+reports unsupported, as before. Main rebuilds the scope from known fields
+(`pickScope` in `browser-preview-capture-parse.ts`), and the brief names the
+host tags (never their selectors) so an agent knows which components to look
+in.
+
+### Task 5: pins observe the roots they resolve into
+
+A document observer never sees inside a shadow root, so the pin layer also
+observes each open root a pass resolved into (at most 64; the kit reports
+them through `shadowRootsSeen`). A host that attaches its root only after
+pins were shown is a known gap, recorded in
+[2580](2580-shadow-root-annotation-follow-ups.md) task 3, with sensitive-field
+masks inside roots (task 1, which predates this work), text selections inside
+roots (task 2) and a live desktop run (task 4).
+
 ## Current state
 
 - Comparison is side by side only. Capture current result
@@ -375,10 +466,15 @@ design. The embedding go or no-go is no longer an outstanding decision.
   (`verifySourceHints` in `web-annotation-service-threads.ts`). Since todo
   0725, a client-declared `verified: true` is refused. See
   [web-page-annotations.md](../../architecture/web-page-annotations.md#development-source-hints).
-- iframe and shadow-root targets resolve to their host element with
-  `scope: { kind: "unsupported", reason: … }`
-  (`browser-preview-anchor-script.ts`). Region mode (`CaptureModePicker.tsx`)
-  is the documented fallback for iframe, shadow and canvas content.
+- Element targets inside open shadow roots anchor to the element itself with
+  `scope: { kind: "shadow", hosts }`, the root path outermost first, and
+  re-resolve inside the innermost root (task 5, 2026-11-02;
+  `browser-preview-anchor-script.ts`). Desktop clients send that scope only
+  to a backend advertising `operations.shadowTargets`. iframe and closed-root
+  targets still resolve to the host element or `unsupported`, and text
+  selections inside shadow roots are refused. Region mode
+  (`CaptureModePicker.tsx`) is the fallback for iframe, closed-root and
+  canvas content.
 - Only Electron captures. Web and iOS list, reply, request and review, and
   hide capture (`canCapture` in `AnnotationPanel.tsx`). The architecture doc's
   client capability matrix records this.
@@ -408,7 +504,10 @@ design. The embedding go or no-go is no longer an outstanding decision.
 3. Development source hints: done (task 4). The documented emitter, the thread
    view list and the live captures are done in
    [0950](0950-source-hint-producer-plugin.md).
-4. Open shadow roots and same-origin iframes.
+4. Open shadow roots and same-origin iframes. Open shadow roots are done
+   (task 5); the follow-ups are in
+   [2580](2580-shadow-root-annotation-follow-ups.md). Same-origin iframes
+   remain.
    - Requires explicit root paths, a navigation generation per frame, and
      coordinate transforms through each frame.
    - Bound depth, frame count, traversal time and transformed geometry.

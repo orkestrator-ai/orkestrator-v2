@@ -418,7 +418,7 @@ describe("bounded, sanitized evidence", () => {
     });
   });
 
-  test("elements that host an iframe or shadow root are captured with unsupported scope", () => {
+  test("an iframe is captured with unsupported scope; a shadow host is an ordinary element", () => {
     const harness = page(`<iframe title="Embedded"></iframe><div id="host"></div>`);
     const host = harness.document.getElementById("host")!;
     host.attachShadow({ mode: "open" }).innerHTML = "<button>Inside</button>";
@@ -428,10 +428,9 @@ describe("bounded, sanitized evidence", () => {
         reason: "iframe",
       },
     );
-    expect(captureElement(harness, host).anchor.scope).toEqual({
-      kind: "unsupported",
-      reason: "shadow-root",
-    });
+    // The host lives in the document. Content inside its open root is
+    // reachable on its own (browser-preview-shadow-targets.test.ts).
+    expect(captureElement(harness, host).anchor.scope).toEqual({ kind: "document" });
   });
 });
 

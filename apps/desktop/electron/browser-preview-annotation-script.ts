@@ -242,10 +242,10 @@ function installBrowserPreviewCaptureRuntime(
   };
 
   // -- Element mode ---------------------------------------------------------
-  /** The page element under a point, skipping inspector-owned overlays. */
-  const elementAt = (x: number, y: number): Element | null => {
+  /** The topmost page element `root` reports at a point, skipping inspector-owned overlays. */
+  const topmostAt = (root: Document | ShadowRoot, x: number, y: number): Element | null => {
     try {
-      const stack = document.elementsFromPoint?.(x, y) ?? [];
+      const stack = root.elementsFromPoint?.(x, y) ?? [];
       for (let index = 0; index < Math.min(stack.length, 32); index += 1) {
         const element = stack[index]!;
         if (!kit.isInspectorNode(element)) return element;
@@ -256,13 +256,41 @@ function installBrowserPreviewCaptureRuntime(
     const previous = pickOverlay.style.pointerEvents;
     pickOverlay.style.pointerEvents = "none";
     try {
-      const element = document.elementFromPoint(x, y);
+      const element = root.elementFromPoint?.(x, y) ?? null;
       return element && !kit.isInspectorNode(element) ? element : null;
     } catch {
       return null;
     } finally {
       pickOverlay.style.pointerEvents = previous;
     }
+  };
+  /**
+   * The page element under a point. The document retargets a hit inside an
+   * open shadow root to its host, so ask each open root in turn, at most
+   * `MAX_SHADOW_DEPTH` deep. A hit the root reports outside itself (slotted
+   * light content) stays where it is. Closed roots expose no `shadowRoot`, so
+   * their host is the target, as before.
+   */
+  const elementAt = (x: number, y: number): Element | null => {
+    let element = topmostAt(document, x, y);
+    for (let depth = 0; element && depth < kit.MAX_SHADOW_DEPTH; depth += 1) {
+      const root = element.shadowRoot;
+      if (!root) break;
+      const inner = topmostAt(root, x, y);
+      if (!inner || inner === element || inner.getRootNode() !== root) break;
+      element = inner;
+    }
+    return element;
+  };
+  /** The focused element, inside open shadow roots too. */
+  const focusedElement = (): Element | null => {
+    let active = document.activeElement;
+    for (let depth = 0; active && depth < kit.MAX_SHADOW_DEPTH; depth += 1) {
+      const inner = active.shadowRoot?.activeElement ?? null;
+      if (!inner) break;
+      active = inner;
+    }
+    return active;
   };
   const selectable = (element: Element | null): element is Element =>
     Boolean(element) &&
@@ -283,7 +311,7 @@ function installBrowserPreviewCaptureRuntime(
   const startingCandidate = (): Element | null => {
     const resolved = initialTargetElement();
     if (selectable(resolved)) return resolved;
-    const active = document.activeElement;
+    const active = focusedElement();
     if (selectable(active)) return active;
     const centre = elementAt(window.innerWidth / 2, window.innerHeight / 2);
     if (selectable(centre)) return centre;
@@ -379,7 +407,9 @@ function installBrowserPreviewCaptureRuntime(
       const mouse = event as MouseEvent;
       const pointTarget = elementAt(mouse.clientX, mouse.clientY);
       const chosen =
-        candidate && pointTarget && (candidate === pointTarget || candidate.contains(pointTarget))
+        candidate &&
+        pointTarget &&
+        (candidate === pointTarget || kit.composedContains(candidate, pointTarget))
           ? candidate
           : (pointTarget ?? candidate);
       if (chosen) selectElement(chosen);
@@ -409,16 +439,19 @@ function installBrowserPreviewCaptureRuntime(
       }
       if (!candidate) return;
       if (key === "ArrowUp" || key === "[") {
-        const parent: Element | null = candidate.parentElement;
+        const parent: Element | null = kit.composedParent(candidate);
         if (selectable(parent)) {
           downStack.push(candidate);
           moveTo(parent, true);
         }
       } else if (key === "ArrowDown" || key === "]") {
         let next = downStack.pop() ?? null;
-        if (!next || !candidate.contains(next)) {
+        if (!next || !kit.composedContains(candidate, next)) {
           next = null;
-          const children = candidate.children;
+          // An open shadow root's content is what renders, so step into it first.
+          const shadowChildren = candidate.shadowRoot?.children;
+          const children =
+            shadowChildren && shadowChildren.length > 0 ? shadowChildren : candidate.children;
           for (let index = 0; index < Math.min(children.length, 200); index += 1) {
             const child = children[index]!;
             if (!kit.isInspectorNode(child)) {

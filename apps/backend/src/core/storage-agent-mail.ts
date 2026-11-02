@@ -1019,6 +1019,33 @@ export class AgentMailRepository {
       .map(metadataMessage);
   }
 
+  /**
+   * When `coordinatorId` last sent mail that reached `environmentId`'s
+   * mailboxes (any of its conversations), or null. Mail the store refused or
+   * bounced was never sent and does not count.
+   */
+  async latestCoordinatorMailTo(
+    environmentId: string,
+    coordinatorId: string,
+  ): Promise<string | null> {
+    const store = await this.store.snapshot();
+    let latest: string | null = null;
+    for (const mailbox of Object.values(store.mailboxes)) {
+      for (const message of mailbox.messages) {
+        if (
+          message.toEnvironmentId === environmentId &&
+          message.from.kind === "coordinator" &&
+          message.from.coordinatorId === coordinatorId &&
+          message.placement !== "bounced" &&
+          message.placement !== "undeliverable" &&
+          (latest === null || message.createdAt > latest)
+        )
+          latest = message.createdAt;
+      }
+    }
+    return latest;
+  }
+
   async listUserSentAgentMail(): Promise<AgentMailMessageSummary[]> {
     const [store, config] = await Promise.all([
       this.store.snapshot(),

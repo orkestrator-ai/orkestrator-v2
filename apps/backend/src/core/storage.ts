@@ -1937,6 +1937,10 @@ export class StorageService {
     return this.repos.agentMail.listAgentMailSentByMailbox(environmentId, tabId);
   }
 
+  latestCoordinatorMailTo(environmentId: string, coordinatorId: string): Promise<string | null> {
+    return this.repos.agentMail.latestCoordinatorMailTo(environmentId, coordinatorId);
+  }
+
   listUserSentAgentMail(): Promise<AgentMailMessageSummary[]> {
     return this.repos.agentMail.listUserSentAgentMail();
   }

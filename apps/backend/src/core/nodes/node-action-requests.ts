@@ -8,6 +8,7 @@ import {
   parseWorkerQuestionAnswers,
   type WorkerQuestionRelay,
 } from "@orkestrator/protocol/worker-question-relay";
+import type { ProjectHomeMessage } from "@orkestrator/protocol/project-home-message";
 
 /**
  * Actions a coordinator may only *request*; the user approves or rejects
@@ -38,11 +39,16 @@ import {
  *   of it, through the same `resolve_native_agent_interaction` the worker's
  *   tab uses. A question no longer pending settles `stale` and nothing is
  *   sent. Approvals and permissions are never relayed.
+ * - `message-project-home`: send a main coordinator's message to the
+ *   project home, the user's own checkout, when the coordinator has sent it
+ *   nothing in the last three hours. The coordinator's reason is the
+ *   request's `reason`; declining sends nothing.
  *
  * Requests hold names and identifiers only, never file contents or values;
  * the exceptions are an AGENTS.md proposal's entries, which are the
  * coordinator's own bounded words the user reviews, and a worker question
- * relay's bounded copy of the question and proposed answer.
+ * relay's bounded copy of the question and proposed answer, and a held
+ * project-home message, which is the coordinator's own bounded text.
  * The outcome is mailed back to the requesting coordinator conversation.
  *
  * An approved `update-agents-md` request keeps the user's final entries, and
@@ -62,7 +68,8 @@ export type NodeActionKind =
   | "apply-root-changes"
   | "update-agents-md"
   | "switch-agent-account"
-  | "answer-worker-question";
+  | "answer-worker-question"
+  | "message-project-home";
 
 /** Kinds whose approved, unfinished runs are resumed after a restart. */
 const RESUMABLE_KINDS: ReadonlySet<NodeActionKind> = new Set(["update-agents-md"]);
@@ -107,6 +114,8 @@ export interface NodeActionRequest {
   agentsMd?: { changes: AgentsMdChange[] };
   /** `answer-worker-question`: the question as proposed and the coordinator's answer. */
   workerQuestion?: WorkerQuestionRelay;
+  /** `message-project-home`: the message held for the user's approval. */
+  projectHomeMessage?: ProjectHomeMessage;
   createdAt: string;
   expiresAt: string;
   state: NodeActionState;
@@ -232,6 +241,7 @@ export class NodeActionRequests {
     reason?: string;
     agentsMd?: NodeActionRequest["agentsMd"];
     workerQuestion?: NodeActionRequest["workerQuestion"];
+    projectHomeMessage?: NodeActionRequest["projectHomeMessage"];
   }): Promise<NodeActionRequest> {
     if (input.requestId !== undefined && (!input.requestId.trim() || input.requestId.length > 256))
       throw new Error("Expected a requestId of 1-256 characters");
@@ -247,7 +257,8 @@ export class NodeActionRequests {
           JSON.stringify(existing.requestedBy) !== JSON.stringify(input.requestedBy) ||
           existing.reason !== (input.reason ? input.reason.slice(0, 500) : undefined) ||
           JSON.stringify(existing.agentsMd) !== JSON.stringify(input.agentsMd) ||
-          JSON.stringify(existing.workerQuestion) !== JSON.stringify(input.workerQuestion)
+          JSON.stringify(existing.workerQuestion) !== JSON.stringify(input.workerQuestion) ||
+          JSON.stringify(existing.projectHomeMessage) !== JSON.stringify(input.projectHomeMessage)
         )
           throw new Error("Request ID was reused with a different payload");
         await this.persist();
@@ -264,6 +275,9 @@ export class NodeActionRequests {
       ...(input.reason ? { reason: input.reason.slice(0, 500) } : {}),
       ...(input.agentsMd ? { agentsMd: structuredClone(input.agentsMd) } : {}),
       ...(input.workerQuestion ? { workerQuestion: structuredClone(input.workerQuestion) } : {}),
+      ...(input.projectHomeMessage
+        ? { projectHomeMessage: structuredClone(input.projectHomeMessage) }
+        : {}),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + NODE_ACTION_REQUEST_TTL_MS).toISOString(),
       state: "pending",
@@ -450,6 +464,10 @@ export function describeNodeAction(
           (target) =>
             `${request.workerQuestion?.tabName ? `in tab “${request.workerQuestion.tabName}” ` : ""}of “${names(target)}” on ${target.nodeName}`,
         )
+        .join(", ")}`;
+    case "message-project-home":
+      return `Send a coordinator message to the project home ${request.targets
+        .map((target) => `“${names(target)}” on ${target.nodeName}`)
         .join(", ")}`;
     case "update-agents-md":
       return `Open a pull request updating the ## Orkestrator section of AGENTS.md in ${request.targets

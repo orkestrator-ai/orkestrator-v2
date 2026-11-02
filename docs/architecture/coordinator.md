@@ -905,12 +905,15 @@ by running it once against the committed branch
 repeats the work on the same commit. `COORDINATOR_VALIDATION_RULE` tells the main
 coordinator to ask for focused checks when review comes next, in the same places
 as the PR rule (the tool descriptions in short form). A full run is still right
-when no review follows, the user asks for one, or its result is what the
-coordinator needs to learn. Every delegation frame gives the worker the same
-default (`COORDINATOR_WORKER_VALIDATION_INSTRUCTION`), but unlike the PR
-instruction it yields to an explicit request in the prompt, because the worker
-cannot see those exceptions. A follow-up sent as mail or to an existing tab does
-not carry that instruction, so there the coordinator's rule is the only guard.
+when the user asks for one or its result is what the coordinator needs to
+learn. The coordinator states whether review follows in every worker prompt;
+when none follows, it must explicitly request all repository-required validation
+before handoff. Every delegation frame (`COORDINATOR_WORKER_VALIDATION_INSTRUCTION`)
+defers full passes only when the prompt says review follows, yielding to an
+explicit full-run request. Otherwise the worker follows repository validation
+requirements and reports any required full validation it did not run. A follow-up
+sent as mail or to an existing tab does not carry that instruction, so there the
+coordinator's rule is the only guard.
 
 A coordinator turn ends when it has delegated. It does not wait for the worker,
 so the composer stays open. A prompt typed during a turn is queued and runs

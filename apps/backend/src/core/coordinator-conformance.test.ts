@@ -331,14 +331,29 @@ describe("coordinator read-only conformance", () => {
     // start a Multi Review whose first step runs that suite on the same commit.
     expect(COORDINATOR_VALIDATION_RULE).toContain("when review comes next never ask a worker");
     expect(COORDINATOR_VALIDATION_RULE).toContain("focused checks");
-    // The exceptions: a full run is still right when its result is the point.
-    expect(COORDINATOR_VALIDATION_RULE).toContain("no review follows");
+    expect(COORDINATOR_VALIDATION_RULE).toContain(
+      "State in every worker prompt whether review follows",
+    );
+    expect(COORDINATOR_VALIDATION_RULE).toContain(
+      "When no review follows, explicitly ask the worker to run all validation required by the repository before handoff",
+    );
+    // A full run is still right when its result is the point.
     expect(COORDINATOR_VALIDATION_RULE).toContain("the user asks for one");
     expect(COORDINATOR_VALIDATION_RULE).toContain("diagnosing a suite failure");
-    // The worker's default matches, but an explicit request still wins, because
-    // the rule above has exceptions the worker cannot see.
     expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).toContain(
-      "Unless the prompt below asks for one",
+      "When the prompt below says review follows",
+    );
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).toContain(
+      "unless it explicitly asks you to run them",
+    );
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).toContain(
+      "When no review follows or the prompt does not say, follow the repository's validation requirements before handoff",
+    );
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).toContain(
+      "Report any required full validation you did not run",
+    );
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).not.toContain(
+      "review runs full validation once against your committed work",
     );
     for (const instruction of [
       COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,

@@ -539,7 +539,7 @@ const OPERATOR_INSTRUCTIONS =
 
 /** A coordinator's worker prompts ask for commits and focused checks, never a pull request (see COORDINATOR_PR_RULE, COORDINATOR_VALIDATION_RULE). */
 const COORDINATOR_WORKER_PROMPT_NOTE =
-  "Never ask the worker to open a pull request: ask it to commit and report back; the pull request comes from a PR tab after review. When review follows, ask for focused checks rather than a full test suite: review runs full validation itself.";
+  "Never ask the worker to open a pull request: ask it to commit and report back; the pull request comes from a PR tab after review. State whether review follows. When review follows, ask for focused checks rather than a full test suite: review runs full validation itself. When no review follows, explicitly request all validation required by the repository before handoff.";
 
 export async function createControlMcp(
   invoke: ControlMcpInvoker,

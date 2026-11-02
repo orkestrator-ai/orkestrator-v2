@@ -21,6 +21,7 @@ import {
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_WORKER_NO_PR_INSTRUCTION,
+  COORDINATOR_WORKER_VALIDATION_INSTRUCTION,
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
@@ -1181,10 +1182,17 @@ describe("Orkestrator control MCP server", () => {
       "Preferred complete Multi Review button action",
     );
     // Workers commit and report; the pull request comes from the PR tab.
-    for (const name of ["launch_environment", "launch_job", "send_prompt_to_tab"])
-      expect(definitions.find((tool) => tool.name === name)?.description).toContain(
-        "Never ask the worker to open a pull request",
+    for (const name of ["launch_environment", "launch_job", "send_prompt_to_tab"]) {
+      const description = definitions.find((tool) => tool.name === name)?.description;
+      expect(description).toContain("Never ask the worker to open a pull request");
+      expect(description).toContain("State whether review follows");
+      expect(description).toContain(
+        "When review follows, ask for focused checks rather than a full test suite",
       );
+      expect(description).toContain(
+        "When no review follows, explicitly request all validation required by the repository before handoff",
+      );
+    }
     expect(definitions.find((tool) => tool.name === "create_pr")?.description).toContain(
       "only after the review and its fix have finished",
     );
@@ -2120,6 +2128,7 @@ describe("Orkestrator control MCP server", () => {
     // A coordinator's prompt is framed as a delegation around the original text.
     expect(String(launch?.prompt)).toContain("Diagnose and fix the failing test suite.");
     expect(String(launch?.prompt)).toContain(COORDINATOR_WORKER_NO_PR_INSTRUCTION);
+    expect(String(launch?.prompt)).toContain(COORDINATOR_WORKER_VALIDATION_INSTRUCTION);
   });
 
   test("rejects disabled agents and invalid model or reasoning selections", async () => {

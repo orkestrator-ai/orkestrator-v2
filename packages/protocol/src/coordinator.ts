@@ -524,7 +524,7 @@ export const COORDINATOR_PR_RULE =
  * `IMPLEMENTATION_VALIDATION_HANDOFF`; this is the coordinator's equivalent.
  */
 export const COORDINATOR_VALIDATION_RULE =
-  "Validation: Multi Review and build pipelines start by running the project's full validation once against the committed branch, so when review comes next never ask a worker for a full test suite, typecheck, lint or build pass, including in a last message before you start the review. Ask for the focused checks that cover its changes and for those results in its report. Ask for a full run only when no review follows, the user asks for one, or that run's result is what you need to learn, such as when diagnosing a suite failure.";
+  "Validation: Multi Review and build pipelines start by running the project's full validation once against the committed branch, so when review comes next never ask a worker for a full test suite, typecheck, lint or build pass, including in a last message before you start the review. Ask for the focused checks that cover its changes and for those results in its report. State in every worker prompt whether review follows. When no review follows, explicitly ask the worker to run all validation required by the repository before handoff. When review follows, ask for a full run only if the user asks for one or that run's result is what you need to learn, such as when diagnosing a suite failure.";
 
 /**
  * Self-timers and provider accounts, told to every main coordinator verbatim.

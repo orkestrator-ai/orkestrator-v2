@@ -28,6 +28,9 @@ import {
   getNativeAgentData,
 } from "@/types/paneLayout";
 import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.pane-layout");
 
 type SavePaneLayout = (
   environmentId: string,
@@ -418,11 +421,7 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
     try {
       await hydrateDependencies(savedInput.root);
     } catch (error) {
-      console.warn(
-        "[PaneLayout] Skipped installing a saved layout whose dependencies " +
-          "could not be hydrated:",
-        error,
-      );
+      log.warn("persist.install-skipped", { environmentId, error: formatLogError(error) });
       return;
     }
     // Re-check after the await: hydration yields, so a local edit or a
@@ -559,7 +558,7 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
   };
 
   const reportWriteFailure = (environmentId: string, error: unknown): void => {
-    console.error("[PaneLayout] Failed to persist pane layout:", error);
+    log.error("persist.failed", { environmentId, error: formatLogError(error) });
     if (isPaneLayoutUnsupportedVersion(error) && !reportedVersionFailures.has(environmentId)) {
       reportedVersionFailures.add(environmentId);
       toast.error("Pane layout changes are not being saved", {
@@ -612,7 +611,10 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
         try {
           handler(environmentId);
         } catch (error) {
-          console.warn("[PaneLayout] A write-settled handler threw:", error);
+          log.warn("persist.settled-handler-failed", {
+            environmentId,
+            error: formatLogError(error),
+          });
         }
       }
     };

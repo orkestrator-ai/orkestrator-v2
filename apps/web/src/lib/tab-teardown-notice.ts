@@ -1,5 +1,8 @@
 import { toast } from "sonner";
 import { tabTeardownFailureKind } from "@orkestrator/protocol/tab-teardown";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.pane-layout");
 
 /** How long the bridge-upgrade notice stays visible. */
 export const TAB_TEARDOWN_BRIDGE_UPGRADE_TOAST_DURATION_MS = 12_000;
@@ -28,5 +31,9 @@ export function reportNativeTabTeardownFailure(
       duration: TAB_TEARDOWN_BRIDGE_UPGRADE_TOAST_DURATION_MS,
     });
   }
-  console.debug(`[PaneLayout] ${label} teardown remains pending:`, error);
+  log.debug("teardown.pending", () => ({
+    environmentId,
+    source: label,
+    error: formatLogError(error),
+  }));
 }

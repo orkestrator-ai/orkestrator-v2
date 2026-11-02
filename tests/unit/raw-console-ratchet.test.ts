@@ -16,7 +16,7 @@ const oxlint = join(repoRoot, "node_modules/.bin/oxlint");
  */
 const UNMIGRATED: Readonly<Record<string, number>> = {
   "apps/backend/**": 455,
-  "apps/web/**": 271,
+  "apps/web/**": 182,
   "apps/web-public/**": 0,
 };
 

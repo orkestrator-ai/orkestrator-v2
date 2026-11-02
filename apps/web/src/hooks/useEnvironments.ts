@@ -29,7 +29,6 @@ import type {
   PortMapping,
   PrState,
 } from "@/types";
-import { rendererDebugLog } from "@/lib/debug-log";
 import {
   clearBuildPipelineHandoffResolutions,
   clearBuildPipelineTabActivation,
@@ -39,6 +38,10 @@ import {
   activateProjectForEnvironmentCleanup,
   startEnvironmentCleanupSelectionSync,
 } from "@/lib/environment-cleanup-selection";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.environment");
+const setupLog = createLogger("terminal.setup");
 
 /**
  * Extract error message from various error types.
@@ -180,12 +183,10 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
   const key = createSessionKey(environment.containerId ?? null, "default", environment.id);
   const store = useTerminalSessionStore.getState();
   const existing = store.sessions.get(key);
-  console.info("[setup-terminal] binding setup session from environment hook", {
+  setupLog.info("session.bind-from-environment", {
     environmentId: environment.id,
-    environmentName: environment.name,
     environmentType: environment.environmentType,
     containerId: environment.containerId ?? null,
-    key,
     previousSessionId: existing?.sessionId ?? null,
     nextSessionId: sessionId,
     hadSerializedBuffer: !!existing?.serializedBuffer,
@@ -445,10 +446,10 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
           return;
         }
       } catch (error) {
-        console.warn(
-          `[useEnvironments] Failed to reconcile setup snapshot for ${environment.id}:`,
-          error,
-        );
+        log.warn("setup-snapshot.reconcile-failed", {
+          environmentId: environment.id,
+          error: formatLogError(error),
+        });
       }
     }),
   )
@@ -472,12 +473,12 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
 /** Apply one incremental setup-completion event to the authoritative stores. */
 export function applyEnvironmentSetupComplete(payload: EnvironmentSetupCompletePayload): void {
   const { environment_id, success, environment } = payload;
-  console.info("[setup-terminal] received environment-setup-complete", {
+  setupLog.info("setup.complete-received", {
     environmentId: environment_id,
     success,
     hasEnvironment: !!environment,
     setupScriptsComplete: environment?.setupScriptsComplete ?? null,
-    error: payload.error ?? null,
+    error: payload.error ? formatLogError(payload.error) : null,
   });
   const store = useEnvironmentStore.getState();
   if (environment) {
@@ -526,7 +527,7 @@ export function useEnvironmentLifecycleService(): void {
         "environment-setup-started",
         (event) => {
           const { environment_id, session_id, environment } = event.payload;
-          console.info("[setup-terminal] received environment-setup-started", {
+          setupLog.info("setup.started-received", {
             environmentId: environment_id,
             sessionId: session_id,
             hasEnvironment: !!environment,
@@ -692,7 +693,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
 
     const setupListener = async () => {
       const stop = await listen<EnvironmentRenamedPayload>("environment-renamed", (event) => {
-        rendererDebugLog("[useEnvironments] Received environment-renamed event:", event.payload);
+        log.debug("rename.received", () => ({ environmentId: event.payload.environment_id }));
         const { environment_id, new_name, new_branch } = event.payload;
 
         // The backend clears prUrl/prState/hasMergeConflicts in the same
@@ -702,9 +703,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         // PR the monitor has just found for the new branch.
         const currentEnv = useEnvironmentStore.getState().getEnvironmentById(environment_id);
         if (currentEnv && currentEnv.branch !== new_branch && currentEnv.prUrl) {
-          rendererDebugLog(
-            `[useEnvironments] Branch changed (${currentEnv.branch} -> ${new_branch}), clearing stale PR state`,
-          );
+          log.debug("rename.pr-state-cleared", () => ({ environmentId: environment_id }));
           setPRInStore(environment_id, null, null, null);
         }
 
@@ -762,10 +761,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       } catch (err) {
         const message = getErrorMessage(err, "Failed to load environments");
         if (silent) {
-          console.warn(
-            `[useEnvironments] Failed to refresh environments for project ${pid}:`,
-            message,
-          );
+          log.warn("list.refresh-failed", { projectId: pid, error: formatLogError(err) });
         } else {
           setError(message);
         }
@@ -935,7 +931,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
 
   const startEnvironment = useCallback(
     async (environmentId: string, initialPrompt?: string, options?: StartEnvironmentOptions) => {
-      rendererDebugLog("[useEnvironments] startEnvironment called:", environmentId);
+      log.debug("start.called", () => ({ environmentId }));
       // Read from store directly to avoid stale closure over `environments`.
       // When called from handleCreateEnvironment, the useCallback closure may
       // capture an older environments array that doesn't include the new env.
@@ -943,18 +939,14 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         .getState()
         .environments.find((env) => env.id === environmentId);
       if (!existingEnv) {
-        console.warn(
-          "[useEnvironments] startEnvironment called for unknown environment:",
-          environmentId,
-        );
+        log.warn("start.unknown-environment", { environmentId });
       }
       if (existingEnv) {
-        console.info("[useEnvironments] startEnvironment snapshot:", {
+        log.info("start.snapshot-read", {
           environmentId,
           environmentType: existingEnv.environmentType,
           status: existingEnv.status,
-          branch: existingEnv.branch,
-          worktreePath: existingEnv.worktreePath,
+          hasWorktree: !!existingEnv.worktreePath,
           projectId: existingEnv.projectId,
         });
       }
@@ -973,36 +965,36 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       updateEnvironmentInStore(environmentId, { lifecycleError: null });
 
       try {
-        rendererDebugLog("[useEnvironments] Setting status to creating...");
+        log.debug("start.status-set", () => ({ environmentId, status: "creating" }));
         updateStatusInStore(environmentId, "creating");
         if (options?.background) {
-          rendererDebugLog("[useEnvironments] Handing environment start to backend...");
+          log.debug("start.background-requested", () => ({ environmentId }));
           await backend.startEnvironmentInBackground(environmentId);
           finishAttemptAdmission();
           return [];
         }
 
-        rendererDebugLog("[useEnvironments] Calling backend.startEnvironment...");
+        log.debug("start.backend-requested", () => ({ environmentId }));
         const result = await backend.startEnvironment(environmentId);
         finishAttemptAdmission();
-        rendererDebugLog(
-          "[useEnvironments] backend.startEnvironment completed, refreshing environment...",
-          {
-            setupStarted: result.setupStarted,
-            setupSessionId: result.setupSessionId,
-          },
-        );
+        log.debug("start.backend-completed", () => ({
+          environmentId,
+          setupStarted: result.setupStarted,
+          setupSessionId: result.setupSessionId,
+        }));
 
         // Refresh the full environment data (including containerId / worktreePath)
         const updatedEnv = await backend.getEnvironment(environmentId);
         if (updatedEnv) {
-          rendererDebugLog("[useEnvironments] Got updated environment:", updatedEnv);
+          log.debug("start.environment-refreshed", () => ({
+            environmentId,
+            status: updatedEnv.status,
+            environmentType: updatedEnv.environmentType,
+            containerId: updatedEnv.containerId,
+            hasWorktree: !!updatedEnv.worktreePath,
+          }));
           if (updatedEnv.environmentType === "local" && !updatedEnv.worktreePath) {
-            console.warn("[useEnvironments] Local environment started without worktreePath:", {
-              environmentId,
-              status: updatedEnv.status,
-              branch: updatedEnv.branch,
-            });
+            log.warn("start.worktree-missing", { environmentId, status: updatedEnv.status });
           }
           updateEnvironmentInStore(environmentId, updatedEnv);
           if (result.setupSessionId) {
@@ -1016,7 +1008,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         return [];
       } catch (err) {
         finishAttemptAdmission();
-        console.error("[useEnvironments] Error starting environment:", err);
+        log.error("start.failed", { environmentId, error: formatLogError(err) });
         const message = getErrorMessage(err, "Failed to start environment");
         // Foreground provisioning failures are also persisted by the backend,
         // so claim that attempt's eventual snapshot to avoid a duplicate toast.
@@ -1046,25 +1038,25 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
 
   const stopEnvironment = useCallback(
     async (environmentId: string) => {
-      rendererDebugLog("[useEnvironments] stopEnvironment called:", environmentId);
+      log.debug("stop.called", () => ({ environmentId }));
       setError(null);
       try {
         // Immediately set status to stopping for user feedback
-        rendererDebugLog("[useEnvironments] Setting status to stopping...");
+        log.debug("stop.status-set", () => ({ environmentId, status: "stopping" }));
         updateStatusInStore(environmentId, "stopping");
-        rendererDebugLog("[useEnvironments] Calling backend.stopEnvironment...");
+        log.debug("stop.backend-requested", () => ({ environmentId }));
         await backend.stopEnvironment(environmentId);
-        rendererDebugLog("[useEnvironments] backend.stopEnvironment completed, updating status...");
+        log.debug("stop.backend-completed", () => ({ environmentId }));
         updateStatusInStore(environmentId, "stopped");
-        rendererDebugLog("[useEnvironments] Status updated to stopped");
+        log.debug("stop.status-set", () => ({ environmentId, status: "stopped" }));
 
         // Disconnect all sessions for this environment since container is stopped
-        rendererDebugLog("[useEnvironments] Disconnecting sessions for environment...");
+        log.debug("stop.sessions-disconnecting", () => ({ environmentId }));
         await disconnectEnvironmentSessions(environmentId);
-        rendererDebugLog("[useEnvironments] Sessions disconnected");
+        log.debug("stop.sessions-disconnected", () => ({ environmentId }));
         toast.success("Environment stopped");
       } catch (err) {
-        console.error("[useEnvironments] Error stopping environment:", err);
+        log.error("stop.failed", { environmentId, error: formatLogError(err) });
         const message = getErrorMessage(err, "Failed to stop environment");
         setError(message);
         // Revert to running if stop failed
@@ -1110,7 +1102,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         updateEnvironmentInStore(environmentId, updatedEnv);
         return updatedEnv;
       } catch (err) {
-        console.error("[useEnvironments] Error syncing environment status:", err);
+        log.error("status-sync.failed", { environmentId, error: formatLogError(err) });
         // Don't throw - just log the error
       }
     },
@@ -1194,7 +1186,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         });
         toast.success("Environment restarted");
       } catch (err) {
-        console.error("[useEnvironments] Error restarting environment:", err);
+        log.error("restart.failed", { environmentId, error: formatLogError(err) });
         const message = getErrorMessage(err, "Failed to restart environment");
         setError(message);
         updateStatusInStore(environmentId, "error");

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
@@ -1211,7 +1212,7 @@ describe("resolveAgentDefaults", () => {
     useConfigStore.setState({ config });
     // A failed probe leaves the picker on its fallback rather than breaking the
     // dialog, and the attempt is not held against the next opening.
-    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const logs = captureLogs();
     try {
       invokeMock.mockImplementation((command: string) => {
         if (command === "ensure_host_pi_model_catalog") {
@@ -1248,8 +1249,18 @@ describe("resolveAgentDefaults", () => {
           invokeMock.mock.calls.filter(([command]) => command === "ensure_host_pi_model_catalog"),
         ).toHaveLength(2),
       );
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.environment",
+          event: "models.pi-seed-failed",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({ message: "pi bridge entrypoint not found" }),
+          }),
+        }),
+      );
     } finally {
-      warn.mockRestore();
+      logs.restore();
     }
   });
 

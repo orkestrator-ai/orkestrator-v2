@@ -9,6 +9,10 @@ import { ContainerUsageSampler } from "./container-usage-sampler.js";
 import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
 import { DockerCleanupGrants } from "./docker-cleanup-grants.js";
+import {
+  DockerAvailabilityCache,
+  type DockerAvailabilityCacheOptions,
+} from "./docker-availability-cache.js";
 import { DockerContainerStateCache } from "./docker-container-state-cache.js";
 import { EnvironmentOperations } from "./environment-operations.js";
 import { FeatureBuildTasks } from "./feature-build-tasks.js";
@@ -39,6 +43,8 @@ export type BackendRuntimeOptions = {
   containerOom?: ContainerOomEventsOptions;
   /** Test seams: the log followers' `docker logs -f` spawn and lease clock. */
   containerLogs?: ContainerLogServiceOptions;
+  /** The backend passes the `check_docker` probe; fixtures leave it out. */
+  dockerAvailability?: DockerAvailabilityCacheOptions;
 };
 
 /**
@@ -65,6 +71,8 @@ export class BackendRuntime {
   readonly accounts: AgentAccountsRuntime;
   /** The short-lived `docker ps` snapshot shared by status reads. */
   readonly containerStates = new DockerContainerStateCache();
+  /** This machine's Docker availability, relayed in node summaries. */
+  readonly dockerAvailability: DockerAvailabilityCache;
   /** This backend's container usage sample (owner-filtered, so not host-wide). */
   readonly containerUsage = new ContainerUsageSampler();
   /** The `docker events` OOM follower, started by the backend once it knows its owner. */
@@ -102,6 +110,7 @@ export class BackendRuntime {
     this.terminals = new TerminalRuntime(options.terminals);
     this.localServers = new LocalServerRuntime(options.localServers);
     this.environments = new EnvironmentOperations();
+    this.dockerAvailability = new DockerAvailabilityCache(options.dockerAvailability);
     this.prMonitor = new PrMonitorRuntime(options.prMonitor);
     this.tmux = new TmuxRuntime(options.tmux);
     this.accounts = new AgentAccountsRuntime(options.accounts);

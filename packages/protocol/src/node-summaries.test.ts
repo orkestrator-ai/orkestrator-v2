@@ -265,3 +265,17 @@ test("environment summaries carry the row's active build and mail markers, bound
     );
   }
 });
+
+test("environment summaries carry the machine's Docker availability only when it is a boolean", () => {
+  const raw = { id: "e", projectId: "p" };
+  for (const dockerAvailable of [true, false]) {
+    expect(
+      toNodeEnvironmentSummary("bk_test" as never, { ...raw, dockerAvailable })?.dockerAvailable,
+    ).toBe(dockerAvailable);
+  }
+  // An older node sends none; a malformed value is dropped, never guessed.
+  for (const dockerAvailable of [undefined, "false", 0, null]) {
+    const row = toNodeEnvironmentSummary("bk_test" as never, { ...raw, dockerAvailable })!;
+    expect("dockerAvailable" in row).toBe(false);
+  }
+});

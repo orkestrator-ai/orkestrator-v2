@@ -2173,6 +2173,9 @@ printf '%s\\n' '{}' > "$out"
       expect(plain[0]).not.toHaveProperty("prMonitorConfirmed");
       expect(plain[0]).not.toHaveProperty("prViewerCanMerge");
       expect(plain[0]).not.toHaveProperty("prCheckSummary");
+      expect(plain[0]).not.toHaveProperty("dockerAvailable");
+      // The machine's last `check_docker` answer rides on each summary row.
+      context.runtime.dockerAvailability.record({ available: false, reason: "daemon-unavailable" });
 
       // Runtime health is outside the manifest revision, so known revisions
       // never turn the summary form into an `unchanged` answer.
@@ -2190,6 +2193,7 @@ printf '%s\\n' '{}' > "$out"
         prMonitorConfirmed: true,
         prViewerCanMerge: false,
         prCheckSummary: { passed: 0, total: 1, pending: 1 },
+        dockerAvailable: false,
       });
     } finally {
       announced.mockRestore();

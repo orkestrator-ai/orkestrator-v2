@@ -350,3 +350,26 @@ Command: `NODE_ENV=test mise run test:logged -- --name baseline-profiles-repeat 
 Evidence: `/tmp/orkestrator-test-run.6dslpJ/baseline-profiles-repeat.log.gz` (19.0 s).
 This confirms the existing cleanup race independently of the packaged-app changes;
 no assertion, skip or production cleanup behavior was changed.
+
+
+### Coordinator retention fix validation, 2026-11-02
+
+`mise run test:logged -- --name repaired-validation-test -- mise run test`
+failed `design service startup > removes the recorded profile of a backend that was killed` in `apps/backend/src/core/design/browser-profiles.test.ts`: assertion at line 505: ledger directory still contained a JSON entry after profile removal (78.44 ms).
+Backend summary: 13349 pass, one fail, 13450 tests; web: 11406 pass,
+one fail, 11417 tests. The aggregate scheduled six workspace worker slots, one root worker, two
+bridge workers and one protocol-lockfile slot.
+Evidence: `/tmp/orkestrator-test-run.kQC3bQ/repaired-validation-test.log.gz`
+(and inner artifact directory `/tmp/orkestrator-test-run.OxYauT`).
+
+The unchanged complete owner passed alone via `mise run test:logged` with
+name `profiles-owner`, explicit owner path and `--parallel=1 --only-failures`
+(0.4 s). The same owner passed in a separately installed detached
+`origin/main` worktree at `d7cdfaa8b` (main-profiles-owner); the worktree was removed.
+No target-branch failure or environmental cause was reproduced, so this
+observation does not excuse the aggregate failure. The next exact aggregate
+rerun passed the workspace group (308.1 s), including this owner. It exposed
+three malformed flake-index rows introduced while recording these observations;
+the rows were repaired and the complete index owner passed alone. That rerun
+artifact is `/tmp/orkestrator-test-run.eKA8Rz/validation-test-final.log.gz`.
+A post-repair exact aggregate rerun is recorded separately.

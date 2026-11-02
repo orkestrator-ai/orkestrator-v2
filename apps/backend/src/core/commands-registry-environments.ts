@@ -870,9 +870,8 @@ export function registerEnvironmentCommands(
       asString(environmentId, "environmentId"),
     );
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    logSetupTerminal("renderer ensured setup", {
+    logSetupTerminal("setup.renderer-ensured", {
       environmentId: environment.id,
-      environmentName: environment.name,
       setupScriptsComplete: environment.setupScriptsComplete ?? false,
       status: environment.status,
     });
@@ -904,7 +903,7 @@ export function registerEnvironmentCommands(
           hasOutput: terminals.outputLength(environment.setupSessionId) > 0,
         };
       }
-      logSetupTerminal("renderer requested setup session: none", {
+      logSetupTerminal("setup.renderer-requested-none", {
         environmentId: id,
       });
       return null;
@@ -914,7 +913,7 @@ export function registerEnvironmentCommands(
       terminalRunning: terminals.hasProcess(session.sessionId),
       hasOutput: terminals.outputLength(session.sessionId) > 0,
     };
-    logSetupTerminal("renderer requested setup session", {
+    logSetupTerminal("setup.renderer-requested", {
       environmentId: id,
       sessionId: session.sessionId,
       running: session.running,

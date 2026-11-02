@@ -39,6 +39,10 @@ import type { Project } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
 import { pathExists, runCommand } from "./shell.js";
 import { configuredWorktreeLocations, validateWorktreeLocation } from "./worktree-locations.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("environment");
 
 export { MAX_ENVIRONMENT_CLEANUP_ATTEMPTS } from "./environment-cleanup-ledger.js";
 const RETRY_BASE_MS = 60_000;
@@ -103,9 +107,11 @@ export async function reconcileEnvironmentCleanup(
       (await ledger.rearmForVersion(entry.environmentId, backendVersion))
     ) {
       exhaustedWarnings.delete(entry.environmentId);
-      console.info(
-        `[backend] Retrying cleanup for deleted environment ${entry.environmentId} once under backend ${backendVersion}; it had stopped after ${entry.attempts} attempts`,
-      );
+      log.info("cleanup.rearmed", {
+        environmentId: entry.environmentId,
+        backendVersion,
+        attempts: entry.attempts,
+      });
       const rearmed = await ledger.get(entry.environmentId);
       if (!rearmed) continue;
       entry = rearmed;
@@ -113,9 +119,12 @@ export async function reconcileEnvironmentCleanup(
     if (isEnvironmentCleanupExhausted(entry)) {
       if (!exhaustedWarnings.has(entry.environmentId)) {
         exhaustedWarnings.add(entry.environmentId);
-        console.warn(
-          `[backend] Cleanup for deleted environment ${entry.environmentId} is still failing after ${entry.attempts} attempts (${entry.lastError ?? "unknown"}); pending: ${entry.pending.join(", ")}`,
-        );
+        log.warn("cleanup.exhausted", {
+          environmentId: entry.environmentId,
+          attempts: entry.attempts,
+          lastError: entry.lastError ?? null,
+          pending: entry.pending.join(","),
+        });
       }
       continue;
     }
@@ -142,9 +151,11 @@ export async function reconcileEnvironmentCleanup(
       });
     } catch (error) {
       // Admission closes at shutdown; the entry stays for the next start.
-      console.warn(
-        `[backend] Environment cleanup retry was not admitted for ${entry.environmentId}: ${redactCleanupError(error)}`,
-      );
+      log.warn("cleanup.retry-not-admitted", {
+        environmentId: entry.environmentId,
+        summary: redactCleanupError(error),
+        error: formatLogError(error, { message: false }),
+      });
     }
     const remaining = await ledger.get(entry.environmentId);
     if (remaining && !isEnvironmentCleanupExhausted(remaining)) {
@@ -208,9 +219,11 @@ export async function sweepOrphanedEnvironmentState(
         await removeConfinedDirectory(dataDir, `${root}/${name}`);
         removed += 1;
       } catch (error) {
-        console.warn(
-          `[backend] Failed to remove orphaned ${root} state: ${redactCleanupError(error)}`,
-        );
+        log.warn("orphan-state.remove-failed", {
+          root,
+          summary: redactCleanupError(error),
+          error: formatLogError(error, { message: false }),
+        });
       }
     }
   }
@@ -477,9 +490,10 @@ async function sweepStrayWorkspaceRoot(
       await removeConfinedDirectory(canonicalBase, name);
       result.removed += 1;
     } catch (error) {
-      console.warn(
-        `[backend] Failed to remove a stray workspace directory: ${redactCleanupError(error)}`,
-      );
+      log.warn("stray-workspace.remove-failed", {
+        summary: redactCleanupError(error),
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 }
@@ -719,7 +733,12 @@ const reportedStrayWithContent = new Map<string, number>();
 function warnSweepFailureOnce(sweep: string, error: unknown): void {
   if (loggedSweepFailures.has(sweep)) return;
   loggedSweepFailures.add(sweep);
-  console.warn(`[backend] ${sweep} sweep failed: ${redactCleanupError(error)}`);
+  log.warn("cleanup.sweep-failed", {
+    sweep,
+    summary: redactCleanupError(error),
+    ...classifyCommandFailure(error, { tools: ["docker", "git"] }),
+    error: formatLogError(error, { message: false }),
+  });
 }
 
 /**
@@ -740,14 +759,12 @@ export async function sweepPreLedgerDiskState(
       try {
         const { removed, keptWithContent } = await sweepStrayWorkspaceDirectories(context, options);
         if (removed > 0) {
-          console.info(`[backend] Removed ${removed} stray workspace director(ies)`);
+          log.info("stray-workspace.removed", { removed });
         }
         if (keptWithContent !== (reportedStrayWithContent.get(dataDirKey) ?? 0)) {
           reportedStrayWithContent.set(dataDirKey, keptWithContent);
           if (keptWithContent > 0) {
-            console.info(
-              `[backend] Kept ${keptWithContent} unowned workspace director(ies) that hold files; remove them by hand if unneeded`,
-            );
+            log.info("stray-workspace.kept", { kept: keptWithContent });
           }
         }
       } catch (error) {
@@ -757,9 +774,7 @@ export async function sweepPreLedgerDiskState(
       try {
         const { deleted, kept } = await sweepOrphanedEnvironmentBranches(context, options);
         if (deleted > 0 || kept > 0) {
-          console.info(
-            `[backend] Orphaned environment branches: deleted ${deleted}, kept ${kept} that may hold unmerged work`,
-          );
+          log.info("orphan-branches.swept", { deleted, kept });
         }
       } catch (error) {
         warnSweepFailureOnce("Orphaned environment branch", error);
@@ -767,7 +782,7 @@ export async function sweepPreLedgerDiskState(
       if (isCancelled()) return;
       try {
         const removed = await sweepAbandonedTempFiles(context, options);
-        if (removed > 0) console.info(`[backend] Removed ${removed} abandoned temp file(s)`);
+        if (removed > 0) log.info("temp-files.removed", { removed });
       } catch (error) {
         warnSweepFailureOnce("Abandoned temp file", error);
       }
@@ -828,7 +843,10 @@ export function scheduleEnvironmentCleanupReconcile(
         state.timer.unref?.();
       }
     } catch (error) {
-      console.warn(`[backend] Environment cleanup reconcile failed: ${redactCleanupError(error)}`);
+      log.warn("cleanup.reconcile-failed", {
+        summary: redactCleanupError(error),
+        error: formatLogError(error, { message: false }),
+      });
     } finally {
       state.running = null;
       if (state.rerun && !state.cancelled) {
@@ -871,23 +889,25 @@ export async function runStartupEnvironmentCleanup(
       try {
         const removed = await sweepOrphanedEnvironmentState(context);
         if (removed > 0) {
-          console.info(`[backend] Removed ${removed} orphaned environment state director(ies)`);
+          log.info("orphan-state.removed", { removed });
         }
       } catch (error) {
-        console.warn(
-          `[backend] Orphaned environment state sweep failed: ${redactCleanupError(error)}`,
-        );
+        log.warn("orphan-state.sweep-failed", {
+          summary: redactCleanupError(error),
+          error: formatLogError(error, { message: false }),
+        });
       }
       if (!state.cancelled) {
         try {
           const removed = await sweepOrphanedDesignCanvases(context);
           if (removed > 0) {
-            console.info(`[backend] Removed ${removed} orphaned design canvas(es)`);
+            log.info("orphan-canvas.removed", { removed });
           }
         } catch (error) {
-          console.warn(
-            `[backend] Orphaned design canvas sweep failed: ${redactCleanupError(error)}`,
-          );
+          log.warn("orphan-canvas.sweep-failed", {
+            summary: redactCleanupError(error),
+            error: formatLogError(error, { message: false }),
+          });
         }
       }
       if (!state.cancelled) {

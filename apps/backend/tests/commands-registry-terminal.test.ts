@@ -3163,10 +3163,9 @@ printf '["exists","missing"]'
           ),
         ).toHaveLength(failPersistence ? 0 : 1);
         expect(consoleError).toHaveBeenCalledWith(
-          failPersistence
-            ? "Failed to record terminal environment activity"
-            : "Failed to notify terminal agent completion",
-          expect.objectContaining({ environmentId: environment.id }),
+          expect.stringContaining(
+            `${failPersistence ? "activity.record-failed" : "agent-completion.notify-failed"} environmentId=${environment.id}`,
+          ),
         );
       } finally {
         consoleError.mockRestore();
@@ -3350,11 +3349,7 @@ printf '["exists","missing"]'
           "the terminal activity persistence error",
         );
         expect(consoleError).toHaveBeenCalledWith(
-          "Failed to record terminal environment activity",
-          {
-            environmentId: environment.id,
-            error: persistenceError.message,
-          },
+          expect.stringContaining(`activity.record-failed environmentId=${environment.id}`),
         );
         expect(emitted.some(({ event }) => event === "environment-activity-recorded")).toBe(false);
         await commands.get("close_local_terminal_session")?.({ sessionId }, context);

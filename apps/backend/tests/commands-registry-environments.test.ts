@@ -1961,7 +1961,7 @@ exit 0
             await waitForCondition(
               () =>
                 errorLog.mock.calls.some(([message]) =>
-                  String(message).includes("background start failed"),
+                  String(message).includes("lifecycle.failed operation=\"background start\""),
                 ),
               "queued start rejection",
             );
@@ -2376,8 +2376,12 @@ esac
         expect(environment.lifecycleError).toBe(
           ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.containerRemovalFailed,
         );
-        // The daemon-level cause is still recoverable from the backend logs.
-        expect(JSON.stringify(errorLog.mock.calls)).toContain("container runtime refused removal");
+        // The exit code reaches the backend logs; the child's output never does.
+        expect(JSON.stringify(errorLog.mock.calls)).toContain("lifecycle.failed");
+        expect(JSON.stringify(errorLog.mock.calls)).toContain("exitCode=1");
+        expect(JSON.stringify(errorLog.mock.calls)).not.toContain(
+          "container runtime refused removal",
+        );
       } finally {
         errorLog.mockRestore();
       }

@@ -1,6 +1,6 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import type { CommandContext } from "./commands-context.js";
 import { validateGitRefName } from "./commands-agent-support.js";
@@ -25,6 +25,7 @@ import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { DOCKER_LABEL_ENVIRONMENT_ID, DOCKER_LABEL_OWNER } from "./constants.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
 export type EnvironmentCleanupContext = Pick<
   CommandContext,
@@ -532,16 +533,22 @@ export async function runEnvironmentCleanupStep(
     } else await cleanupStateDirectories(entry, context);
   } catch (error) {
     const summary = redactCleanupError(error);
-    console.warn(
-      `[backend] Environment cleanup step ${step} failed for ${entry.environmentId}: ${summary}`,
-    );
+    log.warn("cleanup.step-failed", {
+      environmentId: entry.environmentId,
+      step,
+      summary,
+      ...classifyCommandFailure(error, { tools: ["docker", "git"] }),
+      error: formatLogError(error, { message: false }),
+    });
     await ledger.fail(entry.environmentId, step, summary).catch(() => undefined);
     return false;
   }
   await ledger.complete(entry.environmentId, step).catch((error: unknown) => {
-    console.warn(
-      `[backend] Failed to record environment cleanup for ${entry.environmentId}: ${redactCleanupError(error)}`,
-    );
+    log.warn("cleanup.record-failed", {
+      environmentId: entry.environmentId,
+      summary: redactCleanupError(error),
+      error: formatLogError(error, { message: false }),
+    });
   });
   return true;
 }

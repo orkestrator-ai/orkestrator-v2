@@ -208,7 +208,7 @@ describe("local bridge reuse under load", () => {
     const events = () =>
       logs
         .records()
-        .filter((record) => record.area === "local-server")
+        .filter((record) => record.area === "local-server" && record.event !== "server.stopping")
         .map((record) => record.event);
     try {
       await requestOk(first.port, "/stall");
@@ -420,7 +420,7 @@ describe("local bridge reuse under load", () => {
       expect(
         logged.some(
           (line) =>
-            line.includes(`codex:${environmentId} (pid ${first.pid})`) &&
+            line.includes(`server.stopping key=codex:${environmentId} pid=${first.pid}`) &&
             line.includes("health check failed 3 consecutive times"),
         ),
       ).toBe(true);

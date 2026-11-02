@@ -65,7 +65,6 @@ function makeOptions(environments: Environment[], harness: Harness = {}) {
         if (child.pid) terminated.push(child.pid);
         return harness.terminateResult ?? true;
       }) as never,
-      log: () => undefined,
     },
   };
 }
@@ -339,7 +338,6 @@ describe("reapOrphanedLocalServers", () => {
         if (child.pid) terminated.push(child.pid);
         return true;
       }) as never,
-      log: () => undefined,
     });
 
     // Both were still killed; the storage failure is swallowed so one bad
@@ -401,7 +399,6 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
           if (overrides.killFails) throw new Error("tmux server went away");
           killed.push(sessionName);
         },
-        log: () => undefined,
       },
     };
   }
@@ -606,7 +603,6 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
         listed += 1;
         return [];
       },
-      log: () => undefined,
     });
 
     expect(reaped).toEqual([]);
@@ -626,7 +622,6 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
         removeRuntimeRoot: async (rootPath: string) => {
           removed.push(rootPath);
         },
-        log: () => undefined,
       });
 
       expect(reaped).toEqual([]);

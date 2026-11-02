@@ -256,7 +256,9 @@ describe("environment cleanup reconciler", () => {
     try {
       const result = await reconcileEnvironmentCleanup(context, { backendVersion: "1.1.0" });
       expect(result.attempted).toBe(1);
-      expect(info.mock.calls.flat().join("\n")).toContain("once under backend 1.1.0");
+      expect(info.mock.calls.flat().join("\n")).toContain(
+        "cleanup.rearmed environmentId=gone backendVersion=1.1.0",
+      );
     } finally {
       info.mockRestore();
     }
@@ -291,11 +293,11 @@ describe("environment cleanup reconciler", () => {
       }
       expect(attempted).toBe(MAX_ENVIRONMENT_CLEANUP_ATTEMPTS);
       expect(
-        info.mock.calls.flat().filter((line) => String(line).includes("once under backend")),
+        info.mock.calls.flat().filter((line) => String(line).includes("cleanup.rearmed")),
       ).toHaveLength(1);
       const stopped = warn.mock.calls
         .flat()
-        .filter((line) => String(line).includes("is still failing after"));
+        .filter((line) => String(line).includes("cleanup.exhausted"));
       expect(stopped).toHaveLength(1);
     } finally {
       warn.mockRestore();
@@ -567,7 +569,7 @@ describe("orphaned environment state sweep", () => {
       await runStartupEnvironmentCleanup(context);
       expect(
         warning.mock.calls.some(([message]) =>
-          String(message).includes("Orphaned design canvas sweep failed:"),
+          String(message).includes("orphan-canvas.sweep-failed"),
         ),
       ).toBe(true);
       expect(await exists(abandoned)).toBe(false);

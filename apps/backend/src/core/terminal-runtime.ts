@@ -15,6 +15,9 @@ import {
   trimOrphanedLowSurrogate,
 } from "./commands-terminal.js";
 import { TerminalHistory, type TerminalHistoryOptions } from "./terminal-history.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 export type TerminalSessionConfig = (
   | {
@@ -423,7 +426,7 @@ export class TerminalRuntime {
         continue;
       }
       if (now - missingSince < graceMs) continue;
-      console.warn(`[backend] Reaping orphaned terminal ${environmentId}/${tabId}`);
+      log.info("orphan.reaped", { environmentId, tabId });
       this.explicitlyCloseSession(sessionId);
       this.orphanedMissingSince.delete(sessionId);
       reaped += 1;
@@ -639,9 +642,9 @@ export class TerminalRuntime {
           return;
         }
         this.finishTrackedCompletion(id, generation);
-        console.error("Failed to notify terminal agent completion", {
+        log.error("agent-completion.notify-failed", {
           environmentId,
-          error: error instanceof Error ? error.message : String(error),
+          error: formatLogError(error),
         });
       },
     );
@@ -687,10 +690,7 @@ export class TerminalRuntime {
           return;
         }
         this.finishTrackedCompletion(id, generation);
-        console.error("Failed to record terminal environment activity", {
-          environmentId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        log.error("activity.record-failed", { environmentId, error: formatLogError(error) });
       });
   }
 
@@ -737,10 +737,7 @@ export class TerminalRuntime {
         });
       })
       .catch((error) => {
-        console.error("Failed to record terminal environment activity", {
-          environmentId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        log.error("activity.record-failed", { environmentId, error: formatLogError(error) });
       });
   }
 

@@ -13,7 +13,6 @@ import {
   stableTerminalKey,
   peekLocalAgentBridge,
   peekContainerAgentBridge,
-  conciseError,
 } from "./commands-helpers.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
@@ -30,6 +29,9 @@ import {
   providerSessionHeldElsewhere,
   withProviderSessionTeardownLock,
 } from "./provider-session-ownership.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("environment");
 
 export function registerTeardownCommands(
   register: CommandRegistrar,
@@ -474,10 +476,11 @@ export function registerTeardownCommands(
                 TAB_TEARDOWN_RETRY_BASE_DELAY_MS * 2 ** (failures - 1),
               ),
           });
-          console.warn(
-            `[backend] Tab teardown remains pending for ${environment.id}/${intent.tabId}:`,
-            conciseError(error),
-          );
+          log.warn("tab-teardown.pending", {
+            environmentId: environment.id,
+            tabId: intent.tabId,
+            error: formatLogError(error),
+          });
         }
       }
     };
@@ -495,9 +498,7 @@ export function registerTeardownCommands(
     const environments = await context.storage.loadEnvironments();
     const paneLayouts = await context.storage.loadPaneLayoutsForReconciliation();
     if (!paneLayouts.available) {
-      console.warn(
-        "[backend] Skipping orphaned tab reconciliation because pane layouts are unreadable",
-      );
+      log.warn("tab-reconcile.skipped", { reason: "pane-layouts-unreadable" });
       return {
         terminals: 0,
         nativeSessions: 0,
@@ -619,7 +620,7 @@ export function registerTeardownCommands(
                   : session.agent === "pi"
                     ? "pi-native"
                     : "opencode-native";
-        console.warn(`[backend] Reaping orphaned native session ${session.environmentId}/${tabId}`);
+        log.info("orphan-session.reaped", { environmentId: session.environmentId, tabId });
         await teardownTab(
           {
             environmentId: session.environmentId,
@@ -638,10 +639,7 @@ export function registerTeardownCommands(
       : undefined;
     // Transferred transcripts no tab references any more, on the same layouts.
     await sweepAgentHandoffs(context.storage, paneLayouts.layouts, now).catch((error: unknown) => {
-      console.warn(
-        "[backend] Failed to sweep agent handoffs:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("handoff-sweep.failed", { error: formatLogError(error) });
       return 0;
     });
     return { terminals, nativeSessions, tmuxSessions: tmux?.reaped ?? 0 };

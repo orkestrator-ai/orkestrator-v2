@@ -22,6 +22,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { CommandFailedError, runCommand } from "./shell.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("local-server");
 
 /** Where an on-demand bridge's install inputs live inside its resource directory. */
 export const BRIDGE_RUNTIME_SUBDIRECTORY = "runtime";
@@ -149,7 +152,7 @@ async function installLocked(
     bridgeRoot,
     `${STAGING_PREFIX}${runtime.digest}-${process.pid}-${Date.now()}`,
   );
-  console.log(`[ElectronBackend] Installing ${label} support (${runtime.bridge})…`);
+  log.info("bridge-runtime.installing", { label, bridge: runtime.bridge });
   try {
     await cp(path.join(runtime.sourceDir, BRIDGE_RUNTIME_SUBDIRECTORY), staging, {
       recursive: true,
@@ -200,7 +203,7 @@ async function installLocked(
   // Keep previous digests. Other backends, bridges and their lazy-loading
   // helpers may still use them, even after the installing backend has exited.
   // Reclamation needs a separate maintenance pass with proof of no live users.
-  console.log(`[ElectronBackend] Installed ${label} support into ${runtime.installDir}`);
+  log.info("bridge-runtime.installed", { label, installDir: runtime.installDir });
   return runtime.installDir;
 }
 

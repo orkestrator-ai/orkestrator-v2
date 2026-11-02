@@ -1,15 +1,17 @@
 import { CommandFailedError, GitRemoteTimeoutError } from "./shell.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
-export const LIFECYCLE_LOG_DETAIL_MAX_CHARS = 500;
+const log = createLogger("environment");
 
-/**
+export /**
  * Bounded, user-facing error text.
  *
  * A leaf: `commands-servers` needs only these from `commands-projects`, and
  * hosting them there made the two modules mutually dependent.
  */
 
-export function conciseError(error: unknown): string {
+function conciseError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.length > 500 ? `${message.slice(0, 500)}…` : message;
 }
@@ -119,45 +121,23 @@ export function environmentLifecycleErrorMessage(error: unknown, causeDepth = 0)
 }
 
 /**
- * Strips the credential shapes a subprocess failure realistically carries.
- *
- * `runCommand` already removes values the caller declared secret, but a child
- * echoes things the caller never named — most importantly the remote URL of a
- * failed clone or fetch, which carries its own credentials in userinfo.
- */
-export function scrubLifecycleLogDetail(detail: string): string {
-  const scrubbed = detail
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, "$1[redacted]@")
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
-    .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/gi, "[redacted]")
-    .replace(/\bgh[pousr]_[A-Za-z0-9_]+\b/gi, "[redacted]")
-    .replace(/\bsk-[A-Za-z0-9._-]{16,}\b/gi, "[redacted]")
-    .replace(/\bxox[abposr]-[A-Za-z0-9-]+\b/gi, "[redacted]");
-
-  return scrubbed.length > LIFECYCLE_LOG_DETAIL_MAX_CHARS
-    ? `${scrubbed.slice(0, LIFECYCLE_LOG_DETAIL_MAX_CHARS)}…`
-    : scrubbed;
-}
-
-/**
  * The persisted message is a fixed category, so without this the cause of a
  * failed start survives nowhere and "check the backend logs" is a dead end.
  *
- * The child's own text is the useful part, so it is logged — scrubbed, and
- * alongside the structured outcome, which is the only place a timeout or a
- * missing runtime is distinguishable from an ordinary non-zero exit.
+ * A failed command's output never reaches the log, so `reason` says what went
+ * wrong, alongside the exit code and signal. docs/architecture/logging.md has
+ * the list.
  */
 export function logEnvironmentLifecycleFailure(
   operation: string,
   environmentId: string,
   error: unknown,
 ): void {
-  const detail = scrubLifecycleLogDetail(error instanceof Error ? error.message : String(error));
-  const outcome =
-    error instanceof CommandFailedError
-      ? ` (timedOut=${error.timedOut} executableMissing=${error.executableMissing} exitCode=${error.exitCode} signal=${error.signal})`
-      : "";
-  console.error(
-    `[environment-lifecycle] ${operation} failed for ${environmentId}: ${environmentLifecycleErrorMessage(error)}${outcome} — ${detail}`,
-  );
+  log.error("lifecycle.failed", {
+    operation,
+    environmentId,
+    summary: environmentLifecycleErrorMessage(error),
+    ...classifyCommandFailure(error, { tools: ["docker", "git"] }),
+    error: formatLogError(error),
+  });
 }

@@ -163,8 +163,10 @@ import {
   composerOccupiedError,
   describePromptQueueActionError,
   PromptQueueActionError,
+  queuedSettingsLockedError,
   webAnnotationQueueItemFrozenError,
 } from "@/lib/prompt-queue-errors";
+import { queuedPromptControlRestore } from "./queued-prompt-controls";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import {
@@ -3490,25 +3492,24 @@ export function SharedNativeAgentController({
           })
         : [];
       // Keep the queued item recoverable if restoring its settings fails.
-      await updateControls({
-        ...(typeof queued.model === "string" ? { modelId: queued.model } : {}),
-        ...(typeof queued.reasoningEffort === "string"
-          ? { reasoningId: queued.reasoningEffort }
-          : {}),
-        ...(queued.mode === "build" || queued.mode === "plan" ? { mode: queued.mode } : {}),
-        ...(typeof queued.fastMode === "boolean" ? { fastMode: queued.fastMode } : {}),
-        ...(typeof queued.executionAgent === "string"
-          ? { executionProfileId: queued.executionAgent }
-          : typeof queued.agent === "string"
-            ? { executionProfileId: queued.agent }
-            : {}),
-        ...(typeof queued.includeLocalSettings === "boolean"
-          ? { includeLocalSettings: queued.includeLocalSettings }
-          : {}),
-        ...(typeof queued.promptSuggestions === "boolean"
-          ? { promptSuggestions: queued.promptSuggestions }
-          : {}),
-      });
+      const controls = queuedPromptControlRestore(queued, composer, effectiveComposeProfileId);
+      if (Object.keys(controls).length > 0) {
+        try {
+          await updateControls(controls);
+        } catch (error) {
+          // Match Claude's specific config-route refusal as serialized by the
+          // backend. Phase alone cannot distinguish a lock from invalid controls
+          // or transport failures, and may lag behind the provider's state.
+          if (
+            platform === "claude" &&
+            error instanceof Error &&
+            error.message === "Claude session config update failed (HTTP 409): Session is running"
+          ) {
+            throw queuedSettingsLockedError(label, { cause: error });
+          }
+          throw error;
+        }
+      }
       await removeQueued(message.id);
       updateDraft(sessionKey, {
         text: message.text,

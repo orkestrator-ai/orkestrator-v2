@@ -101,3 +101,9 @@ Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
 13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
 3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
 The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
+
+## Coordinator node-mail fixes — 2026-11-02
+
+The unintended package-wide `mail-focused` invocation documented in case 2883 repeated the same count mismatch at 160.53 ms: expected 0, received 1 at commands-agent-tools.test.ts:195. That run used two workers and was stopped after 399.8 s, so it has no final suite counts. Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.573vpq/mail-focused.log.gz`.
+
+The unchanged complete owner passed alone in 3.4 s with `mise run test:logged -- --name agent-tools-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`. The implementation and fixed waits were unchanged. Status remains open.

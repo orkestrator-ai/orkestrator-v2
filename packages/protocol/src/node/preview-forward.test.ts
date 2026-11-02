@@ -851,3 +851,135 @@ describe("forwardPreviewUpgrade refusal bodies", () => {
     expect(result).toMatchObject({ outcome: "failed" });
   });
 });
+
+describe("forwardPreviewRequest with idle connection reuse", () => {
+  let upstream: NetServer;
+  let ingress: Server;
+  let ingressPort: number;
+  /** "keep" answers every request; "close" ends each connection after answering. */
+  let mode: "keep" | "close" | "stall-second";
+  let accepted: number;
+  let idle: Socket[];
+  const calls = { connect: 0, takeIdle: 0, reuse: 0, staleRetry: 0 };
+  const sockets = new Set<Socket>();
+  const REQUEST_LINE = /(?:GET|HEAD|OPTIONS|POST) \S+ HTTP\/1\.1\r\n/g;
+
+  beforeEach(async () => {
+    mode = "keep";
+    accepted = 0;
+    idle = [];
+    Object.assign(calls, { connect: 0, takeIdle: 0, reuse: 0, staleRetry: 0 });
+    upstream = createNetServer((socket) => {
+      accepted += 1;
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+      let answered = 0;
+      socket.on("data", (chunk: Buffer) => {
+        for (const _request of chunk.toString("latin1").matchAll(REQUEST_LINE)) {
+          answered += 1;
+          if (mode === "stall-second" && answered > 1) return;
+          socket.write("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok");
+          // Like a keep-alive timeout firing just as the response completes.
+          if (mode === "close") socket.end();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+    const hooks = {
+      connect: async () => {
+        calls.connect += 1;
+        const socket = connect(upstreamPort, "127.0.0.1");
+        sockets.add(socket);
+        socket.on("close", () => sockets.delete(socket));
+        await new Promise((resolve) => socket.once("connect", resolve));
+        return socket;
+      },
+      takeIdle: async () => {
+        calls.takeIdle += 1;
+        // Handed out paused, as the backend pool does.
+        return idle.pop() ?? null;
+      },
+      reuse: (socket: Socket) => {
+        calls.reuse += 1;
+        idle.push(socket);
+      },
+      onStaleRetry: () => {
+        calls.staleRetry += 1;
+      },
+    };
+    ingress = createServer((request, response) => {
+      void forwardPreviewRequest(
+        request,
+        response,
+        policyFor(upstreamPort, `http://127.0.0.1:${ingressPort}`),
+        { ...DEFAULT_PREVIEW_FORWARD_LIMITS, headersTimeoutMs: 300 },
+        hooks as Parameters<typeof forwardPreviewRequest>[4],
+      );
+    });
+    await new Promise<void>((resolve) => ingress.listen(0, "127.0.0.1", resolve));
+    ingressPort = (ingress.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    ingress.closeAllConnections();
+    await new Promise<void>((resolve) => ingress.close(() => resolve()));
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  function send(method: string, body?: string) {
+    return new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const request = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: ingressPort,
+          path: "/",
+          method,
+          agent: false,
+          headers: body === undefined ? {} : { "content-length": String(body.length) },
+        },
+        (response) => {
+          let text = "";
+          response.on("data", (chunk) => (text += chunk));
+          response.on("end", () => resolve({ status: response.statusCode ?? 0, body: text }));
+        },
+      );
+      request.on("error", reject);
+      request.end(body);
+    });
+  }
+
+  test("sequential safe requests share one upstream connection", async () => {
+    for (let index = 0; index < 3; index += 1) expect((await send("GET")).body).toBe("ok");
+    expect(accepted).toBe(1);
+    expect(calls).toEqual({ connect: 1, takeIdle: 3, reuse: 3, staleRetry: 0 });
+  });
+
+  test("a reused connection the application closed is retried once on a fresh one", async () => {
+    mode = "close";
+    expect((await send("GET")).body).toBe("ok");
+    // Hand the closed connection back as if it were still idle.
+    await Bun.sleep(20);
+    expect(idle).toHaveLength(1);
+    const second = await send("GET");
+    expect(second).toEqual({ status: 200, body: "ok" });
+    expect(calls.staleRetry).toBe(1);
+    expect(calls.connect).toBe(2);
+  });
+
+  test("requests with a body never take an idle connection", async () => {
+    expect((await send("GET")).body).toBe("ok");
+    expect((await send("POST", "payload")).body).toBe("ok");
+    expect(calls.takeIdle).toBe(1);
+    expect(calls.connect).toBe(2);
+  });
+
+  test("a reused connection that times out is not retried", async () => {
+    mode = "stall-second";
+    expect((await send("GET")).body).toBe("ok");
+    expect((await send("GET")).status).toBe(504);
+    expect(calls.staleRetry).toBe(0);
+    expect(calls.connect).toBe(1);
+  });
+});

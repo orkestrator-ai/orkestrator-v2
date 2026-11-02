@@ -2,7 +2,9 @@
  * Streaming full-origin forwarding shared by the backend's published-origin
  * proxy and Electron's local ingress. The caller supplies an authorized
  * upstream connection; this module owns request/response streaming, byte and
- * time bounds, cancellation, and safe failure reporting. It never retries.
+ * time bounds, cancellation, and safe failure reporting. The one retry it makes
+ * is a safe, bodyless request whose reused idle connection turned out to be
+ * closed before any response arrived (RFC 9112 §9.3.1).
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Transform, type Duplex, type Readable } from "node:stream";
@@ -60,6 +62,14 @@ export interface PreviewForwardResult {
 export interface PreviewForwardHooks {
   /** Open an authorized upstream connection. Throw a PreviewServiceError to fail safely. */
   connect(signal: AbortSignal): Promise<Duplex>;
+  /**
+   * An authorized idle connection kept by `reuse`, or null for a fresh one.
+   * Asked only for safe methods without a body, which can be retried on a
+   * fresh connection if the idle one was closed by the application.
+   */
+  takeIdle?(signal: AbortSignal): Promise<Duplex | null>;
+  /** Called when a request is resent because its idle connection was closed. */
+  onStaleRetry?(): void;
   /** Register the in-flight exchange for revocation; returns a release. */
   track?(close: () => void): () => void;
   /**
@@ -94,6 +104,19 @@ export function previewErrorStatus(category: PreviewErrorCategory): number {
 }
 
 export const PREVIEW_ERROR_HEADER = "x-orkestrator-preview-error";
+
+/** Methods that may be resent after a reused connection closed unanswered. */
+const RETRYABLE_ON_STALE_CONNECTION = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * A reused connection the application had already closed fails before any
+ * response: EOF, a reset, or a write after the peer went away.
+ */
+function closedBeforeResponse(error: unknown): boolean {
+  if (error instanceof PreviewHttp1Error) return error.code === "connection-closed";
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ECONNRESET" || code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
+}
 
 function categoryOf(error: unknown): PreviewErrorCategory {
   if (error instanceof PreviewHttp1Error) {
@@ -212,11 +235,12 @@ export async function forwardPreviewRequest(
 
   try {
     const started = Date.now();
-    upstream = await hooks.connect(controller.signal);
-    if (controller.signal.aborted) throw previewFailure("access-expired");
-    if (upstream.listenerCount("error") === 0) upstream.on("error", () => undefined);
     const incoming = pairsFromRaw(request.rawHeaders);
     const { hasBody, length } = requestBodyLength(incoming);
+    const retryable = !hasBody && RETRYABLE_ON_STALE_CONNECTION.has(method);
+    let pooled = retryable && hooks.takeIdle ? await hooks.takeIdle(controller.signal) : null;
+    upstream = pooled ?? (await hooks.connect(controller.signal));
+    if (controller.signal.aborted) throw previewFailure("access-expired");
     let uploadFailure: PreviewErrorCategory | null = null;
     const body = hasBody
       ? request
@@ -233,27 +257,44 @@ export async function forwardPreviewRequest(
         previewCategory: "capacity-exceeded",
       });
     }
-    const upstreamResponse = await http1Request(upstream, {
-      method,
-      path,
-      headers: upstreamRequestHeaders(incoming, policy),
-      body,
-      bodyLength: length,
-      headersTimeoutMs: limits.headersTimeoutMs,
-      bodyIdleTimeoutMs: limits.bodyIdleTimeoutMs,
-      maxHeaderBytes: limits.headerMaxBytes,
-      maxHeaderFields: limits.headerMaxFields,
-      signal: controller.signal,
-      keepAlive: Boolean(hooks.reuse),
-      onReusable: (socket) => {
-        reused = true;
-        hooks.reuse?.(socket);
-      },
-    }).catch((error: unknown) => {
-      if (uploadFailure)
-        throw Object.assign(new Error("upload failed"), { previewCategory: uploadFailure });
-      throw error;
-    });
+    const exchange = (socket: Duplex) => {
+      if (socket.listenerCount("error") === 0) socket.on("error", () => undefined);
+      return http1Request(socket, {
+        method,
+        path,
+        headers: upstreamRequestHeaders(incoming, policy),
+        body,
+        bodyLength: length,
+        headersTimeoutMs: limits.headersTimeoutMs,
+        bodyIdleTimeoutMs: limits.bodyIdleTimeoutMs,
+        maxHeaderBytes: limits.headerMaxBytes,
+        maxHeaderFields: limits.headerMaxFields,
+        signal: controller.signal,
+        keepAlive: Boolean(hooks.reuse),
+        onReusable: (socket) => {
+          reused = true;
+          hooks.reuse?.(socket);
+        },
+      });
+    };
+    const upstreamResponse = await exchange(upstream)
+      .catch(async (error: unknown) => {
+        // A reused connection the application had closed: nothing was answered
+        // and a safe bodyless request has nothing to replay, so send it once
+        // more on a fresh connection.
+        if (!pooled || controller.signal.aborted || !closedBeforeResponse(error)) throw error;
+        pooled = null;
+        hooks.onStaleRetry?.();
+        const fresh = await hooks.connect(controller.signal);
+        upstream = fresh;
+        if (controller.signal.aborted) throw previewFailure("access-expired");
+        return exchange(fresh);
+      })
+      .catch((error: unknown) => {
+        if (uploadFailure)
+          throw Object.assign(new Error("upload failed"), { previewCategory: uploadFailure });
+        throw error;
+      });
     result.firstByteMs = Date.now() - started;
     const { headers } = downstreamResponseHeaders(upstreamResponse.headers, policy);
     const contentType = String(headers["content-type"] ?? "");

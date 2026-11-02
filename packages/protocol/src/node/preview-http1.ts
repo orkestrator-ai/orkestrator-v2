@@ -6,9 +6,11 @@
  * stream. Bun's `node:http` client does not honour `createConnection`, so this
  * module owns the exchange: it serializes one request, streams its body with
  * backpressure, parses exactly one response head under explicit bounds, and
- * exposes the decoded body as a backpressured stream. Connections are not
- * reused (`Connection: close`), which keeps framing errors from leaking into a
- * following request. Node-only; never imported by the browser renderer.
+ * exposes the decoded body as a backpressured stream. A connection is closed
+ * after its exchange (`Connection: close`) unless the caller opts into reuse
+ * (`keepAlive`), and even then it is handed back only after a cleanly framed
+ * response, so framing errors never leak into a following request. Node-only;
+ * never imported by the browser renderer.
  */
 import { Readable, type Duplex } from "node:stream";
 
@@ -466,11 +468,19 @@ export function http1Request(socket: Duplex, options: Http1RequestOptions): Prom
       fail(new PreviewHttp1Error("aborted", "Request aborted"));
       return;
     }
+    // A reused connection may have been closed by the peer while it was idle.
+    if (socket.destroyed || !socket.writable || socket.readableEnded) {
+      fail(new PreviewHttp1Error("connection-closed", "Upstream closed before responding"));
+      return;
+    }
     options.signal?.addEventListener("abort", onAbort, { once: true });
     socket.on("data", onHeadData);
     socket.once("end", onHeadEnd);
     socket.once("close", onHeadEnd);
     socket.once("error", onHeadError);
+    // A connection handed back for reuse is paused; with the readers attached,
+    // an EOF that arrived while it was idle is now observed, not missed.
+    socket.resume();
 
     const hasBody = Boolean(options.body);
     const length = hasBody

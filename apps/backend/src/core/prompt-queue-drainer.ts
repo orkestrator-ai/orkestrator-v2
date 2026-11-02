@@ -10,6 +10,9 @@ import type { Environment } from "./models.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("tmux");
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -479,7 +482,7 @@ export class PromptQueueDrainer {
     this.queueAttempts.set(queueKey, attempts);
     if (attempts >= (this.options.maxDispatchAttempts ?? MAX_QUEUE_DISPATCH_ATTEMPTS)) {
       // The key and the reason are safe to log; the prompt itself never is.
-      console.warn(`[prompt-queue] tmux queue ${queueKey} has failed ${attempts} times: ${reason}`);
+      log.warn("queue.failing", { queueKey, attempts, reason });
     }
     const backoff = Math.min(
       this.options.retryCeilingMs ?? QUEUE_RETRY_CEILING_MS,
@@ -515,10 +518,10 @@ export class PromptQueueDrainer {
       });
     } catch (error) {
       // A name is cosmetic; never let it block the prompt.
-      console.warn(
-        `[prompt-queue] Failed to rename ${environment.id} from its first prompt:`,
-        error instanceof Error ? error.name : "unknown error",
-      );
+      log.warn("queue.rename-failed", {
+        environmentId: environment.id,
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 }

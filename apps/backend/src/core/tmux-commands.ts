@@ -39,6 +39,10 @@ import {
 } from "./tmux-session-manager.js";
 import { InteractiveTmuxTerminalManager } from "./tmux-interactive.js";
 import { ClaudeStatePollManager, environmentContainerId } from "./tmux-poll.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -116,7 +120,10 @@ export async function cleanupEnvironmentTmux(
     let cleanupComplete = true;
     for (const session of context.runtime.tmux.sessions.environmentSessions(environmentId)) {
       const stopped = await session.stop().catch((error: unknown) => {
-        console.warn("[tmux] session stop failed during environment cleanup", error);
+        log.warn("cleanup.session-stop-failed", {
+          ...classifyCommandFailure(error, { tools: ["tmux"] }),
+          error: formatLogError(error),
+        });
         return false;
       });
       if (!stopped) cleanupComplete = false;
@@ -128,7 +135,10 @@ export async function cleanupEnvironmentTmux(
       backend = await resolveBackend(environmentId, context);
     } catch (error) {
       if (options.requireStopped || !cleanupComplete) throw error;
-      console.debug("[tmux] skipping environment tmux cleanup", error);
+      log.debug("cleanup.skipped", () => ({
+        ...classifyCommandFailure(error, { tools: ["tmux"] }),
+        error: formatLogError(error, { stack: false }),
+      }));
       return;
     }
 
@@ -140,7 +150,7 @@ export async function cleanupEnvironmentTmux(
     } catch (error) {
       cleanupComplete = false;
       survivingEnvironmentIds = [];
-      console.warn("[tmux] failed to load environments during tmux cleanup", error);
+      log.warn("cleanup.environments-load-failed", { error: formatLogError(error) });
     }
 
     if (cleanupComplete) {
@@ -150,7 +160,10 @@ export async function cleanupEnvironmentTmux(
         survivingEnvironmentIds,
       ).catch((error: unknown) => {
         cleanupComplete = false;
-        console.warn("[tmux] failed to kill environment tmux sessions", error);
+        log.warn("cleanup.kill-failed", {
+          ...classifyCommandFailure(error, { tools: ["tmux"] }),
+          error: formatLogError(error),
+        });
         return { killed: [], complete: false };
       });
       cleanupComplete = cleanupComplete && result.complete;
@@ -163,7 +176,7 @@ export async function cleanupEnvironmentTmux(
     );
     await restoreWorkspaceHooks(backend, hookPaths).catch((error: unknown) => {
       cleanupComplete = false;
-      console.warn("[tmux] uninstallWorkspaceHooks failed during environment cleanup", error);
+      log.warn("hooks.uninstall-failed", { error: formatLogError(error) });
     });
     if (cleanupComplete) {
       await backend.removeFile(hookPaths.claudeSettingsBackup).catch(() => undefined);
@@ -245,10 +258,10 @@ export function registerTmuxBackendCommands(
           await options.prepareEnvironmentFirstPrompt(envId, firstPrompt, context);
         } catch (error) {
           // Naming is cosmetic; starting the user's agent is not.
-          console.warn(
-            `[tmux] Failed to prepare first-prompt naming for ${envId}:`,
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("naming.prepare-failed", {
+            environmentId: envId,
+            error: formatLogError(error, { message: false }),
+          });
         }
       }
       return context.runtime.tmux.sessions.installLock(envId).runExclusive(async () => {
@@ -303,7 +316,7 @@ export function registerTmuxBackendCommands(
       if (session && context.runtime.tmux.sessions.sessionsInEnvironment(envId) === 0) {
         await uninstallWorkspaceHooks(session.backend, session.workspaceHookPaths).catch(
           (error: unknown) => {
-            console.warn("[tmux] uninstallWorkspaceHooks failed", error);
+            log.warn("hooks.uninstall-failed", { error: formatLogError(error) });
           },
         );
       }
@@ -397,10 +410,10 @@ export function registerTmuxBackendCommands(
         await options.prepareEnvironmentFirstPrompt(envId, prompt, context);
       } catch (error) {
         // Naming is cosmetic; submitting the user's prompt is not.
-        console.warn(
-          `[tmux] Failed to prepare first-prompt naming for ${envId}:`,
-          error instanceof Error ? error.name : "unknown error",
-        );
+        log.warn("naming.prepare-failed", {
+          environmentId: envId,
+          error: formatLogError(error, { message: false }),
+        });
       }
     }
     await session.submit(prompt);
@@ -506,7 +519,7 @@ export function registerTmuxBackendCommands(
     const environments = await context.storage.loadEnvironments();
     const paneLayouts = await context.storage.loadPaneLayoutsForReconciliation();
     if (!paneLayouts.available) {
-      console.warn("[tmux] skipping orphan reconciliation because pane layouts are unreadable");
+      log.warn("orphans.skipped", { reason: "pane-layouts-unreadable" });
       return { reaped: 0, skipped: true };
     }
     const survivingIds = environments.map((environment) => environment.id);
@@ -589,7 +602,7 @@ export function registerTmuxBackendCommands(
         }
         remaining.delete(name);
         tmux.forgetOrphan(key);
-        console.warn(`[tmux] reaped orphaned session ${environment.id}/${name}`);
+        log.info("orphan.reaped", { environmentId: environment.id, session: name });
         reaped += 1;
       }
       if (

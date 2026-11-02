@@ -85,7 +85,6 @@ describe("Electron tmux environment teardown", () => {
               runtimeRootPrefix: path.dirname(runtimeRoot),
               listRuntimeRoots: async () => [environment.id],
               listTmuxSessions: () => readHostTmuxSessions(run),
-              log: () => undefined,
             });
           try {
             expect(await session.stop()).toBe(false);

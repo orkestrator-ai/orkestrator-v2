@@ -1,6 +1,9 @@
 import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./tmux-shared.js";
 import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -267,7 +270,9 @@ export class InteractiveTmuxTerminalManager {
       if (!context || this.terminals.get(terminal.id) !== terminal) return;
       void this.emitSnapshot(terminal, context, false)
         .catch((error) => {
-          console.debug("[tmux] interactive snapshot failed", error);
+          log.debug("interactive.snapshot-failed", () => ({
+            error: formatLogError(error, { stack: false }),
+          }));
         })
         .finally(() => {
           if (this.terminals.get(terminal.id) === terminal) this.schedule(terminal);

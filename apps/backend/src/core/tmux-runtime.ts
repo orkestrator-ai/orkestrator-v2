@@ -6,6 +6,9 @@ import {
 } from "./tmux-interactive.js";
 import { ClaudeStatePollManager, type ClaudeStatePollManagerOptions } from "./tmux-poll.js";
 import { TmuxSessionManager } from "./tmux-session-manager.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("tmux");
 
 /** How often the orphaned-session sweep may run. */
 const ORPHAN_SWEEP_INTERVAL_MS = 60_000;
@@ -160,10 +163,7 @@ export class TmuxRuntime {
       });
     const settled = operation
       .catch((error) => {
-        console.warn(
-          `[tmux] failed to persist activity for ${environmentId}:`,
-          error instanceof Error ? error.message : String(error),
-        );
+        log.warn("activity.persist-failed", { environmentId, error: formatLogError(error) });
       })
       .finally(() => {
         if (this.activityWrites.get(environmentId) === settled) {

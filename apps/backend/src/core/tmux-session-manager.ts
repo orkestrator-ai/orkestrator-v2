@@ -66,6 +66,7 @@ import {
   uninstallWorkspaceHooks,
   workspaceHookPaths,
 } from "./tmux-hooks.js";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 type CommandContext = shared.CommandContext;
 
 export function localClaudeAccountPrefix(accountDirectory: string | undefined): string {
@@ -351,7 +352,7 @@ export class TmuxSession {
     const requestedFastMode = fastMode ?? false;
     const launchFastMode = requestedFastMode && helpText.includes("--settings");
     if (launchedNew && requestedFastMode && !launchFastMode) {
-      console.warn("[tmux] claude CLI does not support --settings; launching without fast mode");
+      log.warn("cli.fast-mode-unsupported");
     }
     if (launchedNew) {
       let agentMcpConfigPath: string | undefined;
@@ -437,7 +438,7 @@ export class TmuxSession {
         }
         this.fastMode = launchFastMode;
         await this.persistFastModeOptionWithRetry(launchFastMode).catch((error) => {
-          console.warn("[tmux] failed to persist launch fast mode", error);
+          log.warn("fast-mode.persist-failed", { error: formatLogError(error) });
         });
       });
     } else {
@@ -456,7 +457,7 @@ export class TmuxSession {
         // starts at null and therefore never invents a value here.
         if (this.fastMode !== null) {
           await this.persistFastModeOptionWithRetry(this.fastMode).catch((error) => {
-            console.warn("[tmux] failed to repair reattached fast mode metadata", error);
+            log.warn("fast-mode.repair-failed", { error: formatLogError(error) });
           });
         }
       });
@@ -522,7 +523,7 @@ export class TmuxSession {
       if (helpText.includes("--effort")) {
         command += ` --effort ${shellArg(claudeReasoning.effort)}`;
       } else {
-        console.warn("[tmux] claude CLI does not support --effort; launching without it");
+        log.warn("cli.effort-unsupported");
       }
     }
     if (fastMode || claudeReasoning.ultracode) {
@@ -718,10 +719,9 @@ export class TmuxSession {
                   this.nextObservationAt = 0;
                 }
                 // Pane contents are sensitive. Report only the error class.
-                console.warn(
-                  "[tmux] pane observation failed",
-                  error instanceof Error ? error.name : "unknown error",
-                );
+                log.warn("pane.observe-failed", {
+                  error: formatLogError(error, { message: false }),
+                });
               })
               .finally(() => {
                 if (this.observationInFlight === observation) {
@@ -755,7 +755,7 @@ export class TmuxSession {
               if (sessions.sessionsInEnvironment(this.environmentId) === 0) {
                 await uninstallWorkspaceHooks(this.backend, this.workspaceHookPaths).catch(
                   (error) => {
-                    console.warn("[tmux] uninstallWorkspaceHooks failed", error);
+                    log.warn("hooks.uninstall-failed", { error: formatLogError(error) });
                   },
                 );
               }
@@ -901,10 +901,10 @@ export class TmuxSession {
       void tmux
         .noteTurnFailed(context, this.environmentId, `claude-tmux:${this.sessionId}:${event.id}`)
         .catch((error: unknown) => {
-          console.warn(
-            `[tmux] failed to record a failed turn for ${this.environmentId}:`,
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("turn.failure-record-failed", {
+            environmentId: this.environmentId,
+            error: formatLogError(error, { message: false }),
+          });
         });
     } else if (previous !== this.busy) {
       void tmux.persistEnvironmentActivity(context, this.environmentId);
@@ -932,10 +932,10 @@ export class TmuxSession {
       if (this.completionGeneration === generation) {
         this.stopCompletionObserved = false;
       }
-      console.warn(
-        `[tmux] Failed to schedule PR refresh after agent completion for ${this.environmentId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("pr-refresh.schedule-failed", {
+        environmentId: this.environmentId,
+        error: formatLogError(error),
+      });
     });
   }
 
@@ -1304,7 +1304,7 @@ export class TmuxSession {
       }
       await this.sleep(50);
     }
-    console.warn("[tmux] timed out waiting for Claude slash command to settle", this.tmuxSession);
+    log.warn("slash-command.settle-timeout", { session: this.tmuxSession });
   }
 
   async interrupt(): Promise<void> {
@@ -1658,7 +1658,10 @@ export async function killOrphanSession(
       .exec(["tmux", "kill-session", "-t", tmuxSessionName(environmentId, tabId)])
       .catch(() => undefined);
   } catch (error) {
-    console.debug("[tmux] skipping orphan kill", error);
+    log.debug("orphan.kill-skipped", () => ({
+      ...classifyCommandFailure(error, { tools: ["tmux"] }),
+      error: formatLogError(error, { stack: false }),
+    }));
   }
 }
 

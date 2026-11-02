@@ -14,6 +14,9 @@ import {
   type SignalHealthState,
   type SignalHealthStatus,
 } from "./recurring-diagnostics.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -317,10 +320,7 @@ export class ClaudeStatePollManager {
           this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
         }
         this.revokeSignal(poll);
-        console.warn(
-          `[tmux] Could not arm the Claude state signal for ${containerId}:`,
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("signal.arm-failed", { containerId, error: formatLogError(error) });
       })
       .finally(() => {
         if (poll.signalArming === arming) poll.signalArming = undefined;
@@ -365,9 +365,7 @@ export class ClaudeStatePollManager {
     this.countDemotion(reason);
     this.revokeSignal(poll);
     this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
-    console.warn(
-      `[tmux] Claude state signal in ${containerId} ${reason === "missed-change" ? "missed a change" : "rang too often"}; polling every second until it is re-armed`,
-    );
+    log.warn("signal.degraded", { containerId, reason });
   }
 
   private countDemotion(reason: SignalDemotionReason): void {
@@ -661,10 +659,10 @@ export class ClaudeStatePollManager {
     poll.stale = false;
     if (completedTurn) {
       void poll.context.notifyAgentTurnCompleted?.(environment.id).catch((error) => {
-        console.warn(
-          `[tmux] Failed to schedule PR refresh after terminal completion for ${environment.id}:`,
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("pr-refresh.schedule-failed", {
+          environmentId: environment.id,
+          error: formatLogError(error),
+        });
       });
     }
     // Independent of the armed gate above: a Claude tmux agent can run
@@ -688,10 +686,7 @@ export class ClaudeStatePollManager {
    */
   private probeForAgentCreatedPullRequest(poll: ClaudeStatePoll, environmentId: string): void {
     const warn = (error: unknown): void => {
-      console.warn(
-        `[tmux] Failed to probe for an agent-created PR in ${environmentId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("pr-probe.failed", { environmentId, error: formatLogError(error) });
     };
     try {
       void Promise.resolve(poll.context.probeAgentCreatedPullRequest?.(environmentId)).catch(warn);

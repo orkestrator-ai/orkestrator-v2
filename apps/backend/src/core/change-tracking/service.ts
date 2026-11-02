@@ -59,6 +59,9 @@ import {
   type TurnStartResult,
 } from "./turn-boundaries.js";
 import { RemoteSlots, WorktreeRegistry, type WorktreeTarget } from "./worktree-owner.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("change-tracking");
 
 const MUTATING_TOOL_KINDS = new Set([
   "shell",
@@ -231,10 +234,7 @@ export class ChangeTrackingService {
       this.turns.reconcileAfterRestart();
       this.publisher.drainOutbox();
     } catch (error) {
-      console.warn(
-        "[change-tracking] startup reconciliation failed:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("startup.reconcile-failed", { error: formatLogError(error) });
     }
     for (const listener of this.startListeners.splice(0)) listener();
     if (!this.options.manualScheduling) {
@@ -356,10 +356,7 @@ export class ChangeTrackingService {
         : null;
       return await this.turns.prepareTurnStart({ ...context, target, inheritedFrom });
     } catch (error) {
-      console.warn(
-        "[change-tracking] turn start capture failed:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("turn-start.capture-failed", { error: formatLogError(error) });
       return { kind: "untracked", reason: "change-tracking-error" };
     }
   }
@@ -420,10 +417,7 @@ export class ChangeTrackingService {
     try {
       this.turns.markDispatched(turnIdFor(environmentId, logicalSessionKey, requestId), outcome);
     } catch (error) {
-      console.warn(
-        "[change-tracking] dispatch record failed:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("dispatch.record-failed", { error: formatLogError(error) });
     }
   }
 
@@ -460,10 +454,7 @@ export class ChangeTrackingService {
         return keys;
       })
       .catch((error) => {
-        console.warn(
-          "[change-tracking] turn finalization failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("turn.finalize-failed", { error: formatLogError(error) });
         return [] as string[];
       })
       .finally(() => {
@@ -533,10 +524,7 @@ export class ChangeTrackingService {
     for (const turnId of turnIds) {
       if (!this.writersSettled(turnId)) continue;
       await this.turns.settleInterrupted(turnId).catch((error) => {
-        console.warn(
-          "[change-tracking] late turn settlement failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("turn.settle-failed", { error: formatLogError(error) });
       });
     }
   }
@@ -566,10 +554,7 @@ export class ChangeTrackingService {
     }
     const run = this.pullNow(source)
       .catch((error) => {
-        console.warn(
-          "[change-tracking] evidence pull failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("evidence.pull-failed", { error: formatLogError(error) });
         return 0;
       })
       .finally(() => this.pulls.delete(source.sourceKey));
@@ -742,10 +727,7 @@ export class ChangeTrackingService {
           };
       }
       await this.measurements.recomputeOperation(operationId, worktree, window).catch((error) => {
-        console.warn(
-          "[change-tracking] tool measurement failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("measurement.failed", { error: formatLogError(error) });
       });
     }
     this.publishVolumes(volumeTurns, source.environmentId, worktree);

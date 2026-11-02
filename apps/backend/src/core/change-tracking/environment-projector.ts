@@ -30,6 +30,9 @@ import type { MeasurementFileRecord } from "./change-ledger.js";
 import type { ChangeMeasurementService } from "./measurement-service.js";
 import type { ChangeProjectionService } from "./projection-service.js";
 import type { WorktreeRegistry } from "./worktree-owner.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("change-tracking");
 
 export interface ProjectionAnnouncer {
   announce(resourceKey: string): void;
@@ -114,10 +117,7 @@ export class EnvironmentChangeProjector {
     const next = previous
       .then(() => this.apply(event))
       .catch((error) => {
-        console.warn(
-          "[change-tracking] environment projection failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("projection.failed", { error: formatLogError(error) });
       })
       .finally(() => {
         if (this.chains.get(environmentId) === next) this.chains.delete(environmentId);

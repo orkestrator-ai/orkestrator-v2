@@ -11,6 +11,9 @@ import { baselineTargetBranch } from "../diff-baseline.js";
 import { importOpenCodeCommandJournals } from "./legacy-import.js";
 import { ChangeTrackingService } from "./service.js";
 import type { WorktreeTarget } from "./worktree-owner.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("change-tracking");
 
 export function createBackendChangeTracking(input: {
   dataDir: string;
@@ -57,10 +60,7 @@ export function createBackendChangeTracking(input: {
   service.onStart(() => {
     // Phase 7: surviving backend-local journals become legacy summaries.
     void importOpenCodeCommandJournals(service, input.dataDir).catch((error) => {
-      console.warn(
-        "[change-tracking] legacy journal import failed:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("journal-import.failed", { error: formatLogError(error) });
     });
   });
   return service;

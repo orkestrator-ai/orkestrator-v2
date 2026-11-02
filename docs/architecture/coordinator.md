@@ -831,7 +831,8 @@ with a pull request carry, besides `prUrl` and `prState`,
 `failed`, `pending` and `total` counts, plus `requiredFailed`, or null) and `prReadyToMerge` with
 `prNotReadyReason` when false (`coordinator-pr-status.ts`). Readiness is
 `evaluatePrMergeReadiness` (`packages/protocol/src/pr-merge-readiness.ts`),
-the rule behind the sidebar's shimmer, with the PR monitor's confirmation as
+the rule behind the sidebar's shimmer, with checks always required (the
+coordinator ignores the auto-merge setting) and the PR monitor's confirmation as
 its freshness: this node's announced monitor state
 (`get_environment_pr_health`, which never asks GitHub), or for another
 node's rows the health its summaries relay while that node is connected and

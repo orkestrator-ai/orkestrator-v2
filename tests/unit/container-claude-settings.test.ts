@@ -21,7 +21,11 @@ test("container Claude settings start terminal Claude in bypass mode without a c
   // Current Claude Code reads the consent only from settings; the file is
   // rewritten on every start, so without it every start asks again.
   expect(settings.skipDangerousModePermissionPrompt).toBe(true);
-  expect(Object.keys(settings.hooks ?? {}).sort()).toEqual(["Stop", "UserPromptSubmit"]);
+  expect(Object.keys(settings.hooks ?? {}).sort()).toEqual([
+    "Stop",
+    "StopFailure",
+    "UserPromptSubmit",
+  ]);
 });
 
 test("the image keeps its pinned Claude CLI on its pin, as the host does", () => {

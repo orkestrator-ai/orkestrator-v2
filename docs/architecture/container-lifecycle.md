@@ -1252,13 +1252,13 @@ The legacy `stream_container_logs` is an adapter onto the same service whose
 lease lapses, so an old client that never closes cannot leave an immortal
 follower. Backend shutdown stops every follower.
 
-## Claude terminal state signal (`claude-state-signal=2`)
+## Claude terminal state signal (`claude-state-signal=3`)
 
 Claude started in a container terminal reports its state through the hooks the
 entrypoint writes into `~/.claude/settings.json`: `UserPromptSubmit` writes
-`working` and `Stop` writes `waiting` to `/tmp/.claude-state`. A turn that ends on
-an API error runs `StopFailure` instead of `Stop`, which is not installed here, so
-it reads `working` until the next prompt (to-do 1200). Bridge sessions
+`working`, `Stop` writes `waiting` and `StopFailure` (which runs instead of
+`Stop` when a turn ends on an API error) writes `failed` to
+`/tmp/.claude-state`. Bridge sessions
 (`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set) write nothing. The same file sets
 bypass permissions as the default mode and records its consent
 (`skipDangerousModePermissionPrompt`), the only place current Claude Code
@@ -1274,6 +1274,19 @@ with `state revision completions`. The counters survive lost POSTs, including a
 whole working-to-waiting turn between reads. The legacy state file is still
 written for older backends. Reads are bounded to 256 bytes. Version 1 images
 keep the one-second poll because their state cannot expose a missed whole turn.
+
+Version 3 adds the `StopFailure` hook and the `failed` word (to-do 1200). It
+bumps the revision but is not a completion, and the legacy file says `idle`
+for it. The poll reads it as `idle` and persists it with
+`completionOutcome: "failed"`, so storage rings `agent_failed` on the
+`claude-terminal` source's own working edge, never "finished". When the poll
+never saw that working edge (both rings lost from `waiting` or `idle`), the
+changed revision alone records an `agent_failed` completion. Images with
+version 2 have no `StopFailure` hook, so a failed turn there still reads
+`working` until the next prompt; the poll arms the doorbell for any version
+from 2. A backend that predates version 3 reads a `failed` snapshot as an
+unreadable state and keeps the previous state (marked stale after three reads)
+until the next prompt.
 
 After persisting, `orkestrator-state-signal` POSTs, detached and with no body,
 to `/claude-state-signal` on the agent

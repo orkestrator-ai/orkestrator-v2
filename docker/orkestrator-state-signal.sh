@@ -1,19 +1,21 @@
 #!/bin/sh
-# ORKESTRATOR_CAPABILITY claude-state-signal=2
-# Usage: orkestrator-state-signal [working|waiting]
+# ORKESTRATOR_CAPABILITY claude-state-signal=3
+# Usage: orkestrator-state-signal [working|waiting|failed]
 # Persist bounded revision/completion counters before ringing. A lost POST
 # cannot hide a whole turn. No argument is the install's non-mutating probe.
-# The legacy state file remains readable by older backends.
+# `failed` (version 3, the StopFailure hook) is a turn that ended on an API
+# error: it bumps the revision but is not a completion. The legacy state file
+# remains readable by older backends, which know no `failed`, so it says idle.
 state_file="${ORKESTRATOR_STATE_FILE:-/tmp/.claude-state}"
 snapshot="${state_file}-snapshot"
 case "${1:-}" in
-  working|waiting)
+  working|waiting|failed)
     (
       flock -w 1 9 || exit 1
       previous=idle revision=0 completions=0
       if [ -f "$snapshot" ]; then
         read -r previous revision completions < "$snapshot" || exit 1
-        case "$previous" in working|waiting|idle) ;; *) exit 1 ;; esac
+        case "$previous" in working|waiting|idle|failed) ;; *) exit 1 ;; esac
         case "$revision:$completions" in *[!0-9:]*|:*|*:) exit 1 ;; esac
         [ "${#revision}" -le 14 ] && [ "${#completions}" -le 14 ] || exit 1
       fi
@@ -25,7 +27,9 @@ case "${1:-}" in
       trap 'rm -f "$tmp"' EXIT
       printf '%s %s %s\n' "$1" "$revision" "$completions" > "$tmp" || exit 1
       mv -f "$tmp" "$snapshot" || exit 1
-      printf '%s\n' "$1" > "$state_file"
+      legacy="$1"
+      [ "$legacy" = failed ] && legacy=idle
+      printf '%s\n' "$legacy" > "$state_file"
     ) 9>"${snapshot}.lock" || exit 0
     ;;
   "") ;;

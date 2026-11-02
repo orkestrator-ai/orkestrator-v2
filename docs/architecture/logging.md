@@ -709,7 +709,7 @@ Everything renderer-only is in a `web.*` area, or `terminal` and `terminal.setup
 with one vocabulary file per domain (`web-kanban.ts`, `web-sync.ts`, and so on).
 
 - **Its level.** The renderer has no environment, so `ORKESTRATOR_LOG_LEVEL` does not
-  reach it. Its default is `info`. Setting `localStorage["orkestrator:debug"]` and
+  reach it, and the live log detail setting does not either. Its default is `info`. Setting `localStorage["orkestrator:debug"]` and
   reloading raises every area to `debug`: `applyRendererLogLevel`
   (`apps/web/src/lib/debug-log.ts`) reads it once at startup. This is the old
   `rendererDebugLog` gate, which every `debug` site now goes through, including those

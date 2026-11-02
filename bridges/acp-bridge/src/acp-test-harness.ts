@@ -21,7 +21,7 @@
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
 import { parseLogRecordLine } from "@orkestrator/protocol/logger";
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, jest } from "bun:test";
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -34,7 +34,7 @@ import os from "node:os";
 
 import { dirname, join, resolve } from "node:path";
 
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const here = dirname(fileURLToPath(import.meta.url));
 

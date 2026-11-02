@@ -1,3 +1,4 @@
+import { boundedJson } from "./http-bridge-transport.js";
 import type { StorageService } from "./storage.js";
 import { createHash } from "node:crypto";
 import { createLogger, emitLogRecord } from "@orkestrator/protocol/logger";
@@ -25,6 +26,9 @@ const REQUEST_TIMEOUT_MS = 5_000;
 // stuck turn may be holding up. After these, its next start resends.
 const RETRY_DELAYS_MS = [2_000, 10_000];
 const REQUEST_CONCURRENCY = 8;
+const MAX_RESPONSE_BYTES = 4 * 1024;
+// Clock skew recovery is local to a bridge and limited to one jump per policy.
+const MAX_SEQUENCE_SKEW_MS = 24 * 60 * 60 * 1000;
 // A full push prunes these to the bridges still running; between pushes, each
 // replaced bridge adds an entry.
 const MAX_TRACKED_BRIDGES = 1_024;
@@ -110,6 +114,7 @@ export class LogPolicyService {
   private stopped = false;
   /** The last sequence each bridge generation took, so a repeated start sends nothing. */
   private readonly delivered = new Map<string, number>();
+  private readonly wireSequences = new Map<string, number>();
   /** One delivery loop per bridge; a newer policy is picked up by the running loop. */
   private readonly delivering = new Set<string>();
   private activeRequests = 0;
@@ -203,6 +208,9 @@ export class LogPolicyService {
     for (const id of Array.from(this.reportedFailures.keys())) {
       if (!live.has(id)) this.reportedFailures.delete(id);
     }
+    for (const id of Array.from(this.wireSequences.keys())) {
+      if (!live.has(id)) this.wireSequences.delete(id);
+    }
     await Promise.all(deliveries);
   }
 
@@ -212,18 +220,22 @@ export class LogPolicyService {
     this.delivering.add(id);
     try {
       let failures = 0;
+      let staleRecoveries = 0;
       let retrySeq = this.seq;
       while (!this.stopped && this.delivered.get(id) !== this.seq) {
         const seq = this.seq;
         if (retrySeq !== seq) {
           failures = 0;
+          staleRecoveries = 0;
           retrySeq = seq;
         }
-        const outcome = await this.post(target, seq, this.detail);
+        const wireSeq = Math.max(seq, (this.wireSequences.get(id) ?? 0) + 1);
+        let outcome = await this.post(target, wireSeq, this.detail);
         // A failed final attempt must not strand a policy that arrived in flight.
         if (seq !== this.seq) continue;
         if (outcome.kind === "applied") {
           track(this.delivered, id, seq);
+          track(this.wireSequences, id, wireSeq);
           this.reportedFailures.delete(id);
           failures = 0;
           continue;
@@ -236,8 +248,17 @@ export class LogPolicyService {
           continue;
         }
         if (outcome.kind === "stale") {
-          this.seq = Math.max(this.seq, outcome.seq + 1);
-          continue;
+          if (
+            staleRecoveries === 0 &&
+            outcome.seq >= wireSeq &&
+            outcome.seq <= Math.max(this.now(), seq) + MAX_SEQUENCE_SKEW_MS &&
+            Number.isSafeInteger(outcome.seq + 1)
+          ) {
+            track(this.wireSequences, id, outcome.seq);
+            staleRecoveries += 1;
+            continue;
+          }
+          outcome = { kind: "failed", reason: "invalid-stale-sequence" };
         }
         const delay = this.retryDelaysMs[failures];
         if (delay === undefined) {
@@ -308,7 +329,9 @@ export class LogPolicyService {
       await response.body?.cancel().catch(() => undefined);
       return { kind: "failed", reason: `http-${response.status}` };
     }
-    const answer = (await response.json().catch(() => null)) as {
+    const answer = (await boundedJson(response, "bridge log policy", {
+      remaining: MAX_RESPONSE_BYTES,
+    }).catch(() => null)) as {
       applied?: unknown;
       stale?: unknown;
       seq?: unknown;

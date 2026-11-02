@@ -1,6 +1,6 @@
 # Docker confirmation startup probe count changes in the aggregate
 
-- **ID:** 2398
+- **ID:** 2407
 - **Status:** open
 - **Date observed:** 2026-11-01
 - **Test:** `App Docker availability > delays the confirming startup probe without extending the loading overlay`

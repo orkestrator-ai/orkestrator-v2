@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
 
@@ -106,7 +107,7 @@ describe("Electron backend command registry", () => {
       },
     });
     const commands = createCommandRegistry();
-    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+    const warning = captureLogs();
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
@@ -161,13 +162,20 @@ exit 0
           payload: snapshot,
         });
         await Promise.resolve();
-        expect(warning).toHaveBeenCalledWith(
-          "[ElectronBackend] Failed to persist the Claude model catalogue:",
-          "injected host cache failure",
+        expect(warning.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "models",
+            event: "cache.write-failed",
+            fields: expect.objectContaining({
+              agent: "claude",
+              error: expect.objectContaining({ message: "injected host cache failure" }),
+            }),
+          }),
         );
       });
     } finally {
-      warning.mockRestore();
+      warning.restore();
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
       if (pid) {
         try {

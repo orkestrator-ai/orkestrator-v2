@@ -65,10 +65,26 @@ export async function getHostPort(
   containerPort: number,
   protocol = "tcp",
   signal?: AbortSignal,
+  throwOnError = false,
 ): Promise<number | null> {
   try {
     // A runtime behind an egress gateway publishes through the gateway.
     const owner = await networkOwnerContainer(containerId, signal);
+    if (throwOnError) {
+      // `docker port` exits nonzero for an unpublished port as well as daemon
+      // failures. Inspect distinguishes successful absence from a failed read.
+      const { stdout } = await runCommand(
+        "docker",
+        ["inspect", "--format", "{{json .NetworkSettings.Ports}}", owner],
+        { timeoutMs: 10_000, signal },
+      );
+      const bindings = JSON.parse(stdout) as Record<
+        string,
+        Array<{ HostPort: string }> | null
+      > | null;
+      const port = Number(bindings?.[`${containerPort}/${protocol}`]?.[0]?.HostPort);
+      return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+    }
     const { stdout } = await runCommand("docker", ["port", owner, `${containerPort}/${protocol}`], {
       timeoutMs: 10_000,
       signal,
@@ -78,7 +94,8 @@ export async function getHostPort(
     const rawPort = line.split(":").at(-1);
     const port = rawPort ? Number.parseInt(rawPort, 10) : Number.NaN;
     return Number.isFinite(port) ? port : null;
-  } catch {
+  } catch (error) {
+    if (throwOnError) throw error;
     return null;
   }
 }

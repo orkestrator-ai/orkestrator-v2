@@ -312,8 +312,9 @@ flowchart LR
 
 Live bridge delivery sends stored levels; each receiving process applies its own
 `ORKESTRATOR_LOG_LEVEL` override, which the settings do not replace. Local targets are delivered before Docker discovery completes;
-container lookups share a three-second deadline across port and token reads and
-publish targets as they finish. HTTP requests are limited to eight at once, with
+each container lookup shares a three-second deadline across port and token reads and
+publishes its target as it finishes. Failed lookups retry twice with fresh deadlines;
+successful absence does not retry. Exhausted lookups produce a content-free failure count. HTTP requests are limited to eight at once, with
 retry sleeps outside that limit. Each new policy gets a fresh retry budget,
 including when it supersedes a failed final attempt.
 
@@ -329,7 +330,7 @@ OpenCode is not one of ours and has no route.
 | Answer | Means |
 | --- | --- |
 | 200 `{ "applied": true, "seq", "diagnostics" }` | In force now. |
-| 200 `{ "applied": false, "stale": true, "seq" }` | The bridge holds a newer `seq`. The backend sends again past it. |
+| 200 `{ "applied": false, "stale": true, "seq" }` | The bridge holds a newer `seq`. The backend retries once past it for this bridge only, within a one-day clock-skew bound. |
 | 400 `{ "error" }` | The body does not parse. Nothing changed. |
 | 404 or 405 | An older bridge. It keeps working and applies the setting at its next start, through `ORKESTRATOR_BRIDGE_DEBUG`. Never an error for the session. |
 
@@ -337,6 +338,9 @@ It is metadata only, by the same rule as `/activity`: it reads no session, touch
 no liveness, hydrates nothing and re-attaches nothing. `seq` rises with each policy,
 seeded from the clock, so a delayed request cannot undo a newer one and a restarted
 backend still counts as newer.
+
+Bridge answers are limited to 4 KiB. Sequence recovery is per bridge, so an invalid or
+continually rising stale answer cannot advance other bridges or retry forever.
 
 Delivery is best-effort. A failure is retried twice and then logged once as
 `policy.push-failed`, without the bridge's address or token. The listing skips health

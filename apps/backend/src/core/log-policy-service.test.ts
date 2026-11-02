@@ -420,3 +420,83 @@ test("backend lifecycle wires a real config save and removes its listener on shu
     storage.close();
   }
 });
+
+test.each([Number.MAX_SAFE_INTEGER, -1, 1_000_000_000_000])(
+  "an implausible stale sequence %s stays isolated to its bridge",
+  async (seq) => {
+    const h = await harness({
+      targets: [target, { ...target, agent: "pi", baseUrl: "http://127.0.0.1:4001" }],
+      answers: [Response.json({ stale: true, seq })],
+    });
+    h.service.start();
+    await h.settle();
+    expect(h.requests.every((request) => Number.isSafeInteger(request.body.seq))).toBe(true);
+    expect(h.requests.find((request) => request.url.includes(":4001"))!.body.seq).toBe(1000);
+    await h.writeGlobal({ logDetail: { level: "debug", areaLevels: {} } });
+    h.service.configChanged();
+    await h.settle();
+    expect(h.requests.at(-1)!.body.seq).toBe(1001);
+    h.service.stop();
+  },
+);
+
+test("continually rising stale answers have a bounded recovery budget", async () => {
+  const stale = (body: Record<string, unknown>) =>
+    Response.json({ stale: true, seq: Number(body.seq) + 1 });
+  const h = await harness({ answers: Array.from({ length: 10 }, () => stale) });
+  h.service.start();
+  await h.settle();
+  expect(h.requests).toHaveLength(3); // one recovery plus the ordinary retry budget
+  expect(h.logged.filter((output) => output.record?.event === "policy.push-failed")).toHaveLength(
+    1,
+  );
+  h.service.stop();
+});
+
+test("an honest stale recovery remains monotonic across later settings without affecting peers", async () => {
+  const h = await harness({
+    targets: [target, { ...target, agent: "pi", baseUrl: "http://127.0.0.1:4001" }],
+    answers: [Response.json({ stale: true, seq: 5000 })],
+  });
+  h.service.start();
+  await h.settle();
+  await h.writeGlobal({ logDetail: { level: "debug", areaLevels: {} } });
+  h.service.configChanged();
+  await h.settle();
+  expect(
+    h.requests
+      .filter((request) => request.url.includes(":4000"))
+      .map((request) => request.body.seq),
+  ).toEqual([1000, 5001, 5002]);
+  expect(
+    h.requests
+      .filter((request) => request.url.includes(":4001"))
+      .map((request) => request.body.seq),
+  ).toEqual([1000, 1001]);
+});
+
+test("oversized chunked answers are cancelled and reported without consuming the rest", async () => {
+  let cancelled = false;
+  let chunks = 0;
+  const response = new Response(
+    new ReadableStream({
+      pull(controller) {
+        chunks++;
+        controller.enqueue(new Uint8Array(2048));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+  );
+  const h = await harness({ answers: [response, Response.json(null)] });
+  h.service.start();
+  await h.settle();
+  expect(cancelled).toBe(true);
+  expect(chunks).toBeLessThanOrEqual(4);
+  expect(h.requests).toHaveLength(2);
+  expect(
+    h.logged.find((output) => output.record?.event === "policy.push-failed")?.record?.fields
+      ?.reason,
+  ).toBe("malformed-answer");
+});

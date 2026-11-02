@@ -626,6 +626,7 @@ export async function createCommandFixtures() {
         deletePaneLayout: mock(async () => undefined),
         listBuildPipelines: mock(async () => []),
         listAllBuildPipelines: mock(async () => []),
+        getAgentMailSummary: mock(async () => ({ revision: 0, mailboxes: [] })),
         listMultiReviewWorkflows: mock(async () => []),
         getProject: mock(async (projectId: string) => {
           if (options.project) return options.project.id === projectId ? options.project : null;

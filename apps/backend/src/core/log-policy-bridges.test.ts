@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
 import type { CommandContext } from "./commands-context.js";
 
@@ -102,7 +103,7 @@ test("running container discovery validates tokens, de-duplicates shared runtime
       },
     },
   );
-  expect(reads).toHaveLength(5);
+  expect(reads).toHaveLength(7);
   expect(targets).toEqual([
     { agent: "claude", baseUrl: "http://127.0.0.1:5097", authToken: token },
   ]);
@@ -147,5 +148,67 @@ test("local and healthy Docker targets are emitted while another token read awai
   failed.reject(new Error("deadline"));
   const targets = await discovery;
   expect(targets).toHaveLength(5);
-  expect(requests).toHaveLength(5);
+  expect(requests).toHaveLength(7);
+});
+
+test("a failed port lookup is retried with a fresh deadline; absence is not retried", async () => {
+  const signals: AbortSignal[] = [];
+  let calls = 0;
+  const capture = captureLogs();
+  try {
+    const targets = await listRunningBridgeTargets(
+      context({
+        processes: {},
+        environments: [{ id: "docker", status: "running", containerId: "container" }],
+      }),
+      undefined,
+      {
+        getHostPort: async (_id, port, _protocol, signal, strict) => {
+          expect(strict).toBe(true);
+          if (port !== 4097) return null;
+          signals.push(signal!);
+          if (++calls === 1) throw new DOMException("lookup deadline", "TimeoutError");
+          return 5097;
+        },
+        dockerExec: async () => token,
+      },
+    );
+    expect(calls).toBe(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(targets).toEqual([
+      { agent: "claude", baseUrl: "http://127.0.0.1:5097", authToken: token },
+    ]);
+    expect(capture.records()).toEqual([]);
+  } finally {
+    capture.restore();
+  }
+});
+
+test("exhausted container lookup retries emit only a content-free failure count", async () => {
+  const capture = captureLogs();
+  let calls = 0;
+  try {
+    const targets = await listRunningBridgeTargets(
+      context({
+        processes: {},
+        environments: [{ id: "docker", status: "running", containerId: "private-container" }],
+      }),
+      undefined,
+      {
+        getHostPort: async () => {
+          calls++;
+          throw new Error("private daemon output");
+        },
+        dockerExec: async () => token,
+      },
+    );
+    expect(targets).toEqual([]);
+    expect(calls).toBe(15);
+    expect(capture.records().map((record) => record.fields)).toEqual([
+      { agent: "all", reason: "lookup-failed", count: 5 },
+    ]);
+    expect(capture.lines.join("")).not.toContain("private");
+  } finally {
+    capture.restore();
+  }
 });

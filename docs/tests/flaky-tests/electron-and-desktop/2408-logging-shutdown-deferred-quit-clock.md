@@ -1,6 +1,6 @@
 # Logging shutdown assertion races its deferred quit
 
-- **ID:** 2399
+- **ID:** 2408
 - **Status:** resolved
 - **Date observed:** 2026-11-02
 - **Test:** `application logging shutdown > closes the log anyway when pending output outlives its own bound`

@@ -1,6 +1,6 @@
 # Backend event-stream keepalive fixture reaches its watchdog in the aggregate
 
-- **ID:** 2400
+- **ID:** 2409
 - **Status:** open
 - **Date observed:** 2026-11-02
 - **Test:** `a stream that stops its keepalives, or an attempt nothing answers, is given up on`

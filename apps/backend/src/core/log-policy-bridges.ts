@@ -1,3 +1,4 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import type { CommandContext } from "./commands-context.js";
 import { dockerExec, getHostPort } from "./commands-container-exec.js";
 import {
@@ -10,6 +11,7 @@ import type { BridgeLogPolicyTarget } from "./log-policy-service.js";
 
 /** OpenCode has no bridge of ours to carry the route. */
 const LOG_POLICY_BRIDGES: readonly LocalServerKind[] = ["claude", "codex", "cursor", "grok", "pi"];
+const log = createLogger("logging");
 const CONTAINER_LOOKUP_CONCURRENCY = 4;
 const CONTAINER_LOOKUP_TIMEOUT_MS = 3_000;
 
@@ -46,7 +48,7 @@ async function containerTarget(
 ): Promise<BridgeLogPolicyTarget | null> {
   const { containerPort, tokenFile } = CONTAINER_BRIDGE_PEEK[agent];
   const signal = AbortSignal.timeout(CONTAINER_LOOKUP_TIMEOUT_MS);
-  const hostPort = await dependencies.getHostPort(containerId, containerPort, "tcp", signal);
+  const hostPort = await dependencies.getHostPort(containerId, containerPort, "tcp", signal, true);
   if (!hostPort) return null;
   const authToken = (
     await dependencies.dockerExec(
@@ -89,13 +91,23 @@ export async function listRunningBridgeTargets(
   );
   const lookupCount = containerIds.length * LOG_POLICY_BRIDGES.length;
   let next = 0;
+  let failedLookups = 0;
   await Promise.all(
     Array.from({ length: Math.min(CONTAINER_LOOKUP_CONCURRENCY, lookupCount) }, async () => {
       while (next < lookupCount) {
         const index = next++;
         const containerId = containerIds[Math.floor(index / LOG_POLICY_BRIDGES.length)]!;
         const agent = LOG_POLICY_BRIDGES[index % LOG_POLICY_BRIDGES.length]!;
-        const target = await containerTarget(containerId, agent, dependencies).catch(() => null);
+        let target: BridgeLogPolicyTarget | null = null;
+        // Each retry gets a fresh deadline. A failed Docker read is not absence.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            target = await containerTarget(containerId, agent, dependencies);
+            break;
+          } catch {
+            if (attempt === 2) failedLookups++;
+          }
+        }
         if (target) {
           targets.push(target);
           onTarget?.(target);
@@ -103,5 +115,8 @@ export async function listRunningBridgeTargets(
       }
     }),
   );
+  if (failedLookups > 0) {
+    log.warn("policy.push-failed", { agent: "all", reason: "lookup-failed", count: failedLookups });
+  }
   return targets;
 }

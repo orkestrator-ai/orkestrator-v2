@@ -1,8 +1,8 @@
 {
   "$comment": "Registry digest pin of the published artifact preview worker, written by write-pin.ts (the publish-preview-worker workflow or publish.sh). Packaged backends pull image@digest on demand (transcript_artifact_prepare_worker) only when contextDigest equals the digest of the build context they ship and the image's label agrees; otherwise they build that context. null until an image is published.",
-  "image": null,
-  "tag": null,
-  "digest": null,
-  "contextDigest": null,
-  "publishedAt": null
+  "image": "ghcr.io/orkestrator-ai/orkestrator-v2/artifact-preview-worker",
+  "tag": "ctx-cfbafc5d238e4eb3232bfcb93ec144155634a56c58e1a5d26aea4ec0aaf3080c",
+  "digest": "sha256:96000c2e09b08038ed84989334b1372eec8d22dc34fed24211f6f8c693b30552",
+  "contextDigest": "sha256:cfbafc5d238e4eb3232bfcb93ec144155634a56c58e1a5d26aea4ec0aaf3080c",
+  "publishedAt": "2026-11-02T01:18:47Z"
 }

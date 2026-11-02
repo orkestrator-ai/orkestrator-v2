@@ -1,3 +1,4 @@
+import { bridgeDiagnosticPayload } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import type { SDKAgent } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
@@ -22,7 +23,7 @@ function harness() {
   const diagnostics = new CursorRunDiagnostics(
     state,
     () => now,
-    (line) => lines.push(line),
+    ({ payload }) => lines.push(payload),
   );
   return {
     state,
@@ -31,23 +32,18 @@ function harness() {
     advance: (ms: number) => {
       now += ms;
     },
-    last: () =>
-      JSON.parse(
-        lines
-          .findLast((line) => !line.includes('"event":"sdk-'))!
-          .slice("[bridge-diagnostics] ".length),
-      ),
+    last: () => JSON.parse(lines.findLast((line) => !line.includes('"event":"sdk-'))!),
   };
 }
 
 describe("Cursor stall diagnostics", () => {
   test("the base constructor can emit before the SDK field exists", () => {
     const lines: string[] = [];
-    const diagnostics = new CursorRunDiagnostics(newSessionState(), Date.now, (line) =>
-      lines.push(line),
+    const diagnostics = new CursorRunDiagnostics(newSessionState(), Date.now, ({ payload }) =>
+      lines.push(payload),
     );
     try {
-      const records = lines.map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)));
+      const records = lines.map((line) => JSON.parse(line));
       expect(records[0]).toMatchObject({ event: "send-started" });
       expect(records[0]).not.toHaveProperty("coverage");
       expect(records.some((record) => record.event === "sdk-snapshot")).toBe(true);
@@ -259,7 +255,7 @@ describe("Cursor stall diagnostics", () => {
     const diagnostics = new CursorRunDiagnostics(
       newSessionState(),
       Date.now,
-      (line) => lines.push(line),
+      ({ payload }) => lines.push(payload),
       5,
     );
     try {
@@ -281,7 +277,7 @@ describe("Cursor stall diagnostics", () => {
     const previous = process.env.ORKESTRATOR_BRIDGE_DEBUG;
     const lines: string[] = [];
     const log = spyOn(console, "info").mockImplementation((line) => {
-      lines.push(String(line));
+      lines.push(JSON.stringify(bridgeDiagnosticPayload(String(line))));
     });
     try {
       process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";

@@ -36,6 +36,9 @@ import {
   type StructuredOutputResult,
   type StructuredOutputTurnRecord,
 } from "@orkestrator/protocol/structured-output";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 export const BRIDGE_SESSION_REGISTRY_VERSION = 2;
 
@@ -515,10 +518,7 @@ export class BridgeSessionStore {
   }
 
   private warnPersistenceFailure(error: unknown): void {
-    console.warn(
-      "[codex-bridge] Failed to persist bridge session registry:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("registry.persist-failed", { error: formatLogError(error, { stack: false }) });
   }
 
   toRecord(options: {

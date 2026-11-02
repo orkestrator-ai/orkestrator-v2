@@ -14,3 +14,5 @@
 - **Hypothesis:** launching Chromium competes with the aggregate's other browser suites and Git-heavy fixtures on a contended host, and the launch sits under Bun's default five-second hook budget. Not established; the hook was never timed in a passing aggregate run.
 - **Changes:** evidence only; no assertion, timeout or skip was changed. The branch does not change this test file or the launch; its only change nearby is `TranscriptMediaStreams.dispose()` awaiting its staging root (0247), which is teardown, after the hook. The hook timed out the same way on other branches in 0694, 0801 and 0825, before 0247 existed.
 - **Next step:** if it recurs, time the `chromium.launch` call in the aggregate; an explicit launch budget like other Chromium suites use would be the fix to weigh, not a skip.
+
+On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test:slow` (5002 ms), run alongside the Electron suite. The owner passed alone at load average 55.

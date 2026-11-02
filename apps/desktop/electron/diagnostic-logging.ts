@@ -11,10 +11,11 @@ export function reportMainThreadStall(
     endedAt,
     intervalMs,
     folded,
+    level,
   }: Parameters<NonNullable<EventLoopStallMonitorOptions["report"]>>[0],
   describeStall: (lagMs: number) => string,
 ): void {
-  desktopLog.warn("main-thread.stalled", {
+  desktopLog[level]("main-thread.stalled", {
     lagMs,
     endedAt,
     intervalMs,

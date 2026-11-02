@@ -88,6 +88,9 @@ import {
   capacityRetryStartedText,
   parseCapacityRetryContinuation,
 } from "../sessions/capacity-retry.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 export interface PersistedSessionIndexEntry {
   id?: unknown;
@@ -1254,7 +1257,7 @@ export async function hydrateMessagesFromPersistedSession(
       };
     }
   }
-  console.warn(`[codex-bridge] Rollout for thread ${threadId} could not be read for hydration`);
+  log.warn("rollout.hydrate-failed", { threadId });
   return {
     messages: [],
     title: meta.title,

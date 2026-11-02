@@ -277,3 +277,4 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test` (69.12 ms). The owner passed alone: `bun test ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --only-failures` (37 pass, 0 fail).

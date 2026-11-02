@@ -8,7 +8,7 @@ test("Claude tool envelopes preserve pending work without recording content", ()
     "claude",
     { id: "PRIVATE" },
     () => 0,
-    (line) => lines.push(line),
+    ({ payload }) => lines.push(payload),
   );
   try {
     observeClaudeMessage(diagnostics, {

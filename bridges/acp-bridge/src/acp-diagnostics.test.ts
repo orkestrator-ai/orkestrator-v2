@@ -1,3 +1,4 @@
+import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
 import { expect, test } from "bun:test";
 import { nativeFetch, spawnBridge, stopChild } from "./acp-test-harness.js";
 
@@ -15,23 +16,18 @@ test.each([false, true])(
     } finally {
       await stopChild(child);
     }
-    const lines = chunks
-      .join("")
-      .split("\n")
-      .filter((line) => line.startsWith("[bridge-diagnostics] "));
+    const snapshots = bridgeDiagnosticPayloads(chunks.join("").split("\n"));
     if (enabled) {
-      const closed = lines
-        .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
-        .find((entry) => entry.event === "closed");
+      const closed = snapshots.find((entry) => entry.event === "closed");
       expect(closed).toBeDefined();
       expect(closed.bridge).toBe("acp");
       expect(closed.counters.requestsSent).toBeGreaterThan(0);
       expect(closed.counters.responsesReceived).toBeGreaterThan(0);
       expect(closed.metrics.pendingRequests).toBe(0);
       expect(closed.stream).toBe("resolved");
-      expect(lines.join("\n")).not.toContain("integration-test-token");
+      expect(chunks.join("")).not.toContain("integration-test-token");
     } else {
-      expect(lines).toHaveLength(0);
+      expect(snapshots).toHaveLength(0);
     }
   },
 );

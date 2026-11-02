@@ -110,9 +110,7 @@ describe("settleFailedTurn", () => {
         "session.error",
       ]);
       expect(events[1]?.data).toEqual({ error: "Provider failed" });
-      expect(log).toHaveBeenCalledWith("[session-manager] Error processing prompt", {
-        errorClass: "Error",
-      });
+      expect(log).toHaveBeenCalledWith("[bridge.claude] prompt.failed errorClass=Error");
     } finally {
       stop();
       flush.mockRestore();

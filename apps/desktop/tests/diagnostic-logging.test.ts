@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { configureLogger } from "@orkestrator/protocol/logger";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import type {
   ArtifactHostBlockReason,
@@ -17,6 +18,17 @@ beforeEach(() => {
 afterEach(() => capture.restore());
 
 describe("desktop diagnostic logging", () => {
+  test("a stall the monitor marks as always written reaches the log at any level", () => {
+    configureLogger({ level: "error" });
+    reportMainThreadStall(
+      { lagMs: 10_000, endedAt: "t", intervalMs: 500, folded: "", level: "error" },
+      () => "",
+    );
+    expect(capture.records()).toEqual([
+      expect.objectContaining({ level: "error", event: "main-thread.stalled" }),
+    ]);
+  });
+
   test("maps a main-thread stall and removes diagnostic suffix prefixes", () => {
     const describeStall = mock(() => "; dialog=confirm openMs=1200");
     reportMainThreadStall(
@@ -25,6 +37,7 @@ describe("desktop diagnostic logging", () => {
         endedAt: "2026-11-01T12:00:00.000Z",
         intervalMs: 500,
         folded: "; 2 shorter stall(s) since the last report, longest 1100 ms",
+        level: "warn",
       },
       describeStall,
     );
@@ -46,7 +59,10 @@ describe("desktop diagnostic logging", () => {
   });
 
   test("omits empty dialog and folded-stall fields", () => {
-    reportMainThreadStall({ lagMs: 1000, endedAt: "t", intervalMs: 500, folded: "" }, () => "");
+    reportMainThreadStall(
+      { lagMs: 1000, endedAt: "t", intervalMs: 500, folded: "", level: "warn" },
+      () => "",
+    );
     expect(capture.records()[0]?.fields).toEqual({ lagMs: 1000, endedAt: "t", intervalMs: 500 });
   });
 

@@ -92,6 +92,9 @@ import {
   sessionTitle,
   truncateUtf8,
 } from "./acp-transcript.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.acp");
 
 export async function listNormalizedModels(
   signal?: AbortSignal,
@@ -153,13 +156,13 @@ export function restoreSessionConfig(candidate: JsonObject): AcpNormalizedSessio
   if (candidate.sessionConfig !== undefined) {
     const restored = parsePersistedAcpSessionConfig(provider, candidate.sessionConfig);
     if (restored) return restored;
-    console.warn("[acp-bridge] Resetting a malformed persisted session config");
+    log.warn("state.session-config-reset");
     return emptySessionConfig();
   }
   if (candidate.composer !== undefined) {
     const composer = parsePersistedComposerState(provider, candidate.composer);
     if (composer) return { ...emptySessionConfig(), composer };
-    console.warn("[acp-bridge] Resetting a malformed persisted composer state");
+    log.warn("state.composer-reset");
   }
   return emptySessionConfig();
 }
@@ -272,9 +275,7 @@ export async function restorePersistedState(): Promise<void> {
     sessions.clear();
     bumpCursorDiscoveryRevision();
     clientSessionKeys.clear();
-    console.warn(
-      `[acp-bridge] Discarding unusable persisted state: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    log.warn("state.discarded", { error: formatLogError(error, { stack: false }) });
     const file = stateFile;
     if (!file) return;
     await fs

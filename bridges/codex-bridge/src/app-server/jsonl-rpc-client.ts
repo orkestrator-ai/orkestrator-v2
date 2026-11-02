@@ -29,6 +29,9 @@ import {
   type JsonRpcId,
 } from "./envelope-validation.js";
 import type { EngineGeneration } from "../engine/types.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
 
 /** Guards against a runaway peer filling memory with one unterminated line. */
 export const DEFAULT_MAX_INBOUND_LINE_BYTES = 64 * 1024 * 1024;
@@ -284,7 +287,7 @@ export class JsonlRpcClient {
       try {
         this.options.recordInboundLine(line);
       } catch (error) {
-        console.error("[codex-bridge] notification recorder threw:", error);
+        log.error("recorder.threw", { error: formatLogError(error) });
       }
     }
 
@@ -319,7 +322,7 @@ export class JsonlRpcClient {
         try {
           this.options.onServerRequest(message);
         } catch (error) {
-          console.error("[codex-bridge] server-request handoff threw:", error);
+          log.error("server-request.handoff-failed", { error: formatLogError(error) });
         }
         return;
       }
@@ -328,7 +331,7 @@ export class JsonlRpcClient {
         try {
           this.options.onNotification(message, extractThreadId(message.params));
         } catch (error) {
-          console.error("[codex-bridge] notification enqueue threw:", error);
+          log.error("notification.enqueue-failed", { error: formatLogError(error) });
         }
         return;
       }
@@ -560,7 +563,7 @@ export class SerialQueue {
     const next = previous
       .then(() => task())
       .catch((error: unknown) => {
-        console.error(`[codex-bridge] queued task for ${key} failed:`, error);
+        log.error("queue.task-failed", { key, error: formatLogError(error) });
       })
       .finally(() => {
         this.depth -= 1;

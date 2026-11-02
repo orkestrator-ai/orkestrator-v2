@@ -26,21 +26,30 @@ import {
 } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { serve } from "@hono/node-server";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
+
+const log = createLogger("bridge.claude");
+
+configureBridgeLogger();
 
 export const app = new Hono();
 
 /**
  * One readable line per uncaught route error.
  *
- * Hono's default handler passes the raw `Error` to `console.error`, which under
+ * Hono's default handler passes the raw `Error` to the console, which under
  * Bun prints a source-context dump of whichever minified vendor file threw —
  * hundreds of columns of bundled SDK, with the actual message buried in it and
  * no indication of which request produced it. The response is the same 500
  * either way; only the log improves.
  */
 app.onError((error, c) => {
-  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  console.error(`[claude-bridge] ${c.req.method} ${c.req.path} failed: ${detail}`);
+  log.error("http.request-failed", {
+    method: c.req.method,
+    path: c.req.path,
+    error: formatLogError(error),
+  });
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
@@ -230,7 +239,7 @@ if (parentPid !== null) {
   startParentWatchdog({
     parentPid,
     onParentExit: () => {
-      console.error(`[claude-bridge] Backend process ${parentPid} is gone; shutting down`);
+      log.warn("parent.gone", { parentPid });
       process.exit(0);
     },
   });
@@ -248,13 +257,13 @@ function startBridgeServer(
 
   const port = parseInt(env.PORT || "4097", 10);
   const hostname = env.HOSTNAME || "0.0.0.0";
-  console.log(`Claude Bridge Server starting on ${hostname}:${port}`);
+  log.debug("server.starting", { hostname, port });
   const server = start({
     fetch: app.fetch,
     port,
     hostname,
   });
-  console.log(`Claude Bridge Server running at http://${hostname}:${port}`);
+  log.info("server.listening", { hostname, port });
   return server;
 }
 

@@ -7,6 +7,7 @@
  * and what it does with a run that outlives its budget — none of which needs a
  * model to answer.
  */
+import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
 import { describe, expect, jest, test } from "bun:test";
 import type { AgentSession, ContextUsage } from "@earendil-works/pi-coding-agent";
 import { newSessionState } from "./agent-session.js";
@@ -124,10 +125,7 @@ function input(overrides: Partial<DispatchInput> = {}): DispatchInput {
 }
 
 function closedDiagnostic(lines: string[]): Record<string, unknown> | undefined {
-  return lines
-    .filter((line) => line.startsWith("[bridge-diagnostics] "))
-    .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
-    .find((entry) => entry.event === "closed");
+  return bridgeDiagnosticPayloads(lines).find((entry) => entry.event === "closed");
 }
 
 describe("dispatchPrompt", () => {
@@ -160,8 +158,10 @@ describe("dispatchPrompt", () => {
         });
         state.diagnostics?.report("heartbeat");
         if (enabled) {
-          expect(lines.at(-1)).toContain('"pendingToolCount":1');
-          expect(lines.at(-1)).toContain('"kind":"bash"');
+          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
+            '"pendingToolCount":1',
+          );
+          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain('"kind":"bash"');
         }
         applySessionEvent(state, {
           type: "tool_execution_end",
@@ -170,11 +170,17 @@ describe("dispatchPrompt", () => {
           result: { content: [] },
         });
         state.diagnostics?.report("heartbeat");
-        if (enabled) expect(lines.at(-1)).toContain('"pendingToolCount":0');
+        if (enabled)
+          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
+            '"pendingToolCount":0',
+          );
         stub.finish();
         await completion;
         expect(state.diagnostics).toBeUndefined();
-        if (enabled) expect(lines.at(-1)).toContain('"event":"closed"');
+        if (enabled)
+          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
+            '"event":"closed"',
+          );
         else expect(lines).toHaveLength(0);
         expect(lines.join("\n")).not.toContain("PRIVATE");
       } finally {

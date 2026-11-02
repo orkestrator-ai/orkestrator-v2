@@ -24,6 +24,7 @@
     "./node/logger-environment": "./src/node/logger-environment.ts",
     "./node/command-failure-reason": "./src/node/command-failure-reason.ts",
     "./testing/log-capture": "./src/testing/log-capture.ts",
+    "./testing/bridge-diagnostic-lines": "./src/testing/bridge-diagnostic-lines.ts",
     "./node/repository-instructions": "./src/node/repository-instructions.ts",
     "./node/bug-report-facts": "./src/node/bug-report-facts.ts",
     "./node/standalone-service": "./src/node/standalone-service.ts",

@@ -1,3 +1,4 @@
+import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
 import { describe, expect, jest, mock, test } from "bun:test";
 import type {
   MessagePatchEventData,
@@ -401,7 +402,7 @@ describe("sendPrompt", () => {
         const call = await nextQueryCall();
         finish = () => call.finish();
         jest.advanceTimersByTime(60_001);
-        const snapshots = lines.filter((line) => line.startsWith("[bridge-diagnostics] "));
+        const snapshots = bridgeDiagnosticPayloads(lines).map((entry) => JSON.stringify(entry));
         expect(snapshots.some((line) => line.includes('"event":"heartbeat"'))).toBe(enabled);
         if (enabled) {
           const heartbeat = snapshots.find((line) => line.includes('"event":"heartbeat"'))!;
@@ -448,14 +449,10 @@ describe("sendPrompt", () => {
 
       await expect(promptPromise).rejects.toBeInstanceOf(ProviderUnavailableError);
 
-      const closed = lines
-        .filter((line) => line.startsWith("[bridge-diagnostics] "))
-        .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
-        .find((entry) => entry.event === "closed");
+      const closed = bridgeDiagnosticPayloads(lines).find((entry) => entry.event === "closed");
       expect(closed).toMatchObject({ terminal: "rejected", stream: "rejected" });
       expect(errors).toContainEqual([
-        "[session-manager] Error processing prompt",
-        { errorClass: "ProviderUnavailableError" },
+        "[bridge.claude] prompt.failed errorClass=ProviderUnavailableError",
       ]);
       expect(JSON.stringify(errors)).not.toContain("PRIVATE");
     } finally {
@@ -481,10 +478,7 @@ describe("sendPrompt", () => {
       expect(abortSession(session.id)).toBe(true);
       await promptPromise;
 
-      const closed = lines
-        .filter((line) => line.startsWith("[bridge-diagnostics] "))
-        .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
-        .find((entry) => entry.event === "closed");
+      const closed = bridgeDiagnosticPayloads(lines).find((entry) => entry.event === "closed");
       expect(closed).toMatchObject({
         terminal: "rejected",
         stream: "rejected",

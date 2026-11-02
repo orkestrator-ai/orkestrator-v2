@@ -147,6 +147,9 @@ import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
 } from "@orkestrator/protocol/session-activity-batch";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.pi");
 
 class HttpError extends Error {
   constructor(
@@ -276,7 +279,7 @@ export async function route(
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
     }
-    console.error("[pi-bridge] Unexpected HTTP route failure");
+    log.error("http.route-failed");
     return json(response, 500, { error: "Internal bridge error" });
   }
 }

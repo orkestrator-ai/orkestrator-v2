@@ -441,7 +441,10 @@ export class WorktreeChangeOwner {
         throw error;
       }
       this.previous = result.manifest;
-      this.statCache = result.statCache;
+      // A hint can arrive after describe() has copied a settled entry into
+      // this result. Do not let publication undo that invalidation. Discard
+      // the returned cache on any epoch change, including invalidate-all.
+      this.statCache = this.observationEpoch === epoch ? result.statCache : new Map();
       return {
         kind: "published",
         snapshotId,

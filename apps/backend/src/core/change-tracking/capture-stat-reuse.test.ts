@@ -2,7 +2,7 @@
  * ST-1: a capture does not read or hash a file whose settled stat stamp still
  * matches, and the manifest it publishes is the one a full read produces.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -170,6 +170,112 @@ describe("stat-stamp reuse (ST-1)", () => {
       "link",
     ]);
   });
+
+  test("a missing cached blob is read again after a settled skip", async () => {
+    const root = repo();
+    const store = new ObjectStore({ root: temp("ork-stat-reuse-store-"), durable: false });
+    const executor = new HostCaptureExecutor(root, 0);
+    const first = captured(await captureWorktree({ executor, store }));
+    const entry = first.manifest.entries.find((candidate) => displayPath(candidate.p) === "a.txt")!;
+    rmSync(join(store.root, "objects", entry.o.slice(0, 2), entry.o.slice(2)));
+    expect(await store.has(entry.o)).toBe(false);
+    const reuse = spyOn(store, "reuse");
+    const fetch = spyOn(executor, "fetch");
+    try {
+      const second = captured(
+        await captureWorktree({
+          executor,
+          store,
+          previous: first.manifest,
+          statCache: first.statCache,
+        }),
+      );
+      expect(reuse.mock.calls.some(([oid]) => oid === entry.o)).toBe(true);
+      expect(fetch.mock.calls.some(([paths]) => paths.includes(entry.p))).toBe(true);
+      expect(executor.reads).toEqual({ contentRead: 6, stampReused: 3 });
+      expect(await store.has(entry.o)).toBe(true);
+      expect(second.manifest).toEqual(first.manifest);
+      expect(second.manifestId).toBe((await captureFresh(root)).manifestId);
+    } finally {
+      reuse.mockRestore();
+      fetch.mockRestore();
+    }
+  });
+
+  test("a chmod-only change on a settled file updates its mode", async () => {
+    const root = repo();
+    const store = new ObjectStore({ root: temp("ork-stat-reuse-store-"), durable: false });
+    const executor = new HostCaptureExecutor(root, 0);
+    const first = captured(await captureWorktree({ executor, store }));
+    const before = first.manifest.entries.find((entry) => displayPath(entry.p) === "a.txt")!;
+    chmodSync(join(root, "a.txt"), 0o755);
+    const second = captured(
+      await captureWorktree({
+        executor,
+        store,
+        previous: first.manifest,
+        statCache: first.statCache,
+      }),
+    );
+    const after = second.manifest.entries.find((entry) => entry.p === before.p)!;
+    expect(after.m).toBe("100755");
+    expect(after.o).toBe(before.o);
+    expect(executor.reads).toEqual({ contentRead: 6, stampReused: 2 });
+    expect(second.manifestId).not.toBe(first.manifestId);
+    expect(second.manifestId).toBe((await captureFresh(root)).manifestId);
+  });
+
+  for (const all of [false, true]) {
+    test(`an in-flight ${all ? "full" : "path"} invalidation survives cache publication`, async () => {
+      const h = createHarness();
+      let release!: () => void;
+      let describe: ReturnType<typeof spyOn> | undefined;
+      let pending: Promise<unknown> | undefined;
+      try {
+        const registry = new WorktreeRegistry({
+          ledger: h.service.ledger,
+          store: new ObjectStore({ root: temp("ork-stat-reuse-store-"), durable: false }),
+          statSettleWindowMs: 0,
+        });
+        const identity = await registry.resolve({ kind: "local", worktreePath: h.repo });
+        const owner = registry.owner(identity!);
+        const executor = owner.executor as HostCaptureExecutor;
+        const capture = () => owner.capture({ purpose: "refresh", deadlineMs: 10_000 });
+        expect((await capture()).kind).toBe("published");
+        let described!: () => void;
+        const reached = new Promise<void>((resolve) => {
+          described = resolve;
+        });
+        const resume = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const original = executor.describe.bind(executor);
+        describe = spyOn(executor, "describe").mockImplementation(async (...args) => {
+          const records = await original(...args);
+          described();
+          await resume;
+          return records;
+        });
+        pending = capture();
+        await reached;
+        expect(executor.reads).toEqual({ contentRead: 1, stampReused: 1 });
+        owner.invalidate(all ? undefined : ["u:a.txt"]);
+        release();
+        expect(((await pending) as { kind: string }).kind).toBe("published");
+        describe.mockRestore();
+        expect((await capture()).kind).toBe("published");
+        expect(executor.reads).toEqual({ contentRead: 2, stampReused: 1 });
+        // Once the invalidation has been honoured, settled reuse resumes.
+        expect((await capture()).kind).toBe("published");
+        expect(executor.reads).toEqual({ contentRead: 2, stampReused: 2 });
+      } finally {
+        release?.();
+        await pending;
+        describe?.mockRestore();
+        h.cleanup();
+      }
+    });
+  }
 
   test("a path hint forces the next capture to read that file", async () => {
     const h = createHarness();

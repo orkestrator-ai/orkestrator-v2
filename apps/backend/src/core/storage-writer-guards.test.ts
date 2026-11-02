@@ -71,6 +71,7 @@ describe("StorageService store writers", () => {
     // Transactional stores, including a raw database writer resolved through
     // `buildPipelineStore()`.
     for (const store of [
+      "composeDraftsFile",
       "sessionsFile",
       "featurePlansFile",
       "nativeAgentSessionsFile",

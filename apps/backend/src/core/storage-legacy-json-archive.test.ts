@@ -134,6 +134,30 @@ describe("retired JSON archive", () => {
     expect(await archiveFiles(archive)).toEqual(before);
   });
 
+  test("a draft save prunes what it drops from that draft's archived copies only", async () => {
+    const environment = createEnvironment("project-1");
+    const { storage, archive } = await migrated({
+      "environments.json": [environment],
+      "compose-drafts.json": {
+        draft: {
+          ...composeDraft("draft", environment.id, "kept text"),
+          value: { text: "kept text", mention: "ARCHIVED-MENTION-4e1a" },
+        },
+        other: {
+          ...composeDraft("other", environment.id, "other text"),
+          value: { text: "other text", mention: "OTHER-MENTION-kept" },
+        },
+      },
+    });
+
+    await storage.saveComposeDraft("draft", "environment", environment.id, { text: "edited" });
+
+    const copy = await fs.readFile(path.join(archive, "compose-drafts.json"), "utf8");
+    expect(copy).not.toContain("ARCHIVED-MENTION-4e1a");
+    expect(copy).toContain("OTHER-MENTION-kept");
+    expect(JSON.parse(copy).draft.value).toEqual({ text: "kept text" });
+  });
+
   test("a delete prunes only the removed content from every archived copy", async () => {
     const environment = createEnvironment("project-1");
     const coordinators = {

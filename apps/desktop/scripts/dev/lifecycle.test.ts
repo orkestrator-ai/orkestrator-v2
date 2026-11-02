@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
+import * as bridgeBuilds from "./bridge-builds.js";
 import * as profileIo from "./profile-io.js";
 import { atomicWriteJson, initializeProfile } from "./profile-io.js";
 import { parseDevArguments } from "./arguments.js";
@@ -186,6 +187,14 @@ describe("Electron readiness", () => {
       const credentials = spyOn(profileIo, "seedAgentTestProviderCredentials").mockResolvedValue(
         [],
       );
+      // The bridge build reads the checkout's real `dist`, which a clean CI
+      // checkout does not have yet; this test is about the Electron launch.
+      const bridges = spyOn(bridgeBuilds, "prepareProfileBridgeBuilds").mockResolvedValue({
+        version: 1,
+        repositoryRoot: profile.repositoryRoot,
+        recordedAt: new Date(0).toISOString(),
+        bridges: {} as bridgeBuilds.BridgeBuildRecord["bridges"],
+      });
       Object.assign(process.env, launchEnv);
       let electronArgs: readonly string[] | undefined;
       let electronOptions: SpawnOptions | undefined;
@@ -197,18 +206,6 @@ describe("Electron readiness", () => {
           typecheck: () => ({ status: 0 }),
           bundle: async () =>
             ({ success: true, outputs: [], logs: [] }) as unknown as Bun.BuildOutput,
-          turbo: () => ({
-            status: 0,
-            stdout: JSON.stringify({
-              tasks: [
-                "acp-bridge",
-                "claude-bridge",
-                "codex-bridge",
-                "cursor-bridge",
-                "pi-bridge",
-              ].map((name) => ({ taskId: `${name}#build`, hash: "test-hash" })),
-            }),
-          }),
           spawn: ((command: string, args: readonly string[], options: SpawnOptions) => {
             if (command === "bun") return vite;
             electronArgs = args;
@@ -253,6 +250,7 @@ describe("Electron readiness", () => {
         );
         expect(electronOptions?.env?.ELECTRON_DEV).toBe("1");
         for (const [key, value] of Object.entries(launchEnv)) expect(process.env[key]).toBe(value);
+        expect(bridges).toHaveBeenCalledTimes(flavor === "agent-test" ? 1 : 0);
         expect(postSpawnWritePending).toBe(true);
         expect(reachedReady).toBe(true);
         expect(await readFile(path.join(profile.logDir, "electron.log"), "utf8")).toContain(frame);
@@ -260,6 +258,7 @@ describe("Electron readiness", () => {
         cache.mockRestore();
         toolchains.mockRestore();
         credentials.mockRestore();
+        bridges.mockRestore();
         for (const [key, value] of Object.entries(previousEnv)) {
           if (value === undefined) delete process.env[key];
           else process.env[key] = value;

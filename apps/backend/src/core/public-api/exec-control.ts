@@ -286,8 +286,15 @@ async function stopGoalCheckWorkers(
       throw new Error("Invalid goal check worker list");
     operations = listed;
   } catch (error) {
+    // Keep the cause: a local drain failure blocks stop and delete, and the
+    // user needs to see why.
     if (options.requireStopped || environment.environmentType === "local")
-      throw new Error("Goal check workers could not be verified stopped");
+      throw new Error(
+        `Goal check workers could not be verified stopped: ${boundedMessage(error)}`,
+        {
+          cause: error,
+        },
+      );
     console.warn(`[public-api] Could not list goal check workers: ${boundedMessage(error)}`);
     return;
   }

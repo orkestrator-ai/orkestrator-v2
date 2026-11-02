@@ -68,10 +68,22 @@ test("generated workload waits for CPU, memory and churn workers before a consec
   }
 }, 15000);
 
-describe("in-page deadlines", () => {
+// CI's test job installs no Playwright browsers (the runner image has Google
+// Chrome), so launch whichever Chromium is present, as
+// private-tmpdir-playwright.integration.test.ts does.
+const CHROMIUM = [
+  chromium.executablePath(),
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+].find((candidate) => existsSync(candidate));
+
+describe.skipIf(!CHROMIUM)("in-page deadlines", () => {
   let browser: Browser;
   beforeAll(async () => {
-    browser = await chromium.launch();
+    browser = await chromium.launch({ executablePath: CHROMIUM });
   });
   afterAll(async () => {
     await browser?.close();

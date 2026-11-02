@@ -492,7 +492,13 @@ command node.
   merged lists the command node's projects (with its folders) come first and
   every other node's follow. Anything new goes after whatever precedes it in
   that default. A node that is not connected is hidden from the merged lists
-  but keeps its entries, so its projects return to their place. Within a
+  but keeps its entries, so its projects return to their place. The machine
+  order is also set by dragging rows in Settings > Machines, and the machine
+  lists outside the sidebar follow it with the command node always first
+  (`inMachineOrder`): that list, the Settings machine strip, the agent accounts
+  table and the title bar's per-machine CPU readings
+  (`MachineCpuReadings`, one coordinated read per machine, routed through the
+  command node). Within a
   node's own section, project, folder and environment order belong to that
   node: a drag there is written to the owner (`arrange_projects`,
   `reorder_environments`), and moving a project into a folder of the merged

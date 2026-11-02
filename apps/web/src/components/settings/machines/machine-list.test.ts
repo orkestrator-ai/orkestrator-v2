@@ -71,7 +71,7 @@ function list(...connections: ConnectionSummary[]): ConnectionList {
 }
 
 describe("buildMachineList", () => {
-  test("lists the connected machine first, then the rest by name, each once", () => {
+  test("lists the command node first, then the rest in registry order, each once", () => {
     const entries = buildMachineList({
       status,
       nodes: nodes(node("zed", "Zed"), node("build", "Build box")),
@@ -81,10 +81,10 @@ describe("buildMachineList", () => {
     });
     expect(entries.map((entry) => [entry.name, entry.role, entry.current])).toEqual([
       ["Desk", "self", true],
-      ["Build box", "node", false],
       ["Zed", "node", false],
+      ["Build box", "node", false],
     ]);
-    const build = entries[1]!;
+    const build = entries[2]!;
     // The saved connection to the same installation is merged into the node.
     expect(build.connection?.id).toBe("build");
     expect(build.address).toBe("build.tailnet.ts.net");
@@ -122,15 +122,15 @@ describe("buildMachineList", () => {
     });
     expect(entries.map((entry) => [entry.name, entry.role])).toEqual([
       ["mini", "self"],
-      ["hp.example", "device"],
       ["mbp3", "node"],
       ["omarchy-gram", "node"],
+      ["hp.example", "device"],
     ]);
     // The node keeps the saved connection with its proved identity.
     expect(entries.find((entry) => entry.name === "mbp3")?.connection?.id).toBe("local");
   });
 
-  test("the node the window's workspace is on is the current machine and comes first", () => {
+  test("the node the window's workspace is on is the current machine but does not move", () => {
     const entries = buildMachineList({
       status,
       nodes: nodes(node("build", "Build box")),
@@ -139,8 +139,28 @@ describe("buildMachineList", () => {
       workspaceNodeId: "bk_build",
     });
     expect(entries.map((entry) => [entry.name, entry.current])).toEqual([
-      ["Build box", true],
       ["This machine", false],
+      ["Build box", true],
+    ]);
+  });
+
+  test("the machines follow the stored order, under the command node wherever it is stored", () => {
+    const entries = buildMachineList({
+      status,
+      nodes: nodes(node("a", "A"), node("b", "B"), node("c", "C"), node("new", "New")),
+      connections: list(local, remote("vps")),
+      selfProfile: null,
+      workspaceNodeId: null,
+      machineOrder: ["bk_c", "bk_self", "bk_a", "bk_gone", "bk_b"],
+    });
+    expect(entries.map((entry) => entry.nodeId ?? entry.role)).toEqual([
+      "bk_self",
+      "bk_c",
+      // A new machine follows the one before it in the registry, as in the sidebar.
+      "bk_new",
+      "bk_a",
+      "bk_b",
+      "device",
     ]);
   });
 

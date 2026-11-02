@@ -5,6 +5,7 @@ import type { ConnectionList } from "@orkestrator/protocol/connections";
 import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-maintenance";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
 import { BACKEND_PROFILE_CONFLICT_CODE } from "@orkestrator/protocol/backend-profile";
+import { emptyPortalLayout } from "@orkestrator/protocol/portal-layout";
 import { listen } from "@/lib/native/events";
 import { invoke } from "@/lib/native/backend";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
@@ -13,6 +14,7 @@ import {
   mockToastWarning,
   resetSonnerMocks,
 } from "../../../../../../tests/mocks/sonner";
+import { portalLayoutStore } from "@/lib/portal/portal-layout";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   onGlobalSettingsCloseRequest,
@@ -245,6 +247,49 @@ async function renderPage() {
 }
 
 describe("Machines settings", () => {
+  test("keeps the command node on top with no grip, and the others in the stored order", async () => {
+    install();
+    installDesktop();
+    portalLayoutStore.setState({
+      layout: {
+        ...emptyPortalLayout(),
+        revision: 5,
+        machineOrder: ["bk_zed", "bk_self", "bk_build"],
+      },
+      loaded: true,
+    });
+    try {
+      await renderPage();
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByTestId("machine-row")
+            .map((element) => element.querySelector(".font-medium")?.textContent),
+        ).toEqual(["Desk", "Zed", "Build box"]),
+      );
+      expect(within(row("Zed")).getByRole("button", { name: "Reorder Zed" })).toBeTruthy();
+      expect(
+        within(row("Build box")).getByRole("button", { name: "Reorder Build box" }),
+      ).toBeTruthy();
+      expectDomAbsent(screen.queryByRole("button", { name: "Reorder Desk" }));
+    } finally {
+      portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
+    }
+  });
+
+  test("a machine controlled by another offers no reordering", async () => {
+    install({
+      status: {
+        ...commandStatus,
+        mode: "leaf",
+        controllers: [{ displayName: "Boss" }] as never,
+      },
+    });
+    installDesktop();
+    await renderPage();
+    expectDomAbsent(screen.queryByRole("button", { name: /^Reorder / }));
+  });
+
   test("lists every machine once, the connected one first, with address, connection and last connection", async () => {
     install();
     installDesktop();

@@ -66,3 +66,10 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+Seen again on 2026-11-02 in the shared-logger bridge migration: `mise run test`, in the workspace group, expected at least 2 and received 1 after 453.07 ms. The owner then passed alone three times on the branch and three times on `f80a181e6` (20 pass, 0 fail each), with the host at a load average near 26:
+
+```sh
+cd apps/backend && bun test ./tests/container-readiness.test.ts --preload ../../tests/setup-node.ts --only-failures
+```
+
+That change does not touch this test or its readiness code, so this adds a sighting, not a cause.

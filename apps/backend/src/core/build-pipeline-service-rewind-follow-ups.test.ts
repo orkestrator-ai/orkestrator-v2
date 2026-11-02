@@ -696,6 +696,106 @@ describe("rewinding the code to a step", () => {
     }
   });
 
+  test("a pipeline whose pending reset can never run can still be deleted", async () => {
+    const fake = fakeGit();
+    let unavailable = false;
+    const git: EnvironmentGit = async (id, args) => {
+      if (unavailable && args[0] === "update-ref") {
+        throw new EnvironmentUnavailableError("The environment's container is not running.");
+      }
+      return fake.git(id, args);
+    };
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await withService(
+        async (service, storage, provider, _invocations, controls) => {
+          fake.worktree.controls = controls;
+          const { started, build } = await completedOnC3(service, storage, controls);
+          const created = provider.created.length;
+          unavailable = true;
+          await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(
+            "has not finished",
+          );
+          // The workspace came back on another commit: the reset now refuses
+          // for good, so the supervisor can never finish it.
+          unavailable = false;
+          controls.currentHead = C1;
+          await service.advanceNow(started.id);
+          const stuck = await pipeline(storage, started.id);
+          expect(stuck.rewinds?.at(-1)?.code?.pending).toBe(true);
+          expect(stuck.phase).toBe("building");
+          // Pause and cancel still wait for the confirmed reset.
+          await expect(service.pause(started.id)).rejects.toThrow("The branch moved");
+          await expect(service.cancel(started.id)).rejects.toThrow("The branch moved");
+
+          await service.remove(started.id);
+
+          expect(await storage.getBuildPipeline(started.id)).toBeNull();
+          await service.advanceNow(started.id);
+          expect(fake.calls.some((call) => call[0] === "reset")).toBe(false);
+          expect(controls.currentHead).toBe(C1);
+          expect(provider.created.length).toBe(created);
+        },
+        { environmentGit: git },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a delete waits for a reset already under way, then removes the pipeline as usual", async () => {
+    const fake = fakeGit();
+    let unavailable = false;
+    let holdReset: Promise<void> | undefined;
+    let resetEntered: () => void = () => undefined;
+    const git: EnvironmentGit = async (id, args) => {
+      if (args[0] === "update-ref") {
+        if (unavailable) {
+          throw new EnvironmentUnavailableError("The environment's container is not running.");
+        }
+        if (holdReset) {
+          resetEntered();
+          await holdReset;
+        }
+      }
+      return fake.git(id, args);
+    };
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await withService(
+        async (service, storage, _provider, _invocations, controls) => {
+          fake.worktree.controls = controls;
+          const { started, build } = await completedOnC3(service, storage, controls);
+          unavailable = true;
+          await expect(service.rewindCode(started.id, build.sessionKey, C3)).rejects.toThrow(
+            "has not finished",
+          );
+          unavailable = false;
+          let release: () => void = () => undefined;
+          holdReset = new Promise((resolve) => (release = resolve));
+          const entered = new Promise<void>((resolve) => (resetEntered = resolve));
+          const pass = service.advanceNow(started.id);
+          await entered;
+
+          const removal = service.remove(started.id);
+          for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+          // The supervisor holds the lock mid-reset, so the record is still there.
+          expect(await storage.getBuildPipeline(started.id)).not.toBeNull();
+
+          release();
+          await pass;
+          await removal;
+          expect(controls.currentHead).toBe(C0);
+          expect(fake.calls.filter((call) => call[0] === "reset")).toHaveLength(1);
+          expect(await storage.getBuildPipeline(started.id)).toBeNull();
+        },
+        { environmentGit: git },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("workflow closure failure happens before any Git mutation", async () => {
     const fake = fakeGit();
     await withService(

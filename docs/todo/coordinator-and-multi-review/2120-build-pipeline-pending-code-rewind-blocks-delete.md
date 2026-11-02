@@ -1,17 +1,21 @@
 # A pending code rewind blocks deleting its pipeline
 
 A build pipeline whose "Rewind code to here" was admitted (the reset journaled
-with `pending`) but whose Git reset cannot run cannot be paused, cancelled or
-deleted until the reset finishes. Found on 2026-11-01 while running
+with `pending`) but whose Git reset cannot run could not be paused, cancelled or
+deleted until the reset finished. Found on 2026-11-01 while running
 [0405](0405-build-pipeline-rewind-follow-ups.md) task 7 in a real container.
+Fixed for delete on 2026-11-02: deleting now drops the record and its unrun
+reset; pause and cancel still wait for the reset, by decision.
 
 ## Task analysis
 
-Analysed 2026-11-01 against `main` at `93b99bfb`.
+Analysed 2026-11-01 against `main` at `93b99bfb`; rechecked 2026-11-02
+against `main` at `38d55ee1` (still true: `remove` still cancelled through
+`mutate`, and the new service test failed there with the same reason).
 
 ### Tasks
 
-1. **Let a pipeline with an unfinishable pending code rewind be deleted**. Status: open.
+1. **Let a pipeline with an unfinishable pending code rewind be deleted**. Status: done (2026-11-02; live container run not done).
 
 ### 1. Deleting a pipeline whose reset cannot finish
 
@@ -61,3 +65,79 @@ rejects with the reason above and the record stays. Not otherwise changed by
   - **Leave it: deleting the environment clears it.**
     - Pros: no change.
     - Cons: the user must know to do that, and loses the environment.
+
+## Current state
+
+`remove` (`build-pipeline-service-lifecycle.ts`) first reads the record. When
+the newest rewind's `code.pending` is set, it takes the pipeline lock through
+`BuildPipelineContext.withLock` (a lock entry point that does not finish the
+reset; `mutate` now runs on top of it), re-reads the record under the lock and,
+if the reset is still pending, deletes the record without calling `cancel`.
+If the supervisor finished the reset while delete waited for the lock, delete
+falls back to the old path: cancel, then delete. Every other delete is
+unchanged. Pause and cancel still refuse with "The code rewind to … has not
+finished" while the reset cannot run.
+
+Covered by two tests in `build-pipeline-service-rewind-follow-ups.test.ts`:
+"a pipeline whose pending reset can never run can still be deleted" (the branch
+moved after admission; fails on `38d55ee1`) and "a delete waits for a reset
+already under way, then removes the pipeline as usual".
+
+## Open questions
+
+- Should the "has not finished" reason add "Delete the build to discard the
+  reset" when the reset refuses for good (the branch moved)? Not done: it
+  changes user-visible text shared by every control and the supervisor log.
+
+## Needs verification
+
+- The same stuck case in a real container: confirm a code rewind, stop the
+  container, recreate its workspace (or move the branch), then delete the
+  pipeline from the UI. Only the service harness has been run.
+
+## Assumptions and decisions
+
+### Task 1: delete only, pause and cancel still wait
+
+Chose the recommended option: delete skips `cancel` when the newest rewind's
+code is pending. The ticket's title also names pause and cancel; the to-do's
+decision keeps them waiting, because unblocking them needs a new "abandoned"
+rewind state (option 2) that the inspector, `forcePushUpstream` and older
+records would have to handle. Pause and cancel on a stuck pipeline therefore
+still refuse; the test asserts that. A recoverable stuck pipeline (stopped
+container) still finishes on its own once started.
+
+### Task 1: a separate lock entry point instead of a flag on `mutate`
+
+Added `BuildPipelineContext.withLock(pipelineId, work)`, the queueing half of
+`mutate`, and rebuilt `mutate` on it. A `skipPendingCodeRewind` flag on
+`mutate` would also save the record after the mutation, which a delete does
+not want; a raw lock keeps the delete a single storage call while still
+waiting behind a supervisor pass that is mid-reset, so the reset can never run
+after the record is gone.
+
+### Task 1: re-check under the lock and fall back
+
+The pending check runs once before the lock (so ordinary deletes do not take
+the lock at all and behave exactly as before) and again under it. If the reset
+finished while delete waited, the pipeline is active again with nothing
+pending, so delete cancels it as usual rather than dropping a build that may
+be about to start its step.
+
+### Task 1: no cancel side effects on the dropped pipeline
+
+The skipped `cancel` would have closed workflow result slots, posted the
+"failed" Kanban/ticket comment (`reconcileTerminalState`) and cleared provider
+attribution. Result slots were already closed when the rewind was admitted
+(the "workflow closure failure happens before any Git mutation" test), and the
+attribution map is cleared by `remove` itself. The completion comment is not
+posted: the record is gone, and the comment path saves the pipeline, which
+would fail or resurrect it. A deleted build's ticket therefore keeps its last
+lifecycle comment, as when an environment deletion removes its pipelines.
+
+### Task 1: the confirmed reset is dropped without a trace
+
+The dropped reset leaves the backup ref, if `update-ref` ever ran, and nothing
+else; the pipeline record that described it is deleted. That is the con the
+to-do accepted. Error text for pause and cancel is unchanged (it does not yet
+tell the user that delete is the way out); see Open questions.

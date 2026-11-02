@@ -54,3 +54,39 @@ At a host load average near 46, the same unchanged file failed alone on
 the same early close seen from the other side) and on the branch (run 1 of 4,
 the line 196 enqueue into the closed controller). This reproduces the timing
 failure on the target branch; it is not caused by this change.
+
+## Kanban repair validation, 2026-11-02
+
+After `840738528`, reran the preparation's incomplete `mise run test` through
+`test:logged` (`pending-rewind-default-rerun`). It acquired the lease after
+155.9 s and finished in 323.5 s with exit 1. Bridges and protocol passed;
+workspace failed only the four terminalPortalStore tests above, and root
+failed only the three ClaudeTmuxInteractiveTerminal tests above (3418 pass,
+3 fail). No new timing failure occurred. The original preparation artifacts
+were preserved.
+
+Artifacts under the host temporary directory:
+
+- Aggregate: `orkestrator-test-run.ggkPtI/summary.json` and its group `.log.gz`
+  files; wrapper: `orkestrator-test-run.QjNF4u/`.
+- Branch isolated terminal component: `orkestrator-test-run.sRROYB/`
+  (23 pass, 3 fail); terminal portal: `orkestrator-test-run.l2gvpS/`
+  (19 pass, 4 fail).
+- Fresh detached `origin/main` at `38d55ee146c5bc29bdfb338c4f93f9de5f0cd787`,
+  installed with `mise exec -- bun install --frozen-lockfile`, without linked
+  dependencies: component `orkestrator-test-run.9XTjSA/` (23 pass, 3 fail),
+  portal `orkestrator-test-run.1rKWfw/` (19 pass, 4 fail). Same assertions:
+  component sees two invokes instead of one and no fallback browser request;
+  portal sees no browser request. Temporary worktree removed after comparison.
+
+Isolated commands (each through `mise run test:logged -- --name <label> --`)
+on both checkouts:
+
+- `bun test ./tests/unit/components/ClaudeTmuxInteractiveTerminal.test.tsx --parallel=1 --only-failures`
+- `bun test --cwd apps/web ./src/stores/terminalPortalStore.test.ts --parallel=1 --only-failures`
+
+The changed-owner command
+`bun test --cwd apps/backend ./src/core/build-pipeline-service-rewind-follow-ups.test.ts --parallel=1 --only-failures`
+passed through `test:logged` (`rewind-kanban-fix`). Touched TypeScript files
+passed `bun fmt --check` and oxlint. The already-passing preparation typecheck,
+lint and format suites were not repeated.

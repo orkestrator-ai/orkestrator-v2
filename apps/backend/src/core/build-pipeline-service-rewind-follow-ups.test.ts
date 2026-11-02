@@ -777,17 +777,34 @@ describe("rewinding the code to a step", () => {
           const pass = service.advanceNow(started.id);
           await entered;
 
-          const removal = service.remove(started.id);
-          for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
-          // The supervisor holds the lock mid-reset, so the record is still there.
-          expect(await storage.getBuildPipeline(started.id)).not.toBeNull();
+          const deletePipeline = storage.deleteBuildPipeline.bind(storage);
+          const deletion = spyOn(storage, "deleteBuildPipeline").mockImplementation(async (id) => {
+            // Observe the persisted state before removal: waiting for the reset
+            // alone is insufficient; the ordinary path must cancel first.
+            const cancelled = await pipeline(storage, id);
+            expect(cancelled.rewinds?.at(-1)?.code?.pending).not.toBe(true);
+            expect(cancelled.phase).toBe("failed");
+            expect(cancelled.error).toBe("Build cancelled");
+            await deletePipeline(id);
+          });
+          try {
+            const removal = service.remove(started.id);
+            for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+            // The supervisor holds the lock mid-reset, so the record is still there.
+            expect(await storage.getBuildPipeline(started.id)).not.toBeNull();
 
-          release();
-          await pass;
-          await removal;
-          expect(controls.currentHead).toBe(C0);
-          expect(fake.calls.filter((call) => call[0] === "reset")).toHaveLength(1);
-          expect(await storage.getBuildPipeline(started.id)).toBeNull();
+            release();
+            await pass;
+            await removal;
+            expect(controls.currentHead).toBe(C0);
+            expect(fake.calls.filter((call) => call[0] === "reset")).toHaveLength(1);
+            expect(deletion).toHaveBeenCalledTimes(1);
+            expect(deletion).toHaveBeenCalledWith(started.id);
+            expect(await storage.getBuildPipeline(started.id)).toBeNull();
+          } finally {
+            release();
+            deletion.mockRestore();
+          }
         },
         { environmentGit: git },
       );

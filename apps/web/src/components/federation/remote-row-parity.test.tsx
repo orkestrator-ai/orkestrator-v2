@@ -282,7 +282,12 @@ test("a machine-qualified row describes change counts along with unread work and
     });
     return (
       <EnvironmentRow
-        facts={nodeEnvironmentRowFacts(machineView([row]), row, { busy: false, writable: true })}
+        facts={nodeEnvironmentRowFacts(
+          machineView([row]),
+          row,
+          { busy: false, writable: true },
+          true,
+        )}
         selected={false}
         subtitle="app activity"
         onActivate={() => {}}

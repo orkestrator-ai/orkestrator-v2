@@ -211,7 +211,11 @@ function summaryStatus(status: string): EnvironmentStatus {
  * Another machine's rows, from its summaries. A summary from a leaf that
  * predates a search field simply lacks it; the row matches on what is there.
  */
-export function machineSearchSource(machine: MachineView): ProjectSearchSource {
+export function machineSearchSource(
+  machine: MachineView,
+  /** This machine's auto-merge "Require checks to pass" setting. */
+  requireChecks: boolean,
+): ProjectSearchSource {
   const environments: ProjectSearchEnvironment[] = [];
   for (const list of machine.environmentsByProject.values()) {
     for (const environment of list) {
@@ -229,7 +233,9 @@ export function machineSearchSource(machine: MachineView): ProjectSearchSource {
         ...(environment.lastActivityAt ? { lastActivityAt: environment.lastActivityAt } : {}),
         ...(environment.createdAt ? { createdAt: environment.createdAt } : {}),
         order: environment.order,
-        ...(isNodeEnvironmentReadyToMerge(environment, machine) ? { readyToMerge: true } : {}),
+        ...(isNodeEnvironmentReadyToMerge(environment, machine, requireChecks)
+          ? { readyToMerge: true }
+          : {}),
       });
     }
   }

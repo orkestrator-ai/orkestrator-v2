@@ -43,13 +43,14 @@ function monitor(overrides: Partial<PrMonitorEnvironmentState> = {}): PrMonitorE
 
 describe("isLocalEnvironmentReadyToMerge", () => {
   test("a current, answered reading of a clean PR is ready", () => {
-    expect(isLocalEnvironmentReadyToMerge(environment(), monitor(), "current")).toBe(true);
+    expect(isLocalEnvironmentReadyToMerge(environment(), monitor(), "current", true)).toBe(true);
     // A running container can be polled too.
     expect(
       isLocalEnvironmentReadyToMerge(
         environment({ environmentType: "containerized", status: "running" }),
         monitor(),
         "current",
+        true,
       ),
     ).toBe(true);
   });
@@ -79,20 +80,61 @@ describe("isLocalEnvironmentReadyToMerge", () => {
         environment(environmentOverrides as Partial<ReadyToMergeEnvironment>),
         monitor(monitorOverrides as Partial<PrMonitorEnvironmentState>),
         sync,
+        true,
       ),
     ).toBe(false);
   });
 
   test("not ready without a monitor entry", () => {
-    expect(isLocalEnvironmentReadyToMerge(environment(), null, "current")).toBe(false);
+    expect(isLocalEnvironmentReadyToMerge(environment(), null, "current", true)).toBe(false);
   });
 
   test("an unknown merge permission does not hide readiness", () => {
     for (const viewerCanMerge of [null, undefined, true]) {
       expect(
-        isLocalEnvironmentReadyToMerge(environment(), monitor({ viewerCanMerge }), "current"),
+        isLocalEnvironmentReadyToMerge(environment(), monitor({ viewerCanMerge }), "current", true),
       ).toBe(true);
     }
+  });
+
+  describe("with auto-merge's Require checks to pass off", () => {
+    test("checks GitHub does not require no longer hold the shimmer back", () => {
+      for (const [environmentOverrides, monitorOverrides] of [
+        // A non-required check failing or still running.
+        [{ prMergeability: "unstable" }, { checkSummary: { passed: 13, total: 14, pending: 0 } }],
+        [{ prMergeability: "unstable" }, { checkSummary: { passed: 1, total: 2, pending: 1 } }],
+        [{}, { checkSummary: { passed: 1, total: 2, pending: 0 } }],
+      ] as const) {
+        const args = [
+          environment(environmentOverrides as Partial<ReadyToMergeEnvironment>),
+          monitor(monitorOverrides as Partial<PrMonitorEnvironmentState>),
+          "current",
+        ] as const;
+        expect(isLocalEnvironmentReadyToMerge(...args, false)).toBe(true);
+        // The default still waits for every check.
+        expect(isLocalEnvironmentReadyToMerge(...args, true)).toBe(false);
+      }
+    });
+
+    test.each([
+      ["GitHub blocks the merge (a required check)", { prMergeability: "blocked" }, {}, "current"],
+      ["it has conflicts", { hasMergeConflicts: true }, {}, "current"],
+      ["a draft", { prMergeability: "unavailable" }, {}, "current"],
+      ["the mirror is stale", { prMergeability: "unstable" }, {}, "stale"],
+      ["the merging credential lacks push access", {}, { viewerCanMerge: false }, "current"],
+    ] as const)(
+      "still not ready when %s",
+      (_label, environmentOverrides, monitorOverrides, sync) => {
+        expect(
+          isLocalEnvironmentReadyToMerge(
+            environment(environmentOverrides as Partial<ReadyToMergeEnvironment>),
+            monitor(monitorOverrides as Partial<PrMonitorEnvironmentState>),
+            sync,
+            false,
+          ),
+        ).toBe(false);
+      },
+    );
   });
 });
 
@@ -100,9 +142,14 @@ describe("localEnvironmentPrMergeState", () => {
   const conflicted = environment({ hasMergeConflicts: true, prMergeability: "dirty" });
 
   test("a current reading of a conflicted PR has conflicts", () => {
-    expect(localEnvironmentPrMergeState(environment(), monitor(), "current")).toBe("ready");
+    expect(localEnvironmentPrMergeState(environment(), monitor(), "current", true)).toBe("ready");
     expect(
-      localEnvironmentPrMergeState(conflicted, monitor({ hasMergeConflicts: true }), "current"),
+      localEnvironmentPrMergeState(
+        conflicted,
+        monitor({ hasMergeConflicts: true }),
+        "current",
+        true,
+      ),
     ).toBe("conflicts");
   });
 
@@ -117,6 +164,7 @@ describe("localEnvironmentPrMergeState", () => {
         conflicted,
         monitor({ hasMergeConflicts: true, ...monitorOverrides }),
         sync,
+        true,
       ),
     ).toBeNull();
   });
@@ -127,6 +175,7 @@ describe("localEnvironmentPrMergeState", () => {
         environment({ prState: "merged" }),
         monitor({ prState: "merged" }),
         "current",
+        true,
       ),
     ).toBeNull();
     expect(
@@ -134,6 +183,7 @@ describe("localEnvironmentPrMergeState", () => {
         environment({ prMergeability: "blocked" }),
         monitor(),
         "current",
+        true,
       ),
     ).toBeNull();
   });
@@ -163,23 +213,27 @@ describe("isNodeEnvironmentReadyToMerge", () => {
   }
 
   test("a current clean reading the leaf's monitor vouches for is ready", () => {
-    expect(isNodeEnvironmentReadyToMerge(remote({ prMonitorConfirmed: true }), live)).toBe(true);
-    expect(nodeEnvironmentPrMergeState(remote({ prMonitorConfirmed: true }), live)).toBe("ready");
+    expect(isNodeEnvironmentReadyToMerge(remote({ prMonitorConfirmed: true }), live, true)).toBe(
+      true,
+    );
+    expect(nodeEnvironmentPrMergeState(remote({ prMonitorConfirmed: true }), live, true)).toBe(
+      "ready",
+    );
   });
 
   test("an unconfirmed reading is never ready, even when current and clean", () => {
     // Identical persisted summaries can follow a failed detection, expired
     // credentials, or a restart before the first successful detection. A leaf
     // that predates the relay never sends the flag.
-    expect(isNodeEnvironmentReadyToMerge(remote(), live)).toBe(false);
+    expect(isNodeEnvironmentReadyToMerge(remote(), live, true)).toBe(false);
   });
 
   test("confirmed conflicts show as conflicts; unconfirmed ones show nothing", () => {
     const conflicted = { prHasMergeConflicts: true } as const;
     expect(
-      nodeEnvironmentPrMergeState(remote({ ...conflicted, prMonitorConfirmed: true }), live),
+      nodeEnvironmentPrMergeState(remote({ ...conflicted, prMonitorConfirmed: true }), live, true),
     ).toBe("conflicts");
-    expect(nodeEnvironmentPrMergeState(remote(conflicted), live)).toBeNull();
+    expect(nodeEnvironmentPrMergeState(remote(conflicted), live, true)).toBeNull();
   });
 
   test.each([
@@ -198,8 +252,26 @@ describe("isNodeEnvironmentReadyToMerge", () => {
       isNodeEnvironmentReadyToMerge(
         remote({ prMonitorConfirmed: true, ...(overrides as Partial<FederatedEnvironment>) }),
         machine as Parameters<typeof isNodeEnvironmentReadyToMerge>[1],
+        true,
       ),
     ).toBe(false);
+  });
+
+  test("with Require checks to pass off, a failing optional check still shimmers", () => {
+    const failing = remote({
+      prMonitorConfirmed: true,
+      prMergeability: "unstable",
+      prCheckSummary: { passed: 13, total: 14, pending: 0 },
+    });
+    expect(nodeEnvironmentPrMergeState(failing, live, false)).toBe("ready");
+    expect(nodeEnvironmentPrMergeState(failing, live, true)).toBeNull();
+    expect(
+      nodeEnvironmentPrMergeState(
+        remote({ prMonitorConfirmed: true, prMergeability: "blocked" }),
+        live,
+        false,
+      ),
+    ).toBeNull();
   });
 });
 
@@ -224,10 +296,10 @@ test("leaf check counts survive summary projection and match local readiness acr
       ...summary,
       ref: { backendId: "bk_leaf", environmentId: "env-1" },
     } as FederatedEnvironment;
-    expect(nodeEnvironmentPrMergeState(remote, live)).toBe(
-      localEnvironmentPrMergeState(environment(), monitor({ checkSummary }), "current"),
+    expect(nodeEnvironmentPrMergeState(remote, live, true)).toBe(
+      localEnvironmentPrMergeState(environment(), monitor({ checkSummary }), "current", true),
     );
-    expect(isNodeEnvironmentReadyToMerge(remote, live)).toBe(
+    expect(isNodeEnvironmentReadyToMerge(remote, live, true)).toBe(
       checkSummary.passed === checkSummary.total,
     );
   }

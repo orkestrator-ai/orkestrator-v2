@@ -115,7 +115,12 @@ function localRow(environment: Environment, markers: Markers): Row {
       buildPipeline: markers.buildPipeline === true,
       unreadMail: markers.unreadMail ?? 0,
       failedMail: markers.failedMail === true,
-      prMergeState: localEnvironmentPrMergeState(environment, markers.monitor ?? null, "current"),
+      prMergeState: localEnvironmentPrMergeState(
+        environment,
+        markers.monitor ?? null,
+        "current",
+        true,
+      ),
       machine: { name: machine.name, colorToken: machine.colorToken },
       dockerAvailable: true,
       localCheckoutAvailable: true,
@@ -137,7 +142,7 @@ function nodeRow(environment: Environment, markers: Markers): Row {
   };
   const summary = toNodeEnvironmentSummary(NODE, raw as Record<string, unknown>)!;
   expect(summary.ref).toEqual(environmentRef(NODE, environment.id));
-  return row(nodeEnvironmentRowFacts(machine, summary, { busy: false, writable: true }));
+  return row(nodeEnvironmentRowFacts(machine, summary, { busy: false, writable: true }, true));
 }
 
 /** Everything but the machine lines, which differ by design ("This window"). */
@@ -232,7 +237,12 @@ test("offline, busy and unwritable node facts disable mutations and retain last-
     ["connected", true, true],
     ["connected", false, false],
   ] as const) {
-    const facts = nodeEnvironmentRowFacts({ ...machine, transport }, summary, { busy, writable });
+    const facts = nodeEnvironmentRowFacts(
+      { ...machine, transport },
+      summary,
+      { busy, writable },
+      true,
+    );
     const model = environmentRowModel(facts);
     expect(model.menu.deleteDisabled).toBe(true);
     expect(model.menu.forkContainerDisabled).toBe(true);

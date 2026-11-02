@@ -1,3 +1,4 @@
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   DndContext,
@@ -379,15 +380,28 @@ function useShownRepositoryHeading(machines: readonly MachineView[]): OpenedRepo
     : undefined;
   const projectId = target?.projects.find((project) => project.key === opened?.projectKey)?.ref
     .projectId;
+  const homeId = target?.environmentsByProject
+    .get(projectId ?? "")
+    ?.find((environment) => environment.isProjectHome && !environment.deleting)?.ref.environmentId;
+  const localHomeId = useEnvironmentStore(
+    (state) =>
+      state.environments.find(
+        (environment) => environment.projectId === projectId && environment.projectHome,
+      )?.id,
+  );
   const remoteShown = useRemoteWorkspaceStore((state) =>
     state.active === null
       ? null
       : state.active.nodeId === target?.connectionId &&
         state.active.projectId === projectId &&
-        state.active.environmentId === null,
+        (state.active.environmentId === null ||
+          state.active.projectHome === true ||
+          state.active.environmentId === homeId),
   );
   const localShown = useUIStore(
-    (state) => state.selectedProjectId === projectId && state.selectedEnvironmentId === null,
+    (state) =>
+      state.selectedProjectId === projectId &&
+      (state.selectedEnvironmentId === null || state.selectedEnvironmentId === localHomeId),
   );
   if (!opened || !target || projectId === undefined) return null;
   return (remoteShown ?? (target.bound && localShown)) ? opened : null;

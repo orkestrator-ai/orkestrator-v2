@@ -149,3 +149,26 @@ test("a completed drag suppresses its click until the next task and then permits
     sortableSpy.mockRestore();
   }
 });
+
+test.each([false, true])(
+  "selected=%s controls repository currentness and background",
+  (selected) => {
+    render(
+      <SortableProjectFolder
+        name="acme/app"
+        repository
+        selected={selected}
+        onOpen={() => {}}
+        projectCount={1}
+        isCollapsed={false}
+        onToggleCollapse={() => {}}
+      >
+        <span>Member</span>
+      </SortableProjectFolder>,
+    );
+    const heading = screen.getByRole("button", { name: "Open acme/app" });
+    expect(heading.getAttribute("aria-current")).toBe(selected ? "page" : null);
+    const frame = heading.closest("[data-project-folder]")!.querySelector(".relative")!;
+    expect(frame.classList.contains("from-selected")).toBe(selected);
+  },
+);

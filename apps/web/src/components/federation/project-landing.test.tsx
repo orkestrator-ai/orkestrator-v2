@@ -310,6 +310,12 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         // the member it opened.
         const repository = screen.getByRole("button", { name: "Open acme/app on Machine A" });
         const member = projectHeading("app", "Machine A");
+        act(() =>
+          useMachineViewStore
+            .getState()
+            .revealProject(projectKey(projectRef("bk_a" as BackendId, "project-1"))),
+        );
+        expect(member.getAttribute("aria-current")).toBe("true");
         fireEvent.click(repository);
         await waitFor(() =>
           expect(request()).toEqual({
@@ -320,6 +326,21 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         );
         expect(repository.getAttribute("aria-current")).toBe("page");
         expect(member.getAttribute("aria-current")).toBeNull();
+
+        expect(useMachineViewStore.getState().revealedProject).toBeNull();
+        // The realm can ensure Home before the shell's next summary arrives.
+        act(() =>
+          useRemoteWorkspaceStore.getState().noteRealmSelection("bk_a", {
+            projectId: "project-1",
+            environmentId: "ensured-home",
+            projectHome: true,
+          }),
+        );
+        expect(repository.getAttribute("aria-current")).toBe("page");
+        expect(member.getAttribute("aria-current")).toBeNull();
+        expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request.boardTab).toBe(
+          "coordinator",
+        );
 
         // The member's own entry takes the highlight back.
         fireEvent.click(member);

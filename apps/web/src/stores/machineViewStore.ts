@@ -185,7 +185,7 @@ export const useMachineViewStore = create<MachineViewState>()(
         set((state) =>
           openedRepository === null && state.openedRepository === null
             ? state
-            : { openedRepository },
+            : { openedRepository, ...(openedRepository ? { revealedProject: null } : {}) },
         ),
     }),
     {

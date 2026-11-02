@@ -12,6 +12,7 @@ import {
 } from "@orkestrator/protocol/federation";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import type { MachineView } from "@/lib/federation/aggregate";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
@@ -67,7 +68,21 @@ function useRecentSelections(backendId: BackendId | null) {
       const views = useMachineViewStore.getState();
       views.recordRecent(keys);
       if (keys.length > 0) views.revealProject(null);
-      views.noteRepositoryOpened(null);
+      const continuesHeading =
+        state.projectSelectionRevision === previous.projectSelectionRevision &&
+        views.openedRepository?.projectKey ===
+          (state.selectedProjectId
+            ? projectKey(projectRef(backendId, state.selectedProjectId))
+            : null) &&
+        useEnvironmentStore
+          .getState()
+          .environments.some(
+            (environment) =>
+              environment.id === state.selectedEnvironmentId &&
+              environment.projectId === state.selectedProjectId &&
+              environment.projectHome,
+          );
+      if (!continuesHeading) views.noteRepositoryOpened(null);
     });
   }, [backendId]);
 }

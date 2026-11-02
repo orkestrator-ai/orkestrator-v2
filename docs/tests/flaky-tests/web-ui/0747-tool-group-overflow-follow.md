@@ -330,3 +330,10 @@ mise run test:logged -- --name merge-browser-owners -- bunx playwright test --co
 ```
 
 All 38 ToolGroupFold cases passed; both native branch-selection cases still failed (40 passed, two failed overall; 103.5 s logged). This confirms the existing intermittent overflow-follow recurrence. No owning source, assertion, timeout or skip changed. Evidence under the host temporary directory: `orkestrator-test-run.xHtE03/merge-feature-browser.log.gz` and `orkestrator-test-run.OdWuh9/merge-browser-owners.log.gz`. The aggregate remains failed.
+
+### Environment terminology preparation (2026-11-02)
+
+- **Run:** `mise run test:browser` during preparation of `rename-environment-kinds-fbee095fc40a-r1` (wording-only branch; no ToolGroupFold source or spec change). The aggregate reported 9 failed, 3 flaky and 1,147 passed in 11.1 min.
+- **Failure:** desktop `a waiting group that fits its cap follows appended calls as it starts overflowing` (now `e2e/ToolGroupFold.spec.ts:442`) failed its first attempt on a `toBe` comparison and passed on retry.
+- **Isolated rerun:** `ORKESTRATOR_E2E_PORT=1488 mise run test:logged -- --name ek-branch-stream-4 -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts:361 e2e/ToolGroupFold.spec.ts:442 --retries=0` passed, exit 0, in 4.3 s; the same pair also passed three earlier logged runs.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KtcBbJ/browser.log.gz`. Cause remains unconfirmed.

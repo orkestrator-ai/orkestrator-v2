@@ -21,6 +21,8 @@ Analysed 2026-11-02 against `main` at `d7cdfaa8b`.
 bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-upstream-pool.test.ts --parallel=1
 ```
 
+It still fails on the newer `main` at `fd679c0e2`: two runs of two through `mise run test:logged -- --name ek-pool-N -- bun test --cwd=apps/backend ./src/preview-upstream-pool.test.ts`, each six passing and this one failing.
+
 A standalone `node:net` script under the same Bun (connect, await the client's `connect`, then count the server's accepted sockets) found the server callback had not yet run in 15 of 20 connections. So when `long.put` runs, `accepted.at(-1)` is usually the peer of the earlier `expiring` client, which is already closed. Ending it never reaches `client`, and the pool correctly keeps `client` idle until the 60 s limit. The pool itself (`preview-upstream-pool.ts`, the `end`/`close`/`data` listeners in `put`) is not implicated. Found while validating the environment-terminology branch, which does not touch this code.
 
 **Decisions.**

@@ -3,7 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 
 import * as backend from "@/lib/backend";
 import type { UsageHistoryReport, UsageTotals } from "@/lib/backend";
-import { UsageSettings, usagePlatformFilterOptions } from "./UsageSettings";
+import {
+  UsageSettings,
+  usageEnvironmentOptionLabel,
+  usagePlatformFilterOptions,
+} from "./UsageSettings";
 
 function totals(overrides: Partial<UsageTotals> = {}): UsageTotals {
   return {
@@ -277,4 +281,52 @@ test("the platform filter always offers whatever is selected", () => {
   expect(usagePlatformFilterOptions([], "codex")).toEqual(["codex"]);
   expect(usagePlatformFilterOptions(["codex"], "claude")).toEqual(["claude", "codex"]);
   expect(usagePlatformFilterOptions(["codex", "claude"], "claude")).toEqual(["claude", "codex"]);
+});
+
+test("busiest environments name the project above the environment, deleted ones included", async () => {
+  history.mockResolvedValue(
+    report({
+      environments: [
+        {
+          environmentId: "env-1",
+          name: "Feature branch",
+          projectName: "Orkestrator",
+          totals: totals({ totalTokens: 6_000 }),
+          sessions: 2,
+        },
+        {
+          environmentId: "env-gone",
+          name: "Finished work",
+          projectName: "Website",
+          deleted: true,
+          totals: totals({ totalTokens: 3_000 }),
+          sessions: 1,
+        },
+        {
+          environmentId: "env-unknown",
+          deleted: true,
+          totals: totals({ totalTokens: 1_000 }),
+          sessions: 1,
+        },
+      ],
+    }),
+  );
+  render(<UsageSettings />);
+  const list = within(await screen.findByRole("region", { name: "Environments" }));
+  const rows = list.getAllByRole("listitem");
+  expect(rows.map((row) => row.textContent?.replace(/[\d.]+[%KM]?/g, "").trim())).toEqual([
+    "OrkestratorFeature branch",
+    "Website · DeletedFinished work",
+    "Unknown projectDeleted environment",
+  ]);
+});
+
+test("the environment filter marks a deleted environment it can still name", () => {
+  expect(usageEnvironmentOptionLabel({ name: "Feature", projectName: "Ork" })).toBe(
+    "Feature · Ork",
+  );
+  expect(usageEnvironmentOptionLabel({ name: "Feature", projectName: "Ork", deleted: true })).toBe(
+    "Feature · Ork (deleted)",
+  );
+  expect(usageEnvironmentOptionLabel({ deleted: true })).toBe("Deleted environment");
 });

@@ -406,6 +406,7 @@
         "scripts/**",
         "apps/desktop/scripts/**",
         "bridges/*/scripts/**",
+        "apps/backend/scripts/**",
         "**/*.live-probe.ts",
         "packages/cli/**",
         "docker/**",
@@ -419,7 +420,7 @@
       }
     },
     {
-      "files": ["apps/backend/**", "apps/web/**", "apps/web-public/**"],
+      "files": ["apps/web/**", "apps/web-public/**"],
       "rules": {
         "no-restricted-globals": "off"
       }

@@ -49,7 +49,7 @@ import {
 } from "./constants.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-const log = createLogger("model-catalog");
+const log = createLogger("models");
 
 type RefreshableAgent = Extract<
   AgentPlatform,

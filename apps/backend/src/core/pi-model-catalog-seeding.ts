@@ -14,7 +14,7 @@ import {
 } from "./commands-servers.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-const log = createLogger("model-catalog");
+const log = createLogger("models");
 
 /**
  * Seed Pi's host-wide model catalogue before an environment exists.

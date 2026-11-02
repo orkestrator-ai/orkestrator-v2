@@ -89,7 +89,7 @@ import {
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-const log = createLogger("model-catalog");
+const log = createLogger("models");
 
 /**
  * Total extra time a first-use catalogue read may spend starting a bridge and
@@ -908,7 +908,7 @@ export function registerProjectCommands(
       try {
         await storage.cacheAgentModelCatalog(agent, models);
       } catch (error) {
-        log.warn("persist.failed", { agent, error: formatLogError(error) });
+        log.warn("cache.write-failed", { agent, error: formatLogError(error) });
       }
     }
     const cataloguedOpenCodeModels =

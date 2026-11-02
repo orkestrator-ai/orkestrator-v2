@@ -748,7 +748,7 @@ record what was observed at the time and are left as they are.
 | `[goals]`, `[goal-verifier]` | `[native-agent.goal] <event>` |
 | `[opencode-provider]` | `[native-agent.opencode] <event>` |
 | `[native-agent-job]`, `[NativeAgentService]`, `[human-prompts]`, `[agent-handoffs]` | `[native-agent] <event>` |
-| `[ElectronBackend]` model catalogue lines | `[model-catalog] <event>` |
+| `[ElectronBackend]` model catalogue lines | `[models] <event>` |
 | `[ElectronBackend] Installing ... support` | `[local-server] bridge-runtime.*` |
 | `[prompt-queue]`, `[pty]` | `[tmux] queue.*`, `[terminal] pty.*` |
 | `[backend]` design lines, `[design-renderer]` | `[design] <event>` |
@@ -771,16 +771,13 @@ record what was observed at the time and are left as they are.
 
 ## What is left in the backend
 
-- **`storage-config.ts`** keeps its one raw site until the live settings work merges,
-  which owns that file along with `log-policy-*.ts`, `backend-runtime.ts` and
-  `commands-registry-servers.ts`.
 - **An optional `logger`** remains on `core/transcript-artifacts/` (`runtime.ts`,
   `preview-runner.ts`, `content-server.ts`). Nothing in production passes one, so those
   warnings are silent today. Moving them onto the logger would add lines rather than move
   them, which is a decision for the cleanup slice.
-- `apps/backend/**` stays excluded from the lint rule until `storage-config.ts` moves.
-  22 of the 23 sites the ratchet counts are `bounded-console.ts` and `scripts/`, whose
-  console is the product. The fixture processes now write to `process.stdout` directly.
+- `apps/backend/**` is no longer excluded from the lint rule. `bounded-console.ts` and
+  `scripts/` stay excluded for good, as their console is the product. Fixture processes
+  write to `process.stdout` directly.
 - **`detail` fields:** the PR monitor, auto-merge and diff stats services report through
   an `onWarning(message, error)` callback, so their lines carry the service's own text in
   `detail`. It holds identifiers only. Static events there would mean changing those

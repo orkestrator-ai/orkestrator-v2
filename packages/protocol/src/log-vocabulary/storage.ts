@@ -26,6 +26,8 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "Cleanup of a retired Looped Review turn did not finish and stays pending.",
       "handoffs.prune-failed":
         "Pruning agent handoffs that nothing references failed; a later prune retries.",
+      "desktop-connections.malformed":
+        "Stored desktop connection settings were malformed, so the local connection is used.",
       "legacy-json.moved":
         "JSON store files written after the SQLite migration were archived, not imported.",
       "legacy-json.archive-failed": "Imported JSON store files could not be archived.",

@@ -82,15 +82,4 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "Handling a request event failed, so the stream restarts. Error class only.",
     },
   },
-  "model-catalog": {
-    description: "Agent model catalogues: seeding, probing and saving them.",
-    events: {
-      "persist.failed": "A model catalogue could not be saved.",
-      "seed.pi-failed": "The host Pi model catalogue could not be seeded; the next launch retries.",
-      "bridge.not-ready": "The first-use catalogue bridge did not become ready.",
-      "bridge.start-failed": "The first-use catalogue bridge failed to start.",
-      "probe.exit-unclean": "A catalogue probe or sign-in server did not exit cleanly.",
-      "download.deferred": "A model catalogue could not be downloaded yet.",
-    },
-  },
 });

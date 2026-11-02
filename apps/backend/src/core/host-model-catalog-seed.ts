@@ -7,7 +7,7 @@ import type {
 } from "./host-model-catalog-refresh.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-const log = createLogger("model-catalog");
+const log = createLogger("models");
 
 /**
  * How long a failed seed suppresses the next one. A signed-out host fails every

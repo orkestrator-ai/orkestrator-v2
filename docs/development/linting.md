@@ -111,9 +111,8 @@ the logger itself), and one for paths not migrated yet.
 unmigrated path, so those limits only fall. Migrating a path removes its entry
 from the override and the test together. The bridges and their shared protocol
 modules are migrated; a bridge's `scripts/` and `*.live-probe.ts` files are among
-those whose console is the product. The backend's limit counts its `scripts/` and
-`bounded-console.ts` too, and only `storage-config.ts` is left to move before its
-exclusion can go.
+those whose console is the product. The backend is migrated too, with its `scripts/` and `bounded-console.ts`
+excluded for good.
 
 ## Module boundaries
 

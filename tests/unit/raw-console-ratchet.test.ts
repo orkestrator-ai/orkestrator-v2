@@ -15,7 +15,6 @@ const oxlint = join(repoRoot, "node_modules/.bin/oxlint");
  * uses the logger, which needs no number raised.
  */
 const UNMIGRATED: Readonly<Record<string, number>> = {
-  "apps/backend/**": 23,
   "apps/web/**": 369,
   "apps/web-public/**": 0,
 };
@@ -42,6 +41,7 @@ const PERMANENT: readonly string[] = [
   "scripts/**",
   "apps/desktop/scripts/**",
   "bridges/*/scripts/**",
+  "apps/backend/scripts/**",
   "**/*.live-probe.ts",
   "packages/cli/**",
   "docker/**",
@@ -195,7 +195,7 @@ describe("raw console lint rule", () => {
     ["packages/protocol/src/logger.ts"],
     ["packages/protocol/src/node/application-logging.ts"],
     ["apps/backend/src/bounded-console.ts"],
-    ["apps/backend/src/core/probe.ts"],
+    ["apps/backend/scripts/probe.ts"],
     ["apps/web/src/lib/probe.ts"],
     ["bridges/claude-bridge/scripts/probe.ts"],
     ["bridges/claude-bridge/src/services/probe.live-probe.ts"],

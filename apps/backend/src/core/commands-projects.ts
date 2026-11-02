@@ -1,4 +1,3 @@
-import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
@@ -22,7 +21,6 @@ import {
 } from "./commands-containers.js";
 import type { CommandContext } from "./commands-context.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-
 
 type ClaudeCatalogRefreshDependencies = {
   enqueueContainerBridgeOperation: typeof enqueueContainerBridgeOperation;

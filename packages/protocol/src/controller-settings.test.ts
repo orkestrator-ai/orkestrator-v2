@@ -35,7 +35,7 @@ describe("controller settings snapshots", () => {
     const valid = {
       controllerId: "bk_command" as BackendId,
       changedAt: "2026-10-22T00:00:00.000Z",
-      settings: { terminalScrollback: 5000 },
+      settings: { terminalScrollback: 5000, terminalLinkDefaultTarget: "browser-tab" },
     };
     expect(
       parseControllerSettingsStore({

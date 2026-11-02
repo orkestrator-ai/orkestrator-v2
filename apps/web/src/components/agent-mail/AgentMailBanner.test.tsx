@@ -124,7 +124,7 @@ describe("AgentMailBanner", () => {
       install("stored", { placementReason: "recipient-cannot-inject", policy, noAgent: true });
       const view = render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
       expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
       expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
       view.unmount();
     }
@@ -136,8 +136,8 @@ describe("AgentMailBanner", () => {
     snapshot.messages[0]!.trust = "external";
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message in inbox · waiting for an agent")).toBeTruthy();
-    expect(screen.queryByText(/send a first message|and deliver/)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+    expect(screen.queryByText(/send a first message|and deliver/) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
   });
 
   test("explains that a delegation report waits for the worker turn", () => {
@@ -148,8 +148,8 @@ describe("AgentMailBanner", () => {
         .getByText("Worker report waiting · delivers when the worker turn ends")
         .classList.contains("truncate"),
     ).toBe(false);
-    expect(screen.queryByText(/agent is idle/)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Deliver now" })).toBeNull();
+    expect(screen.queryByText(/agent is idle/) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
   });
 
   test("rehydrates its authoritative summary even when cached state has a revision", async () => {

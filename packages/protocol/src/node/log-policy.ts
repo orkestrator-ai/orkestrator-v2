@@ -1,7 +1,7 @@
 import { configureLogger, type LogRecord } from "../logger.js";
 import { formatLogAreaLevels, type LogDetail } from "../log-policy.js";
 import type { ApplicationLogPolicy, InstalledApplicationLogging } from "./application-logging.js";
-import { LOG_LEVEL_ENV, parseLogLevels } from "./logger-environment.js";
+import { logLevelEnvironmentValue, parseLogLevels } from "./logger-environment.js";
 
 /**
  * Levels from the settings with `ORKESTRATOR_LOG_LEVEL` on top. A person who
@@ -13,7 +13,7 @@ export function effectiveLogDetail(
   detail: LogDetail,
   env: NodeJS.ProcessEnv = process.env,
 ): LogDetail {
-  const overrides = parseLogLevels(env[LOG_LEVEL_ENV]);
+  const overrides = parseLogLevels(logLevelEnvironmentValue(env));
   return {
     level: overrides.level ?? detail.level,
     areaLevels: { ...detail.areaLevels, ...overrides.areaLevels },

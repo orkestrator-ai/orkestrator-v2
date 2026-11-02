@@ -174,6 +174,63 @@ describe("bridge log levels across the hop", () => {
     expect(capture.records()[0]?.fields).toEqual({ source: "codex:env-1" });
   });
 
+  test.each([
+    'api_key: "opaque-test-canary-12345"',
+    'prefix\napi_key:\t"opaque-test-canary-12345"',
+    "prefix\tBearer\topaque-test-canary-12345",
+    "prefix\nBearer\nopaque-test-canary-12345",
+  ])("redacts decoded credentials in %j through the full hop", async (path) => {
+    capture = captureLogs();
+    await forward((child) => {
+      const line = `${bridgeLine("warn", { path })}\n`;
+      // Include a chunk boundary inside JSON's escaped representation.
+      child.stdout.write(line.slice(0, -20));
+      child.stdout.write(line.slice(-20));
+    });
+    expect(capture.records()).toHaveLength(1);
+    expect(capture.records()[0]?.fields?.path).toContain("[redacted]");
+    expect(JSON.stringify(capture.records())).not.toContain("opaque-test-canary-12345");
+    expect(capture.lines.join("\n")).not.toContain("opaque-test-canary-12345");
+  });
+
+  test("redacts decoded formatted error strings, stack frames and nested causes", async () => {
+    capture = captureLogs();
+    await forward((child) => {
+      const wire = JSON.stringify({
+        ...JSON.parse(bridgeLine("error")),
+        fields: {
+          error: {
+            name: "Error",
+            message: `failed ${SHAPED.xaiApiKey}`,
+            stack: [`at ${SHAPED.cursorApiKey} (fixture:1:1)`],
+            cause: { name: "Error", message: `cause ${SHAPED.refreshToken}` },
+          },
+          count: 2,
+          retryable: false,
+          optional: null,
+        },
+      })
+        .replaceAll("xai-", "\\u0078ai-")
+        .replaceAll("key_", "\\u006bey_")
+        .replaceAll("rt_", "\\u0072t_");
+      child.stderr.write(`${wire}\n`);
+    });
+    expect(capture.records()[0]?.fields).toEqual({
+      source: "codex:env-1",
+      error: {
+        name: "Error",
+        message: "failed [redacted]",
+        stack: ["at [redacted] (fixture:1:1)"],
+        cause: { name: "Error", message: "cause [redacted]" },
+      },
+      count: 2,
+      retryable: false,
+      optional: null,
+    });
+    expectNothingSecretLogged(JSON.stringify(capture.records()), "decoded errors");
+    expectNothingSecretLogged(capture.lines.join("\n"), "rendered errors");
+  });
+
   test("a record reaches the desktop's file level through both relays, fields intact", async () => {
     // Backend, supervised: re-emits as JSON on its own stdio. Desktop: reads
     // that line and re-emits it at its level in the user's format.

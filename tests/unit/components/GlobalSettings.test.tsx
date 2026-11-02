@@ -2443,6 +2443,30 @@ describe("GlobalSettings", () => {
     );
   });
 
+  test("saves the terminal link default and describes the alternative gesture", async () => {
+    render(<GlobalSettings activeSection="previews" />);
+
+    const target = screen.getByRole("combobox", { name: "Open terminal links in" });
+    expect(target.textContent).toContain("External browser");
+    expect(screen.getByText(/opens it in a preview tab\./)).toBeTruthy();
+
+    fireEvent.keyDown(target, { key: "ArrowDown" });
+    await screen.findByRole("listbox");
+    const option = screen.getByRole("option", { name: "Preview tab" });
+    fireEvent.pointerDown(option, { pointerType: "mouse" });
+    fireEvent.pointerUp(option, { pointerType: "mouse" });
+    await waitFor(() => expect(target.textContent).toContain("Preview tab"));
+    expect(screen.getByText(/opens it in your external browser\./)).toBeTruthy();
+    await flushAutoSave();
+
+    await waitFor(() =>
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalLinkDefaultTarget: "browser-tab" }),
+        SAVE_OPTIONS,
+      ),
+    );
+  });
+
   test("blocks auto-save for invalid domains and terminal colors", async () => {
     const { rerender } = render(<GlobalSettings activeSection="network" />);
     fireEvent.change(screen.getByPlaceholderText(/github\.com/), {

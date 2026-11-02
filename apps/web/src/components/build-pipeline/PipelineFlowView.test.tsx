@@ -580,15 +580,18 @@ describe("pipeline zoom controls", () => {
     });
   };
 
-  test("offer Fit, which zooms the whole graph into view and back from 100%", () => {
+  test("toggle the zoom level between 100% and the whole graph in view", () => {
     renderPipelineTab(largePanel());
     const controls = screen.getByRole("group", { name: "Zoom" });
     const level = screen.getByTestId("pipeline-zoom-level");
     expect(level.textContent).toBe("100%");
-    fireEvent.click(within(controls).getByRole("button", { name: "Fit the whole pipeline" }));
+    expect(within(controls).getAllByRole("button")).toHaveLength(4);
+    expect(level.getAttribute("aria-label")).toBe("Zoom 100%, fit to view");
+    fireEvent.click(level);
     const fitted = Number.parseInt(level.textContent!, 10);
     expect(fitted).toBeLessThan(100);
     expect(fitted).toBeGreaterThanOrEqual(20);
+    expect(level.getAttribute("aria-label")).toBe(`Zoom ${fitted}%, reset to 100%`);
     fireEvent.click(level);
     expect(level.textContent).toBe("100%");
   });

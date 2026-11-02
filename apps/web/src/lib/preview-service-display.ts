@@ -230,7 +230,7 @@ export function diagnoseService(
     return {
       severity: "warning",
       title: `Another environment's server is on port ${definition.applicationPort}`,
-      detail: `A server another environment started is not shown here. Start this environment's server; if it moved to another port, ${PREVIEW_LINK_GESTURE} the address it prints in this environment to move this service there.`,
+      detail: `A server another environment started is not shown here. Start this environment's server; if it moved to another port, open the address it prints in this environment in a preview tab to move this service there.`,
       actions: ["retry"],
     };
   }

@@ -17,6 +17,7 @@ import {
   type RealmSelectRequest,
 } from "@/lib/federation/workspace-realm";
 import { useConfigStore } from "@/stores/configStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -70,6 +71,8 @@ export function WorkspaceRealmHost() {
   const appliedSeq = useRef(0);
   // The request whose dialog the user closed.
   const [closedSeq, setClosedSeq] = useState(0);
+  // Set while the window's files panel state is applied here, so it is not echoed back.
+  const applyingShellFilesPanel = useRef(false);
 
   // Listen first, then say so: the window resends what it asked meanwhile.
   useEffect(
@@ -82,6 +85,18 @@ export function WorkspaceRealmHost() {
         // The window's sidebar: the toolbar here shows and toggles it.
         if (message.type === "sidebar" && useUIStore.getState().sidebarOpen !== message.open) {
           useUIStore.setState({ sidebarOpen: message.open });
+        }
+        // The window owns the files panel's state; applying it is not a new choice to report.
+        if (
+          message.type === "filesPanel" &&
+          useFilesPanelStore.getState().isOpen !== message.open
+        ) {
+          applyingShellFilesPanel.current = true;
+          try {
+            useFilesPanelStore.setState({ isOpen: message.open });
+          } finally {
+            applyingShellFilesPanel.current = false;
+          }
         }
         // The window's grouping decides whether this node's coordinator opens directly.
         if (message.type === "grouping") {
@@ -104,6 +119,15 @@ export function WorkspaceRealmHost() {
       useUIStore.subscribe((state, previous) => {
         if (state.sidebarOpen !== previous.sidebarOpen) {
           postToShell({ type: "sidebar", open: state.sidebarOpen });
+        }
+      }),
+    [],
+  );
+  useEffect(
+    () =>
+      useFilesPanelStore.subscribe((state, previous) => {
+        if (state.isOpen !== previous.isOpen && !applyingShellFilesPanel.current) {
+          postToShell({ type: "filesPanel", open: state.isOpen });
         }
       }),
     [],

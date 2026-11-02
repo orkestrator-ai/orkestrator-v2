@@ -15,7 +15,7 @@ with [agent-testing.md](agent-testing.md).
 | Test one file | `mise run test:logged -- --name focused -- bun test ./path/to/file.test.ts --parallel=1 --only-failures` | First feedback while editing one owner |
 | Test root unit tests | `mise run test:logged -- --name root-unit -- mise run test:unit` | Root `tests/unit` only |
 | Test changed code | `mise run test:changed` | Fast local feedback across affected packages and files |
-| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; excludes the [slow tier](#test-tiers) |
+| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; excludes the [slow tier](#test-tiers). Only pre-review implementation workers skip it when Multi Review or a build pipeline comes next; review preparation must schedule it when applicable |
 | Test the slow tier | `mise run test:slow` | On demand only: tests that wait on real processes, servers, or wall-clock time |
 | Test both tiers | `mise run test:full` | What CI runs; default and slow tiers |
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |
@@ -32,12 +32,19 @@ Choose validation scope using [AGENTS.md](../../AGENTS.md#choosing-validation-fo
 before applying this loop. Documentation-only changes need only
 `mise run format:check`.
 
+Only pre-review implementation workers defer the full pass when Multi Review
+or a build pipeline follows. Review preparation must discover and schedule every
+applicable validation command from AGENTS.md, including `mise run test`, once
+against the committed branch. The worker exemption does not apply to preparation
+and must never cause preparation to defer its own validation to a later review.
+When no review follows, implementation workers run the required full validation.
+
 A normal code implementation loop is:
 
 1. Run the owning test file while iterating.
 2. Run `mise run test:changed` after the local behavior is green.
 3. Run `mise run check` through `test:logged` and run `mise run test` before
-   handoff.
+   handoff, except for pre-review implementation workers as described above.
 4. Add the relevant browser, agent, Docker, or iOS suite when the changed area
    requires it.
 

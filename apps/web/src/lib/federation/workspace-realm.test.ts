@@ -34,6 +34,16 @@ test("only known messages with bounded IDs cross between a window and its realm"
     type: "select",
   });
   expect(parseShellMessage({ type: "sidebar", open: "yes" })).toBeNull();
+  expect(parseShellMessage({ type: "filesPanel", open: true })).toEqual({
+    type: "filesPanel",
+    open: true,
+  });
+  expect(parseShellMessage({ type: "filesPanel", open: "yes" })).toBeNull();
+  expect(parseRealmMessage({ type: "filesPanel", open: false })).toEqual({
+    type: "filesPanel",
+    open: false,
+  });
+  expect(parseRealmMessage({ type: "filesPanel" })).toBeNull();
   expect(parseShellMessage({ type: "grouping", grouping: "repository" })).toEqual({
     type: "grouping",
     grouping: "repository",

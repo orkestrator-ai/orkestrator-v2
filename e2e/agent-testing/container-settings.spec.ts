@@ -38,12 +38,12 @@ async function login(page: Page, testInfo: TestInfo) {
 }
 
 async function openContainerSettings(page: Page, narrow: boolean) {
+  const projects = page.getByRole("button", {
+    name: "Open projects and environments",
+    exact: true,
+  });
+  const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
   if (narrow) {
-    const projects = page.getByRole("button", {
-      name: "Open projects and environments",
-      exact: true,
-    });
-    const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
     await expect(drawer.or(projects)).toBeVisible({ timeout: 30_000 });
     if (!(await drawer.isVisible())) await projects.click();
     await expect(drawer).toBeVisible();
@@ -56,13 +56,11 @@ async function openContainerSettings(page: Page, narrow: boolean) {
   await expect(item).toBeVisible({ timeout: 15_000 });
   if (narrow) {
     // Narrow layouts: select the environment (the drawer closes), then open
-    // its settings from the Tools drawer.
+    // its settings from the bottom bar of the reopened drawer.
     await item.click();
-    const settings = page.getByRole("button", { name: "Environment settings" }).first();
-    if (!(await settings.isVisible().catch(() => false))) {
-      await page.getByRole("button", { name: /tools/i }).first().click();
-    }
-    await settings.click();
+    await expect(drawer).toBeHidden();
+    await projects.click();
+    await drawer.getByRole("button", { name: "Environment settings", exact: true }).click();
     return;
   }
   await item.click({ button: "right" });

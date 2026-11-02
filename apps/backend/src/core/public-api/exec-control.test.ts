@@ -40,14 +40,22 @@ test.each(["", "not json", "null", "{}", '["other-operation"]'])(
 );
 
 test("a missing control runtime is best effort during stop", async () => {
+  const cause = new Error(`bun unavailable:\n  ${"x".repeat(600)}`);
   spies.push(
-    spyOn(shell, "runCommand").mockRejectedValue(new Error("bun unavailable")),
+    spyOn(shell, "runCommand").mockRejectedValue(cause),
     spyOn(console, "warn").mockImplementation(() => {}),
   );
   await expect(stopEnvironmentExecWorkers("env-1", context)).resolves.toBeUndefined();
-  await expect(
-    stopEnvironmentExecWorkers("env-1", context, { requireStopped: true }),
-  ).rejects.toThrow("Goal check workers could not be verified stopped");
+  const error = await stopEnvironmentExecWorkers("env-1", context, {
+    requireStopped: true,
+  }).catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(Error);
+  if (!(error instanceof Error)) throw new Error("Expected a strict list failure");
+  expect(error.cause).toBe(cause);
+  const prefix = "Goal check workers could not be verified stopped: ";
+  const diagnostic = `bun unavailable: ${"x".repeat(482)}…`;
+  expect(diagnostic).toHaveLength(500);
+  expect(error.message).toBe(`${prefix}${diagnostic}`);
 });
 
 test("a valid goal-check list cancels and cleans up its worker", async () => {

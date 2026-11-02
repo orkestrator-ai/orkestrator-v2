@@ -100,6 +100,17 @@ describe("global settings synchronization", () => {
     ).toBe(24);
   });
 
+  test("tracks the terminal link default, treating absent as external", () => {
+    const current = globalConfig();
+    expect(storedCoreFields(current).terminalLinkDefaultTarget).toBe("external");
+    expect(globalFormSignature({ ...current, terminalLinkDefaultTarget: "external" })).toBe(
+      globalFormSignature(current),
+    );
+    expect(globalFormSignature({ ...current, terminalLinkDefaultTarget: "browser-tab" })).not.toBe(
+      globalFormSignature(current),
+    );
+  });
+
   test("tracks the durable terminal-history opt-out", () => {
     const current = globalConfig();
     expect(globalFormSignature({ ...current, terminalHistoryEnabled: false })).not.toBe(

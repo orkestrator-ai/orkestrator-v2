@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.35.1-beta",
+  "version": "2.35.3-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -24,6 +24,7 @@
     "./logger": "./src/logger.ts",
     "./log-vocabulary": "./src/log-vocabulary/index.ts",
     "./node/logger-environment": "./src/node/logger-environment.ts",
+    "./node/command-failure-reason": "./src/node/command-failure-reason.ts",
     "./testing/log-capture": "./src/testing/log-capture.ts",
     "./testing/bridge-diagnostic-lines": "./src/testing/bridge-diagnostic-lines.ts",
     "./node/repository-instructions": "./src/node/repository-instructions.ts",
@@ -235,6 +236,7 @@
     "./tab-initial-prompt": "./src/tab-initial-prompt.ts",
     "./terminal-agent-launch": "./src/terminal-agent-launch.ts",
     "./terminal-history": "./src/terminal-history.ts",
+    "./terminal-link-target": "./src/terminal-link-target.ts",
     "./terminal-input-batcher": "./src/terminal-input-batcher.ts",
     "./terminal-input-contract-fixtures": "./src/terminal-input-contract-fixtures.ts",
     "./terminal-input-sequencer": "./src/terminal-input-sequencer.ts",

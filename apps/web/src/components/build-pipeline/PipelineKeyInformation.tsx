@@ -1,8 +1,8 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   CheckCircle2,
   CircleDashed,
-  ClipboardList,
+  FileText,
   MinusCircle,
   X,
   XCircle,
@@ -16,6 +16,7 @@ import {
   type KeyInformationTestResult,
 } from "@orkestrator/protocol/build-pipeline-key-information";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 const AUTHOR_LABELS: Record<KeyInformationAuthor, string> = {
@@ -60,23 +61,28 @@ const ISSUE_STATUS: Record<KeyInformationIssueStatus, { label: string; className
  */
 export function PipelineKeyInformationButton({
   keyInformation,
-  compact = false,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
-  /** Icon only, for the narrow header. */
-  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const suppressFocusTooltip = useRef(false);
   const panelId = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Restoring focus must not announce a tooltip. A fresh hover or focus may.
+  const closeAndRestoreFocus = useCallback(() => {
+    suppressFocusTooltip.current = true;
+    setTooltipOpen(false);
+    setOpen(false);
+    buttonRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setOpen(false);
-      buttonRef.current?.focus();
+      closeAndRestoreFocus();
     };
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
@@ -90,24 +96,43 @@ export function PipelineKeyInformationButton({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open]);
+  }, [open, closeAndRestoreFocus]);
 
   return (
     <>
-      <Button
-        ref={buttonRef}
-        type="button"
-        size="sm"
-        variant={open ? "secondary" : "outline"}
-        className={cn("h-7 shrink-0 gap-1.5 text-xs", compact && "w-7 px-0")}
-        aria-label={compact ? "Key information" : undefined}
-        aria-expanded={open}
-        aria-controls={open ? panelId : undefined}
-        onClick={() => setOpen((value) => !value)}
+      <Tooltip
+        open={!open && tooltipOpen}
+        onOpenChange={(value) => {
+          if (!value || !suppressFocusTooltip.current) setTooltipOpen(value);
+        }}
       >
-        <ClipboardList className="size-3.5" />
-        {compact ? null : "Key information"}
-      </Button>
+        <TooltipTrigger asChild>
+          <Button
+            ref={buttonRef}
+            type="button"
+            size="icon"
+            variant={open ? "secondary" : "outline"}
+            aria-label="Key information"
+            aria-expanded={open}
+            aria-controls={open ? panelId : undefined}
+            onBlur={() => {
+              suppressFocusTooltip.current = false;
+            }}
+            onPointerEnter={() => {
+              suppressFocusTooltip.current = false;
+            }}
+            onClick={() => {
+              setTooltipOpen(false);
+              setOpen((value) => !value);
+            }}
+          >
+            <FileText className="size-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={5}>
+          Key information
+        </TooltipContent>
+      </Tooltip>
       {open ? (
         <div
           ref={panelRef}
@@ -130,10 +155,7 @@ export function PipelineKeyInformationButton({
               variant="ghost"
               className="size-7"
               aria-label="Close key information"
-              onClick={() => {
-                setOpen(false);
-                buttonRef.current?.focus();
-              }}
+              onClick={closeAndRestoreFocus}
             >
               <X className="size-3.5" />
             </Button>

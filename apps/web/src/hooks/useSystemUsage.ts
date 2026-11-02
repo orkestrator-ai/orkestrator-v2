@@ -6,11 +6,13 @@ import {
   type EnvironmentProcessUsageSnapshot,
   type SystemUsageSnapshot,
 } from "@/lib/backend";
+import { portalStore } from "@/lib/portal/portal-store";
 import {
   getReadCoordinator,
   type ReadCoordinatorClock,
   type ReadKey,
 } from "@/lib/read-coordinator";
+import type { BackendId } from "@orkestrator/protocol/federation";
 
 /**
  * Shared, demand-driven system and process meters.
@@ -150,6 +152,34 @@ export function useSystemUsage({
     active,
     intervalMs,
     read: getSystemUsage,
+    isSample: isSystemUsageSnapshot,
+  });
+}
+
+/**
+ * One machine's host sample, for a view of several machines. The machine this
+ * window is on shares the title-bar meters' read, so both show the same figure.
+ * Every other machine has a read of its own through the command node, so a slow
+ * or unreachable machine holds up nothing but its own figure.
+ */
+export function useMachineSystemUsage({
+  nodeId,
+  bound,
+  intervalMs,
+  active = true,
+}: {
+  nodeId: BackendId;
+  bound: boolean;
+  intervalMs: number;
+  active?: boolean;
+}): UsageView<SystemUsageSnapshot> {
+  return useUsageRead({
+    key: bound ? SYSTEM_USAGE_READ_KEY : { ...SYSTEM_USAGE_READ_KEY, target: `node:${nodeId}` },
+    active,
+    intervalMs,
+    read: bound
+      ? getSystemUsage
+      : () => portalStore.invokeOnNode<SystemUsageSnapshot>(nodeId, "get_system_usage"),
     isSample: isSystemUsageSnapshot,
   });
 }

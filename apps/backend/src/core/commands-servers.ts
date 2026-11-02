@@ -974,6 +974,10 @@ async function startLocalServerAttempt(
         }
       : {}),
   };
+  // Only our bridges consume this launch flag. OpenCode can pass its environment
+  // to agent commands, so it must not inherit a relay request from the backend.
+  if (kind === "opencode") delete env[BRIDGE_LOG_RELAY_ENV];
+  else env[BRIDGE_LOG_RELAY_ENV] = "1";
   // A widened attachment boundary is inherited, not requested: a backend
   // started with this variable in its own environment would otherwise hand it
   // to every worker bridge. Only the branch below may name a root.

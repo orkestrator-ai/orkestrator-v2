@@ -41,7 +41,7 @@ describe("local discovery diagnostics", () => {
       worktree({ listener: "other-environment", failure: previewError("target-unverified") }),
     );
     expect(diagnosis?.title).toBe("Another environment's server is on port 3000");
-    expect(diagnosis?.detail).toContain("⌘⇧-click");
+    expect(diagnosis?.detail).toContain("in a preview tab");
     expect(diagnosis?.actions).toEqual(["retry"]);
   });
 

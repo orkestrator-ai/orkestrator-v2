@@ -17,3 +17,39 @@
 - **Disposition:** open.
 - **Evidence:** the fixed 30 ms wait against a 10 ms expiry is still at `node-files.test.ts:340`. The owner passed alone today (14/14, 2.0 s; Bun 1.4.4).
 - **Next step:** poll (bounded) until the temporary file is gone, instead of the fixed wait.
+
+## Safe error formatting second review — 2026-11-02
+
+Preparation's `mise run test` at `de952cc0accc820c6d57425323428cc993794a54`
+repeated the remaining-upload assertion at line 424 (67.02 ms). Backend:
+13,006 passed, 97 skipped, five failed across 870 files (440.83 s), three
+isolated workers. Original evidence is preserved at
+`.orkestrator/review-artifacts/review-validation-b03e0cc0-820a-4723-8d36-20d1666dfe82/validation-04.stdout.txt`.
+
+The complete unchanged owner passed on the fix branch as part of
+`mise run test:logged -- --name r5-round2-recorded-owners -- bun test --cwd apps/backend ./tests/container-readiness.test.ts ./src/core/commands-agent-tools.test.ts ./tests/codex-subagent-cards.test.ts ./src/core/nodes/node-files.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 14.2 s; passing per-file counts were not retained by the runner).
+
+A detached `origin/main` worktree at `9dbd7f1cc9981789ab352056bea84a1007c99959`
+installed its own dependencies with `mise exec -- bun install --frozen-lockfile`.
+`mise run test:logged -- --name r5-round2-main-upload -- bun test --cwd apps/backend ./src/core/nodes/node-files.test.ts --parallel=1 --only-failures`
+passed (0.5 s). The same owner with `--test-name-pattern 'abandoned uploads expire'`
+and `--rerun-each=50` passed (2.3 s), as did `--rerun-each=200` (8.3 s), under
+names `r5-round2-main-upload-repeat` and `r5-round2-main-upload-repeat-200`.
+
+The owner and implementation match main, but these passes do not reproduce the
+preparation failure on main or establish its cause. The failure's independence
+from the logging change remains unproven. No unrelated implementation,
+assertion, wait, timeout, or skip was changed; this case remains open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.

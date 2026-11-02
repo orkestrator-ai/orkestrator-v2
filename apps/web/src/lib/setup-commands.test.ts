@@ -118,8 +118,8 @@ test("approveSetupRuntime approves nothing for an unknown environment, and says 
       expect.objectContaining({
         level: "warn",
         area: "environment",
-        event: "setup-approval.unknown-environment",
-        fields: { environmentId: "missing" },
+        event: "setup.unknown-environment",
+        fields: { scope: "missing", action: "approveSetupRuntime" },
       }),
     ]);
   } finally {

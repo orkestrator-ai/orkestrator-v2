@@ -11,8 +11,9 @@ export async function forceResolveSetupRuntime(
 ): Promise<Environment | undefined> {
   const store = useEnvironmentStore.getState();
   if (!store.getEnvironmentById(environmentId)) {
-    console.warn("[setup-commands] forceResolveSetupRuntime: unknown environment", {
-      environmentId,
+    log.warn("setup.unknown-environment", {
+      scope: environmentId,
+      action: "forceResolveSetupRuntime",
     });
     return undefined;
   }
@@ -25,9 +26,7 @@ export async function forceResolveSetupRuntime(
 export async function retrySetupRuntime(environmentId: string): Promise<Environment | undefined> {
   const store = useEnvironmentStore.getState();
   if (!store.getEnvironmentById(environmentId)) {
-    console.warn("[setup-commands] retrySetupRuntime: unknown environment", {
-      environmentId,
-    });
+    log.warn("setup.unknown-environment", { scope: environmentId, action: "retrySetupRuntime" });
     return undefined;
   }
   const updated = await backend.runEnvironmentSetup(environmentId);
@@ -46,7 +45,7 @@ export async function approveSetupRuntime(
 ): Promise<Environment | undefined> {
   const store = useEnvironmentStore.getState();
   if (!store.getEnvironmentById(environmentId)) {
-    log.warn("setup-approval.unknown-environment", { environmentId });
+    log.warn("setup.unknown-environment", { scope: environmentId, action: "approveSetupRuntime" });
     return undefined;
   }
   const updated = await backend.approveEnvironmentSetup(environmentId, hash, remember);

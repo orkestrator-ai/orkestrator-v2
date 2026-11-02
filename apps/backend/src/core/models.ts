@@ -1212,6 +1212,8 @@ export interface AppConfig {
       backgroundColor: string;
     };
     terminalScrollback: number;
+    /** Where ⌘-click on a terminal link opens; ⌘⇧-click opens the other. Absent is `external`. */
+    terminalLinkDefaultTarget?: import("@orkestrator/protocol/terminal-link-target").TerminalLinkDefaultTarget;
     terminalHistoryEnabled?: boolean;
     terminalHistoryRetentionMb?: number;
     terminalHistoryGlobalRetentionMb?: number;

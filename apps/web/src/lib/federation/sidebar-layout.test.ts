@@ -11,6 +11,7 @@ import type { MachineView } from "./aggregate";
 import {
   arrangeMachines,
   buildRepositoryTree,
+  inMachineOrder,
   resolveRepositoryArrangement,
   mergeOrder,
   mergedArrangementUpdate,
@@ -121,6 +122,26 @@ describe("machine order", () => {
       "bk_control",
     );
     expect(next).toEqual(["bk_a", "bk_b", "bk_control"]);
+  });
+
+  test("the machine lists show the command node first wherever it is stored", () => {
+    const ids = ["bk_a", "bk_control", "bk_b", "bk_new"];
+    expect(
+      inMachineOrder(ids, (id) => id, ["bk_b", "bk_control", "bk_gone", "bk_a"], "bk_control"),
+    ).toEqual(["bk_control", "bk_b", "bk_new", "bk_a"]);
+    expect(inMachineOrder(ids, (id) => id, [], null)).toEqual(ids);
+  });
+
+  test("moving the machines around the command node leaves its stored place alone", () => {
+    const next = arrangeMachines(
+      [control, leafA, leafB],
+      [leafA, leafB],
+      layout({ machineOrder: ["bk_a", "bk_control", "bk_b"] }),
+      "bk_control",
+      "bk_b",
+      "bk_a",
+    );
+    expect(next).toEqual(["bk_b", "bk_control", "bk_a"]);
   });
 });
 

@@ -3,6 +3,9 @@ import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettin
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import { DataSavingSetting } from "./DataSavingSetting";
+import { PreviewSettings } from "./PreviewSettings";
+import { TerminalLinkTargetSetting } from "./TerminalLinkTargetSetting";
+import { WebAnnotationSettings } from "./WebAnnotationSettings";
 import type {
   CoordinatorResearchMcpServer,
   CoordinatorWebResearch,
@@ -318,6 +321,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     terminalBackgroundColor,
     terminalScrollback,
     setTerminalScrollback,
+    terminalLinkDefaultTarget,
+    setTerminalLinkDefaultTarget,
     terminalHistoryEnabled,
     setTerminalHistoryEnabled,
     terminalHistoryRetentionMb,
@@ -2425,6 +2430,16 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     grok: () => renderPlatform("grok"),
     pi: () => renderPlatform("pi"),
     terminal: renderTerminal,
+    previews: () => (
+      <SettingsPageLayout title="Browser previews">
+        <TerminalLinkTargetSetting
+          value={terminalLinkDefaultTarget}
+          onChange={setTerminalLinkDefaultTarget}
+        />
+        <PreviewSettings />
+        <WebAnnotationSettings />
+      </SettingsPageLayout>
+    ),
     network: renderNetwork,
     "web-client": renderWebClient,
     container: renderContainer,

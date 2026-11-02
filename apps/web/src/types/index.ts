@@ -616,6 +616,8 @@ export interface GlobalConfig {
   terminalAppearance: TerminalAppearance;
   /** Terminal scrollback buffer size (lines) */
   terminalScrollback: number;
+  /** Where ⌘-click on a terminal link opens; ⌘⇧-click opens the other. Absent is `external`. */
+  terminalLinkDefaultTarget?: import("@orkestrator/protocol/terminal-link-target").TerminalLinkDefaultTarget;
   /** Whether terminal output is retained in the backend archive. */
   terminalHistoryEnabled?: boolean;
   /** Maximum retained archive size per terminal, in MiB. */

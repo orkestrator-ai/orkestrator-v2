@@ -116,8 +116,10 @@ readiness backoff schedule (1, 2, 4, 8, 16, 30 s), and **Retry** restarts it.
 any edit flips `userOverride`, which makes it the user's own registration.
 
 **Port increments.** When a dev server finds its port taken and moves to the
-next one, open the address it prints (⌘⇧-click in the terminal). The link
-resolves in that environment; an unregistered port offers **Move `<service>`
+next one, open the address it prints in a preview tab from the terminal
+(⌘⇧-click, or ⌘-click when Settings → Browser previews defaults links to preview
+tabs).
+The link resolves in that environment; an unregistered port offers **Move `<service>`
 from port A to B** for nearby services of the same kind and scheme, next to
 **Register**. Nothing moves without that click.
 
@@ -266,8 +268,9 @@ a tab does (`forwardExternally` in `preview-transport-manager.ts`).
 - **Which route.** `openServiceInExternalBrowser` uses the private origin
   whenever `browserTopLevel` is available, and the forward only for a remote
   connection without it. A local connection keeps the private-origin path.
-- **Links.** A Cmd/Ctrl-clicked loopback link in a terminal, or a clicked one
-  in agent chat, is resolved in its source environment
+- **Links.** A loopback link opened externally from a terminal (Cmd/Ctrl-click
+  by default; Settings → Browser previews can swap it with Cmd/Ctrl+Shift-click), or a
+  clicked one in agent chat, is resolved in its source environment
   (`resolve_preview_target`, as for a preview tab). A single registered
   service opens through **Open in browser**'s route. An unregistered or
   ambiguous port opens a preview tab, where the user registers or picks it.

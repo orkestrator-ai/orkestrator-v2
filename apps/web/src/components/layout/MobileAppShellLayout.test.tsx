@@ -771,6 +771,40 @@ for (const action of [
   });
 }
 
+for (const [label, dialog] of [
+  ["Repository settings", "repository-settings"],
+  ["Environment settings", "environment-settings"],
+] as const) {
+  test(`drawer bottom bar routes remote ${dialog} and yields with local selection cleared`, async () => {
+    const remote = useRemoteWorkspaceStore.getState();
+    const ui = useUIStore.getState();
+    try {
+      useRemoteWorkspaceStore.getState().open("bk_remote", {
+        projectId: "p",
+        environmentId: "e",
+      });
+      renderLayout(
+        { sidebar: <SidebarBottomBar />, selectedProjectId: null, selectedEnvironmentId: null },
+        { keepInitialDrawerOpen: true },
+      );
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      await waitFor(() =>
+        expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
+      );
+      expect(useRemoteWorkspaceStore.getState().requests.bk_remote?.request).toEqual({
+        type: "select",
+        projectId: "p",
+        environmentId: "e",
+        dialog,
+      });
+      expect(useAppDialogStore.getState().request).toBeNull();
+    } finally {
+      useRemoteWorkspaceStore.setState(remote, true);
+      useUIStore.setState(ui, true);
+    }
+  });
+}
+
 for (const remoteReport of [false, true]) {
   test(`drawer bottom bar opens ${remoteReport ? "remote" : "local"} bug report and yields the drawer`, async () => {
     const remote = useRemoteWorkspaceStore.getState();

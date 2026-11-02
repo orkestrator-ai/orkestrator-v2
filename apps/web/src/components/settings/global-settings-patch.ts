@@ -15,6 +15,10 @@ import {
   DEFAULT_SESSION_TITLE_GENERATION_POLICY,
   type SessionTitleGenerationPolicy,
 } from "@orkestrator/protocol/session-title-generation";
+import {
+  DEFAULT_TERMINAL_LINK_TARGET,
+  type TerminalLinkDefaultTarget,
+} from "@orkestrator/protocol/terminal-link-target";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
 import type { GlobalConfig, PreferredEditor, TerminalAppearance } from "@/types";
@@ -45,6 +49,7 @@ export interface CoreFieldsSnapshot {
   sessionTitleGeneration: SessionTitleGenerationPolicy;
   terminalAppearance: TerminalAppearance;
   terminalScrollback: number;
+  terminalLinkDefaultTarget: TerminalLinkDefaultTarget;
   terminalHistoryEnabled: boolean;
   terminalHistoryRetentionMb: number;
   terminalHistoryGlobalRetentionMb: number;
@@ -107,6 +112,7 @@ const ABSENT_WHEN: {
   claudeBackgroundCommandLimitHours: (value) =>
     value === DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
   sessionTitleGeneration: (value) => value === DEFAULT_SESSION_TITLE_GENERATION_POLICY,
+  terminalLinkDefaultTarget: (value) => value === DEFAULT_TERMINAL_LINK_TARGET,
   reviewInstruction: (value) => value === DEFAULT_REVIEW_INSTRUCTION,
   reviewLensPresets: (value) => isShippedReviewLensPresetList(value),
 };

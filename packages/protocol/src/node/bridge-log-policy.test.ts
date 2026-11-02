@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { configureLogger, createLogger, parseLogRecordLine, resetLogger } from "../logger.js";
 import { captureLogs } from "../testing/log-capture.js";
 import { bridgeDebugEnabled } from "./bridge-diagnostics.js";
+import { configureBridgeLogger, LOG_LEVEL_ENV } from "./logger-environment.js";
 import {
   applyBridgeLogPolicy,
   MAX_BRIDGE_LOG_POLICY_BYTES,
@@ -15,6 +16,25 @@ afterEach(() => {
 });
 
 describe("applyBridgeLogPolicy", () => {
+  test.each([
+    ["error", "debug", false],
+    ["debug", "error", true],
+  ] as const)(
+    "retains the consumed startup override %s during live updates",
+    (override, level, diagnostics) => {
+      const env: NodeJS.ProcessEnv = { [LOG_LEVEL_ENV]: override };
+      configureBridgeLogger(env);
+      expect({ ...env }).toEqual({});
+      expect(applyBridgeLogPolicy({ seq: 1, level, areaLevels: {} }, env).body).toMatchObject({
+        diagnostics,
+      });
+      expect(createLogger("bridge.codex").isEnabled("debug")).toBe(diagnostics);
+      expect(applyBridgeLogPolicy({ seq: 2, level, areaLevels: {} }, env).body).toMatchObject({
+        diagnostics,
+      });
+    },
+  );
+
   test.each([
     ["bridge.claude", "prompt.accepted"],
     ["bridge.codex", "app-server.exited"],

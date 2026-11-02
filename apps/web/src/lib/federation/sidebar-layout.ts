@@ -91,7 +91,7 @@ function isMachineComplete(machine: MachineView): boolean {
 
 /** The command node first, then every other machine in the order given. */
 export function defaultMachineOrder(
-  machines: readonly MachineView[],
+  machines: readonly Pick<MachineView, "connectionId">[],
   commandNodeId: string | null,
 ): string[] {
   const ids = machines.map((machine) => machine.connectionId);
@@ -114,11 +114,30 @@ export function registryOrder<M extends MachineView>(
 
 /** Every machine's entry in the stored machine order, plus any not stored yet. */
 export function machineOrder(
-  machines: readonly MachineView[],
+  machines: readonly Pick<MachineView, "connectionId">[],
   layout: Pick<PortalLayout, "machineOrder">,
   commandNodeId: string | null,
 ): string[] {
   return mergeOrder(layout.machineOrder, defaultMachineOrder(machines, commandNodeId));
+}
+
+/**
+ * `items` as the machine lists outside the sidebar show them: the command node
+ * always first, then the stored machine order. Anything the stored order does
+ * not name yet goes after whatever precedes it in `items`.
+ */
+export function inMachineOrder<T>(
+  items: readonly T[],
+  idOf: (item: T) => string,
+  stored: readonly string[],
+  commandNodeId: string | null,
+): T[] {
+  const position = new Map(mergeOrder(stored, items.map(idOf)).map((id, index) => [id, index]));
+  const rank = (item: T) => {
+    const id = idOf(item);
+    return id === commandNodeId ? -1 : (position.get(id) ?? Number.MAX_SAFE_INTEGER);
+  };
+  return [...items].sort((left, right) => rank(left) - rank(right));
 }
 
 /** `machines` in the stored machine order. */
@@ -139,8 +158,8 @@ export function orderMachines<M extends MachineView>(
 
 /** The next stored machine order after dragging one shown machine onto another. */
 export function arrangeMachines(
-  machines: readonly MachineView[],
-  shown: readonly MachineView[],
+  machines: readonly Pick<MachineView, "connectionId">[],
+  shown: readonly Pick<MachineView, "connectionId">[],
   layout: Pick<PortalLayout, "machineOrder">,
   commandNodeId: string | null,
   activeId: string,

@@ -34,7 +34,10 @@ function keep(
 export function useMaintenanceSummaries(entries: MachineEntry[]) {
   const [summaries, setSummaries] = useState<Record<string, MaintenanceSummary>>({});
   const reachable = entries.filter((entry) => entry.maintenance);
-  const signature = reachable.map((entry) => `${entry.key}|${entry.nodeId}`).join(",");
+  const signature = reachable
+    .map((entry) => `${entry.key}|${entry.nodeId}`)
+    .sort()
+    .join(",");
   const targets = useRef(reachable);
   useEffect(() => {
     targets.current = reachable;

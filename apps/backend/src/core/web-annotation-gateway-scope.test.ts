@@ -79,12 +79,6 @@ async function start() {
     bindAddress: "127.0.0.1",
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: TOKEN },
-    logger: {
-      debug: () => undefined,
-      error: () => undefined,
-      info: () => undefined,
-      warn: () => undefined,
-    },
     allowNonTailscaleBind: true,
   });
   const info = await gateway.start();

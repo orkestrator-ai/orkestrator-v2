@@ -1046,7 +1046,6 @@ describe("process and platform command behavior", () => {
       ownerNamespace: "pending-rootless-test",
       fallbackImage: () => "busybox:1.37",
       emit: () => undefined,
-      log: { info: () => undefined, warn: () => undefined },
     });
     const check = service.check("boot");
     try {

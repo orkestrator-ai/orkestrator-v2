@@ -48,8 +48,6 @@ export interface PreviewBaselineHarness {
   close(): Promise<void>;
 }
 
-const silent = { debug: () => undefined, info: () => undefined, warn: () => undefined };
-
 export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarness> {
   const root = await mkdtemp(join(tmpdir(), "ork-preview-baseline-"));
   const pki = join(root, "pki");
@@ -99,7 +97,6 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
     }));
     manager = new PreviewPublicationManager({
       runtime: preview.runtime,
-      logger: { info: () => undefined, warn: () => undefined },
     });
     await manager.start();
 
@@ -121,7 +118,6 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
       // No ORKESTRATOR_GATEWAY_TOKEN: the gateway writes gateway-auth.json,
       // the same file a qualifier reads on a real backend.
       env: {},
-      logger: { ...silent, error: () => undefined },
       allowNonTailscaleBind: true,
       previews: preview.runtime,
     });

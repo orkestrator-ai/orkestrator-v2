@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import {
@@ -11,7 +12,6 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
 import {
-  createLogger,
   createRendererRoot,
   createTempDir,
   decodeResponseBody,
@@ -215,14 +215,13 @@ describe("remote gateway", () => {
   test("honors startup guardrails for disabled, missing, invalid, and non-Tailscale binds", async () => {
     const dataDir = await createTempDir("ork-gateway-guard-");
     const rendererRoot = await createRendererRoot(dataDir);
-    const logger = createLogger();
+    const logs = captureLogs();
 
     const disabled = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
       dataDir,
       rendererRoot,
       env: { ORKESTRATOR_GATEWAY_DISABLED: "1" },
-      logger,
     });
     expect(await disabled.start()).toBeNull();
 
@@ -243,7 +242,6 @@ describe("remote gateway", () => {
         ],
       },
       env: {},
-      logger,
     });
     expect(await noTailscale.start()).toBeNull();
 
@@ -266,11 +264,19 @@ describe("remote gateway", () => {
         ],
       },
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger,
     });
     gateways.push(loopbackFallback);
     await expect(loopbackFallback.start()).resolves.toMatchObject({ bindAddress: "127.0.0.1" });
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("falling back to 127.0.0.1"));
+    expect(
+      logs
+        .records()
+        .some(
+          (record) =>
+            record.event === "tailscale.no-address-fallback" &&
+            record.fields?.bindAddress === "127.0.0.1",
+        ),
+    ).toBe(true);
+    logs.restore();
 
     const nonTailscaleFallback = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -279,7 +285,6 @@ describe("remote gateway", () => {
       fallbackBindAddress: "0.0.0.0",
       interfaces: {},
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger,
     });
     await expect(nonTailscaleFallback.start()).rejects.toThrow(
       "Refusing to bind gateway to non-Tailscale address",
@@ -291,7 +296,6 @@ describe("remote gateway", () => {
       rendererRoot,
       bindAddress: "127.0.0.1",
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger,
     });
     await expect(nonTailscaleBind.start()).rejects.toThrow(
       "Refusing to bind gateway to non-Tailscale address",
@@ -303,7 +307,6 @@ describe("remote gateway", () => {
       rendererRoot,
       bindAddress: "100.88.12.3",
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456", ORKESTRATOR_GATEWAY_PORT: "nope" },
-      logger,
     });
     await expect(invalidPort.start()).rejects.toThrow("Invalid gateway port");
   });
@@ -531,12 +534,6 @@ describe("remote gateway", () => {
       bindAddress: "127.0.0.1",
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: {
-        debug: mock(() => undefined),
-        error: mock(() => undefined),
-        info: mock(() => undefined),
-        warn: mock(() => undefined),
-      },
       allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
@@ -696,8 +693,8 @@ describe("remote gateway", () => {
   });
 
   test("treats malformed login bodies and cookies as unauthenticated input", async () => {
-    const logger = createLogger();
-    const { info } = await startGateway({ logger });
+    const logs = captureLogs();
+    const { info } = await startGateway({});
     for (const body of ["{", "null"]) {
       const response = await requestUrl(`${info.url}__orkestrator/login`, {
         method: "POST",
@@ -719,7 +716,8 @@ describe("remote gateway", () => {
       headers: { cookie: "orkestrator_gateway_auth=%E0%A4%A" },
     });
     expect(malformedCookie.status).toBe(401);
-    expect(logger.error).not.toHaveBeenCalled();
+    expect(logs.records().filter((record) => record.level === "error")).toEqual([]);
+    logs.restore();
   });
 
   test("uses a loopback-only single-use exchange for agent-test browser sessions", async () => {
@@ -1288,12 +1286,6 @@ describe("remote gateway", () => {
       bindAddress: "127.0.0.1",
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: {
-        debug: mock(() => undefined),
-        error: mock(() => undefined),
-        info: mock(() => undefined),
-        warn: mock(() => undefined),
-      },
       allowNonTailscaleBind: true,
     });
     gateways.push(gateway);

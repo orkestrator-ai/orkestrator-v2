@@ -1961,7 +1961,7 @@ exit 0
             await waitForCondition(
               () =>
                 errorLog.mock.calls.some(([message]) =>
-                  String(message).includes("lifecycle.failed operation=\"background start\""),
+                  String(message).includes('lifecycle.failed operation="background start"'),
                 ),
               "queued start rejection",
             );

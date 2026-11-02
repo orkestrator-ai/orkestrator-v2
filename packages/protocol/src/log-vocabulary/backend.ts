@@ -35,6 +35,10 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
       "shutdown.signal-received":
         "A signal started shutdown, which tells a clean quit from the backend being killed.",
       "shutdown.finished": "Shutdown finished, and the process exits with `code`.",
+      "port-policy.second-backend":
+        "Another backend serves the default data directory, so this one avoids its ports.",
+      "port-policy.serve-on-free-port":
+        "--tailscale-serve is on a free gateway port; pass --port with --strict-gateway-port to keep one.",
     },
   },
 });

@@ -694,13 +694,6 @@ type MetricsSnapshot = {
   };
 };
 
-const silentLogger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-};
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function runCase(
@@ -731,7 +724,6 @@ export async function runCase(
     bindAddress: "127.0.0.1",
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: token },
-    logger: silentLogger,
     allowNonTailscaleBind: true,
     compression: transport === "on" ? "on" : "body",
     keepaliveMs: options.keepaliveMs,

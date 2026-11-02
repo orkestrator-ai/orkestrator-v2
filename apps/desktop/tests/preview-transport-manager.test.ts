@@ -96,7 +96,6 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     tunnel = new PreviewTunnelServer({
       runtime: harness.runtime,
       metrics: new PreviewMetrics(),
-      logger: { debug: () => undefined, warn: () => undefined },
     });
     gateway = createServer((_request, response) => response.end());
     gateway.on("upgrade", (request, socket, head) => {
@@ -180,7 +179,6 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       partitionFor: () => "persist:release-failure",
       sessionFor: () => new FakeSession(),
       clientKey: "release-failure",
-      logger: { warn },
     });
     function harnessCommand<T>(command: string, args: Record<string, unknown>): Promise<T> {
       const commands = createCommandRegistry();

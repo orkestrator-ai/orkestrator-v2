@@ -901,7 +901,6 @@ describe("remote gateway", () => {
         port: 0,
         compression: "body",
         env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-        logger: { debug() {}, error() {}, info() {}, warn() {} },
         allowNonTailscaleBind: true,
       });
       const info = await gateway.start();
@@ -1368,7 +1367,6 @@ describe("remote gateway", () => {
         bindAddress: "127.0.0.1",
         port: 0,
         env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-        logger: { debug() {}, error() {}, info() {}, warn() {} },
         allowNonTailscaleBind: true,
       });
       const info = await gateway.start();
@@ -1423,12 +1421,6 @@ describe("remote gateway", () => {
       bindAddress: "127.0.0.1",
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: {
-        debug: mock(() => undefined),
-        error: mock(() => undefined),
-        info: mock(() => undefined),
-        warn: mock(() => undefined),
-      },
       allowNonTailscaleBind: true,
     });
     gateways.push(gateway);

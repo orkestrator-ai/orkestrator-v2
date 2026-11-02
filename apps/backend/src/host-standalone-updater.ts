@@ -26,6 +26,9 @@ import {
   type StandaloneLayout,
 } from "@orkestrator/protocol/node/standalone-service";
 import type { HostMaintenanceService } from "./core/host-maintenance.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("updater");
 
 /**
  * The executor of a standalone backend installed with `orkestrator service
@@ -79,7 +82,6 @@ export interface StandaloneUpdaterOptions {
   now?: () => number;
   restartDelayMs?: number;
   idlePollMs?: number;
-  log?: Pick<Console, "info" | "warn">;
 }
 
 export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
@@ -90,7 +92,6 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
   const now = options.now ?? Date.now;
   const restartDelayMs = options.restartDelayMs ?? HOST_UPDATE_RESTART_DELAY_MS;
   const idlePollMs = options.idlePollMs ?? IDLE_POLL_MS;
-  const log = options.log ?? console;
   let handledCheckId: string | null = null;
   const handledJobs = new Set<string>();
   const running = new Map<string, AbortController>();
@@ -216,7 +217,7 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
       await installLauncher(layout, releaseDir);
       await activateRelease(layout, target);
       await requestRestart(layout);
-      log.info(`[Updater] Restarting into ${target}`);
+      log.info("standalone.restarting", { target });
       options.shutdown();
     } catch (error) {
       if (!signal.aborted) report({ state: "failed", error: message(error) });

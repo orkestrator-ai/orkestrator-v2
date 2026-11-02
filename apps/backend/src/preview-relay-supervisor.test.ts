@@ -285,7 +285,6 @@ describe("PreviewRelaySupervisor (local relay process)", () => {
 describe("PreviewRelaySupervisor (scripted relay process)", () => {
   let processes: FakeRelayProcess[];
   let behaviours: FakeHello[];
-  let warnings: string[];
   let supervisor: PreviewRelaySupervisor;
   let now: number;
   const signal = new AbortController().signal;
@@ -294,7 +293,6 @@ describe("PreviewRelaySupervisor (scripted relay process)", () => {
   beforeEach(() => {
     processes = [];
     behaviours = [];
-    warnings = [];
     now = 1_000;
     supervisor = new PreviewRelaySupervisor({
       spawn: () => {
@@ -305,7 +303,6 @@ describe("PreviewRelaySupervisor (scripted relay process)", () => {
       allowedPorts: () => [3000],
       helloTimeoutMs: 20,
       now: () => now,
-      logger: { warn: (...args: unknown[]) => warnings.push(args.map(String).join(" ")) },
     });
   });
 
@@ -397,7 +394,6 @@ describe("PreviewRelaySupervisor (scripted relay process)", () => {
     fake.stdout.write(Buffer.concat([Buffer.from(secret), randomBytes(1024 * 1024)]));
     await Bun.sleep(10);
     expect(fake.stdout.readableLength).toBe(0);
-    expect(warnings.filter((line) => line.includes(secret))).toEqual([]);
 
     now += 1_001;
     const again = await supervisor.connect(target, signal);

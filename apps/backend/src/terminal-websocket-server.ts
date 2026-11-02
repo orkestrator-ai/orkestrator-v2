@@ -20,6 +20,9 @@ import {
   TerminalWebSocketControlFrameError,
   type TerminalWebSocketServerControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("gateway.terminal");
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -97,7 +100,6 @@ export type TerminalWebSocketServerOptions = {
   tokenMatches(request: IncomingMessage, suppliedToken?: string): boolean;
   credentialExpiresAt?(request: IncomingMessage, suppliedToken?: string): number | null;
   originAllowed(request: IncomingMessage): boolean;
-  logger: Pick<Console, "debug" | "warn" | "error">;
   authTimeoutMs?: number;
   maxSockets?: number;
   maxChannelsPerSocket?: number;
@@ -249,7 +251,7 @@ export class TerminalWebSocketGateway {
       });
     } catch {
       this.upgradeSockets.delete(socket);
-      this.options.logger.debug("[TerminalWebSocket] Upgrade rejected");
+      log.debug("upgrade-rejected");
       if (!socket.destroyed) this.rejectUpgrade(socket, 400, "Bad Request");
     }
     return true;
@@ -327,7 +329,9 @@ export class TerminalWebSocketGateway {
     this.options.metrics?.recordTerminalWebSocketOpened();
     ws.binaryType = "arraybuffer";
     ws.on("message", (data, isBinary) => this.onMessage(state, request, data, isBinary));
-    ws.on("error", (error) => this.options.logger.debug("[TerminalWebSocket] Socket error", error));
+    ws.on("error", (error) =>
+      log.debug("socket-error", () => ({ error: formatLogError(error, { stack: false }) })),
+    );
     ws.once("close", () => this.dispose(state));
     if (authenticated) {
       this.ready(state);
@@ -728,7 +732,7 @@ export class TerminalWebSocketGateway {
       });
     } catch (error) {
       this.retireChannel(state, channel);
-      this.options.logger.warn("[TerminalWebSocket] Subscription failed", error);
+      log.warn("subscription-failed", { error: formatLogError(error) });
       this.sendControl(state, {
         type: "error",
         code: "terminal-unavailable",
@@ -998,7 +1002,7 @@ export class TerminalWebSocketGateway {
           );
         },
         () => {
-          this.options.logger.warn("[TerminalWebSocket] Terminal operation failed");
+          log.warn("operation-failed");
           this.operationResult(
             options.state,
             options.channelId,

@@ -49,7 +49,6 @@ describe("PreviewTunnelServer", () => {
   let port: number;
   let serviceId: string;
   const clients: PreviewWebSocket[] = [];
-  const logs: unknown[][] = [];
 
   beforeEach(async () => {
     fixture = await startPreviewFixture({ marker: "tunnel-app" });
@@ -68,10 +67,6 @@ describe("PreviewTunnelServer", () => {
     tunnel = new PreviewTunnelServer({
       runtime: harness.runtime,
       metrics: harness.runtime.metrics,
-      logger: {
-        debug: (...args: unknown[]) => void logs.push(args),
-        warn: (...args: unknown[]) => void logs.push(args),
-      },
       helloTimeoutMs: 200,
     });
     server = createServer((_request, response) => response.end("not a tunnel"));
@@ -83,7 +78,6 @@ describe("PreviewTunnelServer", () => {
   });
 
   afterEach(async () => {
-    logs.length = 0;
     for (const client of clients.splice(0)) client.terminate();
     tunnel.close();
     server.closeAllConnections();
@@ -309,7 +303,6 @@ describe("PreviewTunnelServer", () => {
     tunnel = new PreviewTunnelServer({
       runtime: harness.runtime,
       metrics: harness.runtime.metrics,
-      logger: console,
       upstream: { relayConnect: async () => upstream },
       pingIntervalMs: options.pingIntervalMs,
     });
@@ -694,7 +687,6 @@ describe("PreviewTunnelServer", () => {
     harness.runtime.registry.flushEvent();
 
     const recorded = JSON.stringify({
-      logs,
       diagnostics: harness.runtime.diagnostics(),
       events: harness.events,
       stats: tunnel.stats(),

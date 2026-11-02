@@ -7,6 +7,9 @@ import {
   relayHttp,
   relayUpgrade,
 } from "./core/nodes/index.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("gateway");
 
 /** Routes a client grant (leaf workspace) may use: the client API only. */
 const GRANT_ALLOWED_PATHS = [
@@ -641,7 +644,7 @@ export class GatewayAuth {
         jsonResponse(response, 400, { error: error.message });
         return;
       }
-      this.ctx.logger.error("[RemoteGateway] Failed to persist gateway token:", error);
+      log.error("auth-token.persist-failed", { error: formatLogError(error) });
       jsonResponse(response, 500, { error: "Unable to persist gateway token" });
     }
   }

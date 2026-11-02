@@ -97,7 +97,6 @@ async function setup(
     run,
     restartDelayMs: 30,
     idlePollMs: 5,
-    log: { info: () => undefined, warn: () => undefined },
   });
   updater.start();
   cleanups.push(() => {

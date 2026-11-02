@@ -19,6 +19,9 @@ import type {
   GatewayEventClient,
   GatewayReconcileReason,
 } from "./gateway-internals.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("gateway");
 
 /** SSE fan-out, the replay handshake, and bounded per-client buffering. */
 export class GatewayEvents {
@@ -379,9 +382,7 @@ export class GatewayEvents {
   }
 
   dropBufferedClient(client: EventClientWriter, event: string, projectedBytes: number): void {
-    this.ctx.logger.warn(
-      `[RemoteGateway] Dropping an event-stream client buffering ${projectedBytes} bytes; it will reconnect and refetch`,
-    );
+    log.warn("events.client-dropped", { projectedBytes });
     this.ctx.clients.delete(client);
     this.ctx.metrics.recordDroppedEventClient(event);
     this.ctx.metrics.recordStreamDropped();

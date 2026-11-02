@@ -6,6 +6,10 @@ import {
   TailscaleServeConflictError,
   TailscaleServeManager,
 } from "./tailscale-serve.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("gateway.tailscale");
 
 type ServeManager = Pick<TailscaleServeManager, "start" | "stop"> &
   Partial<Pick<TailscaleServeManager, "clearHttpsPort" | "stopOwned">>;
@@ -86,7 +90,6 @@ export class ManagedWebClient {
   constructor(
     private readonly serve: ServeManager,
     private readonly httpsPort = 443,
-    private readonly logger: Pick<Console, "error"> = console,
     private readonly ownershipStore: ManagedWebClientOwnershipStore = createVolatileOwnershipStore(),
   ) {}
 
@@ -138,7 +141,10 @@ export class ManagedWebClient {
         this.url = null;
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
-        this.logger.error("[TailscaleServe] Failed to disable web access:", error);
+        log.error("web-access.disable-failed", {
+          ...classifyCommandFailure(error),
+          error: formatLogError(error),
+        });
       }
       return this.getStatus();
     }
@@ -176,14 +182,20 @@ export class ManagedWebClient {
       this.url = null;
       this.error = error instanceof Error ? error.message : String(error);
       this.resetAvailable = error instanceof TailscaleServeConflictError && error.resetAvailable;
-      this.logger.error("[TailscaleServe] Failed to enable web access:", error);
+      log.error("web-access.enable-failed", {
+        ...classifyCommandFailure(error),
+        error: formatLogError(error),
+      });
       // Serve can be configured successfully before URL discovery fails. In
       // that case, remove the listener so a retry is safe and deterministic.
       try {
         await this.serve.stop();
         if (ownership) await this.ownershipStore.clear();
       } catch (cleanupError) {
-        this.logger.error("[TailscaleServe] Failed to clean up web access:", cleanupError);
+        log.error("web-access.cleanup-failed", {
+          ...classifyCommandFailure(cleanupError),
+          error: formatLogError(cleanupError),
+        });
       }
     }
     return this.getStatus();
@@ -206,7 +218,10 @@ export class ManagedWebClient {
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
       this.resetAvailable = retryAvailable;
-      this.logger.error("[TailscaleServe] Failed to reset web access:", error);
+      log.error("web-access.reset-failed", {
+        ...classifyCommandFailure(error),
+        error: formatLogError(error),
+      });
       return this.getStatus();
     }
 
@@ -222,7 +237,6 @@ export function createManagedWebClient(
   return new ManagedWebClient(
     new TailscaleServeManager(executable),
     httpsPort,
-    console,
     createFileOwnershipStore(path.join(dataDir, "managed-web-client.json")),
   );
 }

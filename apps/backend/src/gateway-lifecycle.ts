@@ -22,6 +22,9 @@ import {
 } from "./gateway-internals.js";
 import type { ListenerKind, GatewayStartInfo } from "./gateway-internals.js";
 import { DEFAULT_CONTROL_MCP_PORT } from "./fixed-ports.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("gateway");
 
 /**
  * Where an accepted request goes: `GatewayAuth.handle`. `GatewayAuth` calls
@@ -43,7 +46,7 @@ export class GatewayLifecycle {
 
   async start(): Promise<GatewayStartInfo | null> {
     if (this.ctx.env.ORKESTRATOR_GATEWAY_DISABLED === "1") {
-      this.ctx.logger.info("[RemoteGateway] Disabled by ORKESTRATOR_GATEWAY_DISABLED=1");
+      log.info("disabled", { source: "ORKESTRATOR_GATEWAY_DISABLED" });
       return null;
     }
 
@@ -54,7 +57,7 @@ export class GatewayLifecycle {
       tailscaleBindAddress ??
       this.ctx.fallbackBindAddress;
     if (!bindAddress && !this.ctx.controlBindAddress && this.ctx.loopbackClientPort === undefined) {
-      this.ctx.logger.warn("[RemoteGateway] No Tailscale address found; gateway not started");
+      log.warn("tailscale.no-address");
       return null;
     }
     const usingFallback =
@@ -63,9 +66,7 @@ export class GatewayLifecycle {
       !tailscaleBindAddress &&
       this.ctx.fallbackBindAddress === bindAddress;
     if (usingFallback) {
-      this.ctx.logger.warn(
-        `[RemoteGateway] No Tailscale address found; falling back to ${this.ctx.fallbackBindAddress}`,
-      );
+      log.warn("tailscale.no-address-fallback", { bindAddress: this.ctx.fallbackBindAddress });
     }
     const safeLoopbackFallback =
       usingFallback && bindAddress !== undefined && isLoopbackAddress(bindAddress);
@@ -98,7 +99,7 @@ export class GatewayLifecycle {
         this.ctx.controlPort ?? 0,
         "control",
       );
-      this.ctx.logger.info(`[BackendControl] Listening on ${controlListener.url}`);
+      log.info("control.listening", { url: controlListener.url });
     }
 
     let browserListener: { bindAddress: string; port: number; url: string } | null = null;
@@ -107,18 +108,19 @@ export class GatewayLifecycle {
     if (bindAddress) {
       try {
         browserListener = await this.listenWithPortFallback(bindAddress, port);
-        this.ctx.logger.info(`[RemoteGateway] Listening on ${browserListener.url}`);
+        log.info("browser.listening", { url: browserListener.url });
       } catch (error) {
         if (!controlListener && this.ctx.loopbackClientPort === undefined) throw error;
         browserFailure = error;
         browserError = error instanceof Error ? error.message : String(error);
-        this.ctx.logger.error(`[RemoteGateway] Browser listener unavailable: ${browserError}`);
+        log.error("browser.unavailable", { detail: browserError });
       }
     } else {
       browserError = "No Tailscale address was found";
-      this.ctx.logger.warn(
-        `[RemoteGateway] ${browserError}; ${controlListener ? "desktop control" : "loopback client"} listener remains available`,
-      );
+      log.warn("browser.unavailable-degraded", {
+        detail: browserError,
+        remaining: controlListener ? "desktop-control" : "loopback-client",
+      });
     }
 
     // The SSH forwarding target. An additional listener, never a change to
@@ -134,14 +136,14 @@ export class GatewayLifecycle {
           "browser",
         );
         this.ctx.loopbackClientUrl = loopbackClientListener.url;
-        this.ctx.logger.info(
-          `[RemoteGateway] Loopback client gateway listening on ${loopbackClientListener.url}`,
-        );
+        log.info("loopback.listening", { url: loopbackClientListener.url });
       } catch (error) {
         loopbackClientError = error instanceof Error ? error.message : String(error);
-        this.ctx.logger.error(
-          `[RemoteGateway] Loopback client gateway unavailable on ${LOOPBACK_CLIENT_BIND_ADDRESS}:${this.ctx.loopbackClientPort}: ${loopbackClientError}`,
-        );
+        log.error("loopback.unavailable", {
+          address: LOOPBACK_CLIENT_BIND_ADDRESS,
+          port: this.ctx.loopbackClientPort,
+          detail: loopbackClientError,
+        });
       }
     }
 
@@ -153,7 +155,7 @@ export class GatewayLifecycle {
       }
       return null;
     }
-    this.ctx.logger.info(`[RemoteGateway] Auth token stored at ${this.ctx.authFile}`);
+    log.info("auth-token.stored", { file: this.ctx.authFile });
 
     return {
       ...primaryListener,
@@ -184,9 +186,7 @@ export class GatewayLifecycle {
       try {
         const listener = await this.listen(bindAddress, candidatePort, "browser");
         if (candidatePort !== preferredPort) {
-          this.ctx.logger.warn(
-            `[RemoteGateway] Port ${preferredPort} was in use; listening on ${candidatePort} instead`,
-          );
+          log.warn("port.fallback", { preferredPort, port: candidatePort });
         }
         return listener;
       } catch (error) {
@@ -195,9 +195,7 @@ export class GatewayLifecycle {
     }
 
     const listener = await this.listen(bindAddress, 0, "browser");
-    this.ctx.logger.warn(
-      `[RemoteGateway] Port ${preferredPort} and nearby ports were in use; listening on ${listener.port} instead`,
-    );
+    log.warn("port.fallback-distant", { preferredPort, port: listener.port });
     return listener;
   }
 
@@ -222,7 +220,10 @@ export class GatewayLifecycle {
   ): Promise<{ bindAddress: string; port: number; url: string }> {
     const server = createServer((request, response) => {
       this.router.handle(request, response, listenerKind).catch((error: unknown) => {
-        this.ctx.logger.error("[RemoteGateway] Request failed:", error);
+        log.throttled("error", "request.failed", {
+          error,
+          fields: () => ({ error: formatLogError(error) }),
+        });
         if (!response.headersSent) {
           jsonResponse(response, 500, {
             error: error instanceof Error ? error.message : String(error),
@@ -245,7 +246,7 @@ export class GatewayLifecycle {
         if (this.router.handleUpgrade?.(request, socket, head)) return;
         if (!this.ctx.terminalWebSocket.handleUpgrade(request, socket, head)) socket.destroy();
       } catch {
-        this.ctx.logger.warn("[RemoteGateway] WebSocket upgrade failed");
+        log.warn("websocket.upgrade-failed");
         socket.destroy();
       }
     });

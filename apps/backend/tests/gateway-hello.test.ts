@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test } from "bun:test";
 import { createServer, type Server } from "node:http";
 import {
@@ -9,7 +10,6 @@ import {
 import type { BackendHelloIdentity } from "../src/gateway";
 import {
   auxiliaryServers,
-  createLogger,
   openTerminalSocket,
   requestUrl,
   startGateway,
@@ -220,20 +220,16 @@ describe("loopback client gateway", () => {
     await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve));
     const address = occupied.address();
     const busyPort = typeof address === "object" && address ? address.port : 0;
-    const logger = createLogger();
+    const logs = captureLogs();
 
     const { info } = await startGateway({
       loopbackClientPort: busyPort,
       backendHello: async () => identity,
-      logger,
     });
     expect(info.loopbackClientUrl).toBeUndefined();
     expect(info.loopbackClientError).toBeTruthy();
-    expect(
-      (logger.error.mock.calls as unknown[][]).some((call) =>
-        String(call[0]).includes("Loopback client gateway unavailable"),
-      ),
-    ).toBe(true);
+    expect(logs.records().some((record) => record.event === "loopback.unavailable")).toBe(true);
+    logs.restore();
 
     const hello = await requestUrl(helloUrl(info.url), {
       headers: { authorization: `Bearer ${info.token}` },

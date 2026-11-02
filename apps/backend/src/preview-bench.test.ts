@@ -71,7 +71,6 @@ describe.skipIf(!enabled)("preview route latency (loopback, one machine)", () =>
     tunnel = new PreviewTunnelServer({
       runtime: harness.runtime,
       metrics: harness.runtime.metrics,
-      logger: { debug: () => undefined, warn: () => undefined },
     });
     gateway = createServer((_request, response) => response.end());
     gateway.on("upgrade", (request, socket, head) => {
@@ -97,7 +96,6 @@ describe.skipIf(!enabled)("preview route latency (loopback, one machine)", () =>
     }));
     manager = new PreviewPublicationManager({
       runtime: harness.runtime,
-      logger: { info: () => undefined, warn: () => undefined },
     });
     await manager.start();
     publishedPort = manager.status().listening!.port;

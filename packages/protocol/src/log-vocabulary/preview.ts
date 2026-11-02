@@ -22,6 +22,19 @@ export const PREVIEW_LOG_AREAS = defineLogAreas({
       "transport.close-failed": "A preview transport could not be closed.",
       "ca-bundle.read-failed": "The upstream CA bundle could not be read.",
       "publication.start-failed": "Private preview publication did not start.",
+      "publication.reconfigure-failed": "Preview publication could not be reconfigured.",
+      "publication.listening": "Private preview origins are listening.",
+      "certificate.reloaded": "The preview certificate was reloaded.",
+      "access.revoked-close-failed":
+        "A revoked preview resource could not be closed. Error class only.",
+      "registry.invalid-definition": "An invalid stored preview service definition was ignored.",
+      "registry.environment-reconcile-failed":
+        "An environment's preview services could not be reconciled.",
+      "registry.resolver-failed": "A preview resolver failed. Error class only.",
+      "registry.revocation-listener-failed":
+        "A preview revocation listener threw. Error class only.",
+      "registry.change-emit-failed":
+        "A preview change event could not be emitted. Error class only.",
       ...THROTTLE_LOG_EVENTS,
     },
   },

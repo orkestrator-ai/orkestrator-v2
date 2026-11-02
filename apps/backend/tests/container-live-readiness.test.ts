@@ -1049,12 +1049,10 @@ describe("C22 live host-service reply", () => {
       });
       cleanups.push(() => other.stop(true));
 
-      const messages: string[] = [];
       const service = new ContainerHostReachabilityService({
         servicePort: () => servicePort,
         ownerNamespace: scene.owner,
         fallbackImage: () => IMAGE,
-        log: { info: (line) => messages.push(line), warn: (line) => messages.push(line) },
       });
       const host = await service.check("manual");
       const environment = lifecycleEnvironment({ id: `env-${RUN}-c22` });

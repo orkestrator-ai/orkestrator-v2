@@ -32,7 +32,6 @@ function fixture() {
     tailscaleServe: false,
     tailscaleServePort: 443,
     createTailscaleServe: () => serve,
-    logger: { info: mock(() => {}), error: mock(() => {}) },
   };
   return { gateway, serve, managed, deps };
 }

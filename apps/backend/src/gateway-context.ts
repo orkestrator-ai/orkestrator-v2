@@ -63,7 +63,6 @@ export class GatewayContext {
   readonly nodeHooks: OrkestratorGatewayOptions["nodeHooks"];
   readonly env: NodeJS.ProcessEnv;
   readonly interfaces?: NetworkInterfaceMap;
-  readonly logger: Pick<Console, "debug" | "error" | "info" | "warn">;
   readonly allowNonTailscaleBind: boolean;
   readonly webClientControl: OrkestratorGatewayOptions["webClientControl"];
   readonly hostUpdaterControl: OrkestratorGatewayOptions["hostUpdaterControl"];
@@ -135,7 +134,6 @@ export class GatewayContext {
     this.nodeHooks = options.nodeHooks;
     this.env = options.env ?? process.env;
     this.interfaces = options.interfaces;
-    this.logger = options.logger ?? console;
     this.allowNonTailscaleBind = options.allowNonTailscaleBind ?? false;
     this.webClientControl = options.webClientControl;
     this.hostUpdaterControl = options.hostUpdaterControl;
@@ -150,7 +148,6 @@ export class GatewayContext {
       this.previewTunnel = new PreviewTunnelServer({
         runtime: this.previews,
         metrics: this.previewMetrics,
-        logger: options.logger ?? console,
       });
       const tunnel = this.previewTunnel;
       this.previews.tunnelReady = () => tunnel.listening && this.servers.size > 0;
@@ -197,7 +194,6 @@ export class GatewayContext {
           request.headers.origin &&
           this.credentials.isOriginAllowed(request, request.headers.origin),
         ),
-      logger: this.logger,
       metrics: this.metrics,
       maxSockets: options.terminalWebSocket?.maxSockets,
       maxChannelsPerSocket: options.terminalWebSocket?.maxChannelsPerSocket,

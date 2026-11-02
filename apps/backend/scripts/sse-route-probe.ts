@@ -327,7 +327,6 @@ export async function startProbeServer(options: ProbeServerOptions): Promise<Pro
     keepaliveMs: options.keepaliveMs,
     allowNonTailscaleBind: true,
     env: { ORKESTRATOR_GATEWAY_TOKEN: token },
-    logger: { debug() {}, info() {}, warn() {}, error() {} },
   });
   const info = await gateway.start();
   if (!info) throw new Error("The probe gateway did not start");

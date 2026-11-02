@@ -916,7 +916,6 @@ describe("standalone Serve crash recovery", () => {
         tailscaleServePort: 8443,
         standaloneServeOwnership: createStandaloneServeOwnershipStore(dataDir),
         createTailscaleServe: () => manager,
-        logger: { info() {}, error() {} },
       });
       expect(result.info.browserUrl).toStartWith("https://workstation.example.ts.net");
       expect(

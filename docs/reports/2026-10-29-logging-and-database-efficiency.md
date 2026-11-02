@@ -1529,6 +1529,8 @@ What a line no longer holds:
   no longer hold the environment's name, which can come from a prompt. The id stays.
 - The non-keyed fallback sweep in `core/index.ts` now uses `log.throttled`, so a lasting fault
   writes one line and a summary per minute instead of a line every two seconds.
+- `[gateway] request.failed` is throttled too, per error kind. This was the per-request stack
+  listed under L5; the first occurrence keeps its frames and the repeats are a count.
 
 Lines that gained evidence: a site that logged only an error's name or code now also has
 its frames, and a site logging a raw object now has a bounded form of it, through

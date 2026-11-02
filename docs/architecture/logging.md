@@ -753,6 +753,11 @@ record what was observed at the time and are left as they are.
 | `[prompt-queue]`, `[pty]` | `[tmux] queue.*`, `[terminal] pty.*` |
 | `[backend]` design lines, `[design-renderer]` | `[design] <event>` |
 | `[backend]` reaper lines | `[local-server] reaper.*` |
+| `[RemoteGateway]`, `[BackendControl]` | `[gateway] <event>` |
+| `[TerminalWebSocket]` | `[gateway.terminal] <event>` |
+| `[TailscaleServe]` | `[gateway.tailscale] <event>`, `[backend] shutdown.step-failed` |
+| `[previews]` | `[preview] publication.*`, `access.*`, `registry.*`, `certificate.reloaded` |
+| `[Updater] Restarting into` | `[updater] standalone.restarting` |
 | `[Backend] Event loop stalled for N ms` | `[event-loop] stalled lagMs=N` |
 | `[claude-bridge]`, `[session-manager]`, `[session]`, `[events]`, `[config]`, `[mcp]`, `[plugins]`, `[plugin-config]`, `[mcp-config]`, `[event-emitter]` | `[bridge.claude]` |
 | `[codex-bridge]`, `[codex-bridge][app-server:N]` | `[bridge.codex]`, with `generation=N` for the second |
@@ -766,20 +771,16 @@ record what was observed at the time and are left as they are.
 
 ## What is left in the backend
 
-`console.*` was the easy part to count. What remains does not show in the ratchet:
-
 - **`storage-config.ts`** keeps its one raw site until the live settings work merges,
   which owns that file along with `log-policy-*.ts`, `backend-runtime.ts` and
   `commands-registry-servers.ts`.
-- **Injected loggers** still receive `console` from `main.ts`, so they write their
-  old text and tags: `gateway-*.ts`, `terminal-websocket-server.ts`,
-  `managed-web-client.ts`, `startup-services.ts`, `gateway-port-policy.ts`,
-  `host-standalone-updater.ts`, `preview-publication.ts`, `preview-tunnel-server.ts`,
-  `preview-relay-supervisor.ts`, `core/preview-access.ts`,
-  `core/preview-service-registry.ts` and `core/transcript-artifacts/` (`runtime.ts`,
-  `preview-runner.ts`, `content-server.ts`). `apps/backend/**` stays excluded from the
-  lint rule until these go, and 22 of the sites the ratchet still counts are
-  `bounded-console.ts` and `scripts/`, whose console is the product.
+- **An optional `logger`** remains on `core/transcript-artifacts/` (`runtime.ts`,
+  `preview-runner.ts`, `content-server.ts`). Nothing in production passes one, so those
+  warnings are silent today. Moving them onto the logger would add lines rather than move
+  them, which is a decision for the cleanup slice.
+- `apps/backend/**` stays excluded from the lint rule until `storage-config.ts` moves.
+  22 of the 23 sites the ratchet counts are `bounded-console.ts` and `scripts/`, whose
+  console is the product. The fixture processes now write to `process.stdout` directly.
 - **`detail` fields:** the PR monitor, auto-merge and diff stats services report through
   an `onWarning(message, error)` callback, so their lines carry the service's own text in
   `detail`. It holds identifiers only. Static events there would mean changing those

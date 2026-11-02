@@ -86,7 +86,7 @@ const standaloneLogging = installStandaloneBackendLogging(options);
 // policy service keeps this live from here on.
 applyLogDetail(readApplicationLogPolicy(options.dataDir).detail);
 log.info("starting", { version: APP_VERSION });
-await logGatewayPortPolicy(options, process.env, console, liveInstanceIn);
+await logGatewayPortPolicy(options, process.env, liveInstanceIn);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
   dataDir: options.dataDir,
   runtimeFlavor: options.runtimeFlavor,
@@ -181,7 +181,6 @@ const { gatewayInfo, info, tailscaleServe } = await startGatewayServices({
   tailscaleServePort: options.tailscaleServePort,
   standaloneServeOwnership: createStandaloneServeOwnershipStore(options.dataDir),
   createTailscaleServe: () => new TailscaleServeManager(options.tailscaleExecutable),
-  logger: console,
 });
 
 // Command nodes register these on their leaves, so a client that loaded this
@@ -217,7 +216,7 @@ backend.setTranscriptArtifactApplicationOrigins({
 // Private preview origins are optional: a missing domain or certificate only
 // disables browser publication and never blocks the backend from serving.
 const previewPublication = backend.previews
-  ? new PreviewPublicationManager({ runtime: backend.previews, logger: console })
+  ? new PreviewPublicationManager({ runtime: backend.previews })
   : null;
 await previewPublication?.start().catch((error: unknown) => {
   previewLog.warn("publication.start-failed", { error: formatLogError(error) });

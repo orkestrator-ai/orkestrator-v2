@@ -21,6 +21,9 @@ import type {
   PreviewRevocationReason,
   PreviewServiceRegistry,
 } from "./preview-service-registry.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("preview");
 
 export type PreviewAccessRevocationReason =
   PreviewRevocationReason | "credential-rotated" | "operator-revoked" | "released" | "expired";
@@ -40,7 +43,6 @@ export interface PreviewAccessOptions {
   issuanceEnabled: () => boolean;
   publication?: () => PreviewPublicationPort | null;
   sweepIntervalMs?: number;
-  logger?: Pick<Console, "warn">;
 }
 
 interface TrackedResource {
@@ -113,14 +115,12 @@ export class PreviewAccessService {
   private readonly now: () => number;
   private readonly sweepTimer: ReturnType<typeof setInterval>;
   private readonly unsubscribe: () => void;
-  private readonly logger: Pick<Console, "warn">;
   private disposed = false;
   private readonly counters = { issued: 0, revoked: 0, expired: 0, denied: 0 };
 
   constructor(private readonly options: PreviewAccessOptions) {
     this.limits = options.limits ?? PREVIEW_LIMITS;
     this.now = options.now ?? Date.now;
-    this.logger = options.logger ?? console;
     this.unsubscribe = options.registry.onRevoked((serviceIds, reason) => {
       this.revokeServices(serviceIds, reason);
     });
@@ -529,9 +529,9 @@ export class PreviewAccessService {
       try {
         resource.close(reason);
       } catch (error) {
-        this.logger.warn(
-          `[previews] Closing a revoked resource failed: ${error instanceof Error ? error.name : "error"}`,
-        );
+        log.warn("access.revoked-close-failed", {
+          error: formatLogError(error, { message: false }),
+        });
       }
     }
     // Keep a bounded tombstone so a late request gets `access-expired`, then forget it.

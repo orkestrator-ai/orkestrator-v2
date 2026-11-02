@@ -440,8 +440,8 @@ export class NativeAgentInteractionTracker {
 
   private async reconcileAgentInteractionsOnce(): Promise<void> {
     const [environments, nativeSessions, pipelineRecords] = await Promise.all([
-      this.storage.loadEnvironments(),
-      this.storage.listNativeAgentSessions(),
+      this.storage.readEnvironmentsSnapshot(),
+      this.storage.readNativeAgentSessionsSnapshot(),
       this.storage.listAllBuildPipelines(),
     ]);
     if (this.host.isStopped()) return;

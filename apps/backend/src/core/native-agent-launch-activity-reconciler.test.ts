@@ -13,6 +13,11 @@ import {
   type StorageService,
 } from "./native-agent-service-shared.js";
 import type { NativeAgentTurnRecovery } from "./native-agent-turn-recovery.js";
+import { deepFreeze } from "./storage-frozen-snapshot.js";
+
+function frozenCopy<T>(items: T[]): T[] {
+  return [...deepFreeze(structuredClone(items))];
+}
 
 const sessionKey = nativeAgentSessionStorageKey("env-1", "codex", "env-env-1:tab-1");
 
@@ -24,12 +29,18 @@ function harness(
   } = {},
 ) {
   const loadEnvironments = mock(overrides.environments ?? (async () => []));
+  const listNativeAgentSessions = overrides.sessions ?? (async () => []);
   const prune = mock(async () => undefined);
   const scans: Promise<void>[] = [];
   const host: NativeAgentLaunchActivityReconcilerHost = {
     storage: {
       loadEnvironments,
-      listNativeAgentSessions: overrides.sessions ?? (async () => []),
+      listNativeAgentSessions,
+      // Frozen as storage freezes the shared snapshots, so a sweep that writes
+      // to a record it only read fails here.
+      readEnvironmentsSnapshot: async () =>
+        frozenCopy(await (overrides.environments ?? (async () => []))()),
+      readNativeAgentSessionsSnapshot: async () => frozenCopy(await listNativeAgentSessions()),
     } as unknown as StorageService,
     invoke: (async () => undefined) as CommandInvoker,
     options: {},

@@ -236,7 +236,7 @@ export class NativeAgentLaunchActivityReconciler {
    * leaves the bridge running changes nothing and the window just lapses.
    */
   async runtimeStopRequested(environmentId: string, agent?: BuildPipelineAgent): Promise<void> {
-    const sessions = await this.storage.listNativeAgentSessions();
+    const sessions = await this.storage.readNativeAgentSessionsSnapshot();
     const requestedGroups = new Set<string>();
     for (const session of sessions) {
       if (session.environmentId !== environmentId || (agent && session.agent !== agent)) continue;
@@ -593,7 +593,7 @@ export class NativeAgentLaunchActivityReconciler {
     const provider = this.providerRegistry.cached(providerCacheKey(environmentId, agent));
     if (provider && this.providerRegistry.hasDispatchInFlight(provider)) return true;
     if (workflowBridgeRunning(environmentId, agent)) return true;
-    const sessions = await this.storage.listNativeAgentSessions();
+    const sessions = await this.storage.readNativeAgentSessionsSnapshot();
     return sessions.some((session) => {
       if (session.environmentId !== environmentId || session.agent !== agent) return false;
       const observed = this.observedSessionActivity.get(session.key);
@@ -649,7 +649,7 @@ export class NativeAgentLaunchActivityReconciler {
 
   /** Fresh no-touch admission read, including background work and persisted sessions after reload. */
   async hasActiveCheckoutWork(environmentId: string): Promise<boolean> {
-    const sessions = (await this.storage.listNativeAgentSessions()).filter(
+    const sessions = (await this.storage.readNativeAgentSessionsSnapshot()).filter(
       (session) => session.environmentId === environmentId,
     );
     for (const session of sessions) {
@@ -673,9 +673,10 @@ export class NativeAgentLaunchActivityReconciler {
   private async reconcileAgentActivityOnce(): Promise<void> {
     // Include storage/coordinator waits in the stop fence, not just provider I/O.
     const stopEpochs = new Map(this.stopEpochs);
+    // Shared, frozen copies: this sweep only reads them (BG-5).
     const [environments, sessions] = await Promise.all([
-      this.storage.loadEnvironments(),
-      this.storage.listNativeAgentSessions(),
+      this.storage.readEnvironmentsSnapshot(),
+      this.storage.readNativeAgentSessionsSnapshot(),
     ]);
     if (this.host.isStopped()) return;
 

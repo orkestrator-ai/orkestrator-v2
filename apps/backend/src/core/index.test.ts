@@ -2097,7 +2097,10 @@ test("production excerpt wiring looks up the exact session and falls back within
       };
     };
   };
-  const sessions = spyOn(internal.context.storage, "listNativeAgentSessions").mockResolvedValue([
+  const sessions = spyOn(
+    internal.context.storage,
+    "readNativeAgentSessionsSnapshot",
+  ).mockResolvedValue([
     { environmentId: "e", logicalSessionKey: "env-e:other", agent: "claude" },
     { environmentId: "e", logicalSessionKey: "env-e:tab:one", agent: "codex" },
   ] as Awaited<ReturnType<StorageService["listNativeAgentSessions"]>>);
@@ -2162,7 +2165,10 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
       };
     };
   };
-  const sessions = spyOn(internal.context.storage, "listNativeAgentSessions").mockResolvedValue([
+  const sessions = spyOn(
+    internal.context.storage,
+    "readNativeAgentSessionsSnapshot",
+  ).mockResolvedValue([
     { environmentId: "e", logicalSessionKey: "env-e:tab", agent: "claude" },
   ] as Awaited<ReturnType<StorageService["listNativeAgentSessions"]>>);
   const projection = spyOn(internal.nativeAgents, "getProjection").mockResolvedValue({

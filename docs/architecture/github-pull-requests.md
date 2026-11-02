@@ -116,6 +116,15 @@ call sites.
   detail-load failure also opens the original link externally once; subsequent
   retries and polling failures do not repeatedly open the browser.
   Cmd/Ctrl-click and every "Open on GitHub" action always open the browser.
+- **Native window.** Opening and closing the pane is renderer state only: the
+  desktop main process sees no window focus or blur, no focus, show or raise
+  call, no new window or view and no `shell.openExternal`.
+  `e2e/agent-testing/pull-request-pane-electron.spec.ts` (in
+  `mise run test:agent:electron`) checks that against the real app, and also
+  that the main view and the view Chromium focuses are unchanged. It checks
+  OS key-window focus only where the desktop session lets Electron become key;
+  a locked macOS console never does (todo 1170) and the spec then records a
+  `native-focus` annotation.
 
 ## Environments
 

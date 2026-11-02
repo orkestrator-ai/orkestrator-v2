@@ -136,7 +136,7 @@ jobs:
   test:
     name: Unit and integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
 
@@ -227,6 +227,12 @@ jobs:
         env:
           # A known place for the failing groups' full logs, uploaded below.
           ORKESTRATOR_TEST_LOG_DIR: ${{ runner.temp }}/orkestrator-test-logs
+          # On this 4-core runner the planner gives the workspace group one
+          # Turbo slot, so web (~8.5 min) and the single-worker backend
+          # (~18 min, all tiers) run back to back and reached the 30-minute
+          # default group deadline in November 2026. The no-progress watchdog
+          # still catches a wedged group within five minutes.
+          ORKESTRATOR_TEST_GROUP_TIMEOUT_MS: "2700000"
         run: mise run test:full
 
       # The console keeps only each failing group's tail and its failure

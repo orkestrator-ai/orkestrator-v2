@@ -90,7 +90,10 @@ export function TerminalLinksFixture() {
     terminal.open(hostRef.current!);
     terminal.resize(30, 5);
     // The label is deliberately not a URL: only OSC 8 can make it clickable.
-    const url = resolution ? "http://localhost:3000/start?x=1" : "https://example.com/osc-target";
+    const url =
+      resolution || search.get("local") === "true"
+        ? "http://localhost:3000/start?x=1"
+        : "https://example.com/osc-target";
     terminal.write(`\x1b]8;;${url}\x07OSC link\x1b]8;;\x07`, () => {
       setReady(true);
     });

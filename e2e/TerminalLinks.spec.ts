@@ -34,15 +34,10 @@ for (const modifier of ["Control", "Meta"] as const) {
       '["https://example.com/osc-target"]',
     );
     await screen.click({ position, modifiers: [modifier, "Shift"] });
-    await expect(page.getByTestId("internal-opens")).toHaveText(
-      JSON.stringify([
-        {
-          environmentId: "osc-environment",
-          sourceTabId: "osc-source-tab",
-          url: "https://example.com/osc-target",
-        },
-      ]),
+    await expect(page.getByTestId("external-opens")).toHaveText(
+      JSON.stringify(["https://example.com/osc-target", "https://example.com/osc-target"]),
     );
+    await expect(page.getByTestId("internal-opens")).toHaveText("[]");
     expect(dialogs).toEqual([]);
     await page.reload();
     await expect(page.getByTestId("osc-ready")).toHaveText("true");
@@ -52,7 +47,7 @@ for (const modifier of ["Control", "Meta"] as const) {
 }
 
 test("a preview-tab default swaps the two link gestures", async ({ page }) => {
-  await page.goto("/terminal-links?defaultTarget=browser-tab");
+  await page.goto("/terminal-links?defaultTarget=browser-tab&local=true");
   await expect(page.getByTestId("osc-ready")).toHaveText("true");
   const screen = page.getByTestId("osc-terminal").locator(".xterm-screen");
   const bounds = await screen.boundingBox();
@@ -67,14 +62,29 @@ test("a preview-tab default swaps the two link gestures", async ({ page }) => {
       {
         environmentId: "osc-environment",
         sourceTabId: "osc-source-tab",
-        url: "https://example.com/osc-target",
+        url: "http://localhost:3000/start?x=1",
       },
     ]),
   );
   await expect(page.getByTestId("external-opens")).toHaveText("[]");
 
   await screen.click({ position, modifiers: ["Meta", "Shift"] });
+  await expect(page.getByTestId("external-opens")).toHaveText(
+    '["http://localhost:3000/start?x=1"]',
+  );
+});
+
+test("a preview-tab default opens public OSC links externally", async ({ page }) => {
+  await page.goto("/terminal-links?defaultTarget=browser-tab");
+  await expect(page.getByTestId("osc-ready")).toHaveText("true");
+  const screen = page.getByTestId("osc-terminal").locator(".xterm-screen");
+  const bounds = await screen.boundingBox();
+  if (!bounds) throw new Error("Missing terminal screen");
+  await page.mouse.move(bounds.x + 15, bounds.y + 10);
+  await expect(screen).toHaveClass(/xterm-cursor-pointer/);
+  await screen.click({ position: { x: 15, y: 10 }, modifiers: ["Meta"] });
   await expect(page.getByTestId("external-opens")).toHaveText('["https://example.com/osc-target"]');
+  await expect(page.getByTestId("internal-opens")).toHaveText("[]");
 });
 
 for (const kind of ["service", "unregistered", "ambiguous"]) {

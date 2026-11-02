@@ -76,11 +76,11 @@ export function createTerminalLinkActivator({
         useConfigStore.getState().config.global.terminalLinkDefaultTarget,
       ),
     );
-    if (target === "browser-tab") {
+    if (target === "browser-tab" && isLoopbackUrl(uri)) {
       requestTerminalBrowserTab({ environmentId, sourceTabId, url: uri });
       return;
     }
-    if (target === "external") {
+    if (target !== "none") {
       void openExternal(uri).catch((err) => {
         console.error("[terminal-links] Failed to open URL:", err);
       });

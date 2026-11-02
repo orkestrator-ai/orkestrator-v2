@@ -151,6 +151,7 @@ export function SettingsScopeBanner({
   const mixed = [
     "defaults",
     "terminal",
+    "previews",
     "claude",
     "codex",
     "cursor",

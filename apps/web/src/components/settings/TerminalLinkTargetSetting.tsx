@@ -47,7 +47,9 @@ export function TerminalLinkTargetSetting({
         ⌘-click (Ctrl-click) opens a link in{" "}
         {value === "external"
           ? "your external browser; ⌘⇧-click (Ctrl+Shift-click) opens it in a preview tab."
-          : "a preview tab; ⌘⇧-click (Ctrl+Shift-click) opens it in your external browser."}
+          : "a preview tab; ⌘⇧-click (Ctrl+Shift-click) opens it in your external browser."}{" "}
+        Preview tabs support local HTTP(S) addresses only; other links open in your external
+        browser.
       </p>
     </section>
   );

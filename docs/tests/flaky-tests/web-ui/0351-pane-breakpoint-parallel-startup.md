@@ -137,3 +137,14 @@ mise run test:logged -- --name review-browser-pane-owner -- bunx playwright test
 ```
 
 No source, assertion, timeout or skip changed; the root cause is not established.
+
+
+## MCP provenance review — 2026-11-02
+
+The four-worker `ORKESTRATOR_E2E_PORT=15473 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=4 mise run test:logged -- --name browser -- mise run test:browser` run repeated the mobile app-shell `appendChild fallback` anchor mismatch at line 140: expected `Transcript message 49.`, received message 48. The complete unchanged owner passed alone with two workers in 77.7 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=15475 mise run test:logged -- --name pane-owning-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts --workers=2 --output=output/visual-previews/pane-owning-results
+```
+
+A separately installed detached `origin/main` at `38d55ee14` also passed the complete owner with two workers in 85.8 s (port 15476, logged name `main-pane-breakpoint`). This confirms intermittence, not a main reproduction of the failure. Aggregate evidence: host temporary directory `orkestrator-test-run.ZlAiMU/browser.log` (compressed at finalization). No pane code, assertion, timeout or skip changed.

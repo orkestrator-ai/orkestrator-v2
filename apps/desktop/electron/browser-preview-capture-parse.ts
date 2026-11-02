@@ -6,11 +6,12 @@ import type {
   BrowserPreviewCaptureErrorCode,
   BrowserPreviewCaptureMode,
 } from "@orkestrator/protocol/browser-preview";
-import type {
-  WebAnnotationCaptureInput,
-  WebAnnotationPageEvidence,
-  WebAnnotationRect,
-  WebAnnotationSourceHint,
+import {
+  WEB_ANNOTATION_MAX_SHADOW_DEPTH,
+  type WebAnnotationCaptureInput,
+  type WebAnnotationPageEvidence,
+  type WebAnnotationRect,
+  type WebAnnotationSourceHint,
 } from "@orkestrator/protocol/web-annotations";
 import {
   isSafeRelativePath,
@@ -102,17 +103,38 @@ function pickQuote(value: unknown): unknown {
   return { exact: value.exact, prefix: value.prefix, suffix: value.suffix };
 }
 
+function pickStableId(stableId: unknown): Record<string, unknown> {
+  if (stableId === undefined) return {};
+  return {
+    stableId: isRecord(stableId) ? { kind: stableId.kind, value: stableId.value } : stableId,
+  };
+}
+
+function pickShadowHost(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return { tagName: value.tagName, ...pickStableId(value.stableId), cssPath: value.cssPath };
+}
+
+function pickScope(scope: unknown): unknown {
+  if (!isRecord(scope)) return scope;
+  if (scope.kind === "document") return { kind: "document" };
+  if (scope.kind === "shadow") {
+    return {
+      kind: "shadow",
+      // One past the limit, so an over-deep path fails validation instead of being cut.
+      hosts: Array.isArray(scope.hosts)
+        ? scope.hosts.slice(0, WEB_ANNOTATION_MAX_SHADOW_DEPTH + 1).map(pickShadowHost)
+        : scope.hosts,
+    };
+  }
+  return { kind: scope.kind, reason: scope.reason };
+}
+
 export function pickAnchor(value: unknown): unknown {
   if (!isRecord(value)) return value;
-  const stableId = value.stableId;
   const semantic = value.semantic;
-  const scope = value.scope;
   return {
-    ...(stableId === undefined
-      ? {}
-      : {
-          stableId: isRecord(stableId) ? { kind: stableId.kind, value: stableId.value } : stableId,
-        }),
+    ...pickStableId(value.stableId),
     semantic: isRecord(semantic)
       ? { tagName: semantic.tagName, role: semantic.role, name: semantic.name }
       : semantic,
@@ -121,11 +143,7 @@ export function pickAnchor(value: unknown): unknown {
       ? value.ancestors.slice(0, 13).map(pickAncestor)
       : value.ancestors,
     cssPath: value.cssPath,
-    scope: isRecord(scope)
-      ? scope.kind === "document"
-        ? { kind: "document" }
-        : { kind: scope.kind, reason: scope.reason }
-      : scope,
+    scope: pickScope(value.scope),
   };
 }
 

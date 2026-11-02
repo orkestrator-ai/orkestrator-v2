@@ -11,7 +11,7 @@ export async function workerSessionActivity(
   tabId: string,
 ) {
   const key = `env-${environmentId}:${tabId}`;
-  const session = (await storage.listNativeAgentSessions()).find(
+  const session = (await storage.readNativeAgentSessionsSnapshot()).find(
     (candidate) => candidate.environmentId === environmentId && candidate.logicalSessionKey === key,
   );
   if (!session || !nativeAgents)

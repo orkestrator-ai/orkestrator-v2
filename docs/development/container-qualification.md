@@ -118,6 +118,52 @@ Live tests start runtimes through `tests/container-live-start.ts`
 running, so a bare `docker start` of a restricted runtime fails on a gateway
 image.
 
+## Stop attribution: the drain waited on interactive shells (2026-11-02)
+
+Todo [2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md).
+The roughly 10 s `stop_environment` was not Docker's stop grace. PID 1's
+chain (`docker-init` → `sudo` → `sleep infinity`) exits on SIGTERM. The time
+went to `orkestrator-drain.sh`, which waited its whole 10 s grace for the
+interactive login shell of the setup terminal or a terminal tab. Interactive
+zsh and bash ignore SIGTERM. The drain now hangs those shells up with SIGHUP
+once everything that can act on SIGTERM has gone. It no longer waits for
+SIGTERM-ignoring non-readers. EOF-driven pipe readers retain bounded time to
+finish after the hangup pass, and stopped jobs receive SIGCONT after SIGTERM.
+`docker/tests/drain-regression.py`, run by `container-drain.integration.test.ts` on Linux,
+uses owned processes and real PTYs to cover delayed cleanup before hangup,
+stopped jobs, delayed EOF flushing, ignored TERM/HUP survivors, and the shared
+deadline without requiring an image.
+
+- **Host:** beelink (Arch Linux, kernel 7.1.8, x86_64, 16 CPUs), Docker
+  Engine 29.9.2 rootful, load average 7–20 from other builds.
+- **Images:** before, the released `2.34.4-beta` (`ba91a0125f81`); after,
+  a local image built `FROM` it with only the working tree's
+  `orkestrator-drain.sh` copied in.
+- **Bare steps** (`--init`, full mode, 3 runs per case, a container created
+  per run): the drain took 63–220 ms with nothing open. With a login shell
+  open it took 9.3–10.1 s before the change and 92–195 ms after it. `docker
+  stop` took 0.12–0.47 s in every case and always exited 143 (SIGTERM, not
+  SIGKILL). `docker stop -t 0` took 0.20–0.72 s, so a shorter timeout saves
+  nothing.
+- **`stop_environment` through the backend**
+  (`container-benchmarks.test.ts -t stop_environment`, a restricted runtime
+  with its egress gateway; medians, min–max):
+
+  | Case | Image | Total | Drain exec | Runtime `docker stop` | Gateway `docker stop` | Outside the operation |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | Idle (n=3) | before | 531 ms (516–1018) | 60 ms | 58 ms | 333 ms | 76 ms |
+  | Idle (n=3) | after | 636 ms (630–688) | 97 ms | 71 ms | 376 ms | 75 ms |
+  | Login shell open (n=5) | before | 10,422 ms (10,310–10,830) | 9,503 ms | 116 ms | 585 ms | 116 ms |
+  | Login shell open (n=5) | after | 645 ms (578–926) | 119 ms | 72 ms | 364 ms | 79 ms |
+
+  The other step is one goal-check `docker exec` of 60–120 ms. Before the
+  change, each stop with a terminal open was also recorded as forced,
+  because the shell was still there after the drain.
+- **C11** (`container-live-qualification.test.ts -t C11`) now opens a login
+  shell on a terminal and requires the drain to finish within 5 s of a 10 s
+  grace. It passed in 3.3 s against the after image and failed against the
+  before image (drain 9.46 s).
+
 ## UI response under multi-environment load, first run on a busy host (2026-11-01)
 
 Todo [0022](../todo/containers-and-environments/0022-container-resource-budgets-and-performance.md)
@@ -171,7 +217,9 @@ more between the two idle phases (589 against 317 ms) than between idle and
 busy, so this sample cannot attribute them to the load. Every stop took
 10.5–11.6 s with or without load, against 0.1–0.6 s for the benchmark's bare
 `docker stop`; that is recorded in
-[2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md).
+[2150](../todo/containers-and-environments/2150-container-environment-stop-takes-ten-seconds.md),
+which traced it to the drain waiting on the setup terminal's shell
+([Stop attribution](#stop-attribution-the-drain-waited-on-interactive-shells-2026-11-02)).
 
 ## Egress gateway conditions on Linux Engine (2026-10-31)
 
@@ -876,7 +924,7 @@ Live test names carry the scenario id.
 | C08 | Unsupported remote daemon or old image | Actionable preflight failure before destructive work |
 | C09 | Stale marker and delayed current boot | No setup or agent launch before current-boot readiness |
 | C10 | Setup interrupted after a possible side effect | No automatic duplicate setup or false ready state |
-| C11 | Stop with running descendants and a pending approval | Bounded drain; approval never granted; children reaped |
+| C11 | Stop with running descendants, an interactive shell and a pending approval | Bounded drain that hangs up the shell instead of waiting for it; approval never granted; children reaped |
 | C12 | Persistent workspace stop/start | Full fixture state retained; real mounts verified |
 | C13 | Provider session restore after a rebuild | Correct history and lineage; an ambiguous dispatch stays unresolved |
 | C14 | Legacy migration and volume rebuild, including a legacy runtime with staged provider inputs and no provider databases | Verified bytes and Git state; correct workspace generation; inputs staged afresh |
@@ -945,8 +993,14 @@ durations only:
 - `warmStopStart.startSteps`, `startDockerCalls` and
   `startDockerCallBreakdown` do the same for warm starts.
 
-The benchmark's warm stop is a bare `docker stop` of the runtime, so its
-gateway keeps running and a warm start never restarts it.
+The benchmark's warm stop is the drain and a bare `docker stop` of the
+runtime, so its gateway keeps running and a warm start never restarts it.
+With no terminal open, the drain has nothing to wait for. The
+`stop_environment` case (`-t stop_environment`, its own runtime) times
+`stopEnvironmentOnce`, the user's stop: idle, then with a login shell open
+the way the setup terminal opens one. It reports the operation's phases,
+each Docker call (`dockerCallMs`, a repeated call numbered in order) and the
+time outside the operation.
 
 The harness asserts only that rebuilds succeed and no log follower survives.
 Compare the report with these targets by hand. They were set on Linux
@@ -968,6 +1022,7 @@ headroom.
 | Docker CLI calls per fresh environment | `freshRestricted.dockerCalls` | ≤ 27 (21 for the runtime, 6 for its gateway) |
 | Three concurrent fresh environments, each against the sequential median | `freshConcurrent3.slowdownVsSequentialMedian` | ≤ 1.5× |
 | Warm stop (drain and `docker stop`) | `warmStopStart.stop` | ≤ 1 s |
+| `stop_environment` with a login shell open | `stopEnvironment.terminalOpen.total` | ≤ 1.5 s |
 | Warm start to current-boot ready | `warmStopStart.start` | ≤ 2 s |
 | Rebuild copy and verify, 5,000 files | `rebuild.medium.copying` | ≤ 20 s |
 | Docker calls per minute with the Docker view open | `dockerCallsPerMinuteViewOpen` | ≤ 36 |

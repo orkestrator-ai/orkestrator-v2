@@ -27,11 +27,11 @@ governs, marked "Decided".
 ### Tasks
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
-2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7 and ST-8 done).
+2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open.
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
@@ -65,19 +65,61 @@ governs, marked "Decided".
 
 **Problem.** Some keyed paths still decode or rewrite a whole store for one row.
 
-**Context.** Done: `getEnvironment`, `getNativeAgentSession`, `getPromptQueue`, `getComposeDraft`, `getPaneLayout` and `getSession` read one row (`loadStoreRow`), and `updateStoreRow` carries a cached store forward (`storage-database.ts`). SQLite pragmas (ST-12) were decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task.
+**Context.** Done: `getEnvironment`, `getNativeAgentSession`, `getPromptQueue`, `getComposeDraft`, `getPaneLayout` and `getSession` read one row (`loadStoreRow`), and `updateStoreRow` carries a cached store forward (`storage-database.ts`). SQLite pragmas (ST-12) were decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task. Done 2026-11-02 (branch `keyed-storage-row-e11a908a8276-r1`, re-checked against `main` at `38d55ee14`):
 
-**Investigation.** Still whole-store: the lease-held native session mutations in `storage-native.ts` (more than 20 call sites load the store inside the key's lease), `workerProjection`'s `listNativeAgentSessions()` (`index.ts`), each background job decoding the environment and session stores on its own (BG-5), compose-draft saves taking a global lease and a full load while typing (ST-10, `storage-drafts.ts`), and `updateStoreRow` throwing for keyed array layouts (`storage-database.ts`). Inserts scan their collection for the next position (ST-11). #1423 gave agent mail a revision-keyed read model and dropped the pretty-printed size check, so ST-9's remainder (pending injects as their own collection, a body-free mailbox list) needs re-checking before work.
+- BG-5: `FrozenStoreSnapshot` (`storage-frozen-snapshot.ts`) keeps one deeply frozen decoded copy per committed revision, re-decoding only rows whose serialized value changed, one copy per store and none above 64 MiB of serialized rows. `readEnvironmentsSnapshot` and `readNativeAgentSessionsSnapshot` serve it to the activity sweep and its read-only helpers (`runtimeStopRequested`, `hasObservedLiveWork`, `hasActiveCheckoutWork`), the interaction tracker sweep, the tmux reconcile, the human-prompt monitor's `workingSessions`, `workerProjection`, `workerSessionActivity` and the pending-rename reconcile (`commands-registry.ts`, every 2 s while an environment has a rename intent, else 30 s).
+- ST-10, compose drafts: a save or single delete reads and writes only its row (`updateSensitiveStoreRow`, which keeps `saveSensitiveJson`'s archive pruning by journaling a keyed `prune-row` cleanup in the row's transaction); owner sweeps are one `updateStore` that writes nothing when the owner has no draft. The store lease stays.
+- ST-11: `store_rows_position` on `(store, collection, position)`, created on open.
+
+**Investigation.** Re-checked 2026-11-02. Still whole-store: the lease-held native session mutations in `storage-native.ts` (22 call sites still load the whole store inside the key's lease, TX-4's rest), `updateStoreRow` throwing for keyed array layouts (`storage-database.ts`), and the record-store writers the report names under ST-10 (`storage-projects.ts`, `storage-sessions.ts`). Environments are an array store written whole under the environment lease by many paths, with attributable archive scrubs, so moving one writer to row writes breaks the one-kind-of-writer rule (`storage-writer-guards.test.ts`); every writer of the store has to move together, and array row writes have to exist first. Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
 
 **Decisions.**
 
-- **How to share decoded stores between background readers (BG-5)?**
+- **How to share decoded stores between background readers (BG-5)?** Done as recommended.
   - **One frozen decoded snapshot per store revision, the pattern #1423 used for mail (recommended).**
     - Pros: proven here; callers cannot mutate shared state.
     - Cons: callers that mutate their result must copy first, so each caller has to be checked.
   - **Pass one snapshot per sweep through each job's arguments.**
     - Pros: no cache.
     - Cons: touches every job signature; does not help unrelated jobs in the same second.
+- **BG-5: replace `listNativeAgentSessions` itself, or add snapshot reads beside it?** Decided 2026-11-02: beside it.
+  - **New `read*Snapshot` methods, moving callers one at a time once each is checked (recommended).**
+    - Pros: a caller is moved only when it is known not to write; the test harnesses of the moved callers return frozen data, so a write fails there.
+    - Cons: two read paths per store; unmoved callers still decode the store.
+  - **Make `listNativeAgentSessions` (and later `loadEnvironments`) return the frozen copy.**
+    - Pros: every caller benefits at once.
+    - Cons: 30 callers, several of which pass records to code that may write them; a missed one throws in production.
+- **ST-10, compose drafts: drop the store lease?** Decided 2026-11-02: keep it.
+  - **Keep the lease; one row read and write inside it (recommended).**
+    - Pros: saves stay ordered against the owner checks they await and against the owner deletion sweeps, exactly as before.
+    - Cons: still one lease claim and release per save.
+  - **A per-key lease, with the owner fences re-checked inside the row transaction.**
+    - Pros: drafts of different tabs save concurrently, and a save costs no store-wide lease.
+    - Cons: needs synchronous fences for project removal and coordinator conversation close that do not exist today.
+- **ST-10, compose drafts: how to keep the retired JSON archive pruning?** Decided 2026-11-02: journaled with the row.
+  - **`updateSensitiveStoreRow`: journal a keyed pruning intent (`prune-row`) in the same transaction as the row update, through the existing durable cleanup journal (`commitWithLegacyJsonCleanup`, `storage-stores.ts`), or one whole-value `prune` intent when the store was unreadable; inside `atomically()` the intent joins the scope's cleanups and commits with it (recommended).**
+    - Pros: the same pruning a whole-value save did, for one record, with the same recovery guarantee: an interrupted or failed pruning is replayed on reopen or before the next journaled write, before another mutation (a later re-add included) can obscure the removal; nothing is read when no archive is left (it expires 14 days after migration).
+    - Cons: one more cleanup variant in the journal, and each journaled save stores a copy of the row's new value in the private cleanup store until the pruning finishes.
+  - **Prune after the row commits, with no durable intent.**
+    - Pros: smaller; no journal entry per save.
+    - Cons: a crash or an archive write failure between the two leaves removed sensitive content in that archived copy until it expires.
+  - **Fall back to the whole-store save while an archive exists.**
+    - Pros: byte-for-byte the old behaviour.
+    - Cons: two kinds of writer for one store, which the writer guard refuses.
+- **ST-11: index or a stored next position?** Decided 2026-11-02.
+  - **An index on `(store, collection, position)`, created on open (recommended).**
+    - Pros: no stored value or schema version changes, so an older build still opens the database; ordered row fetches use it too.
+    - Cons: one more index to maintain on inserts and deletes; it is built once on the first open after the upgrade.
+  - **A numbered migration, or the next position kept in `stores`.**
+    - Pros: a migration follows the documented pattern.
+    - Cons: a new version locks every older build out of the database, and a stored counter is new stored data to keep consistent.
+- **ST-10's remaining writers: next step?**
+  - **Add array-layout `updateStoreRow` with tests, then move every environment writer at once (recommended).**
+    - Pros: environments are the largest store written whole for one field.
+    - Cons: one large change touching every environment mutation, its archive scrubs and the deletion fences.
+  - **Move the record stores (sessions, projects) first.**
+    - Pros: `updateStoreRow` already supports them.
+    - Cons: smaller stores, so less gained.
 
 ### 3. Renderer re-renders and refetches
 
@@ -160,19 +202,53 @@ governs, marked "Decided".
 
 **Problem.** Bridges re-measure and re-serialise whole transcripts and tool cards per update, and Codex reads every session record per config read.
 
-**Context.** Done: ACP streaming output persists at most once a second (`scheduleStreamingPersist` in `acp-persist-writer.ts`) and measures the transcript every 1 MB (BR-1, BR-3), as decided on 2026-11-01. Neither has a new test; the existing bridge suite passes. One ACP test (`latches a fatal error when active children exceed the bounded registry`) fails on `0bd214ee` too when the file is run directly.
+**Context.** Done: ACP streaming output persists at most once a second (`scheduleStreamingPersist` in `acp-persist-writer.ts`) and measures the transcript every 1 MB (BR-1, BR-3), as decided on 2026-11-01. Neither has a new test; the existing bridge suite passes. One ACP test (`latches a fatal error when active children exceed the bounded registry`) fails on `0bd214ee` too when the file is run directly; it passed in the 2026-11-02 bridge run.
 
-**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-4 to BR-6 (`transcript-budget.ts` and the Pi, Cursor and ACP transcript helpers), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's duplicated helpers and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+Done 2026-11-02 (against `main` at `38d55ee1`), in the order decided below: the Pi, Cursor and ACP transcript helpers moved into `packages/protocol/src/node` first (BR-15's transcript half), then BR-4 to BR-6 were fixed there once.
+
+- `bridge-transcript-text.ts`: `sliceUtf8`, `boundUtf8Text` and `BoundedTextAppender`, which replaces Pi's and Cursor's identical `appendBounded`/`boundText`/`sliceToBytes` and ACP's `appendBounded`/`appendSaturating`/`truncateUtf8`/`truncateDisplayText`. The two truncation behaviours are kept as policies (`append-notice` for Pi and Cursor, `reserve-notice` for ACP), so each bridge's text is unchanged. BR-6: the appender remembers each owner's buffer byte length, used only while `current` is the very string it was taken from, so a delta costs its own bytes.
+- `bridge-transcript-bounds.ts`: one `createBridgeTranscriptBounds` for the bound wrapper, read bound, streaming check and revised-row bookkeeping Pi and Cursor each carried. The bridges' `transcript.ts` keep their exported names as thin bindings, so no call site changed.
+- BR-4, `TranscriptRowSizes` in `transcript-budget.ts`: a dirty bound re-serialises only the newest row and the rows noted since the last pass. The hook is the existing revised-row note (`noteRowRevised` for Pi and Cursor, ACP's `noteRevisedRow`), which every in-place change to an older row must already reach for `revisedMessageIds`. A remembered size is also tied to the row object and to the row after it, so a replaced history or a row that became newest again (Pi's refused-prompt rollback, ACP's withdrawn prompt) is measured again. One entry per retained row, rebuilt on every pass. Under `bun test` (`NODE_ENV=test`) every remembered size is re-checked and a stale one throws `StaleTranscriptSizeError`, so the three bridge suites prove their write paths note what they change. Two paths that change an older row without a reader note now invalidate it directly: Pi's history-replay result fold (`forgetRowSize`) and ACP's nested-part shedding.
+- BR-5, `EncodedObjectSizes` in `transcript-budget.ts`: Pi's `chargeToolPart`, Cursor's `chargeToolPart` and ACP's `commitToolPartMutation` measure a card with exactly `JSON.stringify`'s byte count, but re-measure only string fields that changed, and a field that extends its previous value costs one prefix comparison plus its new suffix. Object and array fields are still measured every time, because the bridges mutate some in place. Cursor's shell-delta `continues` fast path is unchanged.
+- Tests: `bridge-transcript-text.test.ts` replays random streams (multibyte, split surrogate pairs, notices, caps below the marker) through verbatim copies of the old bridge helpers and requires the same text; `transcript-budget.test.ts` checks the row cache (only the newest and noted rows are measured, follower and identity checks, count bound, verification) and that `boundTranscriptInPlace` with the cache leaves exactly the state it leaves without it, and checks `EncodedObjectSizes` against `encodedJsonBytes` through random edits; `bridge-transcript-bounds.test.ts` covers the shared wrapper. The Pi, Cursor and ACP bridge suites pass unchanged with verification on.
+
+**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+
+What BR-5 does not remove: Pi resends a running tool's whole accumulated output on every frame, and `renderToolCall` re-bounds it (`boundText`) before the charge, so a Pi frame still costs O(output) — now one prefix comparison instead of a whole-card serialisation. Getting below that needs Pi's tool rendering to take deltas. ACP's text charge (`Buffer.byteLength(text) * 2`) is not JSON-escaped, so it is not a strict upper bound on encoded growth; it only schedules the bound, which is exact, so it was left alone. Cursor's per-sub-agent byte check (`boundNestedParts` with `measureBytes`) still serialises each live row's nested parts on an exact pass. No before-and-after numbers were taken (task 1).
 
 **Decisions.**
 
-- **Fix each bridge or move the helpers first (BR-15)?**
+- **Fix each bridge or move the helpers first (BR-15)?** Decided 2026-11-01; done 2026-11-02 for the transcript helpers.
   - **Move the Codex and Cursor versions into `packages/protocol/src/node` first, then fix BR-4 to BR-6 there once (recommended).**
     - Pros: each fix lands once; the good versions already exist.
     - Cons: a protocol change, so `mise run test` across all bridges.
   - **Fix each bridge in place.**
     - Pros: smaller diffs.
     - Cons: three copies of every fix.
+- **What invalidates a remembered row size (BR-4)?** Done 2026-11-02 with the first option.
+  - **The existing revised-row note, plus row identity and follower checks, verified against a fresh measurement under `bun test` (recommended, taken).**
+    - Pros: reuses a hook every older-row change must already call; the newest row, where streaming writes without a note, is always measured; a missed note fails the bridge suites instead of shipping.
+    - Cons: a new write path that changes an older row without a note and without a test would make the bound measure that row stale (over or under by that change) until the row is noted or evicted.
+  - **A per-row version counter bumped by `rowChanged`, as the report suggested.**
+    - Pros: explicit.
+    - Cons: the same audit, plus a second hook every path must call.
+  - **Skip measuring while the last exact size plus the charged growth is under the budget.**
+    - Pros: no per-row state.
+    - Cons: relies on every charge being a strict upper bound, which ACP's text charge is not; a transcript at the budget still measures everything on every dirty read, which is the case that costs most.
+- **How to keep each bridge's truncated text identical (BR-15)?** Done 2026-11-02 with the first option.
+  - **One appender with two named policies (recommended, taken).**
+    - Pros: one implementation and memo; output unchanged, proven against copies of the old helpers.
+    - Cons: two behaviours remain; unifying them would change what users see at the cap.
+  - **Converge on one policy.**
+    - Pros: simpler.
+    - Cons: changes transcript text in one or two bridges, which this task must not do.
+- **Should the SSE replay rings move as part of BR-15?** Open.
+  - **Separately, after BR-7 (recommended).**
+    - Pros: Claude's ring adopting Codex's superseded-frame collapse changes what a reconnecting client is replayed, which needs its own replay tests; the transcript helpers did not depend on it.
+    - Cons: BR-15 stays half open.
+  - **Move Codex's `event-ring.ts` into protocol now and point Claude at it.**
+    - Pros: closes BR-15.
+    - Cons: a behaviour change to Claude's SSE replay in a task meant to leave output unchanged.
 
 ### 7. Change tracking and git scans
 

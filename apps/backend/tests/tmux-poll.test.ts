@@ -49,6 +49,12 @@ describe("ClaudeStatePollManager", () => {
     const context = {
       storage: {
         loadEnvironments: options.loadEnvironments ?? (async () => environments),
+        readEnvironmentsSnapshot: async () =>
+          Object.freeze(
+            (await (options.loadEnvironments?.() ?? Promise.resolve(environments))).map((item) =>
+              Object.freeze(structuredClone(item)),
+            ),
+          ),
         setEnvironmentAgentActivity: async (
           environmentId: string,
           state: "idle" | "working" | "waiting",

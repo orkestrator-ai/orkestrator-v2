@@ -71,6 +71,8 @@ export function nodeEnvironmentRowFacts(
   machine: MachineView,
   environment: FederatedEnvironment,
   actions: { busy: boolean; writable: boolean },
+  /** This machine's auto-merge "Require checks to pass" setting. */
+  requireChecks: boolean,
 ): EnvironmentRowFacts {
   const project = machine.projects.find(
     (candidate) => candidate.ref.projectId === environment.projectId,
@@ -95,7 +97,7 @@ export function nodeEnvironmentRowFacts(
     unreadMail: environment.agentMailUnread ?? 0,
     failedMail: environment.agentMailFailed === true,
     // Decided from the machine's relayed PR reading and monitor health.
-    prMergeState: nodeEnvironmentPrMergeState(environment, machine),
+    prMergeState: nodeEnvironmentPrMergeState(environment, machine, requireChecks),
     machine: {
       name: machine.name,
       colorToken: machine.colorToken,

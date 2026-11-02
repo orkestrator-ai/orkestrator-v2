@@ -184,6 +184,33 @@ describe("BuildChatTab key information", () => {
     expect(within(panel).getByText(/by Verify · round 1/)).toBeTruthy();
   });
 
+  test("renders code chips throughout the recorded brief", () => {
+    renderTab({
+      ...reviewed,
+      keyInformation: {
+        ...keyInformation,
+        statement: "Run (`npm test`),`bun test`.",
+        context: "See src/a.ts:12 and App.js; Node.js uses example.com/a.ts.",
+        solution: "Update Index.js.",
+        workDone: ["Changed src/b.ts#L12"],
+      },
+      backendRevision: 96,
+    });
+    const panel = openPanel();
+    expect(Array.from(panel.querySelectorAll("code"), (code) => code.textContent)).toEqual([
+      "npm test",
+      "bun test",
+      "src/a.ts",
+      "App.js",
+      "Index.js",
+      "src/b.ts",
+    ]);
+    expect(within(panel).getByRole("region", { name: "Context" }).textContent).toContain(
+      "See src/a.ts:12 and App.js; Node.js uses example.com/a.ts.",
+    );
+    expect(panel.textContent).not.toContain("`");
+  });
+
   test("names the first section Problem by default", () => {
     renderTab({
       ...reviewed,

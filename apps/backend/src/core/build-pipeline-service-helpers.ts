@@ -28,6 +28,7 @@ import type { StructuredReviewFindings } from "@orkestrator/protocol/structured-
 import {
   AGENT_INTERACTION_LIMITS,
   AGENT_INTERACTION_SUMMARY_VERSION,
+  agentInteractionTextBody,
   type AgentInteractionOutcome,
   type AgentInteractionRequest,
   type AgentInteractionWorkflowSummary,
@@ -679,6 +680,7 @@ export function interactionPresentation(
   const visible = action === "decline-and-continue";
   const truncate = (value: string, maximum: number): string =>
     value.length <= maximum ? value : `${value.slice(0, Math.max(0, maximum - 1))}…`;
+  const textBody = agentInteractionTextBody(request);
   return {
     journalId,
     sessionKey: session.sessionKey,
@@ -698,9 +700,7 @@ export function interactionPresentation(
     title: visible
       ? truncate(request.presentation.title, 512)
       : `Unexpected ${request.provider} ${request.kind} authorization`,
-    ...(visible && request.presentation.body
-      ? { body: truncate(request.presentation.body, 1_024) }
-      : {}),
+    ...(visible && textBody ? { body: truncate(textBody, 1_024) } : {}),
     questions: visible
       ? request.presentation.questions.slice(0, 4).map((question) => ({
           prompt: truncate(question.prompt, 512),

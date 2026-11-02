@@ -27,6 +27,7 @@ import {
   nodeEnvironmentTooltipDetails,
 } from "@/components/environments/environment-row-facts";
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
+import { useShimmerRequiresChecks } from "@/hooks/useEnvironmentNameSignal";
 import { useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
@@ -628,7 +629,8 @@ export function RemoteEnvironmentItem({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const details = useNodeEnvironment(environment.ref, tooltip.open || deleteOpen);
   const live = machine.transport === "connected";
-  const facts = nodeEnvironmentRowFacts(machine, environment, actions);
+  const requireChecks = useShimmerRequiresChecks();
+  const facts = nodeEnvironmentRowFacts(machine, environment, actions, requireChecks);
 
   return (
     <EnvironmentRow

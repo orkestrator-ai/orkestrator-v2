@@ -246,6 +246,8 @@
     "./tmux-observation": "./src/tmux-observation.ts",
     "./transcript-annotations": "./src/transcript-annotations.ts",
     "./transcript-part-ids": "./src/transcript-part-ids.ts",
+    "./node/bridge-transcript-bounds": "./src/node/bridge-transcript-bounds.ts",
+    "./node/bridge-transcript-text": "./src/node/bridge-transcript-text.ts",
     "./node/transcript-budget": "./src/node/transcript-budget.ts",
     "./node/transcript-window": "./src/node/transcript-window.ts",
     "./unknown-command": "./src/unknown-command.ts",

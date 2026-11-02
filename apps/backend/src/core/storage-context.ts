@@ -230,11 +230,37 @@ export class StorageContext {
    * Synchronous read-modify-write of one database store in a single SQLite
    * transaction. Because nothing awaits inside, SQLite's write lock alone
    * serializes it against this and every other backend process; no lease or
-   * queue is needed. `mutate` changes the loaded value in place.
+   * queue is needed. `mutate` changes the loaded value in place. Sensitive
+   * mutations journal archive pruning against the resulting value in the
+   * same commit, including each intermediate mutation in an atomic scope.
    */
-  updateStore<V, T>(filePath: string, fallback: () => V, mutate: (value: V) => T): T {
+  updateStore<V, T>(
+    filePath: string,
+    fallback: () => V,
+    mutate: (value: V) => T,
+    options: { sensitive?: boolean } = {},
+  ): T {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("updateStore requires a database store");
+    if (options.sensitive && hasLegacyJsonStore(this.dataDir, store)) {
+      const cleanups: LegacyJsonCleanup[] = [];
+      let result!: T;
+      const write = () => {
+        result = this.updateStore(filePath, fallback, (current) => {
+          const updated = mutate(current);
+          cleanups.push({ store, kind: "prune", next: structuredClone(current) });
+          return updated;
+        });
+      };
+      const scope = this.openAtomicScope();
+      if (scope) {
+        write();
+        scope.archiveCleanups.push(...cleanups);
+      } else {
+        commitWithLegacyJsonCleanup(this.database, this.dataDir, write, cleanups);
+      }
+      return result;
+    }
     const scope = this.openAtomicScope();
     if (scope) {
       const current = this.loadStore(store, fallback);
@@ -844,6 +870,69 @@ export class StorageContext {
     const scope = this.openAtomicScope();
     if (scope) scope.archiveTransforms.push(scrub);
     else scrub();
+  }
+
+  /**
+   * {@link updateStoreRow} for a record store holding sensitive content, with
+   * the retired JSON archive pruning {@link saveSensitiveJson} does: content
+   * the row's new value drops is removed from every archived copy of that
+   * record. Replacing an unreadable store (nothing shows what it held) prunes
+   * every copy against the whole new value, as a whole-value save does. The
+   * pruning intent commits with the row and replays after failure or restart.
+   * Deletes journal removal of the whole archived key, even if already absent.
+   */
+  updateSensitiveStoreRow<T>(
+    filePath: string,
+    key: string,
+    mutate: (current: unknown) => RowUpdate<T>,
+  ): T {
+    const store = this.storeForFile(filePath);
+    if (store === null) throw new Error("updateSensitiveStoreRow requires a database store");
+    if (!hasLegacyJsonStore(this.dataDir, store)) {
+      return this.updateStoreRow(filePath, key, mutate);
+    }
+    const cleanups: LegacyJsonCleanup[] = [];
+    let result!: T;
+    const write = () => {
+      let unreadable = false;
+      if (this.storeHeldAsDocument(filePath)) {
+        try {
+          this.loadStoreStrict(filePath);
+        } catch (error) {
+          if (!(error instanceof StoreCorruptError)) throw error;
+          unreadable = true;
+        }
+      }
+      result = this.updateStoreRow(filePath, key, (previous) => {
+        const update = mutate(previous);
+        if (update.delete) {
+          cleanups.push({ store, kind: "delete-row", key });
+        } else if (
+          "value" in update &&
+          (unreadable ||
+            previous === undefined ||
+            pruneRemovedContent(previous, update.value) !== previous)
+        ) {
+          cleanups.push({ store, kind: "prune-row", key, next: structuredClone(update.value) });
+        }
+        return update;
+      });
+      if (unreadable && cleanups.length > 0) {
+        cleanups.splice(0, cleanups.length, {
+          store,
+          kind: "prune",
+          next: this.loadStoreStrict<unknown>(filePath)?.value ?? {},
+        });
+      }
+    };
+    const scope = this.openAtomicScope();
+    if (scope) {
+      write();
+      scope.archiveCleanups.push(...cleanups);
+    } else {
+      commitWithLegacyJsonCleanup(this.database, this.dataDir, write, cleanups);
+    }
+    return result;
   }
 
   /** Rewrites every retained sensitive backup while preserving its record shape. */

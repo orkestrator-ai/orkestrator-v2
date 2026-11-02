@@ -2,9 +2,7 @@ import {
   DIFF_CONTEXT_LINES,
   MAX_DIFF_EDIT_DISTANCE,
   MAX_HISTORY_MESSAGE_IDS,
-  MAX_MESSAGE_TEXT_BYTES,
   MAX_MESSAGES,
-  MAX_MODEL_ID_BYTES,
   MAX_PARTS_PER_MESSAGE,
   MAX_TOOL_ARGUMENT_BYTES,
   MAX_TOOL_DIFF_BYTES,
@@ -12,10 +10,7 @@ import {
   MAX_TOOL_INLINE_FILE_BYTES,
   MAX_TOOL_OUTPUT_BYTES,
   MAX_TOOL_PATH_BYTES,
-  MAX_TOOL_TITLE_BYTES,
   MAX_TRANSCRIPT_BYTES,
-  TRANSCRIPT_CHECK_INTERVAL_BYTES,
-  acpToolSourceStates,
   isObject,
   provider,
   saturatedText,
@@ -29,12 +24,17 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import {
+  BoundedTextAppender,
+  boundUtf8Text,
+  sliceUtf8,
+} from "@orkestrator/protocol/node/bridge-transcript-text";
+import {
   encodedJsonBytes,
   planOldestFirstTrim,
 } from "@orkestrator/protocol/node/transcript-budget";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { terminalDisplayOutput } from "./acp-client-methods.js";
-import { rememberEvictedRows } from "./acp-rows.js";
+import { rememberEvictedRows, transcriptRowSizes } from "./acp-rows.js";
 
 /** Every `session/update` kind that appends to or mutates the transcript. */
 export const TRANSCRIPT_UPDATE_KINDS = new Set([
@@ -548,9 +548,7 @@ export function safeDiffPath(value: string): string {
 }
 
 export function truncateDisplayText(value: string, maximumBytes: number, notice: string): string {
-  if (Buffer.byteLength(value) <= maximumBytes) return value;
-  const noticeBytes = Buffer.byteLength(notice);
-  return truncateUtf8(value, Math.max(0, maximumBytes - noticeBytes)) + notice;
+  return boundUtf8Text(value, maximumBytes, notice);
 }
 
 /**
@@ -660,12 +658,28 @@ export function contentBlockParts(
 }
 
 /**
+ * Truncation for streamed text never fails an interactive turn, so the marker
+ * is part of the correctness contract rather than decoration, and it always
+ * fits inside the cap: a prior chunk can leave fewer free bytes than the marker
+ * needs, and its room is then taken from the already-buffered prefix instead
+ * of silently dropping the chunk and presenting the shortened response as
+ * complete.
+ */
+const appender = new BoundedTextAppender({
+  notice: "\n[output truncated by Orkestrator]",
+  policy: "reserve-notice",
+  saturated: saturatedText,
+});
+
+/**
  * `appendBounded`, memoised on the object that owns `current`.
  *
  * Once a target is saturated the answer can only ever be `current` unchanged,
  * so returning it directly keeps a stream that overruns its cap O(1) per chunk
  * instead of re-encoding and re-copying the capped buffer on the read loop for
- * the rest of the turn.
+ * the rest of the turn. The target also remembers the buffer's byte length, so
+ * a chunk below the cap costs its own bytes rather than a fresh measurement of
+ * everything before it.
  *
  * Truncation can leave a saturated buffer a few bytes short of the cap, where
  * the two UTF-8 backoffs landed. Dropping a chunk that would fit in those bytes
@@ -681,50 +695,29 @@ export function appendSaturating(
   addition: string,
   maximumBytes: number,
 ): { value: string; truncated: boolean } {
-  if (target && saturatedText.has(target)) return { value: current, truncated: true };
-  const next = appendBounded(current, addition, maximumBytes);
-  if (next.truncated && target) saturatedText.add(target);
-  return next;
+  return appender.append(current, addition, maximumBytes, target);
 }
 
+/**
+ * Append within a byte cap with no owner to record saturation on.
+ *
+ * `lengthOwner`, when given, only remembers the buffer's byte length between
+ * calls (a session's `currentTurnOutput`, say); it is never marked saturated.
+ */
 export function appendBounded(
   current: string,
   addition: string,
   maximumBytes: number,
+  lengthOwner?: object,
 ): {
   value: string;
   truncated: boolean;
 } {
-  const currentBytes = Buffer.byteLength(current);
-  const remaining = Math.max(0, maximumBytes - currentBytes);
-  if (Buffer.byteLength(addition) <= remaining)
-    return { value: current + addition, truncated: false };
-  const marker = "\n[output truncated by Orkestrator]";
-  const markerBytes = Buffer.byteLength(marker);
-  // Truncation is no longer fatal for an interactive turn, so the marker is
-  // part of the correctness contract rather than optional decoration. A prior
-  // stream chunk can leave fewer free bytes than the marker needs; reserve its
-  // space from the already-buffered prefix in that case instead of silently
-  // dropping this chunk and presenting the shortened response as complete.
-  const contentLimit = Math.max(0, maximumBytes - markerBytes);
-  const prefix = truncateUtf8(current, contentLimit);
-  const usable = Math.max(0, contentLimit - Buffer.byteLength(prefix));
-  return {
-    value: prefix + truncateUtf8(addition, usable) + truncateUtf8(marker, maximumBytes),
-    truncated: true,
-  };
+  return appender.append(current, addition, maximumBytes, lengthOwner, false);
 }
 
-export function truncateUtf8(value: string, maximumBytes: number): string {
-  if (maximumBytes <= 0) return "";
-  const encoded = Buffer.from(value);
-  if (encoded.length <= maximumBytes) return value;
-  // Back up over continuation bytes so decoding cannot replace a partial code
-  // point with U+FFFD (three bytes) and accidentally exceed the byte cap.
-  let end = maximumBytes;
-  while (end > 0 && (encoded[end]! & 0b1100_0000) === 0b1000_0000) end -= 1;
-  return encoded.subarray(0, end).toString("utf8");
-}
+/** Cut a string at a byte budget without splitting a UTF-8 code point. */
+export const truncateUtf8 = sliceUtf8;
 
 export function boundTranscript(state: SessionState): boolean {
   state.uncheckedTranscriptBytes = 0;
@@ -739,7 +732,11 @@ export function boundTranscript(state: SessionState): boolean {
   // parts is measured once; the notice that replaces trimmed parts is sized
   // exactly, so this plans the same result the old measure-after-every-shift
   // loop reached without re-serializing the shrinking transcript each pass.
+  // Only the trailing row and rows noted as changed since the last bound are
+  // serialized again; see `transcriptRowSizes`.
+  const rowSizes = transcriptRowSizes(state);
   const plan = planOldestFirstTrim(state.messages, MAX_TRANSCRIPT_BYTES, {
+    messageSizes: rowSizes.measureRows(state.messages),
     leadingReplacement: (message) => ({
       bytes: encodedJsonBytes(trimNoticePart(message)),
       present: isTrimNotice(message, message.parts[0]),
@@ -757,6 +754,7 @@ export function boundTranscript(state: SessionState): boolean {
     const realParts =
       onlyMessage.parts.length - (isTrimNotice(onlyMessage, onlyMessage.parts[0]) ? 1 : 0);
     state.droppedParts += trimPartsTo(onlyMessage, 1 + realParts - plan.droppedParts);
+    rowSizes.invalidate(onlyMessage.id);
     state.transcriptTruncated = true;
     truncatedCurrentMessage = true;
   }

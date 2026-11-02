@@ -258,9 +258,20 @@ mise run dev:stop --profile container-wiring-qa
 mise run dev:reset --profile container-wiring-qa
 ```
 
-Start the profile once with `--fixture`: a restart with `--fixture` leaves the
-previous start's environments broken under the same names
+A restart with `--fixture` reuses the fixture the first start seeded: it keeps
+`test-project` and `origin.git`, reuses the `fixture-local` and
+`fixture-container` environments (starting any that are stopped) and creates
+only requested ones that do not exist yet
 ([2180](../todo/cross-cutting/2180-fixture-restart-orphans-earlier-environments.md)).
+Fixture environment IDs are stored in `test-project/.git/orkestrator-fixture-environments.json`.
+If the repository must be recreated, the new generation records new IDs and later
+restarts reuse those replacements even when the backend gives them suffixed names.
+Legacy profiles with multiple matching fixture environments fail with reset/new-profile
+guidance instead of guessing which one works; no environments are deleted automatically.
+A reused container must match the requested `--fixture-network` mode (default:
+`restricted`). A mismatch stops startup with reset/new-profile guidance because
+network mode is fixed at creation.
+Use `dev:reset` for a pristine fixture.
 `ORKESTRATOR_AGENT_TEST_CONTAINER_ENV` and `ORKESTRATOR_AGENT_TEST_LOCAL_ENV`
 name other environments when needed.
 

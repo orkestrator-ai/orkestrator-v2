@@ -1,14 +1,24 @@
 import type { CommandContext } from "./commands-context.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
+import type { Environment } from "./models.js";
 
 /** Use the persisted ID so Docker's abbreviated IDs cannot create a second lock. */
 export async function containerBridgeOperationId(
   context: Pick<CommandContext, "storage">,
   containerId: string,
 ): Promise<string> {
+  if (!containerId.trim()) return containerId.trim();
+  return containerBridgeOperationIdIn(await context.storage.loadEnvironments(), containerId);
+}
+
+/** {@link containerBridgeOperationId} against environments the caller already read. */
+export function containerBridgeOperationIdIn(
+  environments: readonly Pick<Environment, "containerId">[],
+  containerId: string,
+): string {
   const id = containerId.trim();
   if (!id) return id;
-  const environment = (await context.storage.loadEnvironments()).find(
+  const environment = environments.find(
     ({ containerId: known }) =>
       known && (known === id || known.startsWith(id) || id.startsWith(known)),
   );

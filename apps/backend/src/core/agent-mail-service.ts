@@ -7,12 +7,16 @@ import {
   type AgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
 import { createLogger } from "@orkestrator/protocol/logger";
-import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
+import {
+  isEnvironmentReadyForAgents,
+  isEnvironmentSetupSettled,
+} from "@orkestrator/protocol/environment-readiness";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
 import type { StorageService } from "./storage.js";
+import type { Environment } from "./models.js";
 import type { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import type {
   AgentMailMessageSummary,
@@ -326,10 +330,26 @@ export class AgentMailService {
       offset += page.mailboxes.length;
       if (page.mailboxes.length === 0 || offset >= page.total) break;
     }
+    // One environment read per environment per pass rather than one per
+    // mailbox, so a stopped environment costs no per-mailbox read at all.
+    const environments = new Map<string, Promise<Environment | null | undefined>>();
+    const environmentFor = (environmentId: string) => {
+      let read = environments.get(environmentId);
+      if (!read) {
+        read = this.storage.getEnvironment(environmentId).catch(() => undefined);
+        environments.set(environmentId, read);
+      }
+      return read;
+    };
     const concurrency = 8;
     for (let index = 0; index < mailboxes.length; index += concurrency) {
       await Promise.allSettled(
         mailboxes.slice(index, index + concurrency).map(async (mailbox) => {
+          const stopped = await this.stoppedEnvironmentPresence(mailbox, environmentFor);
+          if (stopped) {
+            await this.recordPresence(mailbox.mailboxId, stopped);
+            return;
+          }
           if (mailbox.kind === "native" && mailbox.agent) {
             const logicalSessionKey =
               mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
@@ -360,6 +380,37 @@ export class AgentMailService {
         }),
       );
     }
+  }
+
+  /**
+   * The presence a mailbox's own read would answer for an environment that is
+   * not running, taken from the pass's one read of that environment: native
+   * reads `environment_stopped`, tmux `environment_unready`. `undefined` when
+   * the mailbox still needs its own read: the environment runs (or, for tmux,
+   * is ready), the row could not be read, it is a coordinator runtime (which
+   * has no environment row), or no presence source is wired for its kind.
+   *
+   * Skipping the native read for a stopped environment also defers its
+   * backstop that clears a refused mail dispatch the refusal could not clear
+   * itself; the drain never dispatches to a stopped environment, and the first
+   * pass after it runs again clears it before any delivery.
+   */
+  private async stoppedEnvironmentPresence(
+    mailbox: MailboxDescriptor,
+    environmentFor: (environmentId: string) => Promise<Environment | null | undefined>,
+  ): Promise<MailboxPresence | undefined> {
+    const native =
+      mailbox.kind === "native" && mailbox.agent && this.nativeAgents.mailInjectPresence;
+    const tmux = mailbox.kind === "tmux" && this.tmux.mailInjectPresence;
+    if (!native && !tmux) return undefined;
+    if (native && coordinatorIdFromRuntimeId(mailbox.environmentId)) return undefined;
+    const environment = await environmentFor(mailbox.environmentId);
+    if (environment === undefined) return undefined;
+    const gone = !environment || Boolean(environment.deletionRequestedAt);
+    if (native) {
+      return gone || environment!.status !== "running" ? "environment_stopped" : undefined;
+    }
+    return gone || !isEnvironmentReadyForAgents(environment) ? "environment_unready" : undefined;
   }
 
   /**

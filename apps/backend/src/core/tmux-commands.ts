@@ -316,12 +316,19 @@ export function registerTmuxBackendCommands(
     await requireSession(context, envId, asString(tabId, "tabId")).interrupt();
     await context.runtime.tmux.persistEnvironmentActivity(context, envId);
   });
-  register("claude_tmux_status", async ({ tabId, environmentId }, context) => {
+  // `livenessMaxAgeMs` lets a background reader (mail presence) take the poll
+  // loop's own recent `has-session` answer instead of spawning another one.
+  register("claude_tmux_status", async ({ tabId, environmentId, livenessMaxAgeMs }, context) => {
     const session = context.runtime.tmux.sessions.get(
       asString(environmentId, "environmentId"),
       asString(tabId, "tabId"),
     );
-    return session ? session.status(await session.tmuxAlive().catch(() => false)) : null;
+    if (!session) return null;
+    const recent =
+      typeof livenessMaxAgeMs === "number" && Number.isFinite(livenessMaxAgeMs)
+        ? session.recentLiveness(livenessMaxAgeMs)
+        : undefined;
+    return session.status(recent ?? (await session.tmuxAlive().catch(() => false)));
   });
   register("claude_tmux_transcript", ({ tabId, environmentId }, context) =>
     requireSession(

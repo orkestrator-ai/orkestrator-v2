@@ -22,3 +22,18 @@ The captured cross-suite totals are lower bounds: 31,617 passes, seven failures
 alone on detached `origin/main` at `9eca79311b06e624e8799feb069052a7009eeeef`.
 This isolated pass confirms intermittency, not a load-related root cause.
 Original failure evidence: `.orkestrator/review-artifacts/review-validation-2b4eea63-cf5c-4639-ad6f-82564be561bf/validation-04.stdout.txt`.
+
+
+## Task 1202 review repair — 2026-11-02
+
+Original command: `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1 mise run test:logged -- --name address-default-suite-concurrent -- mise run test`, workspace/root/bridge/protocol grants 6/1/2/1.
+Group evidence: `orkestrator-test-run.WXZCOJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/`.
+
+Aggregate timeout 6,305.63 ms. Complete branch owner failed (3 pass/2 fail/2 errors, 26.6 s); complete detached-main owner reproduced Save as copy timeout (5,287.79 ms; 4 pass/1 fail/1 error, 26.2 s). Main at 38d55ee14 used its own frozen dependency install. Branch artifact qbCR5s; main B5hJ0n.
+
+The complete owner was rerun with `mise run test:logged -- --name address-graph-editing-rerun -- bun test --cwd apps/web ./src/components/graph-designer/GraphDesignerEditing.test.tsx --parallel=1 --only-failures`. No implementation, assertion, wait, timeout or skip was changed. This recurrence remains open.
+
+Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
+13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
+3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
+The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.

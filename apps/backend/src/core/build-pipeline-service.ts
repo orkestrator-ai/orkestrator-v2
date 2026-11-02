@@ -30,6 +30,7 @@ import type {
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import type { BuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import {
   BuildPipelineContext,
   type BuildPipelineServiceOptions,
@@ -167,8 +168,12 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     return this.lifecycle.retryReview(pipelineId);
   }
 
-  restartStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
-    return this.lifecycle.restartStep(pipelineId, stageId);
+  restartStep(
+    pipelineId: string,
+    stageId: string,
+    selection?: BuildPipelineRestartSelection,
+  ): Promise<BuildPipeline> {
+    return this.lifecycle.restartStep(pipelineId, stageId, selection);
   }
 
   previewCodeRewind(pipelineId: string, stageId: string): Promise<BuildPipelineCodeRewindPreview> {

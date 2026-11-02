@@ -94,6 +94,44 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastSuccess).toHaveBeenCalledWith("Stage restarted");
   });
 
+  test("restarts a step in another agent or model from its context menu", async () => {
+    render(<BuildChatTab data={tabData} />);
+
+    fireEvent.contextMenu(graphNode("Build"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Restart Build" })).toBeTruthy();
+    expect(within(dialog).getByRole("combobox", { name: "Restart build model" })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restart Build" }));
+
+    await waitFor(() =>
+      expect(restartStepMock).toHaveBeenCalledWith(
+        pipeline.id,
+        "build-session",
+        expect.objectContaining({ agent: pipeline.agentType }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
+    expect(mockToastSuccess).toHaveBeenCalledWith("Stage restarted");
+  });
+
+  test("keeps the Restart in dialog open with the reason when the restart is refused", async () => {
+    restartStepMock.mockImplementationOnce(async () => {
+      throw new Error("This build's pull request has been merged.");
+    });
+    render(<BuildChatTab data={tabData} />);
+
+    fireEvent.contextMenu(graphNode("Build"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restart Build" }));
+
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(
+      "pull request has been merged",
+    );
+  });
+
   test("offers validation restart from a touch long press", async () => {
     useBuildPipelineStore.getState().replacePipeline({
       ...pipeline,

@@ -2,6 +2,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { isBuildPipeline, isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
+import { isBuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import {
   asString,
   asBoolean,
@@ -88,11 +89,16 @@ export function registerBuildPipelineCommands(
       asNonBlankString(reviewerId, "reviewerId"),
     );
   });
-  register("restart_build_pipeline_step", ({ pipelineId, stageId }, context) => {
+  // `selection` is "Restart in…": the step reruns on another agent or model.
+  register("restart_build_pipeline_step", ({ pipelineId, stageId, selection }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    if (selection !== undefined && !isBuildPipelineRestartSelection(selection)) {
+      throw new Error("Invalid build pipeline restart selection");
+    }
     return context.buildPipelines.restartStep(
       asNonBlankString(pipelineId, "pipelineId"),
       asNonBlankString(stageId, "stageId"),
+      selection,
     );
   });
   // "Rewind code to here": the preview names the commits a reset drops; the

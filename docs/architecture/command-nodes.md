@@ -452,8 +452,11 @@ command node.
   dialogs: Add Project, New Environment, Repository Settings, Delete Project
   or an environment's Settings), the realm's own selection (for the sidebar's
   highlight), the sidebar's open state (the realm's toolbar toggles it),
-  requests to open settings (they belong to the command node), and a ready
-  handshake so nothing asked while a realm loads is lost.
+  whether the files panel is open (one state for the window and all its
+  realms, shared in both directions; the phone layout, where the panel is a
+  full-screen sheet of the window's own node, does not share it), requests to
+  open settings (they belong to the command node), and a ready handshake so
+  nothing asked while a realm loads is lost.
 - **Creating on another node** opens that node's New Environment dialog in
   its realm, so the node's defaults — the command node's inherited settings
   laid over its own — and start apply as they would there.

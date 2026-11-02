@@ -1211,7 +1211,7 @@ function drag(from: { x: number; y: number }, to: { x: number; y: number }) {
   ];
 }
 
-test("text, region, and page modes capture end to end; embedded roots resolve to their host", async () => {
+test("text, region, and page modes capture end to end; open roots select inner content", async () => {
   const testInfo = test.info();
   await navigate(ROUTE_VARIANTS.pricing);
   const start = (mode: string) =>
@@ -1299,8 +1299,7 @@ test("text, region, and page modes capture end to end; embedded roots resolve to
     await preview("discardPendingCapture", pageStatus.pending.captureId);
   }
 
-  // Element clicks on an iframe and a shadow-root button select their host
-  // element in the top document (inner roots are documented as unsupported).
+  // Iframes retain host fallback; open shadow content captures its inner target.
   const hosts: string[] = [];
   for (const selector of ['[data-testid="billing-iframe"]', '[data-testid="shadow-card"]']) {
     const { descriptor } = await captureElement(selector);
@@ -1309,7 +1308,19 @@ test("text, region, and page modes capture end to end; embedded roots resolve to
     if (pending.capture.target.kind === "element") {
       const tag = pending.capture.target.anchor.semantic.tagName.toLowerCase();
       hosts.push(`${selector} -> ${tag} (${pending.capture.target.anchor.scope.kind})`);
-      expect(["iframe", "fixture-shadow-card"]).toContain(tag);
+      if (selector.includes("billing-iframe")) {
+        expect(tag).toBe("iframe");
+        expect(pending.capture.target.anchor.scope).toEqual({
+          kind: "unsupported",
+          reason: "iframe",
+        });
+      } else {
+        expect(tag).not.toBe("fixture-shadow-card");
+        expect(pending.capture.target.anchor.scope).toMatchObject({
+          kind: "shadow",
+          hosts: [{ tagName: "fixture-shadow-card" }],
+        });
+      }
     }
     await preview("discardPendingCapture", descriptor.captureId);
   }

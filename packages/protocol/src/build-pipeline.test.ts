@@ -6,6 +6,7 @@ import {
   executionModeForSessionPhase,
   isActiveBuildPhase,
   isBuildPipeline,
+  isCancelledBuildPipeline,
   isBuildStepConfigs,
   isStartBuildPipelineInput,
   isPipelineIndependentReviewLabel,
@@ -1623,6 +1624,26 @@ describe("build pipeline protocol", () => {
     expect(isActiveBuildPhase("paused")).toBe(false);
     expect(isActiveBuildPhase("complete")).toBe(false);
     expect(isActiveBuildPhase("failed")).toBe(false);
+  });
+
+  test("tells a cancel from a failure, both of which end in failed", () => {
+    expect(isCancelledBuildPipeline({ phase: "failed", error: "Build cancelled" })).toBe(true);
+    expect(
+      isCancelledBuildPipeline({
+        phase: "failed",
+        error: "Build cancelled, but stopping every agent could not be confirmed: offline",
+      }),
+    ).toBe(true);
+    expect(isCancelledBuildPipeline({ phase: "failed", error: "Build stage failed" })).toBe(false);
+    expect(isCancelledBuildPipeline({ phase: "failed" })).toBe(false);
+    expect(isCancelledBuildPipeline({ phase: "paused", error: "Build cancelled" })).toBe(false);
+    expect(
+      isCancelledBuildPipeline({
+        phase: "failed",
+        error: "Build cancelled",
+        failureContext: { phase: "building", kind: "prompt-dispatch" },
+      }),
+    ).toBe(false);
   });
 
   test("validates bounded start requests at the gateway boundary", () => {

@@ -7,6 +7,7 @@
 import { DEFAULT_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline-stages.js";
 import { randomUUID } from "node:crypto";
 import {
+  BUILD_CANCELLED_ERROR,
   type BuildPipeline,
   type PipelineSession,
   type PipelineSessionPhase,
@@ -1796,8 +1797,8 @@ export class BuildPipelineLifecycle {
       pipeline.phase = "failed";
       pipeline.error =
         abortErrors.length > 0
-          ? `Build cancelled, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`
-          : "Build cancelled";
+          ? `${BUILD_CANCELLED_ERROR}, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`
+          : BUILD_CANCELLED_ERROR;
       delete pipeline.pendingPromptAttempt;
       delete pipeline.activePromptContext;
       delete pipeline.pendingUserMessages;

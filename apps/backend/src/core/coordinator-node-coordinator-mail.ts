@@ -51,6 +51,7 @@ export async function sendToNodeCoordinator(
     requestId: string;
     subject?: string;
     body: string;
+    nodeParent?: { id: string; threadId: string; hopCount: number };
   },
 ): Promise<JsonRecord> {
   if (!target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
@@ -73,6 +74,7 @@ export async function sendToNodeCoordinator(
       projectId: target.projectId,
       ...(input.subject ? { subject: input.subject } : {}),
       body: input.body,
+      ...(input.nodeParent ? { nodeParent: input.nodeParent } : {}),
     },
     `mail:${input.coordinatorId}:${input.requestId}`,
   );
@@ -93,7 +95,7 @@ export async function sendToNodeCoordinator(
     ...(scheduled
       ? {
           delivery: "async",
-          wake: `The coordinator on ${target.nodeName} answers by mail; this conversation is woken when its reply arrives.`,
+          wake: `The coordinator on ${target.nodeName} answers by mail; this conversation is woken when its reply arrives while its unattended budget remains. Held replies need the user to resume delivery.`,
           nextStep: "Finish your turn now. Do not poll.",
         }
       : {
@@ -212,7 +214,7 @@ export function registerCoordinatorCommandNodeMail(register: CommandRegistrar): 
       ...(replyToMessageId ? { replyToMessageId } : {}),
       placement: "node-outbox",
       coordinator: `command node ${name}`,
-      deliveryHint: `queued for the coordinator on ${name}; delivered when it collects its mail`,
+      deliveryHint: `queued for the coordinator on ${name}; delivered when it collects its mail with coordinator-mail support. Older command nodes leave it queued until updated.`,
       coordinatorDelegationOpened: false,
     };
   });

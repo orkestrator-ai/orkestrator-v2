@@ -511,9 +511,29 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         caller.projectId,
         asNonBlankString(args.nodeId, "nodeId"),
       );
+      const own = await mailbox(context, caller);
+      const parent =
+        typeof args.replyToMessageId === "string"
+          ? await context.storage.getAgentMailMessage(
+              own.coordinatorEnvironmentId,
+              own.coordinatorTabId,
+              args.replyToMessageId,
+            )
+          : undefined;
+      if (parent && (parent.from.kind !== "node" || parent.from.nodeId !== target.nodeId))
+        throw new Error("Reply parent is not from that node");
       return sendToNodeCoordinator(target, {
         coordinatorId: caller.coordinatorId,
-        mailbox: await mailbox(context, caller),
+        mailbox: own,
+        ...(parent
+          ? {
+              nodeParent: {
+                id: parent.id,
+                threadId: parent.threadId,
+                hopCount: parent.hopCount ?? 0,
+              },
+            }
+          : {}),
         requestId: asNonBlankString(args.requestId, "requestId"),
         ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
         body: asNonBlankString(args.body, "body"),

@@ -1969,7 +1969,9 @@ export async function createControlMcp(
                   messageId: input.replyToMessageId,
                 }).catch(() => null)
               : null;
-            const replyTarget = nodeMailReplyTarget(isRecord(parent) ? parent.from : null);
+            if (!isRecord(parent))
+              throw new Error("Reply parent could not be loaded from this conversation mailbox");
+            const replyTarget = nodeMailReplyTarget(parent.from);
             if (replyTarget?.kind === "command-node") upward = true;
             else if (replyTarget) {
               remote = {
@@ -2004,6 +2006,7 @@ export async function createControlMcp(
               ...(input.subject ? { subject: input.subject } : {}),
               body: input.body,
               ...(deliverNow === true ? { deliverNow: true } : {}),
+              ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
             });
             if (!isRecord(sent)) throw new Error("Message send returned no result");
             const {

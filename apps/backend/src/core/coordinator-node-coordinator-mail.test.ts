@@ -8,7 +8,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
+import {
+  renderAgentMailCarrier,
+  AGENT_MAIL_MAX_BODY_BYTES,
+  DEFAULT_AGENT_MESSAGING_SETTINGS,
+} from "@orkestrator/protocol/agent-mail";
 import { COMMAND_NODE_COORDINATOR_MAIL_ADDRESS } from "@orkestrator/protocol/coordinator";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 
@@ -151,6 +155,7 @@ async function link(
         nodeId === "bk_leaf"
           ? {
               connected: true,
+              hello: { capabilities: ALL_CAPABILITIES },
               invoke: (name: string, args: Record<string, unknown>) => leafCall(name, args),
             }
           : null,
@@ -172,12 +177,13 @@ async function link(
   });
   let counter = 0;
   /** The command node's main coordinator asks the leaf's coordinator something. */
-  const ask = (body: string, from: MailActor = commandMain) =>
+  const ask = (body: string, from: MailActor = commandMain, replyTo?: string) =>
     run("send_coordinator_node_mail", {
       scope: scopeOf(command, from),
       nodeId: "bk_leaf",
       toEnvironmentId: "coordinator",
       requestId: `ask-${++counter}`,
+      ...(replyTo ? { replyToMessageId: replyTo } : {}),
       body,
     });
   /** The leaf's coordinator answers a message, or starts one when `replyTo` is absent. */
@@ -216,6 +222,89 @@ async function link(
 }
 
 describe("command node coordinator ↔ leaf coordinator", () => {
+  for (const char of ["a", "😀"])
+    test(`boundary payloads deliver and drain (${char})`, async () => {
+      const world = await link();
+      const body = char.repeat(AGENT_MAIL_MAX_BODY_BYTES / Buffer.byteLength(char));
+      const asked = await world.ask(body);
+      const question = await world.leaf.storage.getAgentMailMessage(
+        world.leafMain.environmentId,
+        world.leafMain.tabId,
+        asked.messageId as string,
+      );
+      expect(question.body.endsWith(body)).toBe(true);
+      await world.tell(body, question.id);
+      expect(await world.collect()).toBe(true);
+      const inbox = await world.command.storage.getAgentMailMailbox(
+        world.commandMain.environmentId,
+        world.commandMain.tabId,
+      );
+      const answer = await world.command.storage.getAgentMailMessage(
+        world.commandMain.environmentId,
+        world.commandMain.tabId,
+        inbox.messages.find((m) => m.from.kind === "node")!.id,
+      );
+      expect(answer.body.endsWith(body)).toBe(true);
+      const outbox = await world.leafCall("collect_node_outbox", {
+        controllerId: "bk_cmd",
+        after: 0,
+        coordinatorMail: true,
+      });
+      expect(outbox.items).toEqual([]);
+    });
+
+  test("an older command collector cannot consume coordinator mail as worker mail", async () => {
+    const world = await link();
+    await world.tell("Keep this until the command node is updated");
+    const old = await world.leafCall("collect_node_outbox", { controllerId: "bk_cmd", after: 0 });
+    expect(old.items).toEqual([]);
+    await world.leafCall("ack_node_outbox", { controllerId: "bk_cmd", upTo: 999 });
+    const modern = await world.leafCall("collect_node_outbox", {
+      controllerId: "bk_cmd",
+      after: 0,
+      coordinatorMail: true,
+    });
+    expect(modern.items).toHaveLength(1);
+    expect(await world.collect()).toBe(true);
+  });
+
+  test("cross-node hop limits refuse before a reply is queued", async () => {
+    const world = await link({ budget: 50 });
+    let question = (await world.ask("Q0")).messageId as string;
+    for (let round = 0; round < 4; round++) {
+      await world.tell(`A${round}`, question);
+      expect(await world.collect()).toBe(true);
+      const inbox = await world.command.storage.getAgentMailMailbox(
+        world.commandMain.environmentId,
+        world.commandMain.tabId,
+      );
+      const answer = inbox.messages
+        .filter((m) => m.from.kind === "node")
+        .sort((a, b) => (b.hopCount ?? 0) - (a.hopCount ?? 0))[0]!;
+      expect(answer.hopCount).toBe(round * 2 + 1);
+      question = (await world.ask(`Q${round + 1}`, world.commandMain, answer.id))
+        .messageId as string;
+    }
+    await expect(world.tell("Too many hops", question)).rejects.toThrow("Thread hop limit");
+    const outbox = await world.leafCall("collect_node_outbox", {
+      controllerId: "bk_cmd",
+      after: 0,
+      coordinatorMail: true,
+    });
+    expect(outbox.items).toEqual([]);
+  });
+
+  test("upward new mail reopens the command main", async () => {
+    const world = await link();
+    await world.command.closeMain();
+    await world.tell("Status from the leaf");
+    expect(await world.collect()).toBe(true);
+    const reopened = await world.command.main();
+    expect(reopened.conversationId).not.toBe(world.commandMain.conversationId);
+    await world.command.deliver();
+    expect(world.command.received(reopened).join("\n")).toContain("Status from the leaf");
+  });
+
   test("a question reaches the leaf's main coordinator and its answer comes back in the same thread", async () => {
     const world = await link();
     const asked = await world.ask("Which release branch is checked out on the build box?");
@@ -272,6 +361,7 @@ describe("command node coordinator ↔ leaf coordinator", () => {
     const outbox = await world.leafCall("collect_node_outbox", {
       controllerId: "bk_cmd",
       after: 0,
+      coordinatorMail: true,
     });
     expect((outbox.items as unknown[])[0]).toMatchObject({
       fromCoordinator: true,
@@ -306,6 +396,24 @@ describe("command node coordinator ↔ leaf coordinator", () => {
       trust: "same-project",
     });
 
+    const answerMessage = inbox.messages.find((message) => message.from.kind === "node")!;
+    expect(answerMessage.threadId).toBe(stored.threadId);
+    expect(answerMessage.replyToMessageId).toBe(stored.id);
+    expect(answerMessage.hopCount).toBe(1);
+    const followup = await world.ask("And now?", world.commandMain, answerMessage.id);
+    const followupMessage = await world.leaf.storage.getAgentMailMessage(
+      world.leafMain.environmentId,
+      world.leafMain.tabId,
+      followup.messageId as string,
+    );
+    expect(followupMessage.threadId).toBe(stored.threadId);
+    expect(followupMessage.replyToMessageId).toBe(answerMessage.id);
+    expect(followupMessage.hopCount).toBe(2);
+    const carrier = renderAgentMailCarrier(stored);
+    expect(carrier).toContain("Reply with send_message");
+    expect(carrier).not.toContain("reply_message tool");
+    expect(carrier).not.toContain("authenticated delegation");
+    expect(carrier).not.toContain("follow that task");
     // Replying to that message goes back to the leaf's coordinator address.
     const target = nodeMailReplyTarget(
       inbox.messages.find((message) => message.from.kind === "node")!.from,
@@ -323,6 +431,7 @@ describe("command node coordinator ↔ leaf coordinator", () => {
     const outbox = await world.leafCall("collect_node_outbox", {
       controllerId: "bk_cmd",
       after: 0,
+      coordinatorMail: true,
     });
     const [item] = outbox.items as Array<Record<string, unknown>>;
     // A new message goes to the repository's main coordinator there.
@@ -487,6 +596,22 @@ describe("command node coordinator ↔ leaf coordinator", () => {
       await world.command.finishTurn(world.commandMain, { deliver: false });
       question = (await world.ask(`Q${rounds + 1}`)).messageId as string;
     }
+    const notices = await world.command.storage.getAgentMailMailbox(
+      world.commandMain.environmentId,
+      world.commandMain.tabId,
+    );
+    const noticeSummary = notices.messages.find(
+      (m) => m.from.kind === "system" && m.subject?.includes("loop budget"),
+    );
+    const notice = noticeSummary
+      ? await world.command.storage.getAgentMailMessage(
+          world.commandMain.environmentId,
+          world.commandMain.tabId,
+          noticeSummary.id,
+        )
+      : null;
+    expect(notice?.body).toContain("Sending another request does not reset this budget");
+    expect(notice?.body).toContain("Ask the user");
     // The command node's budget for the leaf coordinator's mail stopped it:
     // three answers woke the command node's coordinator, the fourth is held.
     expect(rounds).toBe(3);

@@ -249,6 +249,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         "subject",
         "body",
         "steer",
+        "nodeParent",
         // The leaf's project, for mail to its coordinator ("coordinator").
         "projectId",
       ],
@@ -320,15 +321,19 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   register("collect_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "after"], "arguments");
+    assertOnlyKeys(args, ["controllerId", "after", "coordinatorMail"], "arguments");
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     const after =
       typeof args.after === "number" && Number.isSafeInteger(args.after) ? args.after : 0;
-    return coordination(context).leafMail.collect(args.controllerId, after);
+    return coordination(context).leafMail.collect(
+      args.controllerId,
+      after,
+      args.coordinatorMail === true,
+    );
   });
 
   register("ack_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "upTo", "sequences"], "arguments");
+    assertOnlyKeys(args, ["controllerId", "upTo", "sequences", "coordinatorMail"], "arguments");
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     if (typeof args.upTo !== "number" || !Number.isSafeInteger(args.upTo)) {
       throw new Error("Expected upTo.");
@@ -345,6 +350,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       args.controllerId,
       args.upTo,
       sequences as number[] | undefined,
+      args.coordinatorMail === true,
     );
   });
 

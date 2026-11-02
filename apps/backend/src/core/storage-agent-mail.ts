@@ -360,6 +360,10 @@ export class AgentMailRepository {
     input: AgentMailSendInput,
     options: {
       newDelegation?: boolean;
+      /** Backend-owned node transport metadata; never accepted from an agent directly. */
+      nodeParent?: { id: string; threadId: string; hopCount: number };
+      /** Transport framing is separate from the bounded user payload. */
+      nodePrefix?: string;
       /** Structured facts for a workflow notice; ignored for any other sender. */
       notice?: AgentMailNotice;
       /**
@@ -389,6 +393,21 @@ export class AgentMailRepository {
       sender.kind === "system" && options.statusBudgetKey ? options.statusBudgetKey : undefined;
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
       throw new Error("requestId must be 1-256 characters");
+    const nodeParent = sender.kind === "node" ? options.nodeParent : undefined;
+    const nodePrefix = sender.kind === "node" ? (options.nodePrefix ?? "") : "";
+    if (Buffer.byteLength(nodePrefix, "utf8") > 4096) throw new Error("Node framing is too large");
+    if (
+      nodeParent &&
+      (!nodeParent.id ||
+        nodeParent.id.length > 256 ||
+        !nodeParent.threadId ||
+        nodeParent.threadId.length > 256 ||
+        !Number.isSafeInteger(nodeParent.hopCount) ||
+        nodeParent.hopCount < 0 ||
+        nodeParent.hopCount >= AGENT_MAIL_MAX_THREAD_HOPS)
+    ) {
+      throw new AgentMailError("hop-limit", "Invalid node thread or thread hop limit reached");
+    }
     const bodyBytes = Buffer.byteLength(input.body, "utf8");
     if (!input.body.trim() || bodyBytes > AGENT_MAIL_MAX_BODY_BYTES)
       throw new Error("body must be non-empty and at most 32 KiB UTF-8");
@@ -405,7 +424,13 @@ export class AgentMailRepository {
       const store = await this.store.snapshot();
       const { senderScope } = this.authenticateMailSender(store, sender);
       const key = idempotencyKey(senderScope, requestId);
-      const fingerprint = sendFingerprint({ ...requested, subject });
+      const fingerprint = sendFingerprint({
+        ...requested,
+        subject,
+        ...(nodeParent
+          ? { replyToMessageId: `${nodeParent.threadId}:${nodeParent.id}:${nodeParent.hopCount}` }
+          : {}),
+      });
       const prior = store.idempotency[key];
       if (prior) {
         if (prior.fingerprint !== fingerprint)
@@ -443,7 +468,13 @@ export class AgentMailRepository {
       const store = await this.store.load();
       const { actor, senderScope, senderMailbox } = this.authenticateMailSender(store, sender);
       const key = idempotencyKey(senderScope, requestId);
-      const fingerprint = sendFingerprint({ ...requested, subject });
+      const fingerprint = sendFingerprint({
+        ...requested,
+        subject,
+        ...(nodeParent
+          ? { replyToMessageId: `${nodeParent.threadId}:${nodeParent.id}:${nodeParent.hopCount}` }
+          : {}),
+      });
       const prior = store.idempotency[key];
       if (prior) {
         if (prior.fingerprint !== fingerprint)
@@ -727,8 +758,9 @@ export class AgentMailRepository {
       const message: AgentMailMessage = {
         version: 1,
         id,
-        threadId: parent?.threadId ?? id,
-        ...(parent ? { replyToMessageId: parent.id } : {}),
+        threadId: nodeParent?.threadId ?? parent?.threadId ?? id,
+        hopCount: (nodeParent?.hopCount ?? parent?.hopCount ?? -1) + 1,
+        ...(nodeParent || parent ? { replyToMessageId: nodeParent?.id ?? parent!.id } : {}),
         requestId,
         createdAt: now,
         from: actor,
@@ -736,8 +768,8 @@ export class AgentMailRepository {
         toTabId: recipient.tabId,
         toIncarnationId: recipient.incarnationId,
         ...(subject ? { subject } : {}),
-        body: input.body,
-        bodyBytes,
+        body: nodePrefix + input.body,
+        bodyBytes: bodyBytes + Buffer.byteLength(nodePrefix, "utf8"),
         trust,
         injectDepth,
         threadDepth: nextThreadDepth,

@@ -72,6 +72,7 @@ export interface OutboxItem {
   fromCoordinator?: true;
   /** The leaf message ID of the command node's mail this answers. */
   replyToMessageId?: string;
+  nodeParent?: { id: string; threadId: string; hopCount: number };
 }
 
 /** A command node's coordinator's latest contact with one environment. */
@@ -281,6 +282,7 @@ export class LeafNodeMail {
           duplicate.subject !== item.subject ||
           JSON.stringify(duplicate.toCoordinator) !== JSON.stringify(item.toCoordinator) ||
           duplicate.replyToMessageId !== item.replyToMessageId ||
+          JSON.stringify(duplicate.nodeParent) !== JSON.stringify(item.nodeParent) ||
           duplicate.repositoryHint !== item.repositoryHint
         )
           throw new Error("Conflicting mail request ID.");
@@ -316,9 +318,12 @@ export class LeafNodeMail {
   async collect(
     controllerId: BackendId,
     after: number,
+    coordinatorMail = false,
   ): Promise<{ items: OutboxItem[]; more: boolean }> {
     const state = await this.store.load();
-    const items = (state.outbox[controllerId]?.items ?? []).filter((entry) => entry.seq > after);
+    const items = (state.outbox[controllerId]?.items ?? []).filter(
+      (entry) => entry.seq > after && (coordinatorMail || !entry.fromCoordinator),
+    );
     return { items: items.slice(0, MAX_COLLECT), more: items.length > MAX_COLLECT };
   }
 
@@ -327,12 +332,15 @@ export class LeafNodeMail {
     controllerId: BackendId,
     upTo: number,
     sequences?: number[],
+    coordinatorMail = false,
   ): Promise<{ remaining: number }> {
     return this.store.mutate((state) => {
       const current = state.outbox[controllerId];
       if (!current) return { next: null, result: { remaining: 0 } };
-      const items = current.items.filter((entry) =>
-        sequences ? !sequences.includes(entry.seq) : entry.seq > upTo,
+      const items = current.items.filter(
+        (entry) =>
+          (!coordinatorMail && entry.fromCoordinator) ||
+          (sequences ? !sequences.includes(entry.seq) : entry.seq > upTo),
       );
       if (items.length === current.items.length) {
         return { next: null, result: { remaining: items.length } };

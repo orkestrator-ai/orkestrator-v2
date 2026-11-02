@@ -143,13 +143,14 @@ export function metadataMessage(message: AgentMailMessage): AgentMailMessageSumm
 }
 
 /**
- * Whether a message is past the thread hop limit. Routed mail (it carries an
- * `autonomousSequence`) is bounded by the pair budget at send time instead,
- * where it is held rather than refused, so its depth is not a limit here.
+ * Whether a message is past the reply hop limit. Routed mail also has a
+ * resettable pair budget (`threadDepth`); its transport-independent hop count
+ * still bounds a single thread across nodes, independently of budget resets.
  */
 export function exceedsThreadHops(message: AgentMailMessage): boolean {
   return (
-    message.autonomousSequence === undefined && message.threadDepth >= AGENT_MAIL_MAX_THREAD_HOPS
+    (message.hopCount ?? 0) >= AGENT_MAIL_MAX_THREAD_HOPS ||
+    (message.autonomousSequence === undefined && message.threadDepth >= AGENT_MAIL_MAX_THREAD_HOPS)
   );
 }
 

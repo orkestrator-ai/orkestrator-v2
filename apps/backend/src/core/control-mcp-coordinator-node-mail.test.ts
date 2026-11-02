@@ -57,11 +57,16 @@ describe("coordinator mail between a command node and its leaves", () => {
   let mode: "command" | "leaf" = "command";
   const invocations: Array<{ command: string; args: Record<string, unknown> }> = [];
   const parents = new Map<string, Structured>();
+  let noMailbox = false;
+  let parentError = false;
 
   beforeEach(async () => {
     dataDir = await mkdtemp(path.join(tmpdir(), "ork-control-mcp-node-mail-"));
     invocations.length = 0;
     mode = "command";
+    noMailbox = false;
+    parentError = false;
+    parents.clear();
     const invoke: ControlMcpInvoker = async <T>(command: string, args: Structured = {}) => {
       invocations.push({ command, args });
       const answers: Record<string, () => unknown> = {
@@ -69,15 +74,22 @@ describe("coordinator mail between a command node and its leaves", () => {
           { id: "project-1", name: "Site", gitUrl: "git@github.com:acme/site.git" },
         ],
         get_config: () => ({ global: { agentMessaging: { enabled: true } } }),
-        get_project_coordinator: () => ({
-          workspace: {
-            id: "coordinator-1",
-            lifecycleState: "ready",
-            conversations: [
-              { id: "conversation-1", tabId: "coord-tab", mailboxIncarnationId: "incarnation-1" },
-            ],
-          },
-        }),
+        get_project_coordinator: () =>
+          noMailbox
+            ? null
+            : {
+                workspace: {
+                  id: "coordinator-1",
+                  lifecycleState: "ready",
+                  conversations: [
+                    {
+                      id: "conversation-1",
+                      tabId: "coord-tab",
+                      mailboxIncarnationId: "incarnation-1",
+                    },
+                  ],
+                },
+              },
         get_node_status: () =>
           mode === "leaf"
             ? { nodeId: "bk_leaf", mode: "leaf", controllers: [{ displayName: "Office desktop" }] }
@@ -99,7 +111,10 @@ describe("coordinator mail between a command node and its leaves", () => {
             },
           ],
         }),
-        get_agent_mail_message: () => parents.get(String(args.messageId)) ?? null,
+        get_agent_mail_message: () => {
+          if (parentError) throw new Error("read failed");
+          return parents.get(String(args.messageId)) ?? null;
+        },
         get_coordinator_node_mailbox: () => ({
           nodeId: args.nodeId,
           node: "Build box",
@@ -147,6 +162,25 @@ describe("coordinator mail between a command node and its leaves", () => {
   };
   const sent = (command: string) =>
     invocations.filter((entry) => entry.command === command).map((entry) => entry.args);
+
+  test("missing reply parents and unavailable mailboxes refuse without a local send", async () => {
+    for (const failure of ["missing", "lookup-error", "no-mailbox"]) {
+      noMailbox = failure === "no-mailbox";
+      parentError = failure === "lookup-error";
+      await expect(
+        call("send_message", {
+          requestId: failure,
+          toEnvironmentId: "coordinator",
+          replyToMessageId: "missing",
+          body: "reply",
+        }),
+      ).rejects.toThrow(
+        failure === "no-mailbox" ? "Coordinator credential is no longer valid" : "Reply parent",
+      );
+    }
+    expect(sent("send_coordinator_agent_mail")).toEqual([]);
+    expect(sent("send_coordinator_command_node_mail")).toEqual([]);
+  });
 
   test("list_mailboxes with nodeId says whether that node has a coordinator to reach", async () => {
     const reach = await call("list_mailboxes", { nodeId: "bk_leaf" });

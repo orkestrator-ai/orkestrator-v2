@@ -1,3 +1,4 @@
+import { AGENT_MAIL_MAX_THREAD_HOPS } from "@orkestrator/protocol/agent-mail";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -448,9 +449,15 @@ export class NodeCoordination {
         toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
         toTabId: "",
         ...(typeof args.subject === "string" ? { subject: args.subject.slice(0, 200) } : {}),
-        body: describeCommandCoordinatorMail(input.body, controllerName),
+        body: input.body,
       },
-      { newDelegation: true },
+      {
+        newDelegation: true,
+        nodePrefix: describeCommandCoordinatorMail("", controllerName),
+        ...(args.nodeParent
+          ? { nodeParent: args.nodeParent as { id: string; threadId: string; hopCount: number } }
+          : {}),
+      },
     );
     // Its answer goes back to this conversation; a new message from this
     // project's coordinator goes to the command node that mailed it last.
@@ -508,6 +515,15 @@ export class NodeCoordination {
       input.coordinatorTabId,
     );
     const mailbox = destination as Partial<CoordinatorMailbox>;
+    const parent = input.replyToMessageId
+      ? await this.options.storage.getAgentMailMessage(
+          input.coordinatorEnvironmentId,
+          input.coordinatorTabId,
+          input.replyToMessageId,
+        )
+      : undefined;
+    if (parent && (parent.hopCount ?? 0) >= AGENT_MAIL_MAX_THREAD_HOPS)
+      throw new Error("Thread hop limit reached");
     const item = await this.leafMail.enqueue(destination.controllerId, {
       requestId: input.requestId,
       fromEnvironmentId: input.coordinatorEnvironmentId,
@@ -526,6 +542,15 @@ export class NodeCoordination {
       ...(input.subject ? { subject: input.subject } : {}),
       body: input.body,
       fromCoordinator: true,
+      ...(parent
+        ? {
+            nodeParent: {
+              id: parent.id,
+              threadId: parent.threadId,
+              hopCount: parent.hopCount ?? 0,
+            },
+          }
+        : {}),
       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
     });
     return {
@@ -579,6 +604,8 @@ export class NodeCoordination {
     repositoryHint?: string;
     subject?: string;
     body: string;
+    nodePrefix?: string;
+    nodeParent?: { id: string; threadId: string; hopCount: number };
     requestId: string;
     /** A leaf agent; absent for this node's own notices. */
     from?: {
@@ -666,6 +693,7 @@ export class NodeCoordination {
         ...(input.subject ? { subject: input.subject } : {}),
         body: input.body,
       },
+      { nodePrefix: input.nodePrefix, nodeParent: input.nodeParent },
     );
   }
 

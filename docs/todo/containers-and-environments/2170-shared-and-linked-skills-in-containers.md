@@ -22,8 +22,8 @@ Analysed 2026-11-01 against `main` at `93b99bfba`.
 
 ### Tasks
 
-1. **Shared skills root**: stage `~/.agents/skills` for providers that read it. Status: open.
-2. **Linked skill entries**: stage a linked skill whose target is a skill directory inside an allowed root. Status: open.
+1. **Shared skills root**: stage `~/.agents/skills` for providers that read it. Status: done.
+2. **Linked skill entries**: stage a linked skill whose target is a skill directory inside an allowed root. Status: done.
 
 ### 1. Shared skills root
 
@@ -61,6 +61,33 @@ Analysed 2026-11-01 against `main` at `93b99bfba`.
     - Pros: nothing new to reason about.
     - Cons: linked skills stay host-only, which is the layout shared-skill tools create.
 
+## Current state
+
+Rechecked on 2026-11-02 against `main` at `38d55ee14`: both gaps were still
+open (`portable-inputs.ts` skipped every link and had no `~/.agents/skills`
+source; `entrypoint.sh` had no `/agents-skills` copy). Both tasks are now
+implemented:
+
+- `portableInputSpec` has a `shared-skills` entry staging `~/.agents/skills`
+  (one unit per top-level entry, credential guard on) into the
+  `agents-skills` stage, bound at `/agents-skills`. `withSharedSkillsInput`
+  adds it when Codex, Cursor, Grok, OpenCode or Pi is staged and the image
+  declares `staged-inputs=4` (`imageCopiesSharedSkills`). `entrypoint.sh`
+  copies it per entry into `~/.agents/skills` in a self-contained block after
+  the Cursor setup, and the root entrypoint relays it under rootless Docker
+  (`STAGED_INPUT_MOUNTS`). Input spec version 5.
+- A top-level link in Claude's, Grok's or Pi's `skills`, or in
+  `~/.agents/skills`, is staged as a real directory when it resolves to a
+  directory holding a regular `SKILL.md` strictly inside `~/.agents/skills`
+  or a skill root of a provider staged in the same run, with no link between
+  that root and the skill (`ProviderCopier.linkedSkill`). Every other link is
+  still skipped and counted as `symlink`.
+- Tests: `apps/backend/tests/portable-inputs-shared-skills.test.ts` (fixture
+  homes only), plus updated expectations in
+  `portable-inputs-user-extensions.test.ts` and the inputs section test.
+- Documented in
+  [`container-lifecycle.md`](../../architecture/container-lifecycle.md#portable-inputs-staged-inputs).
+
 ## Constraints and rationale
 
 - Stage only user-authored content, never logins, history or caches
@@ -76,6 +103,10 @@ None.
 
 - Whether the pinned Grok and Cursor list `~/.agents/skills` in a container
   HOME (from code only).
+- A live container built from this tree (`staged-inputs=4`) has not been
+  booted with a fixture home to confirm `~/.agents/skills` and a linked
+  Claude skill arrive end to end; the staging and the entrypoint copy are
+  each covered by unit tests that run the real entrypoint functions.
 
 ## Related
 
@@ -85,3 +116,70 @@ None.
 ## Replaces
 
 Nothing.
+
+## Assumptions and decisions
+
+### Task 1: the shared root is a pseudo-provider, `shared-skills`
+
+Chosen: the recommended option, a new `agents-skills` mount. It is staged
+under its own summary entry, `shared-skills`, rather than under one of the
+providers that read it. A spec entry belongs to one provider and copies once
+per staging run; attaching the root to each reader would copy it several
+times into one stage, or attribute it to an arbitrary reader. The entry is
+added by `withSharedSkillsInput` in the container create path, so the image
+gate sits beside the existing Cursor gate. The environment's inputs section
+labels it "Shared skills" and offers no "Remove credentials" action, because
+it holds no login; `disabledProviders` never lists it.
+
+### Task 1: readers include Pi, not Claude
+
+`rootSpecsFor` in `agent-skills.ts` lists `~/.agents/skills` for Codex,
+Cursor, Grok, OpenCode and Pi, so all five stage it (the to-do named four).
+Claude does not read it, so a Claude-only environment stages no
+`/agents-skills`; its linked skills still arrive through task 2.
+
+### Task 1: credential guard on, capability bumped to 4
+
+The root is newly portable, so its entries get the same credential guard as
+Claude's `skills` (input spec version 4's rule). `staged-inputs` goes to 4
+and the backend stages the mount only for an image that declares it, so an
+older image never reports shared skills it would not copy. The agent-test
+source is the host home (`agentTestHostHome`), like Pi's and Cursor's
+user resources.
+
+### Task 2: which roots a link may resolve into
+
+Chosen: the recommended option. Allowed targets are `~/.agents/skills`
+(always, even when it is not staged, because the `npx skills` layout links
+Claude's skills into it) and the skill roots of providers staged in the same
+run (Claude, Codex, Grok and Pi `skills`). A link into Claude's skills from
+Grok's is followed only when Claude is staged. A root that resolves to `/`, a
+home or an ancestor of one is dropped, so a mislinked root cannot make the
+whole home an allowed target. The target must lie strictly inside the root
+(the root itself is refused) and be a real directory with a regular
+`SKILL.md`; nested skills (`group/name`) are allowed.
+
+### Task 2: identity re-checked, credentials always withheld
+
+The target's components below the allowed root are checked for links, its
+inode is compared before and after the copy, and the copy is discarded as
+`changed-while-reading` when it moved. Files are still opened `O_NOFOLLOW`
+and links inside the skill are skipped. The credential guard applies to every
+followed link, including in Grok's and Pi's skill roots, whose own entries
+keep their earlier policy, because a link reaches content that root did not
+hold. A refused link keeps the existing `symlink` reason rather than a new
+one, so the status UI and its counts are unchanged.
+
+### Task 2: Codex's tree-mode `skills` still skips links
+
+Codex's `skills` is copied as one tree (`copy_agent_directory` in the
+entrypoint), so a link inside it is still skipped. It is an allowed target
+root. Codex reads `~/.agents/skills` itself, so the `npx skills` layout does
+not need a link there; converting it to per-entry copying was left out of
+scope.
+
+### Shared skills in the entrypoint stay self-contained
+
+The `/agents-skills` copy is one `if` block after the Cursor setup, using only
+the existing helpers, so it does not overlap other edits to `entrypoint.sh`
+(to-do 1200 edits a different part concurrently).

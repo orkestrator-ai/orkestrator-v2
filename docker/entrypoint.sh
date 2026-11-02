@@ -29,14 +29,15 @@ BOOT_PHASE=""
 BOOT_FAILURE_CODE=""
 
 # Portable input contract (docker/image-manifest.ts):
-# ORKESTRATOR_CAPABILITY staged-inputs=3
+# ORKESTRATOR_CAPABILITY staged-inputs=4
 #
 # Agent configuration and credentials arrive only at the read-only mount
 # points below (/claude-config, /codex-home, /opencode-*, /grok-*, /pi-config,
-# /cursor-config, /claude-config.json, /tmp/gitconfig), and this script copies
-# a bounded allowlist from each. Version 2 adds /cursor-config (Cursor's
-# mcp.json only). Version 3 reads a mount node cannot open (rootless Docker)
-# from the copy the root entrypoint relayed (staged_input_path). A backend
+# /cursor-config, /agents-skills, /claude-config.json, /tmp/gitconfig), and
+# this script copies a bounded allowlist from each. Version 2 adds
+# /cursor-config (Cursor's mcp.json only). Version 3 reads a mount node cannot
+# open (rootless Docker) from the copy the root entrypoint relayed
+# (staged_input_path). Version 4 adds /agents-skills (~/.agents/skills). A backend
 # that sees this capability stages exactly that allowlist for enabled
 # providers and binds the staged copies instead of whole host agent homes
 # (apps/backend/src/core/portable-inputs.ts); the two lists must stay in step.
@@ -1197,6 +1198,19 @@ fi
 
 report_agent_copy_skips Cursor
 log_progress "Cursor configuration ready"
+
+# Shared user skills (~/.agents/skills), which Codex, Cursor, Grok, OpenCode and
+# Pi all read (staged-inputs=4). The backend stages the mount only when one of
+# them is enabled, one unit per skill; a skill the host linked in from another
+# skill root arrives as a real directory. Each entry copies on its own, so a
+# link or oversized skill is skipped without dropping the rest.
+if [ -d /agents-skills ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/agents-skills" ]; then
+    log_progress "Setting up shared skills..."
+    mkdir -p "$HOME/.agents/skills"
+    copy_agent_directory_entries /agents-skills "$HOME/.agents/skills" "." "Shared skills"
+    report_agent_copy_skips "Shared skills"
+    log_progress "Shared skills ready"
+fi
 
 # Verify the config file exists and is valid
 if [ -f "$HOME/.claude.json" ]; then

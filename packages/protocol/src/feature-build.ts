@@ -22,6 +22,7 @@ import {
   type BuildStepConfigs,
   type TaskSnapshotImage,
 } from "./build-pipeline.js";
+import { isDeliveryPolicy, type DeliveryPolicy } from "./ticket-sections.js";
 
 export const MAX_FEATURE_BUILD_TITLE_LENGTH = 512;
 export const MAX_FEATURE_BUILD_TEXT_LENGTH = 100_000;
@@ -43,6 +44,8 @@ export interface CreateFeatureBuildInput {
   reviewPreparation?: BuildStepConfig;
   /** Images attached to the feature and supplied to image-aware build stages. */
   images?: TaskSnapshotImage[];
+  /** The form's "When verified" choice, written to the ticket this creates. */
+  deliveryPolicy?: DeliveryPolicy;
   /**
    * Idempotency key.
    *
@@ -146,6 +149,7 @@ export function isCreateFeatureBuildInput(value: unknown): value is CreateFeatur
       isBuildStepConfigs({ review: value.reviewPreparation })) &&
     (value.images === undefined ||
       (Array.isArray(value.images) && value.images.every(isTaskSnapshotImage))) &&
+    (value.deliveryPolicy === undefined || isDeliveryPolicy(value.deliveryPolicy)) &&
     (value.requestId === undefined ||
       (typeof value.requestId === "string" &&
         value.requestId.trim().length > 0 &&

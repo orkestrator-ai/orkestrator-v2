@@ -20,13 +20,18 @@
  *   a different model from the one the launcher showed.
  * - Preparation/consolidation is the explicit one, else the saved one when the
  *   pipeline fans out to more than one reviewer.
+ * - A "When verified" choice (`deliveryPolicy`) is saved to a Kanban ticket here,
+ *   because the ticket is what Build reads when Verify passes. A Linear or GitHub
+ *   ticket has nowhere to hold one, so it stays on the pipeline.
  */
 import {
   isStartBuildPipelineInput,
   type BuildPipeline,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { CommandContext } from "./commands-context.js";
+import type { KanbanTask } from "./storage-shared.js";
 import {
   buildPipelineInputWithDefaults,
   savedLaunchSettings,
@@ -55,6 +60,54 @@ export async function buildPipelineStartWithSavedDefaults(
   return input;
 }
 
+/**
+ * Saves a launch's delivery policy on its ticket, keeping the delivery note,
+ * and returns the ticket as it now reads. Unchanged if it already has it, so a
+ * launch never rewrites a ticket's text for a choice the user did not change.
+ */
+export async function saveTicketDeliveryPolicy(
+  storage: CommandContext["storage"],
+  task: KanbanTask,
+  policy: DeliveryPolicy,
+): Promise<KanbanTask> {
+  const delivery = task.sections?.delivery;
+  if (delivery?.policy === policy) return task;
+  return storage.kanban.updateKanbanTask(
+    task.id,
+    {
+      sections: { delivery: { ...delivery, policy } },
+    },
+    undefined,
+    { notifyDeliveryPolicyChange: false },
+  );
+}
+
+/**
+ * A Kanban launch's start request with its policy saved on the ticket first.
+ * The snapshot follows the ticket's new text, so the run's Ticket node does not
+ * read as edited since launch by the launch itself.
+ */
+async function withTicketDeliveryPolicy(
+  input: StartBuildPipelineInput,
+  storage: CommandContext["storage"],
+): Promise<StartBuildPipelineInput> {
+  if (!input.deliveryPolicy || input.source?.type !== "kanban") return input;
+  const task = await storage.kanban.getKanbanTask(input.source.taskId);
+  if (!task || task.projectId !== input.projectId) return input;
+  const saved = await saveTicketDeliveryPolicy(storage, task, input.deliveryPolicy);
+  const snapshot = input.taskSnapshot;
+  return {
+    ...input,
+    taskSnapshot: {
+      ...snapshot,
+      ...(snapshot.description === task.description ? { description: saved.description } : {}),
+      ...(snapshot.acceptanceCriteria === task.acceptanceCriteria
+        ? { acceptanceCriteria: saved.acceptanceCriteria }
+        : {}),
+    },
+  };
+}
+
 /** `launch_build_pipeline`: fill the saved defaults, then start (idempotent by admission key). */
 export async function launchBuildPipeline(
   args: unknown,
@@ -62,5 +115,5 @@ export async function launchBuildPipeline(
 ): Promise<BuildPipeline> {
   if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
   const input = await buildPipelineStartWithSavedDefaults(args, context);
-  return context.buildPipelines.start(input);
+  return context.buildPipelines.start(await withTicketDeliveryPolicy(input, context.storage));
 }

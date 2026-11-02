@@ -3,6 +3,7 @@
  * repair, verification and pull-request outcomes, terminal reconciliation with
  * the Kanban task or issue, and the durable interaction-resolution journal.
  */
+import { createLogger } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -11,6 +12,8 @@ import {
   type PipelineInteractionTranscriptEntry,
   isVerificationVerdict,
   boundedPipelineSessionError,
+  pipelineDeliverySummary,
+  pipelineDeliveryTooLateNote,
   MAX_PIPELINE_SESSION_VERIFICATION_FEEDBACK_LENGTH,
   taskSnapshotCriteria,
   verificationCriterionResults,
@@ -20,6 +23,10 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
 import { boundPipelineFixResult } from "@orkestrator/protocol/build-pipeline-address-report";
+import {
+  effectiveDeliveryPolicy,
+  type DeliveryPolicy,
+} from "@orkestrator/protocol/ticket-sections";
 import { parseFixResult, type ReviewFixResult } from "./review-prompts.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
@@ -55,6 +62,8 @@ import {
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 
+const deliveryLog = createLogger("build.pipeline");
+
 /**
  * The stage-supervisor operations recovery calls back into: completing a stage
  * opens the next one. The facade binds it late, because the supervisor in turn
@@ -66,7 +75,17 @@ export type BuildPipelineStageDispatch = Pick<
   | "dispatchPending"
   | "assertValidationWorktreeUnchanged"
   | "remindMissingStageResult"
+  | "probeWorktreeOnce"
 >;
+
+/**
+ * The Kanban ticket a pipeline follows. A pipeline with no source at all was
+ * started on a ticket id by a caller that predates sources.
+ */
+function pipelineTicketId(pipeline: Pick<BuildPipeline, "source" | "taskId">): string | undefined {
+  if (pipeline.source?.type === "kanban") return pipeline.source.taskId;
+  return pipeline.source ? undefined : pipeline.taskId;
+}
 
 export class BuildPipelineRecovery {
   constructor(
@@ -251,7 +270,7 @@ export class BuildPipelineRecovery {
     this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (passed) {
       await this.updateKanbanLifecycle(pipeline, buildPipelineKanbanUpdate("validation-complete"));
-      await this.stageSupervisor.startStage(pipeline, "pr", "creating-pr");
+      await this.deliverVerifiedWork(pipeline);
       await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
       return;
     }
@@ -297,7 +316,85 @@ export class BuildPipelineRecovery {
     }
   }
 
+  /**
+   * Acts on the ticket's delivery policy now that Verify has passed (or was
+   * skipped). The ticket is read here and nowhere earlier, so the user can
+   * change their mind while the build runs; from here on the decision on the
+   * pipeline holds, and a later edit only earns a too-late note.
+   */
+  async deliverVerifiedWork(pipeline: BuildPipeline): Promise<void> {
+    const policy = await this.currentDeliveryPolicy(pipeline);
+    pipeline.delivery = { policy, decidedAt: new Date().toISOString() };
+    await this.ctx.save(pipeline, pipeline.backendRevision);
+    if (policy !== "commit-only") {
+      await this.stageSupervisor.startStage(pipeline, "pr", "creating-pr");
+      return;
+    }
+    const worktree = await this.stageSupervisor.probeWorktreeOnce(pipeline);
+    if (worktree.status === "dirty") pipeline.delivery.uncommittedPaths = worktree.paths.length;
+    await this.complete(pipeline);
+  }
+
+  /**
+   * The live ticket's policy, or for a ticket deleted mid-run and for a Linear
+   * or GitHub build, the last one the pipeline saw. A failed read is not a
+   * deleted ticket: it fails the stage rather than guess at what to publish.
+   */
+  private async currentDeliveryPolicy(pipeline: BuildPipeline): Promise<DeliveryPolicy> {
+    const ticketId = pipelineTicketId(pipeline);
+    if (ticketId) {
+      const tasks = await this.ctx.invoke<
+        Array<{ id: string; sections?: { delivery?: { policy?: DeliveryPolicy } } }>
+      >("get_kanban_tasks", { projectId: pipeline.projectId });
+      const task = tasks.find((candidate) => candidate.id === ticketId);
+      if (task) {
+        pipeline.deliveryPolicy = effectiveDeliveryPolicy(task.sections?.delivery?.policy);
+        return pipeline.deliveryPolicy;
+      }
+    }
+    const deletedPolicy = ticketId
+      ? await this.ctx.storage.kanban.getDeletedKanbanDeliveryPolicy(ticketId, pipeline.projectId)
+      : undefined;
+    return effectiveDeliveryPolicy(deletedPolicy ?? pipeline.deliveryPolicy);
+  }
+
+  /**
+   * A ticket's delivery policy changed. The newest pipeline on it keeps the
+   * policy as its last-seen copy; if that run has already decided otherwise,
+   * the ticket gets a comment saying the change came too late for it. Runs
+   * outside the Kanban write it follows, so a held pipeline lock never delays
+   * that write.
+   */
+  async noteTicketDeliveryChange(
+    taskId: string,
+    projectId: string,
+    policy: DeliveryPolicy | undefined,
+  ): Promise<void> {
+    const records = await this.ctx.storage.listBuildPipelines(projectId);
+    const newest = records
+      .map((record) => record.snapshot as BuildPipeline)
+      .filter((pipeline) => pipelineTicketId(pipeline) === taskId)
+      .reduce<BuildPipeline | undefined>(
+        (latest, pipeline) =>
+          !latest || pipeline.createdAt > latest.createdAt ? pipeline : latest,
+        undefined,
+      );
+    if (!newest || newest.phase === "complete" || newest.phase === "failed") return;
+    await this.ctx.mutate(newest.id, async (candidate) => {
+      if (candidate.phase === "complete" || candidate.phase === "failed") return;
+      const linkedTask = await this.ctx.storage.kanban.getKanbanTask(taskId);
+      if (linkedTask?.buildPipelineId && linkedTask.buildPipelineId !== candidate.id) return;
+      candidate.deliveryPolicy = effectiveDeliveryPolicy(policy);
+      const tooLate = pipelineDeliveryTooLateNote(candidate, policy);
+      if (tooLate) await this.updateKanbanLifecycle(candidate, { comment: `⚠️ ${tooLate}` });
+    });
+  }
+
   async finishPullRequest(pipeline: BuildPipeline): Promise<void> {
+    if (pipeline.delivery?.policy === "push-no-pr") {
+      await this.finishBranchPush(pipeline);
+      return;
+    }
     const detection = await this.detectPullRequest(pipeline);
     if (!detection) {
       // PR creation and GitHub indexing are not atomic. Keep the pipeline in
@@ -316,6 +413,21 @@ export class BuildPipelineRecovery {
     if (pullRequestNeedsConflictResolution(detection)) {
       await this.stageSupervisor.startStage(pipeline, "resolve-conflicts", "resolving-conflicts");
       return;
+    }
+    await this.complete(pipeline);
+  }
+
+  /**
+   * Completes a `push-no-pr` Ship. A turn that ended without the push must not
+   * read as "the branch was pushed", so origin is asked; there is no pull
+   * request to look for, no conflict stage to reach and nothing to monitor.
+   */
+  private async finishBranchPush(pipeline: BuildPipeline): Promise<void> {
+    const state = await this.ctx.options.branchPushState?.(pipeline.environmentId);
+    if (state && state.remoteHead !== state.head) {
+      throw new Error(
+        `The push session ended, but origin's ${state.branch} does not have commit ${state.head.slice(0, 12)}. Retry the stage to push it.`,
+      );
     }
     await this.complete(pipeline);
   }
@@ -402,9 +514,10 @@ export class BuildPipelineRecovery {
     if (pipeline.completionCommentStatus === "posted") return;
     pipeline.completionCommentStatus = "posting";
     await this.ctx.save(pipeline, pipeline.backendRevision);
+    const delivered = pipeline.delivery && pipelineDeliverySummary(pipeline.delivery);
     const body =
       pipeline.phase === "complete"
-        ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.`
+        ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.${delivered ? ` ${delivered}` : ""}`
         : `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
     const result =
       source.type === "linear"
@@ -446,10 +559,14 @@ export class BuildPipelineRecovery {
       try {
         pipeline.completionCommentStatus = "posting";
         await this.ctx.save(pipeline, pipeline.backendRevision);
-        await this.updateKanbanLifecycle(
-          pipeline,
-          buildPipelineKanbanUpdate(pipeline.phase === "complete" ? "complete" : "failed"),
-        );
+        const delivered =
+          pipeline.phase === "complete" && pipeline.delivery
+            ? pipelineDeliverySummary(pipeline.delivery)
+            : undefined;
+        await this.updateKanbanLifecycle(pipeline, {
+          ...buildPipelineKanbanUpdate(pipeline.phase === "complete" ? "complete" : "failed"),
+          ...(delivered ? { comment: `✅ ${delivered}` } : {}),
+        });
         pipeline.completionCommentStatus = "posted";
         pipeline.completionCommentPostedAt = new Date().toISOString();
         delete pipeline.completionCommentError;
@@ -500,7 +617,7 @@ export class BuildPipelineRecovery {
         })),
       });
     } catch {
-      console.warn("[BuildPipeline] Could not record acceptance criteria results on the ticket");
+      deliveryLog.warn("criteria.failed");
     }
   }
 
@@ -512,6 +629,7 @@ export class BuildPipelineRecovery {
       prUrl?: string;
       prState?: "open" | "merged" | "closed";
     },
+    options: { requireTicket?: boolean } = {},
   ): Promise<void> {
     const source = pipeline.source;
     if (source?.type !== "kanban") return;
@@ -525,7 +643,11 @@ export class BuildPipelineRecovery {
       }>
     >("get_kanban_tasks", { projectId: pipeline.projectId });
     const task = tasks.find((candidate) => candidate.id === source.taskId);
-    if (!task) throw new Error(`Kanban task not found: ${source.taskId}`);
+    if (!task) {
+      if (options.requireTicket) throw new Error(`Kanban task not found: ${source.taskId}`);
+      // A deleted ticket has no lifecycle left to record, and must not fail the run.
+      return;
+    }
     if (
       (updates.status && task.status !== updates.status) ||
       (updates.prUrl && task.prUrl !== updates.prUrl) ||

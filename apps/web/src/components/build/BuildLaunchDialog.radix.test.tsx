@@ -78,8 +78,8 @@ describe("BuildLaunchDialog with real Radix primitives", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Configure build" });
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
-    // Six step model pickers, and the Review card's Focus.
-    expect(screen.getAllByRole("combobox")).toHaveLength(7);
+    // Six step model pickers, the Review card's Focus and "When verified".
+    expect(screen.getAllByRole("combobox")).toHaveLength(8);
     expect(screen.getByRole("combobox", { name: "Review focus" })).toBeTruthy();
 
     fireEvent.keyDown(dialog, { key: "Escape" });

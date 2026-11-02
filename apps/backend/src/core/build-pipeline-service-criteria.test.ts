@@ -221,7 +221,8 @@ describe("build pipeline acceptance criteria", () => {
 
   test("a failed live lookup still derives criteria from the snapshot", async () => {
     await withService(async (service, _storage, _provider, _invocations, controls) => {
-      controls.failCommands.add("get_kanban_tasks");
+      // The criteria read may use the snapshot; policy capture must still succeed.
+      controls.failCommandsOnce.set("get_kanban_tasks", 1);
       const started = await service.start(startInput());
       expect(started.taskSnapshot.acceptanceCriteriaItems).toEqual([
         { id: "ac-1", text: "No renderer orchestration" },

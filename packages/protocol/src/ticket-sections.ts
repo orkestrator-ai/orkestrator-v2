@@ -88,9 +88,30 @@ export type DeliveryPolicy = (typeof DELIVERY_POLICIES)[number];
 
 export const DELIVERY_POLICY_LABELS: Record<DeliveryPolicy, string> = {
   "commit-only": "Commit, don't push",
-  "push-no-pr": "Push, no PR (Multi Review next)",
+  "push-no-pr": "Push, no PR",
   "open-pr": "Open a PR, don't merge",
 };
+
+/** What Build does with a ticket that names no policy. */
+export const DEFAULT_DELIVERY_POLICY: DeliveryPolicy = "open-pr";
+
+/** The earlier wording of `push-no-pr`, still readable in text a ticket already holds. */
+const LEGACY_PUSH_NO_PR_LABEL = "push, no pr (multi review next)";
+
+/** The policy Build follows for a ticket's stored one. */
+export function effectiveDeliveryPolicy(policy: DeliveryPolicy | undefined): DeliveryPolicy {
+  return policy ?? DEFAULT_DELIVERY_POLICY;
+}
+
+/**
+ * The policies a dropdown offers. `commit-only` stays valid but is no normal
+ * choice, so it appears only as the current selection of a ticket that has it.
+ */
+export function deliveryPolicyChoices(current: DeliveryPolicy | undefined): DeliveryPolicy[] {
+  return current === "commit-only"
+    ? ["open-pr", "push-no-pr", "commit-only"]
+    : ["open-pr", "push-no-pr"];
+}
 
 export function isDeliveryPolicy(value: unknown): value is DeliveryPolicy {
   return typeof value === "string" && (DELIVERY_POLICIES as readonly string[]).includes(value);
@@ -421,6 +442,7 @@ function parseDelivery(body: string): TicketDelivery | undefined {
 
 function deliveryPolicyFromText(value: string): DeliveryPolicy | undefined {
   const normalized = value.replace(/[`*_]/g, "").trim().toLowerCase();
+  if (normalized === LEGACY_PUSH_NO_PR_LABEL) return "push-no-pr";
   for (const policy of DELIVERY_POLICIES) {
     if (normalized === policy || normalized === DELIVERY_POLICY_LABELS[policy].toLowerCase()) {
       return policy;
@@ -1161,4 +1183,4 @@ export const TICKET_KIND_GUIDANCE =
 
 /** What a tool's `sections` field says. */
 export const TICKET_SECTIONS_GUIDANCE =
-  "Structured ticket sections; each is optional and replaces only that section (an empty value clears it). acceptanceCriteria: one checkable item per entry; Verify marks each passed, failed or not checked. checks: standard commands (lint, typecheck, tests) that must pass, kept out of acceptanceCriteria. delivery.policy: commit-only, push-no-pr or open-pr. custom: extra titled sections. Do not repeat standing project rules (report format, checks every change runs, PR flow, safety rules); they live in AGENTS.md's Orkestrator section.";
+  "Structured ticket sections; each is optional and replaces only that section (an empty value clears it). acceptanceCriteria: one checkable item per entry; Verify marks each passed, failed or not checked. checks: standard commands (lint, typecheck, tests) that must pass, kept out of acceptanceCriteria. delivery.policy: commit-only, push-no-pr or open-pr; a build reads it when Verify passes, and none means open-pr. custom: extra titled sections. Do not repeat standing project rules (report format, checks every change runs, PR flow, safety rules); they live in AGENTS.md's Orkestrator section.";

@@ -39,6 +39,35 @@ const VERIFY_PASS = {
   pipelineId: "pipeline-1",
 };
 
+describe("delivery policy changes", () => {
+  test("announces a changed policy from any writer, and nothing else", async () => {
+    await withStorage(async ({ kanban }) => {
+      const seen: Array<[string, string, string | undefined]> = [];
+      kanban.onDeliveryPolicyChange((taskId, projectId, policy) => {
+        seen.push([taskId, projectId, policy]);
+      });
+      const task = await kanban.addKanbanTask("project-1", "Ticket", "Body");
+
+      await kanban.updateKanbanTask(task.id, { title: "Renamed" });
+      expect(seen).toEqual([]);
+
+      await kanban.updateKanbanTask(task.id, { sections: { delivery: { policy: "push-no-pr" } } });
+      expect(seen).toEqual([[task.id, "project-1", "push-no-pr"]]);
+
+      await kanban.updateKanbanTask(task.id, { sections: { delivery: { policy: "push-no-pr" } } });
+      expect(seen).toHaveLength(1);
+
+      await kanban.updateKanbanTask(task.id, {
+        markdown: "Body\n\n## Delivery\n\nPolicy: commit-only",
+      });
+      expect(seen.at(-1)).toEqual([task.id, "project-1", "commit-only"]);
+
+      await kanban.updateKanbanTask(task.id, { markdown: "Body" });
+      expect(seen.at(-1)).toEqual([task.id, "project-1", undefined]);
+    });
+  });
+});
+
 describe("Kanban ticket sections", () => {
   test("a legacy row reads with derived sections and is not rewritten", async () => {
     await withStorage(async (storage, dataDir) => {
@@ -199,5 +228,28 @@ describe("Kanban ticket sections", () => {
         storage.kanban.addKanbanTask("project-1", "T", "", { ...input, kind: "feature" }),
       ).rejects.toThrow("already used with different arguments");
     });
+  });
+});
+
+test("launch policy writes do not notify the previous build and deletion retains the newest choice", async () => {
+  await withStorage(async (storage, dataDir) => {
+    const seen: string[] = [];
+    storage.kanban.onDeliveryPolicyChange(() => seen.push("changed"));
+    const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "Body");
+    const { saveTicketDeliveryPolicy } = await import("./build-pipeline-launch.js");
+    await saveTicketDeliveryPolicy(storage, task, "push-no-pr");
+    expect(seen).toEqual([]);
+    await storage.kanban.updateKanbanTask(task.id, {
+      sections: { delivery: { policy: "commit-only" } },
+    });
+    expect(seen).toEqual(["changed"]);
+    await storage.kanban.deleteKanbanTask(task.id);
+    const reopened = new StorageService(dataDir);
+    expect(await reopened.kanban.getDeletedKanbanDeliveryPolicy(task.id, "project-1")).toBe(
+      "commit-only",
+    );
+    expect(
+      await reopened.kanban.getDeletedKanbanDeliveryPolicy(task.id, "other-project"),
+    ).toBeUndefined();
   });
 });

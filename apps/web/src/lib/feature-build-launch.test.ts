@@ -83,6 +83,32 @@ describe("resolveFeatureBuildStep", () => {
     expect(JSON.stringify(request)).toContain(connected);
   });
 
+  test("sends the form's When verified choice", () => {
+    const step = { agent: "claude" as const, model: "sonnet" };
+    const request = featureBuildRequest({
+      projectId: "project-1",
+      title: "Pushed build",
+      description: "",
+      acceptanceCriteria: "",
+      environmentType: "local",
+      environmentName: "feature",
+      networkAccessMode: "restricted",
+      portMappings: [],
+      models: defaultFeatureBuildModels({
+        catalog,
+        build: step,
+        review: step,
+        review2: step,
+        address: step,
+        pr: step,
+        resolve: step,
+      }),
+      deliveryPolicy: "push-no-pr",
+      requestId: "pushed-build-1",
+    });
+    expect(request.deliveryPolicy).toBe("push-no-pr");
+  });
+
   test("matches a configured model through its resolved id", () => {
     // Configuration stores Claude models in resolved space while the catalogue
     // is keyed by alias; only the shared resolver matches the two.

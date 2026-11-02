@@ -11,6 +11,7 @@ import {
   type BuildPipelineAgent,
   type PipelineSessionPhase,
   isSupersededPipelineSession,
+  pipelineReachedPullRequestStage,
   stepKeyForSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -31,6 +32,7 @@ import {
   fixPrompt,
   keyInformationInstruction,
   prPrompt,
+  pushBranchPrompt,
   resolveConflictsPrompt,
   verificationPrompt,
   type ReviewWorktreeSnapshot,
@@ -202,10 +204,17 @@ export class BuildPipelineStagePrompts {
       };
     }
     if (phase === "pr") {
+      if (pipeline.delivery?.policy === "push-no-pr") {
+        const forcePush = forcePushUpstream(pipeline);
+        return {
+          prompt: pushBranchPrompt(forcePush ? { forcePushUpstream: forcePush } : {}),
+          images: [],
+        };
+      }
       // A restart that ships again must update the pull request the earlier
       // Ship opened, never open a second one. An environment PR without an
       // earlier Ship belongs to a reused environment, not to this pipeline.
-      const shippedBefore = pipeline.sessions.some((session) => session.phase === "pr");
+      const shippedBefore = pipelineReachedPullRequestStage(pipeline);
       const existingPullRequestUrl = shippedBefore
         ? ((await this.ctx.storage.getEnvironment(pipeline.environmentId))?.prUrl ?? undefined)
         : undefined;

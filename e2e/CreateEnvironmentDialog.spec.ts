@@ -310,19 +310,19 @@ test("native Enter inserts a newline and never implicitly submits name or ports"
 });
 
 for (const chord of ["Meta+Enter", "Control+Enter"]) {
-  test(`${chord} submits exactly once from fields, controls and portaled search`, async ({
-    page,
-  }) => {
-    for (const target of [
-      "prompt",
-      "name",
-      "port",
-      "checkbox",
-      "protocol",
-      "cancel",
-      "create",
-      "search",
-    ]) {
+  // Each target starts from a fresh dialog and is an independent journey.
+  // Give each one the normal test deadline instead of sharing it across eight navigations.
+  for (const target of [
+    "prompt",
+    "name",
+    "port",
+    "checkbox",
+    "protocol",
+    "cancel",
+    "create",
+    "search",
+  ]) {
+    test(`${chord} submits exactly once from ${target}`, async ({ page }) => {
       await page.goto("/");
       await trackCreations(page);
       let control: Locator;
@@ -360,8 +360,8 @@ for (const chord of ["Meta+Enter", "Control+Enter"]) {
       await expect.poll(() => creationCount(page), { message: `${chord} on ${target}` }).toBe(1);
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(page.getByRole("listbox")).toHaveCount(0);
-    }
-  });
+    });
+  }
 }
 
 /** Drops generated PNGs onto the dialog, as a file manager drag would. */

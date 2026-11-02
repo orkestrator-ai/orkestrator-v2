@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DELIVERY_POLICY_LABELS,
+  deliveryPolicyChoices,
+  effectiveDeliveryPolicy,
   applyTicketContentUpdate,
   canonicalTicketSections,
   normalizeTicketContent,
@@ -136,6 +139,13 @@ describe("ticket markdown round trip", () => {
     });
     expect(parseTicketMarkdown("## Delivery\n\nPolicy: Commit, don't push")).toEqual({
       delivery: { policy: "commit-only" },
+    });
+    expect(parseTicketMarkdown("## Delivery\n\nPolicy: Push, no PR")).toEqual({
+      delivery: { policy: "push-no-pr" },
+    });
+    // The label's earlier wording, which a ticket may still hold as text.
+    expect(parseTicketMarkdown("## Delivery\n\nPolicy: Push, no PR (Multi Review next)")).toEqual({
+      delivery: { policy: "push-no-pr" },
     });
     expect(parseTicketMarkdown("## Delivery\n\nPolicy: yolo")).toEqual({
       delivery: { note: "Policy: yolo" },
@@ -454,4 +464,21 @@ test("templates list the sections each kind usually carries", () => {
     "## Context\n\n## Acceptance criteria\n\n## Out of scope",
   );
   expect(ticketMarkdownTemplate("work-brief").split("\n\n")).toContain("## Delivery");
+});
+
+describe("delivery policy choices", () => {
+  test("no policy means open-pr", () => {
+    expect(effectiveDeliveryPolicy(undefined)).toBe("open-pr");
+    expect(effectiveDeliveryPolicy("commit-only")).toBe("commit-only");
+  });
+
+  test("commit-only is offered only to a ticket that already has it", () => {
+    expect(deliveryPolicyChoices(undefined)).toEqual(["open-pr", "push-no-pr"]);
+    expect(deliveryPolicyChoices("push-no-pr")).toEqual(["open-pr", "push-no-pr"]);
+    expect(deliveryPolicyChoices("commit-only")).toEqual(["open-pr", "push-no-pr", "commit-only"]);
+  });
+
+  test("push-no-pr promises no Multi Review", () => {
+    expect(DELIVERY_POLICY_LABELS["push-no-pr"]).toBe("Push, no PR");
+  });
 });

@@ -28,11 +28,15 @@ import {
 } from "./build-pipeline-key-information.js";
 import {
   ACCEPTANCE_CRITERION_STATUSES,
+  DELIVERY_POLICY_LABELS,
+  effectiveDeliveryPolicy,
   isAcceptanceCriterionStatus,
+  isDeliveryPolicy,
   isTicketKind,
   sectionsFromTicketText,
   TICKET_SECTION_LIMITS,
   type AcceptanceCriterionStatus,
+  type DeliveryPolicy,
   type TicketKind,
 } from "./ticket-sections.js";
 import { isNativeAgentModelSubstitution } from "./native-agent.js";
@@ -675,6 +679,95 @@ export function verificationCriterionResults(
  * {@link isReviewPackagePreparationSession}.
  */
 export const REVIEW_PACKAGE_SESSION_LABEL = "Package Preparation Session";
+
+/**
+ * The label of a Ship session that only pushes (`push-no-pr`). It runs in the
+ * `pr` phase, so retry, restart, pause and the transcript work as for any Ship,
+ * but it opens no pull request: {@link pipelineReachedPullRequestStage} is what
+ * tells the two apart.
+ */
+export const BRANCH_PUSH_SESSION_LABEL = "Branch Push Session";
+
+export function isBranchPushSession(session: Pick<PipelineSession, "phase" | "label">): boolean {
+  return session.phase === "pr" && session.label === BRANCH_PUSH_SESSION_LABEL;
+}
+
+/**
+ * Whether this pipeline ever ran a Ship that opens a pull request. A pull
+ * request on the environment without one belongs to a reused environment, not
+ * to this pipeline.
+ */
+export function pipelineReachedPullRequestStage(
+  pipeline: Pick<BuildPipeline, "sessions">,
+): boolean {
+  return pipeline.sessions.some(
+    (session) => session.phase === "pr" && !isBranchPushSession(session),
+  );
+}
+
+/**
+ * What the latest passing Verify decided, from the ticket's policy at that
+ * moment. Once set, a policy edit no longer affects this run; a restart at or
+ * before Verify clears it and the next pass decides again.
+ */
+export interface PipelineDelivery {
+  policy: DeliveryPolicy;
+  decidedAt: string;
+  /** `commit-only`: uncommitted non-ignored paths left in the worktree. */
+  uncommittedPaths?: number;
+}
+
+function isPipelineDelivery(value: unknown): value is PipelineDelivery {
+  return (
+    isRecord(value) &&
+    isDeliveryPolicy(value.policy) &&
+    isIsoDate(value.decidedAt) &&
+    (value.uncommittedPaths === undefined ||
+      (Number.isSafeInteger(value.uncommittedPaths) && (value.uncommittedPaths as number) >= 0))
+  );
+}
+
+/**
+ * How a finished run that opened no pull request ended, in one sentence, for
+ * the ticket, the pipeline view and the coordinator. Undefined for `open-pr`.
+ */
+export function pipelineDeliverySummary(
+  delivery: Pick<PipelineDelivery, "policy" | "uncommittedPaths">,
+): string | undefined {
+  if (delivery.policy === "push-no-pr") {
+    return "The branch was pushed and no pull request was opened.";
+  }
+  if (delivery.policy !== "commit-only") return undefined;
+  const uncommitted = delivery.uncommittedPaths ?? 0;
+  return [
+    "The commits were kept in the environment: nothing was pushed and no pull request was opened.",
+    uncommitted > 0
+      ? `${uncommitted} uncommitted ${uncommitted === 1 ? "path also remains" : "paths also remain"} in the worktree.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * The note for a ticket whose policy now differs from what the run already
+ * decided, or undefined when the run still follows the ticket. A cancelled run
+ * delivers nothing, so an edit cannot come too late for it.
+ */
+export function pipelineDeliveryTooLateNote(
+  pipeline: Pick<BuildPipeline, "delivery" | "phase" | "error"> &
+    Partial<Pick<BuildPipeline, "pausedFromPhase">>,
+  ticketPolicy: DeliveryPolicy | undefined,
+): string | undefined {
+  if (pipeline.phase === "complete" || pipeline.phase === "failed") return undefined;
+  const phase = pipeline.phase === "paused" ? pipeline.pausedFromPhase : pipeline.phase;
+  const legacyShip = phase === "creating-pr" || phase === "resolving-conflicts";
+  const delivery = pipeline.delivery ?? (legacyShip ? { policy: "open-pr" as const } : undefined);
+  if (!delivery || pipeline.error?.startsWith("Build cancelled")) return undefined;
+  const wanted = effectiveDeliveryPolicy(ticketPolicy);
+  if (wanted === delivery.policy) return undefined;
+  return `Too late for this build: Verify has already passed and it went ahead with "${DELIVERY_POLICY_LABELS[delivery.policy]}", which this change cannot undo. "${DELIVERY_POLICY_LABELS[wanted]}" applies to the next build, or after restarting this one from Verify.`;
+}
 
 export const PIPELINE_TRANSCRIPT_REFERENCE_VERSION = 1;
 
@@ -1337,6 +1430,14 @@ export interface BuildPipeline {
    * issues and verdicts arrive (`build-pipeline-key-information.ts`).
    */
   keyInformation?: BuildPipelineKeyInformation;
+  /**
+   * The delivery policy last seen: captured at launch and refreshed when the
+   * ticket changes. A Linear or GitHub ticket has nowhere to hold one, so this
+   * is its only copy; a Kanban ticket's own policy wins while the ticket exists.
+   */
+  deliveryPolicy?: DeliveryPolicy;
+  /** Set when Verify passes: see {@link PipelineDelivery}. */
+  delivery?: PipelineDelivery;
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -1382,6 +1483,12 @@ export interface StartBuildPipelineInput {
   existingEnvironmentId?: string;
   maxIterations?: number;
   featurePlanId?: string;
+  /**
+   * The launch dialog's "When verified" choice. `launch_build_pipeline` writes
+   * it to a Kanban ticket; a Linear or GitHub build keeps it on the pipeline.
+   * The coordinator's tools do not offer it: they use the ticket's policy.
+   */
+  deliveryPolicy?: DeliveryPolicy;
 }
 
 export function isActiveBuildPhase(phase: BuildPhase): boolean {
@@ -2208,6 +2315,8 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         value.validationHistory.length > MAX_PIPELINE_VALIDATION_HISTORY ||
         !value.validationHistory.every(isPipelineValidationSummary))) ||
     (value.keyInformation !== undefined && !isBuildPipelineKeyInformation(value.keyInformation)) ||
+    (value.deliveryPolicy !== undefined && !isDeliveryPolicy(value.deliveryPolicy)) ||
+    (value.delivery !== undefined && !isPipelineDelivery(value.delivery)) ||
     (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
     (value.reviewPreparation !== undefined && !isBuildStepConfig(value.reviewPreparation)) ||
     (value.environmentOptions !== undefined &&
@@ -2297,6 +2406,7 @@ export function isStartBuildPipelineInput(value: unknown): value is StartBuildPi
         value.existingEnvironmentId.length > 0)) &&
     (value.featurePlanId === undefined ||
       (typeof value.featurePlanId === "string" && value.featurePlanId.length > 0)) &&
+    (value.deliveryPolicy === undefined || isDeliveryPolicy(value.deliveryPolicy)) &&
     (value.maxIterations === undefined ||
       (Number.isSafeInteger(value.maxIterations) &&
         (value.maxIterations as number) >= 1 &&

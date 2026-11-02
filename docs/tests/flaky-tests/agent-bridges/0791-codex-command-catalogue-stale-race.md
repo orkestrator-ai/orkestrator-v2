@@ -363,3 +363,45 @@ changed; the existing timing investigation remains open.
 
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8VTwNj/bridges.log.gz`
 and `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.53Ejpu/repair-catalogue-owner.log.gz`.
+
+## Safe error formatting second review — 2026-11-02
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+at `af887fd24a46c2a3eb12047f4732f8985ad7782f` failed in
+`a cold app-server child > disposal cancels a pending settling re-read`:
+line 426 expected one call but received two (103.45 ms). Codex bridge:
+2,332 passed, 63 skipped, one failed, two parallel Bun workers.
+The bridge group finished in 39.3 s after shared-scheduler admission.
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/bridges.log`
+(compressed after aggregate completion).
+
+The complete unchanged owner command
+`mise run test:logged -- --name r5-round2-codex-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures`
+first failed in the existing sibling case
+`two pre-plugin answers stay stale until late plugins are observed and confirmed`
+at line 273: expected stale, received ready (57.11 ms; 29 passed, one failed,
+1.2 s). Artifact: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.POP8Pd/`.
+An exact unchanged owner rerun then passed (1.1 s).
+
+A new detached main checkout at `f80a181e6b92d7dbe48f30abb0c18eaf89651543`
+installed its own dependencies with `mise exec -- bun install --frozen-lockfile`.
+The complete owner with `--rerun-each=10` passed (10.6 s), using
+`mise run test:logged -- --name r5-round2-main-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --rerun-each=10 --parallel=1 --only-failures`.
+The disposal case alone also passed 100 repeats (4.5 s), using
+`mise run test:logged -- --name r5-round2-main-catalogue-disposal -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --test-name-pattern 'disposal cancels a pending' --rerun-each=100 --parallel=1 --only-failures`.
+
+No bridge implementation, assertion, wait, timeout or skip changed. The exact
+aggregate failure was not reproduced on main; its independence from the
+logging change remains unproven. This case stays open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.

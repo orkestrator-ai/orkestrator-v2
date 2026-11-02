@@ -241,3 +241,39 @@ No design implementation, assertion, timeout or skip changed.
 The notification-bar review on 2026-11-01 repeated the ledger assertion; the unchanged owner passed alone on the branch (1.2 s) and detached origin/main (1.0 s). Preparation used `mise run test`; its captured output does not name the granted worker count. Evidence: `.orkestrator/review-artifacts/review-validation-eb40d1d2-656b-44f0-9a8f-1c2970a9e415/validation-04.stdout.txt`.
 
 Reruns: `mise run test:logged -- --name fix-design-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` and the same owner command with `--name baseline-design-profiles` in detached main at `b965aea44`, with independently installed dependencies. The ledger still held `1841-1846-0123abcd.json` at line 505 in preparation; this remains an intermittent cleanup observation, not a confirmed root cause.
+
+
+## Safe error formatting second review — 2026-11-02
+
+Preparation ran `mise run test` at `de952cc0accc820c6d57425323428cc993794a54`.
+The backend used three isolated workers and reported 13,006 passed, 97 skipped,
+and five failed across 870 files (440.83 s). Original evidence is preserved at
+`.orkestrator/review-artifacts/review-validation-b03e0cc0-820a-4723-8d36-20d1666dfe82/validation-04.stdout.txt`.
+
+This case observed a JSON ledger entry remained at line 505 (286.29 ms).
+
+The complete unchanged owner passed on the fix branch as part of
+`mise run test:logged -- --name r5-round2-recorded-owners -- bun test --cwd apps/backend ./tests/container-readiness.test.ts ./src/core/commands-agent-tools.test.ts ./tests/codex-subagent-cards.test.ts ./src/core/nodes/node-files.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 14.2 s; passing per-file counts were not retained by the runner).
+
+A detached `origin/main` worktree at `9dbd7f1cc9981789ab352056bea84a1007c99959`
+used its own `mise exec -- bun install --frozen-lockfile` dependencies.
+Its complete owner check was `mise run test:logged -- --name r5-round2-main-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` (1.4 s).
+The targeted repeat command was `mise run test:logged -- --name r5-round2-main-profiles-repeat -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --test-name-pattern 'removes the recorded profile of a backend that was killed' --rerun-each=30 --parallel=1 --only-failures`.
+Result: 28 passed, 2 failed (5.3 s); both repeated the exact remaining-ledger assertion at line 505. Failure evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.ocSX3U/`.
+
+The same failure on main establishes independence from this branch. The owner
+and implementation are unchanged relative to main. No assertion, delay, skip,
+or unrelated implementation was changed; the existing flake remains open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.

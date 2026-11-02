@@ -213,8 +213,192 @@ lines only, taken after the message, so a multi-line message cannot come along.
 Stacks are on by default so that moving a site onto the logger keeps them. Pass
 `{ stack: false }` on a hot path or for an expected failure.
 
-The wider recommendation for error formatting (paths relative to the app, a
-redacted stderr tail at `debug`) is undecided and not built.
+### Paths in stack frames
+
+Frames show paths relative to the app, so a home directory name stays out of the
+log. This works from what the path contains rather than from a configured root,
+because it runs in every process, the browser included, and before any setup:
+
+| The path contains | The frame shows |
+| --- | --- |
+| `/node_modules/` | `node_modules/...` from the last one |
+| A workspace, such as `apps/backend/` or `bridges/claude-bridge/` | The path from there |
+| A deployed bridge, such as `/opt/codex-bridge/` | `codex-bridge/...` |
+| `app.asar/` or `resources/` in a packaged app | The path from there |
+| A web URL | Its path, without the origin or query |
+| Anything else | `.../file.ts`, the file name alone |
+
+Only stack frames are rewritten. An error's *message* keeps any path it holds, such
+as `ENOENT: no such file or directory, open '/Users/...'`. A frame relayed from
+another process goes through the same rewrite.
+
+## Command failures
+
+`formatLogError` leaves a failed command with an exit code, which is rarely enough
+to diagnose it. **The output itself is never logged**, not even a redacted tail of
+stderr at `debug`: the user decided against it. Instead, a site logs a short fixed
+label saying what went wrong.
+
+```ts
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+log.warn("branch.rename-failed", () => ({
+  ...classifyCommandFailure(error, { tools: ["git"] }),
+  error: formatLogError(error),
+}));
+```
+
+```text
+[git] branch.rename-failed reason=branch-exists exitCode=128 signal=null environmentId=... runtime=local error.name=CommandFailedError error.outputOmitted=true error.exitCode=128 error.stack="at runCommandBytes (apps/backend/src/core/shell.ts:345:13)"
+```
+
+`renameLiveGitBranch` in `apps/backend/src/core/commands-agent-support.ts` is the
+worked example.
+
+`classifyCommandFailure(error, options)` returns exactly `{ reason, exitCode, signal }`.
+It reads the output to choose the label, and the output goes no further. It never
+throws, and it never looks at `stdout` directly: `CommandFailedError`'s message is
+already stderr, or stdout when stderr was empty. A message beginning with
+`Command failed: <argv>` is skipped, so a branch named after an error cannot read
+as that error.
+
+- **`tools`** names who produced the output, in reading order. Inside a container
+  use `["docker", "git"]`, because git's output and exit code come through the exec.
+  Without `tools`, every tool's text rules apply and no tool's exit codes do, because
+  those mean different things per tool. `CommandFailedError`'s print backstop runs
+  that way.
+- **`exitCodes`** is for what one command's exit code means, such as `gh pr checks`
+  exiting 8. It is typed to the reason list.
+
+It decides in this order: how the process ended (`timed-out`, `aborted`,
+`output-too-large`, `executable-missing`), the call site's `exitCodes`, a signal
+(`killed`), the named tools' text rules, the shared text rules, the named tools' exit
+codes, the shared exit codes, then `unclassified`.
+
+**A reason is a diagnostic hint, so never branch on one.** It matches text that
+changes with locale and tool version. Under another locale a failure reads as
+`unclassified`, which is correct and still carries its exit code and signal. Control
+flow reads `CommandFailedError`'s structured fields.
+
+### When to add a reason
+
+A migration slice adds a reason wherever a bare exit code is not enough to diagnose
+the failure. When moving a site that logs a failed command:
+
+1. Call `classifyCommandFailure` and name the `tools` the command runs.
+2. If it would report `unclassified` for a failure you can name, add a rule. A new
+   reason is a line in `log-vocabulary/command-failure-reasons.ts`, a rule in
+   `TOOL_RULES` or `SHARED_RULES`, a row below and a sample in
+   `command-failure-reason.test.ts`, which fails until a reason can be produced.
+   `log-vocabulary.test.ts` fails on a malformed or undocumented one, or one missing
+   from this page.
+3. Keep the label static. Never build one from output, and never log output in
+   another field because the label was not enough.
+4. Leave it out for an expected failure a site already handles, where the event says
+   everything. Use `{ stack: false }` there as well.
+
+`reason` is also an ordinary field name: Electron's `renderer.gone-reloading` uses it
+for Chromium's own value. The logger does not enforce this list, so a reviewer of a
+command-failure site checks that `reason` comes from the classifier.
+
+### The reasons
+
+| Reason | Means | Matches |
+| --- | --- | --- |
+| `timed-out` | Ran past its deadline. | `timedOut`; exit 124 from `timeout(1)` |
+| `aborted` | Stopped on request. | `aborted` (the caller's abort signal); `gh` exit 2 |
+| `killed` | A signal ended it. | `signal` set; exit 137 or 143 |
+| `executable-missing` | The program or its working directory does not exist. | `executableMissing`; a raw `spawn` ENOENT |
+| `output-too-large` | Wrote past the capture limit. | `outputLimitExceeded` |
+| `command-not-found` | A shell could not find the program. | `command not found`; exit 127 |
+| `not-executable` | A shell could not run the program. | Exit 126 |
+| `auth-failed` | No credentials, or they were refused. | `authentication failed` or `required`, `could not read username`, `terminal prompts disabled`, `bad credentials`, `permission denied (publickey)`, `host key verification failed`, `gh auth login`, `HTTP 401`, `returned error: 401` or `403`; `gh` exit 4 |
+| `network-failed` | Could not reach a host. | `could not resolve host`, `connection refused` or `reset`, `network is unreachable`, `early eof`, `remote end hung up`, `unable to access` an HTTP(S) URL, `i/o timeout` |
+| `disk-full` | No room to write. | `no space left`, `ENOSPC`, `disk quota exceeded` |
+| `permission-denied` | The OS refused access. | `permission denied`, `operation not permitted`, `read-only file system` |
+| `path-not-found` | A needed path does not exist. | `no such file or directory` |
+| `port-in-use` | The port is taken. | `port is already allocated`, `address already in use` |
+| `invalid-usage` | The tool rejected its arguments. | `usage:` at a line start, `unknown option` or `flag`; `git` exit 129 |
+| `branch-exists` | The target branch is taken. | `a branch named ... already exists` |
+| `branch-not-found` | The branch does not exist. | `no branch named`, `refname ... not found`, `did not match any file(s) known to git` |
+| `invalid-ref` | A name or revision is bad. | `not a valid branch name` or `object name`, `bad revision`, `unknown revision`, `ambiguous argument` |
+| `ref-conflict` | An existing ref occupies the path. | `exists; cannot create`, `cannot lock ref ... is at ... but expected` |
+| `lock-held` | A git lock is held. | `unable to create '....lock'` or `cannot lock ref` with `File exists`, `another git process`, `could not lock config file ...: File exists` |
+| `not-a-repository` | Not inside a repository. | `not a git repository` |
+| `worktree-conflict` | Checked out in another worktree. | `already checked out`, `used by worktree` |
+| `merge-conflict` | Stopped on conflicts. | `CONFLICT (`, `merge conflict`, `could not apply`, `unmerged files` |
+| `dirty-worktree` | Changes would be overwritten. | `local changes ... would be overwritten`, `commit your changes or stash` |
+| `nothing-to-commit` | Nothing staged. | `nothing to commit`, `no changes added to commit` |
+| `push-rejected` | The remote refused the push. | `[rejected]`, `[remote rejected]`, `non-fast-forward` |
+| `remote-ref-missing` | The ref is not on the remote. | `couldn't find remote ref`, `not our ref` |
+| `no-remote` | No such remote or repository. | `does not appear to be a git repository`, `no such remote`, `repository ... not found` |
+| `dubious-ownership` | Owned by another user. | `detected dubious ownership` |
+| `identity-unknown` | No commit identity. | `please tell me who you are`, `unable to auto-detect email` |
+| `rate-limited` | A GitHub rate limit. | `rate limit`, `HTTP 429` |
+| `forbidden` | The token lacks access. | `HTTP 403`, `resource not accessible` |
+| `resource-not-found` | No such GitHub resource. | `HTTP 404`, `could not resolve to a` |
+| `no-pull-request` | No pull request matched. | `no pull requests found`, `no open pull requests` |
+| `pull-request-exists` | The branch already has one. | `a pull request for branch ... already exists` |
+| `server-error` | A GitHub server error. | `HTTP 5xx` |
+| `daemon-unavailable` | Docker is not reachable. | `cannot connect to the docker daemon`, `error during connect`, `is the docker daemon running`, `docker desktop is not running` |
+| `daemon-error` | Docker itself failed. | `docker` exit 125 |
+| `container-not-found` | The container is gone. | `no such container` |
+| `container-not-running` | Stopped, paused or restarting. | `container ... is not running`, `paused`, `restarting` |
+| `container-name-conflict` | The name is taken. | `name ... is already in use` |
+| `image-not-found` | No such image. | `no such image`, `pull access denied`, `manifest ... not found`, `manifest unknown` |
+| `server-not-running` | No tmux server. | `no server running`, `failed to connect to server`, `no sessions`, socket missing/refused errors, `server exited`, `lost server` |
+| `session-not-found` | No such tmux target. | `can't find session`, `window` or `pane`, `session not found` |
+| `session-exists` | The session name is taken. | `duplicate session` |
+| `unclassified` | Nothing above matched. | The fallback, with the exit code and signal as the evidence |
+
+The list and each sentence are in `log-vocabulary/command-failure-reasons.ts`, and
+the patterns are in `node/command-failure-reason.ts`. Text matching is case-insensitive.
+
+## Raw `console` until a site migrates
+
+Two backstops apply before a site moves to the logger.
+
+**`CommandFailedError` prints safely.** Its `toJSON` and `util.inspect.custom` give
+the classified fields and bounded frames, so a raw `console.warn("...", error)` writes
+one line and never `stdout`, `stderr`, `cmd` or `spawnargs`:
+
+```text
+[Backend] Failed: CommandFailedError reason=branch-exists exitCode=128 signal=null outputOmitted=true | at runCommandBytes (apps/backend/src/core/shell.ts:345:13)
+```
+
+This covers `%s`, `%o`, `%j`, a nested field, an array member and, through the
+backend's bounded console, a wrapper's `cause`. `GitRemoteTimeoutError` inherits it.
+
+It does not cover reading the text directly. `error.message`, `String(error)` and a
+template literal still give the output, because callers build user-facing text from
+them, so such a site stays unprotected until it migrates. Under Bun's own console, a
+`CommandFailedError` held as a `cause` also prints in full. Bun's native error printer
+ignores `inspect.custom` there, and the backend avoids it by installing the bounded
+console first.
+
+Other classes were checked. `SshTunnelError.detail` is one redacted line and
+`ProviderSessionFailedError.detail` is bridge text cut at 4,000 characters, both
+bounded, and neither is child output, so neither has a backstop. A raw error from
+`promisify(execFile)` (`tailscale-serve.ts`, `ssh-agent-socket.ts`) and a plain
+`new Error(out.stderr)` (`tmux-*.ts`, `path-safety.ts`) have no class to add one to:
+migrating the site through `formatLogError` is what covers them.
+
+**The fatal rejection guard is bounded.** `packages/protocol/src/fatal-rejections.ts`
+is serialized into workers, so it imports nothing and keeps its raw `console`. It
+writes one line of at most about 5 KiB: a message cut at 1 KiB, up to 16 frames of 240
+characters with the same relative paths, and any `code`, `exitCode` and `signal` that
+look like identifiers. It drops a command failure's message and output. An arbitrary
+rejected object is described by shape (`[object Object] code=E_NOPE keys=3`), never by
+its contents, and a function by `[function]`. It redacts common credential shapes with
+a local copy of the shared credential rules, because it cannot load `secret-redaction.ts`.
+Its metadata and names are redacted too; common fixtures enforce parity.
+`fatal-rejections.test.ts` holds its paths to the same results as `formatLogError`.
+`scripts/recurring-live-ab.ts` counts `Unhandled promise rejection (continuing)` by its
+exact text, so that prefix does not change.
+
+The [R5 addendum](../reports/2026-10-29-logging-and-database-efficiency.md#addendum-log-output-shortened-by-r5)
+lists every site these backstops shortened and the evidence each loses.
 
 ## Output
 
@@ -365,6 +549,7 @@ record what was observed at the time and are left as they are.
 | `[backend] Kept the local branch of deleted environment` | `[environment] cleanup.branch-kept` |
 | `[agent-mail] waiting` | `[agent-mail] delivery.waiting` |
 | `[native-agent] ... older than the command catalogue` | `[native-agent] catalogue.outdated-bridge` |
+| `[ElectronBackend] Failed to rename ... git branch`, and the push and rollback lines | `[git] branch.rename-failed`, `branch.push-config-failed`, `branch.rollback-failed` |
 | `[Backend]` (unmigrated backend output) | Unchanged until the backend migrates |
 | `[DesktopStartup]` | Unchanged |
 
@@ -380,8 +565,8 @@ record what was observed at the time and are left as they are.
   Keep the allowlist and hashing in `bridge-diagnostics.ts`, and pass the result on
   as one string field. Check it fits: strings are cut at 2 KiB, and
   `MAX_ENTRY_BYTES` there is the existing limit to reconcile.
-- **Command failures** lose their message. A backend site that needs stderr to be
-  diagnosable has to log a classified reason, because a raw tail is not available.
+- **Command failures** lose their message. A site that needs more than the exit code
+  logs a classified reason; see [When to add a reason](#when-to-add-a-reason).
 
 Backend jobs, annotation reconciliation and certificate refresh scopes include a
 content-free owner UUID so separate backend instances cannot clear each other.

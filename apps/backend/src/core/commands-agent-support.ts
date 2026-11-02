@@ -7,6 +7,8 @@ import {
   CODEX_BACKGROUND_TASK_MODEL,
   CODEX_BACKGROUND_TASK_REASONING_EFFORT,
 } from "@orkestrator/protocol/codex-background-task";
+import { createLogger, formatLogError, type LogEventOf } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { homePath, runCommand } from "./shell.js";
 import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environment-agent-skills.js";
@@ -738,6 +740,26 @@ export async function generateEnvironmentNameWithCodexExec(
   }
 }
 
+const gitLog = createLogger("git");
+
+/**
+ * A failed branch operation, as a reason rather than the command's output. The
+ * exec's own failures and git's come through together inside a container.
+ */
+function logBranchFailure(
+  event: LogEventOf<"git">,
+  environment: Environment,
+  runtime: "local" | "container",
+  error: unknown,
+): void {
+  gitLog.warn(event, () => ({
+    ...classifyCommandFailure(error, { tools: runtime === "local" ? ["git"] : ["docker", "git"] }),
+    environmentId: environment.id,
+    runtime,
+    error: formatLogError(error),
+  }));
+}
+
 /**
  * Renames the git branch backing an environment, returning whether the stored branch
  * may now be advanced to `newBranch`.
@@ -761,7 +783,7 @@ export async function renameLiveGitBranch(
         { timeoutMs: 30_000 },
       );
     } catch (error) {
-      console.warn("[ElectronBackend] Failed to rename local git branch:", error);
+      logBranchFailure("branch.rename-failed", environment, "local", error);
       return false;
     }
 
@@ -769,10 +791,7 @@ export async function renameLiveGitBranch(
       await configureSameNamedOriginPush(environment.worktreePath);
       await clearStaleLocalBranchUpstream(environment.worktreePath, newBranch);
     } catch (error) {
-      console.warn(
-        "[ElectronBackend] Renamed local git branch but failed to configure its pushes:",
-        error,
-      );
+      logBranchFailure("branch.push-config-failed", environment, "local", error);
       try {
         await runCommand(
           "git",
@@ -781,10 +800,7 @@ export async function renameLiveGitBranch(
         );
         return false;
       } catch (rollbackError) {
-        console.warn(
-          "[ElectronBackend] Failed to roll back local git branch rename:",
-          rollbackError,
-        );
+        logBranchFailure("branch.rollback-failed", environment, "local", rollbackError);
         const worktreePath = environment.worktreePath;
         return await renameLandedOnNewBranch(
           (branch) => localBranchRefExists(worktreePath, branch),
@@ -803,17 +819,14 @@ export async function renameLiveGitBranch(
         `git -C /workspace branch -m -- ${quoteShell(oldBranch)} ${quoteShell(newBranch)}`,
       );
     } catch (error) {
-      console.warn("[ElectronBackend] Failed to rename container git branch:", error);
+      logBranchFailure("branch.rename-failed", environment, "container", error);
       return false;
     }
 
     try {
       await dockerExec(containerId, containerSameNamedOriginPushCommand(newBranch));
     } catch (error) {
-      console.warn(
-        "[ElectronBackend] Renamed container git branch but failed to configure its pushes:",
-        error,
-      );
+      logBranchFailure("branch.push-config-failed", environment, "container", error);
       try {
         await dockerExec(
           containerId,
@@ -821,10 +834,7 @@ export async function renameLiveGitBranch(
         );
         return false;
       } catch (rollbackError) {
-        console.warn(
-          "[ElectronBackend] Failed to roll back container git branch rename:",
-          rollbackError,
-        );
+        logBranchFailure("branch.rollback-failed", environment, "container", rollbackError);
         return await renameLandedOnNewBranch(
           (branch) => containerBranchRefExists(containerId, branch),
           oldBranch,

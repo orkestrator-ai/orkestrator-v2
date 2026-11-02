@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { SECRET_REDACTION_FIXTURES } from "./testing/secret-redaction-fixtures.js";
 import { redactSecrets } from "./secret-redaction.js";
 
 describe("redactSecrets", () => {
+  test.each(SECRET_REDACTION_FIXTURES)("shared fixture %s", (input, secret) => {
+    expect(redactSecrets(input)).not.toContain(secret);
+  });
   test("removes an Authorization bearer token but keeps the header name", () => {
     const redacted = redactSecrets("Authorization: Bearer ghp_0123456789abcdefghij");
     expect(redacted).not.toContain("ghp_0123456789abcdefghij");

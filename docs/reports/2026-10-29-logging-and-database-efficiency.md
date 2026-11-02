@@ -16,6 +16,7 @@ at `79f3bc97e` (same tree as `main`).
 8. [Proposed user controls](#proposed-user-controls)
 9. [Suggested order of work](#suggested-order-of-work)
 10. [Appendix: evidence and limits](#appendix-evidence-and-limits)
+11. [Addendum: log output shortened by R5](#addendum-log-output-shortened-by-r5)
 
 ## Scope and method
 
@@ -765,6 +766,10 @@ Retire the five bespoke variants, and bound `loggedKeptBranches`.
 
 #### R5. A single safe error formatter (L5)
 
+Built without the stderr tail below. See the
+[addendum](#addendum-log-output-shortened-by-r5) for every site whose output got
+shorter.
+
 Add `describeError(error, { maxBytes })`. It returns:
 
 - name, code and errno;
@@ -1257,3 +1262,235 @@ Validation per phase (from AGENTS.md):
 - [Bridge debug logging](../architecture/bridge-diagnostics.md).
 - [Change tracking](../architecture/change-tracking.md).
 - [Process crashes and kills](../debugging/process-crashes-and-kills.md).
+
+## Addendum: log output shortened by R5
+
+Added 2026-11-01 for the R5 ticket. Line numbers are from commit `9d02f1d1c`, and
+the rest of this report still describes the code as of its original date.
+
+R5 was built without the redacted stderr tail suggested above, because the user
+decided against one at any level. A failed command now logs a fixed reason instead.
+[Command failures](../architecture/logging.md#command-failures) describes the
+classifier and lists every reason.
+
+No log level changed. The six branch rename lines were `console.warn` and are now
+`warn`, which is written by default. The fatal guard still writes through the same
+`warn` function.
+
+### What was checked, and how far
+
+Every `console.*` call in `apps/backend/src`, tests and test support excluded, was
+scanned for an argument that could hold an error object, then read by hand.
+Whether a `CommandFailedError` can reach a line was traced by reading the code, not
+by running each path.
+
+| Group | Sites | Output shorter? |
+| --- | --- | --- |
+| [Branch rename lines](#branch-rename-lines) | 6 | Yes, always |
+| [Raw `console` sites a command failure may reach](#raw-console-sites-a-command-failure-may-reach) | 31 | Only when a `CommandFailedError` arrives; not traced to a command on every path |
+| [Fatal rejection guard](#fatal-rejection-guard) | 20 installs | Yes, for long, command or object rejections |
+| [Sites using `formatLogError`](#sites-using-formatlogerror) | 41, plus 6 above | Frame paths only |
+| [Raw `console` sites checked and unchanged](#checked-and-not-shortened) | 43 | No |
+| [Sites logging no error object](#checked-and-not-shortened) | 9 | No |
+
+### What a raw `console` site loses
+
+A raw `console.warn("...", error)` with a real `git branch -m` failure, printed by
+the backend's `formatWithOptions` with the backstop removed and then with it in place:
+
+```text
+[x] Failed: CommandFailedError: fatal: no branch named 'master'
+    at runCommandBytes (<worktree>/apps/backend/src/core/shell.ts:391:17)
+    at async runCommand (<worktree>/apps/backend/src/core/shell.ts:420:36)
+    at processTicksAndRejections (native:7:39) {
+  stdout: '',
+  timedOut: false,
+  executableMissing: false,
+  aborted: false,
+  outputLimitExceeded: false,
+  exitCode: 128,
+  signal: null
+}
+```
+
+```text
+[x] Failed: CommandFailedError reason=branch-not-found exitCode=128 signal=null outputOmitted=true | at runCommandBytes (apps/backend/src/core/shell.ts:391:17) | at async runCommand (apps/backend/src/core/shell.ts:420:36) | at processTicksAndRejections (native:7:39)
+```
+
+The evidence lost at each such site is:
+
+- **The message.** This is the child's stderr, or its stdout when stderr was empty.
+  It also holds what only the text said: the branch, path, container or host named,
+  and the tool's own wording.
+- **The `stdout` field**, in full.
+- **The runtime's own message when the child wrote nothing**, such as the timeout in
+  `Command timed out after N ms`, or a command line it names. The reason says
+  `timed-out`, not how long the limit was.
+- **The separate flags.** `timedOut`, `executableMissing`, `aborted` and
+  `outputLimitExceeded` become one reason. `timedOut` stays true on an abort, so the
+  reason shows `aborted` where the old print showed both.
+- **Stack depth and directories.** Frames stop at 8 and show app-relative paths.
+
+The exit code, signal and error name stay. The backstop names no tools, so only the
+shared exit-code rules apply, and a failure no text rule matches can read as
+`unclassified` where a site naming its tool would do better.
+
+### Branch rename lines
+
+All six are in `renameLiveGitBranch`, `apps/backend/src/core/commands-agent-support.ts`.
+They now use `classifyCommandFailure` and `formatLogError`. They lose everything
+listed above, plus the line's prefix and sentence, which the event name replaces.
+They gain `environmentId` and `runtime`, which the old lines lacked.
+
+| Line | Event | Runtime | Specific evidence lost |
+| --- | --- | --- | --- |
+| 767 | `branch.rename-failed` | local | git's stderr, with the branch names it quotes |
+| 775 | `branch.push-config-failed` | local | git's stderr; which of the push-configuration commands failed now shows only through frame function names |
+| 784 | `branch.rollback-failed` | local | git's stderr from the failed rollback, with the branch names |
+| 803 | `branch.rename-failed` | container | The stderr of `docker exec` or of git inside it |
+| 810 | `branch.push-config-failed` | container | The same, and which step of the single configuration script failed, which no longer shows anywhere |
+| 818 | `branch.rollback-failed` | container | The stderr of `docker exec` or of git inside it |
+
+The old and new branch names are not on any of these lines. `environmentId` leads to
+the environment's stored branch.
+
+### Raw `console` sites a command failure may reach
+
+These still log the raw object. When a `CommandFailedError` arrives they print the
+safe form and lose what is listed under
+[What a raw `console` site loses](#what-a-raw-console-site-loses). Any other error
+prints as before. "May reach" means the job can call code that runs commands and no
+read showed that every failure is caught first; treat it as possible, not observed.
+The file is `apps/backend/src/core/index.ts` unless a row says otherwise.
+
+| Line | Message | Job | What was read |
+| --- | --- | --- | --- |
+| 1972 | Failed to reap orphaned local servers | `reapOrphanedLocalServers` | Identity reads are caught; `terminateProcessTree` runs `ps` (`process-tree.ts:60`) |
+| 1980 | Failed to reap orphaned claude-tmux runtimes | `reapOrphanedClaudeTmuxRuntimes` | `tmux` listing and kill failures are caught and logged with `String(error)` |
+| 2005, 2187 | Failed to reconcile tab teardowns | `reconcile_tab_teardowns` | Each intent logs through `conciseError`; the rest was not traced |
+| 2035 | Failed to restore build pipelines | `buildPipelines.init` | Not traced to a command |
+| 2038 | Failed to restore multi reviews | `multiReviews.init` | Not traced to a command |
+| 2086 | Failed to restore native agent launches | `nativeAgents.init` | Not traced to a command |
+| 2089 | Failed to restore agent mail | `agentMail.init` | Not traced to a command |
+| 2095, 2207 | Failed to reconcile orphaned tab resources | `reconcile_orphaned_tab_resources` | Not traced to a command |
+| 2138 | Failed to adopt pending setup for an environment | `ensure_environment_setup` | Calls `startEnvironmentSetup`; not traced further |
+| 2145 | Failed to restore feature planning | `featurePlanning.init` | Adoption failures are caught; supervisor start not traced |
+| 2151, 2393 | Failed to restore or reconcile native agent activity | `nativeAgents.reconcileAgentActivity` | Not traced to a command |
+| 2159, 2399 | Failed to restore or reconcile Claude terminal activity | `reconcile_claude_state_polling` | The poll's reader runs `runCommand` (`tmux-poll.ts:228`); its handling was not traced |
+| 2163, 2406 | Failed to refresh agent mail presence | `agentMail.refreshPresence` | Not traced to a command |
+| 2170, 2403, 2799 | Failed to drain tmux prompt queues | `promptQueues.drainAll`, `shutdown` | Not traced to a command |
+| 2173, 2409 | Failed to drain agent mail | `agentMail.drainInjects` | Not traced to a command |
+| 2760 | Failed to drain native agent work | `nativeAgents.shutdown` | Partly read |
+| 2770 | Failed to drain build pipelines | `buildPipelines.shutdown` | Not traced to a command |
+| 2775 | Failed to drain multi reviews | `multiReviews.shutdown` | Partly read; most work is `allSettled` |
+| 2783 | Failed to drain graph runs | Graph run shutdown and disposal | Partly read; most work is `allSettled` |
+| 2789 | Failed to drain graph describe jobs | Graph describe shutdown | Partly read; most work is `allSettled` |
+| 2794 | Failed to drain feature planning | `featurePlanning.shutdown` | Partly read; most work is `allSettled` |
+| `native-agent-service.ts:1730` | Catalogue refresh failed | `provider.refreshCatalog` | Provider implementations not traced |
+| `agent-mail-service.ts:181` | Failed to drain newly received mail | `drainInjects` | Not traced to a command |
+
+Any of these can also print a wrapper error whose `cause` is a `CommandFailedError`.
+The backend's bounded console prints that `cause` in the safe form too.
+
+### Fatal rejection guard
+
+`packages/protocol/src/fatal-rejections.ts` used to print any message and stack in
+full, and `JSON.stringify` of any rejected object. It now writes one line of about
+5 KiB at most. Each install below loses the same evidence:
+
+- **A rejected plain object's contents.** Every key and value is gone, leaving its
+  tag, key count and any `name`, `code`, `exitCode` or `signal` that looks like an
+  identifier. A rejection such as `{ status: 500, body: "..." }` reads
+  `[object Object] keys=2`, and this is the largest loss.
+- **A command failure's message and output.** The same applies to any error carrying
+  `stdout`, `stderr`, `cmd` or `spawnargs`, or a message starting `Command failed`.
+- **Long text.** A message or rejected string stops at 1 KiB, and a number or other
+  primitive at 64 characters.
+- **Line breaks and control characters.** These become spaces, so a multi-line
+  message runs together.
+- **Stack detail.** Frames stop at 16 and 240 characters each, directories go as
+  described below, and stack lines not starting `at` are dropped.
+- **A rejected function's source.** It now reads `[function]`.
+- **Credentials**, by design, through a local copy of the shared redaction rules.
+
+The installs are:
+
+- **Product processes (10):** `apps/backend/src/main.ts`,
+  `preview-relay-script.ts`, `preview-browser-harness.ts`,
+  `preview-baseline-harness.ts` and `core/review-validation-worker.ts`, all under
+  `apps/backend/src`; and the entrypoints of `bridges/claude-bridge`,
+  `bridges/codex-bridge`, `bridges/cursor-bridge`, `bridges/pi-bridge` and
+  `bridges/acp-bridge`. The bridges' code did not change; they import the guard.
+- **Test and fixture processes (10):** `e2e/change-tracking-host.ts`;
+  `e2e/fixtures/` `codex-host-rules-host.ts`, `close-retention-host.ts`,
+  `codex-subagent-host.ts` and `claude-interactions-host.ts`;
+  `apps/backend/src/core/build-pipeline-held-dispatch-test-support.ts`;
+  `apps/desktop/scripts/` `test-agent-browser-isolated.ts`,
+  `test-agent-coordinator-live.ts` and `test-agent-goals-live.ts`; and
+  `apps/desktop/tests/preview-external-browser-harness.ts`.
+
+### Sites using `formatLogError`
+
+These lose only directories in stack frames. Their messages, frame counts and fields
+are as they were after R1. A frame now keeps the path from `node_modules/`, a
+workspace, a deployed bridge or a packaged app. A web URL loses its origin and query.
+A path matching none of those keeps only its file name (`.../file.ts`), which is the
+real loss: a frame from a file outside the app no longer says where that file was.
+This can also keep more of a frame, because the shorter path is less likely to hit
+the 240-character cut.
+
+All files are under `apps/desktop/electron/` except the last row.
+
+| File | Lines |
+| --- | --- |
+| `auto-update.ts` | 213, 227, 238, 247, 268 |
+| `backend-process.ts` | 672, 886, 889 |
+| `desktop-window-contexts.ts` | 90 |
+| `host-update-executor.ts` | 116, 264, 291, 326 |
+| `main.ts` | 210, 293, 416, 661, 782, 815, 826, 1410, 1475, 1479, 1495, 1608, 1621 |
+| `native-dialogs.ts` | 144, 177, 233, 246 |
+| `preview-connection-backend.ts` | 73 |
+| `preview-port-hints.ts` | 47 |
+| `relaunch.ts` | 152 |
+| `renderer-recovery.ts` | 56 |
+| `restart-prompt.ts` | 36 |
+| `startup-failure.ts` | 14 |
+| `updater-log.ts` | 21 |
+| `web-client-controller.ts` | 68, 86 |
+| `packages/protocol/src/node/application-logging.ts` | 352, 451 |
+
+The same rewrite applies wherever these reach a log without a direct call: a raw
+`Error` passed as a logger field (`logger.ts:217`), and frames relayed from another
+process (`logErrorFromWire`).
+
+### Checked and not shortened
+
+These 43 sites log a raw object, but no `CommandFailedError` was found reaching them,
+so their output is unchanged. Under `apps/backend/src/core/`:
+
+- **Tmux commands, 19 sites.** `TmuxBackend.exec` runs through its own spawn helper in
+  `tmux-shared.ts` and returns a status, so a failure is a plain `Error`:
+  `tmux-commands.ts` 119, 131, 143, 153, 166, 306; `tmux-session-manager.ts` 435,
+  454, 617, 627, 645, 666, 685, 740, 1643; `tmux-interactive.ts:270`;
+  `tmux-hooks.ts` 553, 1298; `commands-servers.ts:1586`.
+- **Synchronous listeners, 4 sites.** These cannot wait on a command:
+  `storage-changes.ts` 90, 146; `host-maintenance.ts:338`; `control-mcp-server.ts:471`.
+- **Storage and files only, 9 sites.** `usage-history-recorder.ts:102`;
+  `usage-history-store.ts:279`; `storage-stores.ts:630`; `commands-environment.ts`
+  830, 858; `agent-mail-service.ts:278`; `multi-review-service.ts:2311`;
+  `native-agent-provider.ts:275`; and `machine-load.ts:281`, whose one command is
+  already caught in `describeOs`.
+- **`index.ts`, 11 sites.** 1865, 1874, 2042, 2052, 2081, 2124, 2424, 2431, 2455,
+  2804, 2849. These are storage calls, setup that only starts a supervisor, the rename
+  sweep whose tasks each catch their own failure, the control server's bind, or a
+  shutdown whose waits discard rejections.
+
+Nine more take an error but log no error object, so they are unchanged too:
+`graph-node-system.ts` 141 and 242; `commands-environment.ts` 408 and 429;
+`terminal-runtime.ts` 642, 690 and 740; `build-pipeline-service-supervisor.ts:351`;
+and `index.ts:2656`.
+
+"Not shortened" does not mean safe. The tmux errors above carry stderr as their
+message and still print it. So do sites logging `error.message` or `String(error)`,
+such as the reapers' lines in `local-server-reaper.ts`. The R1 backend slice covers
+all of these when it moves them to `formatLogError`.

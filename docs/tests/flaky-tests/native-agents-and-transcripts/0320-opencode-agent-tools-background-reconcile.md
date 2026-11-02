@@ -46,3 +46,38 @@ implementation, assertion, timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name agent-tools-alone -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1` passed (2.6 s).
 - **Evidence:** `orkestrator-test-run.aPuQa7` below the host temporary directory.
 - **Assessment:** confirms recurrence. The branch does not touch agent-tool configuration; nothing changed in the test.
+
+
+## Safe error formatting second review — 2026-11-02
+
+Preparation ran `mise run test` at `de952cc0accc820c6d57425323428cc993794a54`.
+The backend used three isolated workers and reported 13,006 passed, 97 skipped,
+and five failed across 870 files (440.83 s). Original evidence is preserved at
+`.orkestrator/review-artifacts/review-validation-b03e0cc0-820a-4723-8d36-20d1666dfe82/validation-04.stdout.txt`.
+
+This case observed configurationCount() remained one rather than zero at line 195 (194.70 ms).
+
+The complete unchanged owner passed on the fix branch as part of
+`mise run test:logged -- --name r5-round2-recorded-owners -- bun test --cwd apps/backend ./tests/container-readiness.test.ts ./src/core/commands-agent-tools.test.ts ./tests/codex-subagent-cards.test.ts ./src/core/nodes/node-files.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 14.2 s; passing per-file counts were not retained by the runner).
+
+A detached `origin/main` worktree at `9dbd7f1cc9981789ab352056bea84a1007c99959`
+used its own `mise exec -- bun install --frozen-lockfile` dependencies.
+Its complete owner check was `mise run test:logged -- --name r5-round2-main-agent-tools -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures` (failed, 20 passed and one failed (3.9 s)).
+Result: the identical line-195 assertion received one after the 150 ms wait. Failure evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.ozqrnq/`.
+
+The same failure on main establishes independence from this branch. The owner
+and implementation are unchanged relative to main. No assertion, delay, skip,
+or unrelated implementation was changed; the existing flake remains open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.

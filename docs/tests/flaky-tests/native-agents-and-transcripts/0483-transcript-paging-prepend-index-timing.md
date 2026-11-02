@@ -59,3 +59,14 @@ Exact commands, eight-worker aggregate counts, sequential one-worker results,
 failure details and retained evidence are in
 [1600](../aggregate-validation-runs/1600-history-loading-main-merge-validation.md).
 No owning implementation, assertion, timeout or skip changed between runs.
+
+
+## Renderer efficiency review — 2026-11-02
+
+Preparation at `9ad6e88dc` reported desktop `native: paging before prose holds the original tool position` retaining index 1 rather than increasing (browser: 1080 passed, 7 failed, 116 skipped, 1 flaky, 1262.4 s). The original command was `mise run test:logged -- --name browser -- mise run test:browser`.
+
+On detached `origin/main` at `38d55ee14`, with separately installed frozen dependencies, all 19 desktop paging cases passed in the three-owner, two-worker comparison (`CloseRetention.spec.ts TranscriptPaging.spec.ts VirtuosoFollow.spec.ts`; 35 passed, 6 unrelated failures overall, 338.4 s). Repeating the unchanged paging owner three times with two workers reproduced the same index-1 assertion, plus the byte-bounded and same-minute variants and a held-place opacity failure (53 passed, 4 failed, 305.1 s). This establishes recurrence without the renderer efficiency changes; no assertion, skip or timeout was changed.
+
+Commands used `ORKESTRATOR_E2E_PORT=1437 mise run test:logged -- --name baseline-browser-failures -- bunx playwright test CloseRetention.spec.ts TranscriptPaging.spec.ts VirtuosoFollow.spec.ts --config=e2e/playwright.config.ts --project=desktop-chromium --workers=2`, then `ORKESTRATOR_E2E_PORT=1437 mise run test:logged -- --name baseline-paging-repeat -- bunx playwright test TranscriptPaging.spec.ts --config=e2e/playwright.config.ts --project=desktop-chromium --workers=2 --repeat-each=3`.
+
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BoEPrl/baseline-browser-failures.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ULKrgc/baseline-paging-repeat.log.gz`. Root cause remains unconfirmed.

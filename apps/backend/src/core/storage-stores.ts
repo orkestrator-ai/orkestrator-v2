@@ -33,6 +33,9 @@ import {
   type StorageMigrationContext,
   type StoreLayout,
 } from "./storage-database.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 
 /**
  * Registry of the backend stores kept in the SQLite database, and the one-time
@@ -624,12 +627,10 @@ export function openBackendDatabase(
     if (moved > 0 && !imported) {
       // Only an older backend sharing (or later reusing) this directory writes
       // these. Their content is not merged; it stays recoverable in the archive.
-      console.warn(
-        `[Storage] Moved ${moved} JSON store file(s) written after the SQLite migration to ${LEGACY_JSON_DIRECTORY}/; they were not imported`,
-      );
+      log.warn("legacy-json.moved", { moved, directory: LEGACY_JSON_DIRECTORY });
     }
   } catch (error) {
-    console.warn("[Storage] Could not archive imported JSON store files:", error);
+    log.warn("legacy-json.archive-failed", { error: formatLogError(error) });
   }
   try {
     replayLegacyJsonCleanup(database, dataDir);

@@ -25,6 +25,9 @@ import {
 
 import { isRecord } from "./storage-shared.js";
 import type { StorageContext } from "./storage-context.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 
 /** Idempotency record for one committed registry mutation. */
 export interface PreviewMutationRecord {
@@ -339,9 +342,7 @@ export class PreviewServicesRepository {
         return { instanceId: stored.instanceId, created: false };
       }
       if (isRecord(stored) && isOpaquePreviewId(stored.instanceId)) {
-        console.warn(
-          "[backend] Data directory moved or copied; minting a new backend identity for previews",
-        );
+        log.warn("preview-identity.reminted");
       }
       const instanceId = `bk_${randomBytes(16).toString("base64url")}`;
       await this.context.saveJson(this.backendIdentityFile(), {
@@ -405,7 +406,7 @@ export class PreviewServicesRepository {
         ? (raw.revision as number)
         : 0;
     if (raw !== null) {
-      console.warn("[backend] The stored machine profile was invalid; restoring the default");
+      log.warn("machine-profile.invalid");
     }
     const profile: BackendProfile = {
       revision: previousRevision + 1,

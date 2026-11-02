@@ -255,9 +255,9 @@ describe("legacy JSON import", () => {
         "Current",
       ]);
       second.close();
-      expect(warn.mock.calls.some(([message]) => String(message).includes("not imported"))).toBe(
-        true,
-      );
+      expect(
+        warn.mock.calls.some(([message]) => String(message).includes("legacy-json.moved")),
+      ).toBe(true);
     } finally {
       warn.mockRestore();
     }

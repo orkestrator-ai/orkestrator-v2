@@ -11,6 +11,9 @@ import {
 
 import { readStoredNodeAttachments, readStoredNodeRegistry } from "./nodes/node-store-format.js";
 import type { StorageContext } from "./storage-context.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 
 /** Result of a registry or attachment mutation: `next: null` writes nothing. */
 export interface NodeStoreMutation<TStore, TResult> {
@@ -233,7 +236,7 @@ export class NodesRepository {
     );
     if (dropped > 0 && !this.reportedDroppedNodes) {
       this.reportedDroppedNodes = true;
-      console.warn(`[backend] Ignored ${dropped} unreadable node registry entries`);
+      log.warn("nodes.entries-dropped", { dropped });
     }
     return registry;
   }

@@ -5,6 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { StorageDatabase } from "./storage-database.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 
 /**
  * Snapshots of the backend database.
@@ -146,7 +149,7 @@ function snapshot(database: StorageDatabase, dataDir: string, name: string): str
       copy.close();
     }
     if (!sound) {
-      console.warn("[Storage] A database snapshot failed its integrity check and was discarded");
+      log.warn("snapshot.integrity-failed");
       return null;
     }
     fs.renameSync(temporary, target);
@@ -577,9 +580,12 @@ export async function takeHourlySnapshotIfDue(
     const available = availableBytes(directory);
     if (available < requiredFreeBytes(bytes)) {
       const { retryAt } = recordFailure(directory, at);
-      console.warn(
-        `[Storage] Skipped the hourly database snapshot: ${formatBytes(available)} free, ${formatBytes(requiredFreeBytes(bytes))} needed for a ${formatBytes(bytes)} database; next attempt after ${new Date(retryAt).toISOString()}`,
-      );
+      log.warn("snapshot.skipped-low-disk", {
+        availableBytes: available,
+        requiredBytes: requiredFreeBytes(bytes),
+        databaseBytes: bytes,
+        retryAt: new Date(retryAt).toISOString(),
+      });
       return null;
     }
 
@@ -590,7 +596,7 @@ export async function takeHourlySnapshotIfDue(
     try {
       if (!(await copy(database.path, temporary))) {
         recordFailure(directory, at);
-        console.warn("[Storage] A database snapshot failed its integrity check and was discarded");
+        log.warn("snapshot.integrity-failed");
         return null;
       }
       fs.renameSync(temporary, target);
@@ -603,17 +609,12 @@ export async function takeHourlySnapshotIfDue(
     return target;
   } catch (error) {
     const backoff = directory ? recordFailure(directory, now()) : null;
-    console.warn(
-      "[Storage] Hourly database snapshot failed:",
-      error instanceof Error ? error.message : "unknown error",
-      ...(backoff ? [`(next attempt after ${new Date(backoff.retryAt).toISOString()})`] : []),
-    );
+    log.warn("snapshot.failed", {
+      retryAt: backoff ? new Date(backoff.retryAt).toISOString() : null,
+      error: formatLogError(error),
+    });
     return null;
   } finally {
     await release?.().catch(() => undefined);
   }
-}
-
-function formatBytes(bytes: number): string {
-  return `${(bytes / GIB).toFixed(1)} GiB`;
 }

@@ -12,6 +12,9 @@ import type {
 } from "./storage-shared.js";
 import type { StorageContext } from "./storage-context.js";
 import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 
 /** The store (or, for `config`, the file) each manifest resource is revised by. */
 export const RESOURCE_MANIFEST_FILES: Readonly<Record<ResourceManifestKind, string>> = {
@@ -87,7 +90,7 @@ export class StorageChanges {
       try {
         listener(event);
       } catch (error) {
-        console.error("[Storage] Environment attention listener threw:", error);
+        log.error("listener.attention-failed", { error: formatLogError(error) });
       }
     }
   }
@@ -143,7 +146,7 @@ export class StorageChanges {
         subscriber(change);
       } catch (error) {
         // A broken client transport/service observer must never fail a committed mutation.
-        console.error("[Storage] Resource change listener threw:", error);
+        log.error("listener.change-failed", { error: formatLogError(error) });
       }
     }
   }

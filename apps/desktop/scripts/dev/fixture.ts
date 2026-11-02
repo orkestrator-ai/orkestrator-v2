@@ -1,11 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { cp, mkdir, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type { RuntimeProfile } from "../../electron/runtime-profile.js";
 
-type Project = { id: string };
-type Environment = { id: string };
+type Project = { id: string; localPath?: string };
+type Environment = { id: string; name?: string; environmentType?: string; status?: string };
+
+/** One gateway command call; injectable so tests can stand in for the backend. */
+export type FixtureInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 function runGit(args: string[], cwd?: string): void {
   const result = spawnSync("git", args, {
@@ -49,10 +52,41 @@ export function fixtureEnvironmentArgs(
     projectId,
     name: `fixture-${kind}`,
     networkAccessMode: kind === "container" ? containerNetwork : "restricted",
-    environmentType: kind === "container" ? "containerized" : "local",
+    environmentType: fixtureEnvironmentType(kind),
   };
 }
 
+function fixtureEnvironmentType(kind: "local" | "container"): string {
+  return kind === "container" ? "containerized" : "local";
+}
+
+async function exists(target: string): Promise<boolean> {
+  return stat(target).then(
+    () => true,
+    () => false,
+  );
+}
+
+/**
+ * Whether an earlier start's fixture repository and origin are still on disk.
+ * Earlier environments hold both: a container binds `origin.git`, a local
+ * worktree's `.git` file points into `test-project/.git/worktrees/`.
+ */
+export async function fixtureRepositoryIntact(profile: RuntimeProfile): Promise<boolean> {
+  const projectPath = path.join(profile.fixtureDir, "test-project");
+  const originPath = path.join(profile.fixtureDir, "origin.git");
+  return (
+    (await exists(path.join(projectPath, ".git"))) && (await exists(path.join(originPath, "HEAD")))
+  );
+}
+
+/**
+ * Seeds the fixture project and its environments. A restart of the same
+ * profile reuses what an earlier start seeded: recreating the repository would
+ * break that start's container (its origin bind keeps the deleted directory)
+ * and local worktree, and a second pair would sit beside the broken one in the
+ * sidebar. `dev:reset` is the way to get a pristine fixture.
+ */
 export async function seedFixture(options: {
   profile: RuntimeProfile;
   templateRoot: string;
@@ -60,31 +94,37 @@ export async function seedFixture(options: {
   authFile: string;
   environments: Array<"local" | "container">;
   containerNetwork?: "restricted" | "full";
+  invoke?: FixtureInvoke;
 }): Promise<string> {
-  const projectPath = await prepareFixtureRepository(options.profile, options.templateRoot);
+  const call: FixtureInvoke =
+    options.invoke ??
+    (<T>(command: string, args?: Record<string, unknown>) =>
+      invoke<T>(options.browserUrl, options.authFile, command, args));
+  const projectPath = path.join(options.profile.fixtureDir, "test-project");
   const originPath = path.join(options.profile.fixtureDir, "origin.git");
 
-  const projects = await invoke<Project[]>(options.browserUrl, options.authFile, "get_projects");
-  let project = projects.find(
-    (entry) => (entry as Project & { localPath?: string }).localPath === projectPath,
-  );
+  const projects = await call<Project[]>("get_projects");
+  let project = projects.find((entry) => entry.localPath === projectPath);
+  const reuse = project !== undefined && (await fixtureRepositoryIntact(options.profile));
+  if (!reuse) await prepareFixtureRepository(options.profile, options.templateRoot);
   if (!project) {
-    project = await invoke<Project>(options.browserUrl, options.authFile, "add_project", {
-      gitUrl: originPath,
-      localPath: projectPath,
-    });
+    project = await call<Project>("add_project", { gitUrl: originPath, localPath: projectPath });
   }
 
+  // Only a reused repository can still hold working environments; after a
+  // re-preparation every earlier one points at the deleted copy.
+  const existing = reuse
+    ? await call<Environment[]>("get_environments", { projectId: project.id })
+    : [];
   for (const kind of options.environments) {
-    const environment = await invoke<Environment>(
-      options.browserUrl,
-      options.authFile,
-      "create_environment",
-      fixtureEnvironmentArgs(project.id, kind, options.containerNetwork),
+    const args = fixtureEnvironmentArgs(project.id, kind, options.containerNetwork);
+    const previous = existing.find(
+      (entry) => entry.name === args.name && entry.environmentType === fixtureEnvironmentType(kind),
     );
-    await invoke(options.browserUrl, options.authFile, "start_environment", {
-      environmentId: environment.id,
-    });
+    // Starting a running environment re-runs its setup, so leave it alone.
+    if (previous?.status === "running") continue;
+    const environment = previous ?? (await call<Environment>("create_environment", args));
+    await call("start_environment", { environmentId: environment.id });
   }
   return projectPath;
 }

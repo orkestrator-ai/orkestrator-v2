@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { FileText, Hammer } from "lucide-react";
 import {
   hasKeyInformation,
@@ -59,7 +59,12 @@ const TILE_TONE: Record<SummaryTile["tone"], string> = {
  */
 export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabData }) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
-  const hydrationAttemptedFor = useRef<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [hydration, setHydration] = useState<{
+    pipelineId: string;
+    attempt: number;
+    status: "missing" | "error";
+  } | null>(null);
   const buildTab = usePaneLayoutStore((state) => {
     const root = state.environments.get(data.environmentId)?.root;
     if (!root) return undefined;
@@ -77,17 +82,40 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
   // As in the build tab: the store is a cache of a backend-owned record, so a
   // tab restored before the project's pipelines loaded fetches its own.
   useEffect(() => {
-    if (pipeline || hydrationAttemptedFor.current === data.pipelineId) return;
-    hydrationAttemptedFor.current = data.pipelineId;
-    void hydrateBuildPipeline(data.pipelineId).catch((error) => {
-      console.warn("[PipelineKeyInformationTab] Failed to hydrate build pipeline:", error);
-    });
-  }, [data.pipelineId, pipeline]);
+    if (pipeline) return;
+    let cancelled = false;
+    void hydrateBuildPipeline(data.pipelineId).then(
+      () => {
+        if (!cancelled) setHydration({ pipelineId: data.pipelineId, attempt, status: "missing" });
+      },
+      () => {
+        if (!cancelled) setHydration({ pipelineId: data.pipelineId, attempt, status: "error" });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [data.pipelineId, pipeline, attempt]);
 
   if (!pipeline) {
+    const status =
+      hydration?.pipelineId === data.pipelineId && hydration.attempt === attempt
+        ? hydration.status
+        : "loading";
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Loading key information…
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+        <p role={status === "error" ? "alert" : "status"}>
+          {status === "error"
+            ? "Could not load key information."
+            : status === "missing"
+              ? "This pipeline is no longer available."
+              : "Loading key information…"}
+        </p>
+        {status === "error" ? (
+          <Button variant="outline" size="sm" onClick={() => setAttempt((value) => value + 1)}>
+            Retry
+          </Button>
+        ) : null}
       </div>
     );
   }

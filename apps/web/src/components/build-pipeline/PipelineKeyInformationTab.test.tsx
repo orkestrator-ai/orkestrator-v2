@@ -1,10 +1,18 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, mock, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
-import { PipelineKeyInformationTab } from "./PipelineKeyInformationTab";
+import * as realPersistence from "@/lib/build-pipeline-persistence";
+const persistenceSnapshot = { ...realPersistence };
+const hydrate = mock(async (_id: string): Promise<BuildPipeline | null> => null);
+mock.module("@/lib/build-pipeline-persistence", () => ({
+  ...persistenceSnapshot,
+  hydrateBuildPipeline: hydrate,
+}));
+afterAll(() => mock.module("@/lib/build-pipeline-persistence", () => persistenceSnapshot));
+const { PipelineKeyInformationTab } = await import("./PipelineKeyInformationTab");
 import { keyInformation } from "./key-information-test-fixture";
 
 /**
@@ -99,6 +107,55 @@ const section = (tab: HTMLElement, name: string) => within(tab).getByRole("regio
 describe("PipelineKeyInformationTab", () => {
   beforeEach(() => {
     cleanup();
+  });
+
+  function renderCold() {
+    useBuildPipelineStore.setState({ pipelines: new Map() });
+    render(
+      <PipelineKeyInformationTab
+        data={{ environmentId: ENVIRONMENT_ID, pipelineId: PIPELINE_ID }}
+      />,
+    );
+  }
+
+  test("fetches an uncached pipeline and displays its brief", async () => {
+    let finish!: () => void;
+    hydrate.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => {
+            seed(pipeline);
+            resolve(pipeline);
+          };
+        }),
+    );
+    renderCold();
+    expect(screen.getByRole("status").textContent).toBe("Loading key information…");
+    await act(async () => finish());
+    expect(screen.getByRole("heading", { name: pipeline.taskTitle })).toBeTruthy();
+  });
+
+  test("shows a fetch error and retries successfully", async () => {
+    hydrate.mockImplementationOnce(async () => {
+      throw new Error("backend unavailable");
+    });
+    renderCold();
+    await act(async () => {});
+    expect(screen.getByRole("alert").textContent).toBe("Could not load key information.");
+    hydrate.mockImplementationOnce(async () => {
+      seed(pipeline);
+      return pipeline;
+    });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+    expect(screen.getByRole("heading", { name: pipeline.taskTitle })).toBeTruthy();
+  });
+
+  test("shows a missing pipeline after a completed empty read", async () => {
+    hydrate.mockResolvedValueOnce(null);
+    renderCold();
+    await act(async () => {});
+    expect(screen.getByRole("status").textContent).toBe("This pipeline is no longer available.");
+    expect(screen.queryByText("Loading key information…")).toBeNull();
   });
 
   test("explains that nothing is recorded yet", () => {

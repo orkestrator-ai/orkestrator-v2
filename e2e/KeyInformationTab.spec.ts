@@ -83,3 +83,28 @@ test("the tab explains an empty brief", async ({ page }) => {
   await page.goto("/key-information-tab?view=tab&empty=1");
   await expect(page.getByText("Nothing has been recorded yet")).toBeVisible();
 });
+
+for (const state of ["loading", "error", "missing"] as const) {
+  test(`hydration ${state} is visible and recoverable`, async ({ page }, testInfo) => {
+    await page.goto(`/key-information-tab?view=tab&hydration=${state}`);
+    const message =
+      state === "error"
+        ? "Could not load key information."
+        : state === "missing"
+          ? "This pipeline is no longer available."
+          : "Loading key information…";
+    await expect(page.getByText(message, { exact: true })).toBeVisible();
+    await page.screenshot({
+      path: `output/visual-previews/key-info-${state}-${testInfo.project.name}.png`,
+    });
+    if (state === "error") {
+      await page.getByRole("button", { name: "Retry" }).click();
+      await expect(page.getByTestId("pipeline-key-information-tab")).toBeVisible();
+      await page.screenshot({
+        path: `output/visual-previews/key-info-recovered-${testInfo.project.name}.png`,
+      });
+      await page.reload();
+      await expect(page.getByRole("alert")).toHaveText(message);
+    }
+  });
+}

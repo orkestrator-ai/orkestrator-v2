@@ -10,6 +10,7 @@ import {
 } from "../../apps/web/src/contexts/TerminalContext";
 import { buildPipelineFixture } from "../../apps/web/src/test/build-pipeline-fixture";
 import {
+  BUILD_PIPELINE_VERSION,
   useBuildPipelineStore,
   type BuildPipeline,
 } from "../../apps/web/src/stores/buildPipelineStore";
@@ -192,12 +193,34 @@ export function KeyInformationTabFixture() {
   const [view, setView] = useState<"build" | "tab">(params.get("view") === "tab" ? "tab" : "build");
   const [openedWith, setOpenedWith] = useState<string>("");
   const empty = params.get("empty") === "1";
+  const hydration = params.get("hydration");
 
   useLayoutEffect(() => {
+    let reads = 0;
+    if (hydration) {
+      window.orkestrator = {
+        invoke: async () => {
+          reads++;
+          if (hydration === "loading") return new Promise(() => {});
+          if (hydration === "error" && reads === 1) throw new Error("Fixture read unavailable");
+          if (hydration === "missing") return null;
+          return {
+            id: pipeline.id,
+            projectId: pipeline.projectId,
+            environmentId: pipeline.environmentId,
+            version: BUILD_PIPELINE_VERSION,
+            revision: pipeline.backendRevision,
+            updatedAt: pipeline.createdAt,
+            snapshot: pipeline,
+          };
+        },
+        listen: () => () => undefined,
+      } as unknown as Window["orkestrator"];
+    }
     useBuildPipelineStore.setState({
-      pipelines: new Map([
-        [PIPELINE_ID, empty ? { ...pipeline, keyInformation: undefined } : pipeline],
-      ]),
+      pipelines: hydration
+        ? new Map()
+        : new Map([[PIPELINE_ID, empty ? { ...pipeline, keyInformation: undefined } : pipeline]]),
       buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
     });
     usePaneLayoutStore.setState({
@@ -227,7 +250,7 @@ export function KeyInformationTabFixture() {
         ],
       ]),
     });
-  }, [empty]);
+  }, [empty, hydration]);
 
   const onOpen = useCallback(
     (options?: CreateTabOptions) => {

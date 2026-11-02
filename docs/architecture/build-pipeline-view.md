@@ -547,6 +547,12 @@ action.
    retried on every supervisor pass, logged once per reason, and each control
    in the meantime says the rewind has not finished; the reset completes, and
    the step starts, once the container answers again.
+   Deleting the pipeline is the one control that does not wait: inside the
+   pipeline lock it drops the record, with its unrun reset, without cancelling
+   first (admission required an idle pipeline, so there is nothing to stop).
+   That is the way out when the reset can never run, for example because the
+   workspace was recreated or the branch moved by hand. Pause and cancel still
+   wait for the reset.
 4. **Pushed commits and the pull request.** When the upstream had commits the
    reset dropped, every Ship until a live Ship completes after the rewind is
    told to push with `git push --force-with-lease` (never plain `--force`, never

@@ -57,10 +57,11 @@ Multi Review and the pipeline draw with the same components in
 A workflow supplies the nodes in keyboard order, a layout function from width
 to geometry, the edges, ports and the stacked stages. Multi Review keeps its
 own five-column layout (`multiReviewFlowLayout`) and looks and behaves as
-before. The shared zoom controls offer Fit ("Fit the whole pipeline") when a
-graph passes `fitControl`: it zooms out, never past 100% in and never below
-20%, until the whole wide graph shows in its viewport, or the stacked column in
-the panel that scrolls it, and scrolls back to the start. The pipeline turns it
+before. The shared zoom controls offer Fit when a graph passes `fitControl`. There is
+no separate button: the zoom level toggles, fitting the graph when it reads
+100% and resetting to 100% otherwise. Fit zooms out, never past 100% in and
+never below 20%, until the whole wide graph shows in its viewport, or the
+stacked column in the panel that scrolls it, and scrolls back to the start. The pipeline turns it
 on, since its unrolled passes grow the line without bound. Multi Review leaves
 it off: it removed Fit in #1199 and its browser suite asserts it stays gone.
 

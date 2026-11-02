@@ -48,6 +48,57 @@ One workspace is persisted per project: conversations, selected tab, immutable
 state, and sanitized last startup error. Workflow associations are stored
 separately so their lifetime is independent of an open chat tab.
 
+### Workflow record limit and cleanup
+
+Every project shares one list of at most 2,000 workflow associations
+(`MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS`,
+`apps/backend/src/core/coordinator-workflow-retention.ts`). Launches,
+delegations, review and pipeline runs, graph runs and pull-request follows each
+add one. When adding a record would go over the limit, the store first removes
+a batch of up to 200 of the oldest finished records in the same locked write,
+so a store near the limit does not clean up again on every launch. Records are
+taken oldest `createdAt` first.
+
+A record is never removed while something still reads it as live:
+
+- a pending reservation (a launch is still creating its resource);
+- a delegation that is running (waiting episodes included) or whose
+  coordinator wake has not been delivered (`wokenAt` unset), which is what
+  `listOpenCoordinatorDelegations`, `listUnwokenCoordinatorDelegations` and the
+  reconcile sweep read;
+- a review, pipeline, graph run or pull-request follow whose end the
+  coordinator has not been told (`terminalNotifiedAt` unset), which status wakes
+  still observe;
+- a review that a live pull-request follow points at (`reviewAssociationId`);
+- an environment's launch record (it carries `baseCommit`, which makes the
+  coordinator the worker's creator for mail routing and puts the worker's
+  sign-in prompts in the panel) while that environment exists, and every
+  remote (`nodeId`) launch record, since whether a remote environment still
+  exists is not known locally;
+- the newest delegation record for each worker tab while its environment
+  exists, which goal and tab actions read as the coordinator's ownership of
+  that tab;
+- anything created in the last 24 hours, so a retried `requestId` (or a
+  request alias on that record) still finds its original record and replays it
+  instead of starting duplicate work.
+
+If nothing can be removed, the write is refused with an error saying that all
+2,000 records are still in use and that deleting finished worker environments
+or letting running work finish frees room. The limit stays shared across
+projects; with cleanup it is only reached when that many records are live.
+
+What removal changes for the user:
+
+- `list_workflows` and `snapshot.workflows` no longer list that old, finished
+  history. The panel's waiting workers and worker prompts come only from
+  records that are kept.
+- An old finished review whose record was removed has no owner left, so it
+  opens without asking for adoption first, and addressing it records a fresh
+  association for the conversation that addresses it. `adopt_workflow` on a removed record reports it was not
+  found; there was nothing left to re-deliver.
+- A retry of a request older than 24 hours whose record was removed is treated
+  as new.
+
 The working directory is the canonical `Project.localPath`. A project without a
 valid local path shows a checkout setup state; it does not silently use an
 environment worktree, a container, or a temporary clone. Bridge state,
@@ -2003,6 +2054,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - coordinator presence and the turn-end edge:
   `native-agent-service-reconciliation.test.ts`
 - one-wake invariant and crash recovery: `coordinator-service.test.ts`
+- the workflow record limit (cleanup when full, protected records, batch
+  removal, recent-request replay, the all-in-use refusal):
+  `coordinator-workflow-retention.test.ts`
 - status wakes (ownership, one wake per settled transition per resource kind,
   coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`;
   graph runs: `graph-run-coordinator-status.test.ts`,

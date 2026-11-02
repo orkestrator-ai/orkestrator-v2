@@ -19,6 +19,12 @@ import {
   type CoordinatorSurfaceAction,
 } from "@orkestrator/protocol/coordinator-surfaces";
 
+import {
+  COORDINATOR_WORKFLOW_CLEANUP_BATCH,
+  COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR,
+  MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
+  selectCoordinatorWorkflowsToClear,
+} from "./coordinator-workflow-retention.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -28,7 +34,6 @@ import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");
 
-const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 /** The payload hash of a request that joined a live pull-request follow. */
 const PULL_REQUEST_FOLLOW_ALIAS = "pull-request-follow";
@@ -126,6 +131,40 @@ export class CoordinatorsRepository {
       workflows,
       actionReceipts,
     };
+  }
+
+  /**
+   * Called under the store lock before a new workflow record is added. When
+   * the store is at its limit, clears a batch of the oldest finished records
+   * (`coordinator-workflow-retention.ts` says which records count as
+   * finished) and leaves the caller to write the result with its own record.
+   * Refuses, saying why, when every record is still in use.
+   */
+  private async makeRoomForWorkflowAssociation(store: {
+    workflows: CoordinatorWorkflowAssociation[];
+  }): Promise<void> {
+    if (store.workflows.length < MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) return;
+    const environmentIds = new Set(
+      (await this.repos.projects.loadEnvironments()).map((environment) => environment.id),
+    );
+    const needed = store.workflows.length - MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS + 1;
+    const cleared = selectCoordinatorWorkflowsToClear({
+      workflows: store.workflows,
+      environmentExists: (environmentId) => environmentIds.has(environmentId),
+      batch: Math.max(COORDINATOR_WORKFLOW_CLEANUP_BATCH, needed),
+    });
+    if (cleared.size < needed) {
+      log.warn("store.workflows-in-use", {
+        records: store.workflows.length,
+        clearable: cleared.size,
+      });
+      throw new Error(COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR);
+    }
+    store.workflows = store.workflows.filter((association) => !cleared.has(association.id));
+    log.info("store.workflows-cleared", {
+      cleared: cleared.size,
+      remaining: store.workflows.length,
+    });
   }
 
   /**
@@ -348,9 +387,7 @@ export class CoordinatorsRepository {
         }
         return duplicate;
       }
-      if (store.workflows.length >= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
-        throw new Error("Coordinator workflow association store is full");
-      }
+      await this.makeRoomForWorkflowAssociation(store);
       store.workflows.push(association);
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
@@ -393,9 +430,7 @@ export class CoordinatorsRepository {
         await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
         return { association: existing, claimed: true };
       }
-      if (store.workflows.length >= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
-        throw new Error("Coordinator workflow association store is full");
-      }
+      await this.makeRoomForWorkflowAssociation(store);
       const reserved = { ...association, pending: true, claimPid: process.pid };
       store.workflows.push(reserved);
       store.revision += 1;
@@ -827,9 +862,7 @@ export class CoordinatorsRepository {
         await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
         return live;
       }
-      if (store.workflows.length >= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
-        throw new Error("Coordinator workflow association store is full");
-      }
+      await this.makeRoomForWorkflowAssociation(store);
       const createdAt = new Date().toISOString();
       const association: CoordinatorWorkflowAssociation = {
         id: randomUUID(),

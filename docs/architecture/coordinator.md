@@ -1478,6 +1478,22 @@ A build's delivery is not among them: `start_build_pipeline` has no override, an
 the build follows the ticket's delivery policy when Verify passes
 ([tickets](tickets.md#delivery)). A build that ends without a pull request says
 so in `get_build_pipeline` (`delivery`) and its completion notice.
+
+**A build is linked to its ticket.** `start_build_pipeline`'s `taskId` must be a
+ticket in the project; the build starts with
+`source: { type: "kanban", taskId }`, exactly like a Build button launch, so
+Verify's per-criterion results and evidence, the ticket's status, PR URL and
+state, the environment link and the delivery policy's "too late" comment all
+reach the ticket. A `taskId` that is not a ticket in the project is refused
+with an error telling the coordinator to create it with `create_ticket` first;
+the build is never started unlinked. The check and the link are made by the
+backend that runs the build (`coordinatorBuildTicketSource` in
+`build-pipeline-launch.ts`, called by `start_coordinator_build_pipeline` and,
+for a build on a connected node, by that node's
+`start_controller_build_pipeline` against its own copy of the project). The
+command node also sends the source with a node build, so a node too old to
+check still links it. Builds started before this rule carry no source and keep
+their old behaviour.
 Overrides layer the way the launchers do. For `start_build_pipeline`:
 
 - A named step replaces only that step, and a step that names only an agent runs

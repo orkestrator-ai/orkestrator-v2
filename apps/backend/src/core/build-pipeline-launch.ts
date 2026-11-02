@@ -27,6 +27,7 @@
 import {
   isStartBuildPipelineInput,
   type BuildPipeline,
+  type BuildPipelineSource,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
@@ -58,6 +59,33 @@ export async function buildPipelineStartWithSavedDefaults(
     throw new Error("Invalid build pipeline start request");
   }
   return input;
+}
+
+/**
+ * The Kanban link of a build the coordinator starts on `taskId`.
+ *
+ * A pipeline updates its ticket (Verify's criterion results, status, PR URL and
+ * state, the delivery policy's "too late" comment) only through
+ * `source: { type: "kanban" }`, so a coordinator build carries one, exactly like
+ * a Build button launch. A `taskId` that is not a ticket in the project is
+ * refused rather than started unlinked: nothing could ever report back to it.
+ */
+export async function coordinatorBuildTicketSource(
+  storage: Pick<CommandContext["storage"], "kanban">,
+  projectId: string,
+  taskId: unknown,
+): Promise<BuildPipelineSource> {
+  const ticketId = typeof taskId === "string" ? taskId.trim() : "";
+  const task = ticketId ? await storage.kanban.getKanbanTask(ticketId) : null;
+  if (!task || task.projectId !== projectId) {
+    throw Object.assign(
+      new Error(
+        `taskId ${JSON.stringify(ticketId)} is not a ticket in this project. Create the ticket with create_ticket first, then call start_build_pipeline with its id.`,
+      ),
+      { code: "coordinator-build-ticket-required" },
+    );
+  }
+  return { type: "kanban", taskId: task.id };
 }
 
 /**

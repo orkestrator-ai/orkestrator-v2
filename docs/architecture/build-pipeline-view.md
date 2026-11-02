@@ -22,7 +22,7 @@ the rest in one place:
 | --- | --- | --- |
 | Build buttons (Kanban, Linear, GitHub) | `launch_build_pipeline` (`build-pipeline-launch.ts`) | The ticket and any step, reviewer, agent or "When verified" choice the launcher set |
 | Features view | `start_feature_plan_build` (`feature-plan-build.ts`) | The feature plan id |
-| CLI `build launch`, coordinator | `build.launch`, `start_controller_build_pipeline` | Their request |
+| CLI `build launch`, coordinator | `build.launch`, `start_coordinator_build_pipeline` / `start_controller_build_pipeline` | Their request; a coordinator build must name a ticket in the project and is linked to it (`source: kanban`, [coordinator](coordinator.md#launch-defaults)) |
 
 All of them apply `buildPipelineInputWithDefaults`
 (`coordinator-launch-defaults.ts`), which is documented at the top of

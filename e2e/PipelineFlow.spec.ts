@@ -654,10 +654,14 @@ test("the zoom level toggles between 100% and the whole pipeline in view", async
   await expect(level).toHaveText("200%");
   await level.click();
   await expect(level).toHaveText("100%");
+  await expect(level).toHaveAccessibleName("Zoom 100%, fit to view");
   await level.click();
+  // The loops graph overflows at 100% in both viewport layouts, so fitting
+  // must reduce the scale and offer the reset action.
   await expect
     .poll(async () => Number.parseInt((await level.textContent()) ?? "", 10))
-    .toBeLessThanOrEqual(100);
+    .toBeLessThan(100);
+  await expect(level).toHaveAccessibleName(/^Zoom \d+%, reset to 100%$/);
   // Every node is in view: inside the graph's viewport, or for the stacked
   // column, inside the page.
   const frame = isWide(page)

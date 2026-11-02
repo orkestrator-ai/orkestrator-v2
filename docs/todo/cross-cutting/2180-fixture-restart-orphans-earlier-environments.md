@@ -59,8 +59,8 @@ are untouched. Uncommitted changes in `test-project` survive a restart too;
 Reading the recommendation literally (create nothing on a restart) would make a
 restart that asks for more than the first start (first `local`, then
 `local,container`) silently omit the container. Chose instead: for each
-requested kind, reuse the project's environment with the same `fixture-<kind>`
-name and environment type, and create one only when none exists. A reused
+requested kind, reuse the recorded environment ID with the matching environment
+type, and create one only when none exists. A reused
 environment is started only when its status is not `running`, because
 `start_environment` on a running environment re-runs its setup. An environment
 an earlier start created but this start did not request is left as it is.
@@ -73,6 +73,27 @@ again as before and new environments are created, since every earlier one
 points at the deleted copy. The project registration is kept. Those earlier
 environments stay listed; deleting them is left to the user or `dev:reset`
 rather than done automatically (the third option, rejected above).
+
+### Task 1: review fixes (2026-11-02)
+
+Store environment IDs in `test-project/.git/orkestrator-fixture-environments.json`,
+written atomically before starting each new environment. Repository recovery
+removes the previous generation's metadata, so a third seed selects the new ID
+even when its name is `fixture-local-1`. Earlier records remain untouched.
+Legacy profiles without metadata adopt a single matching name (including numeric
+suffixes); ambiguous duplicates fail with reset/new-profile guidance. Chose this
+conservative migration over guessing the newest duplicate, whose usability is
+unknown, or deleting earlier environments and their work.
+
+Compare reused container network mode with the requested mode (restricted by
+default) and reject mismatches with reset/new-profile guidance. Chose rejection
+over silently keeping the old mode or creating another container: network mode
+is fixed at creation and a restart must preserve identity.
+
+Regression coverage now models production name suffixing, performs a third seed
+after repository recovery, rejects ambiguous legacy duplicates, adopts a single
+legacy environment, and checks both network-mode transitions plus unchanged-mode
+reuse.
 
 ### Task 1: evidence
 

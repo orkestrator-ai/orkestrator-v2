@@ -57,6 +57,7 @@ type FakeEnvironment = {
   name: string;
   environmentType: string;
   status: string;
+  networkAccessMode: string;
 };
 
 /** An in-memory backend answering the gateway commands `seedFixture` sends. */
@@ -79,10 +80,15 @@ function fakeBackend() {
           .filter((environment) => environment.projectId === args.projectId)
           .map((environment) => ({ ...environment })) as T;
       case "create_environment": {
+        let name = String(args.name);
+        let suffix = 1;
+        while (environments.some((entry) => entry.name === name))
+          name = `${String(args.name)}-${suffix++}`;
         const environment = {
           id: `environment-${environments.length + 1}`,
           projectId: String(args.projectId),
-          name: String(args.name),
+          name,
+          networkAccessMode: String(args.networkAccessMode),
           environmentType: String(args.environmentType),
           status: "stopped",
         };
@@ -106,6 +112,7 @@ function seed(
   profile: Awaited<ReturnType<typeof temporaryProfile>>,
   invoke: FixtureInvoke,
   environments: Array<"local" | "container"> = ["local", "container"],
+  containerNetwork?: "restricted" | "full",
 ) {
   return seedFixture({
     profile,
@@ -113,6 +120,7 @@ function seed(
     browserUrl: "http://127.0.0.1:1",
     authFile: "/nonexistent",
     environments,
+    containerNetwork,
     invoke,
   });
 }
@@ -218,7 +226,63 @@ describe("disposable agent-test fixture", () => {
     // deleted copy is not reused.
     expect(backend.calls).toEqual(["get_projects", "create_environment", "start_environment"]);
     expect(backend.projects).toHaveLength(1);
+    expect(backend.environments[1]!.name).toBe("fixture-local-1");
+    backend.environments[1]!.status = "stopped";
+    backend.calls.length = 0;
+    await seed(profile, backend.invoke, ["local"]);
+    expect(backend.environments).toHaveLength(2);
+    expect(backend.environments[1]!.status).toBe("running");
+    expect(backend.calls).toEqual(["get_projects", "get_environments", "start_environment"]);
   });
+
+  test("rejects ambiguous legacy duplicates without starting or creating environments", async () => {
+    const profile = await temporaryProfile();
+    const backend = fakeBackend();
+    const projectPath = await seed(profile, backend.invoke, ["local"]);
+    await rm(path.join(projectPath, ".git", "orkestrator-fixture-environments.json"));
+    backend.environments.push({
+      ...backend.environments[0]!,
+      id: "duplicate",
+      name: "fixture-local-1",
+    });
+    backend.calls.length = 0;
+    await expect(seed(profile, backend.invoke, ["local"])).rejects.toThrow("Ambiguous legacy");
+    expect(backend.calls).toEqual(["get_projects", "get_environments"]);
+  });
+
+  test("adopts a single legacy environment and persists its identity", async () => {
+    const profile = await temporaryProfile();
+    const backend = fakeBackend();
+    const projectPath = await seed(profile, backend.invoke, ["local"]);
+    await rm(path.join(projectPath, ".git", "orkestrator-fixture-environments.json"));
+    backend.environments[0]!.name = "fixture-local-1";
+    await seed(profile, backend.invoke, ["local"]);
+    expect(backend.environments).toHaveLength(1);
+    expect(
+      JSON.parse(
+        await readFile(
+          path.join(projectPath, ".git", "orkestrator-fixture-environments.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({ local: backend.environments[0]!.id });
+  });
+
+  for (const original of ["full", "restricted"] as const) {
+    test(`rejects changing a ${original} fixture container network mode`, async () => {
+      const profile = await temporaryProfile();
+      const backend = fakeBackend();
+      await seed(profile, backend.invoke, ["container"], original);
+      backend.calls.length = 0;
+      await expect(
+        seed(profile, backend.invoke, ["container"], original === "full" ? "restricted" : "full"),
+      ).rejects.toThrow("network mode differs");
+      expect(backend.calls).toEqual(["get_projects", "get_environments"]);
+      expect(backend.environments[0]!.networkAccessMode).toBe(original);
+      await seed(profile, backend.invoke, ["container"], original);
+      expect(backend.environments).toHaveLength(1);
+    });
+  }
 
   test("creates a restricted fixture container unless full network is requested", () => {
     expect(fixtureEnvironmentArgs("project", "container")).toEqual({

@@ -178,3 +178,18 @@ No owning implementation, assertion, timeout or skip changed between runs.
 ## PR pane review — 2026-11-02
 
 Preparation browser validation reported desktop `false` instead of `auto`. The complete unchanged StreamingTranscript and VirtuosoFollow owners passed with one worker on detached `origin/main` d7cdfaa8b (`baseline-scroll-owners`, 51.5 s). The exact two desktop cases also passed three repeats each with two workers (`baseline-scroll`, 7.6 s). No cause established. Preparation evidence remains in `.orkestrator/review-artifacts/review-validation-d66c3b2c-a4b1-42da-b180-8fa7b6582c7b/` (validation-04.stdout.txt and validation-05.stderr.txt). Browser preparation reported 1146 passed, 10 failed, 117 skipped, 3 flaky. Default-suite preparation reported two failed owners; aggregate worker grants were not retained in the package. No assertion, timeout, skip or implementation was changed in these owners.
+
+## PR pane fix round 2 — 2026-11-02
+
+Reproduced on detached `origin/main` `d7cdfaa8b` (fresh worktree, own
+`bun install --frozen-lockfile`), host load average 17–25:
+`ORKESTRATOR_E2E_PORT=14874 bunx playwright test --config e2e/playwright.config.ts e2e/VirtuosoFollow.spec.ts --project=desktop-chromium --workers=12 --repeat-each=40`
+failed this case twice with `false` instead of `auto` at
+`VirtuosoFollow.spec.ts:43`, the same line as the PR pane branch's browser
+run; 78 passed (35.3 s). Lighter runs on main (8 and 10 workers, 26 repeats
+in total) and a full `test:browser` component run on main (1148 passed,
+11 failed in other owners) did not hit it. On the branch (`eb1ec4499`) the
+complete unchanged owner passed with one worker (`branch-scroll-owners`,
+52.3 s). The fixture renders only `useVirtuosoScrollState` and Virtuoso,
+which that branch does not change. No assertion, timeout, skip or
+implementation changed.

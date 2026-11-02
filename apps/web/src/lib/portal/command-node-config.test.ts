@@ -288,7 +288,10 @@ describe("patching global settings", () => {
       commandInvoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
         if (command === "invoke_on_node") return { outcome: "ok", result: config("leaf") };
         if (command === "patch_global_config") {
-          return { ...config("command"), global: { ...config("command").global, ...args?.patch } };
+          return {
+            ...config("command"),
+            global: { ...config("command").global, ...(args?.patch as Record<string, unknown>) },
+          };
         }
         return config("command");
       });

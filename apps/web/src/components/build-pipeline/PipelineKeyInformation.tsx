@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   CheckCircle2,
   CircleDashed,
@@ -65,16 +65,24 @@ export function PipelineKeyInformationButton({
   keyInformation: BuildPipelineKeyInformation | undefined;
 }) {
   const [open, setOpen] = useState(false);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const suppressFocusTooltip = useRef(false);
   const panelId = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Restoring focus must not announce a tooltip. A fresh hover or focus may.
+  const closeAndRestoreFocus = useCallback(() => {
+    suppressFocusTooltip.current = true;
+    setTooltipOpen(false);
+    setOpen(false);
+    buttonRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setOpen(false);
-      buttonRef.current?.focus();
+      closeAndRestoreFocus();
     };
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
@@ -88,11 +96,16 @@ export function PipelineKeyInformationButton({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [open]);
+  }, [open, closeAndRestoreFocus]);
 
   return (
     <>
-      <Tooltip>
+      <Tooltip
+        open={!open && tooltipOpen}
+        onOpenChange={(value) => {
+          if (!value || !suppressFocusTooltip.current) setTooltipOpen(value);
+        }}
+      >
         <TooltipTrigger asChild>
           <Button
             ref={buttonRef}
@@ -102,7 +115,16 @@ export function PipelineKeyInformationButton({
             aria-label="Key information"
             aria-expanded={open}
             aria-controls={open ? panelId : undefined}
-            onClick={() => setOpen((value) => !value)}
+            onBlur={() => {
+              suppressFocusTooltip.current = false;
+            }}
+            onPointerEnter={() => {
+              suppressFocusTooltip.current = false;
+            }}
+            onClick={() => {
+              setTooltipOpen(false);
+              setOpen((value) => !value);
+            }}
           >
             <FileText className="size-4" />
           </Button>
@@ -133,10 +155,7 @@ export function PipelineKeyInformationButton({
               variant="ghost"
               className="size-7"
               aria-label="Close key information"
-              onClick={() => {
-                setOpen(false);
-                buttonRef.current?.focus();
-              }}
+              onClick={closeAndRestoreFocus}
             >
               <X className="size-3.5" />
             </Button>

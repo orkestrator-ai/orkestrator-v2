@@ -1239,9 +1239,19 @@ const buildPipelineHeaderFixture: BuildPipeline = {
 
 /** A real-layout fixture for the header's narrowest state: all five action buttons. */
 function BuildPipelineHeaderFixture() {
+  const requestedPhase = new URLSearchParams(window.location.search).get("phase");
   useEffect(() => {
+    const fixture = {
+      ...buildPipelineHeaderFixture,
+      phase:
+        requestedPhase === "resolving-conflicts" ||
+        requestedPhase === "creating-pr" ||
+        requestedPhase === "creating-environment"
+          ? requestedPhase
+          : buildPipelineHeaderFixture.phase,
+    };
     useBuildPipelineStore.setState({
-      pipelines: new Map([[buildPipelineHeaderFixture.id, buildPipelineHeaderFixture]]),
+      pipelines: new Map([[fixture.id, fixture]]),
       buildEnvironmentIds: new Set([buildPipelineHeaderFixture.environmentId]),
     });
     return () => {
@@ -1250,7 +1260,7 @@ function BuildPipelineHeaderFixture() {
         buildEnvironmentIds: new Set(),
       });
     };
-  }, []);
+  }, [requestedPhase]);
 
   return (
     <main className="h-screen w-full bg-background text-foreground">

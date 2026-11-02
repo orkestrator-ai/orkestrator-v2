@@ -212,36 +212,48 @@ export function BuildChatTab({
         data-testid="build-pipeline-header"
         className={cn(
           "relative z-20 flex items-center gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3",
-          isMobile && "gap-2 px-3 py-2",
+          isMobile && "flex-wrap gap-2 px-3 py-2",
         )}
       >
         <div data-testid="build-pipeline-header-summary" className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{pipeline.taskTitle}</div>
-          <div
-            className={cn(
-              "mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground",
-              isMobile && "flex-wrap",
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <div
+              data-testid="build-pipeline-header-phase-agent"
+              className="flex min-w-0 items-center gap-1.5"
+            >
+              {active ? (
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+              ) : pipeline.phase === "complete" ? (
+                <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
+              ) : pipeline.phase === "failed" ? (
+                <AlertCircle className="h-3 w-3 shrink-0 text-destructive" />
+              ) : (
+                <Circle className="h-3 w-3 shrink-0" />
+              )}
+              <span data-testid="build-pipeline-header-phase" className="min-w-0 truncate">
+                {phaseLabel}
+              </span>
+              <span aria-hidden="true" className="shrink-0">
+                ·
+              </span>
+              <span
+                data-testid="build-pipeline-header-agent"
+                className="min-w-0 max-w-1/2 shrink-0 truncate"
+              >
+                {agentLabel}
+              </span>
+            </div>
+            {!isMobile && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span
+                  ref={setProgressSlot}
+                  data-testid="build-pipeline-header-progress"
+                  className="flex min-w-0"
+                />
+              </>
             )}
-          >
-            {active ? (
-              <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-            ) : pipeline.phase === "complete" ? (
-              <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
-            ) : pipeline.phase === "failed" ? (
-              <AlertCircle className="h-3 w-3 shrink-0 text-destructive" />
-            ) : (
-              <Circle className="h-3 w-3 shrink-0" />
-            )}
-            <span className="truncate">{phaseLabel}</span>
-            <span aria-hidden="true">·</span>
-            <span className="truncate">{agentLabel}</span>
-            {/* A phone has no room for it on this line, so it gets its own. */}
-            {isMobile ? null : <span aria-hidden="true">·</span>}
-            <span
-              ref={setProgressSlot}
-              data-testid="build-pipeline-header-progress"
-              className={cn("flex min-w-0", isMobile && "basis-full")}
-            />
           </div>
         </div>
         <div
@@ -273,6 +285,13 @@ export function BuildChatTab({
           <PipelineKeyInformationButton keyInformation={pipeline.keyInformation} />
           <div ref={setGraphToggleSlot} className="flex size-9 shrink-0" />
         </div>
+        {isMobile && (
+          <div
+            ref={setProgressSlot}
+            data-testid="build-pipeline-header-progress"
+            className="flex min-w-0 basis-full"
+          />
+        )}
       </div>
 
       <PipelineFlowView

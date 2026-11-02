@@ -69,6 +69,7 @@ import {
 } from "./agent-accounts-auto-switch-notices.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
+import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
@@ -95,6 +96,7 @@ import { backendClaudeStateSignal } from "./claude-state-signal.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 const activityLog = createLogger("backend.activity");
+const buildPipelineLog = createLogger("build.pipeline");
 
 /** Former activity-bundle cadence, per named job. */
 const ACTIVITY_JOB_MS = 2_000;
@@ -239,6 +241,7 @@ import { WorkspaceWriters } from "./workspace-writers.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { PrAutoMergeController } from "./pr-auto-merge.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
+import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
@@ -582,6 +585,11 @@ export class OrkestratorBackend {
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
         prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery },
+        // Docker-backed, like the worktree signal: summary reads in unit tests
+        // relay only what a `check_docker` answered.
+        ...(process.env.NODE_ENV === "test"
+          ? {}
+          : { dockerAvailability: { probe: () => checkDockerAvailability() } }),
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
           claudeStatePolls: { signal: backendClaudeStateSignal() },
@@ -1277,10 +1285,24 @@ export class OrkestratorBackend {
           }
         },
         environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+        branchPushState: (environmentId) =>
+          readEnvironmentBranchPushState(
+            storage,
+            createGraphEnvironmentShell(context.runtime.environments.fence, storage),
+            environmentId,
+          ),
         workspaceWriters,
       },
     );
     context.buildPipelines = this.buildPipelines;
+    // Fired inside the Kanban write, which must not wait on a pipeline's lock.
+    storage.kanban.onDeliveryPolicyChange((taskId, projectId, policy) => {
+      void this.buildPipelines
+        .noteTicketDeliveryChange(taskId, projectId, policy)
+        .catch((error) => {
+          buildPipelineLog.warn("delivery-policy.failed", { error: formatLogError(error) });
+        });
+    });
     // Stage agents keep the pipeline's key information through the agent tools.
     (
       this.agentTools as {

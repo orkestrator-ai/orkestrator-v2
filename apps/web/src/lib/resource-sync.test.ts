@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import type { NativeEvent, UnlistenFn } from "@/lib/native/events";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import {
@@ -351,18 +352,51 @@ describe("startResourceSync", () => {
     startResourceSync();
     await tick(0);
 
-    for (const payload of [
-      null,
-      "environment",
-      { resource: "nope", id: "x", revision: 1 },
-      { resource: "environment", id: "", revision: 1 },
-      { resource: "environment", id: "env-1", revision: Number.NaN },
-    ]) {
-      listenCalls[0]!.handler({ payload });
-    }
-    await tick(COALESCED);
+    const logs = captureLogs();
+    try {
+      for (const payload of [
+        null,
+        "environment",
+        { resource: "nope", id: "x", revision: 1 },
+        { resource: "environment", id: "", revision: 1 },
+        { resource: "environment", id: "env-1", revision: Number.NaN },
+      ]) {
+        listenCalls[0]!.handler({ payload });
+      }
+      await tick(COALESCED);
 
-    expect(calls).toBe(0);
+      expect(calls).toBe(0);
+      expect(logs.records()).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          area: "web.resource-sync",
+          event: "change.malformed",
+          fields: { payloadType: "object", hasResource: false },
+        }),
+        expect.objectContaining({
+          event: "change.malformed",
+          fields: { payloadType: "string", hasResource: false },
+        }),
+        expect.objectContaining({
+          event: "change.malformed",
+          fields: { payloadType: "object", hasResource: true },
+        }),
+        expect.objectContaining({
+          event: "change.malformed",
+          fields: { payloadType: "object", hasResource: true },
+        }),
+        expect.objectContaining({
+          event: "change.malformed",
+          fields: { payloadType: "object", hasResource: true },
+        }),
+      ]);
+      // Shape facts only: no value from a payload reaches the line.
+      const text = logs.lines.join("\n");
+      expect(text).not.toContain("nope");
+      expect(text).not.toContain("env-1");
+    } finally {
+      logs.restore();
+    }
   });
 
   test("detaches the listener when the returned disposer runs", async () => {

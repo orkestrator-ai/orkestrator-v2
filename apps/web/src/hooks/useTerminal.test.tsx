@@ -1,5 +1,6 @@
 import { isDesktopStartupMessage } from "@orkestrator/protocol/debug-logging";
 import { resetLogger } from "@orkestrator/protocol/logger";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
@@ -2852,7 +2853,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("suppresses the expected session-not-found resize error during teardown", async () => {
-    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const logs = captureLogs();
     resizeTerminalMock.mockRejectedValueOnce(new Error("Session not found"));
     const { result } = renderHook(() =>
       useTerminal({
@@ -2867,22 +2868,25 @@ describe("useTerminal reconnect behavior", () => {
         await result.current.resize(120, 40);
       });
 
-      expect(consoleError).not.toHaveBeenCalledWith(
-        "Failed to resize terminal:",
-        expect.anything(),
-      );
+      expect(logs.records().map((record) => record.event)).not.toContain("session.resize-failed");
       expect(toastErrorMock).not.toHaveBeenCalled();
 
       resizeTerminalMock.mockRejectedValueOnce(new Error("resize failed"));
       await act(async () => {
         await result.current.resize(121, 41);
       });
-      expect(consoleError).toHaveBeenCalledWith(
-        "Failed to resize terminal:",
-        new Error("resize failed"),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "terminal",
+          event: "session.resize-failed",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({ message: "resize failed" }),
+          }),
+        }),
       );
     } finally {
-      consoleError.mockRestore();
+      logs.restore();
     }
   });
 

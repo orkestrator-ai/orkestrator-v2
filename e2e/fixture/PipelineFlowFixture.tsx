@@ -3,7 +3,11 @@ import { DndContext } from "@dnd-kit/core";
 import { PaneTree } from "../../apps/web/src/components/pane-layout/PaneTree";
 import { usePaneLayoutStore } from "../../apps/web/src/stores/paneLayoutStore";
 import type { PaneSplit } from "../../apps/web/src/types/paneLayout";
-import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import {
+  BRANCH_PUSH_SESSION_LABEL,
+  type BuildPipeline,
+  type PipelineSession,
+} from "@orkestrator/protocol/build-pipeline";
 import type { CreateTabOptions } from "../../apps/web/src/contexts/TerminalContext";
 import { TerminalProvider, useTerminalContext } from "../../apps/web/src/contexts/TerminalContext";
 import { MultiReviewTab } from "../../apps/web/src/components/review/MultiReviewTab";
@@ -637,6 +641,26 @@ function seed(): BuildPipeline {
   const params = new URLSearchParams(window.location.search);
   const stored = params.has("restore") ? sessionStorage.getItem("pipeline-flow-snapshot") : null;
   const pipeline: BuildPipeline = stored ? JSON.parse(stored) : scenario();
+  const delivered = params.get("delivered");
+  if (delivered === "push-no-pr" || delivered === "commit-only") {
+    // A build that ended on the ticket's policy instead of a pull request.
+    pipeline.phase = "complete";
+    pipeline.delivery = { policy: delivered, decidedAt: "2026-11-02T00:00:00.000Z" };
+    pipeline.deliveryPolicy = delivered;
+    pipeline.sessions = pipeline.sessions
+      .filter((session) => session.phase !== "pr" && session.phase !== "resolve-conflicts")
+      .map((session) => ({ ...session, status: "idle" as const }));
+    if (delivered === "push-no-pr") {
+      pipeline.sessions.push({
+        ...pipeline.sessions.at(-1)!,
+        phase: "pr",
+        label: BRANCH_PUSH_SESSION_LABEL,
+        sessionKey: `${pipeline.id}:pr:push`,
+        sdkSessionId: `${pipeline.id}-push-session`,
+      });
+    }
+    pipeline.currentSessionIndex = pipeline.sessions.length - 1;
+  }
   if (params.has("remote")) {
     pipeline.environmentId = "remote-environment";
     pipeline.id = "remote-pipeline";

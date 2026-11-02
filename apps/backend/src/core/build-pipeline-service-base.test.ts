@@ -91,8 +91,9 @@ describe("BuildPipelineService", () => {
       worktreePath: "/tmp/build",
       setupScriptsComplete: true,
     });
-    const invoke = async <T>(): Promise<T> => {
-      throw new Error("No backend command should run during admission");
+    const invoke = async <T>(command: string): Promise<T> => {
+      if (command === "get_kanban_tasks") return [] as T;
+      throw new Error("No provisioning command should run during admission");
     };
     const first = new BuildPipelineService(firstStorage, invoke, {
       autoAdvance: false,
@@ -257,10 +258,15 @@ describe("BuildPipelineService", () => {
         setupScriptsComplete: true,
       });
     }
-    const service = new BuildPipelineService(storage, async <T>(): Promise<T> => undefined as T, {
-      autoAdvance: false,
-      provider: async () => new FakeProvider(),
-    });
+    const service = new BuildPipelineService(
+      storage,
+      async <T>(command: string): Promise<T> =>
+        (command === "get_kanban_tasks" ? [] : undefined) as T,
+      {
+        autoAdvance: false,
+        provider: async () => new FakeProvider(),
+      },
+    );
     try {
       const source = {
         type: "linear" as const,
@@ -327,6 +333,7 @@ describe("BuildPipelineService", () => {
       if (command === "create_environment") {
         return (await createEnvironment(args)) as T;
       }
+      if (command === "get_kanban_tasks") return [] as T;
       throw new Error(`Unexpected command: ${command}`);
     };
     const first = new BuildPipelineService(firstStorage, invoke, {
@@ -383,10 +390,15 @@ describe("BuildPipelineService", () => {
       updatedAt: new Date().toISOString(),
       revision: 1,
     }));
-    const service = new BuildPipelineService(storage, async <T>(): Promise<T> => undefined as T, {
-      autoAdvance: false,
-      provider: async () => new FakeProvider(),
-    });
+    const service = new BuildPipelineService(
+      storage,
+      async <T>(command: string): Promise<T> =>
+        (command === "get_kanban_tasks" ? [] : undefined) as T,
+      {
+        autoAdvance: false,
+        provider: async () => new FakeProvider(),
+      },
+    );
     try {
       await expect(service.start(startInput())).rejects.toThrow(
         "Existing build pipeline admission is invalid",
@@ -463,6 +475,7 @@ describe("BuildPipelineService", () => {
         if (command === "write_local_file") {
           return "/tmp/build/.orkestrator/prompt-attachments/shot.png" as T;
         }
+        if (command === "get_kanban_tasks") return [] as T;
         throw new Error(`Unexpected command: ${command}`);
       },
       { autoAdvance: false },
@@ -1231,6 +1244,7 @@ describe("BuildPipelineService", () => {
     // What `create_environment` now answers for a remote-only project.
     const rejection = "Project has no local path - cannot create a local worktree";
     const invoke = async <T>(command: string): Promise<T> => {
+      if (command === "get_kanban_tasks") return [] as T;
       if (command !== "create_environment") {
         throw new Error(`Unexpected command: ${command}`);
       }

@@ -34,10 +34,13 @@ const STEP_LABELS: Record<MultiReviewStepKind, string> = {
   fix: "Fix",
 };
 
-interface MultiReviewRestartDialogProps {
+interface ModelRestartDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  kind: MultiReviewStepKind;
+  /** The step's name as a title: "Fix", "Build", "Reviewer 2"… */
+  stepLabel: string;
+  /** Replaces the default explanation under the title. */
+  description?: string;
   catalog: AgentModelCatalog;
   defaultSelection: MultiReviewModelSelection;
   error?: string | null;
@@ -69,16 +72,32 @@ function catalogSelection(
   };
 }
 
-export function MultiReviewRestartDialog({
+interface MultiReviewRestartDialogProps extends Omit<
+  ModelRestartDialogProps,
+  "stepLabel" | "description"
+> {
+  kind: MultiReviewStepKind;
+}
+
+export function MultiReviewRestartDialog({ kind, ...props }: MultiReviewRestartDialogProps) {
+  return <ModelRestartDialog {...props} stepLabel={STEP_LABELS[kind]} />;
+}
+
+/**
+ * "Restart in…": picks the agent, model, effort and speed a step runs again
+ * under. Shared by Multi Review's steps and the build pipeline's.
+ */
+export function ModelRestartDialog({
   open,
   onOpenChange,
-  kind,
+  stepLabel,
+  description,
   catalog,
   defaultSelection,
   error,
   busy = false,
   onSubmit,
-}: MultiReviewRestartDialogProps) {
+}: ModelRestartDialogProps) {
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const models = useMemo(() => flatCatalog(catalog), [catalog]);
   const [selection, setSelection] = useState(() => catalogSelection(defaultSelection, catalog));
@@ -132,16 +151,14 @@ export function MultiReviewRestartDialog({
     });
   };
 
-  const stepLabel = STEP_LABELS[kind];
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="2xl">
         <DialogHeader>
           <DialogTitle>Restart {stepLabel}</DialogTitle>
           <DialogDescription>
-            Choose the model for the new {stepLabel.toLowerCase()} run. Dependent steps will be
-            reset as usual.
+            {description ??
+              `Choose the model for the new ${stepLabel.toLowerCase()} run. Dependent steps will be reset as usual.`}
           </DialogDescription>
         </DialogHeader>
         <form

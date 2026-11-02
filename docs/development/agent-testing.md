@@ -68,8 +68,11 @@ signed-in user's desktop (it inherits `DISPLAY` and `WAYLAND_DISPLAY`). Set
 `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` for `dev:test` or either isolated
 task to start it on Chromium's headless Ozone platform with the GPU off and
 both display variables removed; the browser suites drive the gateway, not that
-window. It applies only to agent-test profiles on Linux, and Electron specs,
-which need the real window, are not supported in this mode:
+window. It applies only to agent-test profiles on Linux, and the Electron
+specs, which launch their own Electron rather than the profile's, are not
+covered by it. The design canvas Electron spec reads the same variable and
+launches its own Electron headless; the packaged-app spec is always headless on
+Linux (see [Packaged-app Electron spec](#packaged-app-electron-spec)):
 
 ```bash
 ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 mise run test:agent:design:isolated
@@ -716,6 +719,63 @@ leaves the profile running under a detached launcher, so stop it with
 `dev:stop` as usual. It restarts without `--fixture`, so `dev:status` no
 longer reports `testProject` afterwards; the spec falls back to the profile's
 seeded copy.
+
+### Packaged-app Electron spec
+
+`e2e/agent-testing/design-canvas-packaged-electron.spec.ts` runs the design
+canvas Electron journey (`design-canvas-electron-journey.ts`, shared with
+`design-canvas-electron.spec.ts`) against the packaged Linux app: its own
+executable, `app.asar`, the bundled Bun backend and bridges, and the renderer
+loaded from `file://<resources>/web/index.html`. No other spec loads that
+renderer; the rest serve it from Vite. It has its own Playwright config,
+`playwright.packaged-electron.config.ts`, so `mise run test:agent:electron`
+does not need a packaged build.
+
+```bash
+# Build release/linux-unpacked/ (bun install, download:bun, build:all,
+# electron-builder --linux --dir). Installs nothing.
+mise run package:linux:unpacked
+
+ORKESTRATOR_AGENT_TEST_RUN_ID=design-packaged \
+mise run test:logged -- --name agent-electron-packaged -- \
+  mise run test:agent:electron:packaged
+```
+
+Do not use `mise run package:linux` for this: it runs the same build and then
+installs the app into `~/.local/share/orkestrator-v2` and `~/.local/bin`,
+replacing whatever Orkestrator the signed-in user has installed there. Set
+`ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build (a path
+relative to the repository root, or absolute). Without it the spec is skipped
+outside Linux and fails with the build command when `release/` has no app. It
+tests whatever is in `release/`, so rebuild after changing the code under test.
+
+The app runs on a disposable agent-test profile under a private temporary
+directory, removed afterwards. `HOME` and the XDG base directories point inside
+it, and only `PATH`, locale, `TZ`, `TMPDIR`, `USER`, `LOGNAME` and `SHELL` are
+inherited (`packaged-electron-app.ts`): a shell on a host that runs Orkestrator
+carries that instance's `ORKESTRATOR_*` roots and agent MCP token, provider and
+GitHub credentials, and the desktop session's D-Bus socket. On Linux it always
+runs headless (`HEADLESS_ELECTRON_SWITCHES`: headless Ozone, GPU off,
+`--password-store=basic`), so no window opens on the signed-in desktop and
+`safeStorage` never reaches a keyring. No agent platform is enabled and no
+provider starts. The backend's boot-time Docker reachability probe still runs
+and removes its probe network.
+
+Besides the journey's own assertions it checks that `app.isPackaged` is true,
+that `process.resourcesPath` sits beside the executable, that the window's URL
+is that `index.html` as a `file://` URL, and that `userData` is the profile's.
+The profile title shows only in the native window title: the packaged
+renderer is built without `VITE_ORKESTRATOR_PROFILE`, so its document title
+stays "Orkestrator AI". A pass takes about 15 seconds on beelink, because
+nothing waits for Vite. Native menu key equivalents are still not exercised:
+Playwright sends keys through Chromium, not the OS (to-do 0036, task 3).
+
+`design-canvas-electron.spec.ts` reads
+`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its
+Electron with the same switches and no display variables. Its Vite-served
+renderer is exposed to
+[2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
+while other work starts or stops containers; the `file://` renderer is not.
 
 ### Live transcript paging
 

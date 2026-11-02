@@ -396,6 +396,25 @@ clone_repository() {
     git clone "$clone_url" "$clone_dest"
 }
 
+# Moves a finished clone from its staging folder into the workspace. Both are
+# on the workspace volume, so each top-level entry is a rename rather than a
+# byte copy. The workspace holds only `.orkestrator` and `lost+found` at this
+# point. Only repository-owned `.orkestrator` is skipped, since restore replaces
+# it. Repository-owned lost+found is moved normally; a collision fails explicitly.
+# An entry that could not be moved fails the step; the caller's in-progress marker
+# makes the next start clean up and clone again.
+move_clone_into_workspace() {
+    local clone_dest="$1"
+    local workspace="$2"
+    find "$clone_dest" -mindepth 1 -maxdepth 1 ! -name .orkestrator \
+        -exec mv -n -- {} "$workspace"/ \; || return 1
+    if [ -n "$(find "$clone_dest" -mindepth 1 -maxdepth 1 ! -name .orkestrator -print -quit)" ]; then
+        echo -e "${RED}Could not move the clone into the workspace.${NC}"
+        return 1
+    fi
+    rm -rf "$clone_dest"
+}
+
 # Check if setup already completed
 if [ -f /tmp/.workspace-setup-complete ]; then
     add_workspace_artifacts_to_git_exclude
@@ -478,8 +497,7 @@ if [ -n "$GIT_URL" ] && { [ ! -d "/workspace/.git" ] || \
     if clone_repository "$CLONE_URL" "$CLONE_DEST"; then
         if [ "$CLONE_DEST" != /workspace ]; then
             touch /workspace/.orkestrator/.clone-copy-in-progress || exit 1
-            cp -a -n "$CLONE_DEST"/. /workspace/ || exit 1
-            rm -rf "$CLONE_DEST"
+            move_clone_into_workspace "$CLONE_DEST" /workspace || exit 1
         fi
         echo -e "${GREEN}Clone successful!${NC}"
         cd /workspace

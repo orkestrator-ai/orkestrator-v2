@@ -1,15 +1,14 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { listenAuthoritative } from "./authoritative-events";
 
 // `@/lib/native/events` is mocked for every renderer test in tests/setup.ts.
 const listenMock = listen as unknown as ReturnType<typeof mock>;
-const originalError = console.error;
 
 afterEach(() => {
   listenMock.mockReset();
   listenMock.mockImplementation(() => Promise.resolve(() => undefined));
-  console.error = originalError;
 });
 
 describe("listenAuthoritative", () => {
@@ -92,22 +91,35 @@ describe("listenAuthoritative", () => {
       if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) resync = callback;
       return () => undefined;
     });
-    const logged = mock(() => undefined);
-    console.error = logged;
-    let attempts = 0;
-    const recovered = mock(() => undefined);
-    await listenAuthoritative("changed", () => undefined, {
-      onResync: async () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("snapshot unavailable");
-        recovered();
-      },
-    });
-    resync!({ payload: undefined });
-    for (let index = 0; index < 5; index += 1) await Promise.resolve();
-    expect(logged).toHaveBeenCalledTimes(1);
-    resync!({ payload: undefined });
-    for (let index = 0; index < 5; index += 1) await Promise.resolve();
-    expect(recovered).toHaveBeenCalledTimes(1);
+    const logs = captureLogs();
+    try {
+      let attempts = 0;
+      const recovered = mock(() => undefined);
+      await listenAuthoritative("changed", () => undefined, {
+        onResync: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("snapshot unavailable");
+          recovered();
+        },
+      });
+      resync!({ payload: undefined });
+      for (let index = 0; index < 5; index += 1) await Promise.resolve();
+      expect(logs.records()).toEqual([
+        expect.objectContaining({
+          level: "error",
+          area: "web.resource-sync",
+          event: "authoritative.resync-failed",
+          fields: {
+            eventName: "changed",
+            error: expect.objectContaining({ message: "snapshot unavailable" }),
+          },
+        }),
+      ]);
+      resync!({ payload: undefined });
+      for (let index = 0; index < 5; index += 1) await Promise.resolve();
+      expect(recovered).toHaveBeenCalledTimes(1);
+    } finally {
+      logs.restore();
+    }
   });
 });

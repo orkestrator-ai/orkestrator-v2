@@ -1,3 +1,4 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import {
   useCallback,
   useEffect,
@@ -8,6 +9,8 @@ import {
 } from "react";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+const log = createLogger("web.chat");
 
 interface MessageShellProps {
   isUser: boolean;
@@ -129,11 +132,11 @@ export function MessageShell({
           const result = onUserLongPress?.();
           if (result) {
             void result.catch(() => {
-              console.error("[MessageShell] User long-press action failed");
+              log.error("message.long-press-failed");
             });
           }
         } catch {
-          console.error("[MessageShell] User long-press action failed");
+          log.error("message.long-press-failed");
         }
       }
     },

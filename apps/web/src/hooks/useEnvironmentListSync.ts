@@ -1,5 +1,8 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.environment");
 
 /**
  * Kept exported for backwards compatibility; the periodic safety net now runs
@@ -59,10 +62,7 @@ export function useEnvironmentListSync(
           } catch (error) {
             // A failed read is still a read that predates the mutation, so a
             // queued request has to survive it rather than be lost with it.
-            console.warn(
-              `[EnvironmentListSync] Failed to refresh environments for ${projectId}:`,
-              error,
-            );
+            log.warn("list.refresh-failed", { projectId, error: formatLogError(error) });
           }
         } while (
           !disposed &&

@@ -1,5 +1,5 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
@@ -68,6 +68,8 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       runtime: harness.runtime,
       logger: { info: () => undefined, warn: () => undefined },
       certificateCheckMs: 50,
+      // Long enough that only revocation, never idleness, closes a pooled connection.
+      upstreamPool: { idleMs: 60_000 },
     });
     await manager.start();
     port = manager.status().listening!.port;
@@ -183,10 +185,13 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       "plain=published-app; Path=/",
       "widened=1; Path=/",
     ]);
-    // Both forwarded requests timed their upstream connect and response head.
-    const { histograms } = harness.runtime.metrics.snapshot();
-    expect(histograms["http.connect_ms"]?.count).toBe(2);
+    // Both forwarded requests timed their response head; the second reused
+    // the first one's upstream connection, so only one connect was timed.
+    const { counters, histograms } = harness.runtime.metrics.snapshot();
+    expect(histograms["http.connect_ms"]?.count).toBe(1);
     expect(histograms["http.first_byte_ms"]?.count).toBe(2);
+    expect(counters["upstream.opened"]).toBe(1);
+    expect(counters["upstream.reused"]).toBe(1);
   });
 
   test("grants are one-use and sessions are bound to their own host", async () => {
@@ -296,6 +301,66 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     const { cookie, host } = await signIn();
     harness.runtime.access.revokeServices([serviceId], "operator-revoked");
     expect((await request(host, "/", { headers: { cookie } })).status).toBe(401);
+  });
+
+  async function until(predicate: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 200 && !predicate(); attempt += 1) await Bun.sleep(5);
+    expect(predicate()).toBe(true);
+  }
+
+  test("requests share an upstream connection until the access is revoked", async () => {
+    const { cookie, host } = await signIn();
+    const before = fixture.connections();
+    for (let index = 0; index < 3; index += 1) {
+      expect((await request(host, "/health", { headers: { cookie } })).status).toBe(200);
+    }
+    expect(fixture.connections() - before).toBe(1);
+    // The connection is idle in the pool, still open at the application.
+    expect(fixture.openSockets()).toBe(1);
+    expect(harness.runtime.metrics.snapshot().gauges["publication.upstream_idle"]).toBe(1);
+    harness.runtime.access.revokeServices([serviceId], "operator-revoked");
+    await until(() => fixture.openSockets() === 0);
+    expect(harness.runtime.metrics.snapshot().gauges["publication.upstream_idle"]).toBe(0);
+  });
+
+  test("registry revocation alone closes idle upstream connections", async () => {
+    const { cookie, host } = await signIn();
+    expect((await request(host, "/health", { headers: { cookie } })).status).toBe(200);
+    expect(fixture.openSockets()).toBe(1);
+    expect(harness.runtime.metrics.snapshot().gauges["publication.upstream_idle"]).toBe(1);
+    // Disable the independent access-revocation path. Only the proxy's direct
+    // registry subscription can now remove the idle socket from its pool.
+    const revoke = spyOn(harness.runtime.access, "revokeServices").mockImplementation(() => 0);
+    try {
+      const definition = harness.runtime.registry.getDefinition(serviceId)!;
+      await harness.runtime.registry.update(serviceId, definition.definitionRevision, {
+        enabled: false,
+      });
+      expect(revoke).toHaveBeenCalled();
+      await until(() => fixture.openSockets() === 0);
+      expect(harness.runtime.metrics.snapshot().gauges["publication.upstream_idle"]).toBe(0);
+    } finally {
+      revoke.mockRestore();
+    }
+  });
+
+  test("a new endpoint generation closes idle upstream connections", async () => {
+    const replacement = await startPreviewFixture({ marker: "replacement-app" });
+    try {
+      const { cookie, host } = await signIn();
+      expect((await request(host, "/health", { headers: { cookie } })).status).toBe(200);
+      expect(fixture.openSockets()).toBe(1);
+      const definition = harness.runtime.registry.getDefinition(serviceId)!;
+      await harness.runtime.registry.update(serviceId, definition.definitionRevision, {
+        applicationPort: replacement.port,
+      });
+      await until(() => fixture.openSockets() === 0);
+      // The old generation's session cannot reach the new target either.
+      expect((await request(host, "/health", { headers: { cookie } })).status).toBe(401);
+      expect(replacement.connections()).toBe(0);
+    } finally {
+      await replacement.close();
+    }
   });
 
   test("application WebSockets upgrade through the published origin with the session", async () => {

@@ -1,4 +1,5 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { useConfigStore } from "@/stores/configStore";
 import {
   createTerminalLinkActivator,
@@ -192,7 +193,7 @@ describe("createTerminalLinkActivator", () => {
   test("handles rejected external opens without an unhandled rejection", async () => {
     const error = new Error("external open failed");
     const openExternal = mock((_url: string) => Promise.reject(error));
-    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const logs = captureLogs();
     const activate = createTerminalLinkActivator({
       environmentId: "environment-1",
       sourceTabId: "terminal-1",
@@ -202,10 +203,21 @@ describe("createTerminalLinkActivator", () => {
       activate(click({ ctrlKey: true }), "https://example.com/failure");
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(openExternal).toHaveBeenCalledWith("https://example.com/failure");
-      expect(consoleError).toHaveBeenCalledTimes(1);
-      expect(consoleError).toHaveBeenCalledWith("[terminal-links] Failed to open URL:", error);
+      expect(logs.records()).toEqual([
+        expect.objectContaining({
+          level: "error",
+          area: "terminal",
+          event: "link.open-failed",
+          fields: expect.objectContaining({
+            environmentId: "environment-1",
+            error: expect.objectContaining({ message: "external open failed" }),
+          }),
+        }),
+      ]);
+      // The URL can carry tokens: it never reaches a log line.
+      expect(logs.lines.join("\n")).not.toContain("example.com");
     } finally {
-      consoleError.mockRestore();
+      logs.restore();
     }
   });
 

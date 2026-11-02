@@ -1,5 +1,8 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { FileSubtree } from "@/lib/backend";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
+
+const log = createLogger("web.files");
 
 // Shared by panel mounts, including target switches. A refresh joins one queued
 // follow-up, never the observation that was already running at its boundary.
@@ -49,7 +52,7 @@ export async function loadFileSubtree(
     try {
       subtree = await read();
     } catch (err) {
-      console.error(`Failed to load folder ${directory}:`, err);
+      log.error("folder.load-failed", { error: formatLogError(err) });
     }
     return useFilesPanelStore.getState().finishFolderLoad(key, directory, token, subtree);
   });

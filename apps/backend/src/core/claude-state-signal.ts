@@ -12,7 +12,8 @@ import { runCommand } from "./shell.js";
 import type { ClaudeStateSignalInstaller, ClaudeStateSignalSupport } from "./tmux-poll.js";
 
 /**
- * Container side of the Claude terminal state signal (`claude-state-signal=2`).
+ * Container side of the Claude terminal state signal (`claude-state-signal=2`,
+ * or 3 with the `StopFailure` hook's `failed` state).
  *
  * The hooks in `docker/entrypoint.sh` call `orkestrator-state-signal` to write
  * the state and its revision/completion snapshot. It POSTs with the curl

@@ -1,5 +1,6 @@
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import {
@@ -705,9 +706,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("logs clipboard image errors without throwing", async () => {
-    const consoleError = mock(() => {});
-    const originalConsoleError = console.error;
-    console.error = consoleError as unknown as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(
@@ -725,12 +724,20 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
         await capturedImagePasteOptions!.onError!("Image too large (9.0MB). Maximum size is 8MB.");
       });
 
-      expect(consoleError).toHaveBeenCalledWith(
-        "[ClaudeTmuxInteractiveTerminal] Clipboard image error:",
-        "Image too large (9.0MB). Maximum size is 8MB.",
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.claude-tmux",
+          event: "clipboard.image-failed",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({
+              message: "Image too large (9.0MB). Maximum size is 8MB.",
+            }),
+          }),
+        }),
       );
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -794,9 +801,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("contains asynchronous resize failures", async () => {
-    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
-    const originalError = console.error;
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
     resizeInteractiveTerminalMock.mockRejectedValueOnce(new Error("resize unavailable"));
 
     try {
@@ -805,14 +810,21 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       );
 
       await waitFor(() =>
-        expect(consoleError).toHaveBeenCalledWith(
-          "[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:",
-          expect.objectContaining({ message: "resize unavailable" }),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.claude-tmux",
+            event: "terminal.resize-failed",
+            fields: expect.objectContaining({
+              sessionId: "pty-1",
+              error: expect.objectContaining({ message: "resize unavailable" }),
+            }),
+          }),
         ),
       );
       expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     } finally {
-      console.error = originalError;
+      logs.restore();
     }
   });
 
@@ -860,9 +872,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     const onUnhandled = (reason: unknown) => {
       unhandled.push(reason);
     };
-    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
-    const originalError = console.error;
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
     process.on("unhandledRejection", onUnhandled);
 
     try {
@@ -880,14 +890,21 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       await screen.findByText("Terminal recovery failed: Error: recovery unavailable");
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(3);
-      expect(consoleError).toHaveBeenCalledWith(
-        "[ClaudeTmuxInteractiveTerminal] Failed to recover terminal:",
-        expect.objectContaining({ message: "recovery unavailable" }),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.claude-tmux",
+          event: "terminal.recover-failed",
+          fields: expect.objectContaining({
+            sessionId: "pty-1",
+            error: expect.objectContaining({ message: "recovery unavailable" }),
+          }),
+        }),
       );
       expect(unhandled).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);
-      console.error = originalError;
+      logs.restore();
     }
   });
 

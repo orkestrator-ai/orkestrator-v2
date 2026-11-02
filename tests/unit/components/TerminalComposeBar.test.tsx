@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { mockReadImage } from "../../mocks/clipboard";
 import { mockToastError } from "../../mocks/sonner";
@@ -353,17 +354,21 @@ describe("Terminal ComposeBar", () => {
   });
 
   test("contains backend draft load failures without persisting an unhydrated draft", async () => {
-    const warning = mock((_message?: unknown, _error?: unknown) => {});
-    const originalWarn = console.warn;
-    console.warn = warning as typeof console.warn;
+    const logs = captureLogs();
     mockGetComposeDraft.mockRejectedValueOnce(new Error("draft storage unavailable"));
 
     try {
       const { unmount } = renderComposeBar({ environmentId: "env-load-error" });
       await waitFor(() =>
-        expect(warning).toHaveBeenCalledWith(
-          "[ComposeBar] Failed to restore compose draft:",
-          expect.objectContaining({ message: "draft storage unavailable" }),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "terminal",
+            event: "compose.draft-restore-failed",
+            fields: expect.objectContaining({
+              error: expect.objectContaining({ message: "draft storage unavailable" }),
+            }),
+          }),
         ),
       );
 
@@ -371,7 +376,7 @@ describe("Terminal ComposeBar", () => {
       expect(mockSaveComposeDraft).not.toHaveBeenCalled();
       expect(mockDeleteComposeDraft).not.toHaveBeenCalled();
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -391,9 +396,7 @@ describe("Terminal ComposeBar", () => {
   });
 
   test("contains cleanup persistence failures", async () => {
-    const warning = mock((_message?: unknown, _error?: unknown) => {});
-    const originalWarn = console.warn;
-    console.warn = warning as typeof console.warn;
+    const logs = captureLogs();
     seedDraft("persist me");
     mockSaveComposeDraft.mockRejectedValueOnce(new Error("save unavailable"));
 
@@ -404,13 +407,20 @@ describe("Terminal ComposeBar", () => {
       unmount();
 
       await waitFor(() =>
-        expect(warning).toHaveBeenCalledWith(
-          "[ComposeBar] Failed to persist compose draft during cleanup:",
-          expect.objectContaining({ message: "save unavailable" }),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "terminal",
+            event: "compose.draft-persist-failed",
+            fields: expect.objectContaining({
+              phase: "cleanup",
+              error: expect.objectContaining({ message: "save unavailable" }),
+            }),
+          }),
         ),
       );
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -447,9 +457,7 @@ describe("Terminal ComposeBar", () => {
   });
 
   test("contains debounced persistence failures", async () => {
-    const warning = mock((_message?: unknown, _error?: unknown) => {});
-    const originalWarn = console.warn;
-    console.warn = warning as typeof console.warn;
+    const logs = captureLogs();
 
     try {
       renderComposeBar({ environmentId: "env-debounce-error" });
@@ -461,14 +469,21 @@ describe("Terminal ComposeBar", () => {
 
       await waitFor(
         () =>
-          expect(warning).toHaveBeenCalledWith(
-            "[ComposeBar] Failed to persist compose draft:",
-            expect.objectContaining({ message: "debounced save unavailable" }),
+          expect(logs.records()).toContainEqual(
+            expect.objectContaining({
+              level: "warn",
+              area: "terminal",
+              event: "compose.draft-persist-failed",
+              fields: expect.objectContaining({
+                phase: "debounced",
+                error: expect.objectContaining({ message: "debounced save unavailable" }),
+              }),
+            }),
           ),
         { timeout: 1_500 },
       );
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 

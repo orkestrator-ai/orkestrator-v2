@@ -389,3 +389,12 @@ directory. No disk-report code, assertion or deadline was changed.
 - **Assessment:** existing aggregate deadline recurrence; host contention is a hypothesis, not a confirmed cause. No disk-report source, assertion, timeout or skip changed.
 
 The final staged-resolution aggregate, `mise run test:logged -- --name retry-final-default -- mise run test`, repeated this deadline at 5,032.32 ms without an overlapping browser run. Root/support reported 3,394 passed, one skipped, one failed and one between-test error in 222.44 s. All 13 workspace tasks passed (including backend 12,948 passed and web 11,121 passed), as did bridges and the protocol check; the aggregate still exited 1 after 332.3 s. `mise run test:logged -- --name retry-final-disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed the complete unchanged owner in 5.1 s. Evidence: `/tmp/orkestrator-test-run.yHJf7L/root-and-agent-support-tests.log.gz` and `/tmp/orkestrator-test-run.yGYdMK/retry-final-default.log.gz`. No disk-report implementation, assertion, timeout or skip changed.
+
+## Delivery-policy main merge, second pass — 2026-11-02
+
+- **Original command:** `mise run test:logged -- --name merge-pass2-default -- mise run test`, Bun 1.4.4 on Linux, workspace/root/bridge/protocol reservations 6/1/2/1; root used one worker.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` exceeded its 5,000 ms deadline at 5,042.51 ms.
+- **Counts:** root/support 3,439 passed, one skipped and five failed in 244.5 s. The other four failures were account-marker and terminal-link assertions that also failed in isolated owner reruns. Web had 11,396 passed and four terminal-link failures. The aggregate failed after 325.6 s; the workspace build also retained the unrelated environment-row parity test type error.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-pass2-disk-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed in 2.0 s.
+- **Evidence:** `/tmp/orkestrator-test-run.EowbMk/root-and-agent-support-tests.log.gz`; enclosing aggregate evidence is under `/tmp/orkestrator-test-run.bAsP8q/`.
+- **Assessment:** existing aggregate deadline recurrence. Host contention remains a hypothesis; no disk-report source, assertion, timeout or skip changed.

@@ -8,6 +8,7 @@
  * mode requests are backend commands so they survive a renderer reload, and
  * detection status is mirrored into prMonitorStore by usePrMonitorService.
  */
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback, useState } from "react";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
@@ -17,6 +18,8 @@ import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-re
 import type { PrState } from "@/types";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { HydrationStatus } from "@/lib/bounded-hydration";
+
+const log = createLogger("web.github");
 
 interface UsePullRequestOptions {
   environmentId: string | null;
@@ -79,7 +82,7 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
           try {
             url = await backend.getEnvironmentPrUrl(environmentId);
           } catch (err) {
-            console.error("Failed to get PR URL:", err);
+            log.error("pull-request.url-failed", { environmentId, error: formatLogError(err) });
           }
         }
 
@@ -125,10 +128,11 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
   const setModeCreatePending = useCallback(() => {
     if (environmentId) {
       void backend.prMonitorWatch(environmentId, "create-pending").catch((err) => {
-        console.warn(
-          `[usePullRequest] Failed to request create-pending mode for ${environmentId}:`,
-          err,
-        );
+        log.warn("pull-request.mode-request-failed", {
+          environmentId,
+          mode: "create-pending",
+          error: formatLogError(err),
+        });
       });
     }
   }, [environmentId]);
@@ -137,10 +141,11 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
   const setModeMergePending = useCallback(() => {
     if (environmentId) {
       void backend.prMonitorWatch(environmentId, "merge-pending").catch((err) => {
-        console.warn(
-          `[usePullRequest] Failed to request merge-pending mode for ${environmentId}:`,
-          err,
-        );
+        log.warn("pull-request.mode-request-failed", {
+          environmentId,
+          mode: "merge-pending",
+          error: formatLogError(err),
+        });
       });
     }
   }, [environmentId]);

@@ -1,4 +1,6 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
+import { configureLogger } from "@orkestrator/protocol/logger";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
@@ -388,9 +390,7 @@ describe("useEnvironments", () => {
   });
 
   test("keeps visible state unchanged when a silent snapshot refresh fails", async () => {
-    const consoleWarn = console.warn;
-    const warnMock = mock(() => undefined);
-    console.warn = warnMock as typeof console.warn;
+    const logs = captureLogs();
     mockGetEnvironmentSnapshots.mockImplementation(() =>
       Promise.reject(new Error("snapshot unavailable")),
     );
@@ -405,14 +405,21 @@ describe("useEnvironments", () => {
         });
       });
     } finally {
-      console.warn = consoleWarn;
+      logs.restore();
     }
 
     expect(result.current.isLoading).toBe(false);
     expect(result.current.error).toBe("Existing visible error");
-    expect(warnMock).toHaveBeenCalledWith(
-      "[useEnvironments] Failed to refresh environments for project project-1:",
-      "snapshot unavailable",
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        area: "web.environment",
+        event: "list.refresh-failed",
+        fields: expect.objectContaining({
+          projectId: "project-1",
+          error: expect.objectContaining({ message: "snapshot unavailable" }),
+        }),
+      }),
     );
   });
 
@@ -1317,6 +1324,72 @@ describe("useEnvironments", () => {
     });
   });
 
+  test("start lines carry ids and status, never names, branches or paths", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "secret-environment-name",
+      branch: "secret-branch",
+      worktreePath: "/secret/worktree",
+      status: "stopped",
+    });
+    useEnvironmentStore.setState({ environments: [environment], isLoading: false, error: null });
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([environment]));
+    mockStartEnvironment.mockImplementation(() =>
+      Promise.resolve({ setupStarted: true, setupSessionId: "env-1:setup" }),
+    );
+    mockGetEnvironment.mockImplementation(() =>
+      Promise.resolve({ ...environment, status: "running" }),
+    );
+    const logs = captureLogs();
+    configureLogger({ level: "debug" });
+
+    try {
+      const { result } = renderHook(() => useEnvironments("project-1"));
+      await act(async () => {
+        await result.current.startEnvironment("env-1");
+      });
+    } finally {
+      logs.restore();
+    }
+
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        area: "web.environment",
+        event: "start.snapshot-read",
+        fields: expect.objectContaining({
+          environmentId: "env-1",
+          status: "stopped",
+          hasWorktree: true,
+        }),
+      }),
+    );
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "debug",
+        area: "web.environment",
+        event: "start.environment-refreshed",
+        fields: expect.objectContaining({
+          environmentId: "env-1",
+          status: "running",
+        }),
+      }),
+    );
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        area: "terminal.setup",
+        event: "session.bind-from-environment",
+        fields: expect.objectContaining({
+          environmentId: "env-1",
+          nextSessionId: "env-1:setup",
+        }),
+      }),
+    );
+    expect(logs.lines.join("\n")).not.toContain("secret");
+  });
+
   test("startEnvironment sets error on failure", async () => {
     const expectedError = new Error("Failed to start");
     mockStartEnvironment.mockImplementation(() => Promise.reject(expectedError));
@@ -1477,9 +1550,7 @@ describe("useEnvironments", () => {
     mockSyncEnvironmentStatus.mockImplementation(() =>
       Promise.reject(new Error("docker unavailable")),
     );
-    const consoleError = console.error;
-    const errorMock = mock(() => undefined);
-    console.error = errorMock as typeof console.error;
+    const logs = captureLogs();
     const { result } = renderHook(() => useEnvironments(null));
 
     try {
@@ -1489,11 +1560,21 @@ describe("useEnvironments", () => {
       });
       expect(synced).toBeUndefined();
     } finally {
-      console.error = consoleError;
+      logs.restore();
     }
 
     expect(result.current.allEnvironments).toEqual([existingEnv]);
-    expect(errorMock).toHaveBeenCalled();
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "web.environment",
+        event: "status-sync.failed",
+        fields: expect.objectContaining({
+          environmentId: "env-1",
+          error: expect.objectContaining({ message: "docker unavailable" }),
+        }),
+      }),
+    );
   });
 
   test("restartEnvironment stops, disconnects, and starts the environment", async () => {
@@ -2493,14 +2574,23 @@ describe("useEnvironments", () => {
       pendingAgentLaunch: true,
     });
     useEnvironmentStore.setState({ environments: [environment] });
-    const originalWarn = console.warn;
-    console.warn = mock(() => undefined);
+    const logs = captureLogs();
     try {
       mockGetEnvironment.mockRejectedValueOnce(new Error("offline"));
       await reconcileEnvironmentSetupSnapshots();
-      expect(console.warn).toHaveBeenCalled();
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.environment",
+          event: "setup-snapshot.reconcile-failed",
+          fields: expect.objectContaining({
+            environmentId: "env-1",
+            error: expect.objectContaining({ message: "offline" }),
+          }),
+        }),
+      );
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
 
     // The singleton must have been released, or reconciliation is wedged for the

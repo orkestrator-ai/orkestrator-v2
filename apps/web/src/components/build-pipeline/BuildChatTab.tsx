@@ -1,3 +1,4 @@
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -24,10 +25,14 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
+import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { PipelineFlowView } from "./PipelineFlowView";
 import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
 import { usePipelineControls } from "./usePipelineControls";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 interface BuildChatTabProps {
   data: BuildTabData;
@@ -58,6 +63,12 @@ const PHASE_LABELS: Record<string, string> = {
   paused: "Paused",
   complete: "Complete",
   failed: "Failed",
+};
+
+/** A finished run that opened no pull request says what it did instead. */
+const COMPLETE_DELIVERY_LABELS: Partial<Record<DeliveryPolicy, string>> = {
+  "push-no-pr": "Complete · branch pushed, no PR opened",
+  "commit-only": "Complete · commits kept in the environment",
 };
 
 const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
@@ -103,6 +114,7 @@ export function BuildChatTab({
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const controls = usePipelineControls(pipeline, () => setPinnedId(null));
   const hydrationAttemptedFor = useRef<string | null>(null);
+  const createTab = useOptionalTerminalContext()?.createTab;
   // The flow view renders the step count, elapsed time and graph toggle here.
   const [progressSlot, setProgressSlot] = useState<HTMLSpanElement | null>(null);
   const [graphToggleSlot, setGraphToggleSlot] = useState<HTMLDivElement | null>(null);
@@ -115,7 +127,11 @@ export function BuildChatTab({
     if (pipeline || hydrationAttemptedFor.current === data.pipelineId) return;
     hydrationAttemptedFor.current = data.pipelineId;
     void hydrateBuildPipeline(data.pipelineId).catch((error) => {
-      console.warn("[BuildChatTab] Failed to hydrate build pipeline:", error);
+      log.warn("pipeline.hydrate-failed", {
+        source: "chat-tab",
+        pipelineId: data.pipelineId,
+        error: formatLogError(error),
+      });
     });
   }, [data.pipelineId, pipeline]);
 
@@ -127,7 +143,13 @@ export function BuildChatTab({
     );
   }
 
-  const phaseLabel = PHASE_LABELS[pipeline.phase] ?? pipeline.phase;
+  const pushesOnly = pipeline.delivery?.policy === "push-no-pr";
+  const phaseLabel =
+    pipeline.phase === "complete" && pipeline.delivery?.policy !== undefined
+      ? (COMPLETE_DELIVERY_LABELS[pipeline.delivery.policy] ?? PHASE_LABELS.complete!)
+      : pipeline.phase === "creating-pr" && pushesOnly
+        ? "Pushing branch"
+        : (PHASE_LABELS[pipeline.phase] ?? pipeline.phase);
   const active = !["paused", "complete", "failed"].includes(pipeline.phase);
   const interactionFailure =
     pipeline.phase === "failed" && pipeline.failureContext?.kind === "interactive-request";
@@ -152,9 +174,11 @@ export function BuildChatTab({
       ? "Restart Validation"
       : validationRestartTarget === "review-package" || dedicatedPreparationRunning
         ? "Restart Review Preparation"
-        : currentStagePhase
-          ? RESTART_STAGE_LABELS[currentStagePhase]
-          : undefined;
+        : currentStagePhase === "creating-pr" && pushesOnly
+          ? "Restart Push Stage"
+          : currentStagePhase
+            ? RESTART_STAGE_LABELS[currentStagePhase]
+            : undefined;
   const canRestartCurrentStage =
     Boolean(restartCurrentStageLabel) &&
     pipeline.sessions.length > 0 &&
@@ -183,7 +207,10 @@ export function BuildChatTab({
   if (canRetryStage) {
     headerControls.push({
       key: "retry-stage",
-      label: RETRY_STAGE_LABELS[pipeline.failureContext!.phase],
+      label:
+        pipeline.failureContext!.phase === "creating-pr" && pushesOnly
+          ? "Retry Push Stage"
+          : RETRY_STAGE_LABELS[pipeline.failureContext!.phase],
       icon: RefreshCw,
       onClick: controls.retryStage,
     });
@@ -282,7 +309,20 @@ export function BuildChatTab({
               ))}
             </div>
           )}
-          <PipelineKeyInformationButton keyInformation={pipeline.keyInformation} />
+          <PipelineKeyInformationButton
+            keyInformation={pipeline.keyInformation}
+            onOpenTab={
+              createTab
+                ? () =>
+                    createTab("key-information", {
+                      keyInformation: {
+                        environmentId: data.environmentId,
+                        pipelineId: data.pipelineId,
+                      },
+                    })
+                : undefined
+            }
+          />
           <div ref={setGraphToggleSlot} className="flex size-9 shrink-0" />
         </div>
         {isMobile && (

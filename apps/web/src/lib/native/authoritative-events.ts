@@ -5,6 +5,9 @@ import {
   type NativeEvent,
   type UnlistenFn,
 } from "@/lib/native/events";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.resource-sync");
 
 export interface AuthoritativeListenOptions {
   /**
@@ -62,7 +65,10 @@ export async function listenAuthoritativeWith<T>(
         if (!disposed && !options.signal?.aborted) return options.onResync();
       })
       .catch((error: unknown) => {
-        console.error(`[events] Resync for ${event} failed:`, error);
+        log.error("authoritative.resync-failed", {
+          eventName: event,
+          error: formatLogError(error),
+        });
       });
   };
   // Install recovery first so a handshake while event readiness is pending

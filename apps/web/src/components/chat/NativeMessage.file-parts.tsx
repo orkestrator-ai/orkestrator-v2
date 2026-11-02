@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Image as ImageIcon, Quote } from "lucide-react";
 import { FRONTEND_RENDER_POLICY } from "@orkestrator/protocol/rich-content-policy";
@@ -54,6 +55,8 @@ import {
   UserPromptEvidenceContext,
 } from "./NativeMessage.shared";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+
+const log = createLogger("web.chat");
 
 function isImageReference(pathOrUrl?: string): boolean {
   if (!pathOrUrl) return false;
@@ -257,9 +260,10 @@ export function FilePart({
         setSnapshot(resolved.snapshot ?? null);
         return resolved.url;
       } catch (err) {
-        console.error("[NativeMessage] Failed to load image preview:", err, {
-          path,
-          fileUrl,
+        log.error("image-preview.load-failed", {
+          hasPath: Boolean(path),
+          hasFileUrl: Boolean(fileUrl),
+          error: formatLogError(err),
         });
         setLoadError(err instanceof ImageTooLargeError ? "too-large" : "unavailable");
         if (onLoadUnavailableRef.current) {

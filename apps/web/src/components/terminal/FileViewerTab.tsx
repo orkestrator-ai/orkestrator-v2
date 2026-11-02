@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -24,6 +25,8 @@ import {
   LazyLoadInlineErrorFallback,
   type LazyLoadErrorDetails,
 } from "@/components/LazyLoadBoundary";
+
+const log = createLogger("web.files");
 
 const LazyMarkdownEditorTab = lazy(async () => ({
   default: (await import("@/components/markdown/MarkdownEditorTab")).MarkdownEditorTab,
@@ -302,7 +305,7 @@ export function FileViewerTab({
       if (environmentId) {
         await discardFileDraft(environmentId, filePath, getFileDraftRevisionState(tabId)).catch(
           (draftError: unknown) => {
-            console.warn("[FileViewerTab] Failed to discard file draft on reload:", draftError);
+            log.warn("draft.discard-failed", { tabId, error: formatLogError(draftError) });
           },
         );
       }
@@ -329,7 +332,7 @@ export function FileViewerTab({
     },
   ): void {
     if (!(draftError instanceof DraftRevisionConflictError)) {
-      console.warn("[FileViewerTab] Failed to persist file draft:", draftError);
+      log.warn("draft.persist-failed", { tabId: context.tabId, error: formatLogError(draftError) });
       return;
     }
     const currentEntry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
@@ -493,7 +496,7 @@ export function FileViewerTab({
                 );
                 draftReadSucceeded = true;
               } catch (draftError) {
-                console.warn("[FileViewerTab] Failed to restore file draft:", draftError);
+                log.warn("draft.restore-failed", { tabId, error: formatLogError(draftError) });
               }
             }
             if (cancelled) return;

@@ -88,6 +88,10 @@ import {
 import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-agent-defaults";
 import { FeatureBuildFields } from "./FeatureBuildFields";
 import {
+  DEFAULT_DELIVERY_POLICY,
+  type DeliveryPolicy,
+} from "@orkestrator/protocol/ticket-sections";
+import {
   defaultFeatureBuildModels,
   featureBuildIdentity,
   featureBuildRequest,
@@ -114,6 +118,9 @@ import {
   openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.environment");
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -327,7 +334,7 @@ export function CreateEnvironmentDialog({
         if (Array.isArray(models) && models.length > 0) syncCachedAcpModels(models);
       })
       .catch((error) => {
-        console.warn("[CreateEnvironmentDialog] Failed to seed the Pi model catalogue:", error);
+        log.warn("models.pi-seed-failed", { error: formatLogError(error) });
       });
   }, [enabledAgentPlatforms, open, piModels.length]);
   const {
@@ -570,6 +577,8 @@ export function CreateEnvironmentDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [customizeModels, setCustomizeModels] = useState(false);
   const [featureModels, setFeatureModels] = useState<FeatureBuildModelState | null>(null);
+  const [featureDeliveryPolicy, setFeatureDeliveryPolicy] =
+    useState<DeliveryPolicy>(DEFAULT_DELIVERY_POLICY);
   /**
    * Idempotency key for the feature build.
    *
@@ -671,7 +680,7 @@ export function CreateEnvironmentDialog({
           }
         })
         .catch((error) => {
-          console.warn("[CreateEnvironmentDialog] Failed to load cached OpenCode models:", error);
+          log.warn("models.opencode-cache-load-failed", { error: formatLogError(error) });
         });
     }
 
@@ -757,6 +766,7 @@ export function CreateEnvironmentDialog({
     // Back to null rather than to the current defaults, so the next opening
     // re-resolves them against whatever the catalogue holds by then.
     setFeatureModels(null);
+    setFeatureDeliveryPolicy(DEFAULT_DELIVERY_POLICY);
     // The form this key was minted for is gone, so it can never be the "same
     // request again" a reuse would stand for.
     featureRequestIdRef.current = createUuid();
@@ -1021,7 +1031,7 @@ export function CreateEnvironmentDialog({
             }
           } catch (error) {
             if (!isCurrentOperation()) return;
-            console.warn("[CreateEnvironmentDialog] Failed to read dropped attachment:", error);
+            log.warn("create.attachment-read-failed", { error: formatLogError(error) });
             if (dropIntent === "feature") {
               skippedFeatureFiles += 1;
             } else {
@@ -1349,7 +1359,7 @@ export function CreateEnvironmentDialog({
 
       // Validate port mappings before submission
       if (environmentType === "containerized" && !validatePortMappings()) {
-        console.error("Invalid port mappings: ports must be between 1 and 65535");
+        log.error("create.port-mappings-invalid");
         return;
       }
 
@@ -1380,6 +1390,7 @@ export function CreateEnvironmentDialog({
                   data: attachment.base64Data,
                 })),
               models: requestModels,
+              deliveryPolicy: featureDeliveryPolicy,
               requestId,
             });
           let request = buildRequest(featureRequestIdRef.current);
@@ -1440,7 +1451,7 @@ export function CreateEnvironmentDialog({
         resetForm();
         onOpenChange(false);
       } catch (err) {
-        console.error("Failed to create environment:", err);
+        log.error("create.failed", { error: formatLogError(err) });
         toast.error("Could not create environment", {
           description: err instanceof Error ? err.message : "An unexpected error occurred.",
         });
@@ -1455,6 +1466,7 @@ export function CreateEnvironmentDialog({
       agentType,
       buildIntent,
       effectiveFeatureModels,
+      featureDeliveryPolicy,
       featureAcceptanceCriteria,
       featureName,
       onCreateFeatureBuild,
@@ -2049,6 +2061,8 @@ export function CreateEnvironmentDialog({
                 onCustomizeModelsChange={handleCustomizeModelsChange}
                 models={effectiveFeatureModels}
                 onModelsChange={handleFeatureModelsChange}
+                deliveryPolicy={featureDeliveryPolicy}
+                onDeliveryPolicyChange={setFeatureDeliveryPolicy}
                 catalog={modelCatalog}
                 enabledPlatforms={enabledAgentPlatforms}
                 disabled={isLoading}

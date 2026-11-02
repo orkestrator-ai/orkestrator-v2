@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -76,6 +77,8 @@ import {
 import type { FileCandidate, FileMention } from "@/types";
 import { toast } from "sonner";
 import { findNativeAgentAdapter, nativeAgentAdapters } from "./adapter";
+
+const log = createLogger("web.native-agent");
 
 /**
  * Execution profiles offered before a tab is locked to a provider, and the
@@ -636,7 +639,7 @@ export function UnassignedNativeAgentComposer({
           modelCatalogRetriedRef.current.add(requestKey);
           setModelCatalogRetryRevision((revision) => revision + 1);
         }
-        console.warn("[AgentNativeTab] Failed to load native model catalogue:", error);
+        log.warn("model-catalogue.load-failed", { error: formatLogError(error) });
       });
   }, [environmentId, modelCatalogRetryRevision, models, platform]);
   // A host that was not signed in when the picker first asked has nothing to

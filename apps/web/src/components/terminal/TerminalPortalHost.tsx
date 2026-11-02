@@ -11,6 +11,9 @@ import {
   DEFAULT_TERMINAL_SCROLLBACK,
   resolveTerminalBackgroundColor,
 } from "@/constants/terminal";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 // Terminal tab types that need PersistentTerminal instances.
 // Using an allowlist ensures new non-terminal TabType variants don't accidentally spawn PTY sessions.
@@ -121,12 +124,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     // Create terminals for new tabs
     for (const [tabId] of terminalTabsMap) {
       if (!store.hasTerminal(environmentId, tabId)) {
-        console.debug(
-          "[TerminalPortalHost] Creating terminal for tab:",
-          tabId,
-          "in env:",
-          environmentId,
-        );
+        log.debug("portal.terminal-created", () => ({ tabId, environmentId }));
         store.createTerminal({
           tabId,
           containerId,
@@ -143,12 +141,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
       if (terminalData.environmentId !== environmentId) continue;
 
       if (!terminalTabsMap.has(terminalData.tabId)) {
-        console.debug(
-          "[TerminalPortalHost] Disposing terminal for removed tab:",
-          terminalData.tabId,
-          "in env:",
-          environmentId,
-        );
+        log.debug("portal.terminal-disposed", () => ({ tabId: terminalData.tabId, environmentId }));
         store.disposeTerminal(environmentId, terminalData.tabId);
       }
     }

@@ -30,6 +30,9 @@ import {
   type TerminalSocketPayload,
 } from "@/lib/native/terminal-websocket-client";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.gateway");
 
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
@@ -187,7 +190,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       try {
         listener(next);
       } catch (error) {
-        console.error("[RemoteGateway] Connection-state listener failed", error);
+        log.error("connection-listener.failed", { error: formatLogError(error) });
       }
     }
   };
@@ -486,7 +489,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       try {
         callback(payload);
       } catch (error) {
-        console.error(`[RemoteGateway] Event listener for ${event} failed`, error);
+        log.error("event-listener.failed", { eventName: event, error: formatLogError(error) });
       }
     }
   };
@@ -518,7 +521,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       try {
         callback(undefined);
       } catch (error) {
-        console.error("[RemoteGateway] Event-stream listener failed", error);
+        log.error("stream-listener.failed", { error: formatLogError(error) });
       }
     }
   };
@@ -703,7 +706,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         await consumeFetchEventStream(response, controller, true);
       } catch (error) {
         if (!controller.signal.aborted) {
-          console.warn("[RemoteGateway] Event stream disconnected", error);
+          log.warn("events.disconnected", { transport: "fetch", error: formatLogError(error) });
         }
       } finally {
         // An abort means someone stopped this stream on purpose; the watchdog is
@@ -766,7 +769,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     };
     source.onerror = () => {
       if (eventSource !== source) return;
-      console.warn("[RemoteGateway] Event stream disconnected");
+      log.warn("events.disconnected", { transport: "event-source" });
       invalidateMainStreamCredentialProbe();
       const refused = source.readyState === EVENT_SOURCE_CLOSED;
       // A network failure ends what a refusal told us, so the next one asks again.
@@ -792,7 +795,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const dropSilentStreams = () => {
     invalidateMainStreamCredentialProbe();
     stopWatchingMainStream();
-    console.warn("[RemoteGateway] Event stream disconnected: the link went silent");
+    log.warn("events.disconnected", { reason: "silent" });
     setMainStreamConnectionState("disconnected");
     silentDropSinceMainOpen = true;
     if (eventSource) {
@@ -1033,7 +1036,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       };
       source.onerror = () => {
         if (browserTerminalEventSource !== source) return;
-        console.warn("[RemoteGateway] Terminal event stream disconnected");
+        log.warn("terminal-stream.disconnected", { transport: "event-source" });
         // As for the main stream: the jittered ladder owns the retry, rather
         // than the browser's fixed one, and one shared socket means one ladder
         // however many terminals it strands.
@@ -1077,7 +1080,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           await consumeFetchEventStream(response, controller, false, true);
         } catch (error) {
           if (!controller.signal.aborted) {
-            console.warn("[RemoteGateway] Terminal event stream disconnected", error);
+            log.warn("terminal-stream.disconnected", {
+              transport: "fetch",
+              error: formatLogError(error),
+            });
           }
         } finally {
           controller.abort();

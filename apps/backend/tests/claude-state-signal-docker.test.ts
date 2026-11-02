@@ -129,6 +129,17 @@ dockerTest(
       await hook("Stop");
       await until(() => states.at(-1) === "waiting" && probes.length === 1);
 
+      // A turn that ends on an API error runs StopFailure instead of Stop: it
+      // stops reading working and rings agent_failed (to-do 1200).
+      await hook("UserPromptSubmit");
+      await until(() => states.at(-1) === "working");
+      await storage.updateEnvironment(environment.id, { hasUnreadWork: false });
+      await hook("StopFailure");
+      await until(() => states.at(-1) === "idle" && probes.length === 2);
+      const failed = await storage.getEnvironment(environment.id);
+      expect(failed?.agentActivitySources?.["claude-terminal"]?.state).toBe("idle");
+      expect(failed?.unreadReason).toBe("agent_failed");
+
       // With no renderer subscribed, lose both POSTs and reconcile the same final state.
       await storage.updateEnvironment(environment.id, {
         hasUnreadWork: false,
@@ -141,10 +152,10 @@ dockerTest(
       await hook("UserPromptSubmit", true);
       await hook("Stop", true);
       await time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
-      await until(() => probes.length === 2 && completed.length === 1);
+      await until(() => probes.length === 3 && completed.length === 1);
       await time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
       await until(() => interval === 1_000);
-      expect(probes).toHaveLength(2);
+      expect(probes).toHaveLength(3);
       expect(completed).toHaveLength(1);
       const recovered = await storage.getEnvironment(environment.id);
       expect(recovered?.hasUnreadWork).toBe(true);

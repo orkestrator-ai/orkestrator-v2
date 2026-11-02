@@ -19,6 +19,9 @@ import {
   type FeaturePlanningKind,
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.feature-plan");
 
 export type { FeaturePlan, FeaturePlanMessage, FeaturePlanStatus, FeatureStoryCard };
 
@@ -152,7 +155,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       }
       return false;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to load features:", error);
+      log.error("features.load-failed", { projectId, error: formatLogError(error) });
       if (
         get().currentProjectId === projectId &&
         latestFeatureLoadRequestByProject.get(projectId) === requestId
@@ -169,7 +172,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       set((state) => ({ features: upsertFeature(state.features, feature) }));
       return feature.id;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to create feature:", error);
+      log.error("feature.create-failed", { projectId, error: formatLogError(error) });
       return undefined;
     }
   },
@@ -180,7 +183,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       set((state) => ({ features: upsertFeature(state.features, feature) }));
       return feature;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to update feature:", error);
+      log.error("feature.update-failed", { featureId, error: formatLogError(error) });
       return undefined;
     }
   },
@@ -193,7 +196,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       }));
       return result;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to claim feature build:", error);
+      log.error("build.claim-failed", { featureId, taskId, error: formatLogError(error) });
       return undefined;
     }
   },
@@ -210,7 +213,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       set((state) => ({ features: upsertFeature(state.features, feature) }));
       return feature;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to append feature message:", error);
+      log.error("message.append-failed", { featureId, error: formatLogError(error) });
       return undefined;
     }
   },
@@ -228,7 +231,11 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       set((state) => ({ features: upsertFeature(state.features, feature) }));
       return feature;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to append story message:", error);
+      log.error("story-message.append-failed", {
+        featureId,
+        storyId,
+        error: formatLogError(error),
+      });
       return undefined;
     }
   },
@@ -255,7 +262,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       if (projectId) void get().loadFeatures(projectId);
       return record;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to start feature planning:", error);
+      log.error("planning.start-failed", { featureId, storyId, error: formatLogError(error) });
       return undefined;
     }
   },
@@ -267,7 +274,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       if (projectId) void get().loadFeatures(projectId);
       return record;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to retry feature planning:", error);
+      log.error("planning.retry-failed", { featureId, error: formatLogError(error) });
       return undefined;
     }
   },
@@ -279,7 +286,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       if (projectId) void get().loadFeatures(projectId);
       return true;
     } catch (error) {
-      console.error("[FeaturePlanStore] Failed to cancel feature planning:", error);
+      log.error("planning.cancel-failed", { featureId, error: formatLogError(error) });
       return false;
     }
   },

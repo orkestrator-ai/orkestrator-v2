@@ -5,6 +5,9 @@
 import { readText } from "@/lib/native/clipboard";
 import { processClipboardPaste, processLocalClipboardPaste } from "@/hooks/useClipboardImagePaste";
 import { escapePathForTerminalInput } from "@orkestrator/protocol/tmux-prompt";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 export interface TerminalPasteOptions {
   /** Container ID for container environments, null/undefined for local */
@@ -53,7 +56,11 @@ export async function handleTerminalPaste({
         focusTerminal();
       },
       (error) => {
-        console.error(`[${componentName}] Clipboard paste error:`, error);
+        log.error("clipboard.paste-failed", {
+          source: componentName,
+          target: "container",
+          error: formatLogError(error),
+        });
       },
     );
   } else if (worktreePath) {
@@ -69,7 +76,11 @@ export async function handleTerminalPaste({
         focusTerminal();
       },
       (error) => {
-        console.error(`[${componentName}] Clipboard paste error:`, error);
+        log.error("clipboard.paste-failed", {
+          source: componentName,
+          target: "local",
+          error: formatLogError(error),
+        });
       },
     );
   } else {
@@ -81,7 +92,11 @@ export async function handleTerminalPaste({
         focusTerminal();
       }
     } catch (err) {
-      console.error(`[${componentName}] Clipboard text paste error:`, err);
+      log.error("clipboard.paste-failed", {
+        source: componentName,
+        target: "text-only",
+        error: formatLogError(err),
+      });
     }
   }
 }

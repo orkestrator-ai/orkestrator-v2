@@ -751,6 +751,7 @@ describe("LinearTicketsView", () => {
         "local",
         expect.objectContaining({
           includeComments: false,
+          deliveryPolicy: "open-pr",
           steps: expect.objectContaining({
             build: expect.objectContaining({
               agent: expect.any(String),

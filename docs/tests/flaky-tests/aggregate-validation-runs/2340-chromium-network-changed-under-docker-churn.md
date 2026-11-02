@@ -56,6 +56,15 @@
   VM, and CI runners, unless a job runs Docker work beside a browser suite.
   No Chromium switch to ignore these changes was found (the binary's strings
   name the notifier but no switch for it).
+- **Also seen (2026-11-02):** `e2e/agent-testing/design-canvas-electron.spec.ts`
+  run headless on beelink (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`,
+  Electron 45.0.0) failed twice in a row at `openDesignWindow`: the
+  Vite-served renderer showed "Orkestrator couldn't connect", the title check
+  timed out after 150 s, and the diagnostics held 138
+  `net::ERR_NETWORK_CHANGED` lines while other builds' containers connected
+  and disconnected. The same journey against the packaged app
+  (`design-canvas-packaged-electron.spec.ts`) passed in between: its renderer
+  loads from `file://`, which this notifier does not abort.
 - **Guidance:** on a Linux host, a browser failure whose trace shows
   `net::ERR_NETWORK_CHANGED`, or many requests ending at status -1, while other
   work starts or stops containers is this case, not a flake of the owning

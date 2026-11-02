@@ -10,24 +10,16 @@ import {
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
-  DragOverlay,
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { Button } from "@/components/ui/button";
-import {
-  ArrowUpDown,
-  Folder,
-  Plus,
-  FolderGit2,
-  Square,
-  Trash2,
-  RotateCw,
-  RefreshCw,
-} from "lucide-react";
+import { ArrowUpDown, Plus, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
 import { ProjectHomeActivity } from "./ProjectHomeActivity";
 import { ActivityEnvironmentList } from "./ActivityEnvironmentList";
 import { SortableProjectGroup } from "./SortableProjectGroup";
+import { SidebarDragOverlay } from "./SidebarDragOverlay";
+import { SidebarEmptyState } from "./SidebarEmptyState";
 import { SortableProjectFolder } from "./SortableProjectFolder";
 import { SidebarRootDropZone } from "./SidebarRootDropZone";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
@@ -74,11 +66,17 @@ import {
   FederatedActivityList,
   MachineSectionList,
   MergedProjectList,
+  mergedFolderCollapseKey,
 } from "@/components/federation/FederatedSidebarSections";
 import { useBoundCollapseSync } from "@/components/federation/useBoundCollapseSync";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
-import { isMachineShown } from "@/lib/federation/sidebar-layout";
+import {
+  isMachineShown,
+  mergedProjectView,
+  visibleBoundProjectIds,
+} from "@/lib/federation/sidebar-layout";
+import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
   DropdownMenu,
@@ -108,6 +106,9 @@ import {
   projectSortableIds,
   type ProjectFolderEntry,
 } from "@/lib/project-folders";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.sidebar");
 
 const NO_ENVIRONMENTS: Environment[] = [];
 const LazyRepositorySettings = lazy(async () => ({
@@ -259,7 +260,7 @@ export async function forkSidebarEnvironment(
     options.selectProjectAndEnvironment(created.projectId, created.id);
     startEnvironmentInBackground(options.startEnvironment, created.id);
   } catch (error) {
-    console.error("[HierarchicalSidebar] Failed to fork environment:", error);
+    log.error("fork.failed", { environmentId, error: formatLogError(error) });
   }
 }
 
@@ -295,7 +296,10 @@ export async function deleteProjectAndEnvironments(
       try {
         await deleteEnvironment(environment.id);
       } catch (error) {
-        console.error(`Failed to delete environment ${environment.name}:`, error);
+        log.error("environment.delete-failed", {
+          environmentId: environment.id,
+          error: formatLogError(error),
+        });
         failedNames.push(environment.name);
       }
     }
@@ -420,6 +424,8 @@ export function HierarchicalSidebar() {
     () => new Set(visibleMachines.filter(isMachineShown).map((machine) => machine.connectionId)),
     [visibleMachines],
   );
+  const portalLayout = usePortalLayout();
+  const collapsedFolderKeys = useMachineViewStore((state) => state.collapsedFolderKeys);
   useBoundCollapseSync(
     federation.enabled ? (boundMachineView?.backendId ?? null) : null,
     projects,
@@ -595,7 +601,7 @@ export function HierarchicalSidebar() {
       );
       if (reorder) await reorderEnvironments(reorder.projectId, reorder.ids);
     } catch (err) {
-      console.error("Failed to persist sidebar reorder:", err);
+      log.error("reorder.persist-failed", { error: formatLogError(err) });
     }
   };
 
@@ -608,7 +614,7 @@ export function HierarchicalSidebar() {
 
   const handleRemoveFromFolder = (projectId: string): void => {
     void arrangeProjectsByIntent({ kind: "remove-from-folder", projectId }).catch((err) => {
-      console.error("Failed to remove project from folder:", err);
+      log.error("folder.project-remove-failed", { projectId, error: formatLogError(err) });
     });
   };
 
@@ -626,7 +632,7 @@ export function HierarchicalSidebar() {
         }
       })
       .catch((err) => {
-        console.error("Failed to rename project folder:", err);
+        log.error("folder.rename-failed", { error: formatLogError(err) });
       });
   };
 
@@ -634,13 +640,13 @@ export function HierarchicalSidebar() {
     void arrangeProjectsByIntent({ kind: "ungroup-folder", folder: folderName })
       .then(() => setProjectFolderCollapsed(folderName, false))
       .catch((err) => {
-        console.error("Failed to remove project folder:", err);
+        log.error("folder.ungroup-failed", { error: formatLogError(err) });
       });
   };
 
   const handleSortFolder = (folderName: string): void => {
     void arrangeProjectsByIntent({ kind: "sort-folder", folder: folderName }).catch((err) => {
-      console.error("Failed to sort project folder:", err);
+      log.error("folder.sort-failed", { error: formatLogError(err) });
     });
   };
 
@@ -648,7 +654,7 @@ export function HierarchicalSidebar() {
     try {
       await addProject(gitUrl, localPath, cloneOnly);
     } catch (err) {
-      console.error("Failed to add project:", err);
+      log.error("project.add-failed", { error: formatLogError(err) });
       throw err; // Re-throw so the dialog can handle it
     }
   };
@@ -657,7 +663,7 @@ export function HierarchicalSidebar() {
     try {
       await createProjectFromScratch(localPath);
     } catch (err) {
-      console.error("Failed to create project:", err);
+      log.error("project.create-failed", { error: formatLogError(err) });
       throw err;
     }
   };
@@ -670,7 +676,7 @@ export function HierarchicalSidebar() {
     try {
       await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
     } catch (err) {
-      console.error("Failed to delete project:", err);
+      log.error("project.delete-failed", { projectId, error: formatLogError(err) });
       throw err;
     }
   };
@@ -703,6 +709,24 @@ export function HierarchicalSidebar() {
       if (collapsedProjects.includes(project.id)) return;
       for (const env of getProjectEnvironments(project.id)) orderedIds.push(env.id);
     };
+    // A merged list draws this window's projects in the command node's order
+    // and folders (`MergedProjectList`), so a range follows that tree.
+    if (federatedMode === "project" || federatedMode === "repository") {
+      const { tree } = mergedProjectView(
+        machineViews,
+        mergedShownIds,
+        federatedMode,
+        portalLayout,
+        federation.portalState.selfId,
+      );
+      for (const projectId of visibleBoundProjectIds(tree, (name) =>
+        collapsedFolderKeys.includes(mergedFolderCollapseKey(federatedMode, name)),
+      )) {
+        const project = projectsById.get(projectId);
+        if (project) collectFrom(project);
+      }
+      return orderedIds;
+    }
     for (const entry of projectTree) {
       if (entry.kind === "project") {
         collectFrom(entry.project);
@@ -721,6 +745,13 @@ export function HierarchicalSidebar() {
     collapsedProjectFolders,
     getProjectEnvironments,
     collapsedProjects,
+    federatedMode,
+    machineViews,
+    mergedShownIds,
+    portalLayout,
+    federation.portalState.selfId,
+    collapsedFolderKeys,
+    projectsById,
   ]);
 
   // useCallback so memo(EnvironmentItem) rows are not invalidated every render.
@@ -752,16 +783,18 @@ export function HierarchicalSidebar() {
         selectProjectAndEnvironment(environment.projectId, environmentId);
         // Auto-start local environments on selection so a terminal can open
         if (startsOnSelection(environment)) {
-          console.info("[HierarchicalSidebar] Auto-starting local environment:", {
+          log.info("auto-start.started", {
             environmentId: environment.id,
-            branch: environment.branch,
             status: environment.status,
-            worktreePath: environment.worktreePath,
+            hasWorktree: !!environment.worktreePath,
           });
           // Setup command handling (blocking, placeholder, resolve) is centralized
           // in useEnvironments.startEnvironment() for all code paths.
           startEnvironment(environment.id).catch((err) => {
-            console.error("[HierarchicalSidebar] Failed to auto-start local environment:", err);
+            log.error("auto-start.failed", {
+              environmentId: environment.id,
+              error: formatLogError(err),
+            });
           });
         }
         // Already-started local environments resume their backend-owned setup
@@ -823,7 +856,10 @@ export function HierarchicalSidebar() {
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to stop environment ${runningIds[index]}:`, result.reason);
+        log.error("environment.stop-failed", {
+          environmentId: runningIds[index],
+          error: formatLogError(result.reason),
+        });
       }
     });
   };
@@ -838,7 +874,10 @@ export function HierarchicalSidebar() {
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to restart environment ${runningIds[index]}:`, result.reason);
+        log.error("environment.restart-failed", {
+          environmentId: runningIds[index],
+          error: formatLogError(result.reason),
+        });
       }
     });
   };
@@ -850,7 +889,10 @@ export function HierarchicalSidebar() {
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Failed to delete environment ${idsToDelete[index]}:`, result.reason);
+        log.error("environment.delete-failed", {
+          environmentId: idsToDelete[index],
+          error: formatLogError(result.reason),
+        });
       }
     });
 
@@ -1027,18 +1069,9 @@ export function HierarchicalSidebar() {
   /** This window's own machine's projects and environments. */
   const localTree =
     projectsLoading && projects.length === 0 ? (
-      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-        <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
-        <p className="text-sm">Loading projects...</p>
-      </div>
+      <SidebarEmptyState loading />
     ) : projects.length === 0 ? (
-      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-        <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
-        <p className="text-sm">No projects yet</p>
-        <Button variant="link" size="sm" onClick={() => setShowAddProjectDialog(true)}>
-          Add your first project
-        </Button>
-      </div>
+      <SidebarEmptyState onAdd={() => setShowAddProjectDialog(true)} />
     ) : environmentSortMode === "activity" ? (
       <ActivityEnvironmentList
         testId="activity-environment-list"
@@ -1098,30 +1131,17 @@ export function HierarchicalSidebar() {
           <SidebarRootDropZone active={activeType === "project"} />
         </SortableContext>
 
-        {/* Drag overlay for visual feedback */}
-        <DragOverlay>
-          {activeProject && (
-            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-              <div className="flex items-center gap-2">
-                <FolderGit2 className="h-4 w-4" />
-                <span className="text-sm font-medium">{activeProject.name}</span>
-              </div>
-            </div>
-          )}
-          {activeFolder && (
-            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-              <div className="flex items-center gap-2">
-                <Folder className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
-                <span className="text-sm font-medium">{activeFolder.name}</span>
-              </div>
-            </div>
-          )}
-          {activeEnvironment && (
-            <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
-              <span className="text-sm">{activeEnvironment.name}</span>
-            </div>
-          )}
-        </DragOverlay>
+        <SidebarDragOverlay
+          item={
+            activeProject
+              ? { kind: "project", name: activeProject.name }
+              : activeFolder
+                ? { kind: "folder", name: activeFolder.name }
+                : activeEnvironment
+                  ? { kind: "environment", name: activeEnvironment.name }
+                  : null
+          }
+        />
       </DndContext>
     );
 
@@ -1154,7 +1174,7 @@ export function HierarchicalSidebar() {
     );
     if (!reorder) return;
     reorderEnvironments(reorder.projectId, reorder.ids).catch((err: unknown) => {
-      console.error("Failed to persist sidebar reorder:", err);
+      log.error("reorder.persist-failed", { error: formatLogError(err) });
     });
   };
 
@@ -1398,6 +1418,8 @@ export function HierarchicalSidebar() {
               mode={federatedMode}
               renderBoundProject={renderMergedBoundProject}
               onBoundEnvironmentDragEnd={handleBoundEnvironmentDrop}
+              boundLoading={projectsLoading && projects.length === 0}
+              onAddProject={() => setShowAddProjectDialog(true)}
             />
           ) : federatedMode === "machine" && boundMachineView ? (
             <MachineSectionList

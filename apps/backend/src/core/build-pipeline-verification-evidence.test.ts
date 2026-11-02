@@ -58,6 +58,7 @@ async function withSupervisor(
     assertValidationWorktreeUnchanged: (...args) =>
       supervisor.assertValidationWorktreeUnchanged(...args),
     remindMissingStageResult: (...args) => supervisor.remindMissingStageResult(...args),
+    probeWorktreeOnce: (...args) => supervisor.probeWorktreeOnce(...args),
   });
   const supervisor = new BuildPipelineSupervisor(
     ctx,

@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realBackend from "@/lib/backend";
@@ -230,7 +231,7 @@ describe("useFileSave", () => {
   });
 
   test("keeps content dirty when the backend write fails", async () => {
-    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const logs = captureLogs();
     writeContainerFileMock.mockRejectedValueOnce(new Error("disk unavailable"));
     useFileDirtyStore.getState().setOriginalContent("tab", "original");
     useFileDirtyStore.getState().setContent("tab", "updated");
@@ -247,7 +248,16 @@ describe("useFileSave", () => {
 
     expect(useFileDirtyStore.getState().getContent("tab")).toBe("updated");
     expect(useFileDirtyStore.getState().isDirty("tab")).toBe(true);
-    errorSpy.mockRestore();
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "web.files",
+        event: "file.save-failed",
+        fields: expect.objectContaining({ tabId: "tab" }),
+      }),
+    );
+    expect(logs.lines.join("\n")).not.toContain("README.md");
+    logs.restore();
   });
 
   test("preserves edits made during a save and rejects a concurrent save", async () => {

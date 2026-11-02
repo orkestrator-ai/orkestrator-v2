@@ -12,6 +12,9 @@ import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.app");
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
   default: (await import("@/components/environments/EnvironmentSettingsDialog"))
@@ -155,7 +158,7 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
             removeProject,
           );
         } catch (error) {
-          console.error("Failed to delete project:", error);
+          log.error("project.delete-failed", { projectId, error: formatLogError(error) });
           throw error;
         }
       }}

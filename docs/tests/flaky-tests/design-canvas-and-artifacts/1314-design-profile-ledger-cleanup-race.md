@@ -327,3 +327,26 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+
+
+## Packaged design review — 2026-11-02
+
+Preparation at `92acc91a0d737b49f734f64162b24df49c53a190` ran `mise run test`.
+The exact case `design service startup > removes the recorded profile of a backend that was killed`
+failed at line 505 after 97.10 ms: a JSON ledger entry remained after the profile disappeared.
+Original evidence: `.orkestrator/review-artifacts/review-validation-abc8c2c9-251b-4d62-a839-c1971ab9e1db/validation-04.stdout.txt`.
+The root group reported 3,423 passed, one skipped, three unrelated terminal failures;
+the web group reported 11,233 passed, ten skipped, four unrelated terminal failures.
+The captured backend tail does not retain its totals or worker count.
+
+On the fix branch, the unchanged complete owner passed (37 tests, 2.1 s):
+`NODE_ENV=test mise run test:logged -- --name fix-profiles-exact -- bash -c 'cd apps/backend && bun test ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures'`.
+
+A detached origin/main worktree at `38d55ee146c5bc29bdfb338c4f93f9de5f0cd787`,
+with independently installed frozen dependencies, passed the same owner once (37 tests, 1.5 s).
+Repeating the entire owner with one worker reproduced the exact line-505 failure on run 11:
+ten runs each passed all 37 tests; the last run passed 36 and failed one (143.41 ms).
+Command: `NODE_ENV=test mise run test:logged -- --name baseline-profiles-repeat -- bash -c 'cd apps/backend && for attempt in {1..30}; do bun test ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures || exit 1; done'`.
+Evidence: `/tmp/orkestrator-test-run.6dslpJ/baseline-profiles-repeat.log.gz` (19.0 s).
+This confirms the existing cleanup race independently of the packaged-app changes;
+no assertion, skip or production cleanup behavior was changed.

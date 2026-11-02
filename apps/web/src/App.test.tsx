@@ -1,5 +1,6 @@
 import { MODAL_CONTENT_CLASS_NAME } from "@/components/ui/modal-theme";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -858,8 +859,7 @@ describe("App background processing mounts", () => {
       if (projectId === "project-one") throw new Error("pipeline unavailable");
       return [];
     });
-    const originalWarn = console.warn;
-    console.warn = mock(() => undefined);
+    const logs = captureLogs();
     try {
       render(<App />);
 
@@ -874,7 +874,7 @@ describe("App background processing mounts", () => {
         ]);
       });
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -886,21 +886,23 @@ describe("App background processing mounts", () => {
     });
     const migrationError = new Error("migration unavailable");
     mockMigrateLegacyBuildPipelines.mockRejectedValueOnce(migrationError);
-    const originalWarn = console.warn;
-    const warn = mock(() => undefined);
-    console.warn = warn;
+    const logs = captureLogs();
     try {
       render(<App />);
 
       expect(await screen.findByTestId("project-launcher")).toBeTruthy();
       await waitFor(() => {
-        expect(warn).toHaveBeenCalledWith(
-          "[App] Failed to migrate legacy build pipelines:",
-          migrationError,
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "web.app",
+            event: "build-pipelines.migrate-failed",
+            fields: { error: expect.objectContaining({ message: migrationError.message }) },
+          }),
         );
       });
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -918,9 +920,7 @@ describe("App background processing mounts", () => {
       if (environmentId === "env-rejected") throw hydrationError;
       return [];
     });
-    const originalWarn = console.warn;
-    const warn = mock(() => undefined);
-    console.warn = warn;
+    const logs = captureLogs();
     try {
       render(<App />);
 
@@ -929,14 +929,21 @@ describe("App background processing mounts", () => {
           "env-rejected",
           "env-restored",
         ]);
-        expect(warn).toHaveBeenCalledWith(
-          "[App] Failed to restore multi reviews for env-rejected:",
-          hydrationError,
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "web.app",
+            event: "multi-reviews.restore-failed",
+            fields: {
+              environmentId: "env-rejected",
+              error: expect.objectContaining({ message: hydrationError.message }),
+            },
+          }),
         );
       });
       expect(screen.getByTestId("project-launcher")).toBeTruthy();
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 
@@ -1597,9 +1604,7 @@ describe("App Docker availability", () => {
 
   test("keeps the gate closed when the permission probe fails and recovers on retry", async () => {
     const originalOrkestrator = window.orkestrator;
-    const originalConsoleError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError;
+    const logs = captureLogs();
     const getMacOsStatus = mock()
       .mockImplementationOnce(async () => {
         throw new Error("ipc unavailable");
@@ -1622,16 +1627,20 @@ describe("App Docker availability", () => {
       );
       expect(screen.getByText("ipc unavailable")).toBeTruthy();
       expect(mockCheckDocker).not.toHaveBeenCalled();
-      expect(consoleError).toHaveBeenCalledWith(
-        "[App] Failed to check macOS file permissions:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.app",
+          event: "macos-permissions.check-failed",
+          fields: { error: expect.objectContaining({ message: "ipc unavailable" }) },
+        }),
       );
 
       fireEvent.click(screen.getByRole("button", { name: "Check Again" }));
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(1));
       expect(screen.queryByText("Could not check macOS file access") === null).toBe(true);
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
       cleanup();
       window.orkestrator = originalOrkestrator;
     }
@@ -2264,9 +2273,7 @@ describe("App Docker availability", () => {
 
   test("keeps Docker fail-closed with an immediate recovery action after startup requests fail", async () => {
     const deferredConfirmation = deferDockerStartupConfirmation();
-    const originalConsoleError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError;
+    const logs = captureLogs();
 
     try {
       mockCheckDocker
@@ -2301,14 +2308,20 @@ describe("App Docker availability", () => {
       });
       act(() => screen.getByTestId("start-env-unknown").click());
       await waitFor(() => expect(mockStartEnvironment).toHaveBeenCalledTimes(1));
-      expect(consoleError).toHaveBeenCalledWith(
-        "[App] Docker startup check failed:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.app",
+          event: "docker.check-failed",
+          fields: {
+            source: "startup",
+            error: expect.objectContaining({ message: "docker socket unavailable" }),
+          },
+        }),
       );
       first.unmount();
 
       resetAppMocks();
-      console.error = consoleError;
       mockSyncAllEnvironmentsWithDocker.mockImplementationOnce(async () => {
         throw new Error("sync failed");
       });
@@ -2316,23 +2329,25 @@ describe("App Docker availability", () => {
       render(<App />);
 
       await waitFor(() => {
-        expect(consoleError).toHaveBeenCalledWith(
-          "[App] Failed to sync environments with Docker:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.app",
+            event: "docker.sync-failed",
+            fields: { error: expect.objectContaining({ message: "sync failed" }) },
+          }),
         );
       });
       expect(screen.getByTestId("app-shell")).toBeTruthy();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
       deferredConfirmation.restore();
     }
   });
 
   test("keeps a failed retry non-blocking and lets the user dismiss the warning", async () => {
     const deferredConfirmation = deferDockerStartupConfirmation();
-    const originalConsoleError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError;
+    const logs = captureLogs();
     mockCheckDocker.mockImplementationOnce(async () => false);
     mockCheckDocker.mockImplementationOnce(async () => false);
     mockCheckDocker.mockImplementationOnce(async () => {
@@ -2348,9 +2363,16 @@ describe("App Docker availability", () => {
 
       act(() => screen.getByRole("button", { name: "Check Again" }).click());
       await waitFor(() => {
-        expect(consoleError).toHaveBeenCalledWith(
-          "[App] Docker retry check failed:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.app",
+            event: "docker.check-failed",
+            fields: {
+              source: "retry",
+              error: expect.objectContaining({ message: "retry failed" }),
+            },
+          }),
         );
       });
 
@@ -2359,15 +2381,14 @@ describe("App Docker availability", () => {
       expect(screen.getByTestId("app-shell")).toBeTruthy();
       expect(mockExit).not.toHaveBeenCalled();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
       deferredConfirmation.restore();
     }
   });
 
   test("keeps host-tool dialogs behind a published Docker outage when retry fails", async () => {
     const deferredConfirmation = deferDockerStartupConfirmation();
-    const originalConsoleError = console.error;
-    console.error = mock(() => {});
+    const logs = captureLogs();
     mockCheckDocker
       .mockImplementationOnce(async () => false)
       .mockImplementationOnce(async () => false)
@@ -2391,7 +2412,7 @@ describe("App Docker availability", () => {
       expect(screen.getByText("Docker Is Not Running")).toBeTruthy();
       expect(screen.queryByText("AI CLI Required") === null).toBe(true);
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
       deferredConfirmation.restore();
     }
   });
@@ -2517,7 +2538,7 @@ describe("App Docker availability", () => {
   test("keeps the last healthy Docker snapshot when a background poll request fails", async () => {
     const originalSetInterval = window.setInterval;
     const originalClearInterval = window.clearInterval;
-    const originalConsoleError = console.error;
+    const logs = captureLogs();
     const pollCallbacks: Array<() => void> = [];
     window.setInterval = ((handler: TimerHandler, timeout?: number) => {
       if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
@@ -2526,7 +2547,6 @@ describe("App Docker availability", () => {
       return 42;
     }) as typeof window.setInterval;
     window.clearInterval = mock(() => {}) as typeof window.clearInterval;
-    console.error = mock(() => {});
     mockCheckDocker
       .mockImplementationOnce(async () => true)
       .mockImplementationOnce(async () => {
@@ -2554,7 +2574,7 @@ describe("App Docker availability", () => {
       ).toBe("true");
     } finally {
       cleanup();
-      console.error = originalConsoleError;
+      logs.restore();
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
@@ -2563,7 +2583,7 @@ describe("App Docker availability", () => {
   test("keeps the last healthy Docker snapshot when an outage confirmation request fails", async () => {
     const originalSetInterval = window.setInterval;
     const originalClearInterval = window.clearInterval;
-    const originalConsoleError = console.error;
+    const logs = captureLogs();
     const pollCallbacks: Array<() => void> = [];
     window.setInterval = ((handler: TimerHandler, timeout?: number) => {
       if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
@@ -2572,7 +2592,6 @@ describe("App Docker availability", () => {
       return 42;
     }) as typeof window.setInterval;
     window.clearInterval = mock(() => {}) as typeof window.clearInterval;
-    console.error = mock(() => {});
     mockCheckDocker
       .mockImplementationOnce(async () => true)
       .mockImplementationOnce(async () => false)
@@ -2600,7 +2619,7 @@ describe("App Docker availability", () => {
       ).toBe("true");
     } finally {
       cleanup();
-      console.error = originalConsoleError;
+      logs.restore();
       window.setInterval = originalSetInterval;
       window.clearInterval = originalClearInterval;
     }
@@ -2969,9 +2988,7 @@ describe("App startup checks and global events", () => {
   });
 
   test("does not misreport a rejected CLI check as no installed tools", async () => {
-    const originalConsoleError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError;
+    const logs = captureLogs();
     mockCheckClaudeCli.mockImplementation(async () => {
       throw new Error("cli probe failed");
     });
@@ -2981,22 +2998,25 @@ describe("App startup checks and global events", () => {
       render(<App />);
 
       await waitFor(() => {
-        expect(consoleError).toHaveBeenCalledWith(
-          "[App] CLI startup check 1 failed:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.app",
+            event: "cli-check.failed",
+            fields: { check: 1, error: expect.objectContaining({ message: "cli probe failed" }) },
+          }),
         );
       });
       expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
       expect(screen.queryByText("AI CLI Required") === null).toBe(true);
       expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
   test("does not publish partial host-tool results when confirmation remains incomplete", async () => {
-    const originalConsoleError = console.error;
-    console.error = mock(() => {});
+    const logs = captureLogs();
     mockCheckClaudeCli.mockImplementation(async () => true);
     mockCheckClaudeConfig.mockImplementation(async () => false);
     mockCheckGithubCli.mockImplementation(async () => false);
@@ -3014,13 +3034,12 @@ describe("App startup checks and global events", () => {
       expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
       expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
   test("keeps the AI CLI dialog retryable when a retry request fails", async () => {
-    const originalConsoleError = console.error;
-    console.error = mock(() => {});
+    const logs = captureLogs();
     mockCheckClaudeCli.mockImplementation(async () => false);
     mockCheckClaudeConfig.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => null);
@@ -3043,7 +3062,7 @@ describe("App startup checks and global events", () => {
       expect(screen.getByText("AI CLI Required")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -3182,9 +3201,7 @@ describe("App startup checks and global events", () => {
   });
 
   test("continues rendering when config load fails", async () => {
-    const originalConsoleError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError;
+    const logs = captureLogs();
     mockGetConfig.mockImplementation(async () => {
       throw new Error("config unavailable");
     });
@@ -3200,14 +3217,18 @@ describe("App startup checks and global events", () => {
 
       await waitFor(() => {
         expect(mockGetConfig).toHaveBeenCalled();
-        expect(consoleError).toHaveBeenCalledWith(
-          "[App] Failed to load config:",
-          expect.any(Error),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "web.app",
+            event: "config.load-failed",
+            fields: { error: expect.objectContaining({ message: "config unavailable" }) },
+          }),
         );
       });
       expect(screen.getByTestId("app-shell")).toBeTruthy();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -3359,9 +3380,7 @@ describe("App startup checks and global events", () => {
       selectedEnvironmentId: null,
     });
     const originalOrkestrator = window.orkestrator;
-    const originalConsoleWarn = console.warn;
-    const consoleWarn = mock(() => undefined);
-    console.warn = consoleWarn;
+    const logs = captureLogs();
     const setZoomFactor = mock(async () => {
       throw new Error("Expected zoom factor to be a finite number greater than zero");
     });
@@ -3379,12 +3398,20 @@ describe("App startup checks and global events", () => {
         expect(setZoomFactor).toHaveBeenCalledWith(1);
         expect(document.documentElement.style.zoom).toBe("100%");
       });
-      expect(consoleWarn).toHaveBeenCalledWith(
-        "[App] Failed to apply native zoom; using CSS fallback:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.app",
+          event: "zoom.native-failed",
+          fields: {
+            error: expect.objectContaining({
+              message: "Expected zoom factor to be a finite number greater than zero",
+            }),
+          },
+        }),
       );
     } finally {
-      console.warn = originalConsoleWarn;
+      logs.restore();
       window.orkestrator = originalOrkestrator;
     }
   });
@@ -3697,8 +3724,7 @@ describe("App terminal overlay actions", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    const originalConsoleError = console.error;
-    console.error = mock(() => {});
+    const logs = captureLogs();
     try {
       render(<App />);
       act(() => screen.getByTestId("start-env-visible").click());
@@ -3717,7 +3743,7 @@ describe("App terminal overlay actions", () => {
       });
       expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -3765,8 +3791,7 @@ describe("App terminal overlay actions", () => {
       selectedEnvironmentId: "env-visible",
     });
 
-    const originalConsoleError = console.error;
-    console.error = mock(() => {});
+    const logs = captureLogs();
     try {
       render(<App />);
       act(() => screen.getByTestId("start-env-visible").click());
@@ -3780,7 +3805,7 @@ describe("App terminal overlay actions", () => {
       expect(mockGetEnvironment).toHaveBeenCalledWith("env-visible");
       expect(mockToastError).not.toHaveBeenCalled();
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 
@@ -3912,8 +3937,7 @@ describe("App terminal overlay actions", () => {
 
     render(<App />);
 
-    const originalConsoleError = console.error;
-    console.error = mock(() => {});
+    const logs = captureLogs();
     try {
       act(() => {
         screen.getByTestId("create-script-env-visible").click();
@@ -3924,7 +3948,7 @@ describe("App terminal overlay actions", () => {
         expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
       });
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 

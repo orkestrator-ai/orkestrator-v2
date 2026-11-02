@@ -22,7 +22,9 @@ export async function loadAppWithDevRetry(
   const console: string[] = [];
   const listener = (message: { text(): string }) => {
     const text = message.text();
-    if (text.includes("DesktopStartup")) console.push(text.slice(0, 500));
+    if (text.includes("DesktopStartup") || text.includes("[web.startup]")) {
+      console.push(text.slice(0, 500));
+    }
   };
   page.on("console", listener);
   try {

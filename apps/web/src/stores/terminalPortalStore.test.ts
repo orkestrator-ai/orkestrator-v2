@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { invoke } from "@/lib/native/backend";
 import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
 import {
@@ -230,15 +231,24 @@ describe.each([
 
   test("logs rejected external open requests", async () => {
     const error = new Error("native open failed");
-    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const logs = captureLogs();
     invokeMock.mockRejectedValueOnce(error);
 
     try {
       handler(createTerminal())(linkEvent({ ctrlKey: true }), "https://example.com/failure");
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(consoleError).toHaveBeenCalledWith("[terminal-links] Failed to open URL:", error);
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "terminal",
+          event: "link.open-failed",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({ message: "native open failed" }),
+          }),
+        }),
+      );
     } finally {
-      consoleError.mockRestore();
+      logs.restore();
     }
   });
 });

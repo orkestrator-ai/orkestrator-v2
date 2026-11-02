@@ -162,7 +162,12 @@ export function registerDockerCommands(
   dependencies: RegistryDependencies,
 ): void {
   void dependencies;
-  register("check_docker", () => checkDockerAvailability());
+  register("check_docker", async (_args, context) => {
+    const availability = await checkDockerAvailability();
+    // Node summaries relay the answer this machine's own window last saw.
+    context.runtime.dockerAvailability.record(availability);
+    return availability;
+  });
   register("docker_version", async () =>
     (
       await runCommand("docker", ["version", "--format", "{{.Server.Version}}"], {

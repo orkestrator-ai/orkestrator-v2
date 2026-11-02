@@ -10,7 +10,9 @@ the 0174 reproduction against `20f6de91` (2026-10-25, see
 [Qualification evidence (2026-10-25)](#qualification-evidence-2026-10-25));
 container export on Linux Docker Engine, the Linux client performance run and
 flakes 0208 and 0174 against `93b99bfb` (2026-11-01, see
-[Qualification evidence (2026-11-01)](#qualification-evidence-2026-11-01)).
+[Qualification evidence (2026-11-01)](#qualification-evidence-2026-11-01));
+the packaged Linux `file://` renderer against `38d55ee1` (2026-11-02, see
+[Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02)).
 
 ## Task analysis
 
@@ -20,7 +22,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 1. **Opening prompt without the tab mounted**: the backend sends the brief for a new design tab. Status: done (#1262). One accepted residual window and a stale test name remain.
 2. **Container export on Linux Docker Engine**: the export protocol against a real Linux Engine. Status: done (2026-11-01): passed on Docker Engine 29.9.2 (Linux x64), both the backend file and the Docker fixture spec, and the backend file now runs in the Linux Engine CI workflow on amd64 and arm64.
-3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open.
+3. **Electron gaps**: native menu key equivalents, the OS Save dialog, the packaged `file://` renderer, and the unexplained Ctrl/⌘+0 failure. Status: open. The packaged renderer is done for Linux (2026-11-02): `design-canvas-packaged-electron.spec.ts` passed 3 of 3 against a `mise run package:linux:unpacked` build. Still open: the macOS menu-key pass, the Save dialog decision, the Ctrl/⌘+0 item and a run of the macOS bundle.
 4. **Human screen-reader pass**: VoiceOver and NVDA over the layer tree, frame list, inspector and status regions. Status: open.
 5. **Client performance on other hosts and Electron**: rerun the perf harness on Linux and a slower machine, and decide about Electron. Status: Linux done (2026-11-01, on a busy shared host, so host evidence only); its leak check found listener and frame growth at 64 frames, now to-do [2140](2140-design-frame-bridge-growth-under-culling.md). A slower machine and the Electron decision stay open: the 2026-11-01 host is not a slow laptop.
 6. **Old renderer with new backend, and the reverse**: the renderer half of mixed versions. Status: open (published desktop builds exist).
@@ -101,7 +103,7 @@ The menu gap has a concrete risk. The application menu binds the same keys the c
 
 **Decisions.**
 
-- **How to cover the packaged renderer?**
+- **How to cover the packaged renderer?** Taken on 2026-11-02 (see the outcome below).
   - **A Playwright `_electron.launch({ executablePath })` variant of the design Electron spec against a `mise run package:linux` build, run with the release smoke (recommended).**
     - Pros: exercises `file://` loading, the CSP and asset paths with the existing assertions; repeatable on Linux without signing.
     - Cons: needs a packaged build (minutes); the macOS bundle still needs its own run.
@@ -129,6 +131,8 @@ The menu gap has a concrete risk. The application menu binds the same keys the c
   - **Investigate now by stressing the step (`--repeat-each`) under CPU throttle.**
     - Pros: may find a product race.
     - Cons: time on a one-in-twelve failure with no user report.
+
+**Outcome (2026-11-02), packaged renderer only.** The recommended option was taken, for Linux. The spec's journey moved to `e2e/agent-testing/design-canvas-electron-journey.ts`, which the Vite-served spec and the new `design-canvas-packaged-electron.spec.ts` both run. The new spec launches `release/linux-unpacked/orkestrator-v2` through `_electron.launch({ executablePath })` on a disposable profile, headless, with an allowlisted environment. It passed 3 of 3 runs on beelink (13–17 s each) and found no defect in the packaged renderer. It builds with the new `mise run package:linux:unpacked`, not `package:linux`, because `package:linux` would also install the app into the user's `~/.local`. The menu-key pass, the Save dialog decision, the Ctrl/⌘+0 item and a macOS bundle run were not attempted. See [Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02) and decisions 16–20.
 
 ### 4. Human screen-reader pass
 
@@ -473,12 +477,14 @@ files; see [0031-live-provider-and-platform-qualification.md](../cross-cutting/0
   [Electron](#electron)). Not covered: native menu key equivalents (Playwright
   delivers keys through Chromium, not the OS), the native Save dialog of a
   download (the spec sets the save path in `will-download`), and the packaged
-  `file://` renderer. Not attempted on 2026-10-25: the packaged renderer needs
-  a packaged app, because the production main loads it from
-  `process.resourcesPath/web` (`apps/desktop/electron/main.ts`), so it belongs
-  with the release smoke of a built app; the other two need OS-level input
-  and dialogs in a real desktop session, which a shared host running other
-  worktrees and a production instance is not.
+  `file://` renderer on macOS. The packaged Linux renderer is covered since
+  2026-11-02 by `design-canvas-packaged-electron.spec.ts`
+  (`mise run test:agent:electron:packaged` after
+  `mise run package:linux:unpacked`; see
+  [Qualification evidence (2026-11-02)](#qualification-evidence-2026-11-02)).
+  The other two need OS-level input and dialogs in a real desktop session,
+  which a shared host running other worktrees and a production instance is
+  not.
 - **Manual accessibility.** The automated part is done (see
   [Accessibility](#accessibility)): the keyboard-only journey, focus survival
   across acknowledgment, drawers, culling and errors, reduced motion, 200%
@@ -1306,6 +1312,59 @@ Focused only, as this stage requires: `HostPathPickerDialog.test.tsx`
 `tests/unit/mise-tasks.test.ts` (15 pass) and `bun fmt --check` on the changed files. The full suites, typecheck and
 lint are left to the next stage's validation.
 
+## Qualification evidence (2026-11-02)
+
+Task 3, the packaged renderer only, on beelink (Linux 7.1.8, x64), shared
+with other builds throughout, against `38d55ee1`.
+
+### Packaged Linux renderer
+
+- **Build.** `mise run package:linux:unpacked` (new: `package:linux` without
+  its install step) passed in 33.5 s and wrote
+  `release/linux-unpacked/orkestrator-v2`. Nothing was installed into
+  `~/.local`.
+- **Run.** `ORKESTRATOR_AGENT_TEST_RUN_ID=design-packaged mise run
+  test:logged -- --name design-packaged -- mise run
+  test:agent:electron:packaged`. Electron 45.0.0, Chromium 156.0.8078.48,
+  headless Ozone, on a disposable agent-test profile and temporary `HOME`.
+- **Passes.** After the two harness fixes below, 3 of 3 runs passed (13.0,
+  17.4 and 14.2 s), the last two through the mise task. Every step of the
+  journey ran: open, drag, keyboard (nudges, resize, undo/redo, Delete, zoom
+  keys, Ctrl+0, fit, preview, help, Escape), export, download and host
+  import. The new checks passed too: `app.isPackaged`, the window URL
+  `file://…/resources/web/index.html`, and `userData` inside the profile. No
+  page errors were reported.
+- **Harness fixes, not product defects.**
+  - The packaged renderer is built without `VITE_ORKESTRATOR_PROFILE`, so its
+    document title stays "Orkestrator AI". The profile shows only in main's
+    native window title, so the packaged spec checks that one.
+  - Two early runs failed when the "Docker containers can't reach Orkestrator"
+    dialog opened on top of the canvas. This host's ufw drops Docker traffic
+    to the host, so the backend's boot reachability check opens that modal a
+    few seconds in, and it hid the canvas from role queries. The shared
+    Electron startup-dialog helper now closes it, as the browser specs do.
+- **Vite-served spec, headless.** `design-canvas-electron.spec.ts` with
+  `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` failed twice at the first
+  window. The renderer showed "Orkestrator couldn't connect" after 138
+  `net::ERR_NETWORK_CHANGED` module failures, while other builds' containers
+  connected and disconnected. That is
+  [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md),
+  now noted there. It failed before reaching the shared journey, so this
+  stage has no pass of the refactored Vite-served spec.
+- **Clean-up.** Each run removed its temporary root. No reach-probe network
+  created on 2026-11-02 remained afterwards. The 22 older ones belong to
+  other runs (to-do 0241) and were left alone.
+
+### Repository checks (2026-11-02)
+
+Focused only: `packaged-electron-app.test.ts`, `bridge-builds-setup.test.ts`,
+`tests/unit/release/package-config.test.ts`, `mise-tasks.test.ts`,
+`test-all.test.ts` and `test-suite-ownership.test.ts` together;
+`playwright-spec-loading.test.ts` and
+`private-tmpdir-playwright.integration.test.ts`; `bun check` of
+`e2e/agent-testing` and `tests`; and oxlint and `bun fmt --check` on the
+changed files. All passed.
+
 ## Constraints and rationale
 
 - Runs use a unique isolated profile and only its fixture repository, with
@@ -1513,6 +1572,71 @@ Made on 2026-11-01 while working tasks 2, 5 and 8.
       measure.
     - Pros: no test transport change. Cons: browser runs on a shared Linux
       host stay exposed while other builds start containers.
+
+Made on 2026-11-02 while working task 3 (packaged renderer only).
+
+16. **Which build the packaged spec runs.**
+    - Options: `mise run package:linux` as the task named (builds, then
+      installs into `~/.local/share/orkestrator-v2` and `~/.local/bin`); run
+      that install with `HOME` pointed at a temporary directory; split the
+      build into `package:linux:unpacked`, which `package:linux` now calls
+      before installing.
+    - Chosen: the split.
+    - Why: the install replaces the signed-in user's installed app, which a
+      test must never do, and on this host it is forbidden. Redirecting
+      `HOME` would still leave a task that installs when someone runs it as
+      documented. The split keeps one build recipe for both.
+    - Pros: the spec tests exactly the `package:linux` build, with no
+      install. Cons: one more task name; `package-config.test.ts` now checks
+      the steps across two tasks.
+17. **Share the journey or copy the spec.**
+    - Options: copy the 600-line spec and change its launch; move the
+      journey into a module both specs call.
+    - Chosen: the module, `design-canvas-electron-journey.ts`.
+    - Why: the packaged run is only worth having if it holds the `file://`
+      renderer to exactly the same assertions, and a copy would drift.
+    - Pros: one set of steps. Cons: a change to the journey now affects both
+      specs. The Vite-served spec's refactor has not passed here, because of
+      2340 (see the evidence).
+18. **How the packaged app is isolated.**
+    - Options: inherit `process.env` like the Vite-served spec; allowlist a
+      few host variables and point `HOME` and the XDG directories into the
+      temporary root.
+    - Chosen: the allowlist (`packaged-electron-app.ts`).
+    - Why: a shell here descends from the production Orkestrator. It carries
+      that instance's `ORKESTRATOR_RESOURCE_ROOT` and agent MCP token,
+      provider and GitHub credentials, and the desktop's D-Bus socket, which
+      Chromium's `safeStorage` would use to reach the user's keyring.
+      Headless Ozone and `--password-store=basic` keep the window and keyring
+      out of reach as well.
+    - Pros: the run cannot read or write the user's data directory, logins
+      or keyring, and cannot reach the production backend. Cons: a future
+      packaged feature that needs another variable must be added to the
+      allowlist.
+19. **Its own config and task, and no build in the task.**
+    - Options: add the spec to `playwright.electron.config.ts`; give it its
+      own config and `test:agent:electron:packaged`; have that task build
+      first.
+    - Chosen: its own config and task, with the build run separately.
+    - Why: `test:agent:electron` must not need a packaged build. Building
+      inside the test task would make every rerun pay for `build:all` and
+      electron-builder.
+    - Pros: fast reruns; the default Electron suite is unchanged. Cons: the
+      spec tests whatever is in `release/`, so a stale build is possible. The
+      docs say to rebuild first, and a missing build fails with the command
+      to run.
+20. **The reachability dialog.**
+    - Options: close it in the shared Electron startup-dialog helper; close
+      it only in the design specs; switch the check off for agent-test
+      profiles.
+    - Chosen: the shared helper, through the dialog's own Close control.
+    - Why: it is a host condition that can cover any Electron spec's window
+      on a Linux host whose firewall blocks Docker. The browser specs already
+      handle it this way, and these specs use local worktrees, which the
+      notice says are unaffected.
+    - Pros: no product change; every Electron spec gains the same tolerance.
+      Cons: an Electron spec could no longer assert on that dialog without
+      removing the handler (none does today).
 
 ## Open questions
 

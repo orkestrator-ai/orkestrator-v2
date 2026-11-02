@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -8,6 +9,8 @@ import {
 import * as backend from "@/lib/backend";
 import { useFileDirtyStore } from "@/stores";
 import { fileSaveBaseline } from "@/stores/fileDirtyStore";
+
+const log = createLogger("web.files");
 
 interface UseFileSaveOptions {
   tabId: string;
@@ -143,7 +146,7 @@ export function useFileSave({
           });
           return false;
         }
-        console.error("Failed to save file:", error);
+        log.error("file.save-failed", { tabId, error: formatLogError(error) });
         toast.error("Failed to save file", {
           description: error instanceof Error ? error.message : String(error),
         });

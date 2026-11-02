@@ -44,6 +44,9 @@ import { StructuredReviewReportView } from "@/components/review/StructuredReview
 import { toPipelineTranscript } from "./pipeline-transcript";
 import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 /**
  * The stage that owns the structured review report.
@@ -215,7 +218,10 @@ export function PipelineSessionTranscript({
       .catch((error) => {
         if (transcriptRequestRef.current !== request) return;
         transcriptRequestRef.current = null;
-        console.warn("[BuildChatTab] Failed to load the stage transcript:", error);
+        log.warn("transcript.load-failed", {
+          pipelineId: pipeline.id,
+          error: formatLogError(error),
+        });
         const delay = Math.min(250 * 2 ** transcriptRetryAttemptRef.current, 10_000);
         transcriptRetryAttemptRef.current += 1;
         transcriptRetryTimerRef.current = setTimeout(() => {

@@ -43,6 +43,8 @@ import {
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import { TicketKindBadge, TicketSectionsGrid } from "@/components/tickets/TicketSectionsGrid";
 import { ticketContentOf } from "@/components/tickets/ticket-content";
+import { pipelineDeliveryTooLateNote } from "@orkestrator/protocol/build-pipeline";
+import { sectionsFromTicketText, type DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
@@ -62,6 +64,9 @@ import {
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.kanban");
 
 const STATUS_LABELS: Record<KanbanStatus, string> = {
   backlog: "Backlog",
@@ -186,6 +191,14 @@ export function KanbanTaskDialog({
 
   const { startBuild, navigateToBuild } = useBuildPipeline();
   const getPipelineByTaskId = useBuildPipelineStore((s) => s.getPipelineByTaskId);
+  // The run the Delivery tile answers for: the ticket's linked one, once linked.
+  const ticketPipeline = useBuildPipelineStore((s) =>
+    task
+      ? ((task.buildPipelineId ? s.pipelines.get(task.buildPipelineId) : undefined) ??
+        s.getPipelineByTaskId(task.id))
+      : undefined,
+  );
+  const [isSavingDelivery, setIsSavingDelivery] = useState(false);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
   const [buildDialogOpen, setBuildDialogOpen] = useState(false);
   const [createdTaskForBuild, setCreatedTaskForBuild] = useState<KanbanTask | null>(null);
@@ -261,7 +274,10 @@ export function KanbanTaskDialog({
         setPendingImages(persisted.value.images);
       })
       .catch((error) => {
-        console.warn("[KanbanTaskDialog] Failed to restore create draft:", error);
+        log.warn("draft.restore-failed", {
+          projectId: createForProjectId,
+          error: formatLogError(error),
+        });
       })
       .finally(() => {
         if (!disposed) createDraftHydratedRef.current = draftKey;
@@ -285,7 +301,11 @@ export function KanbanTaskDialog({
           ? discardComposeDraft(draftKey)
           : persistComposeDraft(draftKey, "project", createForProjectId, latest);
         void operation.catch((error) => {
-          console.warn("[KanbanTaskDialog] Failed to persist create draft during cleanup:", error);
+          log.warn("draft.persist-failed", {
+            phase: "cleanup",
+            projectId: createForProjectId,
+            error: formatLogError(error),
+          });
         });
       }
     };
@@ -314,7 +334,11 @@ export function KanbanTaskDialog({
         ? discardComposeDraft(draftKey)
         : persistComposeDraft(draftKey, "project", createForProjectId, draft);
       void operation.catch((error) => {
-        console.warn("[KanbanTaskDialog] Failed to persist create draft:", error);
+        log.warn("draft.persist-failed", {
+          phase: "debounced",
+          projectId: createForProjectId,
+          error: formatLogError(error),
+        });
       });
     }, 400);
     return () => clearTimeout(timer);
@@ -354,7 +378,11 @@ export function KanbanTaskDialog({
       if (createForProjectId && discardDraft) {
         const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
         void discardComposeDraft(draftKey).catch((error) => {
-          console.warn("[KanbanTaskDialog] Failed to discard create draft:", error);
+          log.warn("draft.discard-failed", {
+            phase: "close",
+            projectId: createForProjectId,
+            error: formatLogError(error),
+          });
         });
       }
       setEditTitle("");
@@ -569,6 +597,15 @@ export function KanbanTaskDialog({
     if (saved) setIsEditing(false);
   };
 
+  const handleDeliveryPolicyChange = async (policy: DeliveryPolicy) => {
+    if (!task) return;
+    setIsSavingDelivery(true);
+    await updateTaskContent(task.id, {
+      sections: { delivery: { ...content?.sections.delivery, policy } },
+    });
+    setIsSavingDelivery(false);
+  };
+
   const handleCancelEdit = () => {
     setIsEditing(false);
   };
@@ -586,13 +623,22 @@ export function KanbanTaskDialog({
         acceptanceCriteria: editAC,
         images: imagesToSave,
       } satisfies KanbanCreateDraft).catch((error) => {
-        console.warn("[KanbanTaskDialog] Failed to preserve create draft:", error);
+        log.warn("draft.persist-failed", {
+          phase: "create",
+          projectId: createForProjectId,
+          error: formatLogError(error),
+        });
       });
       handleOpenChange(false, false);
       void addTaskStore(createForProjectId, title, description).then(async (newTaskId) => {
         if (!newTaskId) return;
         void discardComposeDraft(draftKey).catch((error) => {
-          console.warn("[KanbanTaskDialog] Failed to discard created task draft:", error);
+          log.warn("draft.discard-failed", {
+            phase: "created",
+            projectId: createForProjectId,
+            taskId: newTaskId,
+            error: formatLogError(error),
+          });
         });
         if (ac) {
           void updateTask(newTaskId, { acceptanceCriteria: ac });
@@ -648,6 +694,7 @@ export function KanbanTaskDialog({
           steps: selection.steps,
           reviewers: selection.reviewers,
           reviewPreparation: selection.reviewPreparation,
+          deliveryPolicy: selection.deliveryPolicy,
         },
       );
       if (!pipelineId) return;
@@ -656,7 +703,7 @@ export function KanbanTaskDialog({
       // Both call sites are `void`-ed click handlers, so an escaping rejection
       // would surface as an unhandled one with nothing to attach it to. The
       // hook reports its own failures; this only covers a throw it did not.
-      console.error("[KanbanTaskDialog] Failed to start build:", error);
+      log.error("build.start-failed", { taskId: task.id, error: formatLogError(error) });
       toast.error("Failed to start build");
     } finally {
       setIsBuildStarting(false);
@@ -728,6 +775,7 @@ export function KanbanTaskDialog({
           steps: selection.steps,
           reviewers: selection.reviewers,
           reviewPreparation: selection.reviewPreparation,
+          deliveryPolicy: selection.deliveryPolicy,
         },
       );
       if (!pipelineId) return;
@@ -736,7 +784,10 @@ export function KanbanTaskDialog({
       // `addTaskStore`, `addImage` and `startBuild` are all awaited from a
       // `void`-ed click handler; without this an escaping rejection would go
       // unhandled and the user would see the dialog stall with no explanation.
-      console.error("[KanbanTaskDialog] Failed to create task and build:", error);
+      log.error("build.create-and-start-failed", {
+        projectId: createForProjectId,
+        error: formatLogError(error),
+      });
       toast.error("Failed to create task and start build");
     } finally {
       setIsBuildStarting(false);
@@ -966,6 +1017,7 @@ export function KanbanTaskDialog({
           busy={isBuildStarting}
           localEnvironmentAvailable={localEnvironmentAvailable}
           returnFocusRef={buildLaunchTriggerRef}
+          deliveryPolicy={sectionsFromTicketText(editDescription, editAC).delivery?.policy}
           {...launchDefaults}
           onConfirm={(selection) => void handleCreateAndBuild(selection)}
         />
@@ -1078,6 +1130,16 @@ export function KanbanTaskDialog({
               ) : (
                 <TicketSectionsGrid
                   sections={content?.sections ?? {}}
+                  deliveryControl={{
+                    onChange: handleDeliveryPolicyChange,
+                    disabled: isSavingDelivery,
+                    tooLateNote:
+                      ticketPipeline &&
+                      pipelineDeliveryTooLateNote(
+                        ticketPipeline,
+                        content?.sections.delivery?.policy,
+                      ),
+                  }}
                   empty={
                     <button
                       type="button"
@@ -1250,6 +1312,7 @@ export function KanbanTaskDialog({
         busy={isBuildStarting}
         localEnvironmentAvailable={localEnvironmentAvailable}
         returnFocusRef={buildLaunchTriggerRef}
+        deliveryPolicy={content?.sections.delivery?.policy}
         {...launchDefaults}
         onConfirm={handleBuildConfirmed}
       />

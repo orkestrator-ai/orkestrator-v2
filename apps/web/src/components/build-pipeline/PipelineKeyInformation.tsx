@@ -3,54 +3,23 @@ import {
   CheckCircle2,
   CircleDashed,
   FileText,
-  MinusCircle,
+  SquareArrowOutUpRight,
   X,
   XCircle,
-  type LucideIcon,
 } from "lucide-react";
 import {
   hasKeyInformation,
   type BuildPipelineKeyInformation,
-  type KeyInformationAuthor,
-  type KeyInformationIssueStatus,
-  type KeyInformationTestResult,
 } from "@orkestrator/protocol/build-pipeline-key-information";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import {
+  KEY_INFORMATION_ISSUE_STATUS as ISSUE_STATUS,
+  KEY_INFORMATION_TEST_RESULT as TEST_RESULT,
+  keyInformationUpdatedLine,
+} from "./key-information-format";
 import { KeyInformationText } from "./KeyInformationText";
-
-const AUTHOR_LABELS: Record<KeyInformationAuthor, string> = {
-  build: "Build",
-  fix: "Fix",
-  review: "Review",
-  address: "Address",
-  verify: "Verify",
-  pr: "Ship",
-  "resolve-conflicts": "Conflict resolution",
-  system: "the pipeline",
-};
-
-const TEST_RESULT: Record<
-  KeyInformationTestResult,
-  { label: string; icon: LucideIcon; className: string }
-> = {
-  passed: { label: "Passed", icon: CheckCircle2, className: "text-emerald-500" },
-  failed: { label: "Failed", icon: XCircle, className: "text-failure" },
-  skipped: { label: "Skipped", icon: MinusCircle, className: "text-muted-foreground" },
-  "not-run": { label: "Not run", icon: CircleDashed, className: "text-muted-foreground" },
-};
-
-const ISSUE_STATUS: Record<KeyInformationIssueStatus, { label: string; className: string }> = {
-  open: { label: "Open", className: "border-amber-500/30 text-amber-300/90" },
-  resolved: { label: "Resolved", className: "border-emerald-500/30 text-emerald-400" },
-  "partially-resolved": {
-    label: "Partially resolved",
-    className: "border-amber-500/30 text-amber-300/90",
-  },
-  deferred: { label: "Deferred", className: "border-border text-muted-foreground" },
-  "wont-fix": { label: "Won't fix", className: "border-border text-muted-foreground" },
-};
 
 /**
  * The pipeline header's Key information button and the floating panel it
@@ -59,11 +28,18 @@ const ISSUE_STATUS: Record<KeyInformationIssueStatus, { label: string; className
  *
  * The panel positions itself against the nearest positioned ancestor, the
  * tab header, so it floats over the graph rather than pushing it down.
+ *
+ * With `onOpenTab` the brief can also be read as a full tab: the panel's
+ * pop-out button turns the panel into that tab, and right-clicking the header
+ * button opens the tab directly without showing the panel first.
  */
 export function PipelineKeyInformationButton({
   keyInformation,
+  onOpenTab,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
+  /** Opens (or focuses) the brief's tab; returns whether a tab is now shown. */
+  onOpenTab?: () => boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
@@ -99,6 +75,15 @@ export function PipelineKeyInformationButton({
     };
   }, [open, closeAndRestoreFocus]);
 
+  // The tab takes over from the panel, so focus follows the tab rather than
+  // returning to the header button. A tab that could not open (tab limit,
+  // environment stopped) leaves the panel as it was.
+  const popOut = () => {
+    if (!onOpenTab?.()) return;
+    setTooltipOpen(false);
+    setOpen(false);
+  };
+
   return (
     <>
       <Tooltip
@@ -126,12 +111,20 @@ export function PipelineKeyInformationButton({
               setTooltipOpen(false);
               setOpen((value) => !value);
             }}
+            onContextMenu={
+              onOpenTab
+                ? (event) => {
+                    event.preventDefault();
+                    popOut();
+                  }
+                : undefined
+            }
           >
             <FileText className="size-4" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" sideOffset={5}>
-          Key information
+          {onOpenTab ? "Key information · right-click to open in a tab" : "Key information"}
         </TooltipContent>
       </Tooltip>
       {open ? (
@@ -150,6 +143,25 @@ export function PipelineKeyInformationButton({
                 {keyInformationUpdatedLine(keyInformation)}
               </div>
             </div>
+            {onOpenTab ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    aria-label="Open key information in a tab"
+                    onClick={popOut}
+                  >
+                    <SquareArrowOutUpRight className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={5}>
+                  Open in a tab
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
             <Button
               type="button"
               size="icon"
@@ -168,15 +180,6 @@ export function PipelineKeyInformationButton({
       ) : null}
     </>
   );
-}
-
-function keyInformationUpdatedLine(info: BuildPipelineKeyInformation | undefined): string {
-  if (!info || !hasKeyInformation(info)) return "Kept up to date by the pipeline's stages.";
-  const last = info.updates.at(-1);
-  const at = new Date(info.updatedAt).toLocaleString();
-  return last
-    ? `Updated ${at} by ${AUTHOR_LABELS[last.author]} · round ${last.round + 1}`
-    : `Updated ${at}`;
 }
 
 /** The brief's sections in reading order; empty ones are left out. */

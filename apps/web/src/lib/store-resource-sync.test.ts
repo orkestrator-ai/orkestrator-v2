@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1279,9 +1280,7 @@ describe("pane-layout binding", () => {
     const listen = mock(async () => {
       throw new Error("native bridge unavailable");
     });
-    const warn = mock((_args: unknown[]) => {});
-    const originalWarn = console.warn;
-    console.warn = warn;
+    const logs = captureLogs();
     try {
       const stop = startTestStoreResourceSync({
         getPaneLayout: mock(async () => null) as never,
@@ -1291,14 +1290,18 @@ describe("pane-layout binding", () => {
 
       // The rejection is contained and attributed to the subscription it came
       // from, rather than surfacing as an unhandled rejection.
-      expect(warn).toHaveBeenCalled();
-      const message = String(warn.mock.calls[0]?.[0] ?? "");
-      expect(message).toContain("Failed to observe setup completion");
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.resource-sync",
+          event: "setup-completion.observe-failed",
+        }),
+      );
 
       // The sync remains usable and tears down cleanly despite the failure.
       expect(() => stop()).not.toThrow();
     } finally {
-      console.warn = originalWarn;
+      logs.restore();
     }
   });
 

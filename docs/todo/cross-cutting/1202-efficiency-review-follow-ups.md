@@ -32,15 +32,15 @@ governs, marked "Decided".
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open.
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
-11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-4 done; GW-2 done in 0052).
+11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open.
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open.
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
 
 ### 1. Baseline and before-and-after numbers
@@ -254,19 +254,66 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
 
 **Problem.** Captures read and hash unchanged files, recount unchanged diffs every pass, and local scans spawn many git processes with no minimum gap.
 
-**Context.** The report's ST-1 to ST-6 and ST-13 to ST-21. fsmonitor is no longer enabled (`docs/architecture/git-scan-caches.md`), so ST-17's second option is gone.
+**Context.** The report's ST-1 to ST-6 and ST-13 to ST-21. fsmonitor is no longer enabled (`docs/architecture/git-scan-caches.md`), so ST-17's second option is gone. Done on 2026-11-02: ST-1 (a host capture reuses a settled stat-cache entry's oid after `fstat`, without reading or hashing), ST-2's first half (libc is `dlopen`ed once per process, and the `readlinkat` probe uses one scratch buffer) and ST-4 (a bounded LRU of line counts by blob pair in `snapshot-diff.ts`). The capture benchmark (`scripts/benchmark-change-tracking.ts`) gained the report's large-asset and 200-changed-file fixtures (`--only=assets,long-turn`). Tests: `capture-stat-reuse.test.ts` and `snapshot-diff-count-cache.test.ts`.
 
-**Investigation.** Confirmed 2026-11-01: `capture.ts` still calls `confinedRead` and hashes before consulting the stat cache (ST-1). The rest is not re-checked since the report.
+**Investigation.** Re-checked on 2026-11-02 against `main` at `38d55ee1`: ST-1, ST-2 and ST-4 were still as the report describes; the rest of this task was not re-checked. Measured on the shared build host under heavy load (load average 25 to 34), three interleaved runs each of the old and new code, 10 warm runs per workload, p50 range:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 1,000 files, one changed: warm capture | 114–261 ms | 47–141 ms |
+| 10,000 files, one changed: warm capture | 2,330–2,494 ms | 615–1,201 ms |
+| 200 files + 20 × 8 MiB assets: warm capture | 281–505 ms | 13–44 ms |
+| Long turn, 200 changed files vs the turn start: compare | 149–435 ms | 6–18 ms |
+
+A micro-benchmark over 10,000 small files two directories deep (5 rounds, median): the old `confinedRead` 621 ms, the new one 275 ms (so `dlopen` cost about 35 µs per file), and the stamp-matched skip 44 ms, which includes the whole ancestor walk. Caching directory handles could therefore save at most about 2 µs per file. What remains of a warm capture over many small files is ST-3: `ObjectStore.reuse` (`utimes` under the store lock) and the closure `has`, about 230 ms each per 10,000 files in one profiling run.
 
 **Decisions.**
 
-- **First step?**
+- **First step?** Decided 2026-11-01, done 2026-11-02.
   - **ST-1, ST-2 and ST-4 together, measured with the capture benchmark plus the large-asset and 200-changed-file fixtures the report names (recommended).**
     - Pros: the highest-impact items; one benchmark run proves all three.
     - Cons: the fixtures have to be written first.
   - **ST-16's minimum scan gap first.**
     - Pros: one small change with a clear effect during installs.
     - Cons: leaves the per-capture cost untouched.
+- **When may a matching stat stamp stand in for the content?** Done as recommended.
+  - **Only when the file's mtime and ctime were at least `STAT_SETTLE_WINDOW_MS` (2 s) old when it was read; a path hint drops its entry (recommended).**
+    - Pros: closes Git's "racily clean" case, where a same-size rewrite inside one timestamp tick keeps the stamp; a file stops being re-read 2 s after its last write; restore and watcher hints still force a read.
+    - Cons: files the agent is actively writing are read on every capture until they age; one more field (`settled`) in the stat cache.
+  - **Trust any matching stamp.**
+    - Pros: simplest; skips the most reads.
+    - Cons: a racy same-size rewrite would publish the old oid, a wrong capture result.
+  - **Trust it and also compare mtime with the capture's own start time, like Git's index.**
+    - Pros: the same protection as the window.
+    - Cons: needs the previous capture's start time carried with the cache, for no measurable gain over the window.
+- **ST-2's second half: cache directory handles within a capture?** Not done.
+  - **Leave the per-file ancestor walk (recommended).**
+    - Pros: the walk, open and `fstat` together cost about 4 µs per file; no open descriptors outlive a read, so there is no descriptor budget or reuse race to manage.
+    - Cons: a few redundant `openat` calls per file remain.
+  - **A capture-scoped, reference-counted handle cache.**
+    - Pros: fewer syscalls per file.
+    - Cons: at most about 20 ms per 10,000 files; needs begin/end hooks on the executor interface (host reads are issued one at a time per capture), a descriptor bound, and keeps a moved or replaced directory open for the rest of the pass.
+- **Which line counts are cached?** Done as recommended.
+  - **Exact counts and deterministic limits, keyed by kind, both oids and the two deterministic budget fields; a hit is used only while the store still holds both blobs (recommended).**
+    - Pros: content addressing means entries never go stale; a deleted or expired body still reads as `body-unavailable`, exactly as before; bounded at 8,192 entries and 4 MiB estimated.
+    - Cons: a hit still costs two `stat` calls; a corrupted (rather than missing) object is not noticed on a hit until its body is rendered.
+  - **Cache everything, including `cpu-budget` limits.**
+    - Pros: simplest.
+    - Cons: a wall-clock limit under load would stick for the rest of the process.
+- **Container captures?** Not done.
+  - **Leave the container helper as it is for now (recommended).**
+    - Pros: its hashing runs inside the container, off the backend's event loop, and only hashes cross the boundary.
+    - Cons: a container capture still reads every candidate file.
+  - **Send cached stamps to the helper so it can skip settled files too.**
+    - Pros: the same saving inside the container.
+    - Cons: a protocol change to the helper and a larger stdin per batch; needs container qualification.
+- **Next step for this task?**
+  - **ST-3: skip the closure `has` for objects proven present in this pass and the `utimes` inside the grace window (recommended).**
+    - Pros: it is now the largest part of a warm capture over many small files.
+    - Cons: touches the orphan fence that retention relies on, so the grace-window reasoning needs care.
+  - **ST-16's minimum scan gap.**
+    - Pros: small and independent.
+    - Cons: does not touch capture cost.
 
 ### 8. tmux and container polling
 
@@ -343,21 +390,75 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
 
 ### 11. Gateway and preview proxy
 
-**Problem.** The preview proxy never reuses upstream connections and strips ETags, and several per-frame costs remain.
+**Problem.** Per-frame and per-request costs remain in the gateway (GW-5, GW-6, GW-10 to GW-12, GW-14 to GW-16). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9) are fixed.
 
-**Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14).
+**Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14). Done on 2026-11-02:
 
-**Investigation.** Not re-checked since the report: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), GW-8 (`preview-forward.ts` sets `keepAlive: false`), GW-9 to GW-12, GW-14 to GW-16.
+- GW-8: the private-origin proxy keeps idle upstream connections (`apps/backend/src/preview-upstream-pool.ts`). A connection is reused only by the access (attachment), endpoint generation and target it was opened for, after the access and target are re-checked. The pool is registered with the access service, so revocation, expiry and a new endpoint generation close it at once; a registry revocation also drops it. Bounds: 8 idle per access, 64 per backend, 2 s idle. A safe bodyless request whose reused connection was already closed is resent once on a fresh connection (`preview-forward.ts`); nothing else is retried. Counters `upstream.opened`, `upstream.reused`, `upstream.stale_retry` and the gauge `publication.upstream_idle` are in preview diagnostics.
+- GW-9: when the gateway proxy compresses a body, or the legacy browser-preview route rewrites one, it sends a weak ETag derived from the upstream tag, `W/"<upstream>|ork:<w|s>:<coding>[:<rewrite key>]"`, instead of none, and turns it back into the upstream's exact tag on `If-None-Match` (`apps/backend/src/gateway-proxy-etag.ts`). The application's 304 is answered with the client's tag. Reloads now revalidate, so GW-10's rewrite runs only on first loads and changed modules.
+- Tests: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`. The whole `test:preview:browser` suite with the Vite fixture passed twice in Chromium, Firefox and WebKit (58 passed, 2 skipped: the Chromium-only measurement). On beelink WebKit ran only with Ubuntu 24.04's `libicu74`, `libxml2` and `libflite1` libraries added to a private copy of the WebKit bundle (see 2680).
+
+**Investigation.** Re-checked on 2026-11-02 against `main` at `38d55ee14`. GW-8 held for the private origin only: `preview-http-proxy.ts` supplied no `reuse` hook although the forwarder and HTTP client supported one, while Electron's local ingress already pooled its tunnel connections and the legacy route already reused connections through Bun's HTTP client. GW-9 held for the legacy browser-preview route and the compressing loopback proxy; the private origin already passed ETags through, so its reloads already got 304s.
+
+Measured with `vite-page-load.spec.ts` (Chromium, the pinned Vite 7.3.6 fixture in an isolated copy plus a generated 150-module page, `/wide.html`; medians of 5 loads per run, 3 runs each). "Again" is a second load in the same tab, "cold" a load after clearing the HTTP cache.
+
+| Wide page (156 requests) | Before | After |
+| --- | --- | --- |
+| Private origin, upstream connections: first / again / cold | 155 / 155 / 155 | 7 / 1 / 1 |
+| Legacy route, bytes on a repeat load | 121 KB (no revalidation) | 0 (154 of 154 answered 304) |
+| Legacy route, 304s at the gateway on a repeat load | 0 | 154 |
+
+The fixture's own page (7 requests): private-origin connections 6 / 6 / 6 before, 3 / 1 / 1 after; legacy repeat-load bytes 43.5 KB before, 0 after. Page-load times were taken on beelink with about ten builds running (load average 30 to 55) and moved more with host load than with the change: wide-page private-origin first load 418 ms median before and 622 ms after, but in different load windows. An interleaved A/B on the same build (four alternating runs with reuse on and off, `ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1`, load average about 50) gave wide-page private-origin medians of 753 ms on / 744 ms off for a first load, 540 / 577 ms for a repeat load and 611 / 645 ms after clearing the cache, with 7 / 1 / 1 against 155 / 155 / 155 upstream connections: within noise. On loopback a TCP connect costs well under a millisecond, so the gain is in connections, sockets and, for TLS and relay targets, handshakes, not visible milliseconds. Raw lines are in `output/efficiency/preview-page-load/` of the build worktree (git-ignored).
+
+Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), GW-10 to GW-12, GW-14 to GW-16.
 
 **Decisions.**
 
-- **First step?**
+- **First step?** Decided 2026-11-01 and done 2026-11-02.
   - **GW-8 and GW-9 together, measured with a Vite fixture page load (recommended).**
     - Pros: the largest wins for preview users; GW-9 also removes most of GW-10's rewrite work.
     - Cons: the pool needs revocation on endpoint generation change and access revocation, which `test:preview:browser` must cover.
   - **GW-6 first.**
     - Pros: fixes a correctness-adjacent desync of quiet channels.
     - Cons: only users of the opt-in terminal WebSocket benefit.
+- **What keys the pool?** Done.
+  - **Access (attachment), endpoint generation and target (recommended).**
+    - Pros: a connection serves only the browser session that opened it; the access service's existing resource tracking closes it on revocation, expiry and generation change with no new revocation path.
+    - Cons: two browser sessions of one service do not share connections.
+  - **Service and endpoint generation.**
+    - Pros: more reuse across sessions.
+    - Cons: a revoked session's connection could serve another one, and revocation needs a separate per-service path.
+- **Idle bounds?** Done.
+  - **8 per access, 64 per backend, 2 s idle (recommended).**
+    - Pros: below the 5 s keep-alive timeout of Node's HTTP server (Vite's), so the application rarely closes a connection about to be reused; matches Electron's ingress pool and a browser's six connections per host.
+    - Cons: a pause of more than 2 s between navigations pays a new connect.
+  - **Longer idle (30 s or more).**
+    - Pros: reuse across slower navigation.
+    - Cons: more races with application keep-alive timeouts and more sockets held per idle tab.
+- **A reused connection the application had closed?** Done.
+  - **Resend once on a fresh connection, only for `GET`, `HEAD` and `OPTIONS` without a body, only when nothing was answered (recommended).**
+    - Pros: what browsers do (RFC 9112 §9.3.1); hides the keep-alive race from users; nothing to replay.
+    - Cons: a safe request reaches the application twice if it closed after reading the request; requests with a body never take an idle connection.
+  - **Never retry.**
+    - Pros: the forwarder keeps its "never retries" rule.
+    - Cons: an occasional 502 on a page load whenever the application's keep-alive timer fires.
+- **Derived tag format?** Done.
+  - **`W/"<upstream>|ork:<w|s>:<coding>[:<rewrite key>]"`, the key hashing route prefix, port and the rewriter's source (recommended).**
+    - Pros: rebuilds the upstream tag exactly, weak prefix included (Vite compares `If-None-Match` as a plain string); a tag never revalidates bytes rewritten for another route or by another build.
+    - Cons: an Orkestrator update that changes the rewriter costs one full reload per module.
+  - **The report's `W/"<upstream>|<encoding>|rw<prefix-hash>"`.**
+    - Pros: shorter.
+    - Cons: loses whether the upstream tag was weak, so Vite would never answer 304; a rewriter change would revalidate stale rewrites.
+- **Next step?** Open.
+  - **GW-6, the terminal WebSocket flush that ignores `bufferedAmount` (recommended).**
+    - Pros: correctness-adjacent; small.
+    - Cons: only users of the opt-in terminal WebSocket benefit.
+  - **GW-10, one combined rewrite regex with a no-match fast path.**
+    - Pros: cheaper first loads on the legacy route.
+    - Cons: GW-9 already removed the rewrite from repeat loads, and the legacy route is a fallback.
+  - **GW-11 and GW-12, per-node federation event names and one cursor frame per skipped range.**
+    - Pros: less replay-window pressure for federation users.
+    - Cons: federation only; touches replay invariants.
 
 ### 12. Local desktop transport
 
@@ -415,11 +516,30 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
 
 ### 15. Container data transfer
 
-**Problem.** Each environment clones from the remote again, copies its clone byte for byte inside one volume, and copies agent-home inputs in full on every start.
+**Problem.** Each environment clones from the remote again (DK-13) and copies agent-home inputs in full on every start (DK-14). Until 2026-11-02 it also copied its clone byte for byte inside one volume (DK-12), and a same-disk move of a worktree with submodules copied the whole worktree (DK-15).
 
 **Context.** Decided 2026-11-01: do this now, ahead of the measurement gate. Files: `docker/workspace-setup.sh` (DK-12, DK-13), `portable-inputs.ts` and the entrypoints (DK-14), `environment-move.ts` (DK-15). Container storage rules in `docs/architecture/container-lifecycle.md` apply: no removal outside lifecycle operations.
 
-**Investigation.** Not started. Unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
+Done 2026-11-02 against `main` at `38d55ee1`:
+
+- DK-12: `move_clone_into_workspace` in `docker/workspace-setup.sh` renames each top-level entry of the staged clone (`/workspace/.orkestrator/.clone-in-progress`) into `/workspace` instead of `cp -a -n` then `rm -rf`. Tests: `tests/unit/workspace-setup-preserve.test.ts` ("workspace setup clone move").
+- DK-15: when git refuses to move a worktree because it has submodules, `renameWorktree` in `environment-move.ts` renames the folder, runs `git worktree repair` and re-links the submodules. It copies only when the rename answers `EXDEV`. Tests: `environment-move.test.ts` ("same-disk move of a worktree git will not move"). `docs/development/disk-usage.md` describes the new behaviour.
+- DK-14 is left open on purpose: another build edits `portable-inputs.ts` at the same time. DK-13 (the mirror) is also still open.
+
+**Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move. Still unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
+
+Measurements, beelink (btrfs host, about ten builds running at once, so timings are noisy), three runs each:
+
+| Item | Setup | Before | After |
+| --- | --- | --- | --- |
+| DK-12 | Clone of this repository (206 MB, 8,478 files), Docker volume on btrfs, move step only | 400–602 ms; extra peak disk 0–31 MB, because `cp` reflinks on btrfs | 9–42 ms; no extra disk |
+| DK-12 | Same clone, tmpfs volume (no reflinks, like ext4 or Docker Desktop's VM disk) | 134–153 ms; extra peak disk 206 MB, a second whole clone | 8–21 ms; no extra disk |
+| DK-12 | Real helper in a container, then `git status` | n/a | 26 ms; clean status, `.orkestrator` intact |
+| DK-15 | Whole `move_environment`, worktree with nested submodules and 200 MB in 2,000 files, tmpfs | 128–141 ms; one `cp`; extra peak disk 196 MB | 87–128 ms; no `cp`; extra peak disk 1–8 MB (sampling noise) |
+| DK-15 | Same, on btrfs | 260–1,119 ms; one `cp` (reflinked) | 160–232 ms; no `cp` |
+| DK-15 | Same, 20,000 files of 10 KB, btrfs | 1,399–1,947 ms | 120–147 ms |
+
+The DK-12 numbers came from a throwaway script that runs the old and new steps on a scratch volume. The DK-15 numbers came from a temporary benchmark test that was not committed: it timed `moveEnvironmentTask` and sampled `statfs` every 5 ms, once with the old `environment-move.ts` and once with the new one.
 
 **Decisions.**
 
@@ -430,6 +550,26 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
   - **DK-13 first.**
     - Pros: the largest saving for big repositories.
     - Cons: a new mounted resource to create, refresh, bound and clean up before anything else lands.
+  - Taken 2026-11-02: DK-12 and DK-15 now; DK-14 next, once the other `portable-inputs.ts` build has merged, then DK-13.
+- **DK-12: how is the clone moved?** (decided 2026-11-02)
+  - **`mv -n` per top-level entry, skipping `.orkestrator` and `lost+found`, then a check that nothing was left behind (taken).**
+    - Pros: one rename per entry within the volume. The existing `.clone-copy-in-progress` marker keeps the step resumable. The check catches an entry `mv -n` skipped, which GNU coreutils 9.7 (the image's) does silently with exit status 0. Per-entry `mv` without `-t` also runs on macOS, where the unit test runs.
+    - Cons: one `mv` process per top-level entry (dozens, not thousands).
+  - **`mv -n -t /workspace` with `find ... {} +`, as the report suggested.**
+    - Pros: one process.
+    - Cons: GNU-only `-t`; on its own it does not notice a skipped entry.
+  - **Clone straight into `/workspace`.**
+    - Pros: no move at all.
+    - Cons: the clone would sit beside the storage marker with no staging folder, so an interrupted clone could not be told apart from user files.
+  - A repository's own `.orkestrator` folder is left in the staging folder and deleted with it. The old merge copied it, but the restore of `.orkestrator` straight afterwards replaced it anyway, so the end state is the same.
+- **DK-15: where does the rename go?** (decided 2026-11-02)
+  - **Keep `git worktree move` first and rename only when git refuses because of submodules; copy only on `EXDEV` (taken).**
+    - Pros: git still checks the ordinary case (locked worktrees, its own records). The submodule case gets the same journal as the copy: the record, with its submodules, is saved before the rename, so restart recovery adopts a destination whose source is gone and re-links it.
+    - Cons: two code paths that rename.
+  - **Replace `git worktree move` with `rename` plus `git worktree repair` for every move.**
+    - Pros: one path.
+    - Cons: drops git's own checks and rewrites a path that already works.
+  - When git reports a cross-device error the move goes straight to the copy, without trying a rename that would fail. A failed repair or re-link, or a rejected path commit, renames the folder back and repairs the source. `git worktree move` cannot undo the rename, because git refuses submodules in that direction too. If renaming back fails, the record stays and restart recovery adopts the destination.
 
 ### 16. CLI and logging
 
@@ -510,6 +650,23 @@ are installed from snapshot reads.
 A fixed one-second timer that is not reset by later chunks, so it is also the
 maximum wait. Every other change still persists through `schedulePersist`, and
 any such write carries the output so far.
+
+### Task 7: stat-stamp settle window
+
+A host capture skips reading a file only when its stat-cache entry is
+`settled`: mtime and ctime were at least 2 s old when it was last read. Chose
+2 s rather than one kernel tick so FAT's two-second timestamps and small clock
+steps are covered; the cost is that a file written in the last 2 s is read
+again. `WorktreeChangeOwner.invalidate(paths)` now also drops those paths'
+entries, which is what the comment in `service.ts` already claimed it did.
+The benchmark waits `--settle-ms` (2.5 s) after writing its fixtures so warm
+captures measure the settled path.
+
+### Task 7: line-count cache scope
+
+The cache is module-level, shared by every comparison in the process, because
+blob ids are content addresses; a hit is accepted only after `store.has` on
+both blobs, so a different or pruned store still reports `body-unavailable`.
 
 ### Task 8: idle cadence
 

@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
-import { createServer, type AddressInfo } from "node:net";
+import { connect as netConnect, createServer, type AddressInfo, type Socket } from "node:net";
 import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,6 +55,10 @@ const pki = await mkdtemp(join(tmpdir(), "ork-preview-browser-"));
 certificates(pki, [`*.${TEST_PREVIEW_DOMAIN}`, "idp.identity.test"]);
 const fixture = await startPreviewFixture({ marker: "browser-app" });
 const other = await startPreviewFixture({ marker: "browser-other" });
+// Connection-pool checks get their own service so revoking or rebinding it
+// cannot disturb other tests; `rebind pool` moves it to the alternate app.
+const pool = await startPreviewFixture({ marker: "browser-pool" });
+const poolAlt = await startPreviewFixture({ marker: "browser-pool-alt" });
 // An IPv6-only target: bound to `::1` alone, registered with `auto` so the
 // real resolver has to fall back from 127.0.0.1 to ::1.
 let ipv6: Awaited<ReturnType<typeof startPreviewFixture>> | null = null;
@@ -67,6 +71,8 @@ try {
 const fixtures: Record<string, Awaited<ReturnType<typeof startPreviewFixture>>> = {
   app: fixture,
   other,
+  pool,
+  "pool-alt": poolAlt,
   ...(ipv6 ? { ipv6 } : {}),
 };
 // The real loopback family probe (the test support stubs it to "no answer"),
@@ -97,9 +103,47 @@ async function register(
 const services: Record<string, string> = {
   app: await register("app", fixture.port),
   other: await register("other", other.port),
+  pool: await register("pool", pool.port),
   ...(ipv6 ? { ipv6: await register("ipv6", ipv6.port, "auto") } : {}),
 };
 
+/**
+ * A byte-for-byte TCP relay that counts the connections the preview opens to
+ * the Vite server, which cannot be instrumented from outside its process.
+ */
+async function countingRelay(targetPort: number) {
+  let accepted = 0;
+  const sockets = new Set<Socket>();
+  const clients = new Set<Socket>();
+  const server = createServer((client) => {
+    accepted += 1;
+    clients.add(client);
+    client.on("close", () => clients.delete(client));
+    const upstream = netConnect({ host: "127.0.0.1", port: targetPort });
+    for (const socket of [client, upstream]) {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+      socket.on("error", () => undefined);
+    }
+    client.pipe(upstream).on("close", () => client.destroy());
+    upstream.pipe(client).on("close", () => upstream.destroy());
+    client.on("close", () => upstream.destroy());
+    upstream.on("close", () => client.destroy());
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    connections: () => accepted,
+    openSockets: () => clients.size,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of Array.from(sockets)) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+let viteRelay: Awaited<ReturnType<typeof countingRelay>> | null = null;
 let vite: ChildProcess | null = null;
 const viteDir = process.env.ORKESTRATOR_TEST_PREVIEW_VITE_DIR;
 if (viteDir) {
@@ -124,8 +168,15 @@ if (viteDir) {
     if (up) break;
     await Bun.sleep(100);
   }
-  services.vite = await register("vite", vitePort);
+  viteRelay = await countingRelay(vitePort);
+  services.vite = await register("vite", viteRelay.port);
 }
+
+/** Loopback ports for the legacy `/__orkestrator/browser/loopback/<port>/` route. */
+const loopbackPorts: Record<string, number> = {
+  app: fixture.port,
+  ...(viteRelay ? { vite: viteRelay.port } : {}),
+};
 
 await harness.runtime.updateSettings((current) => ({
   ...current,
@@ -139,9 +190,22 @@ await harness.runtime.updateSettings((current) => ({
     port: 0,
   },
 }));
+// A long idle timeout lets a spec prove that revocation, not idleness, closed
+// pooled upstream connections; `ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1` turns
+// reuse off for before-and-after measurements. Unset, the production bounds apply.
+const poolIdleMs = Number(process.env.ORKESTRATOR_TEST_PREVIEW_POOL_IDLE_MS ?? 0);
+const poolOff = process.env.ORKESTRATOR_TEST_PREVIEW_POOL_OFF === "1";
 const manager = new PreviewPublicationManager({
   runtime: harness.runtime,
   logger: { info: () => undefined, warn: () => undefined },
+  ...(poolIdleMs > 0 || poolOff
+    ? {
+        upstreamPool: {
+          ...(poolIdleMs > 0 ? { idleMs: poolIdleMs } : {}),
+          ...(poolOff ? { perAccess: 0 } : {}),
+        },
+      }
+    : {}),
 });
 await manager.start();
 
@@ -263,6 +327,7 @@ async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
   vite?.kill("SIGTERM");
+  await viteRelay?.close();
   redirector.closeAllConnections();
   await new Promise<void>((resolve) => redirector.close(() => resolve()));
   recorder.closeAllConnections();
@@ -284,9 +349,21 @@ process.stdout.write(
     services: Object.keys(services),
     ipv6Unavailable,
     gateway: gatewayUrl,
+    loopbackPorts,
     redirectPort: (redirector.address() as AddressInfo).port,
   })}\n`,
 );
+
+async function rebindPool(): Promise<number | null> {
+  const serviceId = services.pool!;
+  const definition = harness.runtime.registry.getDefinition(serviceId)!;
+  const port = definition.applicationPort === pool.port ? poolAlt.port : pool.port;
+  await harness.runtime.registry.update(serviceId, definition.definitionRevision, {
+    applicationPort: port,
+  });
+  await harness.runtime.registry.settle();
+  return harness.runtime.registry.currentGeneration(serviceId);
+}
 
 const lines = createInterface({ input: process.stdin });
 lines.on("line", (line) => {
@@ -302,6 +379,28 @@ lines.on("line", (line) => {
   } else if (command === "metrics") {
     process.stdout.write(
       `${JSON.stringify({ type: "metrics", counters: harness.runtime.metrics.snapshot().counters })}\n`,
+    );
+  } else if (command === "proxy-stats") {
+    // Counters, histograms and gauges: names and numbers only, no request data.
+    process.stdout.write(
+      `${JSON.stringify({ type: "proxy-stats", ...harness.runtime.metrics.snapshot() })}\n`,
+    );
+  } else if (command === "connections" && name) {
+    // Upstream connections accepted by (and still open at) one application.
+    const source = name === "vite" ? viteRelay : fixtures[name];
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "connections",
+        name,
+        accepted: source?.connections() ?? null,
+        open: source?.openSockets() ?? null,
+      })}\n`,
+    );
+  } else if (command === "rebind" && name === "pool") {
+    // Point the pool service at the other application: a target change, so
+    // the registry revokes the old endpoint generation.
+    void rebindPool().then((generation) =>
+      process.stdout.write(`${JSON.stringify({ type: "rebound", name, generation })}\n`),
     );
   } else if (command === "gateway-token") {
     // Throwaway token for this run's gateway only, so a test can sign its

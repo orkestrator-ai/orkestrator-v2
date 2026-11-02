@@ -16,11 +16,15 @@ import { useUIStore } from "@/stores/uiStore";
 import * as backend from "@/lib/backend";
 import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { legacyBuildPipelineStartInput } from "@/lib/build-pipeline-launch-compat";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { LinearIssueDetail } from "@/types/linear";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 export type { GitHubIssueBuildInput };
 
@@ -35,6 +39,8 @@ type StartBuildOptions = {
   reviewPreparation?: BuildStepConfig;
   /** Whether source-ticket comments should be copied into the task snapshot. */
   includeComments?: boolean;
+  /** The launch dialog's "When verified" choice. */
+  deliveryPolicy?: DeliveryPolicy;
 };
 
 function findBuildTabInTree(
@@ -79,6 +85,7 @@ export function useBuildPipeline() {
           ...(options.steps ? { steps: options.steps } : {}),
           ...(options.reviewers ? { reviewers: options.reviewers } : {}),
           ...(options.reviewPreparation ? { reviewPreparation: options.reviewPreparation } : {}),
+          ...(options.deliveryPolicy ? { deliveryPolicy: options.deliveryPolicy } : {}),
           taskTitle: ticket.title,
           taskSnapshot: ticket.taskSnapshot,
           source: ticket.source,
@@ -103,7 +110,11 @@ export function useBuildPipeline() {
         toast.success("Build pipeline started");
         return pipeline.id;
       } catch (error) {
-        console.error("[useBuildPipeline] Failed to start build:", error);
+        log.error("build.start-failed", {
+          taskId: ticket.id,
+          projectId: ticket.projectId,
+          error: formatLogError(error),
+        });
         toast.error("Failed to start build pipeline", {
           description: error instanceof Error ? error.message : "Unknown error",
         });

@@ -11,7 +11,11 @@ import {
 import { acceptanceCriteriaTally } from "@orkestrator/protocol/ticket-sections";
 import { ticketContentOf } from "@/components/tickets/ticket-content";
 import type { KanbanStatus, KanbanTask } from "@/stores/kanbanStore";
-import { isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
+import {
+  isActiveBuildPhase,
+  useBuildPipelineStore,
+  type BuildPhase,
+} from "@/stores/buildPipelineStore";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -108,7 +112,7 @@ export function KanbanCard({
   task,
   onClick,
   isDragOverlay,
-  buildPhase,
+  buildPhase: fallbackBuildPhase,
   environmentName,
   canClearStatus,
   onClearStatus,
@@ -146,7 +150,24 @@ export function KanbanCard({
     ? { transform: `translate(${transform.x}px, ${transform.y}px)` }
     : undefined;
 
-  const phaseDisplay = buildPhase ? getBuildPhaseDisplay(buildPhase) : null;
+  const pipeline = useBuildPipelineStore((s) => {
+    const linked = task.buildPipelineId ? s.pipelines.get(task.buildPipelineId) : undefined;
+    if (linked?.taskId === task.id) return linked;
+    let newest;
+    for (const candidate of s.pipelines.values()) {
+      if (candidate.taskId === task.id && (!newest || candidate.createdAt >= newest.createdAt)) {
+        newest = candidate;
+      }
+    }
+    return newest;
+  });
+  const buildPhase = pipeline?.phase ?? fallbackBuildPhase;
+  const pushesOnly = pipeline?.delivery?.policy === "push-no-pr";
+  const phaseDisplay = buildPhase
+    ? buildPhase === "creating-pr" && pushesOnly
+      ? { ...getBuildPhaseDisplay(buildPhase), label: "Pushing" }
+      : getBuildPhaseDisplay(buildPhase)
+    : null;
   const isActivelyBuilding = buildPhase ? isActiveBuildPhase(buildPhase) : false;
   const commentCount = task.comments.length;
   const { sections } = ticketContentOf(task);

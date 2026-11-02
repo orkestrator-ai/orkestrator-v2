@@ -36,6 +36,9 @@ import type {
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.environment");
 
 export interface CreateEnvironmentFlowOperations {
   createEnvironment: (
@@ -154,7 +157,7 @@ export function startEnvironmentInBackground(
     // rejected renderer request can therefore mean the response was lost, not
     // that admission failed. Durable lifecycle failure and deletion paths
     // retire the bounded handoff marker authoritatively.
-    console.error("Failed to auto-start environment:", startError);
+    log.error("auto-start.failed", { environmentId, error: formatLogError(startError) });
   });
 }
 
@@ -380,7 +383,7 @@ export function CreateEnvironmentFlowDialog({
 
     const status = "status" in result ? result.status : null;
     if ("error" in result) {
-      console.error("Failed to check GitHub credential status:", result.error);
+      log.error("github-credential.check-failed", { error: formatLogError(result.error) });
     }
 
     if (status?.available) return create();
@@ -425,7 +428,7 @@ export function CreateEnvironmentFlowDialog({
       });
       return true;
     } catch (error) {
-      console.error("Failed to start feature build:", error);
+      log.error("feature-build.start-failed", { error: formatLogError(error) });
       toast.error("Could not start the build", {
         description: error instanceof Error ? error.message : "An unexpected error occurred.",
       });
@@ -457,7 +460,7 @@ export function CreateEnvironmentFlowDialog({
       const created = await pending.create();
       settleCredentialWarning(pending, { created });
     } catch (error) {
-      console.error("Failed to create environment:", error);
+      log.error("create.failed", { error: formatLogError(error) });
       settleCredentialWarning(pending, { created: false });
     }
   };

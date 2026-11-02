@@ -133,6 +133,41 @@ describe("reconcilePersistedLayout", () => {
     expect(JSON.stringify(layout)).not.toContain("escape");
   });
 
+  test("key information tabs restore their pipeline in this environment only while it exists", () => {
+    const layout = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "a",
+        tabs: [
+          {
+            id: "a",
+            type: "key-information",
+            keyInformationTabData: { environmentId: "env-other", pipelineId: "pipeline-1" },
+          },
+          {
+            id: "b",
+            type: "key-information",
+            keyInformationTabData: { environmentId: "env-1", pipelineId: "deleted-pipeline" },
+          },
+          { id: "c", type: "key-information", keyInformationTabData: { pipelineId: "" } },
+          { id: "d", type: "key-information" },
+        ],
+      }),
+      { ...context, hasBuildPipeline: (pipelineId: string) => pipelineId === "pipeline-1" },
+    );
+    expect(layout?.root).toMatchObject({
+      tabs: [
+        {
+          id: "a",
+          type: "key-information",
+          keyInformationTabData: { environmentId: "env-1", pipelineId: "pipeline-1" },
+        },
+      ],
+    });
+    expect(JSON.stringify(layout)).not.toContain("deleted-pipeline");
+  });
+
   test("rejects primitive and other non-object persisted roots", () => {
     for (const root of [null, undefined, true, 0, "leaf", []]) {
       expect(reconcilePersistedLayout(saved(root), context), String(root)).toBeNull();

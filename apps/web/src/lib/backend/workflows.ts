@@ -5,6 +5,7 @@ import type {
   CreateFeatureBuildResult,
 } from "@orkestrator/protocol/feature-build";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { BuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import type {
   AgentInteractionApplyOutcome,
   AgentInteractionOrigin,
@@ -981,11 +982,20 @@ export async function retryBuildPipelineReviewer(
   return invoke<BackendBuildPipeline>("retry_build_pipeline_reviewer", { pipelineId, reviewerId });
 }
 
+/**
+ * Restarts a pipeline step. A `selection` ("Restart in…") runs the step, and
+ * every later run of it, on that agent and model instead.
+ */
 export async function restartBuildPipelineStep(
   pipelineId: string,
   stageId: string,
+  selection?: BuildPipelineRestartSelection,
 ): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>("restart_build_pipeline_step", { pipelineId, stageId });
+  return invoke<BackendBuildPipeline>("restart_build_pipeline_step", {
+    pipelineId,
+    stageId,
+    ...(selection ? { selection } : {}),
+  });
 }
 
 /** What "Rewind code to here" would drop, read before the user confirms it. */

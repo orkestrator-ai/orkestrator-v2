@@ -103,7 +103,11 @@ describe("CI workflow contracts", () => {
     for (const suite of suites) expect(source).toContain(`./tests/${suite} --parallel=1`);
     // The container change signals' live tests and exec-cost numbers need a
     // real Linux Engine too, with the run's own image.
-    for (const suite of ["claude-state-signal-docker", "container-worktree-signal-docker"])
+    for (const suite of [
+      "claude-state-signal-docker",
+      "claude-terminal-failed-turn-docker",
+      "container-worktree-signal-docker",
+    ])
       expect(source).toContain(`./tests/${suite}.test.ts --parallel=1`);
     expect(source).toContain(
       "ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE: ${{ env.ORKESTRATOR_QUALIFICATION_IMAGE }}",

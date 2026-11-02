@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -55,6 +56,8 @@ import type {
 import { GITHUB_WORKFLOW_STAGES, getGitHubStageLabel } from "./GitHubIssueCard";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
+
+const log = createLogger("web.github");
 
 function formatGitHubDate(value: string): string {
   const date = new Date(value);
@@ -134,7 +137,7 @@ function GitHubComment({
     try {
       await editComment(projectId, issueNumber, comment.id, body);
       void clearDraft().catch((clearError) => {
-        console.warn("[GitHubComment] Failed to clear saved edit draft:", clearError);
+        log.warn("comment-edit-draft.clear-failed", { error: formatLogError(clearError) });
       });
       setEditing(false);
       toast.success("Comment updated");
@@ -352,7 +355,7 @@ export function GitHubIssueDetailContent({
         body: bodyDraft,
       });
       void Promise.all([clearTitleDraft(), clearBodyDraft()]).catch((clearError) => {
-        console.warn("[GitHubIssueDetail] Failed to clear saved issue drafts:", clearError);
+        log.warn("issue-draft.clear-failed", { error: formatLogError(clearError) });
       });
       setEditing(false);
       toast.success("Issue updated");
@@ -393,7 +396,7 @@ export function GitHubIssueDetailContent({
     try {
       await addComment(projectId, issueNumber, body);
       void clearCommentDraft().catch((error) => {
-        console.warn("[GitHubIssueDetail] Failed to clear posted comment draft:", error);
+        log.warn("comment-draft.clear-failed", { error: formatLogError(error) });
       });
       toast.success("Comment added");
     } catch (error) {

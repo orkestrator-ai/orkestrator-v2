@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.35.3-beta",
+  "version": "2.35.4-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -67,6 +67,7 @@
     "./environment-activity-order": "./src/environment-activity-order.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
     "./build-pipeline-defaults": "./src/build-pipeline-defaults.ts",
+    "./build-pipeline-restart-selection": "./src/build-pipeline-restart-selection.ts",
     "./build-pipeline-criteria": "./src/build-pipeline-criteria.ts",
     "./build-pipeline-tickets": "./src/build-pipeline-tickets.ts",
     "./launch-selection": "./src/launch-selection.ts",

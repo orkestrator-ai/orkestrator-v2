@@ -32,8 +32,12 @@ import {
 import {
   isActiveBuildPhase,
   isSupersededPipelineSession,
+  pipelineDeliverySummary,
+  pipelineReachedPullRequestStage,
 } from "@orkestrator/protocol/build-pipeline";
+import { DELIVERY_POLICY_LABELS } from "@orkestrator/protocol/ticket-sections";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { pipelineRestartSlot } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { flowAttemptKey, useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
@@ -71,6 +75,7 @@ import { PipelineSessionTranscript, pipelineAcceptsMessages } from "./PipelineSe
 import { PipelineTicketView } from "./PipelineTicketView";
 import { PipelineAddressReport } from "./PipelineAddressReport";
 import { usePipelineCodeRewind } from "./PipelineCodeRewindDialog";
+import { usePipelineRestartIn } from "./PipelineRestartInDialog";
 import type { PipelineControls } from "./usePipelineControls";
 
 const NO_CLOCK_SUBSCRIPTION = () => {};
@@ -299,7 +304,7 @@ export function PipelineFlowView({
     !interactionFailure &&
     Boolean(pipeline.reviewFanout) &&
     !pipeline.reviewFanout?.report;
-  const shipped = pipeline.sessions.some((session) => session.phase === "pr");
+  const shipped = pipelineReachedPullRequestStage(pipeline);
 
   const openSession = (node: PipelineFlowNode) => {
     const options = pipelineSessionTabOptions(pipeline, node);
@@ -316,6 +321,12 @@ export function PipelineFlowView({
   };
 
   const codeRewind = usePipelineCodeRewind(pipeline.id, controls.rewindCode, controls.pending);
+  const restartIn = usePipelineRestartIn(
+    modelCatalog,
+    controls.restartStageIn,
+    controls.pending,
+    pipeline.agentType,
+  );
 
   const toggleAttempt = (attemptId: string, expanded: boolean) =>
     setAttemptExpanded(pipeline.id, attemptId, expanded);
@@ -395,6 +406,16 @@ export function PipelineFlowView({
         disabled,
         onSelect: () => controls.restartStage(node.session!.sdkSessionId),
       });
+      if (pipelineRestartSlot(pipeline, node.session)) {
+        const session = node.session;
+        actions.push({
+          key: "restart-in",
+          label: "Restart in…",
+          icon: RotateCcw,
+          disabled,
+          onSelect: () => restartIn.open(session, node.title),
+        });
+      }
     } else if (
       node.hasValidation &&
       !node.session &&
@@ -726,6 +747,7 @@ export function PipelineFlowView({
         </div>
       </OverviewScroll>
       {codeRewind.dialog}
+      {restartIn.dialog}
       {headerSlots?.progress ? createPortal(progress, headerSlots.progress) : null}
       {headerSlots?.graphToggle
         ? createPortal(
@@ -884,6 +906,25 @@ function InspectorBody({
   if (node.kind === "ticket") return <PipelineTicketView pipeline={pipeline} />;
   if (node.kind === "attempt") {
     return <PreviousAttempt node={node} pipeline={pipeline} onShowStep={onShowAttemptStep} />;
+  }
+  if (node.kind === "pr" && node.noPullRequest) {
+    const ended = node.placeholder ? undefined : pipeline.delivery;
+    return (
+      <div data-testid="pipeline-delivery-outcome" className="flex flex-col gap-2 text-sm">
+        <p className={ended ? undefined : "text-muted-foreground"}>
+          {ended
+            ? pipelineDeliverySummary(ended)
+            : `The ticket says "${DELIVERY_POLICY_LABELS[node.noPullRequest]}", so this build opens no pull request once Verify passes. The ticket can still change that until then.`}
+        </p>
+        {pullRequest && shipped ? (
+          <PipelinePullRequestView
+            environmentId={environmentId}
+            pullRequest={pullRequest}
+            shipped={shipped}
+          />
+        ) : null}
+      </div>
+    );
   }
   if (node.kind === "pr") {
     return (

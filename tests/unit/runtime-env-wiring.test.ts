@@ -220,9 +220,11 @@ describe("container runtime environment wiring", () => {
       }
     ).hooks;
 
-    for (const [event, expected] of [
-      ["UserPromptSubmit", "working"],
-      ["Stop", "waiting"],
+    // StopFailure (an API error) writes `failed`; the legacy file says idle.
+    for (const [event, expected, legacy] of [
+      ["UserPromptSubmit", "working", "working"],
+      ["Stop", "waiting", "waiting"],
+      ["StopFailure", "failed", "idle"],
     ] as const) {
       const command = hooks[event]?.[0]?.hooks[0]?.command;
       expect(command).toContain(`/usr/local/bin/orkestrator-state-signal ${expected}`);
@@ -240,7 +242,8 @@ describe("container runtime environment wiring", () => {
         expect(() => statSync(stateFile)).toThrow();
 
         expect(runShell(script, { PATH: path }).exitCode).toBe(0);
-        expect(readFileSync(stateFile, "utf8").trim()).toBe(expected);
+        expect(readFileSync(stateFile, "utf8").trim()).toBe(legacy);
+        expect(readFileSync(`${stateFile}-snapshot`, "utf8").trim()).toBe(`${expected} 1 0`);
       });
     }
   });

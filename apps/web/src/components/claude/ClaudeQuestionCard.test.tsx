@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
@@ -394,9 +395,7 @@ describe("ClaudeQuestionCard", () => {
     onSubmitAnswers.mockImplementation(async () => {
       throw new Error("network down");
     });
-    // Silence the expected console.error
-    const origError = console.error;
-    console.error = () => {};
+    const logs = captureLogs();
 
     try {
       render(
@@ -416,8 +415,17 @@ describe("ClaudeQuestionCard", () => {
 
       // A thrown response has not been reconciled, so retry cannot be safe yet.
       expect(submit.disabled).toBe(true);
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.chat",
+          event: "question.submit-failed",
+          fields: expect.objectContaining({ platform: "Claude" }),
+        }),
+      );
+      expect(logs.lines.join("\n")).not.toContain("Green");
     } finally {
-      console.error = origError;
+      logs.restore();
     }
   });
 

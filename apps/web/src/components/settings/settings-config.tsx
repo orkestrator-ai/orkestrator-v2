@@ -9,6 +9,9 @@ import { Button } from "@/components/ui/button";
 import { isWindowMachine } from "./account-machine";
 import { errorText } from "./machines/machine-ui";
 import { SettingsPageLayout } from "./SettingsPageLayout";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.settings");
 
 interface SettingsConfigValue {
   config: AppConfig;
@@ -71,7 +74,7 @@ function RemoteMachineConfig({
   const setConfig = useCallback((next: AppConfig) => {
     setLocalConfig(next);
     backend.getConfig().then(useConfigStore.getState().setConfig, (cause: unknown) => {
-      console.error("[settings] Failed to reload the workspace config:", cause);
+      log.error("config.reload-failed", { error: formatLogError(cause) });
     });
   }, []);
 

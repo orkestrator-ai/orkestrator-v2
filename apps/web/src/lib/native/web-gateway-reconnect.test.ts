@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { createBrowserGatewayApi, installBrowserGatewayApi } from "./web-gateway";
 import { clearDirectGatewayTransport } from "./gateway-auth-transport";
 import { GATEWAY_KEEPALIVE_EVENT } from "@orkestrator/protocol/gateway-event-stream";
@@ -14,7 +15,11 @@ const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
 const originalSetTimeout = globalThis.setTimeout;
 const originalClearTimeout = globalThis.clearTimeout;
-const originalWarn = console.warn;
+let logs: LogCapture;
+
+beforeEach(() => {
+  logs = captureLogs();
+});
 
 afterEach(() => {
   clearDirectGatewayTransport();
@@ -22,7 +27,7 @@ afterEach(() => {
   globalThis.EventSource = originalEventSource;
   globalThis.setTimeout = originalSetTimeout;
   globalThis.clearTimeout = originalClearTimeout;
-  console.warn = originalWarn;
+  logs.restore();
   // Tests that simulate a hidden or visible tab shadow the prototype getter.
   Reflect.deleteProperty(document, "visibilityState");
 });
@@ -78,7 +83,6 @@ function streamOnce(frames: string[]): Response {
 
 describe("gateway main event stream reconnect backoff", () => {
   test("repeated failures back off from the configured delay to the cap, one timer at a time", async () => {
-    console.warn = mock(() => undefined);
     const eventRequests: string[] = [];
     globalThis.fetch = mock(async (input) => {
       const url = String(input);
@@ -108,7 +112,6 @@ describe("gateway main event stream reconnect backoff", () => {
   });
 
   test("the first retry after a failure is never slower than the configured delay", async () => {
-    console.warn = mock(() => undefined);
     let eventRequests = 0;
     globalThis.fetch = mock(async (input) => {
       if (!String(input).includes(EVENTS_PATH)) return new Response(null, { status: 404 });
@@ -134,7 +137,6 @@ describe("gateway main event stream reconnect backoff", () => {
   });
 
   test("every backed-off attempt resumes from the newest authoritative cursor", async () => {
-    console.warn = mock(() => undefined);
     const eventRequests: string[] = [];
     globalThis.fetch = mock(async (input) => {
       const url = String(input);
@@ -170,7 +172,6 @@ describe("gateway main event stream reconnect backoff", () => {
   });
 
   test("removing the last listener cancels the pending retry and forgets the outage", async () => {
-    console.warn = mock(() => undefined);
     let eventRequests = 0;
     let failing = true;
     globalThis.fetch = mock(async (input) => {
@@ -351,7 +352,6 @@ function openTerminalResponse(): { response: Response; drop: () => void } {
 
 describe("gateway terminal fallback reconnect backoff", () => {
   test("a shared browser terminal stream that keeps dying backs off to the cap, one timer at a time", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -376,7 +376,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("by default the first retry is no slower than the old fixed 2 s and the ladder caps at 16 s", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -395,7 +394,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("jitter spreads two tabs that lose their shared terminal streams at the same instant", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -436,7 +434,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("only a shared stream that stayed open for 30 s resets the ladder", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -479,7 +476,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   describe("rebuilding an open shared stream for a new filter", () => {
     /** Two failures in, with the third socket open at `now = 0`. */
     async function openAfterTwoFailures() {
-      console.warn = mock(() => undefined);
       MockEventSource.instances = [];
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       const timers = manualTimers();
@@ -553,7 +549,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("narrowing waits for a dead shared stream's retry; a new terminal or a Reconnect does not", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -605,7 +600,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("a terminal WebSocket asking for fallback again does not hurry a dead shared stream", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     // The same-origin socket address comes from the document, so it needs one.
@@ -640,7 +634,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("removing the last terminal cancels the pending retry and the next one starts a fresh ladder", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -668,7 +661,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("the main stream reopening retries a waiting shared terminal stream at once, keeping its ladder", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -698,7 +690,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("each direct terminal stream keeps its own ladder, and re-listening starts a fresh one at once", async () => {
-    console.warn = mock(() => undefined);
     const requests: string[] = [];
     globalThis.fetch = mock(async (input) => {
       const url = new URL(String(input));
@@ -740,7 +731,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("only a direct terminal stream that stayed open for 30 s resets its ladder", async () => {
-    console.warn = mock(() => undefined);
     const responses: Array<() => Response> = [
       () => new Response(null, { status: 503 }),
       () => new Response(null, { status: 503 }),
@@ -791,7 +781,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("a terminal WebSocket asking for fallback again does not hurry a direct stream's retry", async () => {
-    console.warn = mock(() => undefined);
     let terminalRequests = 0;
     globalThis.fetch = mock(async () => {
       terminalRequests += 1;
@@ -824,7 +813,6 @@ describe("gateway terminal fallback reconnect backoff", () => {
   });
 
   test("the main stream reopening retries waiting direct terminal streams at once, keeping their ladders", async () => {
-    console.warn = mock(() => undefined);
     let mainAttempts = 0;
     let terminalRequests = 0;
     globalThis.fetch = mock(async (input) => {
@@ -882,7 +870,6 @@ function failingDirectStreams() {
 
 describe("gateway streams waiting out a backoff when the tab or network comes back", () => {
   test("a visible tab retries the waiting main stream and terminal at once, keeping their ladders", async () => {
-    console.warn = mock(() => undefined);
     const counts = failingDirectStreams();
     const timers = manualTimers();
     const api = createBrowserGatewayApi({
@@ -914,7 +901,6 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
   });
 
   test("coming back online retries the waiting shared terminal stream and main stream at once", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -945,7 +931,6 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
   });
 
   test("nothing reconnects on visible or online when no stream is waiting", async () => {
-    console.warn = mock(() => undefined);
     const counts = { main: 0, terminal: 0 };
     globalThis.fetch = mock(async (input) => {
       const url = new URL(String(input));
@@ -972,7 +957,6 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
   });
 
   test("disposing the gateway removes its visibility and online listeners", async () => {
-    console.warn = mock(() => undefined);
     const counts = failingDirectStreams();
     const timers = manualTimers();
     const addToDocument = spyOn(document, "addEventListener");
@@ -1032,7 +1016,6 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
 
 describe("gateway main stream connection state", () => {
   test("a same-origin stream reports connected, disconnected until a retry opens, and idle when unused", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -1086,7 +1069,6 @@ describe("gateway main stream connection state", () => {
   });
 
   test("a direct stream reports disconnected across failed retries until one opens", async () => {
-    console.warn = mock(() => undefined);
     let drop: (() => void) | null = null;
     let eventRequests = 0;
     globalThis.fetch = mock(async (input) => {
@@ -1174,7 +1156,6 @@ test("replacing a disconnected gateway reports idle and clears its state listene
 
 describe("same-origin streams follow the ladder, not the browser's fixed retry", () => {
   test("tabs dropped together retry on their own jitter, and back off, for the whole outage", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -1210,7 +1191,6 @@ describe("same-origin streams follow the ladder, not the browser's fixed retry",
   });
 
   test("the shared terminal socket returns on the ladder and with the main stream", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const timers = manualTimers();
@@ -1256,7 +1236,6 @@ describe("a link that drops without an answer", () => {
   const CONNECT_MS = 40;
 
   test("a same-origin stream that stops its keepalives counts as lost, and is replaced", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     let now = 0;
@@ -1305,7 +1284,6 @@ describe("a link that drops without an answer", () => {
   });
 
   test("a gateway that never sends keepalive events is not taken for a dead link", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi({
@@ -1323,7 +1301,6 @@ describe("a link that drops without an answer", () => {
   });
 
   test("a same-origin attempt nothing answers is given up on and retried", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi({
@@ -1339,7 +1316,6 @@ describe("a link that drops without an answer", () => {
   });
 
   test("a direct stream counts its keepalive comments, and is replaced once they stop", async () => {
-    console.warn = mock(() => undefined);
     const responses: Array<{ push(text: string): void; aborted: boolean }> = [];
     globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
       const encoder = new TextEncoder();
@@ -1384,7 +1360,6 @@ describe("a link that drops without an answer", () => {
   });
 
   test("a direct attempt nothing answers is given up on and retried", async () => {
-    console.warn = mock(() => undefined);
     let attempts = 0;
     globalThis.fetch = mock((_input: unknown, init?: RequestInit) => {
       attempts += 1;
@@ -1416,7 +1391,6 @@ describe("a stream the gateway refuses for its credential", () => {
     "new probe",
   ] as const) {
     test(`ignores a delayed credential refusal after ${supersededBy}`, async () => {
-      console.warn = mock(() => undefined);
       MockEventSource.instances = [];
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       const timers = manualTimers();
@@ -1485,7 +1459,6 @@ describe("a stream the gateway refuses for its credential", () => {
   }
 
   test("a same-origin 401 is no outage, and an agent-test tab leaves for its login page", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const lapsed = mock(() => undefined);
@@ -1519,7 +1492,6 @@ describe("a stream the gateway refuses for its credential", () => {
   });
 
   test("a refusal after an outage that followed a refusal is still noticed", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const fetched = mock(async () => new Response("{}", { status: 401 }));
@@ -1561,7 +1533,6 @@ describe("a stream the gateway refuses for its credential", () => {
   });
 
   test("a same-origin network failure asks nothing: only an HTTP error can be the credential", async () => {
-    console.warn = mock(() => undefined);
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const fetched = mock(async () => new Response("{}", { status: 200 }));
@@ -1579,7 +1550,6 @@ describe("a stream the gateway refuses for its credential", () => {
   });
 
   test("a direct 401 is no outage either, while other failures still are", async () => {
-    console.warn = mock(() => undefined);
     let status = 401;
     const fetched = mock(async () => new Response("{}", { status }));
     globalThis.fetch = fetched as unknown as typeof fetch;

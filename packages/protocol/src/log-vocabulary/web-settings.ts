@@ -5,6 +5,22 @@ export const WEB_SETTINGS_LOG_AREAS = defineLogAreas({
     description: "The settings screens.",
     events: {
       "config.save-failed": "Global settings could not be saved.",
+      "config.load-failed": "The settings page could not load the config.",
+      "config.reload-failed": "Re-reading the workspace config after a save failed.",
+      "domains.test-failed": "The domain resolution test could not run.",
+      "github-credentials.propagate-failed":
+        "Propagating GitHub credentials to environments failed.",
+      "credential.save-failed": "A credential could not be saved.",
+      "credential.clear-failed": "A credential could not be cleared.",
+      "gateway-token.save-failed": "The gateway token could not be saved.",
+      "gateway-token.copy-failed": "Copying the gateway token to the clipboard failed.",
+      "web-client-url.copy-failed": "Copying the web client address to the clipboard failed.",
+      "backend-version.read-failed": "The debug tab could not read the backend version.",
+      "messaging.flush-failed": "Saving pending messaging settings on unmount failed.",
+      "directory-picker.failed": "The repository directory picker could not open.",
+      "file-picker.failed": "The repository file picker could not open.",
+      "repository.save-failed": "Repository settings could not be saved.",
+      "model-catalogues.read-failed": "Reading the model catalogues for settings failed.",
     },
   },
 });

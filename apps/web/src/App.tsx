@@ -83,7 +83,6 @@ import { useDialogFocusReturn, useDialogFocusReturnGroup } from "@/lib/dialog-fo
 import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-import { rendererDebugLog } from "@/lib/debug-log";
 import type {
   DockerAvailability,
   DockerUnavailableReason,
@@ -109,6 +108,9 @@ import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromp
 import { WorkspaceRealmHost } from "@/components/federation/WorkspaceRealmHost";
 import { isWorkspaceRealm } from "@/lib/federation/workspace-realm";
 import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.app");
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -164,7 +166,7 @@ async function probeDocker(
     }
     return result;
   } catch (error) {
-    console.error(`[App] Docker ${source} check failed:`, error);
+    log.error("docker.check-failed", { source, error: formatLogError(error) });
     // A failed request says nothing about Docker. In particular, treating an
     // IPC/gateway startup race as `available: false` used to produce both the
     // Docker warning and the AI CLI onboarding dialog after an app upgrade.
@@ -256,11 +258,11 @@ const STARTUP_BLOCKER_PANEL_CLASS_NAME = cn(
 );
 
 function warnPromptQueueRestoreFailed(environmentId: string, error: unknown): void {
-  console.warn(`[App] Failed to restore prompt queues for ${environmentId}:`, error);
+  log.warn("prompt-queues.restore-failed", { environmentId, error: formatLogError(error) });
 }
 
 function warnMultiReviewRestoreFailed(environmentId: string, error: unknown): void {
-  console.warn(`[App] Failed to restore multi reviews for ${environmentId}:`, error);
+  log.warn("multi-reviews.restore-failed", { environmentId, error: formatLogError(error) });
 }
 
 function App() {
@@ -354,7 +356,7 @@ function ConnectedApp() {
     void migrateLegacyBuildPipelines().catch((error) => {
       // Keep the legacy key intact so the next launch can retry after a
       // transient backend failure.
-      console.warn("[App] Failed to migrate legacy build pipelines:", error);
+      log.warn("build-pipelines.migrate-failed", { error: formatLogError(error) });
     });
   }, []);
   // Renderer stores are projections of backend-owned queues.
@@ -389,7 +391,7 @@ function ConnectedApp() {
     if (!pipelineProjectIds) return;
     for (const projectId of pipelineProjectIds.split(",")) {
       void hydrateBuildPipelinesForProject(projectId).catch((error) => {
-        console.warn(`[App] Failed to restore build pipelines for ${projectId}:`, error);
+        log.warn("build-pipelines.restore-failed", { projectId, error: formatLogError(error) });
       });
     }
   }, [pipelineProjectIds]);
@@ -502,7 +504,7 @@ function ConnectedApp() {
       if (generation !== macOsRefreshGenerationRef.current) return;
       setMacOsPermissions(status);
     } catch (error) {
-      console.error("[App] Failed to check macOS file permissions:", error);
+      log.error("macos-permissions.check-failed", { error: formatLogError(error) });
       if (generation !== macOsRefreshGenerationRef.current) return;
       setMacOsPermissions({
         supported: true,
@@ -632,7 +634,7 @@ function ConnectedApp() {
         result = { available: false, reason: firstFailureReason };
       }
 
-      rendererDebugLog(`[App] Docker ${source} check:`, available);
+      log.debug("docker.checked", () => ({ source, available }));
       publishResult(result);
       setDockerCheckStatus("complete");
 
@@ -642,10 +644,10 @@ function ConnectedApp() {
         try {
           const clearedIds = await syncAllEnvironmentsWithDocker();
           if (clearedIds.length > 0) {
-            rendererDebugLog("[App] Cleared orphaned container references:", clearedIds);
+            log.debug("docker.orphans-cleared", () => ({ clearedCount: clearedIds.length }));
           }
         } catch (error) {
-          console.error("[App] Failed to sync environments with Docker:", error);
+          log.error("docker.sync-failed", { error: formatLogError(error) });
           // Non-fatal - Docker-backed controls can still be enabled.
         }
       }
@@ -724,7 +726,10 @@ function ConnectedApp() {
       );
       if (failures.length > 0) {
         for (const failure of failures) {
-          console.error(`[App] CLI startup check ${failure.index + 1} failed:`, failure.reason);
+          log.error("cli-check.failed", {
+            check: failure.index + 1,
+            error: formatLogError(failure.reason),
+          });
         }
         // Unknown is not absent. Keep all definitive fulfilled values, but do
         // not show installation onboarding from an incomplete capability set.
@@ -743,10 +748,13 @@ function ConnectedApp() {
       if (typeof aiCli === "string" || aiCli === null) setAvailableAiCli(aiCli);
 
       if (failures.length === 0) {
-        rendererDebugLog("[App] Claude CLI available:", claudeCli);
-        rendererDebugLog("[App] Claude config available:", claudeConfig);
-        rendererDebugLog("[App] GitHub CLI available:", githubCli);
-        rendererDebugLog("[App] Available AI CLI:", aiCli);
+        log.debug("cli-check.completed", () => ({ tool: "claude-cli", available: claudeCli }));
+        log.debug("cli-check.completed", () => ({
+          tool: "claude-config",
+          available: claudeConfig,
+        }));
+        log.debug("cli-check.completed", () => ({ tool: "github-cli", available: githubCli }));
+        log.debug("cli-check.completed", () => ({ tool: "ai-cli", selected: aiCli }));
       }
     };
     void checkHostTools();
@@ -764,7 +772,7 @@ function ConnectedApp() {
         setConfig(config);
       })
       .catch((error) => {
-        console.error("[App] Failed to load config:", error);
+        log.error("config.load-failed", { error: formatLogError(error) });
       });
   }, [setConfig]);
 
@@ -793,7 +801,7 @@ function ConnectedApp() {
     try {
       await exit(0);
     } catch (error) {
-      console.error("[App] Failed to exit via plugin:", error);
+      log.error("exit.failed", { error: formatLogError(error) });
       window.close();
     }
   };
@@ -809,21 +817,14 @@ function ConnectedApp() {
         checkGithubCli(),
         getAvailableAiCli(),
       ]);
-      rendererDebugLog(
-        "[App] CLI retry check - Claude:",
-        claudeCli,
-        "GitHub:",
-        githubCli,
-        "Available AI:",
-        aiCli,
-      );
+      log.debug("cli-check.retried", () => ({ claudeCli, githubCli, aiCli }));
       setClaudeCliAvailable(claudeCli);
       setClaudeConfigAvailable(claudeConfig);
       setGithubCliAvailable(githubCli);
       setAvailableAiCli(aiCli);
       setHostToolCheckStatus("complete");
     } catch (error) {
-      console.error("[App] CLI retry check failed:", error);
+      log.error("cli-check.retry-failed", { error: formatLogError(error) });
       // The retry controls live in the current warning. Keep that warning
       // reachable and report the transient failure instead of silently
       // unmounting the user's only recovery path.
@@ -877,7 +878,7 @@ function ConnectedApp() {
       })
       .catch((error) => {
         if (!active) return;
-        console.warn("[App] Failed to apply native zoom; using CSS fallback:", error);
+        log.warn("zoom.native-failed", { error: formatLogError(error) });
         applyCssFallback();
       });
 
@@ -1013,7 +1014,7 @@ function ConnectedApp() {
         const needsSetup = !status.installed || (!status.authenticated && status.canSignIn);
         if (needsSetup && !status.reminderDismissed) setGithubSignInOffered(true);
       })
-      .catch((error) => console.warn("[App] Could not read GitHub CLI status:", error));
+      .catch((error) => log.warn("github-cli.status-failed", { error: formatLogError(error) }));
     return () => {
       active = false;
     };
@@ -1071,10 +1072,10 @@ function ConnectedApp() {
             }
             detailedEnvironment = loadedEnvironment;
           } catch (error) {
-            console.error(
-              "[App] Failed to restore saved prompt attachments before startup:",
-              error,
-            );
+            log.error("attachments.restore-failed", {
+              environmentId,
+              error: formatLogError(error),
+            });
             if (attachmentState === true) {
               toast.error("Could not restore saved prompt attachments", {
                 description:
@@ -1124,7 +1125,10 @@ function ConnectedApp() {
           });
           useEnvironmentStore.getState().updateEnvironment(environmentId, prepared);
         } catch (error) {
-          console.error("[App] Failed to persist startup agent launch:", error);
+          log.error("startup-launch.persist-failed", {
+            environmentId,
+            error: formatLogError(error),
+          });
           toast.error("Could not prepare the agent launch", {
             description: "The environment was not started because its prompt could not be saved.",
           });
@@ -1140,7 +1144,7 @@ function ConnectedApp() {
         await startEnvironment(environmentId, launchPrompt);
         return true;
       } catch (error) {
-        console.error("[App] Failed to start environment from terminal overlay:", error);
+        log.error("environment.start-failed", { environmentId, error: formatLogError(error) });
         return false;
       }
     },

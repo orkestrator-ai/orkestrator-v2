@@ -15,6 +15,9 @@ import {
   renameSession as apiRenameSession,
   reorderSessions as apiReorderSessions,
 } from "@/lib/backend";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.session");
 
 /** Sort sessions by order field (lower = first) */
 const sortByOrder = (sessions: Session[]): Session[] =>
@@ -225,7 +228,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
             return { sessions };
           });
         }
-        console.error("Failed to update session status:", error);
+        log.error("status.update-failed", { sessionId, error: formatLogError(error) });
       }
     });
     queue.tail = operation;
@@ -245,7 +248,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       });
     } catch (error) {
       // Silent failure - activity updates are best-effort
-      console.debug("Failed to update session activity:", error);
+      log.debug("activity.update-failed", () => ({ sessionId, error: formatLogError(error) }));
     }
   },
 
@@ -342,7 +345,10 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         return { sessions: newSessions };
       });
     } catch (error) {
-      console.error("Failed to disconnect environment sessions:", error);
+      log.error("environment-sessions.disconnect-failed", {
+        environmentId,
+        error: formatLogError(error),
+      });
     }
   },
 
@@ -372,7 +378,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         return { sessions: newSessions };
       });
     } catch (error) {
-      console.error("Failed to sync sessions with container:", error);
+      log.error("container-sessions.sync-failed", { environmentId, error: formatLogError(error) });
     }
   },
 
@@ -405,7 +411,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       });
     } catch (error) {
       // Revert on error - reload from server
-      console.error("Failed to reorder sessions:", error);
+      log.error("reorder.failed", { environmentId, error: formatLogError(error) });
       get().loadSessionsForEnvironment(environmentId);
     }
   },

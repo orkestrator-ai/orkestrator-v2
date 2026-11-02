@@ -71,6 +71,9 @@ import { GlobalSettingsSections } from "./GlobalSettings.sections";
 import { globalConfigPatchFromCoreFields, type CoreFieldsSnapshot } from "./global-settings-patch";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import { cn } from "@/lib/utils";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.settings");
 
 // Long enough that a slider drag or a fast typist produces one write, short
 // enough that releasing a control feels like it saved immediately.
@@ -763,7 +766,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       const results = await backend.testDomainResolution(domains, machine);
       setTestResults(results);
     } catch (err) {
-      console.error("[settings] Failed to test domains:", err);
+      log.error("domains.test-failed", { error: formatLogError(err) });
     } finally {
       setIsTesting(false);
     }
@@ -808,7 +811,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         .filter(Boolean)
         .join(" ");
     } catch (err) {
-      console.error("[settings] Failed to propagate GitHub credentials:", err);
+      log.error("github-credentials.propagate-failed", { error: formatLogError(err) });
       failureDescription = err instanceof Error ? err.message : String(err);
     }
 
@@ -906,7 +909,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       // not spin retrying it; any further edit retries naturally.
       failedCoreSignatureRef.current = signature;
       setSaveState("error");
-      console.error("[settings] Failed to save config:", err);
+      log.error("config.save-failed", { error: formatLogError(err) });
       const message = err instanceof Error ? err.message : "Failed to save settings";
       toast.error("Failed to save settings", { description: message });
     } finally {
@@ -964,7 +967,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         await propagateGithubCredentials();
       }
     } catch (err) {
-      console.error("[settings] Failed to save credential:", err);
+      log.error("credential.save-failed", { error: formatLogError(err) });
       const message = err instanceof Error ? err.message : "Failed to save settings";
       toast.error("Failed to save settings", { description: message });
     } finally {
@@ -983,7 +986,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         await propagateGithubCredentials();
       }
     } catch (err) {
-      console.error("[settings] Failed to clear credential:", err);
+      log.error("credential.clear-failed", { error: formatLogError(err) });
       const message = err instanceof Error ? err.message : "Failed to clear credential";
       toast.error("Failed to clear credential", { description: message });
     } finally {
@@ -1002,7 +1005,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       setGatewayToken(nextGatewayTokenSettings.token);
       setSavedGatewayToken(nextGatewayTokenSettings.token);
     } catch (err) {
-      console.error("[settings] Failed to save gateway token:", err);
+      log.error("gateway-token.save-failed", { error: formatLogError(err) });
       const message = err instanceof Error ? err.message : "Failed to save settings";
       toast.error("Failed to save gateway token", { description: message });
     } finally {

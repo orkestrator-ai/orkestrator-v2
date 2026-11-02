@@ -241,3 +241,5 @@ No design implementation, assertion, timeout or skip changed.
 The notification-bar review on 2026-11-01 repeated the ledger assertion; the unchanged owner passed alone on the branch (1.2 s) and detached origin/main (1.0 s). Preparation used `mise run test`; its captured output does not name the granted worker count. Evidence: `.orkestrator/review-artifacts/review-validation-eb40d1d2-656b-44f0-9a8f-1c2970a9e415/validation-04.stdout.txt`.
 
 Reruns: `mise run test:logged -- --name fix-design-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` and the same owner command with `--name baseline-design-profiles` in detached main at `b965aea44`, with independently installed dependencies. The ledger still held `1841-1846-0123abcd.json` at line 505 in preparation; this remains an intermittent cleanup observation, not a confirmed root cause.
+
+On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test` (69.12 ms). The owner passed alone: `bun test ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --only-failures` (37 pass, 0 fail).

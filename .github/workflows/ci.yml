@@ -13,6 +13,60 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  worker-context:
+    name: Stage preview worker context (Linux x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.context.outputs.digest }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Stage and digest the worker context
+        id: context
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = "$(mise current bun)"
+          bun docker/artifact-preview-worker/stage-context.ts "${RUNNER_TEMP}/worker-context"
+          digest="$(bun docker/artifact-preview-worker/context-digest.ts "${RUNNER_TEMP}/worker-context")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  worker-context-parity:
+    name: Preview worker staging parity (${{ matrix.runner }})
+    needs: worker-context
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, macos-15]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Compare independently staged context with Linux x64
+        shell: bash
+        env:
+          CONTEXT_DIGEST: ${{ needs.worker-context.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = "$(mise current bun)"
+          bun docker/artifact-preview-worker/stage-context.ts "${RUNNER_TEMP}/worker-context"
+          test "$(bun docker/artifact-preview-worker/context-digest.ts "${RUNNER_TEMP}/worker-context")" = "$CONTEXT_DIGEST"
+
   mobile-shell-browser:
     name: Mobile shell (${{ matrix.browser }})
     runs-on: ubuntu-latest

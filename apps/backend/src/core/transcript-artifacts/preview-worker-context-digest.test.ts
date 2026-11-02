@@ -132,7 +132,8 @@ describe("worker context digest", () => {
 });
 
 // On macOS this compares release-host staging with Linux using the pinned Bun.
-// The publish workflow additionally compares independent macOS/ARM64 CI installs.
+// This Docker check is opt-in via ORKESTRATOR_TEST_CROSS_HOST_WORKER=1.
+// CI separately compares independent Linux x64, Linux ARM64 and macOS installs.
 test.skipIf(process.env.ORKESTRATOR_TEST_CROSS_HOST_WORKER !== "1")(
   "native and Linux staging produce identical bytes",
   async () => {

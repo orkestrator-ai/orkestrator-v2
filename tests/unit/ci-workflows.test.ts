@@ -7,7 +7,18 @@ const read = (relativePath: string) =>
 
 type Workflow = {
   concurrency: { group: string; "cancel-in-progress": string };
-  jobs: Record<string, { name: string }>;
+  jobs: Record<
+    string,
+    {
+      name: string;
+      needs?: string;
+      "runs-on"?: string;
+      permissions?: Record<string, string>;
+      outputs?: Record<string, string>;
+      strategy?: { matrix: { runner: string[] } };
+      steps?: { id?: string; run?: string; env?: Record<string, string> }[];
+    }
+  >;
 };
 
 const workflow = (name: string) =>
@@ -38,6 +49,38 @@ describe("CI workflow contracts", () => {
     expect(contexts.length).toBeGreaterThan(0);
     const jobNames = Object.values(workflow("ci").jobs).map((job) => job.name);
     for (const context of contexts) expect(jobNames).toContain(context);
+  });
+
+  test("the complete CI suite has a 45-minute group deadline", () => {
+    const step = workflow("ci").jobs.test!.steps!.find((step) => step.run === "mise run test:full");
+    expect(step?.env?.ORKESTRATOR_TEST_GROUP_TIMEOUT_MS).toBe("2700000");
+  });
+
+  test("CI compares independently installed worker contexts across hosts", () => {
+    const jobs = workflow("ci").jobs;
+    const baseline = jobs["worker-context"]!;
+    const parity = jobs["worker-context-parity"]!;
+    expect(baseline["runs-on"]).toBe("ubuntu-24.04");
+    expect(baseline.outputs?.digest).toBe("${{ steps.context.outputs.digest }}");
+    expect(parity.needs).toBe("worker-context");
+    expect(parity["runs-on"]).toBe("${{ matrix.runner }}");
+    expect(parity.strategy?.matrix.runner).toEqual(["ubuntu-24.04-arm", "macos-15"]);
+    for (const job of [baseline, parity]) {
+      expect(job.permissions).toEqual({ contents: "read" });
+      expect(job.steps?.some((step) => step.run === "bun install --frozen-lockfile")).toBe(true);
+      const stage = job.steps?.find((step) =>
+        step.run?.includes("bun docker/artifact-preview-worker/stage-context.ts"),
+      );
+      expect(stage?.run).toContain('test "$(bun --version)" = "$(mise current bun)"');
+      expect(stage?.run).toContain("bun docker/artifact-preview-worker/context-digest.ts");
+    }
+    const digest = baseline.steps?.find((step) => step.id === "context");
+    expect(digest?.run).toContain('echo "digest=$digest" >> "$GITHUB_OUTPUT"');
+    const comparison = parity.steps?.find((step) => step.env?.CONTEXT_DIGEST);
+    expect(comparison?.env?.CONTEXT_DIGEST).toBe("${{ needs.worker-context.outputs.digest }}");
+    expect(comparison?.run).toContain(
+      'test "$(bun docker/artifact-preview-worker/context-digest.ts "${RUNNER_TEMP}/worker-context")" = "$CONTEXT_DIGEST"',
+    );
   });
 
   test("the test job installs every tool a host-gated test needs", () => {

@@ -26,64 +26,74 @@ afterEach(async () => {
 // C14's mount and restaging contract, without requiring a Docker daemon or an
 // image. Staging, container creation and replacement remain real; only Docker's
 // responses (including copy verification and boot readiness) are simulated.
-test("migration binds fresh read-only Codex inputs and retains the source revision", async () => {
-  const dir = await tempDir("ork-replacement-inputs-");
-  cleanup.push(dir);
-  const codexHome = path.join(dir, "host-codex");
-  await fs.mkdir(codexHome);
-  await fs.writeFile(path.join(codexHome, "config.toml"), 'model = "staged-host"\n');
-  // These belong to the runtime, never its staged host inputs.
-  await fs.writeFile(path.join(codexHome, "state.sqlite"), "host database");
-  await fs.mkdir(path.join(codexHome, "sessions"));
-  await fs.writeFile(path.join(codexHome, "sessions", "host.jsonl"), "host session");
-  const imageId = `sha256:${"c".repeat(64)}`;
-  await fs.writeFile(
-    path.join(dir, "image-manifest.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      appVersion: "2.34.2-beta",
-      sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
-      architecture: "amd64",
-      runtimes: { bun: "1.4.4", node: "24.21.0" },
-      agents: {},
-      bridges: [],
-      capabilities: { "persistent-workspace": 1, "staged-inputs": 3 },
-      stateFormats: {
-        workspace: { read: [1], write: [1] },
-        "provider-state": { read: [1], write: [1] },
-      },
-    }),
-  );
-  const archive = path.join(dir, "manifest.tar");
-  expect(
-    spawnSync("tar", ["--format=ustar", "-cf", archive, "-C", dir, "image-manifest.json"], {
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
-    }).status,
-  ).toBe(0);
+test.each([3, 4])(
+  "capability %i binds gated shared skills and preserves Codex revisions",
+  async (stagedVersion) => {
+    const dir = await tempDir("ork-replacement-inputs-");
+    cleanup.push(dir);
+    const codexHome = path.join(dir, "host-codex");
+    await fs.mkdir(codexHome);
+    await fs.writeFile(path.join(codexHome, "config.toml"), 'model = "staged-host"\n');
+    // These belong to the runtime, never its staged host inputs.
+    await fs.writeFile(path.join(codexHome, "state.sqlite"), "host database");
+    await fs.mkdir(path.join(codexHome, "sessions"));
+    await fs.writeFile(path.join(codexHome, "sessions", "host.jsonl"), "host session");
+    const hostHome = path.join(dir, "host-home");
+    await fs.mkdir(path.join(hostHome, ".agents", "skills", "fixture"), { recursive: true });
+    await fs.writeFile(
+      path.join(hostHome, ".agents", "skills", "fixture", "SKILL.md"),
+      "fixture skill",
+    );
+    const imageId = `sha256:${"c".repeat(64)}`;
+    await fs.writeFile(
+      path.join(dir, "image-manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        appVersion: "2.34.2-beta",
+        sourceRevision: "b27421dcfa8de61b9c20a08e79efd7dfbd0c7fc2",
+        architecture: "amd64",
+        runtimes: { bun: "1.4.4", node: "24.21.0" },
+        agents: {},
+        bridges: [],
+        capabilities: { "persistent-workspace": 1, "staged-inputs": stagedVersion },
+        stateFormats: {
+          workspace: { read: [1], write: [1] },
+          "provider-state": { read: [1], write: [1] },
+        },
+      }),
+    );
+    const archive = path.join(dir, "manifest.tar");
+    expect(
+      spawnSync("tar", ["--format=ustar", "-cf", archive, "-C", dir, "image-manifest.json"], {
+        env: { ...process.env, COPYFILE_DISABLE: "1" },
+      }).status,
+    ).toBe(0);
 
-  const owner = dockerOwnerNamespace(dir);
-  const environment = lifecycleEnvironment({ networkAccessMode: "full" });
-  const { context } = memoryLifecycleContext([environment], dir);
-  Object.assign(context, {
-    runtimeFlavor: "agent-test",
-    credentialSources: new Set(["codex"]),
-  });
-  Object.assign(context.storage, {
-    getProject: async () => ({ id: "project-1", gitUrl: "https://example.invalid/repo.git" }),
-    loadConfig: async () => ({
-      version: "1.0.0",
-      global: { enabledAgentPlatforms: ["codex"] },
-      repositories: {},
-    }),
-    listMultiReviewWorkflows: async () => [],
-    listAllBuildPipelines: async () => [],
-  });
+    const owner = dockerOwnerNamespace(dir);
+    const environment = lifecycleEnvironment({ networkAccessMode: "full" });
+    const { context } = memoryLifecycleContext([environment], dir);
+    Object.assign(context, {
+      runtimeFlavor: "agent-test",
+      credentialSources: new Set(["codex"]),
+    });
+    Object.assign(context.storage, {
+      getProject: async () => ({ id: "project-1", gitUrl: "https://example.invalid/repo.git" }),
+      loadConfig: async () => ({
+        version: "1.0.0",
+        global: { enabledAgentPlatforms: ["codex"] },
+        repositories: {},
+      }),
+      listMultiReviewWorkflows: async () => [],
+      listAllBuildPipelines: async () => [],
+    });
 
-  const previousCodexHome = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = codexHome;
-  try {
-    await withDockerScript(
-      `#!/bin/sh
+    const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      await withDockerScript(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   context) printf 'unix:///var/run/docker.sock\\n' ;;
@@ -121,72 +131,90 @@ case "$1" in
 esac
 exit 0
 `,
-      async (log) => {
-        expect(await createDockerContainer(environment, context, { imageId })).toBe(
-          "source-container",
-        );
-        await context.storage.updateEnvironment(environment.id, {
-          containerId: "source-container",
-          status: "running",
-          containerLifecycle: {
-            schemaVersion: 1,
-            revision: 1,
-            lastRuntimeGeneration: 1,
-            runtime: { containerId: "source-container", runtimeGeneration: 1, owner, imageId },
-            storage: { format: "legacy-layer", workspaceGeneration: 1 },
-            outcomes: [],
-          },
-        });
+        async (log) => {
+          expect(await createDockerContainer(environment, context, { imageId })).toBe(
+            "source-container",
+          );
+          await context.storage.updateEnvironment(environment.id, {
+            containerId: "source-container",
+            status: "running",
+            containerLifecycle: {
+              schemaVersion: 1,
+              revision: 1,
+              lastRuntimeGeneration: 1,
+              runtime: { containerId: "source-container", runtimeGeneration: 1, owner, imageId },
+              storage: { format: "legacy-layer", workspaceGeneration: 1 },
+              outcomes: [],
+            },
+          });
 
-        const codexBind = (command: string) => {
-          const mounts = [...command.matchAll(/--mount (\S+)/g)].map((match) => match[1]!);
-          const binds = mounts.filter((mount) => mount.includes("dst=/codex-home,"));
-          expect(binds).toHaveLength(1);
-          expect(binds[0]).toMatch(/^type=bind,src=.+,dst=\/codex-home,readonly$/);
-          const source = binds[0]!.split(",")[1]!.slice("src=".length);
-          expect(source.startsWith(path.join(dir, "portable-inputs") + path.sep)).toBe(true);
-          expect(source).not.toBe(codexHome);
-          return source;
-        };
-        const runtimeCreates = async () =>
-          (await log.read()).split("\n").filter((line) => line.startsWith("create --name"));
-        const sourceBind = codexBind((await runtimeCreates())[0]!);
-        expect(await fs.readdir(sourceBind)).toEqual(["config.toml"]);
-        expect(await fs.readFile(path.join(sourceBind, "config.toml"), "utf8")).toBe(
-          'model = "staged-host"\n',
-        );
+          const codexBind = (command: string) => {
+            const mounts = [...command.matchAll(/--mount (\S+)/g)].map((match) => match[1]!);
+            const binds = mounts.filter((mount) => mount.includes("dst=/codex-home,"));
+            expect(binds).toHaveLength(1);
+            expect(binds[0]).toMatch(/^type=bind,src=.+,dst=\/codex-home,readonly$/);
+            const source = binds[0]!.split(",")[1]!.slice("src=".length);
+            expect(source.startsWith(path.join(dir, "portable-inputs") + path.sep)).toBe(true);
+            expect(source).not.toBe(codexHome);
+            return source;
+          };
+          const runtimeCreates = async () =>
+            (await log.read()).split("\n").filter((line) => line.startsWith("create --name"));
+          const create = (await runtimeCreates())[0]!;
+          const sharedMounts = [...create.matchAll(/--mount (\S+)/g)]
+            .map((match) => match[1]!)
+            .filter((mount) => mount.includes("dst=/agents-skills,"));
+          expect(sharedMounts).toHaveLength(stagedVersion >= 4 ? 1 : 0);
+          if (stagedVersion >= 4) {
+            expect(sharedMounts[0]).toMatch(/,readonly$/);
+            const sharedSource = sharedMounts[0]!.split(",")[1]!.slice("src=".length);
+            expect(sharedSource.startsWith(path.join(dir, "portable-inputs") + path.sep)).toBe(
+              true,
+            );
+            expect(await fs.readFile(path.join(sharedSource, "fixture", "SKILL.md"), "utf8")).toBe(
+              "fixture skill",
+            );
+          }
+          const sourceBind = codexBind(create);
+          expect(await fs.readdir(sourceBind)).toEqual(["config.toml"]);
+          expect(await fs.readFile(path.join(sourceBind, "config.toml"), "utf8")).toBe(
+            'model = "staged-host"\n',
+          );
 
-        // Removing a file as well as adding one catches reuse or merging of an
-        // older revision, even when a later boot would overwrite config.toml.
-        await fs.rm(path.join(codexHome, "config.toml"));
-        await fs.writeFile(path.join(codexHome, "AGENTS.md"), "restaged-host\n");
-        const outcome = await replaceRuntimePreservingState(
-          { environmentId: environment.id, expectedContainerId: "source-container" },
-          context,
-        );
-        expect(outcome).toMatchObject({ kind: "migrate", containerId: "candidate-container" });
-        const creates = await runtimeCreates();
-        expect(creates).toHaveLength(2);
-        const candidateBind = codexBind(creates[1]!);
-        expect(candidateBind).not.toBe(sourceBind);
-        expect(await fs.readdir(candidateBind)).toEqual(["AGENTS.md"]);
-        expect(await fs.readFile(path.join(candidateBind, "AGENTS.md"), "utf8")).toBe(
-          "restaged-host\n",
-        );
-        expect(await fs.readdir(sourceBind)).toEqual(["config.toml"]);
-        const parsed = parseContainerLifecycle(
-          (await context.storage.getEnvironment(environment.id))?.containerLifecycle,
-        );
-        expect(parsed.supported).toBe(true);
-        if (!parsed.supported) throw new Error("Unsupported lifecycle record");
-        expect(parsed.record.storage.format).toBe("volume-v1");
-        expect(parsed.record.retainedRuntimes?.map((runtime) => runtime.containerId)).toEqual([
-          "source-container",
-        ]);
-      },
-    );
-  } finally {
-    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
-    else process.env.CODEX_HOME = previousCodexHome;
-  }
-});
+          // Removing a file as well as adding one catches reuse or merging of an
+          // older revision, even when a later boot would overwrite config.toml.
+          await fs.rm(path.join(codexHome, "config.toml"));
+          await fs.writeFile(path.join(codexHome, "AGENTS.md"), "restaged-host\n");
+          const outcome = await replaceRuntimePreservingState(
+            { environmentId: environment.id, expectedContainerId: "source-container" },
+            context,
+          );
+          expect(outcome).toMatchObject({ kind: "migrate", containerId: "candidate-container" });
+          const creates = await runtimeCreates();
+          expect(creates).toHaveLength(2);
+          const candidateBind = codexBind(creates[1]!);
+          expect(candidateBind).not.toBe(sourceBind);
+          expect(await fs.readdir(candidateBind)).toEqual(["AGENTS.md"]);
+          expect(await fs.readFile(path.join(candidateBind, "AGENTS.md"), "utf8")).toBe(
+            "restaged-host\n",
+          );
+          expect(await fs.readdir(sourceBind)).toEqual(["config.toml"]);
+          const parsed = parseContainerLifecycle(
+            (await context.storage.getEnvironment(environment.id))?.containerLifecycle,
+          );
+          expect(parsed.supported).toBe(true);
+          if (!parsed.supported) throw new Error("Unsupported lifecycle record");
+          expect(parsed.record.storage.format).toBe("volume-v1");
+          expect(parsed.record.retainedRuntimes?.map((runtime) => runtime.containerId)).toEqual([
+            "source-container",
+          ]);
+        },
+      );
+    } finally {
+      if (previousHostHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+      else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHostHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  },
+);

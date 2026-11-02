@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, spyOn, test, mock } from "bun:test";
 import {
   advanceUntil,
   fourReviewers,
@@ -54,3 +54,36 @@ describe("build pipeline reviewer prompts", () => {
     });
   });
 });
+
+// Exercise one host directly: constructing another host would start a new pass
+// and could hide a rejected promise retained by the first one.
+test.each(["reviewInstruction", "reviewContext"] as const)(
+  "a rejected %s build is evicted within the same pass",
+  async (failingRead) => {
+    await withPipeline(async ({ service, read }) => {
+      const started = await service.start(startInput(fourReviewers()));
+      await advanceUntil(service, read, started.id, "reviewing");
+      const pipeline = await read(started.id);
+      const { BuildPipelineReviewFanout } = await import("./build-pipeline-review-fanout.js");
+      const instruction = mock(async () => "Review carefully");
+      const context = mock(async () => ({}));
+      const failure = new Error("transient prompt read failure");
+      if (failingRead === "reviewInstruction") instruction.mockRejectedValueOnce(failure);
+      else context.mockRejectedValueOnce(failure);
+      const fanout = new BuildPipelineReviewFanout({
+        reviewInstruction: instruction,
+        reviewContext: context,
+      } as unknown as ConstructorParameters<typeof BuildPipelineReviewFanout>[0]);
+      const host = fanout["reviewHost"](pipeline, "main");
+      const reviewer = pipeline.reviewFanout!.reviewers[0]!;
+      await expect(host.reviewerPrompt!(0, 4, reviewer)).rejects.toThrow(
+        "transient prompt read failure",
+      );
+      const recovered = await host.reviewerPrompt!(1, 4, reviewer);
+      expect(recovered).toContain("Review carefully");
+      await host.reviewerPrompt!(2, 4, reviewer);
+      expect(instruction).toHaveBeenCalledTimes(2);
+      expect(context).toHaveBeenCalledTimes(failingRead === "reviewContext" ? 2 : 1);
+    });
+  },
+);

@@ -1,6 +1,11 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
+import {
+  COORDINATOR_WORKSPACE_VERSION,
+  COORDINATOR_EXECUTION_POLICY,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import { AgentMailService } from "./agent-mail-service.js";
 import { fixture, replaceRecipientTab } from "./agent-mail-service-test-support.js";
 import type { StorageService } from "./storage.js";
@@ -38,6 +43,74 @@ async function recipientPresence(storage: StorageService) {
 }
 
 describe("mail presence for environments that are not running", () => {
+  test("running native mailboxes still read presence while setup is incomplete", async () => {
+    const { storage, dataDir } = await fixture();
+    const { service, reads } = presenceService(storage, () => "waiting");
+    try {
+      await service.init();
+      await storage.updateEnvironment("recipient", {
+        status: "running",
+        setupPhase: "running",
+        setupScriptsComplete: false,
+      });
+      reads.native = 0;
+      await service.refreshPresence();
+      expect(reads.native).toBe(2);
+      expect(await recipientPresence(storage)).toBe("waiting");
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("coordinator mailboxes read their provider without an environment row", async () => {
+    const { storage, dataDir } = await fixture();
+    const { service, reads } = presenceService(storage, () => "waiting");
+    const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+    const now = new Date().toISOString();
+    try {
+      await storage.coordinators.mutateCoordinatorWorkspace("project", () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-1",
+        projectId: "project",
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            tabId: "coordinator-tab",
+            logicalSessionKey: `env-${runtimeId}:coordinator-tab`,
+            agent: "codex",
+            title: "Coordinator",
+            createdAt: now,
+            mailboxIncarnationId: "coordinator-incarnation-1",
+          },
+        ],
+        selectedConversationId: "conversation-1",
+        repositoryContextRevision: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await storage.synchronizeAgentMailboxes();
+      await service.init();
+      const environment = spyOn(storage, "getEnvironment");
+      try {
+        reads.native = 0;
+        await service.refreshPresence();
+        expect(reads.native).toBe(3);
+        expect(environment.mock.calls.map(([id]) => id)).not.toContain(runtimeId);
+        expect(
+          (await storage.getAgentMailMailbox(runtimeId, "coordinator-tab")).descriptor.presence,
+        ).toBe("waiting");
+      } finally {
+        environment.mockRestore();
+      }
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("a stopped environment's native mailbox reads nothing and is environment_stopped", async () => {
     const { storage, dataDir } = await fixture();
     const { service, reads } = presenceService(storage, () => "idle");

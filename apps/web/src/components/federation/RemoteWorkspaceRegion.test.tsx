@@ -36,10 +36,13 @@ let reload = mock(() => undefined);
 function install(
   desktop: boolean,
   respondPortal?: (command: string, args: Record<string, unknown>) => unknown,
+  nodes = ["a"],
 ) {
   const fake = installDesktopFake({
-    list: connectionList([remoteConnection("a", "Machine A", "teal")]),
-    datasets: { a: sharedIdDataset("working") },
+    list: connectionList(
+      nodes.map((id) => remoteConnection(id, `Machine ${id.toUpperCase()}`, "teal")),
+    ),
+    datasets: Object.fromEntries(nodes.map((id) => [id, sharedIdDataset("working")])),
     respondPortal,
   });
   if (desktop) {
@@ -273,6 +276,119 @@ describe("desktop: another machine's workspace in the central region", () => {
     // Going back to this window's own workspace keeps the state, and it stays open.
     act(() => useRemoteWorkspaceStore.getState().showLocal());
     expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  });
+
+  test("a realm broadcasts files state to another ready realm and initializes a later listener", async () => {
+    const fake = install(true, undefined, ["a", "b", "c"]);
+    renderRegion(anchorElement());
+    for (const [index, node] of ["a", "b", "c"].entries()) {
+      act(() => useRemoteWorkspaceStore.getState().open(`bk_${node}`, {}));
+      await waitFor(() => expect(fake.workspaceViews.open).toHaveBeenCalledTimes(index + 1));
+    }
+    await waitFor(() =>
+      expect(fake.workspaceViews.setVisible).toHaveBeenCalledWith("view-3", true),
+    );
+    for (const viewId of ["view-1", "view-2"]) {
+      act(() => fake.emitViewEvent({ viewId, type: "message", message: { type: "ready" } }));
+    }
+    fake.workspaceViews.send.mockClear();
+    // The source is hidden: background realms still participate in synchronization.
+    act(() =>
+      fake.emitViewEvent({
+        viewId: "view-1",
+        type: "message",
+        message: { type: "filesPanel", open: true },
+      }),
+    );
+    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    for (const viewId of ["view-1", "view-2"]) {
+      expect(fake.workspaceViews.send).toHaveBeenCalledWith(viewId, {
+        type: "filesPanel",
+        open: true,
+      });
+    }
+    expect(fake.workspaceViews.send.mock.calls.some(([id]) => id === "view-3")).toBe(false);
+    act(() =>
+      fake.emitViewEvent({ viewId: "view-3", type: "message", message: { type: "ready" } }),
+    );
+    expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-3", {
+      type: "filesPanel",
+      open: true,
+    });
+    fake.workspaceViews.send.mockClear();
+    act(() =>
+      fake.emitViewEvent({
+        viewId: "view-2",
+        type: "message",
+        message: { type: "filesPanel", open: false },
+      }),
+    );
+    expect(useFilesPanelStore.getState().isOpen).toBe(false);
+    for (const viewId of ["view-1", "view-2", "view-3"]) {
+      expect(fake.workspaceViews.send).toHaveBeenCalledWith(viewId, {
+        type: "filesPanel",
+        open: false,
+      });
+    }
+  });
+
+  test("desktop-to-phone isolates reports and phone-to-desktop resynchronizes retained files state", async () => {
+    const originalMatchMedia = window.matchMedia;
+    let phone = false;
+    const listeners = new Set<() => void>();
+    window.matchMedia = ((query: string) => ({
+      get matches() {
+        return query === MOBILE_SHELL_MEDIA_QUERY && phone;
+      },
+      addEventListener: (_event: string, listener: () => void) => {
+        listeners.add(listener);
+      },
+      removeEventListener: (_event: string, listener: () => void) => {
+        listeners.delete(listener);
+      },
+    })) as unknown as typeof window.matchMedia;
+    try {
+      const fake = install(true);
+      renderRegion(anchorElement());
+      act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+      await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+      act(() =>
+        fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }),
+      );
+      act(() =>
+        fake.emitViewEvent({
+          viewId: "view-1",
+          type: "message",
+          message: { type: "filesPanel", open: true },
+        }),
+      );
+      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      fake.workspaceViews.send.mockClear();
+      act(() => {
+        phone = true;
+        listeners.forEach((listener) => listener());
+      });
+      act(() =>
+        fake.emitViewEvent({
+          viewId: "view-1",
+          type: "message",
+          message: { type: "filesPanel", open: false },
+        }),
+      );
+      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      act(() => useFilesPanelStore.getState().closePanel());
+      expect(fake.workspaceViews.send).not.toHaveBeenCalled();
+      act(() => {
+        phone = false;
+        listeners.forEach((listener) => listener());
+      });
+      expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-1", {
+        type: "filesPanel",
+        open: false,
+      });
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   test("the phone layout shares no files panel state with its realms", async () => {
@@ -673,6 +789,40 @@ test("frame title-bar reports and sequenced panel requests use the current docum
       type: "panel",
       ...useRemoteWorkspaceStore.getState().panelRequests.bk_a,
     }),
+    window.location.origin,
+  );
+});
+
+test("a browser frame initializes and round-trips files state through its workspace envelope", async () => {
+  install(false);
+  useFilesPanelStore.setState({ isOpen: true });
+  renderRegion(anchorElement());
+  act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+  const frame = (await screen.findByTitle(/^Workspace on /)) as HTMLIFrameElement;
+  const post = mock(() => undefined);
+  Object.defineProperty(frame, "contentWindow", {
+    configurable: true,
+    value: { postMessage: post },
+  });
+  expect(post).not.toHaveBeenCalled();
+  act(() => frameMessage(frame, "workspace-1", { type: "ready" }));
+  expect(post).toHaveBeenCalledWith(
+    frameEnvelope("workspace-1", { type: "filesPanel", open: true }),
+    window.location.origin,
+  );
+  post.mockClear();
+  act(() => frameMessage(frame, "wrong-workspace", { type: "filesPanel", open: false }));
+  expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  expect(post).not.toHaveBeenCalled();
+  act(() => frameMessage(frame, "workspace-1", { type: "filesPanel", open: false }));
+  expect(useFilesPanelStore.getState().isOpen).toBe(false);
+  expect(post).toHaveBeenLastCalledWith(
+    frameEnvelope("workspace-1", { type: "filesPanel", open: false }),
+    window.location.origin,
+  );
+  act(() => useFilesPanelStore.getState().openPanel());
+  expect(post).toHaveBeenLastCalledWith(
+    frameEnvelope("workspace-1", { type: "filesPanel", open: true }),
     window.location.origin,
   );
 });

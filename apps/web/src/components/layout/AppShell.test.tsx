@@ -138,14 +138,14 @@ mock.module("@/hooks", () => ({
 
 mock.module("@/stores", () => ({
   ...realStoresSnapshot,
-  useFilesPanelStore: <T,>(selector?: (state: { isOpen: boolean }) => T) =>
-    selectState({ isOpen: filesPanelOpen }, selector),
+  useFilesPanelStore: <T,>(selector?: (state: { isOpen: boolean; activeTab: string }) => T) =>
+    selectState({ isOpen: filesPanelOpen, activeTab: "changes" }, selector),
   useUIStore: Object.assign(
     <T,>(selector?: (state: ReturnType<typeof uiStore.getState>) => T) =>
       uiStore((state) =>
         selectState({ ...state, selectedProjectId, selectedEnvironmentId }, selector),
       ),
-    { getState: uiStore.getState },
+    { getState: uiStore.getState, subscribe: uiStore.subscribe },
   ),
   useProjectStore: <T,>(
     selector?: (state: { projects: Array<{ id: string; name: string }> }) => T,
@@ -252,6 +252,25 @@ afterEach(() => {
 });
 
 describe("AppShell", () => {
+  test("an open files sheet stays hidden over a remote workspace across layout changes", () => {
+    filesPanelOpen = true;
+    isMobile = false;
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+    const view = render(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByText("Files panel")).toBeNull();
+
+    isMobile = true;
+    view.rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByRole("complementary", { name: "Workspace files" })).toBeNull();
+    expect(screen.queryByText("Files panel")).toBeNull();
+    expect(filesPanelOpen).toBe(true);
+
+    // Returning to the local workspace reveals the retained sheet state.
+    act(() => useRemoteWorkspaceStore.getState().showLocal());
+    expect(screen.getByRole("complementary", { name: "Workspace files" })).toBeTruthy();
+    expect(screen.getByText("Files panel")).toBeTruthy();
+  });
+
   test("derives the mobile title and uses the grid action presentation", () => {
     const { container } = render(<AppShell>Workspace</AppShell>);
 

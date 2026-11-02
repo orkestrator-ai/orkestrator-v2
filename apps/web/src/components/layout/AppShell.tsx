@@ -289,7 +289,7 @@ export function AppShell({ children }: AppShellProps) {
           titleNameSignal={
             remoteNames ? (remoteNames.readyToMerge ? "merge-ready" : null) : localNameSignal
           }
-          filesPanelOpen={filesPanelOpen}
+          filesPanelOpen={filesPanelOpen && !remoteShown}
           centralPanelStyle={centralPanelThemeVars}
           actionBar={<ActionBar presentation="grid" />}
           agentInfoButton={

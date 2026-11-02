@@ -83,3 +83,37 @@ Evidence below the host temporary directory:
 `orkestrator-test-run.frrs8L/recorded-close-retention.log.gz`. No owner source,
 assertion, timeout or skip changed. The fixture lifecycle race remains a
 hypothesis; this turn does not establish its cause.
+
+## Deterministic on main at 38d55ee14 — 2026-11-02
+
+Seen while validating to-do 1202 task 3 (branch
+`renderer-paths-optimization-845c78394eb7-r1`, head `19e1baf42`). All four
+desktop Cursor cases failed in the loaded nine-worker `test:browser` run, in a
+three-worker rerun of the failing owners, and in a one-worker run of only the
+Cursor cases. The same one-worker command then failed identically on a fresh
+detached checkout of `origin/main` at `38d55ee14`, so these failures do not come
+from the branch:
+
+```sh
+ORKESTRATOR_E2E_PORT=<free port> mise run test:logged -- --name main-closeretention-cursor -- bunx playwright test --config e2e/playwright.config.ts --workers=1 --project=desktop-chromium e2e/CloseRetention.spec.ts -g "Cursor"
+```
+
+Both checkouts: 2 passed, 4 failed in about 1.1 min, at the same lines:
+
+- line 328 case, at line 339: `conversationsWith(...)` received the prompt
+  followed by an `<orkestrator-system-instructions>` frame instead of the
+  prompt alone.
+- line 422 case, at line 442: `toMatchObject` received `undefined`.
+- line 693 case, at line 724: `agent-runtime-steer-saturated` not found; the
+  runtime panel shows the state `detached`.
+- line 801 case, at line 831: the conversation list holds the framed prompts.
+
+Hypothesis, not established: the Cursor bridge now appends the shared
+system-instructions frame to every writable prompt
+(`bridges/cursor-bridge/src/prompt.ts`, `cursorPromptText`), while this spec
+still compares the fake engine's recorded prompts with the raw text, and its
+`agent.prompts.includes(...)` lookups miss. On this evidence the cases are a
+deterministic failure on `main`, not a load-only flake. Evidence below the
+host temporary directory: `orkestrator-test-run.oUGFjC/branch-closeretention-cursor.log.gz`
+(branch) and `orkestrator-test-run.2v8aZb/main-closeretention-cursor.log.gz`
+(`origin/main`). No owner source, assertion, timeout or skip changed.

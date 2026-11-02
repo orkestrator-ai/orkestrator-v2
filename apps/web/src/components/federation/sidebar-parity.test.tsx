@@ -4,6 +4,9 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { MergedProjectList } from "./FederatedSidebarSections";
+import type { MachineView } from "@/lib/federation/aggregate";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
 import { useMachineViewStore } from "@/stores/machineViewStore";
@@ -119,4 +122,51 @@ for (const grouping of ["project", "machine"] as const) {
     fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     await waitFor(() => expect(screen.queryByTestId("sidebar-drag-overlay")).toBeNull());
   });
+}
+
+for (const mode of ["project", "repository"] as const) {
+  for (const source of ["bound", "remote"] as const) {
+    test(`${mode} empty list waits for ${source} projects before offering Add Project`, async () => {
+      installDesktopFake({ list: connectionList([]), datasets: {} });
+      const machine: MachineView = {
+        connectionId: "a",
+        backendId: "bk_a" as BackendId,
+        name: "Machine A",
+        colorToken: "teal",
+        bound: false,
+        freshness: "current",
+        transport: "connected",
+        projects: [],
+        environmentsByProject: new Map(),
+        truncated: false,
+        loadedAt: null,
+      };
+      function List({ loading, shown = true }: { loading: boolean; shown?: boolean }) {
+        return (
+          <FederationProvider>
+            <MergedProjectList
+              mode={mode}
+              machines={source === "remote" ? [{ ...machine, loadedAt: loading ? null : 1 }] : []}
+              shownIds={new Set(shown ? ["a"] : [])}
+              boundLoading={source === "bound" && loading}
+              renderBoundProject={() => null}
+              onBoundEnvironmentDragEnd={() => {}}
+              onAddProject={() => {}}
+            />
+          </FederationProvider>
+        );
+      }
+      const view = render(<List loading />);
+      expect(screen.getByText("Loading projects...")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Add your first project" })).toBeNull();
+      view.rerender(<List loading={false} />);
+      expect(screen.getByText("No projects yet")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
+      if (source === "remote") {
+        view.rerender(<List loading shown={false} />);
+        expect(screen.queryByText("Loading projects...")).toBeNull();
+        expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
+      }
+    });
+  }
 }

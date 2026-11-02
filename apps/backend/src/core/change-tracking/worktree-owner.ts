@@ -34,7 +34,7 @@ import {
   type CaptureExecutor,
   type CaptureLimits,
   type Manifest,
-  type ManifestMode,
+  type StatCacheEntry,
 } from "./capture.js";
 import {
   OwnerFenceError,
@@ -118,6 +118,8 @@ export interface OwnerDependencies {
   /** Cap on concurrent container captures inside the shared pool. */
   remoteSlots?: RemoteSlots;
   now?: () => number;
+  /** Host captures only; tests shorten it (see `STAT_SETTLE_WINDOW_MS`). */
+  statSettleWindowMs?: number;
 }
 
 /**
@@ -170,7 +172,7 @@ export class WorktreeChangeOwner {
   private readonly contentGenerations = new Map<string, number>();
   private previous: Manifest | null = null;
   private previousLoaded = false;
-  private statCache = new Map<string, { stamp: string; oid: string; mode: ManifestMode }>();
+  private statCache = new Map<string, StatCacheEntry>();
   private running: Promise<CaptureOutcome> | null = null;
   private queued: {
     promise: Promise<CaptureOutcome>;
@@ -187,7 +189,7 @@ export class WorktreeChangeOwner {
     this.executor =
       identity.runtimeKind === "container"
         ? new ContainerCaptureExecutor(identity.runtimeId, identity.canonicalRoot)
-        : new HostCaptureExecutor(identity.canonicalRoot);
+        : new HostCaptureExecutor(identity.canonicalRoot, deps.statSettleWindowMs);
   }
 
   get isReplaced(): boolean {
@@ -243,6 +245,9 @@ export class WorktreeChangeOwner {
     this.observationEpoch++;
     for (const pathId of pathIds ?? []) {
       this.contentGenerations.set(pathId, (this.contentGenerations.get(pathId) ?? 0) + 1);
+      // A settled entry lets the next capture skip reading the file, so a hint
+      // that it changed has to force a read even when the stamp looks equal.
+      this.statCache.delete(pathId);
     }
     if (!pathIds) this.statCache.clear();
     return this.observationEpoch;

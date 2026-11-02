@@ -69,6 +69,29 @@ export const DEFAULT_CAPTURE_LIMITS: CaptureLimits = {
   stableReadAttempts: 2,
 };
 
+/**
+ * What the previous capture learnt about one path. `settled` records that the
+ * file's mtime and ctime were already {@link STAT_SETTLE_WINDOW_MS} old when
+ * it was read, so a later write must move the stamp; only then may a capture
+ * reuse `oid` without reading the file again.
+ */
+export interface StatCacheEntry {
+  stamp: string;
+  oid: string;
+  mode: ManifestMode;
+  settled?: boolean;
+}
+
+/**
+ * How old a file's timestamps must be, at the moment it is read, before its
+ * stat stamp is trusted to identify its content. Filesystem timestamps are
+ * coarse (a kernel tick on Linux, two seconds on FAT), so a second write in
+ * the same tick with the same size leaves the stamp unchanged; Git calls such
+ * an entry "racily clean" and re-hashes it. A file younger than this is read
+ * and hashed on every capture until it ages past the window.
+ */
+export const STAT_SETTLE_WINDOW_MS = 2_000;
+
 export const MANIFEST_POLICY_ID = "raw-bytes-v1/manifest-v1";
 export const OBJECT_FORMAT = "git-loose-sha1+manifest-json-v1";
 
@@ -142,6 +165,8 @@ export type ReadRecord =
       /** Bytes, when transferred; absent when only the hash crossed. */
       bytes?: Uint8Array;
       stable: boolean;
+      /** Timestamps were older than the settle window when read (host only). */
+      settled?: boolean;
     }
   | {
       pathId: string;
@@ -161,7 +186,7 @@ export interface CaptureExecutor {
     pathIds: readonly string[],
     limits: CaptureLimits,
     signal: AbortSignal,
-    statCache?: ReadonlyMap<string, { stamp: string; oid: string; mode: ManifestMode }>,
+    statCache?: ReadonlyMap<string, StatCacheEntry>,
   ): Promise<ReadRecord[]>;
   /** Transfer bytes for records whose blobs are missing from the store. */
   fetch(
@@ -217,8 +242,13 @@ function statStamp(info: { size: number; mtimeMs: number; ctimeMs: number; ino: 
 export class HostCaptureExecutor implements CaptureExecutor {
   readonly kind = "host-worker" as const;
   readonly label: string;
+  /** Files read and hashed, and files whose settled stamp was reused unread. */
+  readonly reads = { contentRead: 0, stampReused: 0 };
 
-  constructor(private readonly root: string) {
+  constructor(
+    private readonly root: string,
+    private readonly settleWindowMs = STAT_SETTLE_WINDOW_MS,
+  ) {
     this.label = `host:${root}`;
   }
 
@@ -267,7 +297,7 @@ export class HostCaptureExecutor implements CaptureExecutor {
     pathIds: readonly string[],
     limits: CaptureLimits,
     signal: AbortSignal,
-    statCache?: ReadonlyMap<string, { stamp: string; oid: string; mode: ManifestMode }>,
+    statCache?: ReadonlyMap<string, StatCacheEntry>,
   ): Promise<ReadRecord[]> {
     return mapBounded(pathIds, limits.readers, signal, (pathId) =>
       this.readOne(pathId, limits, statCache, signal),
@@ -287,24 +317,48 @@ export class HostCaptureExecutor implements CaptureExecutor {
   private async readOne(
     pathId: string,
     limits: CaptureLimits,
-    statCache?: ReadonlyMap<string, { stamp: string; oid: string; mode: ManifestMode }>,
+    statCache?: ReadonlyMap<string, StatCacheEntry>,
     signal?: AbortSignal,
   ): Promise<ReadRecord> {
     if (!validCapturePath(decodePath(pathId)))
       return { pathId, kind: "omitted", reason: "unreadable", size: null, stamp: null };
+    const cached = statCache?.get(pathId);
+    // ST-1: a settled entry whose stamp still matches is not read or hashed.
+    const skipRead = cached?.settled
+      ? (info: { size: number; mtimeMs: number; ctimeMs: number; ino: number }) =>
+          statStamp(info) === cached.stamp
+      : undefined;
     for (let attempt = 0; attempt < limits.stableReadAttempts; attempt++) {
       try {
-        const { bytes, info, after, symlink } = await confinedRead(
+        const readAt = Date.now();
+        const read = await confinedRead(
           this.root,
           decodePath(pathId),
           limits.maxFileBytes,
           signal,
+          {
+            skipRead,
+          },
         );
+        if (read.skipped) {
+          this.reads.stampReused++;
+          return {
+            pathId,
+            kind: "file",
+            mode: read.info.mode & 0o111 ? "100755" : "100644",
+            size: read.info.size,
+            stamp: cached!.stamp,
+            oid: cached!.oid,
+            stable: true,
+            settled: true,
+          };
+        }
+        this.reads.contentRead++;
+        const { bytes, info, after, symlink } = read;
         const stamp = info ? statStamp(info) : `symlink:${objectId("blob", bytes)}`;
         const stable =
           !info || (!!after && statStamp(after) === stamp && bytes.length === info.size);
         if (!stable && attempt + 1 < limits.stableReadAttempts) continue;
-        const cached = statCache?.get(pathId);
         return {
           pathId,
           kind: symlink ? "symlink" : "file",
@@ -314,6 +368,10 @@ export class HostCaptureExecutor implements CaptureExecutor {
           oid: objectId("blob", bytes),
           ...(cached?.stamp === stamp ? {} : { bytes }),
           stable,
+          settled:
+            !!info &&
+            stable &&
+            readAt - Math.max(info.mtimeMs, info.ctimeMs) >= this.settleWindowMs,
         };
       } catch (error) {
         if (signal?.aborted) throw new Error("capture-timeout");
@@ -638,7 +696,7 @@ export type CaptureResult =
       finishedAt: string;
       newObjectIds: string[];
       /** Stat cache for the next capture of the same incarnation. */
-      statCache: Map<string, { stamp: string; oid: string; mode: ManifestMode }>;
+      statCache: Map<string, StatCacheEntry>;
     }
   | { kind: "unavailable"; reason: string; startedAt: string; finishedAt: string };
 
@@ -648,7 +706,7 @@ export interface CaptureRequest {
   /** Paths the previous capture covered, rechecked even if now ignored. */
   previous?: Manifest | null;
   /** Reuse a blob when stat metadata matches; recorded in coverage. */
-  statCache?: ReadonlyMap<string, { stamp: string; oid: string; mode: ManifestMode }>;
+  statCache?: ReadonlyMap<string, StatCacheEntry>;
   limits?: Partial<CaptureLimits>;
   signal?: AbortSignal;
 }
@@ -689,7 +747,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
     const entries: ManifestEntry[] = [...gitlinks];
     const omitted: ManifestOmission[] = [];
     const unstable: string[] = [];
-    const statCache = new Map<string, { stamp: string; oid: string; mode: ManifestMode }>();
+    const statCache = new Map<string, StatCacheEntry>();
     const newObjectIds: string[] = [];
     const needBytes: ReadRecord[] = [];
     let retainedBytes = 0;
@@ -721,7 +779,12 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
           s: record.size,
           t: tracked,
         });
-        statCache.set(record.pathId, { stamp: record.stamp, oid: written.id, mode: record.mode });
+        statCache.set(record.pathId, {
+          stamp: record.stamp,
+          oid: written.id,
+          mode: record.mode,
+          settled: !!record.settled && written.id === record.oid,
+        });
         return;
       }
       if (await request.store.reuse(record.oid)) {
@@ -732,7 +795,12 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
           s: record.size,
           t: tracked,
         });
-        statCache.set(record.pathId, { stamp: record.stamp, oid: record.oid, mode: record.mode });
+        statCache.set(record.pathId, {
+          stamp: record.stamp,
+          oid: record.oid,
+          mode: record.mode,
+          settled: !!record.settled,
+        });
         return;
       }
       needBytes.push(record);

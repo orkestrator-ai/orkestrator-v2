@@ -9,4 +9,12 @@ export const TERMINAL_LOG_AREAS = defineLogAreas({
       ...THROTTLE_LOG_EVENTS,
     },
   },
+  "terminal.setup": {
+    description: "The renderer attaching a backend-managed environment setup terminal.",
+    events: {
+      "session.bind-from-environment": "The environment hook bound a setup session to a tab.",
+      "setup.started-received": "An environment-setup-started event arrived.",
+      "setup.complete-received": "An environment-setup-complete event arrived.",
+    },
+  },
 });

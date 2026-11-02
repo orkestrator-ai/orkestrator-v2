@@ -412,7 +412,9 @@
         "packages/protocol/src/logger.ts",
         "packages/protocol/src/node/application-logging.ts",
         "packages/protocol/src/fatal-rejections.ts",
-        "apps/backend/src/bounded-console.ts"
+        "apps/backend/src/bounded-console.ts",
+        "apps/web/src/lib/desktop-startup-marker.ts",
+        "apps/web/src/lib/bug-report/renderer-errors.ts"
       ],
       "rules": {
         "no-restricted-globals": "off"

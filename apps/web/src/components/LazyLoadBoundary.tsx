@@ -1,7 +1,10 @@
 import { Component, Suspense, type ErrorInfo, type ReactNode } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+const log = createLogger("web.react");
 
 /**
  * Signatures browsers and bundlers use when a dynamic `import()` cannot be
@@ -158,7 +161,12 @@ class LazyLoadErrorBoundary extends Component<
     // The bounded diagnostic keeps only an allowlisted type, a one-way
     // fingerprint and component names extracted without source locations.
     const diagnostic = createLazyLoadFailureDiagnostic(error, info);
-    console.error("[LazyLoadBoundary] View failure", diagnostic);
+    log.error("lazy-view.failed", {
+      kind: diagnostic.kind,
+      errorType: diagnostic.errorType,
+      fingerprint: diagnostic.fingerprint,
+      componentChain: diagnostic.componentChain.join(" > "),
+    });
     try {
       this.props.onError?.(diagnostic);
     } catch {

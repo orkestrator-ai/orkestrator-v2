@@ -16,7 +16,7 @@ const oxlint = join(repoRoot, "node_modules/.bin/oxlint");
  */
 const UNMIGRATED: Readonly<Record<string, number>> = {
   "apps/backend/**": 455,
-  "apps/web/**": 369,
+  "apps/web/**": 360,
   "apps/web-public/**": 0,
 };
 
@@ -24,7 +24,8 @@ const UNMIGRATED: Readonly<Record<string, number>> = {
  * Paths excluded for good. A test's console is not the application log, and for
  * the rest `console` is the product: a CLI's and a script's output, a container
  * script with no logger to import, a bridge's build script, a live probe whose
- * stdout is the test's result channel, and the three files that wrap the console.
+ * stdout is the test's result channel, the four files that wrap the console, and
+ * the renderer's startup markers, whose exact text the desktop matches.
  * `fatal-rejections.ts` is serialized into workers, so it cannot import anything.
  */
 const PERMANENT: readonly string[] = [
@@ -49,6 +50,8 @@ const PERMANENT: readonly string[] = [
   "packages/protocol/src/node/application-logging.ts",
   "packages/protocol/src/fatal-rejections.ts",
   "apps/backend/src/bounded-console.ts",
+  "apps/web/src/lib/desktop-startup-marker.ts",
+  "apps/web/src/lib/bug-report/renderer-errors.ts",
 ];
 
 const RAW_CONSOLE = /\bconsole\.(?:log|info|warn|error|debug|trace)\b/g;

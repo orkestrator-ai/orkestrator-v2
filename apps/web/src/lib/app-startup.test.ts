@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { startApp } from "./app-startup";
 
 function deferred<T>() {
@@ -51,17 +52,19 @@ describe("startApp", () => {
   test("warns and still renders when hydration rejects", async () => {
     const error = new Error("cache unavailable");
     const render = mock(() => {});
-    const warn = mock((_message: string, _error: unknown) => {});
+    const logs = captureLogs();
     const timer = controlledTimer();
 
     await startApp({
       hydrate: () => Promise.reject(error),
       render,
       timer: timer.timer,
-      warn,
     });
 
-    expect(warn).toHaveBeenCalledWith("[App] Failed to restore the model catalogue cache:", error);
+    expect(logs.records().map(({ level, area, event }) => [level, area, event])).toEqual([
+      ["warn", "web.startup", "model-catalogue.restore-failed"],
+    ]);
+    logs.restore();
     expect(timer.clear).toHaveBeenCalledWith(timer.handle);
     expect(render).toHaveBeenCalledTimes(1);
   });

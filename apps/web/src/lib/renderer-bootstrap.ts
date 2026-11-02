@@ -1,5 +1,13 @@
-import { desktopStartupMessage } from "@orkestrator/protocol/debug-logging";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { startDesktopRenderer } from "./desktop-startup";
+import { emitDesktopStartupMarker } from "./desktop-startup-marker";
+
+const log = createLogger("web.window");
+
+/** The file alone: a script URL's directories and query add nothing the stack lacks. */
+function sourceFile(filename: string | undefined): string | undefined {
+  return filename?.split(/[?#]/, 1)[0]?.split("/").pop() || undefined;
+}
 
 interface RendererModule {
   startRenderer(options?: { reportStartupError?: () => void }): Promise<void>;
@@ -17,7 +25,7 @@ interface RendererBootstrapOptions {
   target?: RendererBootstrapTarget;
   startDesktop?: typeof startDesktopRenderer;
   loadRenderer?: () => Promise<RendererModule>;
-  logError?: (...values: unknown[]) => void;
+  emitMarker?: typeof emitDesktopStartupMarker;
 }
 
 /** Install startup diagnostics before loading any module that can mount the application. */
@@ -25,30 +33,25 @@ export async function bootstrapRenderer({
   target = window,
   startDesktop = startDesktopRenderer,
   loadRenderer = () => import("../renderer-entry"),
-  logError = (...values) => console.error(...values),
+  emitMarker = emitDesktopStartupMarker,
 }: RendererBootstrapOptions = {}): Promise<void> {
   let startupPending = true;
   const reportStartupError = () => {
-    if (startupPending) logError(desktopStartupMessage("renderer-error"));
+    if (startupPending) emitMarker("renderer-error");
   };
 
   target.addEventListener("error", (event) => {
     reportStartupError();
-    logError("[WindowError] Unhandled error", {
-      message: event.message,
-      filename: event.filename,
-      lineno: event.lineno,
-      colno: event.colno,
-      error: event.error,
-      stack: event.error instanceof Error ? event.error.stack : undefined,
+    log.error("error.unhandled", {
+      error: formatLogError(event.error ?? event.message),
+      file: sourceFile(event.filename),
+      line: event.lineno,
+      column: event.colno,
     });
   });
   target.addEventListener("unhandledrejection", (event) => {
-    if (startupPending) logError(desktopStartupMessage("unhandled-rejection"));
-    logError("[WindowError] Unhandled promise rejection", {
-      reason: event.reason,
-      stack: event.reason instanceof Error ? event.reason.stack : undefined,
-    });
+    if (startupPending) emitMarker("unhandled-rejection");
+    log.error("rejection.unhandled", { error: formatLogError(event.reason) });
   });
 
   try {

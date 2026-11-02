@@ -15,6 +15,19 @@ import { TERMINAL_LOG_AREAS } from "./terminal.js";
 import { TMUX_LOG_AREAS } from "./tmux.js";
 import { UPDATER_LOG_AREAS } from "./updater.js";
 import { WEB_ANNOTATIONS_LOG_AREAS } from "./web-annotations.js";
+import { WEB_APP_LOG_AREAS } from "./web-app.js";
+import { WEB_BUILD_PIPELINE_LOG_AREAS } from "./web-build-pipeline.js";
+import { WEB_CHAT_LOG_AREAS } from "./web-chat.js";
+import { WEB_CLAUDE_TMUX_LOG_AREAS } from "./web-claude-tmux.js";
+import { WEB_DESIGN_LOG_AREAS } from "./web-design.js";
+import { WEB_ENVIRONMENT_LOG_AREAS } from "./web-environment.js";
+import { WEB_FILES_LOG_AREAS } from "./web-files.js";
+import { WEB_GITHUB_LOG_AREAS } from "./web-github.js";
+import { WEB_KANBAN_LOG_AREAS } from "./web-kanban.js";
+import { WEB_PANE_LAYOUT_LOG_AREAS } from "./web-pane-layout.js";
+import { WEB_SETTINGS_LOG_AREAS } from "./web-settings.js";
+import { WEB_SHELL_LOG_AREAS } from "./web-shell.js";
+import { WEB_SYNC_LOG_AREAS } from "./web-sync.js";
 
 export type { LogAreaSpec, ThrottleLogEvent } from "./define.js";
 export { COMMAND_FAILURE_REASONS, type CommandFailureReason } from "./command-failure-reasons.js";
@@ -43,4 +56,17 @@ export const LOG_VOCABULARY = {
   ...TMUX_LOG_AREAS,
   ...UPDATER_LOG_AREAS,
   ...WEB_ANNOTATIONS_LOG_AREAS,
+  ...WEB_APP_LOG_AREAS,
+  ...WEB_BUILD_PIPELINE_LOG_AREAS,
+  ...WEB_CHAT_LOG_AREAS,
+  ...WEB_CLAUDE_TMUX_LOG_AREAS,
+  ...WEB_DESIGN_LOG_AREAS,
+  ...WEB_ENVIRONMENT_LOG_AREAS,
+  ...WEB_FILES_LOG_AREAS,
+  ...WEB_GITHUB_LOG_AREAS,
+  ...WEB_KANBAN_LOG_AREAS,
+  ...WEB_PANE_LAYOUT_LOG_AREAS,
+  ...WEB_SETTINGS_LOG_AREAS,
+  ...WEB_SHELL_LOG_AREAS,
+  ...WEB_SYNC_LOG_AREAS,
 } as const;

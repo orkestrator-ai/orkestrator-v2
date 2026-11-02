@@ -278,7 +278,8 @@ export function createCommandRegistry(
 
   const reconcilePendingEnvironmentRenames = async (context: CommandContext): Promise<number> => {
     const now = Date.now();
-    const environments = await context.storage.loadEnvironments();
+    // Read only; every 2 s while an intent is pending (BG-5).
+    const environments = await context.storage.readEnvironmentsSnapshot();
     const tasks: Promise<void>[] = [];
     let pending = 0;
     const withIntent = new Set(

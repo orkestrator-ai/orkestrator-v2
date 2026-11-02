@@ -357,3 +357,12 @@ admission wait). The complete controller owner, the eight-file focused renderer
 and store check, web typechecking, affected-file lint, and repository formatting
 also passed. No source, assertion, timeout, or skip changed after those focused
 checks; the subsequent changes only recorded this evidence.
+
+
+## Renderer efficiency review — 2026-11-02
+
+The exact `mise run test:logged -- --name browser -- mise run test:browser` rerun at `a3382d6c9` used nine workers: 1035 passed, 53 failed, 116 skipped, 1519.9 s, exit 1. Failures included mobile `NativeAttachments.spec.ts:6`, `NativeHeldSend.spec.ts:3`, and six `BackgroundTaskOutcome.spec.ts` launch/remount/stop cases. Attachment and held-send failures occurred on reload; the broad run's other failures remain unresolved, rather than presumed to share a cause.
+
+A one-worker rerun of the complete three owners passed all 32 cases (66.3 s, exit 0): `mise run test:logged -- --name review-fixes-native-owners -- bunx playwright test NativeHeldSend.spec.ts NativeAttachments.spec.ts BackgroundTaskOutcome.spec.ts --config=e2e/playwright.config.ts --workers=1`. No code, timeout, assertion or skip changed between runs. This confirms intermittence in these owners; host load is only a hypothesis.
+
+Broad failure evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XG8r46/browser.log.gz`. The passing logged runner deleted its raw output as designed. The original review package remains untouched.

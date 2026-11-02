@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
+  CONTAINER_LIFECYCLE_EVENT,
   parseContainerLifecycleError,
+  type ContainerLifecycleEvent,
   type ContainerLifecycleSnapshot,
   type RebuildPreview,
   type RebuildUnavailableReason,
@@ -21,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
+import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import type { Environment } from "@/types";
 
 const UNAVAILABLE_REASONS: Record<RebuildUnavailableReason, string> = {
@@ -40,6 +43,11 @@ const UNAVAILABLE_REASONS: Record<RebuildUnavailableReason, string> = {
     "This environment keeps the maximum number of recovery copies. Discard old copies first.",
   "unsupported-format": "This environment was changed by a newer version of Orkestrator.",
 };
+
+/** Progress reads while a rebuild runs and no event subscription is live. */
+export const REBUILD_POLL_MS = 2_000;
+/** Backstop reads under live lifecycle events, which carry the progress. */
+export const REBUILD_BACKSTOP_POLL_MS = 15_000;
 
 const PHASE_LABELS: Record<string, string> = {
   requested: "Starting",
@@ -91,29 +99,85 @@ export function EnvironmentRebuildSection({
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [allowUnknownCapacity, setAllowUnknownCapacity] = useState(false);
-  const [snapshot, setSnapshot] = useState<ContainerLifecycleSnapshot | null>(null);
+  const [held, setHeld] = useState<{
+    environmentId: string;
+    snapshot: ContainerLifecycleSnapshot;
+  } | null>(null);
+  const snapshot = held?.environmentId === environment.id ? held.snapshot : null;
   const [cancelling, setCancelling] = useState(false);
+  const [eventsLive, setEventsLive] = useState(false);
   const running = activeRebuild(snapshot);
 
-  const refreshSnapshot = useCallback(
-    () =>
-      backend.getContainerLifecycleSnapshot(environment.id).then(setSnapshot, () => {
+  // Reads and events can land in either order; keep the newer snapshot.
+  const applySnapshot = useCallback((environmentId: string, next: ContainerLifecycleSnapshot) => {
+    setHeld((current) =>
+      current?.environmentId === environmentId && next.revision < current.snapshot.revision
+        ? current
+        : { environmentId, snapshot: next },
+    );
+  }, []);
+
+  const readGeneration = useRef(0);
+  useLayoutEffect(() => {
+    readGeneration.current += 1;
+    return () => {
+      readGeneration.current += 1;
+    };
+  }, [environment.id]);
+
+  const refreshSnapshot = useCallback(() => {
+    const generation = readGeneration.current;
+    return backend.getContainerLifecycleSnapshot(environment.id).then(
+      (next) => {
+        if (generation === readGeneration.current) applySnapshot(environment.id, next);
+      },
+      () => {
         // The section stays usable; the backend re-checks everything anyway.
-      }),
-    [environment.id],
-  );
+      },
+    );
+  }, [applySnapshot, environment.id]);
 
+  // The backend publishes every durable lifecycle write with its snapshot.
+  // Subscribe before the first read, and read again whenever the transport
+  // may have dropped events, so a rebuild started from another window or
+  // before this dialog opened is followed without polling.
   useEffect(() => {
-    void refreshSnapshot();
-  }, [refreshSnapshot]);
+    const controller = new AbortController();
+    void listenAuthoritative<ContainerLifecycleEvent>(
+      CONTAINER_LIFECYCLE_EVENT,
+      ({ payload }) => {
+        if (
+          !controller.signal.aborted &&
+          payload?.environmentId === environment.id &&
+          payload.snapshot
+        ) {
+          applySnapshot(environment.id, payload.snapshot);
+        }
+      },
+      { onResync: refreshSnapshot, signal: controller.signal, resyncOnSubscribe: true },
+    ).then(
+      () => {
+        if (!controller.signal.aborted) setEventsLive(true);
+      },
+      () => {
+        if (controller.signal.aborted) return;
+        setEventsLive(false);
+        void refreshSnapshot();
+      },
+    );
+    return () => controller.abort();
+  }, [applySnapshot, environment.id, refreshSnapshot]);
 
-  // Poll only while a rebuild is in flight; it may have been started from
-  // another window or before this dialog was opened.
+  // While a rebuild runs, a slow read backs up the events; without a live
+  // subscription it is the only source of progress, so it stays quick.
   useEffect(() => {
     if (!running) return;
-    const timer = setInterval(() => void refreshSnapshot(), 2_000);
+    const timer = setInterval(
+      () => void refreshSnapshot(),
+      eventsLive ? REBUILD_BACKSTOP_POLL_MS : REBUILD_POLL_MS,
+    );
     return () => clearInterval(timer);
-  }, [running, refreshSnapshot]);
+  }, [eventsLive, running, refreshSnapshot]);
 
   const openConfirm = async () => {
     setLoadingPreview(true);

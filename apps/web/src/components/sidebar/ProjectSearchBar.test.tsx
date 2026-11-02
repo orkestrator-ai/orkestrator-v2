@@ -292,6 +292,61 @@ describe("ProjectSearchBar", () => {
     }
   });
 
+  test("a failing optional check stops the shimmer only while auto-merge requires checks", async () => {
+    const prUrl = "https://github.com/acme/orkestrator-v2/pull/10";
+    // GitHub would merge it, but a check it does not require is failing.
+    const unstable: Environment = {
+      ...localEnvironment,
+      prUrl,
+      prState: "open",
+      hasMergeConflicts: false,
+      prMergeability: "unstable",
+    };
+    const initialEnvironments = useEnvironmentStore.getState().environments;
+    const initialMonitor = usePrMonitorStore.getState();
+    const initialConfig = useConfigStore.getState().config;
+    const readyName = () =>
+      screen.getByTestId("project-search-item-env-local").querySelector("[data-merge-ready]");
+    try {
+      useEnvironmentStore.setState({ environments: [unstable, containerEnvironment] });
+      usePrMonitorStore.setState({
+        syncStatus: "current",
+        states: new Map([
+          [
+            unstable.id,
+            {
+              environmentId: unstable.id,
+              mode: "normal",
+              checkInProgress: false,
+              consecutiveErrors: 0,
+              lastCheckAt: "2026-10-28T10:00:00.000Z",
+              lastSuccessfulCheckAt: "2026-10-28T10:00:00.000Z",
+              prUrl,
+              prState: "open",
+              hasMergeConflicts: false,
+              checkSummary: { passed: 13, total: 14, pending: 0 },
+            },
+          ],
+        ]),
+      });
+      renderSearchBar({ environments: [unstable, containerEnvironment] });
+      await openSearch();
+      // Require checks to pass is on when absent.
+      expect(readyName() === null).toBe(true);
+
+      act(() => useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: false }));
+      expect(readyName()?.classList).toContain("text-shimmer");
+
+      act(() => useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true }));
+      expect(readyName() === null).toBe(true);
+    } finally {
+      cleanup();
+      useEnvironmentStore.setState({ environments: initialEnvironments });
+      usePrMonitorStore.setState(initialMonitor, true);
+      useConfigStore.setState({ config: initialConfig });
+    }
+  });
+
   test.each([
     ["needs-answer", "Waiting for your answer"],
     ["merge-conflicts", "Merge conflicts to resolve"],

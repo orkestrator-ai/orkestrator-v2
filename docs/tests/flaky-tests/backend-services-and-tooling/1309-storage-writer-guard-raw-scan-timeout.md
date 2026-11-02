@@ -1,7 +1,7 @@
 # Storage writer guard's backend-wide raw-writer scan times out under host load
 
 - **ID:** 1309
-- **Status:** resolved
+- **Status:** open
 - **Resolved:** 2026-10-30, by todo 0930 task 4 (`b64a2b224`)
 - **Observed:** 2026-10-26 to 2026-10-28 in aggregate runs on the shared Linux host;
   diagnosed 2026-10-29 on the todo 0214 follow-up branch
@@ -129,3 +129,29 @@ CPU-bound work, about 0.8 s on a quiet host, most of it the StorageService
 analysis and the roughly 126 files the scan needs. A run at the loads of
 cases 1010 or 1200 (40 to 190) could still push it past 5 s. A recurrence
 there reopens this case.
+
+
+## Task 1202 background-work review repair — 2026-11-02
+
+The exact default-suite retry used `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1
+mise run test:logged -- --name address-default-suite-concurrent -- mise run test`
+with workspace/root/bridge/protocol grants of 6/1/2/1. The ordinary retry was
+cancelled while queued behind another worktree; the documented concurrency
+option admitted all groups. Original preparation artifacts were preserved.
+Aggregate evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.WXZCOJ/`
+(group logs; compressed on failure), outer log in `orkestrator-test-run.Vufyx3`.
+
+Reopened: the raw-writer scan timed out again on this macOS host (5,002.99 ms).
+`mise run test:logged -- --name address-storage-guard-rerun -- bun test --cwd apps/backend ./src/core/storage-writer-guards-raw.test.ts --parallel=1 --only-failures`
+also failed (5,551.72 ms, 7 pass/1 fail). The same complete owner on detached
+`origin/main` at `38d55ee14` reproduced the timeout at 7,167.89 ms (7 pass/1 fail),
+using its own dependency installation. Evidence: `orkestrator-test-run.JCH0jV`
+(branch) and `orkestrator-test-run.JQUWb1` (main), under the same host temp root.
+The recurrence is outside the background-job diff. No budget or assertion was
+changed; the historical optimization remains useful but does not eliminate
+all host-load sensitivity.
+
+Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
+13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
+3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
+The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.

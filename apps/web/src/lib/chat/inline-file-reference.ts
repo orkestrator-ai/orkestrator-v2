@@ -65,7 +65,7 @@ function looksLikeFileName(path: string): boolean {
   return /^[A-Za-z0-9_+-]{1,16}$/.test(extension) && /[A-Za-z]/.test(extension);
 }
 
-function firstSegmentIsHost(path: string): boolean {
+export function firstSegmentIsHost(path: string): boolean {
   if (/^(?:[A-Za-z]:)?[\\/]/.test(path) || path.startsWith(".")) return false;
   const first = path.split(/[\\/]/)[0] ?? "";
   return HOST_SUFFIX.test(first);

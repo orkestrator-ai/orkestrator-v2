@@ -146,8 +146,12 @@ Ready means all of:
 - GitHub's merge state is `clean` (`mergeStateStatus` `CLEAN` or `HAS_HOOKS`,
   not a draft). GitHub derives it from branch protection, so it already covers
   required reviews, required checks and an up-to-date base. `unstable` (a
-  non-required check failing or still running) is not ready.
-- If the monitor has a check rollup, nothing in it is failing or pending.
+  non-required check failing or still running) is not ready while
+  Settings → Version control → Auto-merge → **Require checks to pass** is on
+  (the default). Off, it is ready: GitHub allows the merge, and the Merge PR
+  button and PR views show the failing check themselves.
+- While that setting is on and the monitor has a check rollup, nothing in it is
+  failing or pending.
 - The credential Orkestrator merges with is not known to lack push, maintain
   or admin on the repository (`viewerCanMerge`, below). An unknown permission
   does not block.
@@ -266,11 +270,14 @@ Settings → Version control → Auto-merge → **Require checks to pass**
 GitHub does not require hold a merge back. Off, `decideAutoMerge` passes
 `requireChecks: false` to `evaluatePrMergeReadiness`, so an `unstable` PR and a
 failing or pending check rollup count as ready and the PR merges as soon as
-GitHub allows it. On, it uses the shimmer's rule unchanged. Checks required by
-branch protection always block, because GitHub reports them as `blocked`. The
+GitHub allows it. On, every check has to pass. Checks required by branch
+protection always block, because GitHub reports them as `blocked`. The
 setting is per machine and is read on every decision, so a change applies at
-the next monitor reading. The shimmer is unaffected and still stops on any
-failing check.
+the next monitor reading. The green shimmer follows the same setting, so a
+green name means auto-merge would merge it. The renderer reads this machine's
+setting for every row, another machine's included: node summaries do not relay
+a leaf's setting, so a leaf with a different setting can merge on a different
+rule than its row on a command node shows.
 
 A failed merge or launch is retried after 60 s, doubling up to 15 minutes. A
 successful attempt also holds the same PR for 60 s, because a merge GitHub has

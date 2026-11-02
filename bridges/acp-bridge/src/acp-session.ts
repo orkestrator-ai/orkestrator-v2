@@ -2102,7 +2102,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
       : { value: message.content, truncated: false };
   message.content = nextContent.value;
   if (role === "assistant" && partType === "text" && state.currentTurnOutput !== null) {
-    const captured = appendBounded(state.currentTurnOutput, text, MAX_MESSAGE_TEXT_BYTES);
+    const captured = appendBounded(state.currentTurnOutput, text, MAX_MESSAGE_TEXT_BYTES, state);
     state.currentTurnOutput = captured.value;
     if (captured.truncated) state.outputTruncated = true;
   }

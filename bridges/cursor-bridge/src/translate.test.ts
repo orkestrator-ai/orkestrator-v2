@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { InteractionUpdateSchema } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
 import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
@@ -13,6 +13,7 @@ import {
   FALLBACK_COMPACTION_NOTE,
   applyInteractionUpdate,
   applyStreamUsage,
+  completeStreamedProse,
   settleAbandonedToolParts,
   settleBackgroundChildren,
 } from "./translate.js";
@@ -60,6 +61,36 @@ describe("text and thinking deltas", () => {
     structured.currentTurnOutput = "";
     applyInteractionUpdate(structured, { type: "text-delta", text: '{"a":1}' });
     expect(structured.currentTurnOutput).toBe('{"a":1}');
+  });
+
+  test("keeps structured-output length memos across deltas and prose completion in two rows", () => {
+    const state = running();
+    state.currentTurnOutput = "";
+    // Distinct row and turn buffers are essential: in the first row they
+    // happen to have equal values, which masks a shared memo.
+    applyInteractionUpdate(state, { type: "text-delta", text: "a".repeat(4096) });
+    applyInteractionUpdate(state, { type: "step-started" });
+    applyInteractionUpdate(state, { type: "text-delta", text: "b".repeat(2048) });
+    applyInteractionUpdate(state, { type: "text-delta", text: "warm" });
+
+    const row = state.messages[1]!;
+    const measure = spyOn(Buffer, "byteLength");
+    try {
+      for (let index = 0; index < 20; index += 1) {
+        applyInteractionUpdate(state, { type: "text-delta", text: "é" });
+        completeStreamedProse(state, row, "!");
+      }
+      // Only new suffixes and small metadata should be measured; neither
+      // accumulated buffer should be re-encoded on each append.
+      expect(
+        measure.mock.calls.filter(([value]) => typeof value === "string" && value.length >= 2048),
+      ).toEqual([]);
+    } finally {
+      measure.mockRestore();
+    }
+    expect(state.messages).toHaveLength(2);
+    expect(row.content).toBe("b".repeat(2048) + "warm" + "é!".repeat(20));
+    expect(state.currentTurnOutput).toBe("a".repeat(4096) + row.content);
   });
 
   test("keeps prose in one block when reasoning is interleaved with it", () => {

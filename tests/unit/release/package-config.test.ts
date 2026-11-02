@@ -77,8 +77,14 @@ describe("Electron packaging configuration", () => {
     expect(taskCommands("package:mac")).toContain("mise run build:all");
     expect(taskCommands("package:mac")).toContain("bunx electron-builder --mac --dir");
     expect(taskCommands("package:mac")).toContain("bun scripts/install-packaged-app-mac.ts");
-    expect(taskCommands("package:linux")).toContain("bunx electron-builder --linux --dir");
+    // The packaged Electron spec runs the unpacked build without installing it.
+    expect(taskCommands("package:linux")).toContain("mise run package:linux:unpacked");
     expect(taskCommands("package:linux")).toContain("bun scripts/install-packaged-app-linux.ts");
+    expect(taskCommands("package:linux:unpacked")).toContain("bun install --frozen-lockfile");
+    expect(taskCommands("package:linux:unpacked")).toContain("mise run download:bun");
+    expect(taskCommands("package:linux:unpacked")).toContain("mise run build:all");
+    expect(taskCommands("package:linux:unpacked")).toContain("bunx electron-builder --linux --dir");
+    expect(taskCommands("package:linux:unpacked")).not.toContain("install-packaged-app");
     expect(taskCommands("package:release")).toContain("electron-builder.release.config.ts");
     expect(taskCommands("package:release")).toContain("bunx electron-builder --mac");
     expect(taskCommands("package:release")).toContain(

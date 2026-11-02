@@ -1,9 +1,18 @@
 import { useEnvironmentDisplayActivity } from "./useEnvironmentDisplayActivity";
 import { environmentNameSignal, type EnvironmentNameSignal } from "@/lib/environment-name-signal";
-import { localEnvironmentPrMergeState } from "@/lib/pr-merge-readiness";
+import { localEnvironmentPrMergeState, shimmerRequiresChecks } from "@/lib/pr-merge-readiness";
 import type { PrMergeState, ReadyToMergeEnvironment } from "@/lib/pr-merge-readiness";
 import { useEnvironmentStore } from "@/stores";
+import { useConfigStore } from "@/stores/configStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
+
+/**
+ * Whether checks GitHub does not require hold back the green shimmer: this
+ * machine's auto-merge "Require checks to pass" setting.
+ */
+export function useShimmerRequiresChecks(): boolean {
+  return useConfigStore((state) => shimmerRequiresChecks(state.config.global));
+}
 
 /**
  * Whether this machine's environment has a pull request ready to merge or
@@ -14,12 +23,14 @@ export function useEnvironmentPrMergeState(
   environmentId: string,
   environment: ReadyToMergeEnvironment | null | undefined,
 ): PrMergeState | null {
+  const requireChecks = useShimmerRequiresChecks();
   return usePrMonitorStore((state) =>
     environment
       ? localEnvironmentPrMergeState(
           environment,
           state.states.get(environmentId) ?? null,
           state.syncStatus,
+          requireChecks,
         )
       : null,
   );

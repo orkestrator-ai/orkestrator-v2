@@ -137,3 +137,16 @@ mise run test:logged -- --name review-browser-pane-owner -- bunx playwright test
 ```
 
 No source, assertion, timeout or skip changed; the root cause is not established.
+
+
+## MCP provenance review — 2026-11-02
+
+The four-worker `ORKESTRATOR_E2E_PORT=15473 ORKESTRATOR_VALIDATION_GRANTED_WORKERS=4 mise run test:logged -- --name browser -- mise run test:browser` run repeated the mobile app-shell `appendChild fallback` anchor mismatch at line 140: expected `Transcript message 49.`, received message 48. The complete unchanged owner passed alone with two workers in 77.7 s:
+
+```sh
+ORKESTRATOR_E2E_PORT=15475 mise run test:logged -- --name pane-owning-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/PaneBreakpoint.spec.ts --workers=2 --output=output/visual-previews/pane-owning-results
+```
+
+A separately installed detached `origin/main` at `38d55ee14` also passed the complete owner with two workers in 85.8 s (port 15476, logged name `main-pane-breakpoint`). This confirms intermittence, not a main reproduction of the failure. Aggregate evidence: host temporary directory `orkestrator-test-run.ZlAiMU/browser.log` (compressed at finalization). No pane code, assertion, timeout or skip changed.
+
+Final MCP provenance browser rerun: the wrapper hit its 1,800-second deadline after starting case 995 of 1,206, so no final pass total is available. Both source-layout viewport cases ran; the separate source-layout owner passed. Eleven browser failures were reported before termination, including two design-canvas failures. Compressed evidence: `orkestrator-test-run.ZlAiMU/browser.log.gz` under the host temporary directory, copied to `output/visual-previews/review-validation-evidence/` in the provenance worktree. The public-site stage was not reached. This incomplete run remains failed.

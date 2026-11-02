@@ -121,8 +121,11 @@ export const DesignFrameView = memo(function DesignFrameView({
   useEffect(() => {
     if (!live) setBridge(null);
   }, [live]);
+  // The bridge listens only from here, so one replaced or dropped before it
+  // was committed holds nothing (to-do 2140).
   useEffect(() => {
     if (!bridge) return;
+    bridge.open();
     actionsRef.current.registerBridge(frame.id, bridge);
     return () => {
       actionsRef.current.registerBridge(frame.id, null);

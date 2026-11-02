@@ -24,6 +24,7 @@ with [agent-testing.md](agent-testing.md).
 | Run isolated-stack agent tests | `mise run test:agent:browser:isolated` | Creates a disposable profile, runs browser tests, and cleans up |
 | Run design-only real-stack tests | `mise run test:agent:design:isolated` | Same lifecycle, only `design-canvas.spec.ts` |
 | Run Electron agent tests | `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` | Main process, preload, IPC, clipboard, and shutdown |
+| Run the packaged-app Electron test | `mise run package:linux:unpacked`, then `mise run test:logged -- --name agent-electron-packaged -- mise run test:agent:electron:packaged` | Linux: the design journey against the packaged app's `file://` renderer, headless, on a disposable profile ([agent-testing.md](agent-testing.md#packaged-app-electron-spec)) |
 | Run Docker agent tests | `mise run test:logged -- --name agent-docker -- mise run test:agent:docker` | Opt-in container ownership and fixture coverage |
 | Qualify live paused interactions | `mise run test:logged -- --name paused-interactions-live -- mise run test:agent:paused-interactions` | Opt-in billed turns in a disposable profile; set `ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1` ([agent-testing.md](agent-testing.md#live-paused-interactions)) |
 | Run the live coordinator suite | `mise run test:agent:coordinator --credential-source <platform>` | Manual and opt-in: real provider turns, one disposable profile per platform ([agent-testing.md](agent-testing.md#live-coordinator-suite)) |
@@ -1423,6 +1424,7 @@ Use the default suite plus the additional evidence relevant to the change:
 | React component or store | Owning component/store tests and `mise run test:browser` when browser behavior matters |
 | User-visible or background renderer flow | Isolated-stack browser cycle, including inactive-environment rehydration |
 | Electron main/preload/IPC | Focused Electron tests plus `mise run test:agent:electron` |
+| Desktop packaging (`build` in `package.json`, `extraResources`) or how main loads the production renderer | `mise run package:linux:unpacked`, then `mise run test:agent:electron:packaged` on Linux |
 | Docker lifecycle or ownership | Local fixture coverage plus `mise run test:agent:docker` |
 | Service previews: private origins, publication, bootstrap, request forwarding, or the preview fixtures | `mise run test:preview:browser` (all three engines); add `mise run test:preview:docker` for target resolution, port publication or the relay, and `mise run test:agent:electron` for the desktop tunnel. See "Opt-in preview checks". |
 | iOS | `mise run test:all` on macOS with Xcode, or report that iOS was not run |

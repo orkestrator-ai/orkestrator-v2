@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   WEB_ANNOTATION_LIMITS,
+  WEB_ANNOTATION_MAX_SHADOW_DEPTH,
   WEB_ANNOTATION_REQUEST_STATES,
   WEB_ANNOTATION_REQUEST_STATE_LABELS,
   webAnnotationProducerSource,
@@ -9,6 +10,7 @@ import {
   webAnnotationPageKey,
   webAnnotationQueueOrigin,
   webAnnotationUtf8Bytes,
+  type WebAnnotationElementTarget,
 } from "./web-annotations.js";
 import {
   assertNoDeclaredProvenance,
@@ -151,6 +153,43 @@ describe("web annotation capture validation", () => {
   test("target validation honors enabled kinds", () => {
     expect(isWebAnnotationTarget(fixtureTargets.region, new Set(["element"]))).toBe(false);
     expect(isWebAnnotationTarget(fixtureTargets.region)).toBe(true);
+  });
+
+  test("an element anchor may carry a bounded root path through open shadow roots", () => {
+    const host = { tagName: "app-shell", cssPath: "html > body > app-shell" };
+    const element = fixtureTargets.element as WebAnnotationElementTarget;
+    const withScope = (scope: unknown) => ({
+      ...element,
+      anchor: { ...element.anchor, scope },
+    });
+    expect(isWebAnnotationTarget(withScope({ kind: "shadow", hosts: [host] }))).toBe(true);
+    expect(
+      isWebAnnotationTarget(
+        withScope({
+          kind: "shadow",
+          hosts: [{ ...host, stableId: { kind: "test-id", value: "shell" } }, host],
+        }),
+      ),
+    ).toBe(true);
+    const deepest = Array.from({ length: WEB_ANNOTATION_MAX_SHADOW_DEPTH }, () => host);
+    expect(isWebAnnotationTarget(withScope({ kind: "shadow", hosts: deepest }))).toBe(true);
+
+    for (const scope of [
+      { kind: "shadow", hosts: [] },
+      { kind: "shadow", hosts: [...deepest, host] },
+      { kind: "shadow" },
+      { kind: "shadow", hosts: [{ tagName: "", cssPath: "x" }] },
+      { kind: "shadow", hosts: [{ tagName: "app-shell", cssPath: "" }] },
+      { kind: "shadow", hosts: [{ ...host, cssPath: "x".repeat(4_001) }] },
+      { kind: "shadow", hosts: [{ ...host, stableId: { kind: "class", value: "x" } }] },
+      { kind: "unsupported", reason: "shadow" },
+    ]) {
+      expect(isWebAnnotationTarget(withScope(scope))).toBe(false);
+    }
+    // The older scopes are unchanged.
+    expect(isWebAnnotationTarget(withScope({ kind: "unsupported", reason: "shadow-root" }))).toBe(
+      true,
+    );
   });
 });
 

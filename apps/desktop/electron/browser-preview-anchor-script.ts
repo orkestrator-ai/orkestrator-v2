@@ -33,6 +33,10 @@ export function browserPreviewAnchorKit() {
   const SOURCE_PRODUCER_META = "orkestrator-source-producer";
   const MAX_SOURCE_HINTS = 4;
   const SOURCE_HINT_DEPTH = 16;
+  // `WEB_ANNOTATION_MAX_SHADOW_DEPTH` in the protocol (this kit cannot import).
+  const MAX_SHADOW_DEPTH = 8;
+  /** Shadow roots the resolver entered, so the pin layer can observe them. */
+  const MAX_SEEN_SHADOW_ROOTS = 64;
   const SKIP_TAGS = new Set([
     "SCRIPT",
     "STYLE",
@@ -163,16 +167,21 @@ export function browserPreviewAnchorKit() {
     name: string | null;
   };
   type Quote = { exact: string; prefix: string; suffix: string };
+  type StableId = { kind: "id" | "test-id"; value: string };
+  type ShadowHost = { tagName: string; stableId?: StableId; cssPath: string };
   type Anchor = {
-    stableId?: { kind: "id" | "test-id"; value: string };
+    stableId?: StableId;
     semantic: { tagName: string; role: string | null; name: string | null };
     text: Quote | null;
     ancestors: Ancestor[];
     cssPath: string;
     scope:
       | { kind: "document" }
+      | { kind: "shadow"; hosts: ShadowHost[] }
       | { kind: "unsupported"; reason: "iframe" | "shadow-root" | "closed-root" | "cross-origin" };
   };
+  /** The tree an anchor's ids, paths and candidates are scoped to. */
+  type Root = Document | ShadowRoot;
   /** A boundary between nodes: before a node, after a node, or inside a text node. */
   type Marker =
     | { kind: "enter"; node: Node }
@@ -255,6 +264,32 @@ export function browserPreviewAnchorKit() {
   };
   const isElement = (node: unknown): node is Element =>
     Boolean(node) && (node as Node).nodeType === 1;
+  /** `node`'s root when it is an open shadow root, else null. */
+  const asShadowRoot = (node: Node | null | undefined): ShadowRoot | null =>
+    node && node.nodeType === 11 && isElement((node as ShadowRoot).host)
+      ? (node as ShadowRoot)
+      : null;
+  /** The document or shadow root `element` lives in; a detached element counts as the document. */
+  const rootOf = (element: Element): Root => {
+    try {
+      return asShadowRoot(element.getRootNode()) ?? document;
+    } catch {
+      return document;
+    }
+  };
+  /** Parent in the composed tree: a shadow root's top-level elements lead to its host. */
+  const composedParent = (element: Element): Element | null => {
+    if (element.parentElement) return element.parentElement;
+    return asShadowRoot(element.parentNode)?.host ?? null;
+  };
+  const composedContains = (ancestor: Element, node: Node): boolean => {
+    let current: Element | null = isElement(node) ? node : (node.parentElement ?? null);
+    for (let depth = 0; current && depth < 512; depth += 1) {
+      if (current === ancestor) return true;
+      current = composedParent(current);
+    }
+    return false;
+  };
   const isInspectorNode = (node: Node | null | undefined): boolean => {
     const element = isElement(node) ? node : (node?.parentElement ?? null);
     return Boolean(element?.closest?.(`[${UI_ATTRIBUTE}]`));
@@ -268,9 +303,9 @@ export function browserPreviewAnchorKit() {
       .replace(/^(\d)/, "\\3$1 ")
       .replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
   };
-  const countMatches = (selector: string, limit = 2): number => {
+  const countMatches = (selector: string, limit = 2, root: Root = document): number => {
     try {
-      const matches = document.querySelectorAll(selector);
+      const matches = root.querySelectorAll(selector);
       return Math.min(matches.length, limit);
     } catch {
       return limit;
@@ -307,7 +342,7 @@ export function browserPreviewAnchorKit() {
     let current: Element | null = isElement(node) ? node : (node?.parentElement ?? null);
     for (let depth = 0; current && depth < 64; depth += 1) {
       if (isSensitiveElement(current)) return true;
-      current = current.parentElement;
+      current = composedParent(current);
     }
     return false;
   };
@@ -561,8 +596,15 @@ export function browserPreviewAnchorKit() {
     const labelledBy = element.getAttribute("aria-labelledby");
     if (labelledBy) {
       const names: string[] = [];
+      // IDREFs resolve within the element's own tree, as the browser does.
+      const root = rootOf(element);
       for (const id of labelledBy.trim().split(/\s+/).slice(0, 5)) {
-        const labelElement = document.getElementById(id);
+        let labelElement: Element | null = null;
+        try {
+          labelElement = root.querySelector(`[id="${escapeAttributeValue(id)}"]`);
+        } catch {
+          labelElement = null;
+        }
         if (labelElement && !isInspectorNode(labelElement)) {
           names.push(visibleText(labelElement, NAME_CHARS, budget));
         }
@@ -582,7 +624,7 @@ export function browserPreviewAnchorKit() {
       const id = element.getAttribute("id");
       if (id) {
         try {
-          label = document.querySelector(`label[for="${escapeAttributeValue(id)}"]`);
+          label = rootOf(element).querySelector(`label[for="${escapeAttributeValue(id)}"]`);
         } catch {
           label = null;
         }
@@ -616,13 +658,15 @@ export function browserPreviewAnchorKit() {
   };
 
   const looksGenerated = (value: string): boolean => GENERATED_ID.test(value);
-  const stableIdFor = (element: Element): Anchor["stableId"] | undefined => {
+  /** A test id or id unique within the element's own document or shadow root. */
+  const stableIdFor = (element: Element): StableId | undefined => {
+    const root = rootOf(element);
     const testId = element.getAttribute("data-testid");
     if (
       testId &&
       testId.length <= 200 &&
       testId.trim() &&
-      countMatches(`[data-testid="${escapeAttributeValue(testId)}"]`) === 1
+      countMatches(`[data-testid="${escapeAttributeValue(testId)}"]`, 2, root) === 1
     ) {
       return { kind: "test-id", value: testId };
     }
@@ -632,14 +676,16 @@ export function browserPreviewAnchorKit() {
       id.length <= 200 &&
       id.trim() &&
       !looksGenerated(id) &&
-      countMatches(`[id="${escapeAttributeValue(id)}"]`) === 1
+      countMatches(`[id="${escapeAttributeValue(id)}"]`, 2, root) === 1
     ) {
       return { kind: "id", value: id };
     }
     return undefined;
   };
 
+  /** Structural path within the element's own document or shadow root. */
   const cssPathFor = (element: Element): string => {
+    const root = rootOf(element);
     const parts: string[] = [];
     let current: Element | null = element;
     while (current && parts.length < 24) {
@@ -653,17 +699,17 @@ export function browserPreviewAnchorKit() {
         id &&
         id.length <= 100 &&
         !looksGenerated(id) &&
-        countMatches(`[id="${escapeAttributeValue(id)}"]`) === 1
+        countMatches(`[id="${escapeAttributeValue(id)}"]`, 2, root) === 1
       ) {
         parts.unshift(`${tag}#${escapeIdentifier(id)}`);
         break;
       }
       const parent: Element | null = current.parentElement;
       let segment = tag;
-      if (parent) {
+      if (parent || root !== document) {
         let count = 0;
         let position = 0;
-        const siblings = parent.children;
+        const siblings = (parent ?? root).children;
         for (let index = 0; index < Math.min(siblings.length, 1_000); index += 1) {
           const sibling = siblings[index]!;
           if (sibling.tagName === current.tagName) {
@@ -692,30 +738,57 @@ export function browserPreviewAnchorKit() {
         (normalize(element.getAttribute("title"), NAME_CHARS) || null),
     };
   };
+  /** Nearest ancestors in the composed tree, so a shadow target names its hosts too. */
   const ancestorsFor = (element: Element, budget: Budget): Ancestor[] => {
     const ancestors: Ancestor[] = [];
-    let current = element.parentElement;
+    let current = composedParent(element);
     while (current && ancestors.length < MAX_ANCESTORS) {
       if (current === document.body || current === document.documentElement) break;
       ancestors.push(ancestorDescriptor(current, budget));
-      current = current.parentElement;
+      current = composedParent(current);
     }
     return ancestors.reverse();
   };
 
+  const shadowHostFor = (host: Element): ShadowHost => {
+    const stableId = stableIdFor(host);
+    return {
+      tagName: host.tagName.toLowerCase().slice(0, 64),
+      ...(stableId ? { stableId } : {}),
+      cssPath: cssPathFor(host),
+    };
+  };
+
+  /**
+   * The document, or the root path through open shadow roots (outermost host
+   * first). A page script can only reach an element inside a closed root if
+   * the page handed it over, so that, a detached tree and a path deeper than
+   * `MAX_SHADOW_DEPTH` stay unsupported. Frames are never entered.
+   */
   const scopeFor = (element: Element): Anchor["scope"] => {
     if (element.tagName === "IFRAME" || element.tagName === "FRAME") {
       return { kind: "unsupported", reason: "iframe" };
     }
-    if ((element as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot) {
-      return { kind: "unsupported", reason: "shadow-root" };
-    }
+    const hosts: ShadowHost[] = [];
+    let root: Node;
     try {
-      if (element.getRootNode() !== document) return { kind: "unsupported", reason: "shadow-root" };
+      root = element.getRootNode();
     } catch {
       return { kind: "unsupported", reason: "closed-root" };
     }
-    return { kind: "document" };
+    while (root !== document) {
+      const shadow = asShadowRoot(root);
+      if (!shadow) return { kind: "unsupported", reason: "shadow-root" };
+      if (shadow.mode !== "open") return { kind: "unsupported", reason: "closed-root" };
+      if (hosts.length >= MAX_SHADOW_DEPTH) return { kind: "unsupported", reason: "shadow-root" };
+      hosts.unshift(shadowHostFor(shadow.host));
+      try {
+        root = shadow.host.getRootNode();
+      } catch {
+        return { kind: "unsupported", reason: "closed-root" };
+      }
+    }
+    return hosts.length > 0 ? { kind: "shadow", hosts } : { kind: "document" };
   };
 
   const elementQuote = (element: Element, budget: Budget): Quote & { complete: boolean } =>
@@ -981,7 +1054,7 @@ export function browserPreviewAnchorKit() {
         });
         if (hints.length >= MAX_SOURCE_HINTS) break;
       }
-      current = current.parentElement;
+      current = composedParent(current);
     }
     return hints;
   };
@@ -1206,8 +1279,96 @@ export function browserPreviewAnchorKit() {
   /** Budget or deadline exhausted: distinct from an unsupported scope. */
   const tooComplex = (): Resolution => result("too-complex", "none", 0);
 
+  const stableIdSelector = (stableId: StableId): string =>
+    stableId.kind === "test-id"
+      ? `[data-testid="${escapeAttributeValue(stableId.value)}"]`
+      : `[id="${escapeAttributeValue(stableId.value)}"]`;
+  /** Page elements in `root` matching `selector`, at most 20; none for an invalid selector. */
+  const queryPage = (root: Root, selector: string): Element[] => {
+    try {
+      return Array.from(root.querySelectorAll(selector))
+        .slice(0, 20)
+        .filter((element) => !isInspectorNode(element));
+    } catch {
+      return [];
+    }
+  };
+  const elementsByTag = (root: Root, tagName: string): ArrayLike<Element> => {
+    if (root === document) return document.getElementsByTagName(tagName);
+    try {
+      return root.querySelectorAll(escapeIdentifier(tagName));
+    } catch {
+      return [];
+    }
+  };
+
+  let seenShadowRoots: ShadowRoot[] = [];
+  const noteShadowRoot = (root: ShadowRoot): void => {
+    if (seenShadowRoots.length < MAX_SEEN_SHADOW_ROOTS && !seenShadowRoots.includes(root)) {
+      seenShadowRoots.push(root);
+    }
+  };
+
+  /**
+   * Rule 1, root path: each host must match exactly one element with its tag
+   * in the root that contains it (by stable id, then structural path) and
+   * still have an open shadow root. The later rules then run in the innermost
+   * root. A host that is gone, closed or not yet attached is `missing`.
+   */
+  const resolveRoot = (
+    scope: Anchor["scope"],
+    budget: Budget,
+  ): { root: Root } | { failed: Resolution } => {
+    if (scope.kind === "document") return { root: document };
+    if (
+      scope.kind !== "shadow" ||
+      !Array.isArray(scope.hosts) ||
+      scope.hosts.length === 0 ||
+      scope.hosts.length > MAX_SHADOW_DEPTH
+    ) {
+      return { failed: result("unsupported", "none", 0) };
+    }
+    let root: Root = document;
+    for (const host of scope.hosts) {
+      if (!spend(budget)) return { failed: tooComplex() };
+      const sameTag = (element: Element) => element.tagName.toLowerCase() === host.tagName;
+      let matches: Element[] = host.stableId
+        ? queryPage(root, stableIdSelector(host.stableId)).filter(sameTag)
+        : [];
+      if (matches.length !== 1) {
+        matches = queryPage(root, host.cssPath).filter((candidate) => {
+          if (!sameTag(candidate)) return false;
+          // Structural paths without an ID start at the root's direct children.
+          // ShadowRoot querySelectorAll otherwise also accepts descendant suffixes.
+          if (root !== document && !host.cssPath.includes("#")) {
+            let top = candidate;
+            for (let index = 1; index < host.cssPath.split(" > ").length; index += 1) {
+              if (!top.parentElement) return false;
+              top = top.parentElement;
+            }
+            if (top.parentNode !== root) return false;
+          }
+          // Never substitute a different component for a saved stable identity.
+          if (host.stableId) {
+            const attribute = host.stableId.kind === "test-id" ? "data-testid" : "id";
+            if (candidate.getAttribute(attribute) !== host.stableId.value) return false;
+          }
+          return true;
+        });
+      }
+      if (matches.length > 1) return { failed: result("ambiguous", "none", matches.length) };
+      const shadow: ShadowRoot | null = matches[0]?.shadowRoot ?? null;
+      if (!shadow) return { failed: result("missing", "none", 0) };
+      noteShadowRoot(shadow);
+      root = shadow;
+    }
+    return { root };
+  };
+
   const resolveElement = (anchor: Anchor, budget: Budget): Resolution => {
-    if (anchor.scope.kind !== "document") return result("unsupported", "none", 0);
+    const scope = resolveRoot(anchor.scope, budget);
+    if ("failed" in scope) return scope.failed;
+    const scoped = scope.root;
     let ambiguousCount = 0;
     let staleCandidate = false;
     // One semantic candidate with no corroborating evidence either way: it
@@ -1216,18 +1377,7 @@ export function browserPreviewAnchorKit() {
 
     // Rule 2: unique stable id with compatible identity.
     if (anchor.stableId) {
-      const selector =
-        anchor.stableId.kind === "test-id"
-          ? `[data-testid="${escapeAttributeValue(anchor.stableId.value)}"]`
-          : `[id="${escapeAttributeValue(anchor.stableId.value)}"]`;
-      let matches: Element[] = [];
-      try {
-        matches = Array.from(document.querySelectorAll(selector))
-          .slice(0, 20)
-          .filter((element) => !isInspectorNode(element));
-      } catch {
-        matches = [];
-      }
+      const matches = queryPage(scoped, stableIdSelector(anchor.stableId));
       if (matches.length === 1) {
         const candidate = matches[0]!;
         if (identityMatches(candidate, anchor, budget))
@@ -1240,7 +1390,7 @@ export function browserPreviewAnchorKit() {
 
     // Rule 3: scoped semantic identity corroborated by ancestors or surrounding text.
     if (anchor.semantic.name) {
-      const all = document.getElementsByTagName(anchor.semantic.tagName);
+      const all = elementsByTag(scoped, anchor.semantic.tagName);
       if (all.length > 5_000) return tooComplex();
       const candidates: Element[] = [];
       for (let index = 0; index < all.length; index += 1) {
@@ -1273,14 +1423,7 @@ export function browserPreviewAnchorKit() {
 
     // Rule 4: the structural path, only with supporting identity and context.
     if (anchor.cssPath) {
-      let matches: Element[] = [];
-      try {
-        matches = Array.from(document.querySelectorAll(anchor.cssPath))
-          .slice(0, 20)
-          .filter((element) => !isInspectorNode(element));
-      } catch {
-        matches = [];
-      }
+      const matches = queryPage(scoped, anchor.cssPath);
       if (matches.length === 1) {
         const candidate = matches[0]!;
         const hasSupport = Boolean(anchor.semantic.name || anchor.text?.exact);
@@ -1443,7 +1586,10 @@ export function browserPreviewAnchorKit() {
 
   return {
     UI_ATTRIBUTE,
+    MAX_SHADOW_DEPTH,
     createBudget,
+    composedParent,
+    composedContains,
     hoverLabel,
     rectOf,
     isInspectorNode,
@@ -1460,7 +1606,10 @@ export function browserPreviewAnchorKit() {
     resolveTarget,
     resetResolverCache: () => {
       cachedTextMap = undefined;
+      seenShadowRoots = [];
     },
+    /** Open shadow roots entered since the last reset, at most 64. */
+    shadowRootsSeen: (): ShadowRoot[] => seenShadowRoots.slice(),
   };
 }
 

@@ -117,6 +117,7 @@ import path from "node:path";
 import { normalizeProjectFolderName } from "@orkestrator/protocol/project-folders";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
+import { FrozenStoreSnapshot } from "./storage-frozen-snapshot.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 
 /**
@@ -361,11 +362,35 @@ export class ControlRequestConflictError extends Error {
 }
 
 export class ProjectsRepository {
+  private readonly environmentsSnapshot: FrozenStoreSnapshot<Environment[]>;
+
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
     private readonly repos: StorageRepositories,
-  ) {}
+  ) {
+    this.environmentsSnapshot = new FrozenStoreSnapshot(context, {
+      filePath: files.environmentsFile(),
+      decodeRow: (parsed) => {
+        normalizeStoredEnvironment(parsed as Environment);
+        return parsed;
+      },
+      build: (rows) =>
+        rows.map((row) => row.decoded as Environment).sort((a, b) => a.order - b.order),
+      load: () => this.loadEnvironments(),
+    });
+  }
+
+  /**
+   * Every environment, sorted as {@link loadEnvironments} sorts them, from one
+   * decoded copy shared per store revision (`FrozenStoreSnapshot`). For
+   * read-only background callers: every environment object is frozen, so a
+   * caller that changes one must use {@link loadEnvironments}. The array itself
+   * is a fresh copy.
+   */
+  async readEnvironmentsSnapshot(): Promise<Environment[]> {
+    return [...(await this.environmentsSnapshot.read())];
+  }
 
   enqueueEnvironmentMutation<T>(operation: () => Promise<T>): Promise<T> {
     return this.context.serialize(this.files.environmentsFile(), "environment storage", operation);
@@ -743,6 +768,29 @@ export class ProjectsRepository {
     return rows.find((row) => row.id === environmentId) ?? null;
   }
 
+  /**
+   * Keeps the names of an environment being deleted with its recorded usage,
+   * which outlives it, so the usage pane can still say which environment and
+   * project the usage came from. Best effort: a failure costs the label, never
+   * the deletion.
+   */
+  private async labelRemovedEnvironmentUsage(environment: Environment): Promise<void> {
+    try {
+      const project = (await this.loadProjects()).find(
+        (candidate) => candidate.id === environment.projectId,
+      );
+      this.repos.sessions.labelAgentUsageEnvironment(environment.id, {
+        environmentName: environment.name,
+        ...(project?.name ? { projectName: project.name } : {}),
+      });
+    } catch (error) {
+      console.warn(
+        `[backend] could not keep usage names for ${environment.id}:`,
+        error instanceof Error ? error.name : "unknown",
+      );
+    }
+  }
+
   async removeEnvironment(environmentId: string): Promise<void> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -772,6 +820,7 @@ export class ProjectsRepository {
           final,
         ]);
       }
+      if (removed) await this.labelRemovedEnvironmentUsage(removed);
       await this.saveEnvironments(filtered);
       await this.scrubEnvironmentBackups(environmentId, true);
       this.context.changes.announce(
@@ -1794,8 +1843,9 @@ export class ProjectsRepository {
           : acceptedTime,
       ).toISOString();
       const unreadBefore = environment.hasUnreadWork === true;
+      const unreadFailure = unreadBefore && environment.unreadReason === "agent_failed";
       environment.hasUnreadWork = true;
-      environment.unreadReason = reason;
+      if (reason !== "agent_finished" || !unreadFailure) environment.unreadReason = reason;
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (!unreadBefore) this.notifyAttention(environment);

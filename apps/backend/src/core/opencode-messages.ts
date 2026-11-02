@@ -614,15 +614,45 @@ export function normalizeOpenCodeTranscriptGroups(
   recordUnknown: (type: string) => void,
   commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
 ): Record<string, unknown>[][] {
-  return messages.map((message, index) => {
-    const normalized = normalizeOpenCodeInteractiveMessage(
-      message,
-      index,
-      recordUnknown,
-      commandChanges,
-    );
-    if (!normalized) return [];
-    const inlineError = normalizeOpenCodeInlineError(message);
-    return inlineError ? [normalized, inlineError] : [normalized];
-  });
+  return messages.map((message, index) =>
+    normalizeOpenCodeTranscriptGroup(message, index, recordUnknown, commandChanges),
+  );
+}
+
+function normalizeOpenCodeTranscriptGroup(
+  message: unknown,
+  index: number,
+  recordUnknown: (type: string) => void,
+  commandChanges?: ReadonlyMap<string, MeasuredWorkspaceChange>,
+): Record<string, unknown>[] {
+  const normalized = normalizeOpenCodeInteractiveMessage(
+    message,
+    index,
+    recordUnknown,
+    commandChanges,
+  );
+  if (!normalized) return [];
+  const inlineError = normalizeOpenCodeInlineError(message);
+  return inlineError ? [normalized, inlineError] : [normalized];
+}
+
+/**
+ * The newest `rows` rows of {@link normalizeOpenCodeTranscriptMessages}, or
+ * every row when there are fewer, normalising only the messages they come
+ * from. Each message keeps its real position, so rows are the same as in the
+ * whole normalisation.
+ */
+export function normalizeOpenCodeTranscriptTail(
+  messages: readonly unknown[],
+  recordUnknown: (type: string) => void,
+  rows: number,
+): Record<string, unknown>[] {
+  const groups: Record<string, unknown>[][] = [];
+  let count = 0;
+  for (let index = messages.length - 1; index >= 0 && count < rows; index -= 1) {
+    const group = normalizeOpenCodeTranscriptGroup(messages[index], index, recordUnknown);
+    groups.push(group);
+    count += group.length;
+  }
+  return groups.reverse().flat().slice(-rows);
 }

@@ -73,9 +73,15 @@ export interface UsageModelSummary {
 
 export interface UsageEnvironmentSummary {
   environmentId: string;
-  /** Absent once the environment has been deleted; its usage is still counted. */
+  /**
+   * The environment's current name, or the name it had when it was deleted.
+   * Absent only for an environment deleted before names were kept with its
+   * usage; its usage is still counted.
+   */
   name?: string;
   projectName?: string;
+  /** The environment no longer exists; `name` is the one it was deleted under. */
+  deleted?: boolean;
   totals: UsageTotals;
   sessions: number;
 }

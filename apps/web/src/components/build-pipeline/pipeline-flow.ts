@@ -17,8 +17,14 @@
  */
 
 import {
+  effectiveDeliveryPolicy,
+  type DeliveryPolicy,
+} from "@orkestrator/protocol/ticket-sections";
+import {
   REVIEW_PACKAGE_SESSION_LABEL,
   isActiveBuildPhase,
+  isBranchPushSession,
+  pipelineReachedPullRequestStage,
   isReviewPackagePreparationSession,
   isSupersededPipelineSession,
   pipelineIndependentReviewSlot,
@@ -100,6 +106,8 @@ export interface PipelineFlowNode {
   error?: string;
   /** A reviewer whose agent could not start: it failed before its session existed. */
   startFailed?: boolean;
+  /** The PR node of a run that ends without one: the policy that says so. */
+  noPullRequest?: DeliveryPolicy;
   /** Activity time, for the default selection. */
   activityAt?: number;
   /**
@@ -198,6 +206,9 @@ const COLUMN_LABELS: Record<PipelineFlowColumnKind, string> = {
 };
 
 const CONSOLIDATION_LABEL = "Consolidation";
+
+/** A Ship that only pushes (`push-no-pr`). */
+const PUSH_TITLE = "Push";
 
 /** The configured harness of a step that has not run yet, where the launch chose one. */
 function placeholderStep(
@@ -533,6 +544,19 @@ export function pipelineFlowModel(
   const active = isActiveBuildPhase(pipeline.phase);
   const complete = pipeline.phase === "complete";
   const cancelled = isCancelled(pipeline);
+  // What the run did once it decided, else what it will do as things stand: the
+  // ticket can still change this until Verify passes.
+  const plannedDelivery =
+    pipeline.delivery?.policy ??
+    // A record from before decisions were kept: a live Ship already chose.
+    (pipeline.sessions.some(
+      (session) =>
+        session.phase === "pr" &&
+        !isBranchPushSession(session) &&
+        !isSupersededPipelineSession(session),
+    )
+      ? "open-pr"
+      : effectiveDeliveryPolicy(pipeline.deliveryPolicy));
   const stopped = stoppedPhase(pipeline);
   // Between a restart and its replacement session the current index still
   // names the superseded session; it is history, not the running step.
@@ -1034,7 +1058,7 @@ export function pipelineFlowModel(
     const node: PipelineFlowNode = {
       id: session.sessionKey,
       kind,
-      title: numbered(KIND_TITLES[kind], occurrence),
+      title: numbered(isBranchPushSession(session) ? PUSH_TITLE : KIND_TITLES[kind], occurrence),
       state,
       placeholder: false,
       ...sessionFields(session, pipeline),
@@ -1210,7 +1234,8 @@ export function pipelineFlowModel(
       "review",
       ...(fanoutConfigured ? (["consolidation"] as const) : []),
       "verify",
-      "ship",
+      // `commit-only` ends at Verify: no agent turn follows it.
+      ...(plannedDelivery === "commit-only" ? [] : (["ship"] as const)),
     ];
     // The live run continues after a previous attempt, from its own last step.
     const lastKind = [...columns].reverse().find((column) => !column.superseded)!.kind;
@@ -1223,6 +1248,7 @@ export function pipelineFlowModel(
         case "address":
           return route.indexOf("verify") - 1;
         case "conflicts":
+        case "ship":
           return route.length;
         case "ticket":
           return 0;
@@ -1268,7 +1294,10 @@ export function pipelineFlowModel(
       place(addColumn(kind), {
         id: `placeholder:${kind}`,
         kind,
-        title: numbered(KIND_TITLES[kind], occurrence),
+        title: numbered(
+          kind === "ship" && plannedDelivery === "push-no-pr" ? PUSH_TITLE : KIND_TITLES[kind],
+          occurrence,
+        ),
         state: "not-started",
         placeholder: true,
         ...stepFields(placeholderStep(pipeline, kind)),
@@ -1278,9 +1307,23 @@ export function pipelineFlowModel(
 
   // The pull request: last when reached, or still ahead of an unfinished run.
   // It belongs to this pipeline only once the pipeline has reached Ship.
-  const shipped = pipeline.sessions.some((session) => session.phase === "pr");
+  const shipped = pipelineReachedPullRequestStage(pipeline);
   const pr = shipped ? pullRequest : null;
-  if (!cancelled || shipped)
+  if (plannedDelivery !== "open-pr") {
+    // A run that ends without a pull request says how it ended instead.
+    if (!cancelled) {
+      const column = addColumn("pr", "pr");
+      column.label = "Delivery";
+      place(column, {
+        id: PIPELINE_PR_NODE_ID,
+        kind: "pr",
+        title: "No PR",
+        state: complete ? "complete" : "not-started",
+        placeholder: !complete,
+        noPullRequest: plannedDelivery,
+      });
+    }
+  } else if (!cancelled || shipped)
     place(addColumn("pr", "pr"), {
       id: PIPELINE_PR_NODE_ID,
       kind: "pr",
@@ -1288,6 +1331,11 @@ export function pipelineFlowModel(
       state: pr ? (pr.state === "closed" ? "cancelled" : "complete") : "not-started",
       placeholder: !pr && !complete && !cancelled,
     });
+  if (plannedDelivery === "push-no-pr") {
+    for (const column of columns) {
+      if (column.kind === "ship" && !column.superseded) column.label = PUSH_TITLE;
+    }
+  }
 
   // Review columns are headed by their pass, with reviewer progress.
   let reviewPassNumber = 0;

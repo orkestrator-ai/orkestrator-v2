@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { pipelineCriteriaStatusWord } from "@orkestrator/protocol/build-pipeline-criteria";
+import { DELIVERY_POLICY_LABELS, type DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import {
   CircleDot,
   ClipboardList,
@@ -42,6 +43,13 @@ import type {
   PipelinePullRequest,
 } from "./pipeline-flow";
 import { PipelinePullRequestChecks } from "./PipelinePullRequestView";
+
+/** The PR node's detail when the run ends without a pull request. */
+const NO_PULL_REQUEST_DETAIL: Record<DeliveryPolicy, string> = {
+  "push-no-pr": "Branch pushed, no PR opened",
+  "commit-only": "Commits kept in the environment",
+  "open-pr": "No pull request yet",
+};
 
 export const PIPELINE_IDLE_ICON: Record<PipelineFlowNodeKind, LucideIcon> = {
   ticket: ClipboardList,
@@ -89,6 +97,7 @@ export function pipelineNodeStatusLabel(
   if (node.kind === "attempt") return "Superseded by a restart";
   if (node.superseded) return `Superseded · ${STATE_LABEL[node.state]}`;
   if (node.kind === "pr") {
+    if (node.noPullRequest) return node.placeholder ? "Not started yet" : STATE_LABEL[node.state];
     if (!pullRequest || node.state === "not-started") return "Not created yet";
     return pullRequest.state === "merged"
       ? "Merged"
@@ -131,6 +140,11 @@ function nodeDetail(
     case "setup":
       return pipeline.environmentType === "local" ? "Local worktree" : "Container";
     case "pr":
+      if (node.noPullRequest) {
+        return node.placeholder
+          ? DELIVERY_POLICY_LABELS[node.noPullRequest]
+          : NO_PULL_REQUEST_DETAIL[node.noPullRequest];
+      }
       return pullRequest && node.state !== "not-started"
         ? pullRequest.url.replace(/^https?:\/\/(www\.)?github\.com\//, "")
         : "No pull request yet";
@@ -254,7 +268,7 @@ export function pipelineNodeView({
     placeholder: node.placeholder,
     superseded: node.superseded,
     extra:
-      node.kind === "pr" && pullRequest && node.state !== "not-started" ? (
+      node.kind === "pr" && !node.noPullRequest && pullRequest && node.state !== "not-started" ? (
         <PipelinePullRequestChecks checks={pullRequest.checks} />
       ) : undefined,
     canOpen,

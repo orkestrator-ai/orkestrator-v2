@@ -88,6 +88,10 @@ import {
 import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-agent-defaults";
 import { FeatureBuildFields } from "./FeatureBuildFields";
 import {
+  DEFAULT_DELIVERY_POLICY,
+  type DeliveryPolicy,
+} from "@orkestrator/protocol/ticket-sections";
+import {
   defaultFeatureBuildModels,
   featureBuildIdentity,
   featureBuildRequest,
@@ -570,6 +574,8 @@ export function CreateEnvironmentDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [customizeModels, setCustomizeModels] = useState(false);
   const [featureModels, setFeatureModels] = useState<FeatureBuildModelState | null>(null);
+  const [featureDeliveryPolicy, setFeatureDeliveryPolicy] =
+    useState<DeliveryPolicy>(DEFAULT_DELIVERY_POLICY);
   /**
    * Idempotency key for the feature build.
    *
@@ -757,6 +763,7 @@ export function CreateEnvironmentDialog({
     // Back to null rather than to the current defaults, so the next opening
     // re-resolves them against whatever the catalogue holds by then.
     setFeatureModels(null);
+    setFeatureDeliveryPolicy(DEFAULT_DELIVERY_POLICY);
     // The form this key was minted for is gone, so it can never be the "same
     // request again" a reuse would stand for.
     featureRequestIdRef.current = createUuid();
@@ -1380,6 +1387,7 @@ export function CreateEnvironmentDialog({
                   data: attachment.base64Data,
                 })),
               models: requestModels,
+              deliveryPolicy: featureDeliveryPolicy,
               requestId,
             });
           let request = buildRequest(featureRequestIdRef.current);
@@ -1455,6 +1463,7 @@ export function CreateEnvironmentDialog({
       agentType,
       buildIntent,
       effectiveFeatureModels,
+      featureDeliveryPolicy,
       featureAcceptanceCriteria,
       featureName,
       onCreateFeatureBuild,
@@ -2049,6 +2058,8 @@ export function CreateEnvironmentDialog({
                 onCustomizeModelsChange={handleCustomizeModelsChange}
                 models={effectiveFeatureModels}
                 onModelsChange={handleFeatureModelsChange}
+                deliveryPolicy={featureDeliveryPolicy}
+                onDeliveryPolicyChange={setFeatureDeliveryPolicy}
                 catalog={modelCatalog}
                 enabledPlatforms={enabledAgentPlatforms}
                 disabled={isLoading}

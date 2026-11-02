@@ -236,6 +236,7 @@ import { WorkspaceWriters } from "./workspace-writers.js";
 import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { PrAutoMergeController } from "./pr-auto-merge.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
+import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";
@@ -1263,10 +1264,24 @@ export class OrkestratorBackend {
           }
         },
         environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
+        branchPushState: (environmentId) =>
+          readEnvironmentBranchPushState(
+            storage,
+            createGraphEnvironmentShell(context.runtime.environments.fence, storage),
+            environmentId,
+          ),
         workspaceWriters,
       },
     );
     context.buildPipelines = this.buildPipelines;
+    // Fired inside the Kanban write, which must not wait on a pipeline's lock.
+    storage.kanban.onDeliveryPolicyChange((taskId, projectId, policy) => {
+      void this.buildPipelines
+        .noteTicketDeliveryChange(taskId, projectId, policy)
+        .catch((error) => {
+          console.warn("[BuildPipeline] Could not note a ticket's delivery change:", error);
+        });
+    });
     // Stage agents keep the pipeline's key information through the agent tools.
     (
       this.agentTools as {

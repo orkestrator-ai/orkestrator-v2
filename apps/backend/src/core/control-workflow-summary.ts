@@ -12,6 +12,7 @@ export function workflowSummary(workflow: Record<string, unknown>): Record<strin
     presentationError: workflow.presentationError,
     addressPromptPending: workflow.addressPromptPending,
     fixTabId: workflow.fixTabId,
+    ...("delivery" in workflow ? { delivery: workflow.delivery } : {}),
     ...("autoFix" in workflow || "autoPr" in workflow
       ? { automation: multiReviewAutomation(workflow) }
       : {}),

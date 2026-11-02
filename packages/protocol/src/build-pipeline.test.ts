@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BRANCH_PUSH_SESSION_LABEL,
+  isBranchPushSession,
+  pipelineDeliverySummary,
+  pipelineDeliveryTooLateNote,
+  pipelineReachedPullRequestStage,
   BUILD_PIPELINE_AGENTS,
   BUILD_PIPELINE_VERSION,
   BUILD_STEP_KEYS,
@@ -2514,5 +2519,68 @@ describe("pipeline restart requests", () => {
     ]) {
       expect(isBuildPipeline({ ...snapshot(), restartRequest })).toBe(false);
     }
+  });
+});
+
+describe("pipeline delivery", () => {
+  const decidedAt = "2026-11-02T00:00:00.000Z";
+
+  test("the summary says what happened instead of a pull request", () => {
+    expect(pipelineDeliverySummary({ policy: "open-pr" })).toBeUndefined();
+    expect(pipelineDeliverySummary({ policy: "push-no-pr" })).toBe(
+      "The branch was pushed and no pull request was opened.",
+    );
+    expect(pipelineDeliverySummary({ policy: "commit-only" })).toContain(
+      "The commits were kept in the environment",
+    );
+    expect(pipelineDeliverySummary({ policy: "commit-only", uncommittedPaths: 2 })).toContain(
+      "2 uncommitted paths also remain",
+    );
+  });
+
+  test("an edit is too late only once the run has decided, and only if it differs", () => {
+    const decided = {
+      phase: "creating-pr" as const,
+      delivery: { policy: "open-pr" as const, decidedAt },
+    };
+    expect(pipelineDeliveryTooLateNote({ phase: "building" }, "push-no-pr")).toBeUndefined();
+    expect(pipelineDeliveryTooLateNote(decided, "open-pr")).toBeUndefined();
+    // No policy means open-pr.
+    expect(pipelineDeliveryTooLateNote(decided, undefined)).toBeUndefined();
+    expect(pipelineDeliveryTooLateNote(decided, "push-no-pr")).toContain("Too late for this build");
+    expect(
+      pipelineDeliveryTooLateNote(
+        { ...decided, phase: "failed", error: "Build cancelled by the user" },
+        "push-no-pr",
+      ),
+    ).toBeUndefined();
+  });
+
+  test("a push session is a Ship, and only another Ship reached the pull request stage", () => {
+    const push = { phase: "pr" as const, label: BRANCH_PUSH_SESSION_LABEL };
+    const ship = { phase: "pr" as const, label: "PR Creation Session" };
+    expect(isBranchPushSession(push)).toBe(true);
+    expect(isBranchPushSession(ship)).toBe(false);
+    expect(pipelineReachedPullRequestStage({ sessions: [push] as never })).toBe(false);
+    expect(pipelineReachedPullRequestStage({ sessions: [push, ship] as never })).toBe(true);
+  });
+
+  test("a start request's policy is checked", () => {
+    const start = {
+      taskId: "t",
+      projectId: "p",
+      taskTitle: "T",
+      environmentType: "local",
+      agentType: "claude",
+      taskSnapshot: {
+        title: "T",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    };
+    expect(isStartBuildPipelineInput({ ...start, deliveryPolicy: "push-no-pr" })).toBe(true);
+    expect(isStartBuildPipelineInput({ ...start, deliveryPolicy: "merge" })).toBe(false);
   });
 });

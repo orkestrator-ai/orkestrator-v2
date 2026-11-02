@@ -23,6 +23,7 @@
  * the graph, recovery opening the next stage, goes through the
  * `BuildPipelineStageDispatch` port wired here.
  */
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type {
   BuildPipelineCodeRewindPreview,
   BuildPipeline,
@@ -81,6 +82,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
       assertValidationWorktreeUnchanged: (...args) =>
         this.stageSupervisor.assertValidationWorktreeUnchanged(...args),
       remindMissingStageResult: (...args) => this.stageSupervisor.remindMissingStageResult(...args),
+      probeWorktreeOnce: (...args) => this.stageSupervisor.probeWorktreeOnce(...args),
     });
     this.interactions = new BuildPipelineInteractions(this.context, this.agents, this.recovery);
     this.stageSupervisor = new BuildPipelineSupervisor(
@@ -107,6 +109,15 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
 
   init(): Promise<void> {
     return this.lifecycle.init();
+  }
+
+  /** See {@link BuildPipelineRecovery.noteTicketDeliveryChange}. */
+  noteTicketDeliveryChange(
+    taskId: string,
+    projectId: string,
+    policy: DeliveryPolicy | undefined,
+  ): Promise<void> {
+    return this.recovery.noteTicketDeliveryChange(taskId, projectId, policy);
   }
 
   shutdown(): Promise<void> {

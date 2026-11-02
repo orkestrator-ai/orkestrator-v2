@@ -15,7 +15,9 @@ import {
   isActiveBuildPhase,
   isStartBuildPipelineInput,
   isReviewPackagePreparationSession,
+  BRANCH_PUSH_SESSION_LABEL,
   isSupersededPipelineSession,
+  pipelineReachedPullRequestStage,
   reviewValidationStage,
   REVIEW_PACKAGE_SESSION_LABEL,
   usesReviewFanout,
@@ -31,6 +33,7 @@ import {
   normalizeTicketContent,
   sectionsFromTicketText,
   TICKET_SECTION_LIMITS,
+  type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
 import { backfillBuildPipelineReviewReports } from "./storage-record-upgrades.js";
 import type { KanbanTask } from "./storage-shared-core.js";
@@ -498,6 +501,31 @@ export class BuildPipelineLifecycle {
     };
   }
 
+  /**
+   * The policy to capture at launch, so a ticket deleted before Verify passes
+   * still has one to follow. A Kanban ticket's own policy wins.
+   */
+  private async launchDeliveryPolicy(
+    input: StartBuildPipelineInput,
+  ): Promise<DeliveryPolicy | undefined> {
+    const ticketId =
+      input.source?.type === "kanban"
+        ? input.source.taskId
+        : input.source
+          ? undefined
+          : input.taskId;
+    if (!ticketId) return input.deliveryPolicy;
+    try {
+      const tasks = await this.ctx.invoke<KanbanTask[]>("get_kanban_tasks", {
+        projectId: input.projectId,
+      });
+      const ticket = Array.isArray(tasks) ? tasks.find((task) => task.id === ticketId) : undefined;
+      return ticket?.sections?.delivery?.policy ?? input.deliveryPolicy;
+    } catch {
+      return input.deliveryPolicy;
+    }
+  }
+
   async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
@@ -515,6 +543,7 @@ export class BuildPipelineLifecycle {
       }
     }
     const taskSnapshot = await this.snapshotWithCriteria(input);
+    const deliveryPolicy = await this.launchDeliveryPolicy(input);
     const steps = normalizeSteps(input.steps);
     const reviewers = normalizeReviewers(input.reviewers);
     const reviewPreparation = normalizeReviewPreparation(input.reviewPreparation);
@@ -543,6 +572,7 @@ export class BuildPipelineLifecycle {
       taskTitle: input.taskTitle,
       taskSnapshot,
       source: input.source,
+      ...(deliveryPolicy ? { deliveryPolicy } : {}),
       featurePlanId: input.featurePlanId?.trim() || undefined,
       admissionKey: buildAdmissionKey(input),
       backendRevision: 0,
@@ -958,6 +988,7 @@ export class BuildPipelineLifecycle {
         return;
       }
       candidate.reviewRetryRequested = true;
+      delete candidate.delivery;
       pruneKeyInformationAfterRewind(candidate, candidate.iteration, false, false);
       discardSessionReviewReports(candidate);
       delete candidate.reviewPackage;
@@ -1045,7 +1076,7 @@ export class BuildPipelineLifecycle {
     const block = (reason: string | undefined) => {
       if (reason) blockers.push(reason);
     };
-    const shipped = pipeline.sessions.some((candidate) => candidate.phase === "pr");
+    const shipped = pipelineReachedPullRequestStage(pipeline);
     const environment = pipeline.environmentId
       ? await this.ctx.storage.getEnvironment(pipeline.environmentId)
       : null;
@@ -1397,6 +1428,8 @@ export class BuildPipelineLifecycle {
         delete candidate.structuredReviewRequestId;
       }
       if (selectedOrder <= 4) {
+        // Verify runs again, so the next pass reads the ticket again.
+        delete candidate.delivery;
         delete candidate.verificationResult;
         if (!(restart.kind === "session" && restart.phase === "fix")) {
           delete candidate.verificationFeedback;
@@ -1571,7 +1604,9 @@ export class BuildPipelineLifecycle {
           stagePhase === "resolve-conflicts"
             ? "Conflict resolution cannot be skipped"
             : stagePhase === "pr"
-              ? "The pull request step cannot be skipped"
+              ? named.label === BRANCH_PUSH_SESSION_LABEL
+                ? "The push step cannot be skipped"
+                : "The pull request step cannot be skipped"
               : "Review preparation cannot be skipped: the review needs the package it prepares",
         );
         return;
@@ -1643,7 +1678,7 @@ export class BuildPipelineLifecycle {
    * Ship session belongs to a reused environment, not to this pipeline.
    */
   private async pullRequestMerged(pipeline: BuildPipeline): Promise<boolean> {
-    if (!pipeline.environmentId || !pipeline.sessions.some((session) => session.phase === "pr")) {
+    if (!pipeline.environmentId || !pipelineReachedPullRequestStage(pipeline)) {
       return false;
     }
     const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);

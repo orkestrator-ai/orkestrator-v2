@@ -39,6 +39,35 @@ const VERIFY_PASS = {
   pipelineId: "pipeline-1",
 };
 
+describe("delivery policy changes", () => {
+  test("announces a changed policy from any writer, and nothing else", async () => {
+    await withStorage(async ({ kanban }) => {
+      const seen: Array<[string, string, string | undefined]> = [];
+      kanban.onDeliveryPolicyChange((taskId, projectId, policy) => {
+        seen.push([taskId, projectId, policy]);
+      });
+      const task = await kanban.addKanbanTask("project-1", "Ticket", "Body");
+
+      await kanban.updateKanbanTask(task.id, { title: "Renamed" });
+      expect(seen).toEqual([]);
+
+      await kanban.updateKanbanTask(task.id, { sections: { delivery: { policy: "push-no-pr" } } });
+      expect(seen).toEqual([[task.id, "project-1", "push-no-pr"]]);
+
+      await kanban.updateKanbanTask(task.id, { sections: { delivery: { policy: "push-no-pr" } } });
+      expect(seen).toHaveLength(1);
+
+      await kanban.updateKanbanTask(task.id, {
+        markdown: "Body\n\n## Delivery\n\nPolicy: commit-only",
+      });
+      expect(seen.at(-1)).toEqual([task.id, "project-1", "commit-only"]);
+
+      await kanban.updateKanbanTask(task.id, { markdown: "Body" });
+      expect(seen.at(-1)).toEqual([task.id, "project-1", undefined]);
+    });
+  });
+});
+
 describe("Kanban ticket sections", () => {
   test("a legacy row reads with derived sections and is not rewritten", async () => {
     await withStorage(async (storage, dataDir) => {

@@ -101,6 +101,23 @@ describe("createFeatureBuild", () => {
     expect(fallbackFeatureTitle("Add account export controls")).toBe("Add account export controls");
   });
 
+  test("saves the form's When verified choice on the ticket it creates", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+
+      const created = await createFeatureBuild(
+        { ...input, deliveryPolicy: "push-no-pr" },
+        { storage, runtime, buildPipelines: supervisor.service },
+      );
+
+      const ticket = await storage.kanban.getKanbanTask(created.taskId);
+      expect(ticket?.sections?.delivery?.policy).toBe("push-no-pr");
+      // Stages quote the ticket's saved text, so they see the same policy.
+      expect(supervisor.started[0]?.taskSnapshot.description).toBe(ticket!.description);
+      expect(supervisor.started[0]?.source).toEqual({ type: "kanban", taskId: created.taskId });
+    });
+  });
+
   test("creates immediately with a local title and refines it after naming", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();

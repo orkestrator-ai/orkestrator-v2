@@ -13,6 +13,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { MAX_BUILD_PIPELINE_REVIEWERS } from "@orkestrator/protocol/build-pipeline";
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import { DeliveryPolicySelect } from "@/components/tickets/DeliveryPolicySelect";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { Button } from "@/components/ui/button";
@@ -135,6 +137,9 @@ export interface FeatureBuildFieldsProps {
   promptFields: React.ReactNode;
   /** Image attachments rendered with the feature ticket fields. */
   featureAttachments?: React.ReactNode;
+  /** "When verified", saved on the ticket this creates. */
+  deliveryPolicy?: DeliveryPolicy;
+  onDeliveryPolicyChange?: (policy: DeliveryPolicy) => void;
 }
 
 export function FeatureBuildFields({
@@ -157,6 +162,8 @@ export function FeatureBuildFields({
   disabled = false,
   promptFields,
   featureAttachments,
+  deliveryPolicy,
+  onDeliveryPolicyChange,
 }: FeatureBuildFieldsProps) {
   const selectedIntent = BUILD_INTENTS.find((option) => option.value === intent)!;
 
@@ -247,6 +254,13 @@ export function FeatureBuildFields({
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="space-y-3 pt-3">
+              {onDeliveryPolicyChange ? (
+                <DeliveryPolicySelect
+                  value={deliveryPolicy}
+                  onChange={onDeliveryPolicyChange}
+                  disabled={disabled}
+                />
+              ) : null}
               <div className="flex items-center justify-between gap-4">
                 <div className="space-y-0.5">
                   <Label htmlFor="customize-models" className="text-sm">

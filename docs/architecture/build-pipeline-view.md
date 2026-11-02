@@ -6,8 +6,8 @@ node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 (code rewind, Address from the round's report, package-only restart;
 2026-10-28), the shared review routing (2026-10-29), read-only reviewers
 with the Git guard (2026-10-29), per-stage instructions (2026-10-29),
-reviewer lenses (2026-10-29), the CLI's `build launch` (2026-10-29), and the
-header's key information panel (2026-11-01).
+reviewer lenses (2026-10-29), the CLI's `build launch` (2026-10-29), the
+header's key information panel (2026-11-01), and delivery policies (2026-11-02).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -20,7 +20,7 @@ the rest in one place:
 
 | Launcher | Command | What it sends |
 | --- | --- | --- |
-| Build buttons (Kanban, Linear, GitHub) | `launch_build_pipeline` (`build-pipeline-launch.ts`) | The ticket and any step, reviewer or agent the launcher set |
+| Build buttons (Kanban, Linear, GitHub) | `launch_build_pipeline` (`build-pipeline-launch.ts`) | The ticket and any step, reviewer, agent or "When verified" choice the launcher set |
 | Features view | `start_feature_plan_build` (`feature-plan-build.ts`) | The feature plan id |
 | CLI `build launch`, coordinator | `build.launch`, `start_controller_build_pipeline` | Their request |
 
@@ -156,9 +156,17 @@ a transcript.
   board has already loaded the Kanban ticket and it now reads differently, a
   note says so; nothing is fetched for it.
 - **PR.** The environment's pull request (`prUrl`, `prState`) and the PR
-  monitor's `checkSummary`, shown only once the pipeline has a Ship session (an
-  older PR on a reused environment is not this pipeline's). The monitor owns
-  polling and its bounds; the graph adds no read.
+  monitor's `checkSummary`, shown only once the pipeline has a Ship session that
+  opens one (`pipelineReachedPullRequestStage`; an older PR on a reused
+  environment is not this pipeline's). The monitor owns polling and its bounds;
+  the graph adds no read.
+- **Delivery without a PR.** The line follows the decided policy, or before
+  Verify passes the last one seen, so the steps ahead match what the ticket says
+  now ([Delivery after Verify](#delivery-after-verify)). `push-no-pr` titles the
+  Ship node and its column "Push". `commit-only` draws no Ship at all. Either way
+  the last node reads "No PR" and says what happened ("Branch pushed, no PR
+  opened", "Commits kept in the environment"); its inspector has the whole
+  sentence (`pipelineDeliverySummary`).
 
 Node colours and edge states follow Multi Review. Columns have a fixed width
 (`pipelineFlowLayout`); a long pipeline scrolls sideways and a short one is
@@ -397,8 +405,9 @@ checks and seals the review package with the results they had (a paused,
 already-cancelled run included), and the Tests view's "Stop tests and
 continue" does the same. Skipping an agent step stops its session and opens the
 next one: Build or Fix goes to review preparation, a review or Address to
-Verify, and Verify to the PR. Review preparation and the PR steps cannot be
-skipped. The skipped node reads "Skipped".
+Verify, and Verify to delivery. Review preparation and the PR steps cannot be
+skipped; skipping Verify still follows the ticket's delivery policy. The skipped
+node reads "Skipped".
 
 The review pass tab is a `multi-review` tab whose data names the pipeline and a
 `pipelinePass`; it renders the same view narrowed to that pass. Layout restore
@@ -558,6 +567,41 @@ commits and how many commits it dropped, and names the backup ref.
 keeps the rest of the panel, discards a started consolidation, and resumes a
 review that failed or paused. The failed attempt's session stays as history
 under its key; the retry gets `…:attempt-2`.
+
+## Delivery after Verify
+
+`deliverVerifiedWork` (`build-pipeline-service-recovery.ts`) acts on the ticket's
+policy when Verify passes or is skipped; the policies and who chooses them are
+in [tickets.md](tickets.md#delivery).
+
+- **`open-pr`** starts the PR stage as always.
+- **`push-no-pr`** starts the same Ship stage (`pr` session, `creating-pr` phase,
+  the Pull request step's model and instructions) under
+  `BRANCH_PUSH_SESSION_LABEL`, with `pushBranchPrompt`: commit what remains, push,
+  open nothing. Retry, restart, pause, usage and the transcript are Ship's, and a
+  code rewind's force-with-lease rule still applies. It is an agent turn rather
+  than a backend push because Verify allows uncommitted leftovers and only a turn
+  can judge which are part of the work. It cannot be skipped. When the turn ends,
+  the backend asks origin (`branchPushState`, `git ls-remote`) whether the branch
+  has HEAD; if not, the stage fails and can be retried, so the run cannot claim a
+  push that did not happen. The labels read "Pushing branch", "Retry Push Stage"
+  and "Restart Push Stage", and the board card "Pushing".
+- **`commit-only`** starts nothing. The pipeline completes at once, recording
+  how many uncommitted paths remain.
+
+A run without a PR is a clean success: `phase` is `complete`, and the Kanban
+ticket moves to Review as usual, with a comment saying what happened. Compared
+with a run that opened a PR, it never reaches `detect_pr`, the conflict stage or
+`pr_monitor_watch`, and writes no `prUrl` to the ticket or the environment.
+Checks that a pull request belongs to this pipeline count only a Ship that opens
+one, so an older merged PR on a reused environment blocks neither a restart nor
+a code rewind. A later Ship that does open a PR still sees the existing URL.
+A coordinator that started the build reads the same sentence in its completion
+notice.
+
+If an earlier attempt of the run opened a PR and a restart then ends in
+`push-no-pr`, the push updates that PR, which stays open, and the last node's
+inspector links it. Nothing closes a pull request.
 
 ## Stage table and the built-in template
 

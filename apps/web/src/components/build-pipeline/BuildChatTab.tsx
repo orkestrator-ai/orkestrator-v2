@@ -1,3 +1,4 @@
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -58,6 +59,12 @@ const PHASE_LABELS: Record<string, string> = {
   paused: "Paused",
   complete: "Complete",
   failed: "Failed",
+};
+
+/** A finished run that opened no pull request says what it did instead. */
+const COMPLETE_DELIVERY_LABELS: Partial<Record<DeliveryPolicy, string>> = {
+  "push-no-pr": "Complete · branch pushed, no PR opened",
+  "commit-only": "Complete · commits kept in the environment",
 };
 
 const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
@@ -126,7 +133,13 @@ export function BuildChatTab({
     );
   }
 
-  const phaseLabel = PHASE_LABELS[pipeline.phase] ?? pipeline.phase;
+  const pushesOnly = pipeline.delivery?.policy === "push-no-pr";
+  const phaseLabel =
+    pipeline.phase === "complete" && pipeline.delivery?.policy !== undefined
+      ? (COMPLETE_DELIVERY_LABELS[pipeline.delivery.policy] ?? PHASE_LABELS.complete!)
+      : pipeline.phase === "creating-pr" && pushesOnly
+        ? "Pushing branch"
+        : (PHASE_LABELS[pipeline.phase] ?? pipeline.phase);
   const active = !["paused", "complete", "failed"].includes(pipeline.phase);
   const interactionFailure =
     pipeline.phase === "failed" && pipeline.failureContext?.kind === "interactive-request";
@@ -151,9 +164,11 @@ export function BuildChatTab({
       ? "Restart Validation"
       : validationRestartTarget === "review-package" || dedicatedPreparationRunning
         ? "Restart Review Preparation"
-        : currentStagePhase
-          ? RESTART_STAGE_LABELS[currentStagePhase]
-          : undefined;
+        : currentStagePhase === "creating-pr" && pushesOnly
+          ? "Restart Push Stage"
+          : currentStagePhase
+            ? RESTART_STAGE_LABELS[currentStagePhase]
+            : undefined;
   const canRestartCurrentStage =
     Boolean(restartCurrentStageLabel) &&
     pipeline.sessions.length > 0 &&
@@ -182,7 +197,10 @@ export function BuildChatTab({
   if (canRetryStage) {
     headerControls.push({
       key: "retry-stage",
-      label: RETRY_STAGE_LABELS[pipeline.failureContext!.phase],
+      label:
+        pipeline.failureContext!.phase === "creating-pr" && pushesOnly
+          ? "Retry Push Stage"
+          : RETRY_STAGE_LABELS[pipeline.failureContext!.phase],
       icon: RefreshCw,
       onClick: controls.retryStage,
     });

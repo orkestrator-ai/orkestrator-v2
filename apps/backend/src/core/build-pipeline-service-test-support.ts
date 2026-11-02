@@ -1,3 +1,5 @@
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import type { BuildPipelineServiceOptions } from "./build-pipeline-context.js";
 import { expect } from "bun:test";
 
 import { promises as fs } from "node:fs";
@@ -202,6 +204,7 @@ export async function withService(
           prUrl?: string;
           prState?: string;
           comments: Array<{ text: string }>;
+          sections?: { delivery?: { policy?: DeliveryPolicy } };
         }
       >;
     },
@@ -216,6 +219,8 @@ export async function withService(
     assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
     /** Git in the environment worktree, for code-rewind tests. */
     environmentGit?: EnvironmentGit;
+    /** Origin's copy of the branch, for `push-no-pr` Ship tests. */
+    branchPushState?: BuildPipelineServiceOptions["branchPushState"];
     environmentFence?: EnvironmentMutationFence;
     assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
     /** D3 across engines: the shared workspace-holder projection. */
@@ -255,6 +260,7 @@ export async function withService(
       prUrl?: string;
       prState?: string;
       comments: Array<{ text: string }>;
+      sections?: { delivery?: { policy?: DeliveryPolicy } };
     }
   >();
   const controls = {
@@ -389,6 +395,7 @@ export async function withService(
       ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
       : {}),
     environmentGit: options.environmentGit,
+    branchPushState: options.branchPushState,
     environmentFence: options.environmentFence,
     assertEnvironmentQuiescent: options.assertEnvironmentQuiescent,
     ...(options.workspaceWriters ? { workspaceWriters: options.workspaceWriters(storage) } : {}),

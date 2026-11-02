@@ -25,6 +25,7 @@ import {
 } from "@orkestrator/protocol/feature-build";
 import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import { createHash } from "node:crypto";
+import { saveTicketDeliveryPolicy } from "./build-pipeline-launch.js";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
 import { resizeKanbanImage, type KanbanTask } from "./storage-shared.js";
@@ -202,7 +203,9 @@ export async function createFeatureBuild(
     requestHash,
   });
 
-  let resolvedTask = task;
+  let resolvedTask = input.deliveryPolicy
+    ? await saveTicketDeliveryPolicy(storage, task, input.deliveryPolicy)
+    : task;
   const snapshotImages = [];
   for (const [index, image] of images.entries()) {
     const persisted = await storage.kanban.addNormalizedKanbanImageForRequest(

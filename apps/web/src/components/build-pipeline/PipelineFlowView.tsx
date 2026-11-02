@@ -30,7 +30,10 @@ import {
 import {
   isActiveBuildPhase,
   isSupersededPipelineSession,
+  pipelineDeliverySummary,
+  pipelineReachedPullRequestStage,
 } from "@orkestrator/protocol/build-pipeline";
+import { DELIVERY_POLICY_LABELS } from "@orkestrator/protocol/ticket-sections";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -296,7 +299,7 @@ export function PipelineFlowView({
     !interactionFailure &&
     Boolean(pipeline.reviewFanout) &&
     !pipeline.reviewFanout?.report;
-  const shipped = pipeline.sessions.some((session) => session.phase === "pr");
+  const shipped = pipelineReachedPullRequestStage(pipeline);
 
   const openSession = (node: PipelineFlowNode) => {
     const options = pipelineSessionTabOptions(pipeline, node);
@@ -867,6 +870,25 @@ function InspectorBody({
   if (node.kind === "ticket") return <PipelineTicketView pipeline={pipeline} />;
   if (node.kind === "attempt") {
     return <PreviousAttempt node={node} pipeline={pipeline} onShowStep={onShowAttemptStep} />;
+  }
+  if (node.kind === "pr" && node.noPullRequest) {
+    const ended = node.placeholder ? undefined : pipeline.delivery;
+    return (
+      <div data-testid="pipeline-delivery-outcome" className="flex flex-col gap-2 text-sm">
+        <p className={ended ? undefined : "text-muted-foreground"}>
+          {ended
+            ? pipelineDeliverySummary(ended)
+            : `The ticket says "${DELIVERY_POLICY_LABELS[node.noPullRequest]}", so this build opens no pull request once Verify passes. The ticket can still change that until then.`}
+        </p>
+        {pullRequest && shipped ? (
+          <PipelinePullRequestView
+            environmentId={environmentId}
+            pullRequest={pullRequest}
+            shipped={shipped}
+          />
+        ) : null}
+      </div>
+    );
   }
   if (node.kind === "pr") {
     return (

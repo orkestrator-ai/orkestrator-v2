@@ -1,3 +1,8 @@
+import {
+  effectiveDeliveryPolicy,
+  type DeliveryPolicy,
+} from "@orkestrator/protocol/ticket-sections";
+import { DeliveryPolicySelect } from "@/components/tickets/DeliveryPolicySelect";
 import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { BuildStepConfig, BuildStepKey } from "@orkestrator/protocol/build-pipeline";
 import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
@@ -79,6 +84,8 @@ export interface BuildLaunchSelection {
   reviewPreparation?: BuildLaunchStepSelection;
   /** Present when the launcher offers source comments as optional context. */
   includeComments?: boolean;
+  /** "When verified": saved to a Kanban ticket, or kept on the pipeline for any other ticket. */
+  deliveryPolicy: DeliveryPolicy;
 }
 
 export interface BuildLaunchCommentContextOption {
@@ -197,6 +204,13 @@ const BUILD_STEPS: Array<{
   },
 ];
 
+/** The Pull request card describes what the selected "When verified" will do. */
+const PR_CARD_DESCRIPTIONS: Record<DeliveryPolicy, string> = {
+  "open-pr": "Pushes the branch and opens the pull request.",
+  "push-no-pr": "Pushes the branch. No pull request is opened.",
+  "commit-only": "This step does not run: the commits stay in the environment.",
+};
+
 const ENVIRONMENT_OPTIONS: Array<{
   value: EnvironmentType;
   label: string;
@@ -230,6 +244,8 @@ interface BuildLaunchDialogProps {
   pipelineDefaults?: BuildPipelineConfiguredDefaults;
   /** Offers source-ticket comments as optional build context. */
   commentContext?: BuildLaunchCommentContextOption;
+  /** The ticket's own delivery policy, which "When verified" opens on. */
+  deliveryPolicy?: DeliveryPolicy;
   /** Disables the submit button while a start request is in flight. */
   busy?: boolean;
   /** Whether this project has a host checkout that can own local worktrees. */
@@ -482,6 +498,7 @@ function BuildStepCard({
   instructionsHint,
   onInstructionsChange,
   lens,
+  children,
   state,
   resolved,
   models,
@@ -510,6 +527,8 @@ function BuildStepCard({
     presets: readonly ReviewLensPreset[];
     onChange: (value: ReviewLens | undefined) => void;
   };
+  /** A card's own extra field, above its instructions. */
+  children?: React.ReactNode;
   state: StepState;
   resolved: ResolvedStep;
   models: AgentModel[];
@@ -639,6 +658,8 @@ function BuildStepCard({
         </p>
       )}
 
+      {children}
+
       <BuildStepInstructionsField
         id={`${controlId.replace(/-model$/, "")}-instructions`}
         stepTitle={title}
@@ -668,6 +689,7 @@ export function BuildLaunchDialog({
   preferredFastModes,
   pipelineDefaults,
   commentContext,
+  deliveryPolicy,
   busy = false,
   localEnvironmentAvailable = true,
   returnFocusRef,
@@ -724,6 +746,9 @@ export function BuildLaunchDialog({
     ),
   );
   const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
+  const [deliveryChoice, setDeliveryChoice] = useState(() =>
+    effectiveDeliveryPolicy(deliveryPolicy),
+  );
   // Per launch: instructions are never saved as defaults, so every open starts empty.
   const [instructions, setInstructions] = useState<Partial<Record<InstructionsKey, string>>>({});
   // Each reviewer opens on its position's saved focus; edits are per launch.
@@ -791,12 +816,16 @@ export function BuildLaunchDialog({
         return defaultEnvironmentType;
       });
       setIncludeComments(commentContext?.defaultIncluded ?? true);
+      setDeliveryChoice(effectiveDeliveryPolicy(deliveryPolicy));
       setInstructions({});
       setLenses(initialLenses(pipelineDefaults));
       resetLaunchState();
       return;
     }
     if (!open) return;
+    if (!touchedRef.current.has("deliveryPolicy")) {
+      setDeliveryChoice(effectiveDeliveryPolicy(deliveryPolicy));
+    }
     const nextSteps = initialSteps(
       defaultAgent,
       catalog,
@@ -843,6 +872,7 @@ export function BuildLaunchDialog({
     commentContext?.defaultIncluded,
     defaultAgent,
     defaultEnvironmentType,
+    deliveryPolicy,
     dockerAvailable,
     localEnvironmentAvailable,
     open,
@@ -987,6 +1017,7 @@ export function BuildLaunchDialog({
             onConfirm({
               environmentType,
               ...(commentContext ? { includeComments } : {}),
+              deliveryPolicy: deliveryChoice,
               steps: selectedSteps,
               ...(submittedReviewers ? { reviewers: submittedReviewers } : {}),
               ...(submittedPreparation ? { reviewPreparation: submittedPreparation } : {}),
@@ -1170,7 +1201,11 @@ export function BuildLaunchDialog({
                         number={index + 1}
                         stepKey={card.key}
                         title={card.title}
-                        description={card.description}
+                        description={
+                          card.key === "pr"
+                            ? PR_CARD_DESCRIPTIONS[deliveryChoice]
+                            : card.description
+                        }
                         icon={card.icon}
                         instructions={instructions[card.key] ?? ""}
                         instructionsHint={
@@ -1189,7 +1224,19 @@ export function BuildLaunchDialog({
                         onToggleFavorite={toggleFavorite}
                         onReorderFavorites={reorderPickerFavorites}
                         onChange={(next) => updateStep(card.key, next)}
-                      />
+                      >
+                        {card.key === "pr" ? (
+                          <DeliveryPolicySelect
+                            className="mt-2"
+                            value={deliveryChoice}
+                            offeredFor={deliveryPolicy}
+                            onChange={(next) => {
+                              touchedRef.current.add("deliveryPolicy");
+                              setDeliveryChoice(next);
+                            }}
+                          />
+                        ) : null}
+                      </BuildStepCard>
                     );
                   },
                 )}

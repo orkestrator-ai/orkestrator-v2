@@ -39,7 +39,7 @@ All optional. In render order:
 | `constraints` | Constraints | text | |
 | `acceptanceCriteria` | Acceptance criteria | items | `{ id, text, check? }`. Aliases: Done when, Definition of done. |
 | `checks` | Checks | list of strings | Standard commands, kept out of the criteria. |
-| `delivery` | Delivery | `{ policy?, note? }` | `policy`: `commit-only`, `push-no-pr`, `open-pr`. |
+| `delivery` | Delivery | `{ policy?, note? }` | `policy`: `commit-only`, `push-no-pr`, `open-pr`; none means `open-pr`. A build follows it ([Delivery](#delivery)). |
 | `reporting` | Reporting | text | Report fields beyond the project's standard report. |
 | `outOfScope` | Out of scope | text | Aliases: Non-goals. |
 | `custom` | (its own title) | `{ title, body }[]` | Any `##` heading that names no known section. |
@@ -136,6 +136,49 @@ The backend stores the results on the verify session
 feedback the Fix step reads, and writes the results to the Kanban ticket
 (`record_kanban_criteria_checks`, best effort, only for criteria whose id and
 text still match).
+
+## Delivery
+
+The ticket is the source of truth for what a build does once its work is
+verified. Build reads the policy at the moment Verify passes, so it can change
+while the build runs, and the latest passing Verify is the one that counts,
+including after fix rounds. Skipping Verify is treated the same.
+
+| Policy | Label | After Verify passes |
+| --- | --- | --- |
+| `open-pr` (or none) | Open a PR, don't merge | The PR stage, then conflict resolution if needed. |
+| `push-no-pr` | Push, no PR | A push-only Ship; the pipeline completes once origin has the commit. No Multi Review starts on its own: the coordinator is told the branch is pushed and decides what follows. |
+| `commit-only` | Commit, don't push | Nothing runs. The pipeline completes and says the commits stayed in the environment, and how many uncommitted paths remain, since no agent turn commits them. |
+
+The ticket's Delivery tile and the Build launcher's Pull request card share a
+"When verified" dropdown (`DeliveryPolicySelect`). It offers "Open a PR, don't
+merge" and "Push, no PR"; `commit-only` stays valid for text and tools, and
+appears only as the current selection of a ticket that has it, so neither
+viewing it nor launching changes it. The tile always shows on the ticket dialog,
+even with no policy; the pipeline's Ticket node keeps the read-only view of its
+snapshot. A launch saves its choice to the ticket (`launch_build_pipeline`), and
+a choice equal to the ticket's own writes nothing. The delivery note is kept.
+The form's "A feature" option has the same control under Advanced and saves it
+on the ticket it creates. Other launchers have no control and use the ticket's
+policy: the coordinator's `start_build_pipeline` deliberately has no override,
+and a Features view build creates a ticket with none, which can be set on its
+tile while it runs.
+
+**Too late.** Once Verify passes the decision is on the pipeline
+(`BuildPipeline.delivery`), and an edit cannot undo it. The ticket still accepts
+the edit, for the next build, and says it came too late for this one: a comment
+(`KanbanRepository.onDeliveryPolicyChange` hears every writer) and a note under
+the tile's dropdown (`pipelineDeliveryTooLateNote`). Restarting from Verify or
+earlier clears the decision, so the next pass reads the ticket again. Retrying
+or restarting the push or the PR stage itself keeps it.
+
+**No ticket to read.** The pipeline keeps the last policy it saw
+(`BuildPipeline.deliveryPolicy`): captured at launch and refreshed on every
+change. A ticket deleted mid-run leaves the build following that copy, and the
+ticket lifecycle steps do nothing rather than fail the run. A failed read of the
+board is not a deleted ticket and fails the stage instead of guessing. A build
+from a Linear or GitHub ticket has only this copy: the launch dialog's choice
+stays with that pipeline, and its completion comment says how it was delivered.
 
 ## Views
 

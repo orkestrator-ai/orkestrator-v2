@@ -5,6 +5,7 @@ import {
   hasTicketContentUpdate,
   normalizeTicketContent,
   type AcceptanceCriterionCheck,
+  type DeliveryPolicy,
   type TicketContentUpdate,
   type TicketKind,
   type TicketSectionsPatch,
@@ -181,7 +182,15 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
+export type KanbanDeliveryPolicyListener = (
+  taskId: string,
+  projectId: string,
+  policy: DeliveryPolicy | undefined,
+) => void;
+
 export class KanbanRepository {
+  private deliveryPolicyListener?: KanbanDeliveryPolicyListener;
+
   constructor(
     private readonly context: StorageContext,
     private readonly files: StorageFiles,
@@ -335,6 +344,15 @@ export class KanbanRepository {
    * survive edits that leave a criterion's text alone. Stored `sections` and
    * `sectionsBasis` cannot be written directly.
    */
+  /**
+   * Called after a ticket's delivery policy changes, by any writer (the
+   * dropdown, a text edit, an agent tool, the public API). It must not wait on
+   * anything that takes the Kanban queue: the queue is held while it is called.
+   */
+  onDeliveryPolicyChange(listener: KanbanDeliveryPolicyListener): void {
+    this.deliveryPolicyListener = listener;
+  }
+
   async updateKanbanTask(
     taskId: string,
     updates: Partial<Omit<KanbanTask, "sections" | "sectionsBasis">> & KanbanTaskContentInput,
@@ -357,6 +375,7 @@ export class KanbanRepository {
       }
 
       const oldStatus = task.status;
+      const oldDeliveryPolicy = normalizeKanbanTask(task).sections?.delivery?.policy;
       const { kind, markdown, sections, description, acceptanceCriteria, ...plain } = updates;
       const contentUpdate: TicketContentUpdate = {
         ...(kind !== undefined ? { kind } : {}),
@@ -387,7 +406,12 @@ export class KanbanRepository {
       }
       await this.context.saveJson(this.files.kanbanFile(), tasks);
       this.context.changes.announce("kanban", task.projectId);
-      return normalizeKanbanTask(task);
+      const updated = normalizeKanbanTask(task);
+      const deliveryPolicy = updated.sections?.delivery?.policy;
+      if (deliveryPolicy !== oldDeliveryPolicy) {
+        this.deliveryPolicyListener?.(updated.id, updated.projectId, deliveryPolicy);
+      }
+      return updated;
     });
   }
 
@@ -1099,6 +1123,7 @@ export type KanbanStorage = Pick<
   | "updateKanbanTask"
   | "recordKanbanCriteriaChecks"
   | "deleteKanbanTask"
+  | "onDeliveryPolicyChange"
   | "addKanbanComment"
   | "deleteKanbanComment"
   | "addKanbanImage"

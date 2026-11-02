@@ -4,11 +4,13 @@ import {
   TICKET_KIND_LABELS,
   TICKET_SECTION_DEFINITIONS,
   type AcceptanceCriterion,
+  type DeliveryPolicy,
   type TicketKind,
   type TicketSections,
 } from "@orkestrator/protocol/ticket-sections";
 import { MarkdownBody } from "@/components/pull-requests/pull-request-shared";
 import { CRITERION_STATES } from "./criterion-status";
+import { DeliveryPolicySelect } from "./DeliveryPolicySelect";
 import { cn } from "@/lib/utils";
 
 export function TicketKindBadge({ kind, className }: { kind: TicketKind; className?: string }) {
@@ -119,11 +121,22 @@ export function TicketSectionsGrid({
   sections,
   className,
   empty,
+  deliveryControl,
 }: {
   sections: TicketSections;
   className?: string;
   /** Shown when every section is empty. */
   empty?: React.ReactNode;
+  /**
+   * Makes the Delivery tile a dropdown that is always shown, for a ticket that
+   * can still be edited. Absent, as for a pipeline's snapshot, it only reads.
+   */
+  deliveryControl?: {
+    onChange: (policy: DeliveryPolicy) => void;
+    disabled?: boolean;
+    /** The change came too late for a build that has already decided. */
+    tooLateNote?: string;
+  };
 }) {
   const tiles: React.ReactNode[] = [];
   for (const definition of TICKET_SECTION_DEFINITIONS) {
@@ -172,16 +185,34 @@ export function TicketSectionsGrid({
     }
     if (key === "delivery") {
       const delivery = sections.delivery;
-      if (delivery?.policy || delivery?.note) {
+      if (deliveryControl || delivery?.policy || delivery?.note) {
         tiles.push(
           <Tile key={key} id={key} title={heading}>
-            {delivery.policy ? (
+            {deliveryControl ? (
+              <DeliveryPolicySelect
+                value={delivery?.policy}
+                onChange={deliveryControl.onChange}
+                disabled={deliveryControl.disabled}
+              />
+            ) : delivery?.policy ? (
               <p data-testid="ticket-delivery-policy" className="text-sm font-medium">
                 {DELIVERY_POLICY_LABELS[delivery.policy]}
               </p>
             ) : null}
-            {delivery.note ? (
-              <MarkdownBody body={delivery.note} className={delivery.policy ? "mt-1" : ""} />
+            {delivery?.note ? (
+              <MarkdownBody
+                body={delivery.note}
+                className={deliveryControl || delivery.policy ? "mt-1" : ""}
+              />
+            ) : null}
+            {deliveryControl?.tooLateNote ? (
+              <p
+                role="status"
+                data-testid="ticket-delivery-too-late"
+                className="mt-2 text-xs text-amber-500"
+              >
+                {deliveryControl.tooLateNote}
+              </p>
             ) : null}
           </Tile>,
         );
@@ -198,8 +229,11 @@ export function TicketSectionsGrid({
     }
   }
   if (tiles.length === 0) return <>{empty ?? null}</>;
+  const onlyTheDeliveryControl =
+    deliveryControl && tiles.length === 1 && !sections.delivery?.policy && !sections.delivery?.note;
   return (
-    <div className={cn("@container min-w-0", className)}>
+    <div className={cn("@container min-w-0", onlyTheDeliveryControl && "space-y-3", className)}>
+      {onlyTheDeliveryControl ? empty : null}
       <div
         data-testid="ticket-sections-grid"
         className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-3"

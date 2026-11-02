@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
@@ -33,7 +34,15 @@ const catalog: AgentModelCatalog = {
  * The panel is controlled, so a harness that actually stores what it emits is
  * the only way to see a later edit overwrite an earlier one.
  */
-function Harness({ onModels }: { onModels: (models: FeatureBuildModelState) => void }) {
+function Harness({
+  onModels,
+  deliveryPolicy,
+  onDeliveryPolicyChange,
+}: {
+  onModels: (models: FeatureBuildModelState) => void;
+  deliveryPolicy?: DeliveryPolicy;
+  onDeliveryPolicyChange?: (policy: DeliveryPolicy) => void;
+}) {
   const [models, setModels] = useState<FeatureBuildModelState>(() =>
     defaultFeatureBuildModels({
       catalog,
@@ -67,6 +76,8 @@ function Harness({ onModels }: { onModels: (models: FeatureBuildModelState) => v
       catalog={catalog}
       enabledPlatforms={["claude", "codex", "pi"]}
       promptFields={null}
+      deliveryPolicy={deliveryPolicy}
+      onDeliveryPolicyChange={onDeliveryPolicyChange}
     />
   );
 }
@@ -75,6 +86,26 @@ function openBuildPicker() {
   const picker = screen.getByRole("combobox", { name: "Build agent, model and reasoning" });
   return act(async () => fireEvent.pointerDown(picker));
 }
+
+describe("FeatureBuildFields When verified", () => {
+  test("offers the same choices as the launch dialog and reports a change", () => {
+    const changes: string[] = [];
+    render(
+      <Harness
+        onModels={() => undefined}
+        deliveryPolicy="open-pr"
+        onDeliveryPolicyChange={(policy) => changes.push(policy)}
+      />,
+    );
+    const select = screen.getByRole("combobox", { name: "When verified" }) as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.text)).toEqual([
+      "Open a PR, don't merge",
+      "Push, no PR",
+    ]);
+    fireEvent.change(select, { target: { value: "push-no-pr" } });
+    expect(changes).toEqual(["push-no-pr"]);
+  });
+});
 
 describe("FeatureBuildFields build step speed", () => {
   test("switching to Pi selects its later session-default row and efforts", async () => {

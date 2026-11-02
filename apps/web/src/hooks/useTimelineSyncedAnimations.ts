@@ -2,12 +2,16 @@ import { useLayoutEffect, type RefObject } from "react";
 
 function syncToTimelineOrigin(element: Element): void {
   for (const animation of element.getAnimations()) {
+    // getAnimations() includes colour transitions and one-shot effects. Only
+    // looping CSS animations share a phase; transitions keep their own clock.
+    if (!("animationName" in animation) || animation.effect?.getTiming().iterations !== Infinity)
+      continue;
     if (animation.startTime !== 0) animation.startTime = 0;
   }
 }
 
 /**
- * Pins every CSS animation running on an element to the start of the document
+ * Pins every looping CSS animation running on an element to the start of the document
  * timeline, so repeated indicators (the sidebar's working spinners, waiting
  * pulses) turn in step however far apart they started. A CSS animation
  * otherwise starts its own clock when its class is applied, which leaves each

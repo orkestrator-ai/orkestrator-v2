@@ -87,7 +87,7 @@ function WindowFixture() {
         onLoad={(event) => {
           designBridge.current?.close();
           const target = event.currentTarget.contentWindow!;
-          designBridge.current = new DesignFrameBridge(target);
+          designBridge.current = new DesignFrameBridge(target).open();
           void designBridge.current
             .ask({
               op: "render",

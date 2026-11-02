@@ -1064,6 +1064,10 @@ async function leakCycles(page: Page, cdp: CDPSession, browserCdp: CDPSession, c
     // Let exited frame processes and deferred cleanups finish before sampling.
     await sleep(1_500);
     samples.push(await sample(cycle));
+    // Long retention runs exceed test:logged's inactivity deadline. Emit only
+    // numeric progress after completed work; a stalled cycle still times out.
+    if (cycle % 10 === 0 || cycle === cycles)
+      console.log(`[perf] retention cycles ${cycle}/${cycles}`);
   }
   // Converged: after the first cycle (warm-up), the second half of the cycles
   // does not exceed the first half beyond a small slack.

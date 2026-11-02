@@ -204,14 +204,12 @@ export function AppShell({ children }: AppShellProps) {
   );
   const projectBoardTab = useUIStore((state) => state.projectBoardTab);
   const coordinatorConversation = useActiveCoordinatorConversationStore((state) => state.active);
+  const coordinatorTab = useMemo(
+    () => coordinatorConversationTab(coordinatorConversation, selectedProjectId, projectBoardTab),
+    [coordinatorConversation, selectedProjectId, projectBoardTab],
+  );
   const activeTab = useMemo(() => {
-    // A shown coordinator page covers the project home's tabs; its focused
-    // conversation is the agent session the window describes.
-    const coordinatorTab = coordinatorConversationTab(
-      coordinatorConversation,
-      selectedProjectId,
-      projectBoardTab,
-    );
+    // Keep the coordinator descriptor stable when unrelated pane layouts change.
     if (coordinatorTab) return coordinatorTab;
     if (!selectedEnvironmentId) return null;
     const environment = paneEnvironments.get(selectedEnvironmentId);
@@ -220,13 +218,7 @@ export function AppShell({ children }: AppShellProps) {
     const activePane = leaves.find((leaf) => leaf.id === environment.activePaneId) ?? null;
     if (!activePane?.activeTabId) return null;
     return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
-  }, [
-    coordinatorConversation,
-    paneEnvironments,
-    projectBoardTab,
-    selectedEnvironmentId,
-    selectedProjectId,
-  ]);
+  }, [coordinatorTab, paneEnvironments, selectedEnvironmentId]);
 
   // App shortcuts work wherever focus is in this document (`app-shortcuts.ts`).
   useEffect(() => retainAppShortcutRouter(), []);

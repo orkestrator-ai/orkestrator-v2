@@ -165,6 +165,39 @@ describe("AgentInfoButton coordinator conversations", () => {
     expect(screen.getByRole("button", { name: "Compact" })).toBeTruthy();
   });
 
+  test("hides Undo and Redo even when the coordinator provider supports both", () => {
+    const projection = coordinatorProjection();
+    projection.platform = "opencode";
+    projection.capabilities = nativeAgentCapabilities("opencode");
+    expect(projection.capabilities.actions?.undo).toBe(true);
+    expect(projection.capabilities.actions?.redo).toBe(true);
+    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection);
+    const tab = coordinatorTab();
+    tab.nativeAgentData!.platform = "opencode";
+    const view = render(<AgentInfoButton activeTab={tab} />);
+    open();
+    expect(screen.queryByRole("button", { name: "Undo turn" })).toBe(null);
+    expect(screen.queryByRole("button", { name: "Redo turn" })).toBe(null);
+    // A normal tab with these same capabilities exposes both controls.
+    view.rerender(
+      <AgentInfoButton
+        activeTab={{
+          ...tab,
+          nativeAgentData: { ...tab.nativeAgentData!, environmentId: "environment-1" },
+        }}
+      />,
+    );
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(createSessionKey("environment-1", TAB_ID), {
+        ...projection,
+        environmentId: "environment-1",
+      });
+    open();
+    expect(screen.getByRole("button", { name: "Undo turn" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Redo turn" })).toBeTruthy();
+  });
+
   test("keeps tab-creating, file-changing and policy controls for environment tabs", async () => {
     useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, coordinatorProjection());
 

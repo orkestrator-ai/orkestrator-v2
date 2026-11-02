@@ -454,6 +454,37 @@ describe("CoordinatorPanel", () => {
     expect(useActiveCoordinatorConversationStore.getState().active).toBe(null);
   });
 
+  test("republishes a provider session ID attached after the conversation mounts", async () => {
+    render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active?.tabId).toBe(
+        "coordinator-tab",
+      ),
+    );
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [
+          { ...snapshot.workspace.conversations[0]!, providerSessionId: "attached-session" },
+        ],
+      },
+    };
+    act(() =>
+      dispatchResourceChange({
+        resource: "coordinator",
+        id: "project-1",
+        projectId: "project-1",
+        revision: 2,
+      }),
+    );
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active?.data.sessionId).toBe(
+        "attached-session",
+      ),
+    );
+  });
+
   test.each([true, false])(
     "shows stored mail guidance with platform availability %s",
     async (available) => {
@@ -2086,11 +2117,25 @@ describe("CoordinatorPanel", () => {
     fireEvent.focusIn(agents[1]!, { relatedTarget: agents[0] });
     await waitFor(() => expect(select).toHaveBeenCalledWith("project-1", "side-1"));
     expect(agents[1]!.getAttribute("data-owns-shortcuts")).toBe("true");
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active).toMatchObject({
+        tabId: ensuredSnapshot.workspace.conversations.find(
+          (conversation) => conversation.id === "side-1",
+        )!.tabId,
+        data: { environmentId: coordinatorRuntimeId("coordinator-1", "side-1") },
+      }),
+    );
     const stop = (event: Event) => event.stopPropagation();
     agents[0]!.addEventListener("pointerdown", stop);
     fireEvent.pointerDown(agents[0]!);
     await waitFor(() => expect(select).toHaveBeenLastCalledWith("project-1", "conversation-1"));
     expect(agents[0]!.getAttribute("data-owns-shortcuts")).toBe("true");
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active).toMatchObject({
+        tabId: "coordinator-tab",
+        data: { environmentId: coordinatorRuntimeId("coordinator-1", "conversation-1") },
+      }),
+    );
     agents[0]!.removeEventListener("pointerdown", stop);
   });
 

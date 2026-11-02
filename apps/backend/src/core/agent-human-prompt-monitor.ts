@@ -36,12 +36,33 @@ export interface AgentHumanPromptMonitorDeps {
     backgroundTasks?: unknown;
   } | null>;
   readFileTail(path: string, bytes: number): Promise<string | null>;
+  /**
+   * Opaque revision of what {@link projection} would return, from the
+   * activity sweep's last read; `undefined` when the provider reports none.
+   * While it is unchanged the previous projection is reused instead of read.
+   */
+  contentRevision?(session: MonitoredSession): string | undefined;
+  now?: () => number;
   intervalMs?: number;
   /** Sessions read per pass. */
   perPass?: number;
 }
 
 type Source = { id: string; output: string; command?: string };
+type Projection = Awaited<ReturnType<AgentHumanPromptMonitorDeps["projection"]>>;
+
+/**
+ * Longest a projection is reused on an unchanged revision. The revision comes
+ * from the activity sweep, which reads every working session each pass; this
+ * bounds how long a sweep that stopped reading could hide new output.
+ */
+export const HUMAN_PROMPT_PROJECTION_REUSE_MS = 30_000;
+/** Reused projections held at most; each is a bounded observation. */
+const MAX_REUSED_PROJECTIONS = 256;
+
+function projectionKey(session: MonitoredSession): string {
+  return `${session.environmentId}\0${session.agent}\0${session.logicalSessionKey}`;
+}
 
 /** The Claude CLI's task output files, and only those. */
 const TASK_OUTPUT_FILE =
@@ -150,6 +171,11 @@ export class AgentHumanPromptMonitor {
   private cursor = 0;
   /** Output files of background tasks seen running, by task id (bounded). */
   private readonly taskFiles = new Map<string, { path: string; command?: string }>();
+  /** The last projection read per working session, with the revision it was read at. */
+  private readonly projections = new Map<
+    string,
+    { revision: string; at: number; projection: NonNullable<Projection> }
+  >();
   /** Sources with a prompt, per tab, so the ones that went away are cleared. */
   private readonly live = new Map<
     string,
@@ -182,6 +208,10 @@ export class AgentHumanPromptMonitor {
       );
       if (cleanupRevision !== this.deps.prompts.ownerCleanupRevision) return;
       const working = new Set(sessions.map((session) => session.logicalSessionKey));
+      const workingKeys = new Set(sessions.map(projectionKey));
+      for (const key of Array.from(this.projections.keys())) {
+        if (!workingKeys.has(key)) this.projections.delete(key);
+      }
       // A tab that stopped working has nothing waiting any more.
       for (const [key, entry] of Array.from(this.live)) {
         if (working.has(key)) continue;
@@ -200,11 +230,29 @@ export class AgentHumanPromptMonitor {
     }
   }
 
-  private async scanSession(session: MonitoredSession): Promise<void> {
-    const cleanupRevision = this.deps.prompts.ownerCleanupRevision;
-    const tabId = session.logicalSessionKey.slice(`env-${session.environmentId}:`.length);
+  /**
+   * The session's bounded observation. An unchanged content revision means the
+   * provider has nothing new to show, so the last read is reused and the
+   * session costs no request. The revision is taken before the read: content
+   * that changes during it moves the revision the sweep reports next, which
+   * forces a fresh read then. Background task files are still read every pass,
+   * because their output grows outside the provider's revision.
+   */
+  private async readProjection(session: MonitoredSession): Promise<Projection> {
+    const key = projectionKey(session);
+    const revision = this.deps.contentRevision?.(session);
+    const now = this.deps.now ?? Date.now;
+    const cached = this.projections.get(key);
+    if (
+      revision !== undefined &&
+      cached?.revision === revision &&
+      now() - cached.at < HUMAN_PROMPT_PROJECTION_REUSE_MS
+    ) {
+      return cached.projection;
+    }
+    this.projections.delete(key);
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    let projection: Awaited<ReturnType<AgentHumanPromptMonitorDeps["projection"]>>;
+    let projection: Projection;
     try {
       projection = await Promise.race([
         this.deps.projection(session),
@@ -215,6 +263,21 @@ export class AgentHumanPromptMonitor {
     } finally {
       clearTimeout(deadline);
     }
+    if (projection && revision !== undefined) {
+      this.projections.set(key, { revision, at: now(), projection });
+      while (this.projections.size > MAX_REUSED_PROJECTIONS) {
+        const oldest = this.projections.keys().next().value;
+        if (oldest === undefined) break;
+        this.projections.delete(oldest);
+      }
+    }
+    return projection;
+  }
+
+  private async scanSession(session: MonitoredSession): Promise<void> {
+    const cleanupRevision = this.deps.prompts.ownerCleanupRevision;
+    const tabId = session.logicalSessionKey.slice(`env-${session.environmentId}:`.length);
+    const projection = await this.readProjection(session);
     if (!projection) return;
     const sources: Array<Source & { kind: "agent-tool" | "agent-background-task" }> =
       runningShellSources(projection.messages).map((source) => ({

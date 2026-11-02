@@ -4097,6 +4097,25 @@ export class NativeAgentService {
     }
   }
 
+  /**
+   * Opaque token for what {@link humanPromptOutputIfRunning} reads, from the
+   * activity sweep's last observation: the provider session and its content
+   * revision. No read of any kind. `undefined` when the bridge reports no
+   * revision, so the human-prompt monitor reads that session every time.
+   */
+  humanPromptContentRevision(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): string | undefined {
+    const observed = this.launches.observedActivity(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    return observed?.contentRevision === undefined
+      ? undefined
+      : `${observed.providerSessionId}\0${observed.contentRevision}`;
+  }
+
   /** Background observation bypasses the tab-facing projection and its shared cache. */
   async humanPromptOutputIfRunning(
     environmentId: string,

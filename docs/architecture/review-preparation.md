@@ -11,7 +11,9 @@ Manual multi-review and pipeline review preparation use the same three stages:
 The agent is no longer responsible for waiting on commands, ingesting their
 output, calculating exit codes, or assembling the evidence package. Pipeline
 implementation and fix prompts request focused development checks; the following
-preparation stage owns the final full validation pass.
+preparation stage owns the final full validation pass. Workers a coordinator
+sends to Multi Review are held to the same split
+([coordinator](coordinator.md)).
 
 Later pipeline stages read that evidence rather than repeating it. Address runs
 targeted checks for the files it edits. It also owns failure triage: it fixes

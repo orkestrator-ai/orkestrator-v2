@@ -253,8 +253,10 @@ export const COORDINATOR_DELEGATION_OMISSION_TEXT =
  */
 export const COORDINATOR_WORKER_NO_PR_INSTRUCTION =
   "Do not open a pull request, even if the prompt below asks you to: commit your work and report back. Orkestrator raises the pull request from a PR tab once the work has been reviewed.";
-export const COORDINATOR_JOB_DELEGATION_INSTRUCTION = `This is a server-attested same-project worker delegation. Work only inside this disposable environment under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail. ${COORDINATOR_WORKER_NO_PR_INSTRUCTION}`;
-export const COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION = `This is a server-attested same-project worker delegation. Perform it inside this disposable worker under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail. ${COORDINATOR_WORKER_NO_PR_INSTRUCTION}`;
+export const COORDINATOR_WORKER_VALIDATION_INSTRUCTION =
+  "Run the focused checks your changes need and report them. Unless the prompt below asks for one, do not run a full test suite, typecheck, lint or build pass: review runs full validation once against your committed work.";
+export const COORDINATOR_JOB_DELEGATION_INSTRUCTION = `This is a server-attested same-project worker delegation. Work only inside this disposable environment under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail. ${COORDINATOR_WORKER_NO_PR_INSTRUCTION} ${COORDINATOR_WORKER_VALIDATION_INSTRUCTION}`;
+export const COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION = `This is a server-attested same-project worker delegation. Perform it inside this disposable worker under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail. ${COORDINATOR_WORKER_NO_PR_INSTRUCTION} ${COORDINATOR_WORKER_VALIDATION_INSTRUCTION}`;
 
 export type UserPromptPresentationKind = typeof COORDINATOR_DELEGATION_PRESENTATION;
 

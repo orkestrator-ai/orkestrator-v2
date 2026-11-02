@@ -15,6 +15,7 @@ import {
   COORDINATOR_WORKFLOW_STATUS_WAKE,
   COORDINATOR_PR_RULE,
   COORDINATOR_PR_STATUS_WAKE,
+  COORDINATOR_VALIDATION_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
 } from "@orkestrator/protocol/coordinator";
 import {
@@ -2077,6 +2078,7 @@ describe("Orkestrator control MCP server", () => {
         (initialized.body.result as { instructions?: string })?.instructions ?? "";
       expect(instructions.length).toBeGreaterThan(0);
       expect(instructions.includes(COORDINATOR_PR_RULE)).toBe(role === "main");
+      expect(instructions.includes(COORDINATOR_VALIDATION_RULE)).toBe(role === "main");
     },
   );
 

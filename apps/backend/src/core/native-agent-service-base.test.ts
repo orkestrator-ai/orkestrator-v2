@@ -53,6 +53,7 @@ import {
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
+  COORDINATOR_VALIDATION_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
@@ -3575,6 +3576,8 @@ describe("NativeAgentService", () => {
       expect(sent).toContain(COORDINATOR_LAUNCH_DEFAULTS_RULE);
       // Without this a coordinator asks build workers to raise the PR before review.
       expect(sent).toContain(COORDINATOR_PR_RULE);
+      // Without this a coordinator asks for the suite Multi Review is about to run.
+      expect(sent).toContain(COORDINATOR_VALIDATION_RULE);
       // Worker prompts are shown verbatim in the worker transcript.
       expect(sent).toContain(COORDINATOR_WORKER_PROMPT_FORMAT_RULE);
       // The main coordinator offers to save durable decisions, batched and

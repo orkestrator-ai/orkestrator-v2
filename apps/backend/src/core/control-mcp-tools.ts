@@ -15,6 +15,7 @@ import {
   COORDINATOR_PR_RULE,
   COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
+  COORDINATOR_VALIDATION_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
@@ -536,9 +537,9 @@ const OPERATOR_INSTRUCTIONS =
   "When a result is confirmation-required, read its description aloud, get explicit confirmation, then repeat the identical call with confirmToken. " +
   "Report that work started and check back later with run_status rather than waiting. find_actions and describe_action reveal every other action; run_action runs one.";
 
-/** A coordinator's worker prompts ask for commits, never a pull request (see COORDINATOR_PR_RULE). */
+/** A coordinator's worker prompts ask for commits and focused checks, never a pull request (see COORDINATOR_PR_RULE, COORDINATOR_VALIDATION_RULE). */
 const COORDINATOR_WORKER_PROMPT_NOTE =
-  "Never ask the worker to open a pull request: ask it to commit and report back; the pull request comes from a PR tab after review.";
+  "Never ask the worker to open a pull request: ask it to commit and report back; the pull request comes from a PR tab after review. When review follows, ask for focused checks rather than a full test suite: review runs full validation itself.";
 
 export async function createControlMcp(
   invoke: ControlMcpInvoker,
@@ -568,8 +569,10 @@ export async function createControlMcp(
           : "") +
         "Reuse requestId when retrying mutations. " +
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
-        // Side agents launch nothing, so the PR rule is the main coordinator's.
-        (coordinatorScope?.capabilities.includes("environments") ? ` ${COORDINATOR_PR_RULE}` : "") +
+        // Side agents launch nothing, so these two rules are the main coordinator's.
+        (coordinatorScope?.capabilities.includes("environments")
+          ? ` ${COORDINATOR_PR_RULE} ${COORDINATOR_VALIDATION_RULE}`
+          : "") +
         (coordinatorScope?.capabilities.includes("accounts") && schedulingEnabled
           ? ` ${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}`
           : "") +

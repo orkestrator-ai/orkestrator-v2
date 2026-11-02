@@ -15,7 +15,7 @@ with [agent-testing.md](agent-testing.md).
 | Test one file | `mise run test:logged -- --name focused -- bun test ./path/to/file.test.ts --parallel=1 --only-failures` | First feedback while editing one owner |
 | Test root unit tests | `mise run test:logged -- --name root-unit -- mise run test:unit` | Root `tests/unit` only |
 | Test changed code | `mise run test:changed` | Fast local feedback across affected packages and files |
-| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; excludes the [slow tier](#test-tiers) |
+| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; excludes the [slow tier](#test-tiers). Skip it when Multi Review or a build pipeline comes next, because its preparation runs it |
 | Test the slow tier | `mise run test:slow` | On demand only: tests that wait on real processes, servers, or wall-clock time |
 | Test both tiers | `mise run test:full` | What CI runs; default and slow tiers |
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |

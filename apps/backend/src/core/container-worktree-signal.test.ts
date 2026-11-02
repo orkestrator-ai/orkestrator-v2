@@ -11,6 +11,8 @@ import {
 } from "./container-worktree-signal.js";
 import { ManualTime, deferred, flushMicrotasks } from "./recurring-test-support.js";
 import type { WorktreeChangeHint } from "./worktree-watcher.js";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { CommandFailedError } from "./shell.js";
 
 type Issued = {
   credential: StateSignalCredential;
@@ -25,6 +27,7 @@ function harness(
     /** No agent tools issuer: the context of a fixture without a server. */
     noIssuer?: boolean;
     listening?: () => boolean;
+    defaultWarning?: boolean;
   } = {},
 ) {
   const time = new ManualTime(1_000_000);
@@ -66,7 +69,7 @@ function harness(
     nowMs: time.now,
     delay: (callback, delayMs) => time.setTimeout(callback, delayMs),
     cancelDelay: (timer) => time.clear(timer),
-    onWarning: (message) => warnings.push(message),
+    ...(options.defaultWarning ? {} : { onWarning: (message: string) => warnings.push(message) }),
   });
   const hints: WorktreeChangeHint[] = [];
   let coverageChanges = 0;
@@ -98,6 +101,34 @@ function harness(
 }
 
 describe("container worktree signal", () => {
+  test("default demotion logging omits private command output and credentials", async () => {
+    const logs = captureLogs();
+    const h = harness({
+      defaultWarning: true,
+      install: async () => {
+        throw new CommandFailedError(
+          "Cannot connect to the Docker daemon PRIVATE-WORKTREE password=credential-marker",
+          { exitCode: 125 },
+        );
+      },
+    });
+    const watcher = h.start();
+    try {
+      await flushMicrotasks();
+      const record = logs.records().find((entry) => entry.event === "signal.demoted");
+      expect(record?.fields).toMatchObject({
+        containerId: "container-1",
+        demotion: "arm-failed",
+        reason: "daemon-unavailable",
+        exitCode: 125,
+      });
+      expect(logs.lines.join("\n")).not.toContain("PRIVATE-WORKTREE");
+      expect(logs.lines.join("\n")).not.toContain("credential-marker");
+    } finally {
+      watcher.close();
+      logs.restore();
+    }
+  });
   test("a probe ring confirms the watcher and every ring becomes a full hint", async () => {
     const h = harness();
     const watcher = h.start();
@@ -232,7 +263,8 @@ describe("container worktree signal", () => {
     expect(h.installs).toHaveLength(1);
     expect(h.issued[0]!.revoked).toBe(true);
     expect(h.signals.status().demotions).toEqual({ "arm-failed": 1 });
-    expect(h.warnings.at(-1)).toContain("docker exec failed");
+    expect(h.warnings.at(-1)).toContain("could not be armed");
+    expect(h.warnings.at(-1)).not.toContain("docker exec failed");
     await h.time.advance(CONTAINER_WORKTREE_SIGNAL_RETRY_MS);
     await flushMicrotasks();
     expect(h.installs).toHaveLength(2);

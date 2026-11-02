@@ -58,12 +58,16 @@ import {
 } from "./gateway-internals.js";
 import type { StaticContentEncoding } from "./gateway-internals.js";
 import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
 import {
   browserPreviewRewriteKey,
   derivedProxyEtag,
   mapIfNoneMatchForUpstream,
   restoreDerivedEtag,
 } from "./gateway-proxy-etag.js";
+
+const log = createLogger("gateway");
 
 export function createSseGzipCompressor(): Gzip {
   // No `finishFlush`: a proxied stream can end cleanly when its upstream does,
@@ -657,9 +661,7 @@ export class GatewayProxy {
       const cancelProxyForDisconnect = () => {
         if (!settled && !response.writableFinished) {
           const disconnectError = new Error("Proxy client disconnected");
-          this.ctx.logger.debug(
-            "[RemoteGateway] Proxy client disconnected; aborting upstream request",
-          );
+          log.debug("proxy.client-disconnected");
           // Settle first: destroying the response re-enters this handler via
           // its own "close" event, and a throwing destroy must not leave the
           // proxy promise dangling.

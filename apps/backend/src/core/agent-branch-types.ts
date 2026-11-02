@@ -142,7 +142,7 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   /** The provider session phase (`createSession`'s first argument). */
   readonly sessionPhase: string;
   /** Prefix of the runner's log lines for this host; default `[review-fanout]`. */
-  readonly logPrefix?: string;
+  readonly logOwner?: string;
   /** Plan turns are read-only (the runner adds the read-only boundary). */
   readonly mode?: "plan" | "build";
   readonly wording: AgentBranchWording;
@@ -273,7 +273,7 @@ export class AgentBranchResultError extends Error {
 }
 
 /** The runner's log prefix when the host names none (review fan-outs). */
-export const AGENT_BRANCH_LOG_PREFIX = "[review-fanout]";
+export const AGENT_BRANCH_LOG_OWNER = "review-fanout";
 
 export function agentBranchNowIso(): string {
   return new Date().toISOString();

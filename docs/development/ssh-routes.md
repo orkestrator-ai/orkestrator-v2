@@ -38,14 +38,14 @@ HTTPS/Tailscale route, and both routes appear as one machine.
    port, which you then have to read back.
 2. Check the startup output. The `orkestrator-backend-ready` line has
    `loopbackClientUrl`, for example `http://127.0.0.1:34125/`, and the log
-   says `[RemoteGateway] Loopback client gateway listening on …`. If the port
+   says `[gateway] loopback.listening url=…`. If the port
    is busy, only this listener fails: the ready line has `loopbackClientError`
    and the backend keeps serving.
 3. This listener binds `127.0.0.1` only. It does not change where the
    Tailscale or browser listener binds. It serves the client API and answers
    `404` for control-only routes.
 4. Copy the gateway token from the remote `gateway-auth.json`. The path is
-   printed as `[RemoteGateway] Auth token stored at …`; by default it is
+   printed as `[gateway] auth-token.stored file=…`; by default it is
    `~/Library/Application Support/orkestrator-v2/gateway-auth.json` on macOS
    and `~/.config/orkestrator-v2/gateway-auth.json` on Linux.
 

@@ -1,4 +1,6 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { resetLogger } from "@orkestrator/protocol/logger";
+import { describe, expect, spyOn, test, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +39,10 @@ const CURL_REFUSED =
   "ORK_PROBE_TOOL=curl\ncurl: (7) Failed to connect to 172.17.0.3 port 9 after 0 ms: Could not connect to server\nORK_PROBE_HTTP=000\nORK_PROBE_RC=7\n";
 const CURL_DNS =
   "ORK_PROBE_TOOL=curl\ncurl: (6) Could not resolve host: nosuchhost.invalid\nORK_PROBE_HTTP=000\nORK_PROBE_RC=6\n";
+
+afterEach(() => {
+  resetLogger();
+});
 
 describe("classifyProbeOutput", () => {
   test("any HTTP status proves the path, from busybox wget and curl", () => {
@@ -502,7 +508,9 @@ function service(
 ) {
   const runner = overrides.runner ?? fakeRunner({});
   const events: ContainerHostReachability[] = [];
-  const logs: string[] = [];
+  const capture = captureLogs();
+  const logs = capture.lines;
+  const warnings = () => capture.records().filter((record) => record.level === "warn");
   let now = 1_000_000;
   const svc = new ContainerHostReachabilityService({
     servicePort: () => 38179,
@@ -524,7 +532,6 @@ function service(
       }
     },
     now: () => now,
-    log: { info: (line) => logs.push(`info ${line}`), warn: (line) => logs.push(`warn ${line}`) },
     ...overrides,
     run: overrides.run ?? runner.run,
   });
@@ -533,6 +540,7 @@ function service(
     runner,
     events,
     logs,
+    warnings,
     advance: (ms: number) => {
       now += ms;
     },
@@ -540,6 +548,57 @@ function service(
 }
 
 describe("ContainerHostReachabilityService.check", () => {
+  for (const rejected of [false, true]) {
+    test(`probe logs omit private diagnostics (${rejected ? "rejected" : "resolved"} command)`, async () => {
+      const privateOutput = "PRIVATE-PROBE password=credential-probe-marker";
+      const failure = new CommandFailedError(
+        `Cannot connect to the Docker daemon ${privateOutput}`,
+        { exitCode: 125 },
+      );
+      const runner = fakeRunner({
+        probeOutput: () => privateOutput,
+        execOutput: () => (rejected ? failure : privateOutput),
+        onCall: async (call) => {
+          if (rejected && call[1] === "run") throw failure;
+        },
+      });
+      const { svc, logs, warnings } = service({
+        runner,
+        run: async (command, args, options) => {
+          const result = await runner.run(command, args, options);
+          return command === "docker" && ["run", "exec"].includes(args?.[0] ?? "")
+            ? { ...result, stderr: "PRIVATE-PROBE-STDERR password=stderr-credential-marker" }
+            : result;
+        },
+      });
+      try {
+        const result = await svc.check("boot");
+        // UI diagnostics remain available; logs carry only fixed metadata.
+        expect(result.probes[0]?.detail).toContain("PRIVATE-PROBE");
+        await svc.checkEnvironmentContainer("container-private", { reason: "bridge-ready" });
+        const records = warnings().filter((entry) =>
+          ["probe.result", "check.probe", "check.summary"].includes(entry.event),
+        );
+        expect(new Set(records.map((entry) => entry.event))).toEqual(
+          new Set(["probe.result", "check.probe", "check.summary"]),
+        );
+        for (const entry of records.filter((entry) => entry.event !== "check.summary")) {
+          expect(entry.fields).toMatchObject({
+            outcome: "error",
+            elapsedMs: expect.any(Number),
+            http: null,
+          });
+          if (rejected)
+            expect(entry.fields).toMatchObject({ reason: "daemon-unavailable", exitCode: 125 });
+        }
+        expect(logs.join("\n")).not.toContain("PRIVATE-PROBE");
+        expect(logs.join("\n")).not.toContain("credential-probe-marker");
+        expect(logs.join("\n")).not.toContain("stderr-credential-marker");
+      } finally {
+        await svc.dispose();
+      }
+    });
+  }
   test("a firewall that drops container traffic is reported with the ufw fix and logged", async () => {
     const { svc, runner, events, logs } = service({
       runner: fakeRunner({ probeOutput: () => BUSYBOX_TIMEOUT }),
@@ -580,7 +639,8 @@ describe("ContainerHostReachabilityService.check", () => {
     const logText = logs.join("\n");
     expect(logText).toContain("status=blocked");
     expect(logText).toContain("outcome=timeout");
-    expect(logText).toContain("fix: sudo ufw allow");
+    expect(logText).toContain("check.remediation");
+    expect(logText).toContain("sudo ufw allow");
   });
 
   test("the fix never widens to a range this computer's local network uses", async () => {
@@ -595,12 +655,12 @@ describe("ContainerHostReachabilityService.check", () => {
   });
 
   test("a reachable host passes quietly", async () => {
-    const { svc, logs } = service();
+    const { svc, warnings } = service();
     const result = await svc.check("boot");
     expect(result.status).toBe("reachable");
     expect(result.remediation).toBeNull();
     expect(containerHostReachabilityNeedsAttention(result)).toBe(false);
-    expect(logs.filter((line) => line.startsWith("warn"))).toEqual([]);
+    expect(warnings()).toEqual([]);
   });
 
   test("a block on per-environment networks only is still a block", async () => {
@@ -1016,7 +1076,7 @@ describe("shutdown and stale probe cleanup", () => {
       const disposed = svc.dispose(0).then(() => {
         finished = true;
       });
-      await until(() => logs.some((line) => line.includes("awaiting probe network preparation")));
+      await until(() => logs.some((line) => line.includes("shutdown.awaiting-network")));
       expect(finished).toBe(false);
       // No early shutdown removal while a future create could still succeed.
       expect(runner.calls.filter(isNetworkRemoval)).toHaveLength(1);
@@ -1073,7 +1133,7 @@ describe("shutdown and stale probe cleanup", () => {
         expire!();
         await disposed;
         expect(runner.calls.filter(isNetworkRemoval)).toHaveLength(1);
-        expect(logs.some((line) => line.includes("deferring probe network cleanup"))).toBe(true);
+        expect(logs.some((line) => line.includes("shutdown.cleanup-deferred"))).toBe(true);
       } finally {
         timer.mockRestore();
         release.resolve();
@@ -1143,12 +1203,8 @@ describe("shutdown and stale probe cleanup", () => {
       expect(removals.map((call) => call[3])).toEqual([firstName, expect.any(String), firstName]);
       expect(removals[1]![3]).not.toBe(firstName);
       expect(networkAttempts).toBe(2);
-      expect(logs.some((line) => line.includes("shutdown probe container removal failed"))).toBe(
-        true,
-      );
-      expect(logs.some((line) => line.includes("shutdown probe network removal failed"))).toBe(
-        true,
-      );
+      expect(logs.some((line) => line.includes("shutdown.container-remove-failed"))).toBe(true);
+      expect(logs.some((line) => line.includes("shutdown.network-remove-failed"))).toBe(true);
       for (const release of held) release();
       await checked;
     });
@@ -1175,9 +1231,7 @@ describe("shutdown and stale probe cleanup", () => {
     await svc.dispose(0);
     expect(containerAttempts).toBe(4);
     expect(networkAttempts).toBe(2);
-    expect(
-      logs.filter((line) => line.includes("shutdown probe network removal failed")),
-    ).toHaveLength(2);
+    expect(logs.filter((line) => line.includes("shutdown.network-remove-failed"))).toHaveLength(2);
     for (const release of held) release();
     await checked;
   });

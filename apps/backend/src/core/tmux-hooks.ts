@@ -30,6 +30,10 @@ import {
   shellDq,
 } from "./tmux-shared.js";
 import { TmuxBackend } from "./tmux-backend.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -550,7 +554,12 @@ fi
 export async function ensureClaudeSettingsGitIgnored(backend: TmuxBackend): Promise<void> {
   await backend
     .exec(["bash", "-lc", gitExcludeSetupScript(CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN)])
-    .catch((error) => console.warn("[tmux] failed to configure git exclude", error));
+    .catch((error) =>
+      log.warn("hooks.git-exclude-failed", {
+        ...classifyCommandFailure(error, { tools: ["docker", "git"] }),
+        error: formatLogError(error),
+      }),
+    );
 }
 
 export async function installWorkspaceHooks(
@@ -1295,7 +1304,7 @@ export async function probeThinkingDisplaySupport(
     );
     return thinkingDisplayProbeIndicatesSupport(probe);
   } catch (error) {
-    console.warn("[tmux] --thinking-display probe failed; launching without it", error);
+    log.warn("cli.thinking-display-probe-failed", { error: formatLogError(error) });
     return false;
   }
 }

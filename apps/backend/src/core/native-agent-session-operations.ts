@@ -39,6 +39,9 @@ import type {
   ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
 import type { PermissionRuleChoice, PermissionRuleEnforcer } from "./permission-rules/enforcer.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 /** What the session operations need from the service that wires them. */
 export interface NativeAgentSessionOperationsHost {
@@ -137,9 +140,7 @@ export class NativeAgentSessionOperations {
               if (persisted) this.host.promptQueues.releaseTurnInterrupt(resolved.key, requestId);
             },
             () => {
-              console.warn(
-                "[native-agent] Turn interrupt persistence failed; automatic publication remains fenced",
-              );
+              log.warn("interrupt.persist-failed");
             },
           );
       }
@@ -409,10 +410,10 @@ export class NativeAgentSessionOperations {
         },
       );
     } catch (error) {
-      console.warn(
-        `[native-agent] The ${agent} session a resume replaced was not closed:`,
-        error instanceof Error ? error.name : "unknown error",
-      );
+      log.warn("resume.close-replaced-failed", {
+        agent,
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 

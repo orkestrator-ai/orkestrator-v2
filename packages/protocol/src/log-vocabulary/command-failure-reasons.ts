@@ -23,6 +23,9 @@ export const COMMAND_FAILURE_REASONS = {
   "invalid-usage": "The tool rejected its arguments, which usually means a bug in the caller.",
   // Git.
   "branch-exists": "The target branch name is already taken.",
+  "branch-not-merged": "Deleting the branch would lose commits that are not merged.",
+  "worktree-has-changes": "The worktree holds changes, so it was not removed.",
+  "not-a-worktree": "That path is not a registered worktree.",
   "branch-not-found": "The branch the command named does not exist.",
   "invalid-ref": "A branch name or revision is malformed or does not resolve.",
   "ref-conflict": "A ref cannot be created because an existing ref occupies its path.",
@@ -50,6 +53,12 @@ export const COMMAND_FAILURE_REASONS = {
   "container-not-found": "The container no longer exists.",
   "container-not-running": "The container exists but is stopped, paused or restarting.",
   "container-name-conflict": "Another container already has that name.",
+  "removal-in-progress": "Docker is already removing that container.",
+  "image-in-use": "A container still uses that image.",
+  "volume-in-use": "A container still uses that volume.",
+  "volume-not-found": "No such Docker volume.",
+  "network-in-use": "Containers are still attached to that network.",
+  "network-not-found": "No such Docker network.",
   "image-not-found": "The image does not exist locally or could not be pulled.",
   // Tmux.
   "server-not-running": "There is no tmux server to talk to.",

@@ -1,3 +1,4 @@
+import { configureLogger } from "@orkestrator/protocol/logger";
 /**
  * Remote client bandwidth baseline (todo 0052; plans/stream-efficience.md,
  * Phase 2). Runs the real gateway in this process against a fake backend and
@@ -694,13 +695,6 @@ type MetricsSnapshot = {
   };
 };
 
-const silentLogger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-};
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function runCase(
@@ -731,7 +725,6 @@ export async function runCase(
     bindAddress: "127.0.0.1",
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: token },
-    logger: silentLogger,
     allowNonTailscaleBind: true,
     compression: transport === "on" ? "on" : "body",
     keepaliveMs: options.keepaliveMs,
@@ -1008,6 +1001,7 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
+  configureLogger({ sink: ({ line }) => process.stderr.write(`${line}\n`) });
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(error instanceof UsageError ? 2 : 1);

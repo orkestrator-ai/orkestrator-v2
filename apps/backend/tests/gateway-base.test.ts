@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import {
@@ -17,7 +18,6 @@ import { createServer, type OutgoingHttpHeaders } from "node:http";
 
 import {
   auxiliaryServers,
-  createLogger,
   createRendererRoot,
   createTempDir,
   decodeResponseBody,
@@ -34,6 +34,52 @@ import {
 } from "./gateway-test-harness.js";
 
 describe("remote gateway", () => {
+  test("independent request failures each log diagnostics and still send a failure response", async () => {
+    const logs = captureLogs();
+    try {
+      for (const owner of ["first", "second"]) {
+        const { gateway, info } = await startGateway();
+        const lifecycle = (
+          gateway as unknown as {
+            lifecycle: {
+              router: {
+                handle: (
+                  request: unknown,
+                  response: import("node:http").ServerResponse,
+                ) => Promise<void>;
+              };
+            };
+          }
+        ).lifecycle;
+        let calls = 0;
+        lifecycle.router.handle = async (_request, response) => {
+          calls += 1;
+          if (calls === 2) {
+            response.end("ok");
+            return;
+          }
+          throw new Error(`${owner}-failure-${calls}`);
+        };
+        for (let call = 1; call <= 3; call += 1) {
+          const result = await requestUrl(`${info.url}/operation-${call}`);
+          expect(result.status).toBe(call === 2 ? 200 : 500);
+          if (call !== 2) expect(result.json()).toEqual({ error: `${owner}-failure-${call}` });
+        }
+      }
+      const failures = logs.records().filter((entry) => entry.event === "request.failed");
+      expect(failures).toHaveLength(4);
+      for (const message of [
+        "first-failure-1",
+        "first-failure-3",
+        "second-failure-1",
+        "second-failure-3",
+      ]) {
+        expect(JSON.stringify(failures)).toContain(message);
+      }
+    } finally {
+      logs.restore();
+    }
+  });
   test("separates content-coded metadata from full transformed-representation stripping", () => {
     const upstream = (): OutgoingHttpHeaders => ({
       etag: '"upstream"',
@@ -386,7 +432,6 @@ describe("remote gateway", () => {
       dataDir,
       rendererRoot,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: createLogger(),
     });
     const writes: string[] = [];
     const client = {
@@ -466,7 +511,6 @@ describe("remote gateway", () => {
       dataDir,
       rendererRoot,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: createLogger(),
     });
     const writes: string[] = [];
     const client = {
@@ -528,13 +572,12 @@ describe("remote gateway", () => {
   test("disconnects before a current frame would exceed the hard buffer limit", async () => {
     const dataDir = await createTempDir("ork-gateway-hard-limit-");
     const rendererRoot = await createRendererRoot(dataDir);
-    const logger = createLogger();
+    const logs = captureLogs();
     const gateway = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
       dataDir,
       rendererRoot,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger,
     });
     const client = {
       writableLength: 8 * 1024 * 1024 - 10,
@@ -553,7 +596,10 @@ describe("remote gateway", () => {
     expect(client.write).not.toHaveBeenCalled();
     expect(client.destroy).toHaveBeenCalledTimes(1);
     expect(clients.has(client)).toBe(false);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logs.records().map((record) => record.event)).toEqual(
+      expect.arrayContaining(["events.client-dropped"]),
+    );
+    logs.restore();
   });
 
   test("subscribes a connecting stream from its own query string", async () => {
@@ -637,13 +683,14 @@ describe("remote gateway", () => {
   test("uses an ephemeral browser port after every nearby fallback port is occupied", async () => {
     const occupied = await occupyContiguousPorts(21);
     auxiliaryServers.push(...occupied.servers);
-    const logger = createLogger();
+    const logs = captureLogs();
 
-    const { info } = await startGateway({ port: occupied.start, logger });
+    const { info } = await startGateway({ port: occupied.start });
     const selectedPort = Number(new URL(info.browserUrl!).port);
 
     expect(selectedPort < occupied.start || selectedPort > occupied.start + 20).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("nearby ports were in use"));
+    expect(logs.records().some((record) => record.event === "port.fallback-distant")).toBe(true);
+    logs.restore();
   });
 
   test("falls back to an ephemeral port when port 65535 is occupied", async () => {
@@ -685,7 +732,6 @@ describe("remote gateway", () => {
       bindAddress: "127.0.0.1",
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: createLogger(),
       allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
@@ -755,7 +801,6 @@ describe("remote gateway", () => {
       dataDir: path.join(fileInsteadOfDirectory, "child"),
       rendererRoot: root,
       env: {},
-      logger: createLogger(),
     });
 
     await expect(gateway.setToken("replacement-token-123456")).rejects.toThrow();

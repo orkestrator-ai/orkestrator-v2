@@ -2,6 +2,9 @@ import { deletionMarker, markDeletion } from "../storage-deletion-fences.js";
 import { DesignError } from "./errors.js";
 import type { StorageDatabase } from "../storage-database.js";
 import { openBackendDatabase } from "../storage-stores.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("design");
 
 /**
  * Cross-process coordination for design canvases.
@@ -181,10 +184,7 @@ export class DesignCoordination {
         return { before, after };
       });
     } catch (error) {
-      console.warn(
-        "[backend] Design change signal failed:",
-        (error as { code?: string })?.code ?? "error",
-      );
+      log.warn("change-signal.failed", { error: formatLogError(error, { message: false }) });
       return undefined;
     }
   }

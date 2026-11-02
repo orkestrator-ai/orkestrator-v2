@@ -21,6 +21,9 @@ import {
   type RoutedResult,
 } from "./node-routing.js";
 import type { NodeService } from "./node-service.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("nodes");
 
 /**
  * The portal side of a command node, and the grant side of a leaf.
@@ -158,10 +161,9 @@ export class NodePortal {
       // An environment on a leaf gets its seed files before it starts.
       await this.afterRouted?.(nodeId, args.command, commandArgs, result.result).catch(
         (error: unknown) => {
-          console.warn(
-            "[nodes] Post-command step on a node failed:",
-            error instanceof Error ? error.name : "unknown",
-          );
+          log.warn("command.post-step-failed", {
+            error: formatLogError(error, { message: false }),
+          });
         },
       );
       if (args.command === "update_backend_profile") {

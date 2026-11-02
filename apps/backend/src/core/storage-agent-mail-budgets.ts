@@ -13,6 +13,9 @@ import {
   type PersistedAgentMailStore,
   type PersistedMailbox,
 } from "./storage-agent-mail-store.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-mail");
 
 /** Pairs whose epoch the store keeps (`pairEpochs`); the oldest are dropped. */
 const MAX_PAIR_EPOCHS = 2_000;
@@ -202,10 +205,7 @@ export class AgentMailBudgets {
         },
       );
     } catch (error) {
-      console.warn(
-        "[agent-mail] Could not notify the coordinator of held worker mail:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("budget.hold-notify-failed", { error: formatLogError(error) });
     }
   }
 

@@ -43,7 +43,6 @@ async function createLifecycle(
       env: options.env ?? {},
       loopbackClientPort: options.loopbackClientPort,
       strictPort: options.strictPort,
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
     },
     {
       gatewayCredentialMatches: () => false,

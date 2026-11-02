@@ -47,6 +47,9 @@ import {
   resolveActiveAgentAccount,
   type ResolvedAgentAccount,
 } from "./agent-accounts-active.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-accounts");
 
 /**
  * Containers and the active agent account.
@@ -114,7 +117,7 @@ const defaultRunners: ContainerRunners = {
 
 function logFailure(what: string, error: unknown): void {
   // Never the payload: only what failed and why.
-  console.warn(`[agent-accounts] ${what}:`, error instanceof Error ? error.message : String(error));
+  log.warn("container-sync.failed", { step: what, error: formatLogError(error) });
 }
 
 /** Account directories to stage from, for the platforms whose active account is an added one. */

@@ -49,6 +49,9 @@ import {
   readAgentActivitySources,
   readFrontendAgentActivityObservers,
 } from "./storage-shared.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -482,10 +485,10 @@ export class ProjectsRepository {
     try {
       this.repos.permissionRules.store().deleteForProject(projectId);
     } catch (error) {
-      console.warn(
-        `[backend] permission rule cleanup failed for ${projectId}:`,
-        error instanceof Error ? error.name : "unknown",
-      );
+      log.warn("permission-rules.cleanup-failed", {
+        projectId,
+        error: formatLogError(error, { message: false }),
+      });
     }
     // Its template trust records and capability ceiling (item 109) go with it.
     this.repos.graphTemplates.deleteGraphProjectSettings(projectId);
@@ -784,10 +787,10 @@ export class ProjectsRepository {
         ...(project?.name ? { projectName: project.name } : {}),
       });
     } catch (error) {
-      console.warn(
-        `[backend] could not keep usage names for ${environment.id}:`,
-        error instanceof Error ? error.name : "unknown",
-      );
+      log.warn("usage.environment-label-failed", {
+        environmentId: environment.id,
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 

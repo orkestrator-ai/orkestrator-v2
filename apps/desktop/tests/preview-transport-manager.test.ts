@@ -96,7 +96,6 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     tunnel = new PreviewTunnelServer({
       runtime: harness.runtime,
       metrics: new PreviewMetrics(),
-      logger: { debug: () => undefined, warn: () => undefined },
     });
     gateway = createServer((_request, response) => response.end());
     gateway.on("upgrade", (request, socket, head) => {

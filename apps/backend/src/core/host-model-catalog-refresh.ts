@@ -47,6 +47,9 @@ import {
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("models");
 
 type RefreshableAgent = Extract<
   AgentPlatform,
@@ -143,10 +146,7 @@ export async function withShortLivedBridge<T>(
     return await read(port, probe.token);
   } finally {
     await localServers.terminate(key, child).catch((error: unknown) => {
-      console.warn(
-        `[ElectronBackend] The ${probe.kind} ${purpose === "catalog-refresh" ? "catalogue probe" : "sign-in server"} did not exit cleanly:`,
-        error instanceof Error ? error.message : "unknown error",
-      );
+      log.warn("probe.exit-unclean", { kind: probe.kind, purpose, error: formatLogError(error) });
     });
   }
 }

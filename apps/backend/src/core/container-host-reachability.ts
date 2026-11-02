@@ -14,7 +14,15 @@ import {
 } from "@orkestrator/protocol/container-host-reachability";
 import type { DockerTopology } from "@orkestrator/protocol/image-manifest";
 import { DOCKER_LABEL_OWNER, DOCKER_LABEL_RESOURCE_ROLE } from "./constants.js";
-import { CommandFailedError, runCommand } from "./shell.js";
+import { runCommand } from "./shell.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  type CommandFailureFields,
+  classifyCommandFailure,
+} from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("docker.reachability");
+const probeFailures = new WeakMap<ContainerHostProbe, CommandFailureFields>();
 
 /**
  * Container → host agent tools reachability.
@@ -51,7 +59,6 @@ export const CONTAINER_HOST_PROBE_IMAGE =
   "busybox:1.37-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092";
 export const HOST_REACHABILITY_PROBE_ROLE = "host-reachability-probe";
 export const CONTAINER_AGENT_TOOLS_PROBE_HOST = "host.docker.internal";
-const LOG_PREFIX = "[container-host-reachability]";
 const PROBE_CONNECT_TIMEOUT_SECONDS = 5;
 /** `docker run` start-up, the probe itself, and removal. */
 const PROBE_COMMAND_TIMEOUT_MS = 30_000;
@@ -492,7 +499,6 @@ export type ContainerHostReachabilityDependencies = {
   prepareContainer?: (containerId: string) => Promise<void>;
   loadEnvironment?: (environmentId: string) => Promise<ReachabilityEnvironment | null>;
   now?: () => number;
-  log?: { info(message: string): void; warn(message: string): void };
 };
 
 type ContainerProbeCacheEntry = { at: number; port: number; probe: ContainerHostProbe };
@@ -515,16 +521,11 @@ export class ContainerHostReachabilityService {
   private readonly platform: NodeJS.Platform;
   private readonly run: typeof runCommand;
   private readonly now: () => number;
-  private readonly log: { info(message: string): void; warn(message: string): void };
 
   constructor(private readonly deps: ContainerHostReachabilityDependencies) {
     this.platform = deps.platform ?? process.platform;
     this.run = deps.run ?? runCommand;
     this.now = deps.now ?? Date.now;
-    this.log = deps.log ?? {
-      info: (message) => console.info(message),
-      warn: (message) => console.warn(message),
-    };
   }
 
   snapshot(): ContainerHostReachability {
@@ -565,9 +566,7 @@ export class ContainerHostReachabilityService {
     if (this.closed) return Promise.resolve(this.snapshot());
     const running = this.runCheck(trigger)
       .catch((error: unknown) => {
-        this.log.warn(
-          `${LOG_PREFIX} check crashed trigger=${trigger} error=${boundedError(error)}`,
-        );
+        log.warn("check.crashed", { trigger, error: formatLogError(error) });
         return this.publish({
           ...this.state,
           status: "unverified",
@@ -620,7 +619,7 @@ export class ContainerHostReachabilityService {
     // hung past this bound, runCheck's closed guard and finally own late cleanup.
     const preparing = this.networkPreparation;
     if (preparing) {
-      this.log.info(`${LOG_PREFIX} shutdown awaiting probe network preparation`);
+      log.info("shutdown.awaiting-network");
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         preparing.catch(() => undefined),
@@ -629,18 +628,17 @@ export class ContainerHostReachabilityService {
         }),
       ]).finally(() => clearTimeout(timer));
       if (this.networkPreparation === preparing) {
-        this.log.warn(
-          `${LOG_PREFIX} shutdown deferring probe network cleanup until preparation settles`,
-        );
+        log.warn("shutdown.cleanup-deferred");
         return;
       }
     }
     const network = this.probeNetwork;
     const containers = Array.from(this.probeContainers);
     if (!network && containers.length === 0) return;
-    this.log.info(
-      `${LOG_PREFIX} shutdown removing probe resources network=${network ?? "-"} containers=${containers.length}`,
-    );
+    log.info("shutdown.removing-resources", {
+      network: network ?? null,
+      containers: containers.length,
+    });
     // One per call: a failed removal must not skip the remaining containers.
     const failed: string[] = [];
     for (const name of containers) {
@@ -661,9 +659,11 @@ export class ContainerHostReachabilityService {
       });
       return true;
     } catch (error) {
-      this.log.warn(
-        `${LOG_PREFIX} shutdown probe container removal failed container=${name} error=${boundedError(error)}`,
-      );
+      log.warn("shutdown.container-remove-failed", {
+        container: name,
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
       return false;
     }
   }
@@ -676,9 +676,11 @@ export class ContainerHostReachabilityService {
       if (this.probeNetwork === network) this.probeNetwork = null;
       return true;
     } catch (error) {
-      this.log.warn(
-        `${LOG_PREFIX} shutdown probe network removal failed network=${network} error=${boundedError(error)}`,
-      );
+      log.warn("shutdown.network-remove-failed", {
+        network,
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
       return false;
     }
   }
@@ -694,9 +696,11 @@ export class ContainerHostReachabilityService {
   ): Promise<ContainerHostProbe | null> {
     const port = this.deps.servicePort();
     if (!port) {
-      this.log.warn(
-        `${LOG_PREFIX} container probe skipped reason=${options.reason} container=${shortId(containerId)} cause=agent-tools-not-listening`,
-      );
+      log.warn("probe.skipped", {
+        trigger: options.reason,
+        container: shortId(containerId),
+        cause: "agent-tools-not-listening",
+      });
       return null;
     }
     const cached = this.containerCache.get(containerId);
@@ -746,9 +750,13 @@ export class ContainerHostReachabilityService {
       probe,
       host,
     });
-    this.log.warn(
-      `${LOG_PREFIX} preflight refused stage=${JSON.stringify(stage)} environment=${environment.id} container=${shortId(environment.containerId)} outcome=${probe.outcome} hostStatus=${host.status}`,
-    );
+    log.warn("preflight.refused", {
+      stage,
+      environmentId: environment.id,
+      container: shortId(environment.containerId),
+      outcome: probe.outcome,
+      hostStatus: host.status,
+    });
     throw new ContainerAgentToolsUnreachableError(message, probe.outcome, environment.containerId);
   }
 
@@ -762,13 +770,16 @@ export class ContainerHostReachabilityService {
     const url = containerAgentToolsUrl(port);
     if (options.prepare && this.deps.prepareContainer) {
       await this.deps.prepareContainer(containerId).catch((error: unknown) => {
-        this.log.warn(
-          `${LOG_PREFIX} container prepare failed container=${shortId(containerId)} error=${boundedError(error)}`,
-        );
+        log.warn("probe.prepare-failed", {
+          container: shortId(containerId),
+          ...classifyCommandFailure(error, { tools: ["docker"] }),
+          error: formatLogError(error),
+        });
       });
     }
     const started = this.now();
     let classification: ProbeClassification;
+    let failure: CommandFailureFields | undefined;
     try {
       const { stdout, stderr } = await this.run(
         "docker",
@@ -787,6 +798,7 @@ export class ContainerHostReachabilityService {
       classification = classifyProbeOutput(`${stdout}\n${stderr}`);
     } catch (error) {
       classification = { outcome: "error", httpStatus: null, detail: boundedError(error) };
+      failure = classifyCommandFailure(error, { tools: ["docker"] });
     }
     const probe: ContainerHostProbe = {
       scope: "environment-container",
@@ -798,14 +810,18 @@ export class ContainerHostReachabilityService {
       elapsedMs: Math.max(0, this.now() - started),
       detail: classification.detail,
     };
+    if (failure) probeFailures.set(probe, failure);
     this.containerCache.set(containerId, { at: this.now(), port, probe });
     if (this.containerCache.size > 256) {
       const oldest = this.containerCache.keys().next().value;
       if (oldest !== undefined) this.containerCache.delete(oldest);
     }
-    const line = `${LOG_PREFIX} container probe reason=${options.reason} container=${shortId(containerId)} url=${url} ${probeFields(probe)}`;
-    if (probe.outcome === "reachable") this.log.info(line);
-    else this.log.warn(line);
+    log[probe.outcome === "reachable" ? "info" : "warn"]("probe.result", () => ({
+      trigger: options.reason,
+      container: shortId(containerId),
+      url,
+      ...probeFields(probe),
+    }));
     this.maybeAutoRecheck(probe);
     return probe;
   }
@@ -823,9 +839,7 @@ export class ContainerHostReachabilityService {
     if (!contradicts) return;
     if (this.now() - this.lastAutoRecheckAt < AUTO_RECHECK_INTERVAL_MS) return;
     this.lastAutoRecheckAt = this.now();
-    this.log.info(
-      `${LOG_PREFIX} container probe contradicts host status=${this.state.status} outcome=${probe.outcome}; rechecking host`,
-    );
+    log.info("probe.contradicts-host", { hostStatus: this.state.status, outcome: probe.outcome });
     void this.check("recheck");
   }
 
@@ -834,9 +848,7 @@ export class ContainerHostReachabilityService {
   ): Promise<ContainerHostReachability> {
     const startedAt = this.now();
     const port = this.deps.servicePort();
-    this.log.info(
-      `${LOG_PREFIX} check started trigger=${trigger} platform=${this.platform} port=${port ?? "none"}`,
-    );
+    log.info("check.started", { trigger, platform: this.platform, port: port ?? null });
     const base = {
       ...initialContainerHostReachability(),
       trigger,
@@ -866,7 +878,7 @@ export class ContainerHostReachabilityService {
       ? this.deps.detectTopology()
       : import("./docker-image.js").then((module) => module.detectDockerTopology()));
     const rootless = topology.rootless === true;
-    this.log.info(`${LOG_PREFIX} docker topology kind=${topology.kind} rootless=${rootless}`);
+    log.info("topology.detected", { kind: topology.kind, rootless });
     if (topology.kind === "unavailable") {
       return this.finish(startedAt, {
         ...base,
@@ -887,9 +899,11 @@ export class ContainerHostReachabilityService {
     }
 
     const [firewall, subnets] = await Promise.all([this.detectFirewall(), this.dockerSubnets()]);
-    this.log.info(
-      `${LOG_PREFIX} host firewall kind=${firewall.kind} detail=${JSON.stringify(firewall.detail ?? "")} dockerSubnets=${subnets.join(",") || "none"}`,
-    );
+    log.info("firewall.detected", {
+      kind: firewall.kind,
+      detail: firewall.detail ?? null,
+      dockerSubnets: subnets.join(",") || null,
+    });
 
     const image = await this.ensureProbeImage();
     if (!image) {
@@ -955,9 +969,11 @@ export class ContainerHostReachabilityService {
             if (this.probeNetwork === network.name) this.probeNetwork = null;
           },
           (error: unknown) =>
-            this.log.warn(
-              `${LOG_PREFIX} probe network removal failed network=${network.name} error=${boundedError(error)}`,
-            ),
+            log.warn("probe-network.remove-failed", {
+              network: network.name,
+              ...classifyCommandFailure(error, { tools: ["docker"] }),
+              error: formatLogError(error),
+            }),
         );
       }
     }
@@ -1063,20 +1079,27 @@ export class ContainerHostReachabilityService {
   private finish(startedAt: number, next: ContainerHostReachability): ContainerHostReachability {
     const result = this.publish({ ...next, checkedAt: new Date(this.now()).toISOString() });
     const elapsedMs = Math.max(0, this.now() - startedAt);
-    const line = `${LOG_PREFIX} check finished trigger=${result.trigger} status=${result.status} reason=${result.reason ?? "none"} port=${result.port ?? "none"} firewall=${result.firewall.kind} elapsedMs=${elapsedMs} probes=${result.probes.length}`;
     const warn = result.status === "blocked" || result.reason === "probe-failed";
-    if (warn) this.log.warn(line);
-    else this.log.info(line);
-    for (const probe of result.probes) {
-      const probeLine = `${LOG_PREFIX}   probe ${probeFields(probe)}`;
-      if (probe.outcome === "reachable") this.log.info(probeLine);
-      else this.log.warn(probeLine);
+    const level = warn ? "warn" : "info";
+    log[level]("check.finished", {
+      trigger: result.trigger,
+      status: result.status,
+      outcome: result.reason ?? null,
+      port: result.port ?? null,
+      firewall: result.firewall.kind,
+      elapsedMs,
+      probes: result.probes.length,
+    });
+    // Log the original probes: publication clones the UI snapshot.
+    for (const probe of next.probes) {
+      log[probe.outcome === "reachable" ? "info" : "warn"]("check.probe", () => probeFields(probe));
     }
-    if (result.status !== "reachable")
-      this.log[warn ? "warn" : "info"](`${LOG_PREFIX}   ${result.summary}`);
+    if (result.status !== "reachable") {
+      log[level]("check.summary", { status: result.status, reason: result.reason, elapsedMs });
+    }
     if (result.status === "blocked" && result.remediation) {
       for (const command of result.remediation.commands) {
-        this.log.warn(`${LOG_PREFIX}   fix: ${command}`);
+        log.warn("check.remediation", { command });
       }
     }
     return result;
@@ -1089,7 +1112,7 @@ export class ContainerHostReachabilityService {
       try {
         this.deps.emit?.(CONTAINER_HOST_REACHABILITY_CHANGED_EVENT, this.snapshot());
       } catch (error) {
-        this.log.warn(`${LOG_PREFIX} event emit failed error=${boundedError(error)}`);
+        log.warn("event.emit-failed", { error: formatLogError(error) });
       }
     }
     return this.snapshot();
@@ -1099,37 +1122,39 @@ export class ContainerHostReachabilityService {
     try {
       return (this.deps.hostAddresses ?? hostNetworkAddresses)();
     } catch (error) {
-      this.log.warn(`${LOG_PREFIX} host address listing failed error=${boundedError(error)}`);
+      log.warn("host-addresses.list-failed", {
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
       return [];
     }
   }
 
   private async ensureProbeImage(): Promise<string | null> {
     if (await this.imagePresent(CONTAINER_HOST_PROBE_IMAGE)) {
-      this.log.info(`${LOG_PREFIX} probe image present image=${CONTAINER_HOST_PROBE_IMAGE}`);
+      log.info("probe-image.present", { image: CONTAINER_HOST_PROBE_IMAGE });
       return CONTAINER_HOST_PROBE_IMAGE;
     }
     const pullStarted = this.now();
-    this.log.info(`${LOG_PREFIX} pulling probe image image=${CONTAINER_HOST_PROBE_IMAGE}`);
+    log.info("probe-image.pulling", { image: CONTAINER_HOST_PROBE_IMAGE });
     try {
       await this.run("docker", ["pull", "--quiet", CONTAINER_HOST_PROBE_IMAGE], {
         timeoutMs: PULL_TIMEOUT_MS,
       });
-      this.log.info(
-        `${LOG_PREFIX} probe image pulled elapsedMs=${Math.max(0, this.now() - pullStarted)}`,
-      );
+      log.info("probe-image.pulled", { elapsedMs: Math.max(0, this.now() - pullStarted) });
       return CONTAINER_HOST_PROBE_IMAGE;
     } catch (error) {
-      this.log.warn(
-        `${LOG_PREFIX} probe image pull failed ${commandFailureFields(error)} error=${boundedError(error)}`,
-      );
+      log.warn("probe-image.pull-failed", {
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
     }
     const fallback = this.deps.fallbackImage();
     if (await this.imagePresent(fallback)) {
-      this.log.info(`${LOG_PREFIX} using environment image as probe image=${fallback}`);
+      log.info("probe-image.fallback", { image: fallback });
       return fallback;
     }
-    this.log.warn(`${LOG_PREFIX} no probe image available fallback=${fallback} present=false`);
+    log.warn("probe-image.missing", { fallback });
     return null;
   }
 
@@ -1166,6 +1191,7 @@ export class ContainerHostReachabilityService {
     const name = `ork-${this.deps.ownerNamespace}-reach-${randomBytes(4).toString("hex")}`;
     const started = this.now();
     let classification: ProbeClassification;
+    let failure: CommandFailureFields | undefined;
     this.probeContainers.add(name);
     try {
       const { stdout, stderr } = await this.run(
@@ -1199,6 +1225,7 @@ export class ContainerHostReachabilityService {
       classification = classifyProbeOutput(`${stdout}\n${stderr}`);
     } catch (error) {
       classification = { outcome: "error", httpStatus: null, detail: boundedError(error) };
+      failure = classifyCommandFailure(error, { tools: ["docker"] });
       // A timed-out `docker run` can leave the container behind.
       if (!this.closed) {
         await this.run("docker", ["rm", "-f", name], { timeoutMs: 15_000 }).catch(() => undefined);
@@ -1213,7 +1240,7 @@ export class ContainerHostReachabilityService {
       scope === "default-bridge"
         ? ((await this.networkSubnet("bridge")) ?? subnets[0] ?? null)
         : (subnets[0] ?? null);
-    return {
+    const probe: ContainerHostProbe = {
       scope,
       network,
       subnet,
@@ -1224,6 +1251,8 @@ export class ContainerHostReachabilityService {
       detail: classification.detail,
       ...(hostTarget && hostTarget !== "host-gateway" ? { hostAddress: hostTarget } : {}),
     };
+    if (failure) probeFailures.set(probe, failure);
+    return probe;
   }
 
   private async createProbeNetwork(): Promise<{ name: string; subnet: string | null } | null> {
@@ -1242,9 +1271,11 @@ export class ContainerHostReachabilityService {
         { timeoutMs: PROBE_NETWORK_COMMAND_TIMEOUT_MS },
       );
     } catch (error) {
-      this.log.warn(
-        `${LOG_PREFIX} probe network create failed network=${name} error=${boundedError(error)}; checking the default bridge only`,
-      );
+      log.warn("probe-network.create-failed", {
+        network: name,
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
       // Even a failed client command can have created a daemon-side network.
       // A closing check must take its finally path and attempt removal.
       if (this.closed) return { name, subnet: null };
@@ -1283,7 +1314,10 @@ export class ContainerHostReachabilityService {
         .filter(Boolean)
         .slice(0, MAX_NETWORKS_INSPECTED);
     } catch (error) {
-      this.log.warn(`${LOG_PREFIX} docker network listing failed error=${boundedError(error)}`);
+      log.warn("network.list-failed", {
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
       return [];
     }
     if (names.length === 0) return [];
@@ -1297,7 +1331,10 @@ export class ContainerHostReachabilityService {
         ...new Set(stdout.split(/\s+/).filter((entry) => /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(entry))),
       ];
     } catch (error) {
-      this.log.warn(`${LOG_PREFIX} docker network inspect failed error=${boundedError(error)}`);
+      log.warn("network.inspect-failed", {
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
       return [];
     }
   }
@@ -1326,7 +1363,7 @@ export class ContainerHostReachabilityService {
         .filter(Boolean)
         .slice(0, 32);
       if (ids.length > 0) {
-        this.log.info(`${LOG_PREFIX} removing ${ids.length} stale probe container(s)`);
+        log.info("stale-containers.removing", { count: ids.length });
         for (const id of ids) {
           await this.run("docker", ["rm", "-f", id], { timeoutMs: 30_000 }).catch(() => undefined);
         }
@@ -1349,7 +1386,7 @@ export class ContainerHostReachabilityService {
         .filter((name) => name.startsWith(prefix))
         .slice(0, 32);
       if (names.length > 0) {
-        this.log.info(`${LOG_PREFIX} removing ${names.length} stale probe network(s)`);
+        log.info("stale-networks.removing", { count: names.length });
       }
       // One per call: a refusal (still attached) must not keep the others.
       for (const name of names) {
@@ -1399,22 +1436,17 @@ export function containerAgentToolsUrl(port: number): string {
   return `http://${CONTAINER_AGENT_TOOLS_PROBE_HOST}:${port}/mcp`;
 }
 
-function probeFields(probe: ContainerHostProbe): string {
-  return [
-    `scope=${probe.scope}`,
-    `network=${probe.network ?? "-"}`,
-    `subnet=${probe.subnet ?? "-"}`,
-    `host=${probe.hostAddress ?? "host-gateway"}`,
-    `outcome=${probe.outcome}`,
-    `http=${probe.httpStatus ?? "-"}`,
-    `elapsedMs=${probe.elapsedMs}`,
-    `detail=${JSON.stringify(probe.detail ?? "")}`,
-  ].join(" ");
-}
-
-function commandFailureFields(error: unknown): string {
-  if (!(error instanceof CommandFailedError)) return "errorType=other";
-  return `timedOut=${error.timedOut} exitCode=${error.exitCode ?? "unknown"}`;
+function probeFields(probe: ContainerHostProbe) {
+  return {
+    scope: probe.scope,
+    network: probe.network ?? null,
+    subnet: probe.subnet ?? null,
+    host: probe.hostAddress ?? "host-gateway",
+    outcome: probe.outcome,
+    http: probe.httpStatus ?? null,
+    elapsedMs: probe.elapsedMs,
+    ...probeFailures.get(probe),
+  };
 }
 
 function boundedError(error: unknown): string {

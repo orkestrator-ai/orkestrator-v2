@@ -28,6 +28,9 @@ import {
 } from "@orkestrator/protocol/agent-accounts";
 import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-accounts");
 
 /** The backstop for work no turn-end edge reports, such as an unattended stage. */
 export const AUTO_SWITCH_EVALUATE_INTERVAL_MS = 10 * 60_000;
@@ -160,7 +163,7 @@ export class AgentAccountAutoSwitcher {
   /** The ticks changed, or the machine's accounts did: look now. */
   nudge(platform: AgentAccountPlatform): void {
     void this.evaluate(platform).catch(() => {
-      console.warn(`[agent-accounts] Automatic ${platform} account check failed`);
+      log.warn("auto-switch.check-failed", { platform });
     });
   }
 
@@ -354,7 +357,7 @@ export class AgentAccountAutoSwitcher {
       });
     } catch {
       // The switch stands. `lastSwitch` still records it for anyone who looks.
-      console.warn(`[agent-accounts] Automatic ${platform} switch notice failed`);
+      log.warn("switch-notice.failed", { audience: "platform", platform });
     }
     return true;
   }

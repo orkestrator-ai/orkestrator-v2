@@ -2,8 +2,10 @@ import { readBoundedOpenCodeResponse } from "./opencode-bounded-response.js";
 import { OpenCodeCoordinatorResearch } from "./opencode-coordinator-research.js";
 import { createHash } from "node:crypto";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "./agent-tools.js";
-import { conciseError } from "./commands-error-text.js";
 import { agentToolConnectionFingerprint, openCodeHealthHeaders } from "./commands-server-health.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent.opencode");
 
 /**
  * Reconciliation of the optional Orkestrator MCP entry on OpenCode servers.
@@ -283,10 +285,7 @@ export class OpenCodeAgentToolsReconciler {
               state: "unavailable",
               at: Date.now(),
             });
-            console.warn(
-              `[backend] OpenCode agent tools remain unavailable for ${key}:`,
-              conciseError(error),
-            );
+            log.warn("agent-tools.unavailable", { key, error: formatLogError(error) });
             return;
           }
           await waitForOpenCodeAgentToolsRetry(delays[attempt]!, controller.signal);

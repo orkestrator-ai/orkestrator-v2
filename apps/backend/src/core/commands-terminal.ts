@@ -11,6 +11,9 @@ import type {
   ClientEnvironmentSetupStartResult,
 } from "./environment-operations.js";
 import type { TerminalOutputBuffer, TerminalSessionConfig } from "./terminal-runtime.js";
+import { createLogger, type LogEventOf, type LogFields } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 /**
  * Every key `ClientEnvironment` omits must be destructured away here.
@@ -206,8 +209,8 @@ export function compactTerminalOutputBuffer(buffer: TerminalOutputBuffer): strin
   return joined;
 }
 
-export function logSetupTerminal(message: string, details: Record<string, unknown> = {}): void {
-  console.info(`[setup-terminal] ${message}`, details);
+export function logSetupTerminal(event: LogEventOf<"terminal">, fields: LogFields = {}): void {
+  log.info(event, fields);
 }
 
 export function terminalEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

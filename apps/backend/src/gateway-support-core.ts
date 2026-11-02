@@ -137,7 +137,6 @@ export interface OrkestratorGatewayOptions {
   nodeHooks?: GatewayNodeHooks;
   env?: NodeJS.ProcessEnv;
   interfaces?: NetworkInterfaceMap;
-  logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
   allowNonTailscaleBind?: boolean;
   allowedOrigins?: string[];
   compression?: GatewayCompressionMode;

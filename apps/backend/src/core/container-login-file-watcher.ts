@@ -8,6 +8,9 @@ import {
   type PushedLoginProvider,
 } from "./agent-accounts-containers.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("docker");
 
 /**
  * Hands running containers the host's renewed Grok, OpenCode and Pi logins.
@@ -112,10 +115,7 @@ export class ContainerLoginFileWatcher {
     try {
       return await this.pass();
     } catch (error) {
-      console.warn(
-        "[container-login-watcher] Pass failed:",
-        error instanceof Error ? error.message : String(error),
-      );
+      log.warn("login-watcher.pass-failed", { error: formatLogError(error) });
       return [];
     }
   }

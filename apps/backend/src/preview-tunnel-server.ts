@@ -30,7 +30,6 @@ import { connectPreviewUpstream, type PreviewUpstreamOptions } from "./preview-u
 export interface PreviewTunnelServerOptions {
   runtime: PreviewRuntime;
   metrics: PreviewMetrics;
-  logger: Pick<Console, "debug" | "warn">;
   upstream?: Partial<PreviewUpstreamOptions>;
   helloTimeoutMs?: number;
   pingIntervalMs?: number;

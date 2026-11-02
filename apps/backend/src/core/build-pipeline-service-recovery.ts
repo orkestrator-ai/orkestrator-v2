@@ -62,7 +62,7 @@ import {
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 
-const deliveryLog = createLogger("build.pipeline");
+const log = createLogger("build-pipeline");
 
 /**
  * The stage-supervisor operations recovery calls back into: completing a stage
@@ -617,7 +617,7 @@ export class BuildPipelineRecovery {
         })),
       });
     } catch {
-      deliveryLog.warn("criteria.failed");
+      log.warn("criteria.record-failed");
     }
   }
 

@@ -208,7 +208,7 @@ describe("database snapshots", () => {
     try {
       expect(await take()).toBeNull();
       expect(copies).toBe(0);
-      expect(warn.mock.calls[0]?.[0]).toContain("Skipped the hourly database snapshot");
+      expect(warn.mock.calls[0]?.[0]).toContain("snapshot.skipped-low-disk");
 
       // Space freed, but the next attempt waits out the backoff.
       free = Number.MAX_SAFE_INTEGER;

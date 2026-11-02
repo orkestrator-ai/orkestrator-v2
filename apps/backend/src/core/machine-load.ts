@@ -18,6 +18,9 @@ import {
   hostRamReader,
   type CachedRamReader,
 } from "./system-usage.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("host");
 
 /**
  * Each backend's rolling record of its own machine, for coordinators choosing
@@ -278,7 +281,7 @@ export class MachineLoadSampler {
           },
           onError: (error) => {
             if (this.options.onError) this.options.onError(error);
-            else console.warn("[backend] Failed to sample machine load:", error);
+            else log.warn("load.sample-failed", { error: formatLogError(error) });
           },
         },
       ],

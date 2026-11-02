@@ -212,12 +212,16 @@ export class MediaPdfPreviews {
                 : "The PDF could not be opened",
         });
       }
-      logArtifactEvent("pdf-preview", {
-        environmentId,
-        operation: operationId,
-        pages: result.pageCount ?? undefined,
-        bytes: pdf.byteLength,
-      });
+      logArtifactEvent(
+        "pdf-preview",
+        {
+          environmentId,
+          operation: operationId,
+          pages: result.pageCount ?? undefined,
+          bytes: pdf.byteLength,
+        },
+        "info",
+      );
       return this.remember(hash, {
         ...base,
         status: "ready",

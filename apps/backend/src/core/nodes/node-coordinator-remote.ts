@@ -15,6 +15,9 @@ import {
   waitingBlocker,
   type CoordinatorWaitingBlocker,
 } from "../coordinator-status-wakes.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
 
 /**
  * The command node's reads of coordinator work on the nodes it controls,
@@ -269,10 +272,7 @@ export function bridgeRemoteCoordinatorEvents(input: {
     const timer = schedule(() => {
       pending.delete(key);
       void input.settleRemoteWorker(nodeId, environmentId).catch((error: unknown) => {
-        console.warn(
-          "[coordinator] Could not settle a remote worker:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("remote-worker.settle-failed", { error: formatLogError(error) });
       });
     }, SETTLE_DEBOUNCE_MS);
     (timer as { unref?: () => void } | null)?.unref?.();

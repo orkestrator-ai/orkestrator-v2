@@ -1,6 +1,9 @@
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import type { StorageDatabase, StorageMigration } from "./storage-database.js";
 import { isRecord } from "./storage-shared-core.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 
 /**
  * Data of features that no longer exist.
@@ -203,7 +206,7 @@ export async function reconcileRetiredLoopedReviewSessions(
       database.scrubDeletedContent();
     } catch {
       // No provider error text: it can include sensitive transcript content.
-      console.warn("[backend] Retired Looped Review turn cleanup remains pending");
+      log.warn("retired.turn-cleanup-pending");
     } finally {
       await Promise.resolve()
         .then(() => provider?.dispose?.())

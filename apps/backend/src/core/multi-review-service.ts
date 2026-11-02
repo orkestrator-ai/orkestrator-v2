@@ -224,6 +224,9 @@ import {
   type InteractiveFixTurnOutcome,
 } from "./multi-review-auto-pr.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("review");
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 /** Structured reports need a mutation boundary without provider planning behavior. */
@@ -1208,7 +1211,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     const graph = this.options.graph;
     if (!graph || (await graph.engine()) !== "graph") return false;
     if (!graph.runtime()) {
-      console.warn("[multi-review] The graph engine is selected but unavailable; using bespoke");
+      log.warn("graph-engine.unavailable");
       return false;
     }
     const problem = multiReviewGraphInstructionProblem(input.reviewInstruction);
@@ -2160,7 +2163,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         await engine.cancel(runId);
       } catch (error) {
         // An ended run refuses the cancel; the next pass projects how it ended.
-        console.warn(`[multi-review] Cancelling graph run ${runId} failed:`, errorMessage(error));
+        log.warn("graph-run.cancel-failed", { runId, error: formatLogError(error) });
       }
     }
     void this.advanceNow(workflow.id);
@@ -2308,7 +2311,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             // The destructive commit already succeeded. Returning an error now
             // would make the renderer retain a tab for a workflow that no
             // longer exists; stale durable tabs reconcile away on hydration.
-            console.warn("[multi-review] Post-delete cleanup failed:", result.reason);
+            log.warn("delete.cleanup-failed", { error: formatLogError(result.reason) });
           }
         }
       } finally {
@@ -3255,10 +3258,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.release(workflow, token);
     } catch (error) {
       if (error instanceof ControllerFenceError) throw error;
-      console.warn(
-        "[multi-review] Reading interactive fix session state failed:",
-        errorMessage(error),
-      );
+      log.warn("fix-session.read-failed", { error: formatLogError(error) });
       await this.unclaim(workflow, token);
     }
   }
@@ -3280,10 +3280,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     try {
       outcome = await this.options.interactiveFixTurnOutcome(workflow, session);
     } catch (error) {
-      console.warn(
-        "[multi-review] Reading the interactive Fix outcome failed:",
-        errorMessage(error),
-      );
+      log.warn("fix-outcome.read-failed", { error: formatLogError(error) });
       outcome = "pending";
     }
     if (outcome !== "pending" && outcome !== "unknown") return outcome;
@@ -3846,7 +3843,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       return true;
     } catch (error) {
       if (error instanceof ControllerFenceError) throw error;
-      console.warn("[multi-review] Reading fix session token usage failed:", errorMessage(error));
+      log.warn("fix-usage.read-failed", { error: formatLogError(error) });
       return false;
     }
   }
@@ -4809,10 +4806,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       delete workflow.pendingResultConsumptions;
       await this.save(workflow, token);
     } catch (error) {
-      console.warn(
-        `[multi-review] Deferred result consumption for ${workflow.id}:`,
-        errorMessage(error),
-      );
+      log.warn("result.consume-deferred", {
+        workflowId: workflow.id,
+        error: formatLogError(error),
+      });
     }
   }
 

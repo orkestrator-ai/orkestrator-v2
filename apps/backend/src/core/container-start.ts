@@ -1,5 +1,8 @@
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import { runCommand } from "./shell.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("docker");
 
 /**
  * `docker start` for runtimes, rebuild candidates and egress gateways, with
@@ -216,9 +219,10 @@ export async function startDockerContainer(
     if (!shouldRetryPortCollision(message, inspection.bindings)) throw error;
     collision = error;
     network = inspection.network;
-    (options.log ?? ((line) => console.warn(line)))(
-      `[container-start] automatic host port collided container=${containerId.slice(0, 12)} port=${collidingHostPort(message) ?? "unknown"}; retrying once with fresh ports`,
-    );
+    log.warn("start.port-collision-retrying", {
+      container: containerId.slice(0, 12),
+      port: collidingHostPort(message) ?? null,
+    });
   }
   try {
     await attempt("start");

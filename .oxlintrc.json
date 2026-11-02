@@ -406,6 +406,7 @@
         "scripts/**",
         "apps/desktop/scripts/**",
         "bridges/*/scripts/**",
+        "apps/backend/scripts/**",
         "**/*.live-probe.ts",
         "packages/cli/**",
         "docker/**",
@@ -417,12 +418,6 @@
         "apps/web/src/lib/desktop-startup-marker.ts",
         "apps/web/src/lib/bug-report/renderer-errors.ts"
       ],
-      "rules": {
-        "no-restricted-globals": "off"
-      }
-    },
-    {
-      "files": ["apps/backend/**"],
       "rules": {
         "no-restricted-globals": "off"
       }

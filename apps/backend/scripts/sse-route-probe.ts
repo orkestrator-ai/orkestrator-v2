@@ -1,3 +1,4 @@
+import { configureLogger } from "@orkestrator/protocol/logger";
 /**
  * Does a route hold or re-encode gzip SSE? (todo 0052, task 1.) Sends a slow,
  * steady synthetic stream from a real gateway and reports what reaches the far
@@ -327,7 +328,6 @@ export async function startProbeServer(options: ProbeServerOptions): Promise<Pro
     keepaliveMs: options.keepaliveMs,
     allowNonTailscaleBind: true,
     env: { ORKESTRATOR_GATEWAY_TOKEN: token },
-    logger: { debug() {}, info() {}, warn() {}, error() {} },
   });
   const info = await gateway.start();
   if (!info) throw new Error("The probe gateway did not start");
@@ -675,6 +675,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 }
 
 if (import.meta.main) {
+  configureLogger({ sink: ({ line }) => process.stderr.write(`${line}\n`) });
   process.exitCode = await main(process.argv.slice(2)).catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 2;

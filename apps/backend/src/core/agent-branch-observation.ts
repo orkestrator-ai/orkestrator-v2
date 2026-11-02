@@ -11,10 +11,9 @@ import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent
 import type { AgentBranchContext } from "./agent-branch-commits.js";
 import { isAgentBranchFenceError } from "./agent-branch-commits.js";
 import {
-  agentBranchErrorMessage,
   agentBranchNowIso,
   type AgentBranchRecord,
-  AGENT_BRANCH_LOG_PREFIX,
+  AGENT_BRANCH_LOG_OWNER,
 } from "./agent-branch-types.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import type { EfficiencyEvent } from "./multi-review-efficiency.js";
@@ -31,6 +30,9 @@ import {
   readTranscriptProgressSample,
   type ProgressReadKind,
 } from "./transcript-progress.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-branch");
 
 /**
  * How long a validated, uncommitted result may sit before the live turn is
@@ -93,8 +95,8 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
     return this.context.host;
   }
 
-  private get logPrefix(): string {
-    return this.host.logPrefix ?? AGENT_BRANCH_LOG_PREFIX;
+  private get logOwner(): string {
+    return this.host.logOwner ?? AGENT_BRANCH_LOG_OWNER;
   }
 
   private stallWarningMs(): number {
@@ -127,10 +129,7 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
         settling,
       );
     } catch (error) {
-      console.warn(
-        `${this.logPrefix} Mirroring a reviewer transcript failed:`,
-        agentBranchErrorMessage(error),
-      );
+      log.warn("transcript.mirror-failed", { owner: this.logOwner, error: formatLogError(error) });
     }
   }
 
@@ -188,10 +187,7 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
       return true;
     } catch (error) {
       if (isAgentBranchFenceError(error)) throw error;
-      console.warn(
-        `${this.logPrefix} Reading reviewer token usage failed:`,
-        agentBranchErrorMessage(error),
-      );
+      log.warn("usage.read-failed", { owner: this.logOwner, error: formatLogError(error) });
       return false;
     }
   }
@@ -337,9 +333,7 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
         expectedRunId: active.runId,
       });
     } catch (error) {
-      console.warn(
-        `${this.logPrefix} Could not nudge an uncommitted result: ${agentBranchErrorMessage(error)}`,
-      );
+      log.warn("result.nudge-failed", { owner: this.logOwner, error: formatLogError(error) });
     }
   }
 

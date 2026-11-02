@@ -9,12 +9,14 @@
  * once at the end of the pass, riding on any safety write before then.
  */
 import {
-  agentBranchErrorMessage,
   type AgentBranchHost,
   type AgentBranchRecord,
-  AGENT_BRANCH_LOG_PREFIX,
+  AGENT_BRANCH_LOG_OWNER,
 } from "./agent-branch-types.js";
 import type { EfficiencyEvent } from "./multi-review-efficiency.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-branch");
 
 export type AgentBranchRecordEvent = (event: Omit<EfficiencyEvent, "owner">) => void;
 
@@ -39,7 +41,7 @@ export class AgentBranchCommitQueue {
     private readonly save: () => Promise<void>,
     private readonly record: AgentBranchRecordEvent,
     /** The host's log prefix (`[review-fanout]`, `[graph-agent]`). */
-    private readonly logPrefix = AGENT_BRANCH_LOG_PREFIX,
+    private readonly logOwner = AGENT_BRANCH_LOG_OWNER,
   ) {}
 
   /**
@@ -111,10 +113,10 @@ export class AgentBranchCommitQueue {
       await run;
     } catch (error) {
       if (isAgentBranchFenceError(error)) throw error;
-      console.warn(
-        `${this.logPrefix} Checkpointing reviewer observations failed:`,
-        agentBranchErrorMessage(error),
-      );
+      log.warn("observation.checkpoint-failed", {
+        owner: this.logOwner,
+        error: formatLogError(error),
+      });
     }
   }
 }

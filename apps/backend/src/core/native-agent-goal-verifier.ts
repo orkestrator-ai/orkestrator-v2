@@ -74,10 +74,13 @@ import {
 } from "./native-agent-goal-service.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { ElapsedPollGate } from "./workflow-poll-gate.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent.goal");
 
 const VERDICT_KIND: WorkflowResultKind = "verification-result";
 const SUBMIT_TOOL = workflowResultToolName(VERDICT_KIND);
-const LOG_PREFIX = "[goal-verifier]";
+const LOG_OWNER = "goal-verifier";
 
 /** Spacing between looks at a running verifier. */
 export const GOAL_VERIFIER_POLL_MS = 3_000;
@@ -237,7 +240,7 @@ function goalVerdictRun(data: GoalVerdictData, tokens: number | undefined): Goal
 class GoalVerifierBranchHost implements AgentBranchHost<AgentBranchRecord> {
   readonly workflowId: string;
   readonly sessionPhase = "review";
-  readonly logPrefix = LOG_PREFIX;
+  readonly logOwner = LOG_OWNER;
   readonly mode = "plan" as const;
   readonly wording = WORDING;
   readonly captureUsage = true;
@@ -600,7 +603,7 @@ export class NativeAgentGoalVerifier implements GoalVerifierHost {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       stop().catch((error: unknown) => {
-        console.warn(`${LOG_PREFIX} Could not stop an earlier verifier:`, message(error));
+        log.warn("verifier.stop-failed", { error: formatLogError(error) });
       }),
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, STOP_TIMEOUT_MS);

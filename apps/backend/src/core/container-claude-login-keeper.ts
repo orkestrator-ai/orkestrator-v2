@@ -13,6 +13,9 @@ import {
 } from "./agent-accounts-active.js";
 import { readRuntimeHostClaudeCredentials } from "./commands-files.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("docker");
 
 /**
  * Keeps running containers signed in to Claude without ever giving them a
@@ -152,10 +155,7 @@ export class ContainerClaudeLoginKeeper {
     try {
       return await this.pass();
     } catch (error) {
-      console.warn(
-        "[claude-login-keeper] Pass failed:",
-        error instanceof Error ? error.message : String(error),
-      );
+      log.warn("login-keeper.pass-failed", { error: formatLogError(error) });
       return this.intervalMs;
     }
   }
@@ -302,19 +302,16 @@ export class ContainerClaudeLoginKeeper {
         await refresh(account ?? (await resolveActiveAgentAccount(this.context, "claude")));
       } catch {
         // CLI output may contain credentials; only fixed diagnostics escape.
-        console.warn("[claude-login-keeper] Host Claude refresh failed");
+        log.warn("login-keeper.refresh-failed");
         return await read();
       }
       const renewed = await read();
       if (renewed.login?.expiresAt === undefined || renewed.login.expiresAt <= login.expiresAt) {
-        console.warn("[claude-login-keeper] Host Claude refresh did not extend login expiry");
+        log.warn("login-keeper.refresh-not-extended");
       }
       return renewed;
     } catch (error) {
-      console.warn(
-        "[claude-login-keeper] Host Claude refresh check failed:",
-        error instanceof Error ? error.message : String(error),
-      );
+      log.warn("login-keeper.refresh-check-failed", { error: formatLogError(error) });
       return {};
     }
   }

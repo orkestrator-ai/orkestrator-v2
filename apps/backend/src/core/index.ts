@@ -94,8 +94,12 @@ import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal } from "./claude-state-signal.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("backend");
 
 const activityLog = createLogger("backend.activity");
+const scheduledLog = createLogger("scheduler");
 const buildPipelineLog = createLogger("build.pipeline");
 
 /** Former activity-bundle cadence, per named job. */
@@ -672,10 +676,10 @@ export class OrkestratorBackend {
       storage.announceHumanPrompts(change.entry.environmentId);
       if (change.type !== "set" || change.previous?.prompt.key === change.entry.prompt.key) return;
       void this.coordinators.noteWorkerHumanPrompt(change.entry).catch((error: unknown) => {
-        console.warn(
-          "[backend] Failed to tell the coordinator about a prompt waiting on the user:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("notice.failed", {
+          step: "coordinator-human-prompt",
+          error: formatLogError(error),
+        });
       });
     });
     this.userCommands = new UserCommandService({
@@ -972,10 +976,10 @@ export class OrkestratorBackend {
                 state: event.state,
               })
               .catch((error: unknown) => {
-                console.warn(
-                  "[backend] Failed to note worker activity for status wakes:",
-                  error instanceof Error ? error.message : error,
-                );
+                log.warn("notice.failed", {
+                  step: "worker-activity",
+                  error: formatLogError(error),
+                });
               });
           }
           if (isAgentTurnEndTransition(event)) {
@@ -1024,10 +1028,10 @@ export class OrkestratorBackend {
                 return this.nativeAgents.drainPromptQueueForSession(event);
               })
               .catch((error: unknown) => {
-                console.warn(
-                  "[backend] Failed to drain the prompt queue after a turn ended:",
-                  error instanceof Error ? error.message : error,
-                );
+                log.warn("notice.failed", {
+                  step: "prompt-queue-drain",
+                  error: formatLogError(error),
+                });
               });
             /*
              * Settle first, drain second, in that order.
@@ -1058,17 +1062,17 @@ export class OrkestratorBackend {
                 : Promise.resolve()
             )
               .catch((error: unknown) => {
-                console.warn(
-                  "[backend] Failed to settle worker delegations after a turn ended:",
-                  error instanceof Error ? error.message : error,
-                );
+                log.warn("notice.failed", {
+                  step: "delegation-settle",
+                  error: formatLogError(error),
+                });
               })
               .then(() => this.agentMail.drainInjects())
               .catch((error: unknown) => {
-                console.warn(
-                  "[backend] Failed to drain agent mail after a turn ended:",
-                  error instanceof Error ? error.message : error,
-                );
+                log.warn("notice.failed", {
+                  step: "agent-mail-drain",
+                  error: formatLogError(error),
+                });
               });
           }
         },
@@ -1671,10 +1675,7 @@ export class OrkestratorBackend {
       try {
         owner.wakeEnvironment(environmentId, reason);
       } catch (error) {
-        console.warn(
-          "[backend] Failed to wake workflow work:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("notice.failed", { step: "workflow-wake", error: formatLogError(error) });
       }
     }
   }
@@ -1758,10 +1759,11 @@ export class OrkestratorBackend {
   private probeForAgentCreatedPullRequest(environmentId: string, context: CommandContext): void {
     void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId)).catch(
       (error: unknown) => {
-        console.warn(
-          `[backend] Failed to probe for an agent-created PR in ${environmentId}:`,
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("notice.failed", {
+          step: "pull-request-probe",
+          environmentId,
+          error: formatLogError(error),
+        });
       },
     );
   }
@@ -1773,10 +1775,7 @@ export class OrkestratorBackend {
     try {
       this.runtime.changeTracking?.start();
     } catch (error) {
-      console.warn(
-        "[backend] Failed to start change tracking:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("startup.step-failed", { step: "change-tracking", error: formatLogError(error) });
     }
     // Settles an update the previous process was applying; installing one is
     // what restarted this backend.
@@ -1788,37 +1787,34 @@ export class OrkestratorBackend {
         this.context.pinnedGitHubCli,
       );
     } catch (error) {
-      console.warn(
-        "[backend] Failed to settle the host update record:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("startup.step-failed", { step: "host-update-record", error: formatLogError(error) });
     }
     // Design startup recovery (interrupted operations, migrations, exports)
     // degrades the design feature on failure, never the backend; every design
     // command retries initialization lazily.
     await this.context.design?.initialize().catch((error: unknown) => {
-      console.warn(
-        "[backend] Design storage failed to initialize:",
-        (error as NodeJS.ErrnoException)?.code ?? "error",
-      );
+      log.warn("startup.step-failed", {
+        step: "design-storage",
+        error: formatLogError(error, { message: false }),
+      });
     });
     await this.webAnnotationRollout.refresh();
     // Unreadable annotation storage degrades that feature, not the backend.
     await this.webAnnotations.initialize().catch((error: unknown) => {
-      console.warn(
-        "[backend] Failed to initialize web annotations:",
-        error instanceof Error ? error.name : "unknown",
-      );
+      log.warn("startup.step-failed", {
+        step: "web-annotations",
+        error: formatLogError(error, { message: false }),
+      });
     });
     // Interrupts verification left unfinished by a previous process (never
     // re-run), then cleans up hourly. The preview runtime is optional.
     try {
       this.transcriptArtifacts.initialize();
     } catch (error) {
-      console.warn(
-        "[backend] Failed to initialize transcript artifacts:",
-        error instanceof Error ? error.name : "unknown",
-      );
+      log.warn("startup.step-failed", {
+        step: "transcript-artifacts",
+        error: formatLogError(error, { message: false }),
+      });
     }
     if (this.transcriptArtifactRuntimeEnabled) {
       this.transcriptArtifactRuntime = await attachTranscriptArtifactRuntime(
@@ -1832,18 +1828,12 @@ export class OrkestratorBackend {
     // targets happens in the background so a slow Docker daemon cannot delay
     // startup. A registry that fails to load disables previews, not the backend.
     await this.context.previews?.init().catch((error: unknown) => {
-      console.warn(
-        "[backend] Failed to initialize preview services:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("startup.step-failed", { step: "preview-services", error: formatLogError(error) });
     });
     // Recovers interrupted MCP configuration operations. A failure disables
     // management, not the backend.
     await this.context.mcpManagement?.init().catch((error: unknown) => {
-      console.warn(
-        "[backend] Failed to initialize MCP configuration management:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("startup.step-failed", { step: "mcp-management", error: formatLogError(error) });
     });
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
     this.runtime.terminals.history.configureRetention({
@@ -1880,10 +1870,10 @@ export class OrkestratorBackend {
     // Docker identity. An unreachable daemon leaves them for the next attempt.
     if (this.context.registryWriterLease.isHeld()) {
       await reconcileContainerOperations(this.context).catch((error: unknown) => {
-        console.warn(
-          "[backend] Container operation reconciliation failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("startup.step-failed", {
+          step: "container-operations",
+          error: formatLogError(error),
+        });
       });
       // Probe containers are never started; one left by an interrupted
       // manifest read is removed in the background.
@@ -1904,7 +1894,10 @@ export class OrkestratorBackend {
     // later — the aggregate is a max — so a renderer that quit mid-turn would
     // otherwise leave its environment showing "working" forever.
     await this.context.storage.clearFrontendAgentActivity().catch((error) => {
-      console.warn("[backend] Failed to clear stale agent activity:", error);
+      log.warn("startup.step-failed", {
+        step: "stale-agent-activity",
+        error: formatLogError(error),
+      });
     });
     this.activityLeaseSweep ??= setInterval(() => {
       recurringWorkMetrics.requested("activity-lease-expiry");
@@ -1913,7 +1906,10 @@ export class OrkestratorBackend {
           this.context.storage.expireFrontendAgentActivityLeases(),
         )
         .catch((error) => {
-          console.warn("[backend] Failed to expire agent activity leases:", error);
+          log.warn("startup.step-failed", {
+            step: "agent-activity-leases",
+            error: formatLogError(error),
+          });
         });
     }, FRONTEND_AGENT_ACTIVITY_LEASE_MS / 2);
     this.activityLeaseSweep.unref?.();
@@ -2011,7 +2007,11 @@ export class OrkestratorBackend {
       },
     };
     await this.reapPidServers({ storage: reaperStorage }).catch((error) => {
-      console.warn("[backend] Failed to reap orphaned local servers:", error);
+      log.warn("startup.step-failed", {
+        step: "orphaned-local-servers",
+        ...classifyCommandFailure(error),
+        error: formatLogError(error),
+      });
     });
     // claude-tmux leaves no PID behind — its sessions belong to a tmux server
     // we do not own — so its orphans are found by their runtime roots instead.
@@ -2019,7 +2019,11 @@ export class OrkestratorBackend {
       storage: this.context.storage,
       runtimeRootPrefix: claudeTmuxRuntimeRootPrefix(this.context.storage.getDataDir()),
     }).catch((error) => {
-      console.warn("[backend] Failed to reap orphaned claude-tmux runtimes:", error);
+      log.warn("startup.step-failed", {
+        step: "orphaned-claude-tmux",
+        ...classifyCommandFailure(error, { tools: ["tmux"] }),
+        error: formatLogError(error),
+      });
     });
     // The durable deletion tombstone stays in place across a crash so queues,
     // pipelines, and starts remain blocked. Once orphaned processes have been
@@ -2034,7 +2038,7 @@ export class OrkestratorBackend {
       void recovery.catch(() => {
         // Detailed subprocess failures are logged at their owning boundary.
         // Keep this coordination log free of paths, command output, or secrets.
-        console.warn(`[backend] Interrupted deletion remains pending for ${environmentId}`);
+        log.warn("startup.deletion-pending", { environmentId });
       });
     }
     // Finishes cleanup that earlier deletions could not, and removes bridge
@@ -2044,7 +2048,7 @@ export class OrkestratorBackend {
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
     if (reconcileTabTeardowns) {
       await Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {
-        console.warn("[backend] Failed to reconcile tab teardowns:", error);
+        log.warn("startup.step-failed", { step: "tab-teardowns", error: formatLogError(error) });
       });
     }
 
@@ -2061,7 +2065,7 @@ export class OrkestratorBackend {
         this.runtime.accounts.planUsage,
       )
         .catch(() => {
-          console.warn("[backend] Retired Looped Review cleanup remains pending");
+          log.warn("startup.looped-review-pending");
         })
         .finally(() => {
           retiredReviewCleanup = undefined;
@@ -2074,41 +2078,41 @@ export class OrkestratorBackend {
     // environment deletion have been reconciled. A doomed pipeline is skipped
     // without preventing the gateway from becoming available.
     await this.buildPipelines.init().catch((error) => {
-      console.warn("[backend] Failed to restore build pipelines:", error);
+      log.warn("startup.step-failed", { step: "build-pipelines", error: formatLogError(error) });
     });
     await this.multiReviews.init().catch((error) => {
-      console.warn("[backend] Failed to restore multi reviews:", error);
+      log.warn("startup.step-failed", { step: "multi-reviews", error: formatLogError(error) });
     });
     // Non-blocking: the first discovery recovers every run with an obligation.
     await this.graphRuns.init().catch((error) => {
-      console.warn("[backend] Failed to restore graph runs:", error);
+      log.warn("startup.step-failed", { step: "graph-runs", error: formatLogError(error) });
     });
     // Runs that ended before they had an environment are bounded (item 214).
     void this.graphLaunches.sweep().catch((error: unknown) => {
-      console.warn(
-        "[backend] Failed to sweep graph runs without an environment:",
-        error instanceof Error ? error.name : "error",
-      );
+      log.warn("startup.step-failed", {
+        step: "graph-launch-sweep",
+        error: formatLogError(error, { message: false }),
+      });
     });
     await this.graphDescribe.init().catch((error) => {
-      console.warn("[backend] Failed to restore graph describe jobs:", error);
+      log.warn("startup.step-failed", { step: "graph-describe", error: formatLogError(error) });
     });
     // Environment-less mock runs of deleted projects (item 213); off the startup path.
     void this.graphMock.sweepOrphans().catch(() => undefined);
 
     // Working pipelines light the sidebar again after a restart; runs in the background.
     void this.buildPipelineActivity.start().catch((error: unknown) => {
-      console.warn(
-        "[backend] Failed to restore build pipeline activity:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("startup.step-failed", {
+        step: "build-pipeline-activity",
+        error: formatLogError(error),
+      });
     });
     // Waiting runs light the sidebar again after a restart; runs in the background.
     void this.graphRunAttention.start().catch((error: unknown) => {
-      console.warn(
-        "[backend] Failed to restore graph run attention:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("startup.step-failed", {
+        step: "graph-run-attention",
+        error: formatLogError(error),
+      });
     });
     const reconcilePendingEnvironmentRenames = this.commands.get(
       "reconcile_pending_environment_renames",
@@ -2120,21 +2124,30 @@ export class OrkestratorBackend {
       // it may be called while environment start already owns the lifecycle queue.
       await Promise.resolve(reconcilePendingEnvironmentRenames({}, this.context)).catch(
         (error: unknown) => {
-          console.warn("[backend] Failed to reconcile pending environment renames:", error);
+          log.warn("startup.step-failed", {
+            step: "pending-renames",
+            error: formatLogError(error),
+          });
         },
       );
     }
     await this.nativeAgents.init().catch((error) => {
-      console.warn("[backend] Failed to restore native agent launches:", error);
+      log.warn("startup.step-failed", {
+        step: "native-agent-launches",
+        error: formatLogError(error),
+      });
     });
     await this.agentMail.init().catch((error) => {
-      console.warn("[backend] Failed to restore agent mail:", error);
+      log.warn("startup.step-failed", { step: "agent-mail", error: formatLogError(error) });
     });
     const reconcileOrphanedTabResources = this.commands.get("reconcile_orphaned_tab_resources");
     if (reconcileOrphanedTabResources) {
       await Promise.resolve(reconcileOrphanedTabResources({}, this.context)).catch(
         (error: unknown) => {
-          console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
+          log.warn("startup.step-failed", {
+            step: "orphaned-tab-resources",
+            error: formatLogError(error),
+          });
         },
       );
     }
@@ -2163,10 +2176,10 @@ export class OrkestratorBackend {
               lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
             })
             .catch((error: unknown) => {
-              console.warn(
-                `[backend] Failed to fence interrupted setup for ${environment.id}:`,
-                error,
-              );
+              log.warn("startup.setup-fence-failed", {
+                environmentId: environment.id,
+                error: formatLogError(error),
+              });
             });
           continue;
         }
@@ -2177,20 +2190,26 @@ export class OrkestratorBackend {
         void Promise.resolve(
           ensureEnvironmentSetup({ environmentId: environment.id }, this.context),
         ).catch((error: unknown) => {
-          console.warn(`[backend] Failed to adopt pending setup for ${environment.id}:`, error);
+          log.warn("startup.setup-adopt-failed", {
+            environmentId: environment.id,
+            error: formatLogError(error),
+          });
         });
       }
     }
     // Adopts planning conversations the previous renderer-driven controller
     // left in flight, then advances every durable record on its own timer.
     await this.featurePlanning.init().catch((error) => {
-      console.warn("[backend] Failed to restore feature planning:", error);
+      log.warn("startup.step-failed", { step: "feature-planning", error: formatLogError(error) });
     });
     // Hydrate the sidebar from bridge-owned session snapshots before the
     // gateway accepts a renderer. A refresh therefore sees active environments
     // immediately, without mounting each tab to recreate client state.
     await this.nativeAgents.reconcileAgentActivity().catch((error) => {
-      console.warn("[backend] Failed to restore native agent activity:", error);
+      log.warn("startup.step-failed", {
+        step: "native-agent-activity",
+        error: formatLogError(error),
+      });
     });
     // Annotation requests reconcile against native dispatch state, so start
     // only once native sessions are restored. Runs with no renderer mounted.
@@ -2198,21 +2217,28 @@ export class OrkestratorBackend {
     const reconcileClaudeState = this.commands.get("reconcile_claude_state_polling");
     if (reconcileClaudeState) {
       await Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
-        console.warn("[backend] Failed to restore Claude terminal activity:", error);
+        log.warn("startup.step-failed", {
+          step: "claude-terminal-activity",
+          ...classifyCommandFailure(error, { tools: ["docker", "tmux"] }),
+          error: formatLogError(error),
+        });
       });
     }
     await this.agentMail.refreshPresence().catch((error) => {
-      console.warn("[backend] Failed to refresh agent mail presence:", error);
+      log.warn("startup.step-failed", {
+        step: "agent-mail-presence",
+        error: formatLogError(error),
+      });
     });
     // Queued tmux prompts left behind by a quit or crash drain from here, with
     // no renderer involved. NativeAgentService drains its own queues on its own
     // sweep; this one shares the activity sweep rather than adding a third
     // interval over the same store.
     await this.promptQueues.drainAll().catch((error) => {
-      console.warn("[backend] Failed to drain tmux prompt queues:", error);
+      log.warn("startup.step-failed", { step: "tmux-prompt-queues", error: formatLogError(error) });
     });
     await this.agentMail.drainInjects().catch((error) => {
-      console.warn("[backend] Failed to drain agent mail:", error);
+      log.warn("startup.step-failed", { step: "agent-mail-drain", error: formatLogError(error) });
     });
     let tabTeardownReconcileInFlight: Promise<void> | null = null;
     const reconcileTabTeardownsOnce = (): void => {
@@ -2224,9 +2250,13 @@ export class OrkestratorBackend {
       }
       tabTeardownReconcileInFlight = recurringWorkMetrics
         .observe("tab-cleanup", () => Promise.resolve(reconcileTabTeardowns({}, this.context)))
-        .then(() => undefined)
+        .then(() => activityLog.recovered("job.failed", `${this.logScope}:tab-teardowns`))
         .catch((error: unknown) => {
-          console.warn("[backend] Failed to reconcile tab teardowns:", error);
+          activityLog.throttled("warn", "job.failed", {
+            scope: `${this.logScope}:tab-teardowns`,
+            error,
+            fields: () => ({ error: formatLogError(error, { stack: false }) }),
+          });
         })
         .finally(() => {
           tabTeardownReconcileInFlight = null;
@@ -2244,9 +2274,13 @@ export class OrkestratorBackend {
         .observe("tab-cleanup", () =>
           Promise.resolve(reconcileOrphanedTabResources({}, this.context)),
         )
-        .then(() => undefined)
+        .then(() => activityLog.recovered("job.failed", `${this.logScope}:orphaned-tab-resources`))
         .catch((error: unknown) => {
-          console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
+          activityLog.throttled("warn", "job.failed", {
+            scope: `${this.logScope}:orphaned-tab-resources`,
+            error,
+            fields: () => ({ error: formatLogError(error, { stack: false }) }),
+          });
         })
         .finally(() => {
           orphanReconcileInFlight = null;
@@ -2270,11 +2304,13 @@ export class OrkestratorBackend {
             // idempotent on `wokenAt`, so a delivered one is not repeated.
             .then(() => this.coordinators.reconcileWorkerDelegations()),
         )
+        .then(() => activityLog.recovered("job.failed", `${this.logScope}:coordinator-workflows`))
         .catch((error) => {
-          console.warn(
-            "[backend] Failed to reconcile coordinator workflow notifications:",
-            error instanceof Error ? error.message : error,
-          );
+          activityLog.throttled("warn", "job.failed", {
+            scope: `${this.logScope}:coordinator-workflows`,
+            error,
+            fields: () => ({ error: formatLogError(error, { stack: false }) }),
+          });
         })
         .finally(() => {
           coordinatorWorkflowReconcileInFlight = null;
@@ -2434,26 +2470,49 @@ export class OrkestratorBackend {
       );
       this.activityJobs.start();
     } else if (!this.keyedActivityJobs) {
-      this.nativeActivitySweep ??= setInterval(() => {
-        void this.nativeAgents.reconcileAgentActivity().catch((error) => {
-          console.warn("[backend] Failed to reconcile native agent activity:", error);
+      const sweepFailed = (name: string, error: unknown): void => {
+        activityLog.throttled("warn", "job.failed", {
+          scope: `${this.logScope}:${name}`,
+          error,
+          fields: () => ({ error: formatLogError(error, { stack: false }) }),
         });
+      };
+      this.nativeActivitySweep ??= setInterval(() => {
+        void this.nativeAgents
+          .reconcileAgentActivity()
+          .then(() => activityLog.recovered("job.failed", `${this.logScope}:native-agent-activity`))
+          .catch((error) => {
+            sweepFailed("native-agent-activity", error);
+          });
         if (reconcileClaudeState) {
           void observeSweepStep("claude-state-reconcile", () =>
             reconcileClaudeState({}, this.context),
-          ).catch((error: unknown) => {
-            console.warn("[backend] Failed to reconcile Claude terminal activity:", error);
-          });
+          )
+            .then(() =>
+              activityLog.recovered("job.failed", `${this.logScope}:claude-terminal-activity`),
+            )
+            .catch((error: unknown) => {
+              sweepFailed("claude-terminal-activity", error);
+            });
         }
-        void this.promptQueues.drainAll().catch((error) => {
-          console.warn("[backend] Failed to drain tmux prompt queues:", error);
-        });
-        void this.agentMail.refreshPresence().catch((error) => {
-          console.warn("[backend] Failed to refresh agent mail presence:", error);
-        });
-        void this.agentMail.drainInjects().catch((error) => {
-          console.warn("[backend] Failed to drain agent mail:", error);
-        });
+        void this.promptQueues
+          .drainAll()
+          .then(() => activityLog.recovered("job.failed", `${this.logScope}:tmux-prompt-queues`))
+          .catch((error) => {
+            sweepFailed("tmux-prompt-queues", error);
+          });
+        void this.agentMail
+          .refreshPresence()
+          .then(() => activityLog.recovered("job.failed", `${this.logScope}:agent-mail-presence`))
+          .catch((error) => {
+            sweepFailed("agent-mail-presence", error);
+          });
+        void this.agentMail
+          .drainInjects()
+          .then(() => activityLog.recovered("job.failed", `${this.logScope}:agent-mail-drain`))
+          .catch((error) => {
+            sweepFailed("agent-mail-drain", error);
+          });
         coordinatorWorkflowTick += 1;
         if (coordinatorWorkflowTick % 30 === 0) reconcileCoordinatorWorkflows();
         mailRetentionTick += 1;
@@ -2466,16 +2525,20 @@ export class OrkestratorBackend {
                   config.global.agentMessaging?.retentionDays ?? 14,
                 ),
               ),
-          ).catch((error) => {
-            console.warn("[backend] Failed to prune agent mail:", error);
-          });
+          )
+            .then(() => activityLog.recovered("job.failed", `${this.logScope}:mail-retention`))
+            .catch((error) => {
+              sweepFailed("mail-retention", error);
+            });
         }
         if (reconcilePendingEnvironmentRenames) {
           void observeSweepStep("pending-rename-reconcile", () =>
             reconcilePendingEnvironmentRenames({}, this.context),
-          ).catch((error: unknown) => {
-            console.warn("[backend] Failed to reconcile pending environment renames:", error);
-          });
+          )
+            .then(() => activityLog.recovered("job.failed", `${this.logScope}:pending-renames`))
+            .catch((error: unknown) => {
+              sweepFailed("pending-renames", error);
+            });
         }
       }, 2_000);
       this.nativeActivitySweep.unref?.();
@@ -2498,7 +2561,7 @@ export class OrkestratorBackend {
       // visible in Settings, but must not prevent the rest of Orkestrator from
       // opening so the user can diagnose it. A taken fixed port is retried
       // with backoff, so the listener may still bind later.
-      console.warn("[backend] Failed to start control MCP:", error);
+      log.warn("startup.step-failed", { step: "control-mcp", error: formatLogError(error) });
     });
     // A retried bind that succeeds later must keep previews off its port too.
     this.controlMcp.onStateChange?.(() => {
@@ -2517,10 +2580,18 @@ export class OrkestratorBackend {
     // Node links reach other machines; they start after local recovery and
     // never block it.
     await this.nodes.start().catch((error) => {
-      console.warn("[backend] Command-node links did not start:", errorCode(error));
+      log.warn("startup.step-failed", {
+        step: "command-node-links",
+        code: errorCode(error),
+        error: formatLogError(error, { message: false }),
+      });
     });
     await this.nodePortal.start().catch((error) => {
-      console.warn("[backend] The command-node portal did not start:", errorCode(error));
+      log.warn("startup.step-failed", {
+        step: "command-node-portal",
+        code: errorCode(error),
+        error: formatLogError(error, { message: false }),
+      });
     });
     this.nodeCoordination.start();
     this.coordinators.startStatusWakes();
@@ -2613,7 +2684,10 @@ export class OrkestratorBackend {
         return defaultOwnerLabel(owner);
       },
       log: (message, error) =>
-        console.warn(message, error instanceof Error ? error.message : (error ?? "")),
+        scheduledLog.warn("service.warning", {
+          detail: message,
+          ...(error === undefined ? {} : { error: formatLogError(error) }),
+        }),
     });
   }
 
@@ -2699,7 +2773,7 @@ export class OrkestratorBackend {
   }): void {
     const status = this.transcriptArtifactRuntime?.setApplicationOrigins(input);
     if (status && !status.available)
-      console.warn("[backend] Live interactive artifacts are unavailable:", status.reason);
+      log.warn("artifacts.live-unavailable", { reason: status.reason });
   }
 
   getControlMcpInfo(): ControlMcpInfo | null {
@@ -2814,7 +2888,7 @@ export class OrkestratorBackend {
         try {
           await this.nativeAgents.shutdown();
         } catch (error) {
-          console.warn("[backend] Failed to drain native agent work:", error);
+          log.warn("shutdown.step-failed", { step: "native-agents", error: formatLogError(error) });
         }
         // After the service above stops its verifiers, so none loses a provider mid-call.
         this.goalVerifierProviders.shutdown();
@@ -2824,12 +2898,15 @@ export class OrkestratorBackend {
         try {
           await this.buildPipelines.shutdown();
         } catch (error) {
-          console.warn("[backend] Failed to drain build pipelines:", error);
+          log.warn("shutdown.step-failed", {
+            step: "build-pipelines",
+            error: formatLogError(error),
+          });
         }
         try {
           await this.multiReviews.shutdown();
         } catch (error) {
-          console.warn("[backend] Failed to drain multi reviews:", error);
+          log.warn("shutdown.step-failed", { step: "multi-reviews", error: formatLogError(error) });
         }
         this.graphSystemExecutor.shutdown();
         try {
@@ -2837,28 +2914,37 @@ export class OrkestratorBackend {
           this.graphAgents.dispose();
           this.graphMock.dispose();
         } catch (error) {
-          console.warn("[backend] Failed to drain graph runs:", error);
+          log.warn("shutdown.step-failed", { step: "graph-runs", error: formatLogError(error) });
         }
         try {
           await this.graphDescribe.shutdown();
           this.graphDescribeProviders.shutdown();
         } catch (error) {
-          console.warn("[backend] Failed to drain graph describe jobs:", error);
+          log.warn("shutdown.step-failed", {
+            step: "graph-describe",
+            error: formatLogError(error),
+          });
         }
         try {
           await this.featurePlanning.shutdown();
         } catch (error) {
-          console.warn("[backend] Failed to drain feature planning:", error);
+          log.warn("shutdown.step-failed", {
+            step: "feature-planning",
+            error: formatLogError(error),
+          });
         }
         try {
           await this.promptQueues.shutdown();
         } catch (error) {
-          console.warn("[backend] Failed to drain tmux prompt queues:", error);
+          log.warn("shutdown.step-failed", {
+            step: "tmux-prompt-queues",
+            error: formatLogError(error),
+          });
         }
         try {
           await this.agentMail.shutdown();
         } catch (error) {
-          console.warn("[backend] Failed to drain agent mail:", error);
+          log.warn("shutdown.step-failed", { step: "agent-mail", error: formatLogError(error) });
         }
         this.workflowAdmission.close();
         await lifecycleDrain;
@@ -2877,10 +2963,10 @@ export class OrkestratorBackend {
         await reachabilitySettled;
         await Promise.race([
           this.webAnnotations.close().catch((error: unknown) => {
-            console.warn(
-              "[backend] Failed to flush web annotations:",
-              error instanceof Error ? error.name : "unknown",
-            );
+            log.warn("shutdown.step-failed", {
+              step: "web-annotations",
+              error: formatLogError(error, { message: false }),
+            });
           }),
           new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
         ]);
@@ -2903,7 +2989,10 @@ export class OrkestratorBackend {
             .whenDrained()
             .then(closeLifecycleStorage)
             .catch((error: unknown) => {
-              console.warn("[backend] Failed to close lifecycle storage:", error);
+              log.warn("shutdown.step-failed", {
+                step: "lifecycle-storage",
+                error: formatLogError(error),
+              });
             });
         } else {
           await closeLifecycleStorage();

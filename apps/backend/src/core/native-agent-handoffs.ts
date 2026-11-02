@@ -48,6 +48,9 @@ import { normalizeOpenCodeDisplayEntries } from "./opencode-display-transcript.j
 import { deliveredAgentHandoffIds } from "./storage-shared-native-sessions.js";
 import { pendingPaneLayoutAgentHandoffId } from "./storage-shared-pane-layout.js";
 import type { StorageService } from "./storage.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 /** Refusal for a command sent while a handoff is still waiting to be delivered. */
 export const AGENT_HANDOFF_PENDING_COMMAND_MESSAGE =
@@ -199,10 +202,7 @@ export class NativeAgentHandoffs {
     await this.host.storage
       .markTabAgentHandoffConsumed(session.environmentId, tabId, handoffId)
       .catch((error: unknown) => {
-        console.warn(
-          "[native-agent] Marking a delivered handoff consumed failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("handoff.consume-failed", { error: formatLogError(error) });
       });
   }
 

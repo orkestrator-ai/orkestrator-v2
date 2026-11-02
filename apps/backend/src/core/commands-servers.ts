@@ -8,7 +8,7 @@ import {
   coordinatorWebResearchSetting,
   normalizeCoordinatorResearchMcpServers,
 } from "@orkestrator/protocol/coordinator-web-research";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   formatContainerLifecycleError,
   parseContainerLifecycle,
@@ -94,7 +94,7 @@ import {
 } from "./commands-environment.js";
 import { getHostPort } from "./commands-container-exec.js";
 import { dockerExec } from "./commands-container-exec.js";
-import { conciseError, cleanupErrorMessage } from "./commands-error-text.js";
+import { cleanupErrorMessage } from "./commands-error-text.js";
 import {
   applyClaudeHostCredentialEnvironment,
   applyPiHostCredentialEnvironment,
@@ -118,6 +118,10 @@ import {
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const environmentLog = createLogger("environment");
+const nativeAgentOpencodeLog = createLogger("native-agent.opencode");
 
 /** Provider-neutral process authority every coordinator bridge honours. */
 export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
@@ -757,9 +761,7 @@ export async function startLocalServerUnlocked(
         ? context.runtime.localServers.openCodeHostStart.lockedStartRetryDelayMs(attempt)
         : undefined;
       if (delayMs === undefined || context.runtime.localServers.isShuttingDown()) throw error;
-      console.warn(
-        `[local-server] opencode:${environmentId} lost the shared OpenCode database at startup; retrying in ${delayMs}ms`,
-      );
+      log.warn("opencode.database-lost-retrying", { environmentId, delayMs });
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -1376,10 +1378,10 @@ async function startLocalServerAttempt(
             signal: AbortSignal.timeout(15_000),
           })
           .catch((error: unknown) => {
-            console.warn(
-              `[backend] OpenCode coordinator research servers are unavailable for ${environmentId}:`,
-              conciseError(error),
-            );
+            nativeAgentOpencodeLog.warn("coordinator-servers.unavailable", {
+              environmentId,
+              error: formatLogError(error),
+            });
           });
       }
     }
@@ -1562,9 +1564,10 @@ export async function deleteEnvironment(
       const survivingTerminals =
         await context.runtime.terminals.terminateSessionsForEnvironment(environmentId);
       if (survivingTerminals.length > 0) {
-        console.warn(
-          `[backend] ${survivingTerminals.length} terminal process tree(s) outlived termination for ${environmentId}`,
-        );
+        environmentLog.warn("delete.terminals-survived", {
+          environmentId,
+          count: survivingTerminals.length,
+        });
         throw new Error(
           "Terminal process trees are still running; environment deletion can be retried",
         );
@@ -1586,9 +1589,7 @@ export async function deleteEnvironment(
           fence: context.runtime.environments.fence,
         });
         if (files.failed > 0) {
-          console.warn(
-            `[backend] ${files.failed} graph run artifact director(ies) were not removed for ${environmentId}`,
-          );
+          environmentLog.warn("delete.artifacts-left", { environmentId, failed: files.failed });
         }
         // Isolated branch worktrees and branches (item 403): for a local
         // environment the branches live in the shared repository, so they
@@ -1598,9 +1599,7 @@ export async function deleteEnvironment(
           fence: context.runtime.environments.fence,
         });
         if (branches.failed > 0) {
-          console.warn(
-            `[backend] ${branches.failed} graph run(s) kept branch worktrees for ${environmentId}`,
-          );
+          environmentLog.warn("delete.worktrees-kept", { environmentId, failed: branches.failed });
         }
       }
       // Before the container is removed and before the worktree is deleted:
@@ -1609,7 +1608,12 @@ export async function deleteEnvironment(
       // the worktree still on disk. Best-effort — a tmux server that has
       // already gone must not strand the rest of the deletion.
       await cleanupEnvironmentTmux(environmentId, context).catch((error: unknown) => {
-        console.warn("[backend] claude-tmux cleanup failed during environment deletion:", error);
+        environmentLog.warn("delete.step-failed", {
+          environmentId,
+          step: "claude-tmux",
+          ...classifyCommandFailure(error, { tools: ["tmux"] }),
+          error: formatLogError(error),
+        });
       });
       context.previews?.registry.beforeEnvironmentTargetChange(environmentId);
       if (environment?.containerId) {
@@ -1689,10 +1693,11 @@ export async function deleteEnvironment(
       await storage
         .deleteNativeAgentSessionsByEnvironment(environmentId)
         .catch((error: unknown) => {
-          console.warn(
-            `[backend] native agent session cleanup failed for ${environmentId}:`,
-            error instanceof Error ? error.message : error,
-          );
+          environmentLog.warn("delete.step-failed", {
+            environmentId,
+            step: "native-sessions",
+            error: formatLogError(error),
+          });
         });
       // Measured shell-change badges of the environment's OpenCode sessions.
       // Never rejects; a leftover journal only costs disk.
@@ -1709,39 +1714,43 @@ export async function deleteEnvironment(
       await context.design?.deleteEnvironment(environmentId);
       // Stops annotation writes for this environment, then removes its store.
       await context.webAnnotations?.deleteEnvironment(environmentId).catch((error: unknown) => {
-        console.warn(
-          `[backend] web annotation cleanup failed for ${environmentId}:`,
-          error instanceof Error ? error.name : "unknown",
-        );
+        environmentLog.warn("delete.step-failed", {
+          environmentId,
+          step: "web-annotations",
+          error: formatLogError(error, { message: false }),
+        });
       });
       // Fences and removes the environment's artifact records, bytes and grants.
       await context.transcriptArtifacts
         ?.deleteEnvironment(environmentId)
         .catch((error: unknown) => {
-          console.warn(
-            `[backend] transcript artifact cleanup failed for ${environmentId}:`,
-            error instanceof Error ? error.name : "unknown",
-          );
+          environmentLog.warn("delete.step-failed", {
+            environmentId,
+            step: "transcript-artifacts",
+            error: formatLogError(error, { message: false }),
+          });
         });
       // Saved copies of the images its transcripts showed.
       if (typeof storage.getDataDir === "function") {
         await transcriptMediaPins(storage.getDataDir())
           .deleteEnvironment(environmentId)
           .catch((error: unknown) => {
-            console.warn(
-              `[backend] transcript media pin cleanup failed for ${environmentId}:`,
-              error instanceof Error ? error.name : "unknown",
-            );
+            environmentLog.warn("delete.step-failed", {
+              environmentId,
+              step: "transcript-media-pins",
+              error: formatLogError(error, { message: false }),
+            });
           });
       }
       // Schedules its agents own go with it; others' schedules aimed at it pause.
       try {
         context.scheduledJobs?.environmentDeleted(environmentId);
       } catch (error) {
-        console.warn(
-          `[backend] scheduled job cleanup failed for ${environmentId}:`,
-          error instanceof Error ? error.name : "unknown",
-        );
+        environmentLog.warn("delete.step-failed", {
+          environmentId,
+          step: "scheduled-jobs",
+          error: formatLogError(error, { message: false }),
+        });
       }
       // Its environment-scoped permission rules and their application record
       // go with it; project rules stay (todo 0723).
@@ -1750,10 +1759,11 @@ export async function deleteEnvironment(
           storage.permissionRuleStore().environmentDeleted(environmentId);
         }
       } catch (error) {
-        console.warn(
-          `[backend] permission rule cleanup failed for ${environmentId}:`,
-          error instanceof Error ? error.name : "unknown",
-        );
+        environmentLog.warn("delete.step-failed", {
+          environmentId,
+          step: "permission-rules",
+          error: formatLogError(error, { message: false }),
+        });
       }
       context.agentTools?.revokeEnvironment(environmentId);
       await seedFs.rm(seedFilesDir(storage.getDataDir(), environmentId), {
@@ -1765,10 +1775,11 @@ export async function deleteEnvironment(
       const last = await storage.getEnvironment(environmentId).catch(() => null);
       if (last)
         await context.coordinators?.statusWakes.captureFinalPullRequest(last).catch((error) => {
-          console.warn(
-            `[backend] Could not keep the final PR state for ${environmentId}:`,
-            error instanceof Error ? error.message : "unknown",
-          );
+          environmentLog.warn("delete.step-failed", {
+            environmentId,
+            step: "final-pull-request",
+            error: formatLogError(error),
+          });
         });
       await storage.removeEnvironment(environmentId);
       // Bridges were stopped above, so nothing is writing bridge state now.
@@ -1881,10 +1892,10 @@ export function scheduleMergeCleanupRecovery(environmentId: string, context: Com
       }
       await deleteEnvironmentTask(environmentId, context);
     })().catch((error) => {
-      console.warn(
-        `[backend] Failed to resume merge cleanup for ${environmentId}:`,
-        conciseError(error),
-      );
+      environmentLog.warn("merge-cleanup.resume-failed", {
+        environmentId,
+        error: formatLogError(error),
+      });
     }),
   );
 }

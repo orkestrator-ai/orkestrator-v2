@@ -94,6 +94,9 @@ import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-poli
 import type { KanbanTask } from "./storage-shared-core.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 /** A refused launch; `code` is the same on every surface. Messages carry no content. */
 export class GraphLaunchError extends Error {
@@ -475,11 +478,10 @@ export class GraphRunLaunchService {
       try {
         await this.deps.linkTicket(ticketId, environment.id);
       } catch (error) {
-        console.warn(
-          "[graphs] Could not link the launched run's ticket:",
-          run.id,
-          error instanceof Error ? error.name : "error",
-        );
+        log.warn("launch.ticket-link-failed", {
+          runId: run.id,
+          error: formatLogError(error, { message: false }),
+        });
       }
     }
     if (request.saveDefaults) {
@@ -490,9 +492,12 @@ export class GraphRunLaunchService {
         updatedAt: this.clock().toISOString(),
       });
     }
-    console.info(
-      `[graphs] Launched run ${run.id} (${origin.requestedBy}, ${plan.nodes.length} nodes, ${environment ? "existing" : "new"} environment)`,
-    );
+    log.info("launch.started", {
+      runId: run.id,
+      requestedBy: origin.requestedBy,
+      nodes: plan.nodes.length,
+      environment: environment ? "existing" : "new",
+    });
     return {
       runId: run.id,
       projectId: run.projectId,
@@ -766,7 +771,7 @@ export class GraphRunLaunchService {
       }
     }
     if (removed > 0) {
-      console.info(`[graphs] Removed ${removed} runs that ended without an environment`);
+      log.info("launch.swept", { removed });
     }
     return removed;
   }

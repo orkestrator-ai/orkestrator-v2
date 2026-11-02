@@ -22,6 +22,9 @@ import {
   resendToOpenJobTab,
   jobPromptFingerprint,
 } from "./native-agent-job-tab-reuse.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 function jobIdFor(environmentId: string, requestId: string): string {
   return createHash("sha256")
@@ -213,10 +216,7 @@ async function launchNativeAgentJobInternal(
         previousArmedAt,
       );
     } catch (error) {
-      console.warn(
-        `[native-agent-job] Failed to roll back PR refresh for ${environmentId}:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("job.pr-refresh-rollback-failed", { environmentId, error: formatLogError(error) });
     }
   };
 

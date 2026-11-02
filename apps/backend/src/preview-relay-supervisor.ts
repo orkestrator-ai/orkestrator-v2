@@ -32,7 +32,6 @@ export interface PreviewRelaySupervisorOptions {
   helloTimeoutMs?: number;
   openTimeoutMs?: number;
   now?: () => number;
-  logger?: Pick<Console, "warn">;
 }
 
 function creditFrame(channel: number, bytes: number): Buffer {
@@ -179,8 +178,7 @@ class EnvironmentRelay {
         PreviewRelaySupervisorOptions,
         "window" | "maxChannelsPerEnvironment" | "helloTimeoutMs" | "openTimeoutMs"
       >
-    > &
-      Pick<PreviewRelaySupervisorOptions, "logger">,
+    >,
     allowed: number[],
     private readonly onExit: (relay: EnvironmentRelay, deliberate: boolean) => void,
   ) {
@@ -497,7 +495,6 @@ export class PreviewRelaySupervisor {
           maxChannelsPerEnvironment: this.options.maxChannelsPerEnvironment ?? 64,
           helloTimeoutMs: this.options.helloTimeoutMs ?? 10_000,
           openTimeoutMs: this.options.openTimeoutMs ?? 10_000,
-          logger: this.options.logger,
         },
         this.options.allowedPorts(target.environmentId),
         (stopped, deliberate) => {

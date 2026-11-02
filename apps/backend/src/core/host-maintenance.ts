@@ -28,6 +28,9 @@ import {
 import type { BackendEmit } from "./commands-context.js";
 import type { StorageDatabase } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("host");
 
 /** The backend database store holding the update job, tasks and the last check. */
 export const HOST_MAINTENANCE_STORE = "host-maintenance";
@@ -335,7 +338,7 @@ export class HostMaintenanceService {
       try {
         listener(snapshot);
       } catch (error) {
-        console.warn("[host-maintenance] Listener failed:", error);
+        log.warn("maintenance.listener-failed", { error: formatLogError(error) });
       }
     }
     return snapshot;

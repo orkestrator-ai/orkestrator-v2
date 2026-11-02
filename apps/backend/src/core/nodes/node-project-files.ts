@@ -10,6 +10,9 @@ import { NodeFileTransfer, type NodeFileInvoker } from "./node-file-transfer.js"
 import { NodeFiles } from "./node-files.js";
 import type { NodePortal } from "./node-portal.js";
 import type { NodeService } from "./node-service.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("nodes");
 
 /**
  * A project's `.env` and selected files across the nodes that have the
@@ -146,10 +149,7 @@ export class NodeProjectFiles {
       actor: "environment setup",
     });
     if (receipt.status !== "completed") {
-      console.warn(
-        "[nodes] Seed files for a leaf environment were not all copied:",
-        receipt.error?.code,
-      );
+      log.warn("seed-files.incomplete", { code: receipt.error?.code });
     }
   }
 

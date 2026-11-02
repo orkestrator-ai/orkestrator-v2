@@ -37,7 +37,6 @@ export interface PreviewPublicationStatus {
 
 export interface PreviewPublicationOptions {
   runtime: PreviewRuntime;
-  logger: Pick<Console, "info" | "warn">;
   /** Certificate files are re-read on this interval and hot-swapped when changed. */
   certificateCheckMs?: number;
   /** Test seam for the certificate expiry clock. */
@@ -152,9 +151,7 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
     );
     this.unsubscribe = options.runtime.onSettingsChanged(() => {
       void this.reconfigure().catch((error: unknown) => {
-        options.logger.warn(
-          `[previews] Publication reconfiguration failed: ${error instanceof Error ? error.message : "error"}`,
-        );
+        log.warn("publication.reconfigure-failed", { error: formatLogError(error) });
       });
     });
   }
@@ -323,9 +320,11 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
       this.options.certificateCheckMs ?? 60_000,
     );
     this.certificateTimer.unref?.();
-    this.options.logger.info(
-      `[previews] Private preview origins listening on ${bound.address}:${bound.port} for *.${settings.domain}`,
-    );
+    log.info("publication.listening", {
+      address: bound.address,
+      port: bound.port,
+      domain: settings.domain,
+    });
   }
 
   private async loadCertificate(settings: PreviewSettings["publication"]): Promise<void> {
@@ -383,9 +382,7 @@ export class PreviewPublicationManager implements PreviewPublicationPort {
       // untouched. In-flight preview connections reconnect.
       this.settings = null;
       await this.reconfigure();
-      this.options.logger.info(
-        `[previews] Reloaded preview certificate (valid to ${this.certificate?.validTo ?? "unknown"})`,
-      );
+      log.info("certificate.reloaded", { validTo: this.certificate?.validTo ?? null });
     }
   }
 

@@ -137,6 +137,9 @@ import type { ReviewPackageVerification } from "./commands-review.js";
 import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
 import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-information.js";
 import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
@@ -1328,9 +1331,7 @@ export class BuildPipelineReviewFanout {
         pipeline.pendingResultConsumptions = Array.from(
           new Set([...(pipeline.pendingResultConsumptions ?? []), consolidation.requestId]),
         );
-        console.warn(
-          `[build-pipeline] Deferred consolidation result consumption: ${reviewFanoutErrorMessage(error)}`,
-        );
+        log.warn("consolidation.consume-deferred", { error: formatLogError(error) });
       }
     }
     return { kind: "consolidated" };

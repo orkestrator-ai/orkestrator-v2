@@ -39,6 +39,9 @@ import {
   claudeRuleDetail,
   codexRuleDetail,
 } from "./permission-rules/request-detail.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 
@@ -1014,9 +1017,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       }
     }
     if (droppedRequests > 0) {
-      console.warn(
-        `[native-agent] Dropped ${droppedRequests} unmappable ${this.agent} interaction request(s)`,
-      );
+      log.warn("interaction.requests-dropped", { agent: this.agent, dropped: droppedRequests });
       if (requests.length === 0) {
         throw new ProviderUnavailableError(
           `${this.agent} returned no mappable interaction requests`,

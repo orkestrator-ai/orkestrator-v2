@@ -1,3 +1,5 @@
+import { configureLogger } from "@orkestrator/protocol/logger";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import {
@@ -62,7 +64,6 @@ import { WebSocket } from "ws";
 
 import {
   auxiliaryServers,
-  createLogger,
   createRendererRoot,
   createTempDir,
   decodeResponseBody,
@@ -90,7 +91,6 @@ describe("gateway terminal WebSocket", () => {
       backend: { invoke: async () => undefined },
       tokenMatches: (request) => Boolean(request.headers.cookie),
       originAllowed: () => true,
-      logger: createLogger(),
     });
     const rejectedStatus = (protocol: string, headers: IncomingHttpHeaders = {}) => {
       let response = "";
@@ -116,7 +116,6 @@ describe("gateway terminal WebSocket", () => {
       backend: { invoke: async () => undefined },
       tokenMatches: () => false,
       originAllowed: () => false,
-      logger: createLogger(),
     });
     let deniedOriginResponse = "";
     const deniedOriginSocket = {
@@ -955,7 +954,6 @@ describe("gateway terminal WebSocket", () => {
       backend: { invoke: mock(async () => undefined) },
       tokenMatches: () => true,
       originAllowed: () => true,
-      logger: { debug: () => {}, warn: () => {}, error: () => {} },
     });
     let payloadRead = false;
     // Terminal output is the highest-volume event in the system and the
@@ -1028,16 +1026,12 @@ describe("gateway terminal WebSocket", () => {
   });
 
   test("rejects an upgrade whose request the WebSocket server refuses", async () => {
-    const warnings: string[] = [];
+    const logs = captureLogs();
+    configureLogger({ level: "debug" });
     const terminalGateway = new TerminalWebSocketGateway({
       backend: { invoke: mock(async () => undefined) },
       tokenMatches: () => true,
       originAllowed: () => true,
-      logger: {
-        debug: (message: string) => warnings.push(message),
-        warn: () => {},
-        error: () => {},
-      },
     });
     const written: string[] = [];
     let destroyed = false;
@@ -1067,7 +1061,8 @@ describe("gateway terminal WebSocket", () => {
     expect(handled).toBe(true);
     // The listener's upgrade callback must not see this throw, and the socket
     // must not be left attached and idle.
-    expect(warnings).toContain("[TerminalWebSocket] Upgrade rejected");
+    expect(logs.lines).toContain("[gateway.terminal] upgrade-rejected");
+    logs.restore();
     expect(destroyed || written.some((chunk) => chunk.includes("400"))).toBe(true);
     terminalGateway.close();
   });
@@ -1915,7 +1910,6 @@ describe("remote gateway", () => {
       dataDir,
       rendererRoot,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: createLogger(),
     });
     const writes: string[] = [];
     const client = {
@@ -2096,7 +2090,6 @@ describe("remote gateway", () => {
       dataDir,
       rendererRoot,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: createLogger(),
     });
     const writes: string[] = [];
     const client = {
@@ -2146,7 +2139,6 @@ describe("remote gateway", () => {
       dataDir,
       rendererRoot,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: createLogger(),
     });
     const client = {
       writableLength: 0,
@@ -2692,7 +2684,6 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => null) },
       dataDir: "/tmp",
       rendererRoot: "/tmp",
-      logger: createLogger(),
       eventReplay: { idleRetentionMs: 60_000 },
     });
     const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
@@ -2836,7 +2827,6 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => null) },
       dataDir: "/tmp",
       rendererRoot: "/tmp",
-      logger: createLogger(),
     });
     const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     gateway.emit("environment-renamed", { id: "base" });
@@ -2892,7 +2882,6 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => null) },
       dataDir: "/tmp",
       rendererRoot: "/tmp",
-      logger: createLogger(),
     });
     const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     gateway.emit("environment-renamed", { id: "missed" });
@@ -2962,7 +2951,6 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => null) },
       dataDir: "/tmp",
       rendererRoot: "/tmp",
-      logger: createLogger(),
     });
     const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     const cursor = replay.latestCursor;
@@ -3009,7 +2997,6 @@ describe("remote gateway", () => {
         backend: { invoke: mock(async () => null) },
         dataDir: "/tmp",
         rendererRoot: "/tmp",
-        logger: createLogger(),
       });
       const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
       const event = "environment-renamed";
@@ -3066,7 +3053,6 @@ describe("remote gateway", () => {
         backend: { invoke: mock(async () => null) },
         dataDir: "/tmp",
         rendererRoot: "/tmp",
-        logger: createLogger(),
         eventReplay: { handshakeFrameCapacity: capacity },
       });
       const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
@@ -3124,7 +3110,6 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => null) },
       dataDir: "/tmp",
       rendererRoot: "/tmp",
-      logger: createLogger(),
     });
     const clients = (gateway as unknown as { clients: Map<object, unknown> }).clients;
     const destroy = mock(() => undefined);
@@ -3173,7 +3158,6 @@ describe("remote gateway", () => {
         backend: { invoke: mock(async () => null) },
         dataDir: "/tmp",
         rendererRoot: "/tmp",
-        logger: createLogger(),
         ...(eventReplay ? { eventReplay } : {}),
       }) as unknown as { replayHandshakeFrameCapacity: number; replayHandshakeMaxBytes: number };
 
@@ -3194,7 +3178,6 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => null) },
       dataDir: "/tmp",
       rendererRoot: "/tmp",
-      logger: createLogger(),
     });
     const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     const frame = replay.append("environment-renamed", { id: "one" });
@@ -3236,7 +3219,6 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => null) },
       dataDir: "/tmp",
       rendererRoot: "/tmp",
-      logger: createLogger(),
       eventReplay: {
         handshakeFrameCapacity: 1,
         handshakeMaxBytes: 1024 * 1024,

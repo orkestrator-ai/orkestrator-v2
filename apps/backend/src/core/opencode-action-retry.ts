@@ -10,6 +10,9 @@ import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-perm
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 import { OpenCodeWorkflowResultBroker } from "./opencode-workflow-result-broker.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent.opencode");
 
 /** Coordinates action-retry aborts with the same lock used by prompt dispatch. */
 export class OpenCodeActionRetryCoordinator {
@@ -57,20 +60,14 @@ export class OpenCodeActionRetryCoordinator {
           this.completed.add(sessionId);
         } catch (error) {
           this.failures.add(sessionId);
-          console.warn(
-            "[opencode-provider] Automatic retry abort failed:",
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("retry.abort-failed", { error: formatLogError(error, { message: false }) });
           // The abort response alone does not prove whether OpenCode stopped.
           await this.lifecycle.readSessionLifecycle([sessionId], true, true).catch(() => undefined);
         }
       })
       .catch((error) => {
         this.failures.add(sessionId);
-        console.warn(
-          "[opencode-provider] Automatic retry abort could not be scheduled:",
-          error instanceof Error ? error.name : "unknown error",
-        );
+        log.warn("retry.abort-not-scheduled", { error: formatLogError(error, { message: false }) });
       })
       .finally(() => {
         if (this.tasks.get(sessionId) === task) this.tasks.delete(sessionId);

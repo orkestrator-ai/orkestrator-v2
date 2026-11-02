@@ -30,6 +30,9 @@ import type { NativeAgentJobCompletionAction } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -410,10 +413,7 @@ export class SessionsRepository {
         graceMs: AGENT_HANDOFF_PRUNE_GRACE_MS,
       })
       .catch((error: unknown) => {
-        console.warn(
-          "[storage] Pruning unreferenced agent handoffs failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("handoffs.prune-failed", { error: formatLogError(error) });
       });
   }
 

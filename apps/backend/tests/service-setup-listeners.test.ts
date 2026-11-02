@@ -41,7 +41,6 @@ test.each(["ssh", "tailnet"])(
         allowNonTailscaleBind: options.allowNonTailscaleBind,
         loopbackClientPort: options.loopbackClientPort,
         env: {},
-        logger: { info() {}, warn() {}, error() {}, debug() {} },
         interfaces: {
           tailscale0: [
             {

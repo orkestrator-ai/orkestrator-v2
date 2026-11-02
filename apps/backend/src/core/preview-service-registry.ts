@@ -31,6 +31,9 @@ import type {
   PreviewServiceStore,
   PreviewServicesStorage,
 } from "./storage-preview-services.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("preview");
 
 /** Internal resolved endpoint. Never serialized to clients as-is. */
 export interface ResolvedPreviewTarget {
@@ -110,7 +113,6 @@ export interface PreviewRegistryOptions {
   verificationTtlMs?: number;
   /** Readiness retry schedule while a service is starting. */
   probeBackoffMs?: readonly number[];
-  logger?: Pick<Console, "warn">;
   /** Owned per-environment transport state (the container relay) ends here too. */
   onEnvironmentTargetChange?: (environmentId: string) => void;
 }
@@ -257,7 +259,6 @@ export class PreviewServiceRegistry {
   private readonly eventDelayMs: number;
   private readonly verificationTtlMs: number;
   private readonly backoff: readonly number[];
-  private readonly logger: Pick<Console, "warn">;
 
   constructor(private readonly options: PreviewRegistryOptions) {
     this.limits = options.limits ?? PREVIEW_LIMITS;
@@ -265,7 +266,6 @@ export class PreviewServiceRegistry {
     this.eventDelayMs = options.eventDelayMs ?? 25;
     this.verificationTtlMs = options.verificationTtlMs ?? 5_000;
     this.backoff = options.probeBackoffMs ?? DEFAULT_BACKOFF_MS;
-    this.logger = options.logger ?? console;
   }
 
   get backendInstanceId(): string {
@@ -292,7 +292,7 @@ export class PreviewServiceRegistry {
     const loaded = await this.options.storage.previewServices.loadPreviewServiceStore();
     this.invalidDefinitions = loaded.invalid;
     for (const problem of loaded.invalid) {
-      this.logger.warn(`[previews] Ignoring invalid stored service definition: ${problem.reason}`);
+      log.warn("registry.invalid-definition", { reason: problem.reason });
     }
     for (const definition of Object.values(loaded.store.definitions)) {
       this.definitions.set(definition.serviceId, definition);
@@ -824,9 +824,7 @@ export class PreviewServiceRegistry {
     }
     const run = this.reconcileEnvironment(environmentId)
       .catch((error: unknown) => {
-        this.logger.warn(
-          `[previews] Environment reconciliation failed: ${error instanceof Error ? error.message : "error"}`,
-        );
+        log.warn("registry.environment-reconcile-failed", { error: formatLogError(error) });
       })
       .finally(() => {
         this.environmentReconciles.delete(environmentId);
@@ -1062,9 +1060,9 @@ export class PreviewServiceRegistry {
             ok: false,
             error: previewError("internal", { message: "Service resolution failed." }),
           };
-          this.logger.warn(
-            `[previews] Resolver failed: ${error instanceof Error ? error.name : "error"}`,
-          );
+          log.warn("registry.resolver-failed", {
+            error: formatLogError(error, { message: false }),
+          });
         }
       }
       this.commitResolution(
@@ -1369,9 +1367,9 @@ export class PreviewServiceRegistry {
       try {
         listener(serviceIds, reason);
       } catch (error) {
-        this.logger.warn(
-          `[previews] Revocation listener failed: ${error instanceof Error ? error.name : "error"}`,
-        );
+        log.warn("registry.revocation-listener-failed", {
+          error: formatLogError(error, { message: false }),
+        });
       }
     }
   }
@@ -1417,9 +1415,7 @@ export class PreviewServiceRegistry {
     try {
       this.options.emit(PREVIEW_SERVICES_CHANGED_EVENT, payload);
     } catch (error) {
-      this.logger.warn(
-        `[previews] Failed to emit change event: ${error instanceof Error ? error.name : "error"}`,
-      );
+      log.warn("registry.change-emit-failed", { error: formatLogError(error, { message: false }) });
     }
   }
 }

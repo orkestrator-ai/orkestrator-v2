@@ -35,6 +35,9 @@ import {
   type InProcessToolInfo,
   type InProcessToolResult,
 } from "./mcp-in-process.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("control-mcp");
 
 const CONTROL_MCP_PATH = "/mcp";
 const CONTROL_MCP_DESCRIPTOR = "control-mcp.json";
@@ -438,7 +441,7 @@ export class ControlMcpServer {
       throw error;
     }
     if (this.retryDelayMs !== this.bindRetry.initialDelayMs) {
-      console.log(`[control-mcp] Port ${this.port} is free again; listening.`);
+      log.info("listener.port-free", { port: this.port });
     }
     this.retryDelayMs = this.bindRetry.initialDelayMs;
     this.notifyStateChange();
@@ -468,7 +471,7 @@ export class ControlMcpServer {
       try {
         listener();
       } catch (error) {
-        console.warn("[control-mcp] State listener failed:", error);
+        log.warn("state-listener.failed", { error: formatLogError(error) });
       }
     }
   }

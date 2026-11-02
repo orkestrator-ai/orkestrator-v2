@@ -202,7 +202,7 @@ describe("Bun PTY adapter", () => {
 
       expect(observed).toEqual([9]);
       expect(harness.close).toHaveBeenCalledTimes(1);
-      expect(error).toHaveBeenCalledWith("[pty] Exit listener failed");
+      expect(error).toHaveBeenCalledWith("[terminal] pty.exit-listener-failed");
     } finally {
       error.mockRestore();
     }

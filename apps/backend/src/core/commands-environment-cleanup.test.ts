@@ -352,8 +352,9 @@ describe("delete_environment durable child-state cleanup", () => {
           await expect(invokeDelete()).resolves.toBeUndefined();
           expect(cleanup).toHaveBeenCalledWith("e1");
           expect(warning).toHaveBeenCalledWith(
-            "[backend] transcript media pin cleanup failed for e1:",
-            "Error",
+            expect.stringContaining(
+              "delete.step-failed environmentId=e1 step=transcript-media-pins",
+            ),
           );
           expect(await storage.getEnvironment("e1")).toBeNull();
         } finally {

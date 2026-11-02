@@ -31,6 +31,9 @@ import {
   generateCodexSessionTitle,
   type SessionTitleRunInput,
 } from "./session-title-runners.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 export type SessionTitleStrategy = Extract<AgentAccountPlatform, "codex" | "claude">;
 
@@ -160,10 +163,11 @@ export class SessionTitleService implements SessionTitleGenerator {
         );
         // Content-free: the error of a CLI that was handed the prompt on
         // stdin can quote it back.
-        console.warn(
-          `[ElectronBackend] ${strategy} session-title generation failed; trying the next strategy`,
-          error instanceof Error && /timed out/i.test(error.message) ? "(timed out)" : "",
-        );
+        log.warn("title.strategy-failed", {
+          strategy,
+          timedOut: error instanceof Error && /timed out/i.test(error.message),
+          error: formatLogError(error, { message: false }),
+        });
       }
     }
     return null;

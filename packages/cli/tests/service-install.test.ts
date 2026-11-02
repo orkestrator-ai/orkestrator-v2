@@ -491,7 +491,6 @@ test("a pinned Serve service parses as strict and cannot silently fall back", as
       backend: { invoke: async () => null },
       env: {},
       strictPort: options.strictGatewayPort,
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
     },
     {
       gatewayCredentialMatches: () => false,

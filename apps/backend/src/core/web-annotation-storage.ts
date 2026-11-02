@@ -88,6 +88,9 @@ import {
   type WebAnnotationManifest,
   type WebAnnotationRecordKind,
 } from "./web-annotation-storage-format.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web-annotations");
 
 export {
   WEB_ANNOTATION_DRAFTS_FORMAT,
@@ -528,7 +531,7 @@ export class WebAnnotationEnvironmentStore {
   /** In-memory only: an unreadable referenced record degrades that item. */
   markUnavailable(annotationId: string, reason: string): void {
     if (!this.runtimeUnavailable.has(annotationId)) {
-      console.warn(`[web-annotations] Record unavailable (${reason})`);
+      log.warn("record.unavailable", { reason });
     }
     this.runtimeUnavailable.set(annotationId, reason);
   }
@@ -648,9 +651,7 @@ export class WebAnnotationEnvironmentStore {
       try {
         result = await readLegacyEnvironment(this.dir, this.environmentId, now);
       } catch (error) {
-        console.warn(
-          `[web-annotations] Legacy storage unreadable (code=${errorCode(error) ?? "error"})`,
-        );
+        log.warn("legacy.unreadable", { code: errorCode(error) ?? "error" });
         this.loadFailure = { reason: "environment storage is unreadable" };
         return;
       }
@@ -727,9 +728,7 @@ export class WebAnnotationEnvironmentStore {
     if (archive) {
       await archiveLegacyEnvironment(this.options.dataDir, this.environmentId).catch(
         (error: unknown) => {
-          console.warn(
-            `[web-annotations] Could not archive imported legacy files (code=${errorCode(error) ?? "error"})`,
-          );
+          log.warn("legacy.archive-failed", { code: errorCode(error) ?? "error" });
         },
       );
     }
@@ -844,9 +843,7 @@ export class WebAnnotationEnvironmentStore {
       () => 0,
     );
     if (moved > 0) {
-      console.warn(
-        `[web-annotations] Archived ${moved} legacy file(s) beside an imported environment; they were not imported`,
-      );
+      log.warn("legacy.files-archived", { moved });
     }
   }
 
@@ -885,7 +882,7 @@ export class WebAnnotationEnvironmentStore {
       this.storageStatus = "unavailable";
       this.reason = "environment storage is unreadable";
       this.reasonDetail = undefined;
-      console.warn("[web-annotations] Storage unavailable (code=store-unreadable)");
+      log.warn("storage.unavailable", { code: "store-unreadable" });
       return;
     }
     this.adopt(next, true);
@@ -964,10 +961,7 @@ export class WebAnnotationEnvironmentStore {
     try {
       this.options.onCommit?.(hint);
     } catch (error) {
-      console.warn(
-        "[web-annotations] Change hint listener failed:",
-        error instanceof Error ? error.name : "unknown",
-      );
+      log.warn("change-hint.listener-failed", { error: formatLogError(error, { message: false }) });
     }
   }
 
@@ -1523,18 +1517,12 @@ export class WebAnnotationStorage {
       if (!isEnvironmentDirectoryName(name)) continue;
       if (options.environmentExists && !(await options.environmentExists(name))) {
         await this.deleteEnvironment(name).catch((error: unknown) => {
-          console.warn(
-            "[web-annotations] Failed to remove orphaned environment storage:",
-            error instanceof Error ? error.name : "unknown",
-          );
+          log.warn("orphan.remove-failed", { error: formatLogError(error, { message: false }) });
         });
         continue;
       }
       await this.environment(name).catch((error: unknown) => {
-        console.warn(
-          "[web-annotations] Failed to load environment storage:",
-          error instanceof Error ? error.name : "unknown",
-        );
+        log.warn("storage.load-failed", { error: formatLogError(error, { message: false }) });
       });
     }
   }

@@ -22,6 +22,9 @@ import {
   randomUUID,
   resizeKanbanImage,
 } from "./storage-shared.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -231,7 +234,7 @@ export class KanbanRepository {
               // The authoritative metadata no longer references this image.
               // Keep the committed mutation successful; after the bounded
               // retries the remaining orphan is safe to remove later.
-              console.warn("[Storage] Failed to clean up an orphaned Kanban image");
+              log.warn("kanban.image-cleanup-failed");
             }
           }
         }

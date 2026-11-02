@@ -45,6 +45,9 @@ import {
   type RecoveryCopyGroup,
 } from "./recovery-copy-model.js";
 import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("docker");
 
 /**
  * Recovery copies: earlier runtimes and storage sets an environment keeps
@@ -552,10 +555,10 @@ async function restoreRecoveryCopyUnfenced(
     await context.storage
       .clearBackendTerminalSessionIds?.(environment.id)
       .catch((error: unknown) => {
-        console.error(
-          "Could not clear terminal sessions after recovery restore",
-          error instanceof Error ? error.name : "unknown",
-        );
+        log.error("recovery.clear-terminals-failed", {
+          environmentId: environment.id,
+          error: formatLogError(error, { message: false }),
+        });
       });
     return { containerId: target.containerId };
   } catch (error) {

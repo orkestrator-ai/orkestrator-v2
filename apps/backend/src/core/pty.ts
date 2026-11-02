@@ -3,6 +3,9 @@ import {
   type ProcessTreeChild,
   type TerminateProcessTreeOptions,
 } from "./process-tree.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 export type PtyExitEvent = {
   exitCode: number;
@@ -201,7 +204,7 @@ export function spawnPty(command: string, args: string[], options: SpawnPtyOptio
         } catch {
           // One consumer must not prevent descriptor cleanup or the remaining
           // exit observers from seeing the terminal's final state.
-          console.error("[pty] Exit listener failed");
+          log.error("pty.exit-listener-failed");
         }
       }
     } finally {
@@ -214,7 +217,7 @@ export function spawnPty(command: string, args: string[], options: SpawnPtyOptio
       (exitCode) => notifyExit({ exitCode }),
       () => notifyExit({ exitCode: 1 }),
     )
-    .catch(() => console.error("[pty] Exit notification failed"));
+    .catch(() => log.error("pty.exit-notify-failed"));
 
   return {
     pid: spawned.pid,
@@ -230,7 +233,7 @@ export function spawnPty(command: string, args: string[], options: SpawnPtyOptio
           try {
             callback(exitEvent!);
           } catch {
-            console.error("[pty] Late exit listener failed");
+            log.error("pty.late-exit-listener-failed");
           }
         });
       return { dispose: () => exitListeners.delete(callback) };

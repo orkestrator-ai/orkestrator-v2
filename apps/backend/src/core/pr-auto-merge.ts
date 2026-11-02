@@ -11,6 +11,10 @@ import { resolveEnvironmentActionDefault } from "./action-default-selection.js";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("pull-request");
 
 /**
  * Auto-merge: the backend merges an environment's open pull request as soon
@@ -390,6 +394,10 @@ export class PrAutoMergeController {
       this.options.onWarning(message, error);
       return;
     }
-    console.warn(`[pr-auto-merge] ${message}:`, error instanceof Error ? error.message : error);
+    log.warn("auto-merge.warning", {
+      detail: message,
+      ...classifyCommandFailure(error, { tools: ["gh"] }),
+      error: formatLogError(error),
+    });
   }
 }

@@ -232,8 +232,7 @@ describe("build pipeline activity", () => {
           await timers.advance(500, observer);
           expect((await activity(storage, "e1")).source).toBe("working");
           expect(warning).toHaveBeenCalledWith(
-            "[build-pipeline] Could not update the sidebar for pipeline p1:",
-            "disk unavailable",
+            expect.stringMatching(/sidebar\.update-failed pipelineId=p1 .*disk unavailable/),
           );
           failing.mockRestore();
           await timers.advance(999, observer);

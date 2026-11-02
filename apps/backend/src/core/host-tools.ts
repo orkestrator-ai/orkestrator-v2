@@ -1,6 +1,9 @@
 import type { CommandContext } from "./commands-context.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { commandExists } from "./shell.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("host");
 
 type HostToolSource = "managed" | "path" | "missing";
 
@@ -18,9 +21,8 @@ function logHostToolAvailability(
   }
   if (sources.get(name) === source) return;
   sources.set(name, source);
-  const message = `[Tooling] Host tool availability: tool=${name} available=${source !== "missing"} source=${source}`;
-  if (source === "missing") console.warn(message);
-  else console.info(message);
+  if (source === "missing") log.warn("tool.missing", { tool: name, source });
+  else log.info("tool.available", { tool: name, source });
 }
 
 /**

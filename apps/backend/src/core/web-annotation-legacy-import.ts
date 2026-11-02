@@ -51,6 +51,9 @@ import {
   type WebAnnotationManifest,
   type WebAnnotationRecordKind,
 } from "./web-annotation-storage-format.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web-annotations");
 
 /** Upper bound for any single immutable record file (and row). */
 export const WEB_ANNOTATION_MAX_RECORD_BYTES = 1024 * 1024;
@@ -216,7 +219,7 @@ export async function readLegacyEnvironment(
         code === "manifest-missing"
           ? "manifest is missing; serving the previous committed copy read-only"
           : `${error instanceof WebAnnotationStorageError ? error.message : "manifest is unreadable"}; serving the previous committed copy read-only`;
-      console.warn(`[web-annotations] Legacy storage degraded (code=${code})`);
+      log.warn("legacy.degraded", { code });
     }
   }
   const manifest = parsed?.manifest ?? emptyManifest(environmentId, now);
@@ -326,9 +329,7 @@ export async function readLegacyEnvironment(
         draftsStatus = "unavailable";
       }
       if (draftsStatus !== "ready") {
-        console.warn(
-          `[web-annotations] Legacy draft index ${draftsStatus} (code=${storageCode(error)})`,
-        );
+        log.warn("legacy.draft-index-problem", { status: draftsStatus, code: storageCode(error) });
       }
     }
   }
@@ -395,7 +396,7 @@ export async function readLegacyEnvironment(
   // Only records current state depends on degrade an item; a missing brief of
   // a settled request or an old capture just stays unreadable.
   if (unreadable.size > 0) {
-    console.warn(`[web-annotations] Legacy import found ${unreadable.size} unreadable record(s)`);
+    log.warn("legacy.unreadable-records", { count: unreadable.size });
   }
   return {
     kind: "import",
@@ -413,7 +414,7 @@ export async function readLegacyEnvironment(
 }
 
 function unavailable(error: unknown, fallback: string): LegacyReadResult {
-  console.warn(`[web-annotations] Legacy storage unavailable (code=${storageCode(error)})`);
+  log.warn("legacy.unavailable", { code: storageCode(error) });
   return {
     kind: "unavailable",
     reason: error instanceof WebAnnotationStorageError ? error.message : fallback,

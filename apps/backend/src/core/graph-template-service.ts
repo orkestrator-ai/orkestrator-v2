@@ -64,6 +64,9 @@ import type { AppConfig, Project } from "./models.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { GraphTemplatesStorage } from "./storage.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 /**
  * The template library (item 109, plan P1.9, D2, D18): built-in templates
@@ -570,10 +573,12 @@ export class GraphTemplateService {
     for (const candidate of this.builtinSource()) {
       const guard = validateGraphTemplate(candidate);
       if (!guard.ok || seen.has(guard.value.id)) {
-        console.warn(
-          `[graphs] Built-in template skipped (${guard.ok ? "duplicate id" : "invalid"}):`,
-          guard.ok ? guard.value.id : String((candidate as { id?: unknown })?.id).slice(0, 64),
-        );
+        log.warn("template.skipped", {
+          reason: guard.ok ? "duplicate-id" : "invalid",
+          templateId: guard.ok
+            ? guard.value.id
+            : String((candidate as { id?: unknown })?.id).slice(0, 64),
+        });
         continue;
       }
       seen.add(guard.value.id);

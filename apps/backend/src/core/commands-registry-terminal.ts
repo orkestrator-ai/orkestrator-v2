@@ -524,7 +524,7 @@ export function registerTerminalCommands(
     const id = asString(sessionId, "sessionId");
     const running = isTerminalSessionAttachable({ runtime }, id);
     if (isSetupTerminalSessionId(id)) {
-      logSetupTerminal("renderer checked terminal session", {
+      logSetupTerminal("setup.renderer-checked-session", {
         sessionId: id,
         running,
         terminalRunning: runtime.terminals.hasProcess(id),
@@ -569,7 +569,7 @@ export function registerTerminalCommands(
     const id = asString(sessionId, "sessionId");
     const buffer = runtime.terminals.readOutput(id);
     if (isSetupTerminalSessionId(id)) {
-      logSetupTerminal("renderer requested output buffer", {
+      logSetupTerminal("setup.renderer-requested-buffer", {
         sessionId: id,
         bufferChars: buffer.length,
         running: runtime.terminals.hasProcess(id),

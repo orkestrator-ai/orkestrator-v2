@@ -31,6 +31,9 @@ import {
   type StorageService,
 } from "./native-agent-service-shared.js";
 import { nativeAgentPlatformPolicy } from "./native-agent-platform-policy.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 export const TURN_RECOVERY_RETRY_BASE_MS = 2_000;
 export const TURN_RECOVERY_RETRY_CEILING_MS = 60_000;
@@ -349,10 +352,11 @@ export class NativeAgentTurnRecovery {
               TURN_RECOVERY_RETRY_BASE_MS * 2 ** Math.min(latest.attempts - 1, 8),
             );
         }
-        console.warn(
-          `[native-agent] ${platformLabel(session.agent)} incomplete-turn recovery for ${session.environmentId} failed:`,
-          error instanceof Error ? error.name : "unknown error",
-        );
+        log.warn("turn-recovery.failed", {
+          agent: session.agent,
+          environmentId: session.environmentId,
+          error: formatLogError(error, { message: false }),
+        });
       })
       .finally(() => {
         if (this.tasks.get(session.key) === task) {
@@ -378,7 +382,6 @@ export class NativeAgentTurnRecovery {
     strategy: IncompleteTurnRecoveryStrategy,
   ): Promise<RecoveryResult> {
     const { storage } = this.deps;
-    const label = platformLabel(session.agent);
     if (this.deps.isStopped()) return "complete";
     const environment = await storage.getEnvironment(session.environmentId);
     if (
@@ -478,11 +481,11 @@ export class NativeAgentTurnRecovery {
           }
           confirmedAssistantMessageId = recovery.assistantMessageId;
           if (recovery.action === "exhausted") {
-            console.warn(
-              providerError
-                ? `[native-agent] ${label} turn for ${session.environmentId} failed with a provider error again after automatic retries; leaving it for the user`
-                : `[native-agent] ${label} turn for ${session.environmentId} ended incomplete again after an automatic continuation; leaving it for the user`,
-            );
+            log.warn("turn-recovery.exhausted", {
+              agent: session.agent,
+              environmentId: session.environmentId,
+              cause: providerError ? "provider-error" : "incomplete",
+            });
             return {
               dispatch: false,
               notice: {
@@ -492,11 +495,11 @@ export class NativeAgentTurnRecovery {
               },
             };
           }
-          console.warn(
-            providerError
-              ? `[native-agent] Retrying the ${label} turn that failed with a provider error for ${session.environmentId}`
-              : `[native-agent] Continuing an incomplete ${label} turn for ${session.environmentId}`,
-          );
+          log.info("turn-recovery.retrying", {
+            agent: session.agent,
+            environmentId: session.environmentId,
+            cause: providerError ? "provider-error" : "incomplete",
+          });
           // Publish synchronously after the last awaited guard. A direct/manual
           // claim now fails until provider acceptance finishes, closing the
           // otherwise unavoidable check-to-send gap.

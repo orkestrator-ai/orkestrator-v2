@@ -40,6 +40,10 @@ import {
   selectReapableTmuxSessions,
 } from "./tmux.js";
 import type { Environment } from "./models.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("local-server");
 
 export type LocalServerReapKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
 
@@ -81,7 +85,6 @@ export interface ReapOrphanedClaudeTmuxRuntimesOptions {
   listTmuxSessions?: () => Promise<string[]>;
   killTmuxSession?: (sessionName: string) => Promise<void>;
   removeRuntimeRoot?: (rootPath: string) => Promise<void>;
-  log?: (message: string) => void;
 }
 
 /** Directory names directly under the runtime root prefix, one per environment. */
@@ -149,7 +152,6 @@ export async function reapOrphanedClaudeTmuxRuntimes(
   const removeRuntimeRoot =
     options.removeRuntimeRoot ??
     ((rootPath: string) => fs.rm(rootPath, { recursive: true, force: true }));
-  const log = options.log ?? ((message) => console.warn(message));
 
   const roots = await listRuntimeRoots(prefix);
   if (roots.length === 0) return [];
@@ -174,7 +176,10 @@ export async function reapOrphanedClaudeTmuxRuntimes(
   try {
     sessionNames = await listTmuxSessions();
   } catch (error) {
-    log(`[backend] Failed to list orphaned claude-tmux sessions: ${String(error)}`);
+    log.warn("reaper.tmux-list-failed", {
+      ...classifyCommandFailure(error, { tools: ["tmux"] }),
+      error: formatLogError(error),
+    });
     return [
       ...orphans.map((environmentId) => ({
         environmentId,
@@ -206,13 +211,15 @@ export async function reapOrphanedClaudeTmuxRuntimes(
           continue;
         }
         killFailed = true;
-        log(`[backend] Failed to kill orphaned tmux session ${sessionName}: ${String(error)}`);
+        log.warn("reaper.tmux-kill-failed", {
+          session: sessionName,
+          ...classifyCommandFailure(error, { tools: ["tmux"] }),
+          error: formatLogError(error),
+        });
       }
     }
     if (killedSessions.length > 0) {
-      log(
-        `[backend] Reaped ${killedSessions.length} orphaned claude-tmux session(s) for deleted environment ${environmentId}`,
-      );
+      log.info("reaper.tmux-reaped", { environmentId, count: killedSessions.length });
     }
     if (killFailed) {
       // The root is the only durable evidence connecting the remaining session
@@ -225,9 +232,10 @@ export async function reapOrphanedClaudeTmuxRuntimes(
       await removeRuntimeRoot(path.join(prefix, environmentId));
       reaped.push({ environmentId, outcome: "reaped", killedSessions });
     } catch (error) {
-      log(
-        `[backend] Failed to remove claude-tmux runtime root for ${environmentId}: ${String(error)}`,
-      );
+      log.warn("reaper.runtime-root-remove-failed", {
+        environmentId,
+        error: formatLogError(error),
+      });
       reaped.push({ environmentId, outcome: "retry-pending", killedSessions });
     }
   }
@@ -447,7 +455,6 @@ export interface ReapOrphanedLocalServersOptions {
   /** Injected in tests. */
   readIdentity?: (pid: number) => Promise<ProcessIdentity | null>;
   terminate?: typeof terminateProcessTree;
-  log?: (message: string) => void;
 }
 
 export async function reapOrphanedLocalServers(
@@ -455,7 +462,6 @@ export async function reapOrphanedLocalServers(
 ): Promise<ReapedLocalServer[]> {
   const readIdentity = options.readIdentity ?? readProcessIdentity;
   const terminate = options.terminate ?? terminateProcessTree;
-  const log = options.log ?? ((message) => console.warn(message));
   const environments = await options.storage.loadEnvironments();
 
   const results = await Promise.all(
@@ -487,9 +493,11 @@ export async function reapOrphanedLocalServers(
         try {
           identity = await readIdentity(pid);
         } catch (error) {
-          log(
-            `[backend] Unable to identify ${server.kind} pid ${pid}; preserving its record: ${String(error)}`,
-          );
+          log.warn("reaper.server-unidentified", {
+            kind: server.kind,
+            pid,
+            error: formatLogError(error),
+          });
           record("skipped-unreadable");
           continue;
         }
@@ -513,23 +521,27 @@ export async function reapOrphanedLocalServers(
           // own group cannot be a bridge we spawned (`detached` makes them group
           // leaders), and signalling `-pid` would hit an unrelated group. Keep the
           // record: clearing it would hide the anomaly from the next startup.
-          log(
-            `[backend] Refusing to reap ${server.kind} pid ${pid}: it leads no process group (pgid ${identity.processGroupId})`,
-          );
+          log.warn("reaper.server-refused", {
+            kind: server.kind,
+            pid,
+            processGroupId: identity.processGroupId,
+          });
           record("skipped-not-group-leader");
           continue;
         }
 
-        log(
-          `[backend] Reaping orphaned ${server.kind} server pid ${pid} for environment ${environment.id}`,
-        );
+        log.info("reaper.server-reaping", {
+          kind: server.kind,
+          pid,
+          environmentId: environment.id,
+        });
         const exited = await terminate(detachedProcessHandle(pid), {
           graceMs: REAP_GRACE_MS,
           killWaitMs: REAP_KILL_WAIT_MS,
         });
         if (!exited) {
           // Keep the record so the next startup retries this exact process.
-          log(`[backend] Orphaned ${server.kind} server pid ${pid} did not exit`);
+          log.warn("reaper.server-kill-failed", { kind: server.kind, pid });
           record("kill-failed");
           continue;
         }

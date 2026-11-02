@@ -40,3 +40,33 @@ The unrelated failures observed before stopping that superseded run are retained
 | `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | Projection read count was two instead of one. | Still failed alone (12.9 s), matching [0722](../native-agents-and-transcripts/0722-native-command-filter-projection-read.md). |
 
 Additional root-change approval and transcript-artifact cleanup failures in the workspace group have not been isolated. No assertions, timeouts or skips in these unrelated owners were changed. The superseded run was stopped after 1,139 seconds, preserving its failure artifacts. The exact aggregate command was started again after repairing the Kanban card fixture; it then queued behind another worktree's exclusive lease. No passing aggregate result was established in this repair turn.
+
+
+## Backend logger review repair — 2026-11-02
+
+An attempted focused invocation placed `--cwd apps/backend` before `test`,
+so Bun selected the package's `test` script and expanded the command to all
+backend `src` and `tests`, with four parallel workers. This unintended broad
+run was stopped after 146.3 s (exit 130); no complete-suite counts were
+established. Before interruption, `agent Kanban tools > bounds large ticket
+responses and does not duplicate full content` timed out at 5,668.33 ms and
+reported an ECONNRESET from its in-flight MCP fetch.
+
+The complete unchanged owner passed alone (exit 0, 10.1 s):
+
+```sh
+mise run test:logged -- --name agent-tools-isolated -- bun test --cwd apps/backend ./src/core/agent-tools.test.ts --parallel=1 --only-failures
+```
+
+The original invocation was `mise run test:logged -- --name review-fix-backend
+-- bun --cwd apps/backend test`, followed by these paths and flags:
+
+```text
+src/core/container-worktree-signal.test.ts src/core/container-host-reachability.test.ts src/core/commands-review.test.ts src/core/build-pipeline-service-rewind-follow-ups.test.ts src/core/index.test.ts tests/gateway-base.test.ts src/gateway-result-channels.test.ts src/remote-bandwidth-baseline.test.ts src/sse-route-probe.test.ts src/sse-route-probe.integration.test.ts src/preview-latency-baseline.test.ts --parallel=4 --only-failures
+```
+
+Evidence: host temporary artifact directory `orkestrator-test-run.Lba259`,
+`review-fix-backend.log.gz`. The corrected focused invocation uses
+`bun test --cwd apps/backend` and passed in 30.2 s. No implementation,
+assertion, timeout or skip in the Kanban owner changed; contention remains
+an unproven hypothesis.

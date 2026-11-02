@@ -33,6 +33,10 @@ import { removeRuntimeContainer } from "./egress-gateway.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { removeStorageVolumes } from "./container-storage.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("docker");
 
 /**
  * The container lifecycle authority.
@@ -473,11 +477,10 @@ export async function runContainerOperation<T>(
       attention ? "needs-attention" : "failed",
       { failureCode: code },
     ).catch((completionError: unknown) => {
-      console.warn(
-        "[container-lifecycle] Failed to record operation failure",
+      log.warn("lifecycle.record-failure-failed", {
         environmentId,
-        completionError instanceof Error ? completionError.message : completionError,
-      );
+        error: formatLogError(completionError),
+      });
     });
     throw error;
   }
@@ -924,11 +927,11 @@ export async function reconcileContainerOperations(
       const result = await reconcileContainerOperation(context, environment);
       if (result !== "none") results.push({ environmentId: environment.id, result });
     } catch (error) {
-      console.warn(
-        "[container-lifecycle] Reconciliation failed",
-        environment.id,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("lifecycle.reconcile-failed", {
+        environmentId: environment.id,
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
     }
   }
   return results;

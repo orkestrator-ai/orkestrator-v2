@@ -120,13 +120,13 @@ describe("logDetailAreas", () => {
   test("keeps renderer areas registered without offering ineffective live controls", () => {
     const offered = logDetailAreas().map((entry) => entry.area);
     const rendererAreas = Object.keys(LOG_VOCABULARY).filter(
-      (area) => area.startsWith("web.") || area === "terminal" || area.startsWith("terminal."),
+      (area) => area.startsWith("web.") || area.startsWith("terminal."),
     );
     expect(rendererAreas).toContain("web.window");
-    expect(rendererAreas).toContain("terminal");
     expect(rendererAreas).toContain("terminal.setup");
     for (const area of rendererAreas) expect(offered).not.toContain(area);
     for (const area of [
+      "terminal",
       "backend.activity",
       "desktop.startup",
       "updater",

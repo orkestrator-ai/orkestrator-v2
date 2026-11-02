@@ -547,7 +547,9 @@ test("a storage failure releases the check and a later scan can retry", async ()
   try {
     baselineOwner(f.tracking).checkBaseline("worker");
     await idleBaseline(f.tracking);
-    expect(warning).toHaveBeenCalledWith(expect.stringContaining("diff baseline"), "write failed");
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringMatching(/baseline\.update-failed .*write failed/),
+    );
     expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toEqual(f.baseline);
   } finally {
     update.mockRestore();

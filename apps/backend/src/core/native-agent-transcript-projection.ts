@@ -206,6 +206,9 @@ import {
   deferredThinkingPreview,
   deferredToolArgsPreview,
 } from "./native-agent-deferred-display.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 export {
   attachProgressToToolRows,
@@ -780,9 +783,7 @@ export class NativeAgentTranscriptProjection {
     const drained = await displayTailDrain;
     if (drained.skipped > 0) {
       // Aggregate count only: previews carry transcript content.
-      console.warn(
-        `[NativeAgentService] Shutdown skipped ${drained.skipped} pending display-tail checkpoint(s); provider history remains authoritative`,
-      );
+      log.warn("shutdown.checkpoints-skipped", { skipped: drained.skipped });
     }
   }
 
@@ -5094,10 +5095,10 @@ export class NativeAgentTranscriptProjection {
           // Attention is auxiliary projection metadata. A deleted environment
           // or transient persistence failure must not make its transcript
           // unreadable.
-          console.warn(
-            `[native-agent] Could not record async-question attention for ${input.environmentId}:`,
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("question.attention-record-failed", {
+            environmentId: input.environmentId,
+            error: formatLogError(error, { message: false }),
+          });
         }
       }
       // Reading the projection is the only moment a parked dispatch is

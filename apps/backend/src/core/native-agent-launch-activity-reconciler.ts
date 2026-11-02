@@ -65,6 +65,9 @@ import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-
 import { readActivityGroup } from "./native-agent-activity-reads.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { queueString } from "./native-agent-queue-message.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 /**
  * How long after a requested stop a missing bridge is put down to that stop.
@@ -1032,10 +1035,10 @@ export class NativeAgentLaunchActivityReconciler {
                 } catch (error) {
                   // A badge persistence failure is not evidence that the bridge
                   // or any session in this activity group is unhealthy.
-                  console.warn(
-                    `[native-agent] Could not record async-question attention for ${session.environmentId}:`,
-                    error instanceof Error ? error.name : "unknown error",
-                  );
+                  log.warn("question.attention-record-failed", {
+                    environmentId: session.environmentId,
+                    error: formatLogError(error, { message: false }),
+                  });
                 }
               }
               // A rule that answered every parked request leaves the turn
@@ -1111,10 +1114,10 @@ export class NativeAgentLaunchActivityReconciler {
           if (provider && !outcomeReadFailed) {
             this.providerRegistry.evict(first, provider);
           }
-          console.warn(
-            `[native-agent] Activity reconciliation for ${first.environmentId} failed:`,
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("activity.reconcile-failed", {
+            environmentId: first.environmentId,
+            error: formatLogError(error, { message: false }),
+          });
         }
       }
     };
@@ -1198,10 +1201,10 @@ export class NativeAgentLaunchActivityReconciler {
           }
         })
         .catch((error) => {
-          console.warn(
-            `[native-agent] Failed to persist activity for ${environment.id}:`,
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("activity.persist-failed", {
+            environmentId: environment.id,
+            error: formatLogError(error, { message: false }),
+          });
         });
     }
   }
@@ -1530,10 +1533,10 @@ export class NativeAgentLaunchActivityReconciler {
           await this.invoke("pr_monitor_agent_turn_completed", { environmentId });
           this.pendingPrRefreshEnvironmentIds.delete(environmentId);
         } catch (error) {
-          console.warn(
-            `[native-agent] Failed to schedule PR refresh after completion for ${environmentId}:`,
-            error instanceof Error ? error.name : "unknown error",
-          );
+          log.warn("pr-refresh.schedule-failed", {
+            environmentId,
+            error: formatLogError(error, { message: false }),
+          });
         }
       }
     };
@@ -1997,11 +2000,11 @@ export class NativeAgentLaunchActivityReconciler {
       // leaves the environment hidden-mounted and polled for the life of the
       // app. Stop retrying and let the surfaced error stand.
       const terminal = error instanceof PromptRejectedError;
-      console.warn(
-        `[native-agent] Startup launch for ${environment.id} failed` +
-          `${terminal ? " permanently" : ""}: ` +
-          (error instanceof Error ? error.name : "unknown error"),
-      );
+      log.warn("launch.startup-failed", {
+        environmentId: environment.id,
+        permanent: terminal,
+        error: formatLogError(error, { message: false }),
+      });
       if (!terminal) this.launchRetryAt.set(environment.id, Date.now() + LAUNCH_RETRY_MS);
       await this.storage.updateEnvironment(environment.id, {
         ...(terminal

@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, test } from "bun:test";
 import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
 import {
@@ -121,8 +122,8 @@ describe("startDockerContainer", () => {
       [new CommandFailedError(ROOTLESSKIT_IN_USE.replace("38917", "33169")), "abc"],
       fixedAndAutomatic,
     );
-    const logs: string[] = [];
-    await startDockerContainer("abc123", { run, log: (line) => logs.push(line) });
+    const logs = captureLogs();
+    await startDockerContainer("abc123", { run }).finally(() => logs.restore());
     // Docker detached it from its network on the failed start: reconnected
     // before the retry, and checked after it.
     expect(calls.map((args) => args.slice(0, 2).join(" "))).toEqual([
@@ -133,7 +134,9 @@ describe("startDockerContainer", () => {
       "inspect --type",
     ]);
     expect(calls[2]).toEqual(["network", "connect", "ork-env-net", "abc123"]);
-    expect(logs[0]).toContain("port=33169");
+    expect(logs.records()).toMatchObject([
+      { event: "start.port-collision-retrying", fields: { port: 33169 } },
+    ]);
   });
 
   test("a gateway restart is retried as a start", async () => {
@@ -141,7 +144,7 @@ describe("startDockerContainer", () => {
       [new CommandFailedError(ROOTLESSKIT_IN_USE), ""],
       automaticOnly,
     );
-    await startDockerContainer("gw", { run, verb: "restart", log: () => undefined });
+    await startDockerContainer("gw", { run, verb: "restart" });
     expect(calls.map((args) => args[0])).toEqual([
       "restart",
       "inspect",
@@ -155,7 +158,7 @@ describe("startDockerContainer", () => {
     const fixture = scriptedRun([new CommandFailedError(ROOTLESSKIT_IN_USE), "ok"], automaticOnly, {
       networkId: "a".repeat(64),
     });
-    await startDockerContainer("abc", { run: fixture.run, log: () => undefined });
+    await startDockerContainer("abc", { run: fixture.run });
     expect(fixture.attached()).toBe(true);
     expect(fixture.published()).toBe(true);
     expect(fixture.calls.filter((args) => args[0] === "network")).toEqual([
@@ -169,9 +172,9 @@ describe("startDockerContainer", () => {
       [new CommandFailedError(ROOTLESSKIT_IN_USE), new CommandFailedError(ROOTLESSKIT_IN_USE)],
       automaticOnly,
     );
-    await expect(
-      startDockerContainer("abc", { run: twice.run, log: () => undefined }),
-    ).rejects.toThrow("address already in use");
+    await expect(startDockerContainer("abc", { run: twice.run })).rejects.toThrow(
+      "address already in use",
+    );
     expect(twice.calls.filter((args) => args[0] === "start")).toHaveLength(2);
 
     const fixed = scriptedRun([new CommandFailedError(ROOTLESSKIT_IN_USE)], fixedAndAutomatic);
@@ -188,9 +191,7 @@ describe("startDockerContainer", () => {
         fixed ? [collision, "ok"] : [collision, collision, "ok"],
         fixed ? fixedAndAutomatic : automaticOnly,
       );
-      await expect(
-        startDockerContainer("abc", { run: fixture.run, log: () => undefined }),
-      ).rejects.toBe(collision);
+      await expect(startDockerContainer("abc", { run: fixture.run })).rejects.toBe(collision);
       expect(fixture.calls.filter((args) => args[0] === "start")).toHaveLength(fixed ? 1 : 2);
       expect(fixture.attached()).toBe(true);
       // The port is now free. Docker only publishes it with a network endpoint.
@@ -208,9 +209,7 @@ describe("startDockerContainer", () => {
         reattach: false,
       },
     );
-    await expect(startDockerContainer("abc", { run, log: () => undefined })).rejects.toThrow(
-      "address already in use",
-    );
+    await expect(startDockerContainer("abc", { run })).rejects.toThrow("address already in use");
     expect(calls.at(-1)).toEqual(["stop", "abc"]);
   });
 

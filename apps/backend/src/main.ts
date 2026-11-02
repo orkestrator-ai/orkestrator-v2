@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { mkdir } from "node:fs/promises";
 import process from "node:process";
 import { OrkestratorBackend } from "./core/index.js";
@@ -37,6 +38,9 @@ import {
 } from "@orkestrator/protocol/node/application-logging";
 import { applyLogDetail } from "@orkestrator/protocol/node/log-policy";
 import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logger-environment";
+
+const log = createLogger("backend");
+const previewLog = createLogger("preview");
 
 assertSupportedPlatform();
 // First, before anything logs: Bun's console writes to a stalled stdout reader
@@ -81,16 +85,16 @@ const standaloneLogging = installStandaloneBackendLogging(options);
 // Before anything logs at a level the settings may turn off. The backend's log
 // policy service keeps this live from here on.
 applyLogDetail(readApplicationLogPolicy(options.dataDir).detail);
-console.info(`[Backend] Starting Orkestrator ${APP_VERSION}`);
-await logGatewayPortPolicy(options, process.env, console, liveInstanceIn);
+log.info("starting", { version: APP_VERSION });
+await logGatewayPortPolicy(options, process.env, liveInstanceIn);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
   dataDir: options.dataDir,
   runtimeFlavor: options.runtimeFlavor,
 });
 if (sshAgentSocket) {
-  console.info(`[Backend] SSH agent socket resolved from ${sshAgentSocket.source}`);
+  log.info("ssh-socket.resolved", { source: sshAgentSocket.source });
 } else if (options.runtimeFlavor !== "agent-test") {
-  console.warn("[Backend] No usable SSH agent socket was found");
+  log.warn("ssh-socket.missing");
 }
 
 // A launcher-supervised standalone backend updates itself; the launcher passes
@@ -101,7 +105,7 @@ const standaloneLayoutForService =
     ? standaloneLayout(options.dataDir)
     : null;
 if (options.standaloneUpdaterDir && !standaloneLayoutForService) {
-  console.warn("[Backend] --standalone-updater does not match --data-dir; self-update is off");
+  log.warn("standalone-updater.mismatch");
 }
 
 let gateway!: OrkestratorGateway;
@@ -177,7 +181,6 @@ const { gatewayInfo, info, tailscaleServe } = await startGatewayServices({
   tailscaleServePort: options.tailscaleServePort,
   standaloneServeOwnership: createStandaloneServeOwnershipStore(options.dataDir),
   createTailscaleServe: () => new TailscaleServeManager(options.tailscaleExecutable),
-  logger: console,
 });
 
 // Command nodes register these on their leaves, so a client that loaded this
@@ -213,12 +216,10 @@ backend.setTranscriptArtifactApplicationOrigins({
 // Private preview origins are optional: a missing domain or certificate only
 // disables browser publication and never blocks the backend from serving.
 const previewPublication = backend.previews
-  ? new PreviewPublicationManager({ runtime: backend.previews, logger: console })
+  ? new PreviewPublicationManager({ runtime: backend.previews })
   : null;
 await previewPublication?.start().catch((error: unknown) => {
-  console.warn(
-    `[previews] Private preview publication did not start: ${error instanceof Error ? error.message : String(error)}`,
-  );
+  previewLog.warn("publication.start-failed", { error: formatLogError(error) });
 });
 
 let instanceIdentity: { installationId: string; generation: string; startedAt: string } | null =
@@ -242,9 +243,7 @@ const instancePublication = createInstanceDescriptorPublication({
     };
   },
   onError: (error) => {
-    console.warn(
-      `[Backend] Could not republish the instance descriptor: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    log.warn("instance.republish-failed", { error: formatLogError(error) });
   },
 });
 const stop = createBackendShutdownHandler({
@@ -258,8 +257,6 @@ const stop = createBackendShutdownHandler({
     await instancePublication.close();
     await backend.shutdown();
   },
-  warn: (message) => console.warn(message),
-  info: (message) => console.log(message),
   exit: createBackendExitHandler({
     stopLogging: () => stopStandaloneBackendLogging(standaloneLogging),
     flushConsole: (timeoutMs) => boundedConsole.flush(timeoutMs),
@@ -277,7 +274,7 @@ process.on("SIGTERM", () => void stop("SIGTERM"));
 startReparentWatchdog({
   initialParentPid,
   onReparented: () => {
-    console.warn("[Backend] Parent process exited; shutting down local servers");
+    log.warn("parent.exited");
     void stop("SIGTERM");
   },
 });
@@ -306,9 +303,7 @@ try {
     await instancePublication.refresh();
   }
 } catch (error) {
-  console.warn(
-    `[Backend] Could not publish the instance descriptor: ${error instanceof Error ? error.message : String(error)}`,
-  );
+  log.warn("instance.publish-failed", { error: formatLogError(error) });
 }
 
 // Machine-readable startup means both serving and lifecycle handling are ready.

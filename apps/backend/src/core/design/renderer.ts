@@ -17,6 +17,9 @@ import {
   within,
   type DesignRenderPriority,
 } from "./render-queue.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("design");
 
 export type { DesignRenderPriority } from "./render-queue.js";
 
@@ -721,5 +724,5 @@ function unavailable(message: string): DesignError {
 }
 
 function warn(reason: string, detail: Record<string, number | boolean>): void {
-  console.warn(`[design-renderer] ${reason}`, detail);
+  log.warn("renderer.problem", { problem: reason, ...detail });
 }

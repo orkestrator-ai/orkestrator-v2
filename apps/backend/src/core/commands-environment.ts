@@ -163,6 +163,10 @@ import {
   startContainerWithAgentAccounts,
   syncContainerAgentAccountsOnStart,
 } from "./agent-accounts-containers.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("environment");
 
 export function spawnTerminalProcess(
   id: string,
@@ -176,7 +180,7 @@ export function spawnTerminalProcess(
   const existing = terminals.process(id);
   if (existing) {
     if (isSetupTerminalSessionId(id)) {
-      logSetupTerminal("reusing existing PTY", {
+      logSetupTerminal("setup.pty-reused", {
         sessionId: id,
         pid: existing.pid,
       });
@@ -185,10 +189,10 @@ export function spawnTerminalProcess(
   }
 
   if (isSetupTerminalSessionId(id)) {
-    logSetupTerminal("spawning PTY", {
+    logSetupTerminal("setup.pty-spawning", {
       sessionId: id,
       command,
-      args,
+      argCount: args.length,
       cwd: options.cwd ?? null,
       cols: options.cols,
       rows: options.rows,
@@ -204,7 +208,7 @@ export function spawnTerminalProcess(
 
   terminals.registerProcess(id, terminalProcess);
   if (isSetupTerminalSessionId(id)) {
-    logSetupTerminal("PTY spawned", {
+    logSetupTerminal("setup.pty-spawned", {
       sessionId: id,
       pid: terminalProcess.pid,
     });
@@ -215,7 +219,7 @@ export function spawnTerminalProcess(
   });
   terminalProcess.onExit(({ exitCode, signal }) => {
     if (isSetupTerminalSessionId(id)) {
-      logSetupTerminal("PTY exited", {
+      logSetupTerminal("setup.pty-exited", {
         sessionId: id,
         exitCode,
         signal,
@@ -406,13 +410,11 @@ export async function syncStoredEnvironmentStatus(
       if (isMissingDockerObjectError(error)) {
         return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
       }
-      console.warn(
-        "[environment-status] Preserving container state after strict ownership probe failed",
-        {
-          environmentId: environment.id,
-          message: error instanceof Error ? error.message : String(error),
-        },
-      );
+      log.warn("status.ownership-probe-failed", {
+        environmentId: environment.id,
+        ...classifyCommandFailure(error, { tools: ["docker"] }),
+        error: formatLogError(error),
+      });
       return environment;
     }
   }
@@ -427,9 +429,10 @@ export async function syncStoredEnvironmentStatus(
     if (isMissingDockerObjectError(error)) {
       return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
     }
-    console.warn("[environment-status] Preserving container state after transient Docker error", {
+    log.warn("status.docker-error", {
       environmentId: environment.id,
-      message: error instanceof Error ? error.message : String(error),
+      ...classifyCommandFailure(error, { tools: ["docker"] }),
+      error: formatLogError(error),
     });
     return environment;
   }
@@ -560,9 +563,8 @@ export function beginSetupPreparationSession(
     running: true,
     startedAt: new Date().toISOString(),
   });
-  logSetupTerminal("preparing workspace", {
+  logSetupTerminal("setup.preparing", {
     environmentId: environment.id,
-    environmentName: environment.name,
     environmentType: environment.environmentType,
     sessionId,
   });
@@ -629,9 +631,8 @@ export async function spawnSetupTerminal(
 ): Promise<{ sessionId: string; completion: Promise<boolean> }> {
   const sessionId = setupTerminalSessionId(environment.id);
   const tracker = createSetupCompletionTracker();
-  logSetupTerminal("creating setup session", {
+  logSetupTerminal("setup.session-creating", {
     environmentId: environment.id,
-    environmentName: environment.name,
     environmentType: environment.environmentType,
     sessionId,
     commandCount: commands.length,
@@ -714,7 +715,7 @@ export async function spawnSetupTerminal(
   }
 
   terminals.emitOutput(sessionId, formatSetupTerminalIntro(environment, commands), context.emit);
-  logSetupTerminal("emitted setup intro", {
+  logSetupTerminal("setup.intro-emitted", {
     environmentId: environment.id,
     sessionId,
     bufferChars: terminals.outputLength(sessionId),
@@ -756,7 +757,7 @@ export async function completeEnvironmentSetup(
     updated = (await context.storage.getEnvironment(updated.id)) ?? updated;
   }
   const session = context.runtime.environments.setupSession(environment.id);
-  logSetupTerminal("setup completed", {
+  logSetupTerminal("setup.completed", {
     environmentId: environment.id,
     sessionId: session?.sessionId ?? null,
     bufferChars: session?.sessionId ? context.runtime.terminals.outputLength(session.sessionId) : 0,
@@ -797,10 +798,10 @@ export async function failEnvironmentSetup(
   const message = error instanceof Error ? error.message : String(error);
   const lifecycleError = environmentLifecycleErrorMessage(error);
   const session = context.runtime.environments.setupSession(environmentId);
-  logSetupTerminal("setup failed", {
+  logSetupTerminal("setup.failed", {
     environmentId,
     sessionId: session?.sessionId ?? null,
-    error: message,
+    error: formatLogError(error),
     bufferChars: session?.sessionId ? context.runtime.terminals.outputLength(session.sessionId) : 0,
   });
   if (session) {
@@ -827,7 +828,7 @@ export async function failEnvironmentSetup(
       ...clearPendingAgentLaunchUpdates(),
     });
   } catch (clearError) {
-    console.warn(`[setup] Failed to clear pending agent launch for ${environmentId}:`, clearError);
+    log.warn("setup.clear-launch-failed", { environmentId, error: formatLogError(clearError) });
   }
   context.emit("environment-setup-complete", {
     environment_id: environmentId,
@@ -855,10 +856,7 @@ export async function failEnvironmentSetupBeforeAttempt(
       lifecycleError,
     });
   } catch (updateError) {
-    console.warn(
-      `[setup] Failed to record pre-attempt setup failure for ${environmentId}:`,
-      updateError,
-    );
+    log.warn("setup.record-failure-failed", { environmentId, error: formatLogError(updateError) });
   }
   context.emit("environment-setup-complete", {
     environment_id: environmentId,
@@ -897,9 +895,8 @@ export async function startEnvironmentSetupOnce(
     return { setupStarted: false, environment: ready };
   }
   if (isEnvironmentSetupSettled(current) && setupCompletionBelongsToRuntime(current)) {
-    logSetupTerminal("setup already complete", {
+    logSetupTerminal("setup.already-complete", {
       environmentId: current.id,
-      environmentName: current.name,
       environmentType: current.environmentType,
     });
     return {
@@ -971,9 +968,8 @@ export async function startEnvironmentSetupAfterPreparation(
 
   const commands = await readEnvironmentSetupCommands(current);
   if (commands.length === 0) {
-    logSetupTerminal("no setup commands found", {
+    logSetupTerminal("setup.no-commands", {
       environmentId: current.id,
-      environmentName: current.name,
       environmentType: current.environmentType,
       worktreePath: current.worktreePath ?? null,
       containerId: current.containerId ?? null,
@@ -988,7 +984,7 @@ export async function startEnvironmentSetupAfterPreparation(
   const existingTask = context.runtime.environments.setupTask(current.id);
   const existingSession = context.runtime.environments.setupSession(current.id);
   if (existingTask && existingSession) {
-    logSetupTerminal("setup already running", {
+    logSetupTerminal("setup.already-running", {
       environmentId: current.id,
       sessionId: existingSession.sessionId,
       terminalRunning: context.runtime.terminals.hasProcess(existingSession.sessionId),
@@ -1011,9 +1007,8 @@ export async function startEnvironmentSetupAfterPreparation(
       options.approvedSetupHash,
     );
     if (!trust.trusted) {
-      logSetupTerminal("setup held for approval", {
+      logSetupTerminal("setup.held-for-approval", {
         environmentId: current.id,
-        environmentName: current.name,
       });
       if (preparationSessionId) {
         context.runtime.terminals.emitOutput(

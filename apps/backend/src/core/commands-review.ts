@@ -49,6 +49,9 @@ import {
   reviewPackageFileContents,
   reviewPackageReference,
 } from "./review-package.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("pull-request");
 
 export type PrDetectionResult = {
   headSha?: string | null;
@@ -1579,7 +1582,7 @@ export function buildPrDetectionCandidate(
   };
 }
 
-export function parsePrDetectionOutput(stdout: string, branch: string): PrDetectionResult | null {
+export function parsePrDetectionOutput(stdout: string, _branch: string): PrDetectionResult | null {
   const trimmed = stdout.trim();
   if (isExpectedPrAbsenceOutput(trimmed)) return null;
 
@@ -1606,10 +1609,10 @@ export function parsePrDetectionOutput(stdout: string, branch: string): PrDetect
 
   const result = candidates[0]?.result;
   if (!result) {
-    console.debug("[ElectronBackend] Unexpected output from gh pr list", {
-      branch,
-      output: trimmed,
-    });
+    log.debug("gh.pr-list-unparseable", () => ({
+      outputChars: trimmed.length,
+      candidates: candidates.length,
+    }));
     throw new Error("Failed to parse gh pr list output");
   }
   return result;

@@ -143,6 +143,9 @@ import {
   type OpenCodeRevertMarker,
 } from "./opencode-revert.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent.opencode");
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
 export type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
@@ -471,10 +474,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         }
       } catch (error) {
         if (this.disposed || this.monitorController.signal.aborted) return;
-        console.warn(
-          "[opencode-provider] Request monitor reconnecting:",
-          error instanceof Error ? error.name : "unknown error",
-        );
+        log.warn("monitor.reconnecting", { error: formatLogError(error, { message: false }) });
         this.activeStreamController?.abort();
       }
       this.observation.lost();
@@ -495,17 +495,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     if (this.requestTasks.size >= MAX_TRACKED_PROVIDER_INTERACTIONS) {
       // Force snapshot reconciliation instead of silently dropping an
       // authoritative request event when the bounded worker set is full.
-      console.warn("[opencode-provider] Request worker limit reached");
+      log.warn("worker-limit.reached");
       this.activeStreamController?.abort();
       return;
     }
     const task = this.handleRequest(raw)
       .catch((error) => {
         if (this.disposed || this.monitorController.signal.aborted) return;
-        console.warn(
-          "[opencode-provider] Request handling failed:",
-          error instanceof Error ? error.name : "unknown error",
-        );
+        log.warn("request.failed", { error: formatLogError(error, { message: false }) });
         this.activeStreamController?.abort();
       })
       .finally(() => {

@@ -340,13 +340,17 @@ export class ArtifactPrinting {
     } finally {
       written.release();
     }
-    logArtifactEvent("pdf-printed", {
-      environmentId,
-      operation: operationId,
-      pages: entry.pageCount,
-      bytes: entry.byteLength,
-      ms: this.ctx.now() - started,
-    });
+    logArtifactEvent(
+      "pdf-printed",
+      {
+        environmentId,
+        operation: operationId,
+        pages: entry.pageCount,
+        bytes: entry.byteLength,
+        ms: this.ctx.now() - started,
+      },
+      "info",
+    );
     return this.respond(target, entry);
   }
 }

@@ -27,6 +27,9 @@ import type {
   AgentActivityState,
   PersistedNativeAgentSession,
 } from "./native-agent-service-shared.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent.goal");
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -277,7 +280,7 @@ export class NativeAgentGoalService {
     const task = this.advance(key)
       .catch((error: unknown) => {
         // The next sweep retries; a failure here must not stop other goals.
-        console.warn("[goals] Failed to advance a goal:", errorMessage(error));
+        log.warn("advance.failed", { error: formatLogError(error) });
       })
       .finally(() => {
         this.advancing.delete(key);
@@ -433,11 +436,11 @@ export class NativeAgentGoalService {
     if (previous && !goalIsRunning(previous.status)) return;
     if (goalNeedsAttention(goal)) {
       await this.host.ringAttention(session, goal).catch((error: unknown) => {
-        console.warn("[goals] Failed to record attention:", errorMessage(error));
+        log.warn("attention.record-failed", { error: formatLogError(error) });
       });
     }
     await this.host.releaseTurnEnd(session).catch((error: unknown) => {
-      console.warn("[goals] Failed to settle turn-end work:", errorMessage(error));
+      log.warn("turn-end.settle-failed", { error: formatLogError(error) });
     });
   }
 
@@ -580,7 +583,7 @@ export class NativeAgentGoalService {
     const task = work(controller.signal)
       .catch((error: unknown) => {
         // The goal is still `verifying`, so the next sweep runs it again.
-        console.warn("[goals] A verifier failed to finish:", errorMessage(error));
+        log.warn("verifier.finish-failed", { error: formatLogError(error) });
       })
       .finally(() => {
         this.verifiers.delete(key);

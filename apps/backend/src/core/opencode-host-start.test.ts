@@ -207,7 +207,7 @@ process.on("SIGTERM", () => process.exit(0));
     const environmentId = await localEnvironment("retry-shutdown");
     await fs.writeFile(path.join(root, "locked-runs"), "-1");
     const warn = spyOn(console, "warn").mockImplementation((message) => {
-      if (String(message).includes("retrying in")) {
+      if (String(message).includes("opencode.database-lost-retrying")) {
         // Runs after the retry delay has started, before its next attempt.
         queueMicrotask(() => context.runtime.localServers.closeAdmission());
       }

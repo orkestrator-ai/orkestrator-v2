@@ -1,3 +1,4 @@
+import { configureLogger } from "@orkestrator/protocol/logger";
 /**
  * Test-only isolated backend for the preview latency baseline self-test
  * (`scripts/preview-latency-baseline.ts`, `preview-latency-baseline.test.ts`).
@@ -48,8 +49,6 @@ export interface PreviewBaselineHarness {
   close(): Promise<void>;
 }
 
-const silent = { debug: () => undefined, info: () => undefined, warn: () => undefined };
-
 export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarness> {
   const root = await mkdtemp(join(tmpdir(), "ork-preview-baseline-"));
   const pki = join(root, "pki");
@@ -99,7 +98,6 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
     }));
     manager = new PreviewPublicationManager({
       runtime: preview.runtime,
-      logger: { info: () => undefined, warn: () => undefined },
     });
     await manager.start();
 
@@ -121,7 +119,6 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
       // No ORKESTRATOR_GATEWAY_TOKEN: the gateway writes gateway-auth.json,
       // the same file a qualifier reads on a real backend.
       env: {},
-      logger: { ...silent, error: () => undefined },
       allowNonTailscaleBind: true,
       previews: preview.runtime,
     });
@@ -146,6 +143,7 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
 }
 
 if (import.meta.main) {
+  configureLogger({ sink: ({ line }) => process.stderr.write(`${line}\n`) });
   installFatalRejectionGuard({ label: "[preview-baseline-harness]" });
   const harness = await startPreviewBaselineHarness();
   let closing = false;

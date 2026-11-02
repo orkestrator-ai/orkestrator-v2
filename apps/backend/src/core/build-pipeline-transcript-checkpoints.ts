@@ -11,6 +11,9 @@ import {
   transcriptFingerprint,
 } from "./build-pipeline-service-helpers.js";
 import type { KnownProgressSource, ProgressSample } from "./transcript-progress.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 /** Storage surface the supervisor's transcript checkpoints need. */
 export interface BuildPipelineTranscriptStorage {
@@ -243,9 +246,7 @@ export class BuildPipelineTranscriptCheckpoints {
           // Explicit, content-free state: the referenced transcript is behind
           // the provider's. Identifiers only in the log, never transcript text.
           session.transcriptCheckpointError = result.reason.slice(0, 128);
-          console.warn(
-            `[build-pipeline] Transcript checkpoint deferred for ${pipeline.id}: ${result.reason}`,
-          );
+          log.warn("checkpoint.deferred", { pipelineId: pipeline.id, reason: result.reason });
         }
         continue;
       }
@@ -269,9 +270,7 @@ export class BuildPipelineTranscriptCheckpoints {
       } else {
         // Keep the inline body: the legacy format stays readable and bounded
         // by the old snapshot limit until the move succeeds.
-        console.warn(
-          `[build-pipeline] Legacy transcript move deferred for ${pipeline.id}: ${result.reason}`,
-        );
+        log.warn("legacy-transcript.deferred", { pipelineId: pipeline.id, reason: result.reason });
       }
     }
     return {

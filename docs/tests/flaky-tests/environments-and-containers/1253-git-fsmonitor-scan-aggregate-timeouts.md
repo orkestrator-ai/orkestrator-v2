@@ -189,3 +189,44 @@ The final exact aggregate rerun (`fix-default-final`, 562.0 s) passed this
 owner unchanged. Its only failure was the independently reproduced design
 profile ledger race in case 1314. This passing rerun does not establish a
 timing fix for the earlier observation.
+
+
+## Backend logger review repair — 2026-11-02
+
+The unintended four-worker broad backend invocation recorded in
+[1250](../aggregate-validation-runs/1250-structured-tickets-validation.md#backend-logger-review-repair--2026-11-02)
+reported `git fsmonitor > a scan retries migration after a transient rev-parse
+failure` at 5,019.36 ms, with an in-flight Git diff rejected after SIGTERM.
+That run was stopped after 146.3 s (exit 130), so complete-suite counts are
+unavailable. Evidence: host temporary artifact directory
+`orkestrator-test-run.Lba259`, `review-fix-backend.log.gz`.
+
+The unchanged complete owner was rerun alone:
+
+```sh
+mise run test:logged -- --name fsmonitor-isolated -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures
+```
+
+It still failed: 22 pass, one fail, one between-test error, 12.5 s. This time
+`a scan retries migration after a transient --unset failure` hit 5,017.10 ms;
+Git diff `--numstat` was interrupted with SIGTERM. Evidence: host temporary
+artifact directory `orkestrator-test-run.N8qXT0`, `fsmonitor-isolated.log.gz`.
+This observation has no isolated passing result and is an outstanding
+validation limitation, not a newly established flake or an environmental
+excuse. No fsmonitor implementation, assertion, timeout or skip changed.
+
+
+## Backend logger main merge — 2026-11-02
+
+`mise run test:logged -- --name merge-default-tests-recheck -- mise run test`
+while merging `d7054dace` into `8f174e4db` repeated
+`git fsmonitor > a scan retries migration after a transient rev-parse failure`
+(5005.18 ms, 5000 ms budget). Default scheduler reservations for
+workspace/root/bridges/protocol were 5/1/2/1. The aggregate exited 1 in
+282.9 s; the workspace also retained four shifted-link failures and one
+desktop keepalive failure.
+
+The complete unchanged owner passed alone, exit 0 in 3.5 s:
+`mise run test:logged -- --name merge-rerun-git-fsmonitor -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures`.
+No Git implementation, assertion, timeout, or skip changed. Evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

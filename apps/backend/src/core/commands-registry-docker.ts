@@ -11,6 +11,12 @@ import {
 } from "./docker-cleanup-inventory.js";
 import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
 import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
+import { createLogger, type LogFields } from "@orkestrator/protocol/logger";
+
+const log = createLogger("docker");
+
+type DockerAvailabilityDiagnostic = LogFields;
+type DockerAvailabilityReporter = (diagnostic: DockerAvailabilityDiagnostic) => void;
 
 /** Largest `get_container_logs` answer, in UTF-8 bytes. */
 const CONTAINER_LOG_TAIL_MAX_BYTES = 512 * 1024;
@@ -81,16 +87,21 @@ import {
   syncContainerAgentAccountsOnStart,
 } from "./agent-accounts-containers.js";
 
-const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<(message: string) => void, string>();
+const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<DockerAvailabilityReporter, string>();
 
 function logDockerAvailabilityWarning(
-  logWarning: (message: string) => void,
-  diagnostic: string,
+  logWarning: DockerAvailabilityReporter,
+  diagnostic: DockerAvailabilityDiagnostic,
 ): void {
-  if (lastDockerAvailabilityDiagnosticByLogger.get(logWarning) === diagnostic) return;
-  lastDockerAvailabilityDiagnosticByLogger.set(logWarning, diagnostic);
+  const key = JSON.stringify(diagnostic);
+  if (lastDockerAvailabilityDiagnosticByLogger.get(logWarning) === key) return;
+  lastDockerAvailabilityDiagnosticByLogger.set(logWarning, key);
   logWarning(diagnostic);
 }
+
+const reportDockerAvailability: DockerAvailabilityReporter = (diagnostic) => {
+  log.warn("availability.probe-failed", diagnostic);
+};
 
 export function dockerUnavailableReason(error: unknown): DockerUnavailableReason {
   if (error instanceof CommandFailedError && error.timedOut) return "timed-out";
@@ -110,17 +121,14 @@ export async function checkDockerAvailability(
   dependencies: {
     commandExists?: (command: string) => Promise<boolean>;
     runCommand?: typeof runCommand;
-    logWarning?: (message: string) => void;
+    logWarning?: DockerAvailabilityReporter;
   } = {},
 ): Promise<DockerAvailability> {
   const hasCommand = dependencies.commandExists ?? commandExists;
   const run = dependencies.runCommand ?? runCommand;
-  const logWarning = dependencies.logWarning ?? console.warn;
+  const logWarning = dependencies.logWarning ?? reportDockerAvailability;
   if (!(await hasCommand("docker"))) {
-    logDockerAvailabilityWarning(
-      logWarning,
-      "[Docker] Availability probe failed: reason=not-installed commandExists=false",
-    );
+    logDockerAvailabilityWarning(logWarning, { reason: "not-installed", commandExists: false });
     return { available: false, reason: "not-installed" };
   }
   try {
@@ -137,22 +145,18 @@ export async function checkDockerAvailability(
       : error instanceof Error
         ? "Error"
         : typeof error;
-    logDockerAvailabilityWarning(
-      logWarning,
-      [
-        "[Docker] Availability probe failed:",
-        `reason=${reason}`,
-        "commandExists=true",
-        `errorType=${errorType}`,
-        `timedOut=${commandFailure?.timedOut ?? false}`,
-        `executableMissing=${commandFailure?.executableMissing ?? false}`,
-        `exitCode=${commandFailure?.exitCode ?? "unknown"}`,
-        `signal=${commandFailure?.signal ?? "none"}`,
-        `dockerHostSet=${Boolean(process.env.DOCKER_HOST?.trim())}`,
-        `dockerContextSet=${Boolean(process.env.DOCKER_CONTEXT?.trim())}`,
-        `dockerConfigSet=${Boolean(process.env.DOCKER_CONFIG?.trim())}`,
-      ].join(" "),
-    );
+    logDockerAvailabilityWarning(logWarning, {
+      reason,
+      commandExists: true,
+      errorType,
+      timedOut: commandFailure?.timedOut ?? false,
+      executableMissing: commandFailure?.executableMissing ?? false,
+      exitCode: commandFailure?.exitCode ?? null,
+      signal: commandFailure?.signal ?? null,
+      dockerHostSet: Boolean(process.env.DOCKER_HOST?.trim()),
+      dockerContextSet: Boolean(process.env.DOCKER_CONTEXT?.trim()),
+      dockerConfigSet: Boolean(process.env.DOCKER_CONFIG?.trim()),
+    });
     return { available: false, reason };
   }
 }

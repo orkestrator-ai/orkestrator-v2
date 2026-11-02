@@ -10,6 +10,11 @@ import { CursorSdkLoginSlot } from "./cursor-sdk-login.js";
 import { GitHubCliLoginSlot } from "./github-cli-login.js";
 import { OpenCodeProviderLoginSlot } from "./opencode-provider-login-slot.js";
 import { PiCatalogProbes, type PiCatalogProbesOptions } from "./pi-catalog-probes.js";
+import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("local-server");
+const BACKEND_SHUTTING_DOWN = "backend shutting down";
 
 export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
 /** The ACP-speaking subset of `LocalServerKind`, launched through the ACP bridge. */
@@ -228,7 +233,11 @@ export class LocalServerRuntime {
     reason?: string,
   ): Promise<void> {
     if (reason) {
-      console.warn(`[local-server] Stopping ${key} (pid ${child.pid ?? "unknown"}): ${reason}`);
+      log[reason === BACKEND_SHUTTING_DOWN ? "info" : "warn"]("server.stopping", {
+        key,
+        pid: child.pid ?? null,
+        detail: redactSecrets(reason),
+      });
     }
     const exited = await this.terminateTree(child, {
       graceMs: LOCAL_SERVER_SHUTDOWN_GRACE_MS,
@@ -417,7 +426,7 @@ export class LocalServerRuntime {
       await this.waitForEnvironmentOperations(options.operationDrainTimeoutMs);
       const owned = Array.from(this.processes.entries());
       const results = await Promise.allSettled(
-        owned.map(([key, child]) => this.terminate(key, child, "backend shutting down")),
+        owned.map(([key, child]) => this.terminate(key, child, BACKEND_SHUTTING_DOWN)),
       );
       const errors = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],

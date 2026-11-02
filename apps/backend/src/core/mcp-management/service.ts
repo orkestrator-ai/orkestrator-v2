@@ -141,6 +141,9 @@ import type {
   ContainerPathProbe,
   SourceSpec,
 } from "./types.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("mcp-management");
 
 export type McpServiceStorage = TargetStorage;
 
@@ -1399,10 +1402,7 @@ export class McpManagementService {
       this.timer = null;
       void this.tick()
         .catch((error: unknown) => {
-          console.warn(
-            "[mcp-management] apply tick failed:",
-            error instanceof Error ? error.message : "unknown error",
-          );
+          log.warn("apply.tick-failed", { error: formatLogError(error) });
         })
         .finally(() => this.scheduleTick());
     }, delay);

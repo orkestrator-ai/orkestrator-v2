@@ -11,5 +11,5 @@ await renderer.run({
   frame: { html: "<p>Hello</p>", width: 320, height: 240 },
   operation: { op: "serialize" },
 });
-console.log("ready");
+process.stdout.write("ready\n");
 setInterval(() => {}, 60_000);

@@ -1,14 +1,12 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("backend");
+
 export type BackendShutdownDependencies = {
   stopTailscaleServe?: () => Promise<void>;
   stopManagedWebClient?: () => Promise<void>;
   stopGateway: () => Promise<void>;
   stopBackend: () => Promise<void>;
-  warn: (message: string) => void;
-  /**
-   * Records the shutdown. Without it a clean quit leaves no trace in the
-   * desktop log and cannot be told apart from the backend being killed.
-   */
-  info?: (message: string) => void;
   exit: (code: number) => void;
 };
 
@@ -31,10 +29,6 @@ export function createBackendExitHandler(dependencies: {
   };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
  * Creates an idempotent signal handler. Optional public-access cleanup is
  * best-effort, while gateway/backend failures produce a non-zero exit after all
@@ -48,19 +42,22 @@ export function createBackendShutdownHandler(
   return (signal) => {
     if (shutdownPromise) return shutdownPromise;
     shutdownPromise = (async () => {
-      dependencies.info?.(`[Backend] Received ${signal}; shutting down`);
+      // Without this a clean quit cannot be told apart from the backend being killed.
+      log.info("shutdown.signal-received", { signal });
       if (dependencies.stopTailscaleServe) {
         await dependencies.stopTailscaleServe().catch((error: unknown) => {
-          dependencies.warn(
-            `[TailscaleServe] Failed to remove Serve configuration: ${errorMessage(error)}`,
-          );
+          log.warn("shutdown.step-failed", {
+            step: "tailscale-serve",
+            error: formatLogError(error),
+          });
         });
       }
       if (dependencies.stopManagedWebClient) {
         await dependencies.stopManagedWebClient().catch((error: unknown) => {
-          dependencies.warn(
-            `[TailscaleServe] Failed to remove desktop web access: ${errorMessage(error)}`,
-          );
+          log.warn("shutdown.step-failed", {
+            step: "managed-web-client",
+            error: formatLogError(error),
+          });
         });
       }
 
@@ -69,17 +66,17 @@ export function createBackendShutdownHandler(
         await dependencies.stopGateway();
       } catch (error) {
         fatalErrors.push(error);
-        dependencies.warn(`[Backend] Failed to stop gateway: ${errorMessage(error)}`);
+        log.warn("shutdown.step-failed", { step: "gateway", error: formatLogError(error) });
       }
       try {
         await dependencies.stopBackend();
       } catch (error) {
         fatalErrors.push(error);
-        dependencies.warn(`[Backend] Failed to stop local servers: ${errorMessage(error)}`);
+        log.warn("shutdown.step-failed", { step: "local-servers", error: formatLogError(error) });
       }
 
       const code = fatalErrors.length > 0 ? 1 : signal === "SIGINT" ? 130 : 0;
-      dependencies.info?.(`[Backend] Shutdown finished; exiting with ${code}`);
+      log.info("shutdown.finished", { code });
       dependencies.exit(code);
     })();
     return shutdownPromise;

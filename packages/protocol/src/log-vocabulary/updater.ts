@@ -23,6 +23,7 @@ export const UPDATER_LOG_AREAS = defineLogAreas({
       "restart-prompt.failed": "The restart prompt for a downloaded update failed.",
       unavailable: "Auto-update could not be set up in this session.",
       "update.failed": "electron-updater reported an update error.",
+      "standalone.restarting": "A standalone backend is restarting into a new version.",
     },
   },
 });

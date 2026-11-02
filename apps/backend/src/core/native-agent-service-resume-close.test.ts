@@ -406,8 +406,7 @@ describe("resume closes the session it replaced", () => {
           { ...expected, createdAt: expect.any(String) as unknown as string },
         ]);
         expect(warn).toHaveBeenCalledWith(
-          "[native-agent] The grok session a resume replaced was not closed:",
-          "Error",
+          expect.stringContaining("resume.close-replaced-failed agent=grok error.name=Error"),
         );
         expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-session-detail");
       },

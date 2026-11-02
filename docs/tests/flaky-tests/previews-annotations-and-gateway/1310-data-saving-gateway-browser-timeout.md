@@ -96,3 +96,29 @@ recorded in [1254](../aggregate-validation-runs/1254-merge-readiness-review-vali
   the demonstrated mechanism, though it does not prove that contention was the
   cause of each aggregate failure. No implementation, assertion, timeout or
   skip changed.
+
+
+## Backend logger review repair — 2026-11-02
+
+A one-worker gateway-owner run alongside the four-worker component browser
+rerun hit this deadline at both viewport sizes. The cleanup error was again
+`browserContext.close: Target page, context or browser has been closed`.
+The paired gzip SSE cases passed: two pass, two fail, 143.8 s, exit 1.
+
+```sh
+ORKESTRATOR_E2E_PORT=50454 mise run test:logged -- --name review-fix-gateway-browser -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts e2e/SseGzipStreaming.spec.ts --workers=1 --output output/playwright/gateway-review-owner
+```
+
+Evidence: host temporary artifact directory `orkestrator-test-run.KR1WWT`,
+`review-fix-gateway-browser.log.gz`. After the broad browser run was stopped,
+the same four cases passed on a fresh fixture port (four pass, 55.1 s, exit 0):
+
+```sh
+ORKESTRATOR_E2E_PORT=59768 mise run test:logged -- --name review-fix-gateway-browser-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts e2e/SseGzipStreaming.spec.ts --workers=1 --output output/playwright/gateway-review-alone
+```
+
+The branch changes the two gateway fixtures' logging setup to route diagnostics
+to stderr, keeping stdout JSON-only. No browser assertion, timeout or skip
+changed between these runs. The passing rerun was after a conflict-free rebase
+onto `origin/main` at `38d55ee14`; the backend, protocol and gateway fixture
+sources were identical across the rebase.

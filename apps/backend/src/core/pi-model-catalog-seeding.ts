@@ -12,6 +12,9 @@ import {
   prepareBridgePath,
   waitForLocalServerStartup,
 } from "./commands-servers.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("models");
 
 /**
  * Seed Pi's host-wide model catalogue before an environment exists.
@@ -94,10 +97,11 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
     // this probe successfully read — or masking the error that ended it — would
     // report a provider problem for what is only a stubborn child process.
     await localServers.terminate(key, child).catch((error: unknown) => {
-      console.warn(
-        "[ElectronBackend] The Pi catalogue probe did not exit cleanly:",
-        error instanceof Error ? error.message : "unknown error",
-      );
+      log.warn("probe.exit-unclean", {
+        kind: "pi",
+        purpose: "catalog-seed",
+        error: formatLogError(error),
+      });
     });
   }
 }

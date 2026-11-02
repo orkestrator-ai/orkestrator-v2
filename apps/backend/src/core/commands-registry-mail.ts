@@ -6,6 +6,9 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import type { StorageService } from "./storage.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-mail");
 
 /**
  * Start a new routed mail budget for a tab that was just prompted.
@@ -23,10 +26,7 @@ export async function resetAgentMailBudget(
   try {
     await context.storage.resetAgentMailBudgetForSession(environmentId, logicalSessionKey);
   } catch (error) {
-    console.warn(
-      "[agent-mail] Could not reset the mail budget for a prompted tab:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("budget.reset-failed", { error: formatLogError(error) });
   }
 }
 

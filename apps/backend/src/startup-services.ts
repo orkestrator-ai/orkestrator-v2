@@ -1,6 +1,9 @@
 import type { OrkestratorGateway } from "./gateway.js";
 import type { ManagedWebClient, ManagedWebClientOwnershipStore } from "./managed-web-client.js";
 import { startStandaloneTailscaleServe, type TailscaleServeManager } from "./tailscale-serve.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("gateway.tailscale");
 
 type Gateway = Pick<OrkestratorGateway, "start" | "stop">;
 type Serve = Pick<TailscaleServeManager, "start" | "stop">;
@@ -18,7 +21,6 @@ export interface GatewayStartupDependencies {
   tailscaleServePort: number;
   standaloneServeOwnership?: ManagedWebClientOwnershipStore;
   createTailscaleServe: () => Serve;
-  logger: Pick<Console, "info" | "error">;
 }
 
 /** Startup owns cleanup until the main entrypoint installs its signal handler. */
@@ -45,9 +47,7 @@ export async function startGatewayServices(deps: GatewayStartupDependencies) {
       deps.managedWebClient.setBrowserListenerUrl(gatewayInfo.browserUrl);
       const enabled = await deps.loadWebClientEnabled();
       void deps.managedWebClient.setEnabled(enabled).catch((error: unknown) => {
-        deps.logger.error(
-          `[TailscaleServe] Failed to initialize desktop web access: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        log.error("startup.init-failed", { error: formatLogError(error) });
       });
       // The managed client owns the public URL; this listener is loopback-only.
       info = { ...gatewayInfo, browserUrl: undefined, browserError: undefined };
@@ -62,7 +62,7 @@ export async function startGatewayServices(deps: GatewayStartupDependencies) {
         deps.tailscaleServePort,
         deps.standaloneServeOwnership,
       );
-      deps.logger.info(`[TailscaleServe] Available at ${tailscaleUrl}`);
+      log.info("available", { url: tailscaleUrl });
       info = { ...gatewayInfo, browserUrl: tailscaleUrl };
     }
     return { gatewayInfo, info, tailscaleServe };

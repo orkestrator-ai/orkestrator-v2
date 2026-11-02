@@ -66,7 +66,6 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     }));
     manager = new PreviewPublicationManager({
       runtime: harness.runtime,
-      logger: { info: () => undefined, warn: () => undefined },
       certificateCheckMs: 50,
       // Long enough that only revocation, never idleness, closes a pooled connection.
       upstreamPool: { idleMs: 60_000 },
@@ -410,7 +409,6 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     certificates(dir, ["other.example"]);
     manager = new PreviewPublicationManager({
       runtime: harness.runtime,
-      logger: { info: () => undefined, warn: () => undefined },
     });
     await manager.start();
     expect(manager.status()).toMatchObject({
@@ -424,7 +422,13 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
 
   test("a failing certificate check logs once, reports recovery, and keeps the old certificate", async () => {
     const logs = captureLogs();
-    const events = () => logs.records().map((record) => record.event);
+    const records = () =>
+      logs
+        .records()
+        .filter(
+          (record) => !["publication.listening", "certificate.reloaded"].includes(record.event),
+        );
+    const events = () => records().map((record) => record.event);
     const until = async (done: () => boolean) => {
       while (!done()) await Bun.sleep(10);
     };
@@ -433,7 +437,6 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     const before = manager.status().certificate!.validTo;
     const healthy = new PreviewPublicationManager({
       runtime: harness.runtime,
-      logger: { info() {}, warn() {} },
       certificateCheckMs: 60_000,
     });
     await healthy.start();
@@ -442,7 +445,7 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       await until(() => events().includes("certificate.refresh-failed"));
       await Bun.sleep(150); // Several more 50 ms checks fail in this time.
       expect(events()).toEqual(["certificate.refresh-failed"]);
-      expect(logs.records()[0]?.fields).toMatchObject({ kind: "ENOENT" });
+      expect(records()[0]?.fields).toMatchObject({ kind: "ENOENT" });
       expect(manager.status().certificate!.validTo).toBe(before);
 
       clearInterval(
@@ -455,7 +458,7 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       expect(events()).toEqual(["certificate.refresh-failed"]);
       await (manager as unknown as { refreshCertificate(): Promise<void> }).refreshCertificate();
       await until(() => events().includes("throttle.recovered"));
-      expect(logs.records().at(-1)?.fields).toMatchObject({ site: "certificate.refresh-failed" });
+      expect(records().at(-1)?.fields).toMatchObject({ site: "certificate.refresh-failed" });
     } finally {
       await healthy.dispose();
       logs.restore();
@@ -464,7 +467,13 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
 
   test("a renewal that does not cover the hosts is refused once and clears when it does", async () => {
     const logs = captureLogs();
-    const events = () => logs.records().map((record) => record.event);
+    const records = () =>
+      logs
+        .records()
+        .filter(
+          (record) => !["publication.listening", "certificate.reloaded"].includes(record.event),
+        );
+    const events = () => records().map((record) => record.event);
     const until = async (done: () => boolean) => {
       while (!done()) await Bun.sleep(10);
     };
@@ -480,7 +489,7 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       await rm(join(dir, "ca.pem"));
       certificates(dir);
       await until(() => events().includes("throttle.recovered"));
-      expect(logs.records().at(-1)?.fields).toMatchObject({ site: "certificate.renewal-refused" });
+      expect(records().at(-1)?.fields).toMatchObject({ site: "certificate.renewal-refused" });
     } finally {
       logs.restore();
     }

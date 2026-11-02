@@ -389,7 +389,6 @@ describe("bug report runtime", () => {
         },
         readIdentity: async () => ({ parentPid: 1, processGroupId: 424242, commandLine }),
         terminate: terminated,
-        log: () => undefined,
       });
       expect(results).toMatchObject([
         { environmentId: "bug-report:r1", kind: agent, pid: 424242, outcome: "reaped" },

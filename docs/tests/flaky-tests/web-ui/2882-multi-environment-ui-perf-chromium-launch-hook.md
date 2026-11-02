@@ -1,6 +1,6 @@
 # Multi-environment UI perf: Chromium launch hook times out in the aggregate run
 
-- **ID:** 2412
+- **ID:** 2882
 - **Status:** open
 - **Date observed:** 2026-11-02
 - **Test:** `in-page deadlines > (unnamed)`, the `beforeAll` hook in

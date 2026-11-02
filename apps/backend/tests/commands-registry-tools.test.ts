@@ -927,7 +927,7 @@ exit 0
       await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
 
       expect(info.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
-        [["[Tooling] Host tool availability: tool=codex available=true source=managed"]],
+        [["[host] tool.available tool=codex source=managed"]],
       );
 
       await fs.rm(path.join(managedRoot, "codex"));
@@ -939,8 +939,8 @@ exit 0
 
       expect(info.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
         [
-          ["[Tooling] Host tool availability: tool=codex available=true source=managed"],
-          ["[Tooling] Host tool availability: tool=codex available=true source=path"],
+          ["[host] tool.available tool=codex source=managed"],
+          ["[host] tool.available tool=codex source=path"],
         ],
       );
 
@@ -951,8 +951,8 @@ exit 0
 
       expect(warn.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
         [
-          ["[Tooling] Host tool availability: tool=codex available=false source=missing"],
-          ["[Tooling] Host tool availability: tool=codex available=false source=missing"],
+          ["[host] tool.missing tool=codex source=missing"],
+          ["[host] tool.missing tool=codex source=missing"],
         ],
       );
     } finally {

@@ -1,4 +1,7 @@
 import type { CommandContext } from "./commands-context.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("environment");
 
 /**
  * Withdraws a stopped runtime's parked agent requests and settles its
@@ -15,9 +18,9 @@ export async function settleStoppedRuntimeAgents(
   try {
     await context.nativeAgents?.environmentRuntimeStopped(environmentId);
   } catch (error) {
-    console.warn(
-      `[environment] Could not settle agent activity after stopping ${environmentId}:`,
-      error instanceof Error ? error.name : "unknown error",
-    );
+    log.warn("stop.settle-activity-failed", {
+      environmentId,
+      error: formatLogError(error, { message: false }),
+    });
   }
 }

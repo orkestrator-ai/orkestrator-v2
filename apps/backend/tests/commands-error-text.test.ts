@@ -94,25 +94,4 @@ describe("Electron backend command registry", () => {
       Object.values(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES),
     );
   });
-
-  test("scrubs credentials a child echoed but the caller never named", () => {
-    const scrub = commandTesting.scrubLifecycleLogDetail;
-
-    expect(
-      scrub("fatal: could not read from https://user:private-token@example.invalid/repo.git"),
-    ).toBe("fatal: could not read from https://[redacted]@example.invalid/repo.git");
-    expect(scrub("remote: Authorization: Bearer abc123.def-456")).toBe(
-      "remote: Authorization: Bearer [redacted]",
-    );
-    expect(scrub("token ghp_abcdefghijklmnop rejected")).toBe("token [redacted] rejected");
-    expect(scrub("token github_pat_11ABCDEFG0abcdefg rejected")).toBe("token [redacted] rejected");
-    expect(scrub("key sk-ant-api03-abcdefghijklmnop rejected")).toBe("key [redacted] rejected");
-
-    // Bounded, so one pathological child cannot flood the log.
-    expect(scrub("x".repeat(2_000))).toHaveLength(501);
-    // Ordinary diagnostics survive intact — the point is to keep them readable.
-    expect(scrub("Cannot connect to the Docker daemon at unix:///var/run/docker.sock")).toBe(
-      "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
-    );
-  });
 });

@@ -103,16 +103,16 @@ not zero findings. Read the output.
 ## Raw `console`
 
 `no-restricted-globals` refuses `console`, used directly or passed as a value, so
-new code goes through the [shared logger](../architecture/logging.md). Two
-overrides in `.oxlintrc.json` turn it off: one for code whose console is its
+new code goes through the [shared logger](../architecture/logging.md). One
+permanent override in `.oxlintrc.json` turns it off for code whose console is its
 product or which wraps the console (tests, scripts, the CLI, container scripts,
-the logger itself), and one for paths not migrated yet.
-`tests/unit/raw-console-ratchet.test.ts` pins both lists and a site limit per
-unmigrated path, so those limits only fall. Migrating a path removes its entry
-from the override and the test together. The bridges, their shared protocol
-modules and the renderer are migrated; a bridge's `scripts/` and `*.live-probe.ts`
-files are among those whose console is the product. In the renderer, two files keep
-it: the bug-report recorder wraps `console.error`, and
+the logger itself). `tests/unit/raw-console-ratchet.test.ts` pins that list and
+checks that migrated application paths contain no raw console sites outside it.
+The bridges, their shared protocol modules, the renderer and the backend are
+migrated; a bridge's `scripts/` and
+`*.live-probe.ts` files are among those whose console is the product. The backend's
+`scripts/` and `bounded-console.ts` are excluded for good. In the renderer, two
+files keep it: the bug-report recorder wraps `console.error`, and
 `desktop-startup-marker.ts` writes the startup markers the desktop matches exactly.
 
 ## Module boundaries

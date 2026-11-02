@@ -122,7 +122,6 @@ describe.skipIf(!viteDir)("Vite 7 fixture through a private preview origin", () 
     }));
     manager = new PreviewPublicationManager({
       runtime: harness.runtime,
-      logger: { info: () => undefined, warn: () => undefined },
     });
     await manager.start();
     port = manager.status().listening!.port;

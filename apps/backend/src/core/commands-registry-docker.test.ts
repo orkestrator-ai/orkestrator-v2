@@ -1,3 +1,5 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import type { LogFields } from "@orkestrator/protocol/logger";
 import { describe, expect, mock, test } from "bun:test";
 import {
   initialContainerHostReachability,
@@ -14,17 +16,15 @@ import {
 
 describe("Docker availability classification", () => {
   test("reports a missing Docker command", async () => {
-    const logWarning = mock((_message: string) => undefined);
+    const logWarning = mock((_diagnostic: LogFields) => undefined);
     await expect(
       checkDockerAvailability({ commandExists: async () => false, logWarning }),
     ).resolves.toEqual({ available: false, reason: "not-installed" });
-    expect(logWarning).toHaveBeenCalledWith(
-      "[Docker] Availability probe failed: reason=not-installed commandExists=false",
-    );
+    expect(logWarning).toHaveBeenCalledWith({ reason: "not-installed", commandExists: false });
   });
 
   test("uses structured timeout metadata instead of error text", async () => {
-    const logWarning = mock((_message: string) => undefined);
+    const logWarning = mock((_diagnostic: LogFields) => undefined);
     await expect(
       checkDockerAvailability({
         commandExists: async () => true,
@@ -35,13 +35,16 @@ describe("Docker availability classification", () => {
       }),
     ).resolves.toEqual({ available: false, reason: "timed-out" });
     expect(logWarning).toHaveBeenCalledTimes(1);
-    expect(logWarning.mock.calls[0]?.[0]).toContain(
-      "reason=timed-out commandExists=true errorType=CommandFailedError timedOut=true",
-    );
+    expect(logWarning.mock.calls[0]?.[0]).toMatchObject({
+      reason: "timed-out",
+      commandExists: true,
+      errorType: "CommandFailedError",
+      timedOut: true,
+    });
   });
 
   test("logs bounded metadata without copying Docker stderr", async () => {
-    const logWarning = mock((_message: string) => undefined);
+    const logWarning = mock((_diagnostic: LogFields) => undefined);
     await checkDockerAvailability({
       commandExists: async () => true,
       runCommand: async () => {
@@ -54,15 +57,17 @@ describe("Docker availability classification", () => {
     });
 
     expect(logWarning).toHaveBeenCalledTimes(1);
-    const diagnostic = logWarning.mock.calls[0]?.[0] ?? "";
-    expect(diagnostic).toContain("reason=daemon-unavailable");
-    expect(diagnostic).toContain("exitCode=1");
+    expect(logWarning.mock.calls[0]?.[0]).toMatchObject({
+      reason: "daemon-unavailable",
+      exitCode: 1,
+    });
+    const diagnostic = JSON.stringify(logWarning.mock.calls[0]?.[0]);
     expect(diagnostic).not.toContain("super-secret");
     expect(diagnostic).not.toContain("example.invalid");
   });
 
   test("deduplicates an unchanged failure until Docker recovers", async () => {
-    const logWarning = mock((_message: string) => undefined);
+    const logWarning = mock((_diagnostic: LogFields) => undefined);
     let available = false;
     const dependencies = {
       commandExists: async () => true,
@@ -90,18 +95,20 @@ describe("Docker availability classification", () => {
     expect(logWarning).toHaveBeenCalledTimes(2);
   });
 
-  test("logs through console.warn when no warning dependency is supplied", async () => {
-    const originalConsoleWarn = console.warn;
-    const consoleWarn = mock((_message: string) => undefined);
-    console.warn = consoleWarn;
-
+  test("logs through the logger when no warning dependency is supplied", async () => {
+    const logs = captureLogs();
     try {
       await checkDockerAvailability({ commandExists: async () => false });
-      expect(consoleWarn).toHaveBeenCalledWith(
-        "[Docker] Availability probe failed: reason=not-installed commandExists=false",
-      );
+      expect(logs.records()).toMatchObject([
+        {
+          level: "warn",
+          area: "docker",
+          event: "availability.probe-failed",
+          fields: { reason: "not-installed", commandExists: false },
+        },
+      ]);
     } finally {
-      console.warn = originalConsoleWarn;
+      logs.restore();
     }
   });
 

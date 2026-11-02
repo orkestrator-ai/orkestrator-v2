@@ -6,7 +6,7 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { AgentBranchCommitQueue } from "./agent-branch-commits.js";
 import { attachAgentBeforeDispatch } from "./agent-branch-runner.js";
-import { AGENT_BRANCH_LOG_PREFIX } from "./agent-branch-types.js";
+import { AGENT_BRANCH_LOG_OWNER } from "./agent-branch-types.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 
 const warn = spyOn(console, "warn").mockImplementation(() => undefined);
@@ -27,25 +27,27 @@ const failingProvider = {
 
 describe("agent branch log prefix", () => {
   test("review fan-outs keep the review prefix", async () => {
-    expect(AGENT_BRANCH_LOG_PREFIX).toBe("[review-fanout]");
+    expect(AGENT_BRANCH_LOG_OWNER).toBe("review-fanout");
     await attachAgentBeforeDispatch(failingProvider, "session-1");
-    expect(String(warn.mock.calls[0]?.[0])).toStartWith("[review-fanout] ");
+    expect(String(warn.mock.calls[0]?.[0])).toContain("owner=review-fanout ");
   });
 
   test("a host's prefix replaces it", async () => {
-    await attachAgentBeforeDispatch(failingProvider, "session-1", undefined, "[graph-agent]");
-    expect(String(warn.mock.calls[0]?.[0])).toStartWith("[graph-agent] ");
+    await attachAgentBeforeDispatch(failingProvider, "session-1", undefined, "graph-agent");
+    expect(String(warn.mock.calls[0]?.[0])).toContain("owner=graph-agent ");
     const queue = new AgentBranchCommitQueue(
       async () => {
         throw new Error("save failed");
       },
       () => undefined,
-      "[graph-agent]",
+      "graph-agent",
     );
     queue.stageObservation();
     await queue.flushObservations();
-    expect(warn.mock.calls.map((call) => String(call[0]))).toContain(
-      "[graph-agent] Checkpointing reviewer observations failed:",
-    );
+    expect(
+      warn.mock.calls.some((call) =>
+        String(call[0]).includes("observation.checkpoint-failed owner=graph-agent "),
+      ),
+    ).toBe(true);
   });
 });

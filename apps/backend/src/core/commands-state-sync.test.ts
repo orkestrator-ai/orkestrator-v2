@@ -863,7 +863,7 @@ describe("native agent model catalogue command", () => {
           warn.mock.calls.some(
             (call) =>
               typeof call[0] === "string" &&
-              call[0].includes("first-use pi catalogue bridge did not become ready") &&
+              call[0].includes("bridge.not-ready agent=pi") &&
               call[0].includes("Environment is not running"),
           ),
         ).toBe(true);
@@ -895,8 +895,7 @@ describe("native agent model catalogue command", () => {
         expect(
           warn.mock.calls.some(
             (call) =>
-              typeof call[0] === "string" &&
-              call[0].includes("first-use cursor catalogue bridge failed to start"),
+              typeof call[0] === "string" && call[0].includes("bridge.start-failed agent=cursor"),
           ),
         ).toBe(true);
       } finally {
@@ -958,9 +957,7 @@ describe("native agent model catalogue command", () => {
         expect(cache.cursor?.models.map((model) => model.id)).toEqual(["composer-2.5"]);
         expect(
           warn.mock.calls.some(
-            (call) =>
-              typeof call[0] === "string" &&
-              call[0].includes("Failed to seed the host Pi model catalogue"),
+            (call) => typeof call[0] === "string" && call[0].includes("seed.pi-failed"),
           ),
         ).toBe(true);
       } finally {
@@ -6042,8 +6039,9 @@ describe("pr monitor commands", () => {
           armedAt,
         );
         expect(warning).toHaveBeenCalledWith(
-          "[pr-monitor] Failed to track armed environment e1:",
-          "temporary storage read failure",
+          expect.stringMatching(
+            /arm\.track-failed environmentId=e1 .*temporary storage read failure/,
+          ),
         );
         loadSpy.mockRestore();
       } finally {

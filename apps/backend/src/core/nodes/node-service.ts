@@ -61,6 +61,9 @@ import {
   type NodeLinkTimers,
 } from "./node-link.js";
 import { NodeSshPrompts } from "./node-ssh-prompts.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("nodes");
 
 /**
  * Command-node and leaf behaviour of one backend.
@@ -542,7 +545,10 @@ export class NodeService {
         }),
       };
     } catch (error) {
-      console.warn("[nodes] Could not record the latest controller contact:", errorCode(error));
+      log.warn("contact.record-failed", {
+        code: errorCode(error),
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 
@@ -585,7 +591,10 @@ export class NodeService {
         if (isUnknownCommandError(error, SYNC_CONTROLLER_SETTINGS_COMMAND)) {
           this.unsupportedSettings.set(link, epoch);
         }
-        console.warn("[nodes] Could not send settings to a node:", errorCode(error));
+        log.warn("settings.send-failed", {
+          code: errorCode(error),
+          error: formatLogError(error, { message: false }),
+        });
       }
     });
     const settled = next.catch(() => undefined);
@@ -1529,7 +1538,10 @@ export class NodeService {
         };
       });
     } catch (error) {
-      console.warn("[nodes] Could not record a node verification:", errorCode(error));
+      log.warn("verification.record-failed", {
+        code: errorCode(error),
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 
@@ -1571,7 +1583,10 @@ export class NodeService {
         };
       });
     } catch (error) {
-      console.warn("[nodes] Could not record a node profile:", errorCode(error));
+      log.warn("profile.record-failed", {
+        code: errorCode(error),
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 
@@ -1700,7 +1715,10 @@ export class NodeService {
       await this.discardPendingDetach(nodeId);
       return true;
     } catch (error) {
-      console.warn("[nodes] A forgotten node has not confirmed the detach yet:", errorCode(error));
+      log.warn("detach.unconfirmed", {
+        code: errorCode(error),
+        error: formatLogError(error, { message: false }),
+      });
       return false;
     } finally {
       detachLink.stop();
@@ -1744,7 +1762,10 @@ export class NodeService {
       try {
         await this.completeHandover(registry.pendingHandover);
       } catch (error) {
-        console.warn("[nodes] Command handover recovery pending:", errorCode(error));
+        log.warn("handover.recovery-pending", {
+          code: errorCode(error),
+          error: formatLogError(error, { message: false }),
+        });
       } finally {
         this.handoverRunning = false;
       }

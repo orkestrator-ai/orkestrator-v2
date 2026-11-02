@@ -65,8 +65,7 @@ describe("managed Electron web client", () => {
       throw new Error("Tailscale is not connected");
     });
     const stop = mock(async () => undefined);
-    const logger = { error: mock(() => undefined) };
-    const client = new ManagedWebClient({ start, stop }, 8443, logger);
+    const client = new ManagedWebClient({ start, stop }, 8443);
     client.setBrowserListenerUrl("http://127.0.0.1:41234/");
 
     await expect(client.setEnabled(true)).resolves.toMatchObject({
@@ -91,7 +90,6 @@ describe("managed Electron web client", () => {
     const client = new ManagedWebClient(
       { start, stop: mock(async () => undefined), clearHttpsPort },
       443,
-      { error: mock(() => undefined) },
       ownership,
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
@@ -124,7 +122,6 @@ describe("managed Electron web client", () => {
         }),
       },
       443,
-      { error: mock(() => undefined) },
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
     await client.setEnabled(true);
@@ -149,7 +146,6 @@ describe("managed Electron web client", () => {
     const client = new ManagedWebClient(
       { start, stop: mock(async () => undefined), clearHttpsPort },
       443,
-      { error: mock(() => undefined) },
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
     await expect(client.setEnabled(true)).resolves.toMatchObject({ resetAvailable: true });
@@ -194,7 +190,6 @@ describe("managed Electron web client", () => {
         clearHttpsPort: mock(async () => undefined),
       },
       443,
-      { error: mock(() => undefined) },
       ownership,
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
@@ -225,7 +220,6 @@ describe("managed Electron web client", () => {
         clearHttpsPort: mock(async () => undefined),
       },
       443,
-      { error: mock(() => undefined) },
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
     await client.setEnabled(true);
@@ -265,7 +259,6 @@ describe("managed Electron web client", () => {
         ),
       },
       443,
-      { error: mock(() => undefined) },
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
     await client.setEnabled(true);
@@ -326,7 +319,6 @@ describe("managed Electron web client", () => {
     const client = new ManagedWebClient(
       { start: mock(async () => "https://workstation.example.ts.net/"), stop },
       443,
-      { error: mock(() => undefined) },
       ownership,
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
@@ -353,7 +345,6 @@ describe("managed Electron web client", () => {
         }),
       },
       443,
-      { error: mock(() => undefined) },
       ownership,
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
@@ -372,7 +363,6 @@ describe("managed Electron web client", () => {
     const client = new ManagedWebClient(
       { start, stop: mock(async () => undefined), stopOwned },
       443,
-      console,
       ownership,
     );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
@@ -425,12 +415,7 @@ describe("managed Electron web client", () => {
       clear: mock(async () => undefined),
     };
     const start = mock(async () => "https://unused.example/");
-    const client = new ManagedWebClient(
-      { start, stop: mock(async () => undefined) },
-      443,
-      { error: mock(() => undefined) },
-      store,
-    );
+    const client = new ManagedWebClient({ start, stop: mock(async () => undefined) }, 443, store);
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
 
     await expect(client.setEnabled(true)).resolves.toMatchObject({

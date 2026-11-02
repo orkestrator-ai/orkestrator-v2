@@ -28,6 +28,9 @@ import { pathExists, runCommand } from "./shell.js";
 import type { StorageService } from "./storage.js";
 import { cleanupEnvironmentTmux } from "./tmux-commands.js";
 import { getWorktreeBaseDir, validateWorktreeLocation } from "./worktree-locations.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("environment");
 
 const GIT_TIMEOUT_MS = 120_000;
 // A copy to another disk carries dependencies and build output too.
@@ -768,10 +771,10 @@ export async function recoverInterruptedEnvironmentMoves(
           lifecycleError: "Move recovery could not finish; it will retry on restart.",
         })
         .catch(() => undefined);
-      console.warn(
-        `[backend] interrupted move recovery failed for ${environment.id}:`,
-        errorMessage(error),
-      );
+      log.warn("move.recovery-failed", {
+        environmentId: environment.id,
+        error: formatLogError(error),
+      });
     });
   }
 }

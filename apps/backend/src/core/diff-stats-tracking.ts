@@ -48,6 +48,9 @@ import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { quoteShell } from "./commands-agent-support.js";
 import type { BackendEmit, CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("diff-stats");
 
 /**
  * How long an *unwatched* target's file list or tree (a container, or a local
@@ -227,7 +230,7 @@ export class DiffStatsTracking {
         );
       },
       onWarning: (message, error) => {
-        console.warn(`[diff-stats] ${message}:`, error instanceof Error ? error.message : error);
+        log.warn("scan.warning", { detail: message, error: formatLogError(error) });
       },
     });
   }
@@ -452,10 +455,7 @@ export class DiffStatsTracking {
       await this.sync(storage);
     })()
       .catch((error: unknown) => {
-        console.warn(
-          "[diff-stats] Could not update the environment diff baseline:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("baseline.update-failed", { error: formatLogError(error) });
       })
       .finally(() => {
         this.baselineChecks.delete(environmentId);

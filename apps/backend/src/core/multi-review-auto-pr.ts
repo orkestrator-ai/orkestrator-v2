@@ -4,6 +4,9 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 import type { StorageService } from "./storage.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("pull-request");
 
 /** Pane title of the PR tab, matching the action bar's Create PR launch. */
 export const MULTI_REVIEW_AUTO_PR_TAB_TITLE = "PR";
@@ -302,10 +305,7 @@ export async function launchPrAgent(
     environmentId,
     mode: "create-pending",
   }).catch((reason: unknown) => {
-    console.warn(
-      `[pr] Could not start PR monitoring for ${environmentId}:`,
-      reason instanceof Error ? reason.message : reason,
-    );
+    log.warn("monitor.start-failed", { environmentId, error: formatLogError(reason) });
   });
   return { kind: "launched", tabId };
 }

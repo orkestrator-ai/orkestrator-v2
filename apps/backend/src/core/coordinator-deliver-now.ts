@@ -6,6 +6,9 @@ import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-rea
 import type { AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import type { CommandContext } from "./commands-context.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
 
 /**
  * What a coordinator's `deliverNow` did, as its `send_message` result says it.
@@ -88,10 +91,7 @@ export async function settleCoordinatorDeliverNow(
   try {
     await context.drainAgentMail?.();
   } catch (error) {
-    console.warn(
-      "[coordinator] Delivery pass after deliverNow failed:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("deliver-now.drain-failed", { error: formatLogError(error) });
   }
   const unusedSteer = await context.storage.clearAgentMailSteerRequest(
     sent.toEnvironmentId,

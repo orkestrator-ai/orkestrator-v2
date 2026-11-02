@@ -92,9 +92,9 @@ elsewhere, set `ORKESTRATOR_TAILSCALE_BIN` to the executable.
 
 Copy these two values from startup output:
 
-- The HTTPS address shown by `[TailscaleServe] Available at`
+- The HTTPS address shown by `[gateway.tailscale] available url=`
 - The token in the `gateway-auth.json` file shown by
-  `[RemoteGateway] Auth token stored at`
+  `[gateway] auth-token.stored file=`
 
 Default token paths:
 
@@ -264,7 +264,7 @@ binds only to its tailnet address keeps doing so.
 - SSH login never replaces gateway authentication. A request without the
   gateway token gets `401` on this listener too.
 - If the port is busy, only this listener fails. The backend logs
-  `[RemoteGateway] Loopback client gateway unavailable …` and keeps serving.
+  `[gateway] loopback.unavailable …` and keeps serving.
 - Its URL appears as `loopbackClientUrl` in the `orkestrator-backend-ready`
   line, and as a `client` entry in the instance descriptor's `endpoints`
   array. A browser listener bound to loopback is listed there as a `client`

@@ -1,6 +1,9 @@
 import type { BackendId } from "@orkestrator/protocol/federation";
 
 import { describeLeafMail, NODE_OUTBOX_READY_EVENT, type OutboxItem } from "./node-mail.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("nodes");
 
 /**
  * The command node's side of leaf mail: when a leaf announces mail for this
@@ -155,10 +158,7 @@ export class NodeMailCollector {
           delivered.push(item.seq);
           if (!failed) deliveredPrefix = item.seq;
         } catch (error) {
-          console.warn(
-            "[nodes] Leaf mail could not be delivered to a coordinator yet:",
-            error instanceof Error ? error.name : "unknown",
-          );
+          log.warn("mail.delivery-deferred", { error: formatLogError(error, { message: false }) });
           failed = true;
         }
       }

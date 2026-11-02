@@ -218,15 +218,6 @@ export async function readGatewayMetrics(info: {
   return response.json() as GatewayMetricsSnapshot;
 }
 
-export function createLogger() {
-  return {
-    debug: mock(() => undefined),
-    error: mock(() => undefined),
-    info: mock(() => undefined),
-    warn: mock(() => undefined),
-  };
-}
-
 export async function createTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
@@ -306,7 +297,6 @@ export async function startGateway(
     bindAddress: "127.0.0.1",
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-    logger: createLogger(),
     allowNonTailscaleBind: true,
     ...options,
   });

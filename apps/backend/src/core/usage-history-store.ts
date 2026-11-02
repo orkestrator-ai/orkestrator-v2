@@ -27,6 +27,9 @@ import {
   type UsageEnvironmentLabel,
   type UsageSessionRecord,
 } from "./usage-history-record.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("usage-history");
 
 /**
  * Recorded agent usage as rows of the backend database (`usage-history`), one
@@ -326,7 +329,7 @@ export class UsageHistoryStore {
     try {
       this.prune();
     } catch (error) {
-      console.warn("[usage-history] Could not prune recorded usage:", error);
+      log.warn("prune.failed", { error: formatLogError(error) });
     }
   }
 

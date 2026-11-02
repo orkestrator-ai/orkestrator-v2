@@ -2979,9 +2979,16 @@ describe("BuildPipelineService", () => {
         console.info = originalInfo;
       }
 
-      const entry = logged.find((args) => args[0] === "[build-pipeline] interaction resolved");
+      const entry = logged
+        .map((args) => String(args[0]))
+        .find((line) => line.startsWith("[build-pipeline] interaction.resolved"));
       expect(entry).toBeDefined();
-      const payload = entry![1] as Record<string, unknown>;
+      const payload = Object.fromEntries(
+        entry!
+          .split(" ")
+          .slice(2)
+          .map((field) => field.split("=") as [string, string]),
+      );
       expect(Object.keys(payload).sort()).toEqual([
         "count",
         "kind",
@@ -2995,9 +3002,9 @@ describe("BuildPipelineService", () => {
         kind: "question",
         phase: "build",
         outcome: "auto-declined",
-        count: 1,
+        count: "1",
       });
-      expect(payload.latencyMs as number).toBeGreaterThanOrEqual(0);
+      expect(Number(payload.latencyMs)).toBeGreaterThanOrEqual(0);
       const serialized = JSON.stringify(payload);
       expect(serialized).not.toContain(request.presentation.title);
       expect(serialized).not.toContain(session.sdkSessionId);

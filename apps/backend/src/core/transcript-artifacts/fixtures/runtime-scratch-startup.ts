@@ -10,10 +10,10 @@ const runtime = await createTranscriptArtifactRuntime({
     ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: process.argv[4]!,
     ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: `worker@sha256:${"a".repeat(64)}`,
   },
-  logger: { info: () => {}, warn: (message) => console.error(message) },
+  logger: { info: () => {}, warn: (message) => process.stderr.write(`${message}\n`) },
 });
 try {
-  console.log(JSON.stringify({ isolation: runtime.config.isolation }));
+  process.stdout.write(`${JSON.stringify({ isolation: runtime.config.isolation })}\n`);
 } finally {
   await runtime.close();
 }

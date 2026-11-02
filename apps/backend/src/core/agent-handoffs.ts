@@ -29,6 +29,9 @@ import {
   paneLayoutAgentHandoffIds,
 } from "./storage-shared-pane-layout.js";
 import type { StorageService } from "./storage.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 /** What this backend does with handoffs on its own; a renderer does the rest. */
 export const AGENT_HANDOFF_CAPABILITIES = {
@@ -171,10 +174,7 @@ export async function createAgentHandoff(
     } catch (error) {
       // A measurement failure costs the numbers, not the transfer: unmeasured
       // calls say so in the carrier.
-      console.warn(
-        "[agent-handoffs] Reading change summaries failed:",
-        error instanceof Error ? error.name : "unknown error",
-      );
+      log.warn("handoff.summary-read-failed", { error: formatLogError(error, { message: false }) });
     }
   }
   const snapshot = createAgentHandoffSnapshot({

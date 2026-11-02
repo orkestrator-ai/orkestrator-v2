@@ -3,6 +3,9 @@ import type {
   HumanPromptEntry,
   HumanPromptSource,
 } from "@orkestrator/protocol/human-prompts";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 /**
  * Every shell prompt currently waiting on the user, across the backend.
@@ -134,10 +137,7 @@ export class HumanPromptRegistry {
       try {
         listener(change);
       } catch (error) {
-        console.warn(
-          "[human-prompts] Listener failed:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("human-prompt.listener-failed", { error: formatLogError(error) });
       }
     }
   }

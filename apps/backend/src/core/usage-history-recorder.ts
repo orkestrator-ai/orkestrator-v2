@@ -4,6 +4,9 @@ import type {
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import { usageTurnKey } from "./usage-history-record.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("usage-history");
 
 /**
  * The in-process gate in front of the usage store.
@@ -99,7 +102,7 @@ export class UsageHistoryRecorder {
         // durable `turnIds` makes a re-offer idempotent, so a retry cannot
         // count them twice.
         this.release(input.sessionKey, keys);
-        console.warn("[usage-history] Could not record agent usage:", error);
+        log.warn("record.failed", { error: formatLogError(error) });
       });
   }
 

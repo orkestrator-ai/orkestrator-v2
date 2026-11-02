@@ -340,7 +340,6 @@ describe("raw socket and link", () => {
       port: 0,
       allowNonTailscaleBind: true,
       env: { ORKESTRATOR_GATEWAY_TOKEN: token },
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
     });
     cleanups.push(() => gateway.stop());
     const info = await gateway.start();

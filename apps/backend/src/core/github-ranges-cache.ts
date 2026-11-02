@@ -12,6 +12,10 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "./shell.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("docker");
 
 /**
  * GitHub's published web/api/git IPv4 ranges, fetched by the backend at most
@@ -137,9 +141,11 @@ export async function copyGithubRangesSeed(
     );
     return true;
   } catch (error) {
-    console.warn(
-      `[github-ranges] seed not copied container=${containerId.slice(0, 12)} error=${error instanceof Error ? error.message.slice(0, 200) : String(error)}`,
-    );
+    log.warn("github-ranges.seed-not-copied", {
+      containerId: containerId.slice(0, 12),
+      ...classifyCommandFailure(error, { tools: ["docker"] }),
+      error: formatLogError(error),
+    });
     return false;
   } finally {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined);

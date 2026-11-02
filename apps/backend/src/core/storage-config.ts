@@ -55,6 +55,9 @@ import {
 } from "@orkestrator/protocol/review-lens";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
 type AgentInteractionPolicy = shared.AgentInteractionPolicy;
 type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
@@ -495,7 +498,7 @@ export class ConfigRepository {
     try {
       return parseStoredDesktopConnections(config.desktopConnections);
     } catch {
-      console.warn("[Storage] Ignoring malformed desktop connection settings.");
+      log.warn("desktop-connections.malformed");
       return { activeConnectionId: "local", connections: [] };
     }
   }

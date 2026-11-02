@@ -12,6 +12,9 @@ import { runtimeHostCodexHome } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 import { pathExists } from "./shell.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("environment");
 
 /**
  * Agents remember the folder they ran in. When an environment's worktree
@@ -72,10 +75,7 @@ export async function relocateAgentSessionState(
       await run();
     } catch (error) {
       failures.push(provider);
-      console.warn(
-        `[backend] ${provider} sessions could not follow the moved environment:`,
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("move.sessions-not-moved", { provider, error: formatLogError(error) });
     }
   };
   await attempt("Claude", async () => {

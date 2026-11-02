@@ -36,6 +36,9 @@ import {
   queueReasoningEffort,
   queueString,
 } from "./native-agent-queue-message.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 type SettledSteer = "dispatched" | "absent" | undefined;
 
@@ -456,9 +459,7 @@ export class NativeAgentPromptQueueDispatcher {
     if (attempts >= MAX_QUEUE_DISPATCH_ATTEMPTS) {
       // The key and the reason are safe to log; the prompt itself never is, and
       // neither is provider-authored detail — that is persisted, not logged.
-      console.warn(
-        `[native-agent] Prompt queue ${queueKey} has failed ${attempts} times: ${reason}`,
-      );
+      log.warn("queue.failing", { queueKey, attempts, reason });
       // A head no dispatch ever reserved has no request id, so the park path a
       // failed dispatch uses could not run: the prompt was neither sent nor
       // failed and the queue stalled at the backoff ceiling with nothing shown

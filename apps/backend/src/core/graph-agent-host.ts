@@ -148,7 +148,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
   readonly workflowId: string;
   readonly sessionPhase: string;
   /** The shared runner logs this activation's lines under the graph prefix. */
-  readonly logPrefix = "[graph-agent]";
+  readonly logOwner = "graph-agent";
   readonly mode: "plan" | "build";
   readonly wording = GRAPH_AGENT_WORDING;
   readonly progress: MultiReviewProgressTracker;

@@ -15,6 +15,9 @@ import type { ReviewerPollGate } from "./review-fanout.js";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 function usageCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
@@ -69,10 +72,7 @@ export async function recordPipelineSessionUsage(
     session.tokenCount = tokenCount;
     return true;
   } catch (error) {
-    console.warn(
-      "[build-pipeline] Reading stage session token usage failed:",
-      error instanceof Error ? error.message : String(error),
-    );
+    log.warn("usage.read-failed", { error: formatLogError(error) });
     return false;
   }
 }

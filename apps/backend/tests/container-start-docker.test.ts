@@ -166,7 +166,7 @@ describe("Docker start recovery", () => {
           }
           return runCommand(command, args, options);
         };
-        await expect(startDockerContainer(id, { verb, run, log: () => undefined })).rejects.toThrow(
+        await expect(startDockerContainer(id, { verb, run })).rejects.toThrow(
           "address already in use",
         );
         expect(verbs).toEqual([verb, "start"]);

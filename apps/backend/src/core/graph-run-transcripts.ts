@@ -19,6 +19,9 @@
  */
 import type { PipelineTranscriptReference } from "@orkestrator/protocol/build-pipeline";
 import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 /** Default spacing of captures while a turn runs. */
 export const GRAPH_RUN_TRANSCRIPT_CAPTURE_INTERVAL_MS = 15_000;
@@ -120,7 +123,7 @@ export function createGraphRunTranscriptCapture(options: {
       remember(key, { at: now, fingerprint, revision: reference.revision });
       return reference;
     } catch {
-      console.warn(`[graph-runs] Transcript capture failed for run ${input.runId}`);
+      log.warn("transcript.capture-failed", { runId: input.runId });
       remember(key, { at: now, revision: previous?.revision ?? 0 });
       return undefined;
     }

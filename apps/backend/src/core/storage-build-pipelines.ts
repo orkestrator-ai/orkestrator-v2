@@ -43,6 +43,9 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 
 /**
@@ -612,9 +615,7 @@ export class BuildPipelinesRepository {
     if (saved.commit) {
       const reverted = saved.commit.reverted.get(pipelineId) ?? [];
       for (const entry of reverted) {
-        console.warn(
-          `[build-pipeline] Transcript checkpoint not committed for ${pipelineId}: ${entry.reason}`,
-        );
+        log.warn("checkpoint.not-committed", { pipelineId, reason: entry.reason });
         const live = sessionsOf(snapshot).find(
           (session) => session.sessionKey === entry.sessionKey,
         );

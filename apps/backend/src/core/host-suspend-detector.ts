@@ -1,3 +1,6 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("host");
 /**
  * Detects that the host slept (or its wall clock jumped forward) by comparing
  * how far the wall clock and the monotonic clock advanced between two ticks.
@@ -84,10 +87,7 @@ export class HostSuspendDetector {
     try {
       this.options.onSuspend(drift);
     } catch (error) {
-      console.warn(
-        "[backend] Failed to reconcile due work after a host suspension:",
-        error instanceof Error ? error.name : "unknown",
-      );
+      log.warn("suspend.reconcile-failed", { error: formatLogError(error, { message: false }) });
     }
   }
 

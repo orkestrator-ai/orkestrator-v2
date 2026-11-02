@@ -7,6 +7,9 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { createHash } from "node:crypto";
 import { nativePromptQueueKey } from "./public-api/prompt-delivery.js";
 import { nativeTabsOfLayout, type NativeTabInfo } from "./public-api/summaries.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("native-agent");
 
 /**
  * Which open tab a job may resend to. `any-agent` keeps the tab's own agent and
@@ -317,10 +320,10 @@ export async function resendToOpenJobTab(
   } catch (error) {
     if (error instanceof Error && error.message === "Native job receipt capacity reached")
       throw error;
-    console.warn(
-      `[native-agent-job] Could not queue a resend for ${input.environmentId}:`,
-      error instanceof Error ? error.name : "unknown error",
-    );
+    log.warn("job.resend-queue-failed", {
+      environmentId: input.environmentId,
+      error: formatLogError(error, { message: false }),
+    });
     // A write may have committed before a notification or connection failed.
     // Fall back only after a durable read proves there is no published request.
     const receipt = (await context.storage.getPromptQueue(queueKey))?.jobReceipts?.find(

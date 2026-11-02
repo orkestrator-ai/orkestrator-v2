@@ -197,7 +197,6 @@ const poolIdleMs = Number(process.env.ORKESTRATOR_TEST_PREVIEW_POOL_IDLE_MS ?? 0
 const poolOff = process.env.ORKESTRATOR_TEST_PREVIEW_POOL_OFF === "1";
 const manager = new PreviewPublicationManager({
   runtime: harness.runtime,
-  logger: { info: () => undefined, warn: () => undefined },
   ...(poolIdleMs > 0 || poolOff
     ? {
         upstreamPool: {
@@ -214,12 +213,6 @@ const gatewayDir = join(pki, "gateway");
 await mkdir(join(gatewayDir, "dist"), { recursive: true });
 await writeFile(join(gatewayDir, "dist", "index.html"), '<div id="root"></div>');
 const invokes: string[] = [];
-const silent = {
-  debug: () => undefined,
-  error: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-};
 const gateway = new OrkestratorGateway({
   backend: {
     invoke: (command) => {
@@ -232,7 +225,6 @@ const gateway = new OrkestratorGateway({
   bindAddress: "127.0.0.1",
   port: 0,
   env: { ORKESTRATOR_GATEWAY_TOKEN: crypto.randomUUID() },
-  logger: silent,
   allowNonTailscaleBind: true,
 });
 const gatewayInfo = await gateway.start();

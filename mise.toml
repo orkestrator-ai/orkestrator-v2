@@ -435,10 +435,7 @@ run = [
 
 [tasks."package:linux"]
 description = "Build and install an unpacked Linux application"
-run = [
-  "mise run package:linux:unpacked",
-  "bun scripts/install-packaged-app-linux.ts",
-]
+run = ["mise run package:linux:unpacked", "bun scripts/install-packaged-app-linux.ts"]
 
 [tasks."package:linux:unpacked"]
 description = "Build the unpacked Linux application under release/ without installing it"

@@ -6,8 +6,8 @@
  * what users run, and no dev-served spec ever loads it.
  *
  * Build the app first with `mise run package:linux:unpacked`, which writes
- * `release/linux-unpacked/` and installs nothing; `mise run
- * test:agent:electron:packaged` does both. Set
+ * `release/linux-unpacked/` and installs nothing. Then run `mise run
+ * test:agent:electron:packaged`, which tests that existing build without rebuilding. Set
  * `ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build.
  *
  * The app runs on a disposable agent-test profile under a temporary root, as

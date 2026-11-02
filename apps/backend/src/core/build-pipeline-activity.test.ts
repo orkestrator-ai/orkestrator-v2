@@ -411,3 +411,189 @@ describe("build pipeline activity", () => {
     }
   });
 });
+
+/** What the environment's bell says, or `null` when nothing rang. */
+async function bell(storage: StorageService, environmentId: string) {
+  const environment = (await storage.getEnvironment(environmentId))!;
+  return environment.hasUnreadWork === true ? (environment.unreadReason ?? null) : null;
+}
+
+const STALL = { stallWarning: { sessionId: "s1", detectedAt: "2026-10-31T00:00:00.000Z" } };
+
+describe("what a pipeline's end rings", () => {
+  async function ended(end: BuildPipeline) {
+    const storage = await store();
+    const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+    await observer.start();
+    await save(storage, pipeline("p1", "e1", "building"));
+    await observer.observe("p1");
+    expect(await activity(storage, "e1")).toEqual({ source: "working", aggregate: "working" });
+    await save(storage, end);
+    await observer.observe("p1");
+    expect((await activity(storage, "e1")).source).toBe("idle");
+    observer.stop();
+    return bell(storage, "e1");
+  }
+
+  test("a completed pipeline still rings that the work finished", async () => {
+    expect(await ended(pipeline("p1", "e1", "complete"))).toBe("agent_finished");
+  });
+
+  test("a failed pipeline rings a failure", async () => {
+    expect(
+      await ended(pipeline("p1", "e1", "failed", { error: "Build stage exited with an error" })),
+    ).toBe("agent_failed");
+  });
+
+  for (const error of [
+    "Build cancelled",
+    "Build cancelled, but stopping every agent could not be confirmed: offline",
+  ]) {
+    test(`a cancel rings nothing (${error.slice(0, 24)}…)`, async () => {
+      expect(await ended(pipeline("p1", "e1", "failed", { error }))).toBeNull();
+    });
+  }
+
+  for (const pauseCause of ["requested", "supervisor"] as const) {
+    test(`a ${pauseCause} pause rings nothing`, async () => {
+      expect(
+        await ended(
+          pipeline("p1", "e1", "paused", { pausedFromPhase: "fixing", pauseCause, error: "x" }),
+        ),
+      ).toBeNull();
+    });
+  }
+
+  test("deleting a working pipeline rings nothing", async () => {
+    const storage = await store();
+    const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+    await observer.start();
+    await save(storage, pipeline("p1", "e1", "reviewing"));
+    await observer.observe("p1");
+    await storage.deleteBuildPipeline("p1");
+    await observer.observe("p1");
+    expect((await activity(storage, "e1")).source).toBe("idle");
+    expect(await bell(storage, "e1")).toBeNull();
+    observer.stop();
+  });
+
+  test("a stall never rings, and the stalled pipeline's real end rings once", async () => {
+    for (const [end, expected] of [
+      [pipeline("p1", "e1", "complete"), "agent_finished"],
+      [pipeline("p1", "e1", "failed", { error: "Fix stage failed" }), "agent_failed"],
+      [pipeline("p1", "e1", "failed", { error: "Build cancelled" }), null],
+      [pipeline("p1", "e1", "paused", { pausedFromPhase: "building" }), null],
+    ] as const) {
+      const storage = await store();
+      const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+      await observer.start();
+      await save(storage, pipeline("p1", "e1", "building"));
+      await observer.observe("p1");
+      await save(storage, pipeline("p1", "e1", "building", STALL));
+      await observer.observe("p1");
+      expect((await activity(storage, "e1")).source).toBe("idle");
+      expect(await bell(storage, "e1")).toBeNull();
+
+      await save(storage, end);
+      await observer.observe("p1");
+      expect(await bell(storage, "e1")).toBe(expected);
+      // Later observations of the same end, and a reconcile, do not ring again.
+      await observer.observe("p1");
+      await observer.reconcile();
+      const environment = (await storage.getEnvironment("e1"))!;
+      expect(environment.agentAttentionKeys?.length ?? 0).toBe(expected === null ? 0 : 1);
+      observer.stop();
+    }
+  });
+
+  test("a stall that clears rings only for the pipeline's end", async () => {
+    const storage = await store();
+    const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+    await observer.start();
+    await save(storage, pipeline("p1", "e1", "building"));
+    await observer.observe("p1");
+    await save(storage, pipeline("p1", "e1", "building", STALL));
+    await observer.observe("p1");
+    await save(storage, pipeline("p1", "e1", "reviewing"));
+    await observer.observe("p1");
+    expect((await activity(storage, "e1")).source).toBe("working");
+    expect(await bell(storage, "e1")).toBeNull();
+    await save(storage, pipeline("p1", "e1", "failed", { error: "Review stage failed" }));
+    await observer.observe("p1");
+    expect(await bell(storage, "e1")).toBe("agent_failed");
+    expect((await storage.getEnvironment("e1"))!.agentAttentionKeys ?? []).toEqual([]);
+    observer.stop();
+  });
+
+  test("a failure while a sibling pipeline works rings when the source ends", async () => {
+    const storage = await store();
+    const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+    await save(storage, pipeline("p1", "e1", "building"));
+    await save(storage, pipeline("p2", "e1", "fixing"));
+    await observer.start();
+    await save(storage, pipeline("p1", "e1", "failed", { error: "Build stage failed" }));
+    await observer.observe("p1");
+    expect((await activity(storage, "e1")).source).toBe("working");
+    expect(await bell(storage, "e1")).toBeNull();
+    await save(storage, pipeline("p2", "e1", "complete"));
+    await observer.observe("p2");
+    expect(await bell(storage, "e1")).toBe("agent_failed");
+    observer.stop();
+  });
+
+  test("an end this process watched counts even when its save predates the working write", async () => {
+    const storage = await store();
+    // The activity write's clock runs ahead of the store's timestamps, as
+    // when a pipeline ends between the read and the write that went working.
+    const observer = new BuildPipelineActivity(storage, {
+      timers: NO_TIMERS,
+      clock: () => new Date(Date.now() + 60_000),
+    });
+    await observer.start();
+    await save(storage, pipeline("p1", "e1", "building"));
+    await observer.observe("p1");
+    await save(storage, pipeline("p1", "e1", "failed", { error: "Build stage failed" }));
+    await observer.observe("p1");
+    expect(await bell(storage, "e1")).toBe("agent_failed");
+    observer.stop();
+  });
+
+  test("an old pipeline's end does not colour a later one", async () => {
+    const storage = await store();
+    await save(storage, pipeline("p0", "e1", "failed", { error: "Old failure" }));
+    const observer = new BuildPipelineActivity(storage, {
+      timers: NO_TIMERS,
+      clock: () => new Date(Date.now() + 60_000),
+    });
+    await observer.start();
+    await save(storage, pipeline("p1", "e1", "building"));
+    await observer.observe("p1");
+    await save(storage, pipeline("p1", "e1", "failed", { error: "Build cancelled" }));
+    await observer.observe("p1");
+    expect((await activity(storage, "e1")).source).toBe("idle");
+    expect(await bell(storage, "e1")).toBeNull();
+    observer.stop();
+  });
+
+  for (const [end, expected] of [
+    [pipeline("p1", "e1", "failed", { error: "Build stage failed" }), "agent_failed"],
+    [pipeline("p1", "e1", "complete"), "agent_finished"],
+    [pipeline("p1", "e1", "failed", { error: "Build cancelled" }), null],
+  ] as const) {
+    test(`after a restart the stored record decides (${end.phase}: ${expected})`, async () => {
+      const storage = await store();
+      await storage.setEnvironmentAgentActivity(
+        "e1",
+        "working",
+        new Date(Date.now() - 1_000).toISOString(),
+        "build-pipeline",
+      );
+      await save(storage, end);
+      const observer = new BuildPipelineActivity(storage, { timers: NO_TIMERS });
+      await observer.start();
+      expect((await activity(storage, "e1")).source).toBe("idle");
+      expect(await bell(storage, "e1")).toBe(expected);
+      observer.stop();
+    });
+  }
+});

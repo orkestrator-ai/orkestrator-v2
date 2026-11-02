@@ -5,6 +5,9 @@ import { Info } from "lucide-react";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.kanban");
 
 interface ProjectNotesViewProps {
   projectId: string;
@@ -53,7 +56,7 @@ export function ProjectNotesView({ projectId }: ProjectNotesViewProps) {
             await discardDurableDraft();
           }
         } catch (error) {
-          console.warn("[ProjectNotesView] Notes remain in the durable draft:", error);
+          log.warn("notes.draft-retained", { projectId, error: formatLogError(error) });
         }
       });
       // Serialize writes so an older slow save can never complete after a newer

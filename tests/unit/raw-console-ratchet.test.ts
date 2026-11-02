@@ -16,15 +16,15 @@ const oxlint = join(repoRoot, "node_modules/.bin/oxlint");
  */
 const UNMIGRATED: Readonly<Record<string, number>> = {
   "apps/backend/**": 455,
-  "apps/web/**": 369,
-  "apps/web-public/**": 0,
 };
 
 /**
  * Paths excluded for good. A test's console is not the application log, and for
  * the rest `console` is the product: a CLI's and a script's output, a container
  * script with no logger to import, a bridge's build script, a live probe whose
- * stdout is the test's result channel, and the three files that wrap the console.
+ * stdout is the test's result channel, the renderer's build script, the four files
+ * that wrap the console, and the renderer's startup markers, whose exact text the
+ * desktop matches.
  * `fatal-rejections.ts` is serialized into workers, so it cannot import anything.
  */
 const PERMANENT: readonly string[] = [
@@ -49,6 +49,9 @@ const PERMANENT: readonly string[] = [
   "packages/protocol/src/node/application-logging.ts",
   "packages/protocol/src/fatal-rejections.ts",
   "apps/backend/src/bounded-console.ts",
+  "apps/web/scripts/**",
+  "apps/web/src/lib/desktop-startup-marker.ts",
+  "apps/web/src/lib/bug-report/renderer-errors.ts",
 ];
 
 const RAW_CONSOLE = /\bconsole\.(?:log|info|warn|error|debug|trace)\b/g;
@@ -153,6 +156,17 @@ describe("raw console ratchet", () => {
     expect(rawConsoleSites("apps/desktop/electron/**", trackedSources())).toBe(0);
   });
 
+  test("the renderer holds no raw console site outside the two files listed for good", () => {
+    const sources = trackedSources().filter(
+      (file) =>
+        !file.startsWith("apps/web/scripts/") &&
+        file !== "apps/web/src/lib/desktop-startup-marker.ts" &&
+        file !== "apps/web/src/lib/bug-report/renderer-errors.ts",
+    );
+    expect(rawConsoleSites("apps/web/**", sources)).toBe(0);
+    expect(rawConsoleSites("apps/web-public/**", sources)).toBe(0);
+  });
+
   test("the bridges and their shared modules hold no raw console site", () => {
     const sources = trackedSources().filter(
       (file) => !/^bridges\/[^/]+\/scripts\/|\.live-probe\.ts$/.test(file),
@@ -174,6 +188,8 @@ describe("raw console lint rule", () => {
     ["packages/protocol/src/probe.ts"],
     ["packages/toolchain/src/probe.ts"],
     ["bridges/claude-bridge/src/probe.ts"],
+    ["apps/web/src/lib/probe.ts"],
+    ["apps/web-public/src/probe.ts"],
     ["packages/protocol/src/bridge-lifecycle.ts"],
   ])("rejects console in %s, used directly or passed as a value", (path) => {
     expect(lintCodes(path, 'console.warn("x");\nexport const logger = console;\n')).toEqual([
@@ -196,7 +212,9 @@ describe("raw console lint rule", () => {
     ["packages/protocol/src/node/application-logging.ts"],
     ["apps/backend/src/bounded-console.ts"],
     ["apps/backend/src/core/probe.ts"],
-    ["apps/web/src/lib/probe.ts"],
+    ["apps/web/scripts/probe.ts"],
+    ["apps/web/src/lib/desktop-startup-marker.ts"],
+    ["apps/web/src/lib/bug-report/renderer-errors.ts"],
     ["bridges/claude-bridge/scripts/probe.ts"],
     ["bridges/claude-bridge/src/services/probe.live-probe.ts"],
     ["apps/desktop/tests/probe.test.ts"],

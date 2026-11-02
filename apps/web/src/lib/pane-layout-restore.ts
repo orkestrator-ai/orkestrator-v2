@@ -378,6 +378,18 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     };
   }
 
+  if (type === "key-information") {
+    if (!isRecord(value.keyInformationTabData)) return null;
+    const pipelineId = nonEmptyString(value.keyInformationTabData.pipelineId);
+    // Like the build tab, a brief whose pipeline was deleted is dropped.
+    if (!pipelineId || !context.hasBuildPipeline?.(pipelineId)) return null;
+    return {
+      id,
+      type,
+      keyInformationTabData: { environmentId: context.environmentId, pipelineId },
+    };
+  }
+
   if (type === "multi-review") {
     if (!isRecord(value.multiReviewTabData)) return null;
     const workflowId = nonEmptyString(value.multiReviewTabData.workflowId);

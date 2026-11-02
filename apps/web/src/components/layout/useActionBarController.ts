@@ -67,6 +67,9 @@ import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import type { ResolveLaunchResult } from "./ActionBar.types";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.action-bar");
 
 /**
  * A Create PR launch that has not yet produced a pull request.
@@ -586,7 +589,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         await backend.openInEditor(containerId, editor);
       }
     } catch (err) {
-      console.error("[ActionBar] Failed to open editor:", err);
+      log.error("editor.open-failed", { error: formatLogError(err) });
       const errorMessage = err instanceof Error ? err.message : String(err);
       setEditorError(errorMessage);
     } finally {
@@ -1013,7 +1016,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         }
       })
       .catch((error) => {
-        console.error("[ActionBar] Failed to read orkestrator-ai.json:", error);
+        log.error("run-commands.read-failed", { error: formatLogError(error) });
         if (!cancelled && !isRescan) {
           setRunCommands(null);
         }
@@ -2002,7 +2005,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         setCleanupError(null);
       }
     } catch (err) {
-      console.error("[ActionBar] Failed to delete environment:", err);
+      log.error("environment.delete-failed", { error: formatLogError(err) });
     } finally {
       setDeletingEnvironmentId((current) => (current === operationEnvironmentId ? null : current));
     }
@@ -2029,14 +2032,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       setMergeError(null);
 
       try {
-        console.log("[ActionBar] Starting PR merge...");
+        log.info("merge.started", { environmentId: operationEnvironmentId });
         const mergeResult = await backend.mergeEnvironmentPr(
           operationEnvironmentId,
           "squash",
           true,
           cleanupAfterMerge,
         );
-        console.log("[ActionBar] Merge command completed successfully");
+        log.info("merge.completed", { outcome: mergeResult.outcome });
 
         if (mergeResult.outcome !== "merged") {
           toast.success(mergeResult.outcome === "pending" ? "Merge pending" : "Merge submitted", {
@@ -2065,7 +2068,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           setCleanupDialogOpen(true);
         }
       } catch (err) {
-        console.error("[ActionBar] Failed to merge PR:", err);
+        log.error("merge.failed", { error: formatLogError(err) });
         // backend invoke errors come as strings, not Error objects
         const message =
           err instanceof Error

@@ -1,6 +1,9 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { createLazyLoadFailureDiagnostic } from "@/components/LazyLoadBoundary";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
+
+const log = createLogger("web.chat");
 
 interface MessageRenderBoundaryProps {
   children: ReactNode;
@@ -100,10 +103,13 @@ export class MessageRenderBoundary extends Component<
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // Same redaction rules as the view-level boundary: never the message or
     // stack, which can embed transcript content and absolute paths.
-    console.error(
-      "[MessageRenderBoundary] Message render failure",
-      createLazyLoadFailureDiagnostic(error, info),
-    );
+    const diagnostic = createLazyLoadFailureDiagnostic(error, info);
+    log.error("message.render-failed", {
+      kind: diagnostic.kind,
+      errorType: diagnostic.errorType,
+      fingerprint: diagnostic.fingerprint,
+      componentChain: diagnostic.componentChain.join(" > "),
+    });
   }
 
   // The retry compares the previous props against the current ones, exactly as

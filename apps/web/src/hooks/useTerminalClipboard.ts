@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { writeText } from "@/lib/native/clipboard";
 import { processClipboardPaste } from "./useClipboardImagePaste";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 export interface UseTerminalClipboardOptions {
   /** The xterm.js Terminal instance */
@@ -59,7 +62,10 @@ export function useTerminalClipboard({
     try {
       await writeText(selection);
     } catch (err) {
-      console.error("[useTerminalClipboard] Failed to copy selection:", err);
+      log.error("clipboard.copy-failed", {
+        source: "useTerminalClipboard",
+        error: formatLogError(err),
+      });
     }
   }, [terminal]);
 
@@ -82,7 +88,11 @@ export function useTerminalClipboard({
         terminal.focus();
       },
       (error) => {
-        console.error("[useTerminalClipboard] Clipboard paste error:", error);
+        log.error("clipboard.paste-failed", {
+          source: "useTerminalClipboard",
+          target: "container",
+          error: formatLogError(error),
+        });
       },
     );
   }, [containerId, terminal, writeRef]);

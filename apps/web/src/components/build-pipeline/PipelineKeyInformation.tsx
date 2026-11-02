@@ -3,53 +3,23 @@ import {
   CheckCircle2,
   CircleDashed,
   FileText,
-  MinusCircle,
+  SquareArrowOutUpRight,
   X,
   XCircle,
-  type LucideIcon,
 } from "lucide-react";
 import {
   hasKeyInformation,
   type BuildPipelineKeyInformation,
-  type KeyInformationAuthor,
-  type KeyInformationIssueStatus,
-  type KeyInformationTestResult,
 } from "@orkestrator/protocol/build-pipeline-key-information";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-
-const AUTHOR_LABELS: Record<KeyInformationAuthor, string> = {
-  build: "Build",
-  fix: "Fix",
-  review: "Review",
-  address: "Address",
-  verify: "Verify",
-  pr: "Ship",
-  "resolve-conflicts": "Conflict resolution",
-  system: "the pipeline",
-};
-
-const TEST_RESULT: Record<
-  KeyInformationTestResult,
-  { label: string; icon: LucideIcon; className: string }
-> = {
-  passed: { label: "Passed", icon: CheckCircle2, className: "text-emerald-500" },
-  failed: { label: "Failed", icon: XCircle, className: "text-failure" },
-  skipped: { label: "Skipped", icon: MinusCircle, className: "text-muted-foreground" },
-  "not-run": { label: "Not run", icon: CircleDashed, className: "text-muted-foreground" },
-};
-
-const ISSUE_STATUS: Record<KeyInformationIssueStatus, { label: string; className: string }> = {
-  open: { label: "Open", className: "border-amber-500/30 text-amber-300/90" },
-  resolved: { label: "Resolved", className: "border-emerald-500/30 text-emerald-400" },
-  "partially-resolved": {
-    label: "Partially resolved",
-    className: "border-amber-500/30 text-amber-300/90",
-  },
-  deferred: { label: "Deferred", className: "border-border text-muted-foreground" },
-  "wont-fix": { label: "Won't fix", className: "border-border text-muted-foreground" },
-};
+import {
+  KEY_INFORMATION_ISSUE_STATUS as ISSUE_STATUS,
+  KEY_INFORMATION_TEST_RESULT as TEST_RESULT,
+  keyInformationUpdatedLine,
+} from "./key-information-format";
+import { KeyInformationText } from "./KeyInformationText";
 
 /**
  * The pipeline header's Key information button and the floating panel it
@@ -58,11 +28,18 @@ const ISSUE_STATUS: Record<KeyInformationIssueStatus, { label: string; className
  *
  * The panel positions itself against the nearest positioned ancestor, the
  * tab header, so it floats over the graph rather than pushing it down.
+ *
+ * With `onOpenTab` the brief can also be read as a full tab: the panel's
+ * pop-out button turns the panel into that tab, and right-clicking the header
+ * button opens the tab directly without showing the panel first.
  */
 export function PipelineKeyInformationButton({
   keyInformation,
+  onOpenTab,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
+  /** Opens (or focuses) the brief's tab; returns whether a tab is now shown. */
+  onOpenTab?: () => boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
@@ -98,6 +75,15 @@ export function PipelineKeyInformationButton({
     };
   }, [open, closeAndRestoreFocus]);
 
+  // The tab takes over from the panel, so focus follows the tab rather than
+  // returning to the header button. A tab that could not open (tab limit,
+  // environment stopped) leaves the panel as it was.
+  const popOut = () => {
+    if (!onOpenTab?.()) return;
+    setTooltipOpen(false);
+    setOpen(false);
+  };
+
   return (
     <>
       <Tooltip
@@ -125,12 +111,20 @@ export function PipelineKeyInformationButton({
               setTooltipOpen(false);
               setOpen((value) => !value);
             }}
+            onContextMenu={
+              onOpenTab
+                ? (event) => {
+                    event.preventDefault();
+                    popOut();
+                  }
+                : undefined
+            }
           >
             <FileText className="size-4" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" sideOffset={5}>
-          Key information
+          {onOpenTab ? "Key information · right-click to open in a tab" : "Key information"}
         </TooltipContent>
       </Tooltip>
       {open ? (
@@ -144,11 +138,30 @@ export function PipelineKeyInformationButton({
         >
           <div className="flex shrink-0 items-start gap-2 border-b border-border/60 px-4 py-3">
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium">Key information</div>
-              <div className="mt-0.5 text-[11px] text-muted-foreground">
+              <div className="text-base font-medium">Key information</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
                 {keyInformationUpdatedLine(keyInformation)}
               </div>
             </div>
+            {onOpenTab ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    aria-label="Open key information in a tab"
+                    onClick={popOut}
+                  >
+                    <SquareArrowOutUpRight className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={5}>
+                  Open in a tab
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
             <Button
               type="button"
               size="icon"
@@ -169,15 +182,6 @@ export function PipelineKeyInformationButton({
   );
 }
 
-function keyInformationUpdatedLine(info: BuildPipelineKeyInformation | undefined): string {
-  if (!info || !hasKeyInformation(info)) return "Kept up to date by the pipeline's stages.";
-  const last = info.updates.at(-1);
-  const at = new Date(info.updatedAt).toLocaleString();
-  return last
-    ? `Updated ${at} by ${AUTHOR_LABELS[last.author]} · round ${last.round + 1}`
-    : `Updated ${at}`;
-}
-
 /** The brief's sections in reading order; empty ones are left out. */
 export function KeyInformationBody({
   keyInformation: info,
@@ -186,7 +190,7 @@ export function KeyInformationBody({
 }) {
   if (!info || !hasKeyInformation(info)) {
     return (
-      <p className="text-xs text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         Nothing has been recorded yet. The Build stage fills this in as it works, and the Address
         and Verify stages add the review issues and verification results.
       </p>
@@ -198,7 +202,7 @@ export function KeyInformationBody({
   ]);
   const showRounds = rounds.size > 1;
   return (
-    <div className="flex flex-col gap-4 text-xs">
+    <div className="flex flex-col gap-4 text-sm">
       {info.statement ? (
         <Section title={info.framing === "objective" ? "Objective" : "Problem"}>
           <Prose text={info.statement} />
@@ -224,7 +228,9 @@ export function KeyInformationBody({
           <ol className="flex flex-col gap-3">
             {info.decisions.map((decision, index) => (
               <li key={index} className="rounded-md border border-border/60 bg-muted/20 p-2.5">
-                <div className="font-medium text-foreground">{decision.decision}</div>
+                <div className="font-medium text-foreground">
+                  <KeyInformationText text={decision.decision} />
+                </div>
                 {decision.options.length > 0 ? (
                   <ul className="mt-2 flex flex-col gap-2">
                     {decision.options.map((option, optionIndex) => {
@@ -238,9 +244,11 @@ export function KeyInformationBody({
                           )}
                         >
                           <div className="flex items-center gap-1.5">
-                            <span className="min-w-0 flex-1 break-words">{option.option}</span>
+                            <span className="min-w-0 flex-1 break-words">
+                              <KeyInformationText text={option.option} />
+                            </span>
                             {chosen ? (
-                              <span className="shrink-0 rounded border border-emerald-500/40 px-1 text-[10px] text-emerald-400">
+                              <span className="shrink-0 rounded border border-emerald-500/40 px-1 text-[11px] text-emerald-400">
                                 Chosen
                               </span>
                             ) : null}
@@ -254,12 +262,12 @@ export function KeyInformationBody({
                 {!decision.options.some((option) => option.option === decision.chosen) ? (
                   <div className="mt-2">
                     <span className="text-muted-foreground">Chosen: </span>
-                    {decision.chosen}
+                    <KeyInformationText text={decision.chosen} />
                   </div>
                 ) : null}
                 {decision.rationale ? (
                   <p className="mt-2 break-words whitespace-pre-wrap text-muted-foreground">
-                    {decision.rationale}
+                    <KeyInformationText text={decision.rationale} />
                   </p>
                 ) : null}
               </li>
@@ -280,13 +288,15 @@ export function KeyInformationBody({
               return (
                 <li key={index} className="flex items-start gap-2">
                   <result.icon
-                    className={cn("mt-px size-3.5 shrink-0", result.className)}
+                    className={cn("mt-0.5 size-4 shrink-0", result.className)}
                     aria-label={result.label}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="font-mono text-[11px] break-all">{test.name}</div>
+                    <div className="font-mono text-xs break-all">{test.name}</div>
                     {test.details ? (
-                      <div className="break-words text-muted-foreground">{test.details}</div>
+                      <div className="break-words text-muted-foreground">
+                        <KeyInformationText text={test.details} />
+                      </div>
                     ) : null}
                   </div>
                 </li>
@@ -304,26 +314,26 @@ export function KeyInformationBody({
                 <li key={index} className="rounded-md border border-border/60 px-2.5 py-2">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="min-w-0 flex-1 break-words text-foreground">
-                      {issue.issue}
+                      <KeyInformationText text={issue.issue} />
                     </span>
                     {issue.severity ? (
-                      <span className="shrink-0 rounded border border-border px-1 text-[10px] text-muted-foreground uppercase">
+                      <span className="shrink-0 rounded border border-border px-1 text-[11px] text-muted-foreground uppercase">
                         {issue.severity}
                       </span>
                     ) : null}
                     <span
-                      className={cn("shrink-0 rounded border px-1 text-[10px]", status.className)}
+                      className={cn("shrink-0 rounded border px-1 text-[11px]", status.className)}
                     >
                       {status.label}
                     </span>
                   </div>
                   {issue.resolution ? (
                     <p className="mt-1 break-words whitespace-pre-wrap text-muted-foreground">
-                      {issue.resolution}
+                      <KeyInformationText text={issue.resolution} />
                     </p>
                   ) : null}
                   {showRounds ? (
-                    <div className="mt-1 text-[10px] text-muted-foreground">
+                    <div className="mt-1 text-[11px] text-muted-foreground">
                       Round {issue.round + 1}
                     </div>
                   ) : null}
@@ -343,11 +353,11 @@ export function KeyInformationBody({
               >
                 <div className="flex items-center gap-1.5">
                   {verification.passed === undefined ? (
-                    <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" />
+                    <CircleDashed className="size-4 shrink-0 text-muted-foreground" />
                   ) : verification.passed ? (
-                    <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
+                    <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
                   ) : (
-                    <XCircle className="size-3.5 shrink-0 text-failure" />
+                    <XCircle className="size-4 shrink-0 text-failure" />
                   )}
                   <span className="font-medium text-foreground">
                     Round {verification.round + 1}:{" "}
@@ -360,7 +370,7 @@ export function KeyInformationBody({
                 </div>
                 {verification.summary ? (
                   <p className="mt-1 break-words whitespace-pre-wrap text-muted-foreground">
-                    {verification.summary}
+                    <KeyInformationText text={verification.summary} />
                   </p>
                 ) : null}
                 {verification.checks.length > 0 ? (
@@ -369,19 +379,23 @@ export function KeyInformationBody({
                       <li key={index} className="flex items-start gap-2">
                         {check.passed ? (
                           <CheckCircle2
-                            className="mt-px size-3.5 shrink-0 text-emerald-500"
+                            className="mt-0.5 size-4 shrink-0 text-emerald-500"
                             aria-label="Passed"
                           />
                         ) : (
                           <XCircle
-                            className="mt-px size-3.5 shrink-0 text-failure"
+                            className="mt-0.5 size-4 shrink-0 text-failure"
                             aria-label="Failed"
                           />
                         )}
                         <div className="min-w-0 flex-1">
-                          <div className="break-words">{check.check}</div>
+                          <div className="break-words">
+                            <KeyInformationText text={check.check} />
+                          </div>
                           {check.details ? (
-                            <div className="break-words text-muted-foreground">{check.details}</div>
+                            <div className="break-words text-muted-foreground">
+                              <KeyInformationText text={check.details} />
+                            </div>
                           ) : null}
                         </div>
                       </li>
@@ -400,7 +414,7 @@ export function KeyInformationBody({
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section aria-label={title}>
-      <h3 className="mb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+      <h3 className="mb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
         {title}
       </h3>
       {children}
@@ -409,7 +423,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function Prose({ text }: { text: string }) {
-  return <p className="break-words whitespace-pre-wrap text-foreground">{text}</p>;
+  return (
+    <p className="break-words whitespace-pre-wrap text-foreground">
+      <KeyInformationText text={text} />
+    </p>
+  );
 }
 
 function BulletList({ items }: { items: string[] }) {
@@ -417,7 +435,7 @@ function BulletList({ items }: { items: string[] }) {
     <ul className="flex list-disc flex-col gap-1 pl-4">
       {items.map((item, index) => (
         <li key={index} className="break-words">
-          {item}
+          <KeyInformationText text={item} />
         </li>
       ))}
     </ul>
@@ -432,7 +450,7 @@ function ProsCons({ pros, cons }: { pros: string[]; cons: string[] }) {
         <ul className="flex flex-col gap-0.5">
           {pros.map((pro, index) => (
             <li key={index} className="break-words text-emerald-400/90">
-              + {pro}
+              + <KeyInformationText text={pro} />
             </li>
           ))}
         </ul>
@@ -441,7 +459,7 @@ function ProsCons({ pros, cons }: { pros: string[]; cons: string[] }) {
         <ul className="flex flex-col gap-0.5">
           {cons.map((con, index) => (
             <li key={index} className="break-words text-rose-400/90">
-              − {con}
+              − <KeyInformationText text={con} />
             </li>
           ))}
         </ul>

@@ -1,6 +1,9 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { getFileTree, getLocalFileTree, type FileNode } from "@/lib/backend";
 import type { FileCandidate } from "@/types";
+
+const log = createLogger("web.files");
 
 /**
  * Hook for loading and searching workspace files for @ mentions.
@@ -53,7 +56,7 @@ export function useFileSearch(
         }
       } catch (err) {
         if (requestGenerationRef.current === requestGeneration) {
-          console.error("[useFileSearch] Failed to load file tree:", err);
+          log.error("file-tree.load-failed", { error: formatLogError(err) });
           setError(err instanceof Error ? err.message : "Failed to load files");
           setFileTree([]);
         }

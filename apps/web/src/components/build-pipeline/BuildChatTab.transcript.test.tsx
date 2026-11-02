@@ -5,6 +5,7 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
 import {
@@ -295,17 +296,27 @@ describe("BuildChatTab referenced transcripts", () => {
     getBuildPipelineConditionalMock.mockImplementationOnce(async () => {
       throw new Error("temporary backend restart");
     });
-    const warn = console.warn;
-    console.warn = mock(() => undefined) as typeof console.warn;
+    const logs = captureLogs();
     try {
       renderTab();
       await waitFor(() => expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1));
-      await waitFor(() => expect(console.warn).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "web.build-pipeline",
+            event: "transcript.load-failed",
+            fields: expect.objectContaining({
+              error: expect.objectContaining({ message: "temporary backend restart" }),
+            }),
+          }),
+        ),
+      );
       getBuildPipelineConditionalMock.mockImplementation(answer);
       expect(await screen.findByText("All criteria pass")).toBeTruthy();
       expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(2);
     } finally {
-      console.warn = warn;
+      logs.restore();
     }
   });
 });

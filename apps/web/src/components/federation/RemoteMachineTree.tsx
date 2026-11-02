@@ -27,9 +27,16 @@ import {
   nodeEnvironmentTooltipDetails,
 } from "@/components/environments/environment-row-facts";
 import { EnvironmentAgentSummary } from "@/components/environments/EnvironmentAgentSummary";
+import { useShimmerRequiresChecks } from "@/hooks/useEnvironmentNameSignal";
 import { useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
 import { SidebarRootDropZone } from "@/components/sidebar/SidebarRootDropZone";
+import {
+  folderDragItem,
+  machineEnvironmentDragItem,
+  SidebarDragOverlay,
+  type SidebarDragItem,
+} from "@/components/sidebar/SidebarDragOverlay";
 import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { isMachineWritable, type MachineView } from "@/lib/federation/aggregate";
@@ -204,6 +211,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
   const arrangements = useStore(projectWrites.store);
   const { environmentsOf, reorder } = useRemoteEnvironments();
   const [dragging, setDragging] = useState<"project" | "other" | null>(null);
+  const [dragItem, setDragItem] = useState<SidebarDragItem>(null);
   const [folderDialogKey, setFolderDialogKey] = useState<string | null>(null);
   const writable = isMachineWritable(machine);
   const sortable = writable && !machine.truncated;
@@ -257,10 +265,18 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
         ? "project"
         : "other",
     );
+    const project = items.find((item) => item.id === id);
+    setDragItem(
+      folderDragItem(tree, id) ??
+        (project
+          ? { kind: "project", name: project.name }
+          : machineEnvironmentDragItem([machine], id)),
+    );
   };
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     setDragging(null);
+    setDragItem(null);
     if (!sortable || !over) return;
     const activeId = String(active.id);
     const overId = String(over.id);
@@ -308,7 +324,10 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
       collisionDetection={sidebarCollisionDetection}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setDragging(null)}
+      onDragCancel={() => {
+        setDragging(null);
+        setDragItem(null);
+      }}
     >
       <SortableContext items={sortableIds} strategy={sortingStrategy}>
         {tree.map((entry) => {
@@ -342,6 +361,7 @@ export function RemoteMachineTree({ machine }: { machine: MachineView }) {
         })}
         <SidebarRootDropZone active={dragging === "project"} />
       </SortableContext>
+      <SidebarDragOverlay item={dragItem} />
       <AddToFolderDialog
         open={folderDialogItem !== null}
         onOpenChange={(open) => {
@@ -628,7 +648,8 @@ export function RemoteEnvironmentItem({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const details = useNodeEnvironment(environment.ref, tooltip.open || deleteOpen);
   const live = machine.transport === "connected";
-  const facts = nodeEnvironmentRowFacts(machine, environment, actions);
+  const requireChecks = useShimmerRequiresChecks();
+  const facts = nodeEnvironmentRowFacts(machine, environment, actions, requireChecks);
 
   return (
     <EnvironmentRow

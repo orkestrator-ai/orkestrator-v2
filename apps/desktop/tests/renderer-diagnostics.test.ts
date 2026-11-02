@@ -1,6 +1,18 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
-import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
+import { afterAll, describe, expect, mock, spyOn, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { DESKTOP_STARTUP_EVENTS, desktopStartupMessage } from "@orkestrator/protocol/debug-logging";
+import {
+  configureLogger,
+  createLogger,
+  formatLogError,
+  resetLogger,
+  type LogArea,
+} from "@orkestrator/protocol/logger";
+import { LOG_VOCABULARY } from "@orkestrator/protocol/log-vocabulary";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { installRendererDiagnostics } from "../electron/renderer-diagnostics";
+import { emitDesktopStartupMarker } from "../../web/src/lib/desktop-startup-marker";
 
 afterAll(resetLogger);
 
@@ -97,5 +109,106 @@ describe("renderer startup diagnostics", () => {
     ]);
     for (let code = 0; code < 100; code++) emit("did-fail-load", {}, code, "", "", true);
     expect(log).toHaveBeenCalledTimes(32);
+  });
+});
+
+describe("what a renderer's console can place in the saved log", () => {
+  const webSource = join(import.meta.dir, "../../web/src");
+
+  function rendererSources(): string[] {
+    return readdirSync(webSource, { recursive: true, encoding: "utf8" }).filter(
+      (file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file),
+    );
+  }
+
+  function everyLineOf(area: LogArea, fields?: Record<string, string>): string[] {
+    const logger = createLogger(area) as unknown as {
+      error(event: string, fields?: Record<string, string>): void;
+    };
+    const logs = captureLogs();
+    for (const event of Object.keys(LOG_VOCABULARY[area].events)) logger.error(event, fields);
+    logs.restore();
+    return logs.lines;
+  }
+
+  test("no line of a renderer area crosses, with or without fields", () => {
+    const areas = (Object.keys(LOG_VOCABULARY) as LogArea[]).filter(
+      (area) => area !== "desktop.startup",
+    );
+    const lines = areas.flatMap((area) => [
+      ...everyLineOf(area),
+      ...everyLineOf(area, { detail: "[DesktopStartup] ready" }),
+    ]);
+    expect(lines.length).toBeGreaterThan(100);
+    expect(lines).toContain("[web.window] error.unhandled");
+
+    const { emit, log, mainFrame } = harness();
+    for (const line of lines) emit("console-message", { frame: mainFrame, message: line });
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  test("a migrated error line, stack and all, does not cross", () => {
+    const logs = captureLogs();
+    createLogger("web.window").error("error.unhandled", {
+      error: formatLogError(new Error("[DesktopStartup] ready")),
+    });
+    logs.restore();
+    expect(logs.lines[0]).toContain("[DesktopStartup] ready");
+
+    const { emit, log, mainFrame } = harness();
+    emit("console-message", { frame: mainFrame, message: logs.lines[0] });
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  // A logger in this area would render the exact text of a marker, so this is the
+  // one mistake the exact match in the main frame cannot catch.
+  test("no renderer logger uses the area whose lines read as markers", () => {
+    const areas = new Set<string>();
+    for (const file of rendererSources()) {
+      const text = readFileSync(join(webSource, file), "latin1");
+      for (const match of text.matchAll(/createLogger\(([^)]*)\)/g)) areas.add(match[1]!);
+    }
+    expect(areas.size).toBeGreaterThan(0);
+    for (const area of areas) expect(area).toMatch(/^"[a-z.-]+"$/);
+    expect(areas).not.toContain('"desktop.startup"');
+  });
+
+  test("every renderer marker goes out with its method and exact text, and crosses", () => {
+    const info = spyOn(console, "info").mockImplementation(() => undefined);
+    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    // The level does not apply: a marker is a contract, not a logger entry.
+    configureLogger({ level: "error" });
+    try {
+      for (const event of DESKTOP_STARTUP_EVENTS) emitDesktopStartupMarker(event);
+      expect(info.mock.calls).toEqual([
+        [desktopStartupMessage("checking")],
+        [desktopStartupMessage("ready")],
+      ]);
+      expect(error.mock.calls.flat()).toEqual(
+        DESKTOP_STARTUP_EVENTS.filter((event) => event !== "checking" && event !== "ready").map(
+          desktopStartupMessage,
+        ),
+      );
+
+      configureLogger({ level: "info" });
+      const { emit, log, mainFrame } = harness();
+      for (const [message] of [...info.mock.calls, ...error.mock.calls]) {
+        emit("console-message", { frame: mainFrame, message });
+      }
+      expect(log.mock.calls.flat().toSorted()).toEqual(
+        DESKTOP_STARTUP_EVENTS.map(desktopStartupMessage).toSorted(),
+      );
+    } finally {
+      info.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  test("the seven markers are written from one module only", () => {
+    const writers = rendererSources().filter((file) => {
+      const text = readFileSync(join(webSource, file), "latin1");
+      return /\bdesktopStartupMessage\b/.test(text);
+    });
+    expect(writers).toEqual(["lib/desktop-startup-marker.ts"]);
   });
 });

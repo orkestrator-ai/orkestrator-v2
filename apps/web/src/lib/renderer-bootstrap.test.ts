@@ -1,11 +1,16 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { bootstrapRenderer } from "./renderer-bootstrap";
 
 describe("renderer entry bootstrap", () => {
+  let logs: LogCapture | undefined;
+  afterEach(() => logs?.restore());
+
   test("installs global diagnostics before dynamically loading and starting the renderer", async () => {
     const order: string[] = [];
     const listeners = new Map<string, (event: any) => void>();
-    const logError = mock((..._values: unknown[]) => undefined);
+    logs = captureLogs();
+    const emitMarker = mock((_event: string) => undefined);
     const target = {
       addEventListener: (type: string, listener: (event: any) => void) => {
         order.push(`listen:${type}`);
@@ -35,7 +40,7 @@ describe("renderer entry bootstrap", () => {
       target: target as never,
       startDesktop: startDesktop as never,
       loadRenderer,
-      logError,
+      emitMarker,
     });
 
     expect(order).toEqual([
@@ -45,13 +50,14 @@ describe("renderer entry bootstrap", () => {
       "renderer:import",
       "renderer:start",
     ]);
-    expect(logError).toHaveBeenCalledWith("[DesktopStartup] renderer-error");
+    expect(emitMarker.mock.calls).toEqual([["renderer-error"]]);
     expect(loadRenderer).toHaveBeenCalledTimes(1);
   });
 
   test("keeps runtime error details in DevTools without emitting startup markers", async () => {
     const listeners = new Map<string, (event: any) => void>();
-    const logError = mock((..._values: unknown[]) => undefined);
+    logs = captureLogs();
+    const emitMarker = mock((_event: string) => undefined);
     await bootstrapRenderer({
       target: {
         addEventListener: (type: string, listener: (event: any) => void) => {
@@ -60,22 +66,53 @@ describe("renderer entry bootstrap", () => {
       } as never,
       startDesktop: (async ({ start }: { start(): Promise<void> }) => start()) as never,
       loadRenderer: async () => ({ startRenderer: async () => undefined }),
-      logError,
+      emitMarker,
     });
-    logError.mockClear();
 
     listeners.get("error")?.({
       message: "later failure",
-      filename: "runtime.js",
+      filename: "http://localhost:1420/assets/runtime.js?v=private",
       lineno: 3,
       colno: 4,
       error: new Error("later failure"),
     });
     listeners.get("unhandledrejection")?.({ reason: new Error("later rejection") });
 
-    expect(logError.mock.calls.map(([message]) => message)).toEqual([
-      "[WindowError] Unhandled error",
-      "[WindowError] Unhandled promise rejection",
+    expect(emitMarker).not.toHaveBeenCalled();
+    const records = logs.records();
+    expect(records.map(({ level, area, event }) => [level, area, event])).toEqual([
+      ["error", "web.window", "error.unhandled"],
+      ["error", "web.window", "rejection.unhandled"],
     ]);
+    expect(records[0]?.fields).toMatchObject({
+      error: { name: "Error", message: "later failure" },
+      file: "runtime.js",
+      line: 3,
+      column: 4,
+    });
+    expect(records[1]?.fields).toMatchObject({ error: { message: "later rejection" } });
+    expect(logs.lines.join("\n")).not.toContain("private");
+  });
+
+  test("a window error with no error object keeps its message", async () => {
+    const listeners = new Map<string, (event: any) => void>();
+    logs = captureLogs();
+    await bootstrapRenderer({
+      target: {
+        addEventListener: (type: string, listener: (event: any) => void) => {
+          listeners.set(type, listener);
+        },
+      } as never,
+      startDesktop: (async ({ start }: { start(): Promise<void> }) => start()) as never,
+      loadRenderer: async () => ({ startRenderer: async () => undefined }),
+    });
+
+    listeners.get("error")?.({
+      message: "ResizeObserver loop limit exceeded",
+      lineno: 0,
+      colno: 0,
+    });
+
+    expect(logs.lines.join("\n")).toContain("ResizeObserver loop limit exceeded");
   });
 });

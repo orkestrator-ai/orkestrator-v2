@@ -7,7 +7,8 @@
  * (`get_projects`, `get_environment_snapshots`): names, status and activity
  * only, never transcripts, prompts, paths or credentials. Summary reads ask
  * for {@link NODE_SUMMARY_ENVIRONMENT_READ_ARGS}, which adds the node's PR
- * monitor health and live pipeline membership to each environment. The search fields
+ * monitor health, live pipeline membership, agent-mail counts and Docker
+ * availability to each environment. The search fields
  * (`pathName`, `worktreeName`, `defaultBranch`, `createdAt`) carry what the
  * project search matches on: a directory's last segment, never its path.
  */
@@ -117,6 +118,13 @@ export interface NodeEnvironmentSummary {
   agentMailUnread?: number;
   /** One of its mailboxes has a failed injection. Absent like `agentMailUnread`. */
   agentMailFailed?: true;
+  /**
+   * Whether Docker can run containers on the node, as its own window gates
+   * container actions. A machine-level fact repeated on each row so a summary
+   * read needs no second command. Absent while the node does not know, and
+   * from nodes that predate it; readers then treat Docker as available.
+   */
+  dockerAvailable?: boolean;
   /**
    * The node's last PR reading, so a command node can decide "ready to merge"
    * (`pr-merge-readiness.ts`) for another machine's rows. States only, never
@@ -313,6 +321,7 @@ export function toNodeEnvironmentSummary(
     ...(raw.autoMerge === true ? { autoMerge: true as const } : {}),
     ...(isMailCount(raw.agentMailUnread) ? { agentMailUnread: raw.agentMailUnread } : {}),
     ...(raw.agentMailFailed === true ? { agentMailFailed: true as const } : {}),
+    ...(typeof raw.dockerAvailable === "boolean" ? { dockerAvailable: raw.dockerAvailable } : {}),
     ...(PR_STATES.has(raw.prState) ? { prState: raw.prState as PrState } : {}),
     ...(typeof raw.hasMergeConflicts === "boolean"
       ? { prHasMergeConflicts: raw.hasMergeConflicts }

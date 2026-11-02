@@ -26,6 +26,7 @@ import type {
 import {
   countRawLineChanges,
   countRawLines,
+  DEFAULT_RAW_LINE_DIFF_BUDGET,
   diffRawLines,
   isProbablyBinary,
   type RawLineDiffBudget,
@@ -76,22 +77,97 @@ function kindOf(entry: ManifestEntry): ChangeFileKind {
   return "text";
 }
 
+interface TextCounts {
+  additions: LineCount;
+  deletions: LineCount;
+  fileKind: ChangeFileKind;
+  reason: string | null;
+}
+
+/**
+ * ST-4: line counts by blob pair. Objects are content-addressed, so an entry
+ * never goes stale; a long turn compares the same 200 changed pairs against
+ * the turn start on every provisional pass, and only the pair that moved
+ * needs inflating and diffing again. Only results that the bytes alone decide
+ * are kept: an unavailable body or a wall-clock `cpu-budget` limit is
+ * recomputed next time, and a hit is used only while the store still holds
+ * both blobs. Bounded by count and by an estimate of retained bytes.
+ */
+export const LINE_COUNT_CACHE_MAX_ENTRIES = 8_192;
+export const LINE_COUNT_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+const LINE_COUNT_ENTRY_OVERHEAD_BYTES = 256;
+
+const lineCountCacheLimits = {
+  maxEntries: LINE_COUNT_CACHE_MAX_ENTRIES,
+  maxBytes: LINE_COUNT_CACHE_MAX_BYTES,
+};
+const lineCountCache = new Map<string, TextCounts>();
+let lineCountCacheBytes = 0;
+const lineCountCacheStats = { hits: 0, misses: 0 };
+
+function entryBytes(key: string): number {
+  return key.length * 2 + LINE_COUNT_ENTRY_OVERHEAD_BYTES;
+}
+
+function cachedCounts(key: string): TextCounts | null {
+  const hit = lineCountCache.get(key);
+  if (!hit) {
+    lineCountCacheStats.misses++;
+    return null;
+  }
+  lineCountCacheStats.hits++;
+  // Refresh recency: Map iteration order is insertion order.
+  lineCountCache.delete(key);
+  lineCountCache.set(key, hit);
+  return copyCounts(hit);
+}
+
+function rememberCounts(key: string, counts: TextCounts): void {
+  if (counts.reason === "body-unavailable" || counts.reason === "complexity-limit-cpu-budget")
+    return;
+  if (lineCountCache.has(key)) {
+    lineCountCache.delete(key);
+    lineCountCacheBytes -= entryBytes(key);
+  }
+  lineCountCache.set(key, copyCounts(counts));
+  lineCountCacheBytes += entryBytes(key);
+  for (const oldest of lineCountCache.keys()) {
+    if (
+      lineCountCache.size <= lineCountCacheLimits.maxEntries &&
+      lineCountCacheBytes <= lineCountCacheLimits.maxBytes
+    )
+      break;
+    lineCountCache.delete(oldest);
+    lineCountCacheBytes -= entryBytes(oldest);
+  }
+}
+
+function copyCounts(counts: TextCounts): TextCounts {
+  return { ...counts, additions: { ...counts.additions }, deletions: { ...counts.deletions } };
+}
+
+/** For tests and diagnostics: entries, estimated bytes and hit counters. */
+export function lineCountCacheSnapshot() {
+  return { entries: lineCountCache.size, bytes: lineCountCacheBytes, ...lineCountCacheStats };
+}
+
+/** Empty the cache; tests may also lower its bounds (omitted fields reset). */
+export function clearLineCountCache(limits: { maxEntries?: number; maxBytes?: number } = {}) {
+  lineCountCacheLimits.maxEntries = limits.maxEntries ?? LINE_COUNT_CACHE_MAX_ENTRIES;
+  lineCountCacheLimits.maxBytes = limits.maxBytes ?? LINE_COUNT_CACHE_MAX_BYTES;
+  lineCountCache.clear();
+  lineCountCacheBytes = 0;
+  lineCountCacheStats.hits = 0;
+  lineCountCacheStats.misses = 0;
+}
+
 async function textCounts(
   store: ObjectStore,
   before: ManifestEntry | null,
   after: ManifestEntry | null,
   budget: Partial<RawLineDiffBudget>,
-): Promise<{
-  additions: LineCount;
-  deletions: LineCount;
-  fileKind: ChangeFileKind;
-  reason: string | null;
-}> {
-  const kind =
-    (after ?? before)!.m === "160000" || before?.m === "160000"
-      ? "gitlink"
-      : kindOf((after ?? before)!);
-  if (kind === "gitlink") {
+): Promise<TextCounts> {
+  if ((after ?? before)!.m === "160000" || before?.m === "160000") {
     return {
       additions: notApplicableCount(),
       deletions: notApplicableCount(),
@@ -99,6 +175,32 @@ async function textCounts(
       reason: null,
     };
   }
+  const limits = { ...DEFAULT_RAW_LINE_DIFF_BUDGET, ...budget };
+  // Only the deterministic limits can change a cached answer.
+  const key = [
+    kindOf((after ?? before)!),
+    before?.o ?? "-",
+    after?.o ?? "-",
+    limits.maxInputBytes,
+    limits.maxCountEditDistance,
+  ].join(":");
+  const cached = cachedCounts(key);
+  // A body this store no longer holds still reads as unavailable, as it did
+  // before the cache; checking presence is a stat, not an inflate and diff.
+  if (cached && (!before || (await store.has(before.o))) && (!after || (await store.has(after.o))))
+    return cached;
+  const counts = await uncachedTextCounts(store, before, after, budget);
+  rememberCounts(key, counts);
+  return counts;
+}
+
+async function uncachedTextCounts(
+  store: ObjectStore,
+  before: ManifestEntry | null,
+  after: ManifestEntry | null,
+  budget: Partial<RawLineDiffBudget>,
+): Promise<TextCounts> {
+  const kind = kindOf((after ?? before)!);
   const oldBytes = before ? await store.get(before.o) : new Uint8Array();
   const newBytes = after ? await store.get(after.o) : new Uint8Array();
   if (!oldBytes || !newBytes) {

@@ -1,5 +1,8 @@
 import type { ViewRevisionStamp, ViewSyncCapability } from "@orkestrator/protocol/view-sync";
 import { RevisionRanges, approximateJsonBytes } from "./bounded-hydration-primitives";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.resource-sync");
 
 export {
   BoundedKeySet,
@@ -271,7 +274,10 @@ export function createBoundedHydration<V>(
     try {
       options.onStatusChange?.(next);
     } catch (error) {
-      console.error(`[${options.name}] Hydration status listener failed:`, error);
+      log.error("hydration.status-listener-failed", {
+        source: options.name,
+        error: formatLogError(error),
+      });
     }
   };
 
@@ -280,7 +286,10 @@ export function createBoundedHydration<V>(
     try {
       notify();
     } catch (error) {
-      console.error(`[${options.name}] Notification failed:`, error);
+      log.error("hydration.notification-failed", {
+        source: options.name,
+        error: formatLogError(error),
+      });
     }
   };
 

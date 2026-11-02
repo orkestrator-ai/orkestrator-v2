@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { ClipboardImage } from "@/lib/native/clipboard";
@@ -138,7 +139,6 @@ const initialConfig = useConfigStore.getState().config;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 const originalReadAsDataURL = FileReader.prototype.readAsDataURL;
-const originalConsoleWarn = console.warn;
 const putImageDataMock = mock(() => {});
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -334,7 +334,10 @@ function getDialogBody(dialog: HTMLElement = screen.getByRole("dialog")) {
 }
 
 describe("KanbanTaskDialog", () => {
+  let logs: LogCapture;
+
   beforeEach(() => {
+    logs = captureLogs();
     cleanup();
     toastSuccessMock.mockClear();
     toastErrorMock.mockClear();
@@ -395,7 +398,7 @@ describe("KanbanTaskDialog", () => {
     HTMLCanvasElement.prototype.getContext = originalGetContext;
     HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
     FileReader.prototype.readAsDataURL = originalReadAsDataURL;
-    console.warn = originalConsoleWarn;
+    logs.restore();
   });
 
   afterAll(() => {
@@ -554,16 +557,22 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("reports rejected create-task draft hydration without breaking input", async () => {
-    const warning = spyOn(console, "warn").mockImplementation(() => {});
     getComposeDraftMock.mockRejectedValueOnce(new Error("draft storage unavailable"));
     render(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
 
     await waitFor(() =>
-      expect(warning).toHaveBeenCalledWith(
-        "[KanbanTaskDialog] Failed to restore create draft:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.kanban",
+          event: "draft.restore-failed",
+          fields: expect.objectContaining({
+            projectId: "project-1",
+            error: expect.objectContaining({ message: "draft storage unavailable" }),
+          }),
+        }),
       ),
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
@@ -572,7 +581,6 @@ describe("KanbanTaskDialog", () => {
     expect((screen.getByPlaceholderText("Task title...") as HTMLInputElement).value).toBe(
       "Still editable",
     );
-    warning.mockRestore();
   });
 
   test("persists create-task edits after the debounce", async () => {
@@ -619,7 +627,6 @@ describe("KanbanTaskDialog", () => {
   });
 
   test("reports rejected debounced persistence and explicit discard", async () => {
-    const warning = spyOn(console, "warn").mockImplementation(() => {});
     saveComposeDraftMock.mockRejectedValueOnce(new Error("save rejected"));
     render(
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
@@ -629,21 +636,38 @@ describe("KanbanTaskDialog", () => {
       target: { value: "Rejected save" },
     });
     await waitFor(() =>
-      expect(warning).toHaveBeenCalledWith(
-        "[KanbanTaskDialog] Failed to persist create draft:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.kanban",
+          event: "draft.persist-failed",
+          fields: expect.objectContaining({
+            phase: "debounced",
+            projectId: "project-1",
+            error: expect.objectContaining({ message: "save rejected" }),
+          }),
+        }),
       ),
     );
 
     deleteComposeDraftMock.mockRejectedValueOnce(new Error("discard rejected"));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
-      expect(warning).toHaveBeenCalledWith(
-        "[KanbanTaskDialog] Failed to discard create draft:",
-        expect.any(Error),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          area: "web.kanban",
+          event: "draft.discard-failed",
+          fields: expect.objectContaining({
+            phase: "close",
+            projectId: "project-1",
+            error: expect.objectContaining({ message: "discard rejected" }),
+          }),
+        }),
       ),
     );
-    warning.mockRestore();
+    // The draft is the user's text: its id and the failure are all a line may hold.
+    expect(logs.lines.join("\n")).not.toContain("Rejected save");
   });
 
   test("keeps typing entered while create-draft hydration is pending", async () => {
@@ -1462,7 +1486,6 @@ describe("KanbanTaskDialog", () => {
     // `addTask`, image saving and `startBuild` are all awaited from a `void`-ed
     // confirm handler, so a rejection escaping here would be unhandled and the
     // dialog would sit with a permanently disabled button and no explanation.
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
     addTaskMock.mockImplementationOnce(async () => {
       throw new Error("kanban store unavailable");
     });
@@ -1481,8 +1504,15 @@ describe("KanbanTaskDialog", () => {
     expect(startBuildMock).not.toHaveBeenCalled();
     // Cleared in `finally`, so the launcher can be opened again.
     await waitFor(() => expect(buildButton().disabled).toBe(false));
-
-    consoleError.mockRestore();
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "web.kanban",
+        event: "build.create-and-start-failed",
+        fields: expect.objectContaining({ projectId: "project-1" }),
+      }),
+    );
+    expect(logs.lines.join("\n")).not.toContain("Doomed task");
   });
 
   test("create mode attaches a pasted clipboard image with a generated UUID", async () => {
@@ -1765,7 +1795,6 @@ describe("KanbanTaskDialog", () => {
   test("reports a build start that throws instead of leaving the launch stuck", async () => {
     // The launcher's confirm handlers are `void`-ed, so a rejection escaping
     // here would be unhandled and the button would stay disabled forever.
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
     startBuildMock.mockImplementationOnce(() => {
       throw new Error("bridge exploded");
     });
@@ -1776,8 +1805,14 @@ describe("KanbanTaskDialog", () => {
 
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Failed to start build"));
     await waitFor(() => expect(buildButton().disabled).toBe(false));
-
-    consoleError.mockRestore();
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "web.kanban",
+        event: "build.start-failed",
+        fields: expect.objectContaining({ taskId: "task-1" }),
+      }),
+    );
   });
 
   test("an unfinished pipeline for the task blocks launching another build", () => {

@@ -7,6 +7,9 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 export { isBuildPipeline } from "@/stores/buildPipelineStore";
 
@@ -523,7 +526,7 @@ export async function migrateLegacyBuildPipelines(
   }
   if (!raw) return empty;
   if (raw.length > MAX_LEGACY_STORAGE_BYTES) {
-    console.warn("[BuildPipeline] Legacy pipeline state exceeds the migration limit");
+    log.warn("legacy.state-too-large", { length: raw.length });
     return { ...empty, skipped: 1 };
   }
 

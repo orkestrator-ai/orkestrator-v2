@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.session");
 
 /** Distinguishes a user-initiated refresh from a background reconcile. */
 export interface RefreshSessionOptions {
@@ -29,7 +32,7 @@ interface UseManualSessionRefreshOptions {
  * Run an authoritative session refresh when the user asks for one.
  *
  * Extracted from the three chat tabs, where it was the same watermark effect
- * with only the log prefix and toast label differing.
+ * with only the logged platform and toast label differing.
  */
 export function useManualSessionRefresh({
   refreshRequestId,
@@ -46,7 +49,7 @@ export function useManualSessionRefresh({
 
     lastHandledRefreshRequestIdRef.current = refreshRequestId;
     void refresh({ manual: true }).catch((error) => {
-      console.error(`[${agentLabel}ChatTab] Manual refresh failed:`, error);
+      log.error("refresh.manual-failed", { platform: agentLabel, error: formatLogError(error) });
       toast.error(`Failed to refresh ${agentLabel} tab`, {
         description: error instanceof Error ? error.message : String(error),
       });

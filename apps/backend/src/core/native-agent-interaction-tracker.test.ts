@@ -12,6 +12,7 @@ import {
   type NativeAgentSessionProjection,
   type StorageService,
 } from "./native-agent-service-shared.js";
+import { deepFreeze } from "./storage-frozen-snapshot.js";
 
 const identity = {
   environmentId: "env-1",
@@ -51,15 +52,23 @@ function harness(
     },
     ...overrides.options,
   };
+  const storage = {
+    getNativeAgentSession: async (key: string) =>
+      key === sessionKey ? { key, providerSessionId: "provider-session" } : null,
+    loadEnvironments: async () => [],
+    listNativeAgentSessions: async () => [],
+    listAllBuildPipelines: async () => [],
+    ...overrides.storage,
+  } as unknown as Record<string, (...args: never[]) => Promise<unknown>>;
+  // The sweep reads the shared snapshots, frozen as storage freezes them.
+  storage.readEnvironmentsSnapshot ??= async () => [
+    ...deepFreeze(structuredClone((await storage.loadEnvironments!()) as unknown[])),
+  ];
+  storage.readNativeAgentSessionsSnapshot ??= async () => [
+    ...deepFreeze(structuredClone((await storage.listNativeAgentSessions!()) as unknown[])),
+  ];
   const host: NativeAgentInteractionTrackerHost = {
-    storage: {
-      getNativeAgentSession: async (key: string) =>
-        key === sessionKey ? { key, providerSessionId: "provider-session" } : null,
-      loadEnvironments: async () => [],
-      listNativeAgentSessions: async () => [],
-      listAllBuildPipelines: async () => [],
-      ...overrides.storage,
-    } as unknown as StorageService,
+    storage: storage as unknown as StorageService,
     options,
     evictProvider: () => undefined,
     now: () => now,

@@ -24,10 +24,14 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
+import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { PipelineFlowView } from "./PipelineFlowView";
 import { PipelineKeyInformationButton } from "./PipelineKeyInformation";
 import { usePipelineControls } from "./usePipelineControls";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.build-pipeline");
 
 interface BuildChatTabProps {
   data: BuildTabData;
@@ -103,6 +107,7 @@ export function BuildChatTab({
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const controls = usePipelineControls(pipeline, () => setPinnedId(null));
   const hydrationAttemptedFor = useRef<string | null>(null);
+  const createTab = useOptionalTerminalContext()?.createTab;
   // The flow view renders the step count, elapsed time and graph toggle here.
   const [progressSlot, setProgressSlot] = useState<HTMLSpanElement | null>(null);
   const [graphToggleSlot, setGraphToggleSlot] = useState<HTMLDivElement | null>(null);
@@ -115,7 +120,11 @@ export function BuildChatTab({
     if (pipeline || hydrationAttemptedFor.current === data.pipelineId) return;
     hydrationAttemptedFor.current = data.pipelineId;
     void hydrateBuildPipeline(data.pipelineId).catch((error) => {
-      console.warn("[BuildChatTab] Failed to hydrate build pipeline:", error);
+      log.warn("pipeline.hydrate-failed", {
+        source: "chat-tab",
+        pipelineId: data.pipelineId,
+        error: formatLogError(error),
+      });
     });
   }, [data.pipelineId, pipeline]);
 
@@ -282,7 +291,20 @@ export function BuildChatTab({
               ))}
             </div>
           )}
-          <PipelineKeyInformationButton keyInformation={pipeline.keyInformation} />
+          <PipelineKeyInformationButton
+            keyInformation={pipeline.keyInformation}
+            onOpenTab={
+              createTab
+                ? () =>
+                    createTab("key-information", {
+                      keyInformation: {
+                        environmentId: data.environmentId,
+                        pipelineId: data.pipelineId,
+                      },
+                    })
+                : undefined
+            }
+          />
           <div ref={setGraphToggleSlot} className="flex size-9 shrink-0" />
         </div>
         {isMobile && (

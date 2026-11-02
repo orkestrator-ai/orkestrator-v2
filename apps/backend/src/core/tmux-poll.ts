@@ -418,7 +418,7 @@ export class ClaudeStatePollManager {
   /** Adopt every running container without waiting for a renderer lease. */
   async reconcile(context: CommandContext): Promise<void> {
     if (this.stopped) return;
-    const environments = await context.storage.loadEnvironments();
+    const environments = await context.storage.readEnvironmentsSnapshot();
     if (this.stopped) return;
     const running = new Set<string>();
     for (const environment of environments) {

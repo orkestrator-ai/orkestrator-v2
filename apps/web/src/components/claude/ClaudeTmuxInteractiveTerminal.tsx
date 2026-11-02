@@ -26,6 +26,9 @@ import {
 import { MobileTerminalKeyBar } from "@/components/terminal/MobileTerminalKeyBar";
 import { publishTerminalGeometryIfOwned } from "@/lib/terminal-geometry-owner";
 import { isKeyboardShortcutsShortcut } from "@/lib/keyboard-shortcuts";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.claude-tmux");
 
 const INTERACTIVE_RECOVERY_MAX_ATTEMPTS = 2;
 
@@ -116,7 +119,7 @@ export function ClaudeTmuxInteractiveTerminal({
   );
 
   const handleImageError = useCallback((errorMessage: string) => {
-    console.error("[ClaudeTmuxInteractiveTerminal] Clipboard image error:", errorMessage);
+    log.error("clipboard.image-failed", { error: formatLogError(errorMessage) });
   }, []);
 
   useClipboardImagePaste({
@@ -194,7 +197,7 @@ export function ClaudeTmuxInteractiveTerminal({
           terminal.rows,
           (cols, rows) => resizeInteractiveTerminal(sessionId, cols, rows),
         ).catch((resizeError) => {
-          console.error("[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:", resizeError);
+          log.error("terminal.resize-failed", { sessionId, error: formatLogError(resizeError) });
         });
       }
     };
@@ -295,10 +298,10 @@ export function ClaudeTmuxInteractiveTerminal({
                 if (cancelled || sessionIdRef.current !== sessionId) return;
               }
             }
-            console.error(
-              "[ClaudeTmuxInteractiveTerminal] Failed to recover terminal:",
-              recoveryError,
-            );
+            log.error("terminal.recover-failed", {
+              sessionId,
+              error: formatLogError(recoveryError),
+            });
             if (!cancelled && sessionIdRef.current === sessionId) {
               setError(`Terminal recovery failed: ${String(recoveryError)}`);
             }
@@ -376,7 +379,7 @@ export function ClaudeTmuxInteractiveTerminal({
         void publishTerminalGeometryIfOwned(true, terminal.cols, terminal.rows, (cols, rows) =>
           resizeInteractiveTerminal(sessionId, cols, rows),
         ).catch((resizeError) => {
-          console.error("[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:", resizeError);
+          log.error("terminal.resize-failed", { sessionId, error: formatLogError(resizeError) });
         });
       }
       if (!isMobileRef.current) {

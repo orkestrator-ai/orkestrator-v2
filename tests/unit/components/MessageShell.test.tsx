@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
@@ -512,10 +513,8 @@ describe("MessageShell", () => {
       },
     ],
   ])("reports %s long-press callback failure without leaking a rejection", async (_, callback) => {
-    const originalConsoleError = console.error;
-    const consoleError = mock(() => {});
+    const logs = captureLogs();
     const onUserLongPress = mock(callback);
-    console.error = consoleError;
 
     try {
       render(
@@ -544,9 +543,16 @@ describe("MessageShell", () => {
       await Promise.resolve();
 
       expect(onUserLongPress).toHaveBeenCalledTimes(1);
-      expect(consoleError).toHaveBeenCalledWith("[MessageShell] User long-press action failed");
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "web.chat",
+          event: "message.long-press-failed",
+        }),
+      );
+      expect(logs.lines.join("\n")).not.toContain("long-press failure");
     } finally {
-      console.error = originalConsoleError;
+      logs.restore();
     }
   });
 

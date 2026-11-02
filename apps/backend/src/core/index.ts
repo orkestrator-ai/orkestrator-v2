@@ -69,6 +69,7 @@ import {
 } from "./agent-accounts-auto-switch-notices.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
+import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
@@ -582,6 +583,11 @@ export class OrkestratorBackend {
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
         prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery },
+        // Docker-backed, like the worktree signal: summary reads in unit tests
+        // relay only what a `check_docker` answered.
+        ...(process.env.NODE_ENV === "test"
+          ? {}
+          : { dockerAvailability: { probe: () => checkDockerAvailability() } }),
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
           claudeStatePolls: { signal: backendClaudeStateSignal() },
@@ -682,8 +688,8 @@ export class OrkestratorBackend {
       prompts: humanPrompts,
       workingSessions: async () => {
         const [sessions, environments] = await Promise.all([
-          storage.listNativeAgentSessions(),
-          storage.loadEnvironments(),
+          storage.readNativeAgentSessionsSnapshot(),
+          storage.readEnvironmentsSnapshot(),
         ]);
         const local = new Set(
           environments
@@ -1696,7 +1702,7 @@ export class OrkestratorBackend {
     messageLimit: number,
   ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
-    const session = (await this.context.storage.listNativeAgentSessions()).find(
+    const session = (await this.context.storage.readNativeAgentSessionsSnapshot()).find(
       (candidate) =>
         candidate.environmentId === environmentId &&
         candidate.logicalSessionKey === logicalSessionKey,

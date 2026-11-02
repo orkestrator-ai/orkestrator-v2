@@ -77,6 +77,9 @@ import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-source
 import { getClaudeModelCatalog } from "@/lib/backend";
 import { submitClaudeTmuxAddressAll } from "@/lib/claude-tmux-address-all";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.claude-tmux");
 
 interface Props {
   tabId: string;
@@ -481,7 +484,7 @@ export function ClaudeTmuxChatTab({
       } catch (e) {
         // A missing backend session is not fatal; the auto-start path below
         // still handles new tabs with an initial prompt.
-        console.debug("[ClaudeTmuxChatTab] tmux hydrate failed", e);
+        log.debug("tab.hydrate-failed", () => ({ tabId, environmentId, error: formatLogError(e) }));
         if (refreshRequestId > 0) {
           const message = e instanceof Error ? e.message : String(e);
           setError(`Failed to refresh Claude tmux tab: ${message}`);
@@ -530,10 +533,10 @@ export function ClaudeTmuxChatTab({
       })
       .catch((catalogError) => {
         if (claudeCatalogRequestGenerations.get(environmentId) === requestGeneration) {
-          console.debug(
-            "[ClaudeTmuxChatTab] Claude model catalog unavailable; using bundled fallback",
-            catalogError,
-          );
+          log.debug("models.catalog-unavailable", () => ({
+            environmentId,
+            error: formatLogError(catalogError),
+          }));
         }
       });
   }, [backendHydrated, environmentId, refreshRequestId, setModelCatalog, setModels]);
@@ -885,7 +888,7 @@ export function ClaudeTmuxChatTab({
     try {
       await interruptSession(tabId, environmentId);
       await promoteNextQueuedPromptToDraft().catch((error) => {
-        console.error("[ClaudeTmuxChatTab] Failed to promote queued prompt:", error);
+        log.error("queue.promote-failed", { tabId, environmentId, error: formatLogError(error) });
       });
       setTabBusy(storeKey, false);
     } catch (e) {

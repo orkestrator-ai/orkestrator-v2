@@ -129,6 +129,9 @@ import {
   SettingsRow,
   SettingsSectionHeader,
 } from "./SettingsPageLayout";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.settings");
 
 // OpenCode provider ids are slug-like (`opencode`, `opencode-go`, `openrouter`).
 // A model id pasted whole would silently match nothing, so `/` is rejected.
@@ -421,7 +424,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       .catch((error) => {
         // The debug tab exists to diagnose the running install, so a probe that
         // never answered has to leave a trace rather than quietly look healthy.
-        console.error("[settings] Failed to read the backend app version:", error);
+        log.error("backend-version.read-failed", { error: formatLogError(error) });
         if (!cancelled) setBackendVersion({ state: "failed" });
       });
     return () => {
@@ -860,7 +863,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <SettingsRow
             label="Require checks to pass"
             htmlFor="auto-merge-require-checks"
-            description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass."
+            description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass. An environment's name shimmers green by the same rule."
           >
             <Switch
               id="auto-merge-require-checks"
@@ -1843,7 +1846,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     try {
       await copyGatewayToken(gatewayToken);
     } catch (error) {
-      console.error("[settings] Failed to copy gateway token:", error);
+      log.error("gateway-token.copy-failed", { error: formatLogError(error) });
       toast.error("Failed to copy gateway token");
     }
   }, [copyGatewayToken, gatewayToken]);
@@ -1854,7 +1857,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     try {
       await copyWebClientUrl(webClientUrl);
     } catch (error) {
-      console.error("[settings] Failed to copy web client URL:", error);
+      log.error("web-client-url.copy-failed", { error: formatLogError(error) });
       toast.error("Failed to copy web client URL");
     }
   }, [copyWebClientUrl, webClientUrl]);

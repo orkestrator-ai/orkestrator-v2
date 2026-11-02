@@ -24,6 +24,7 @@ with [agent-testing.md](agent-testing.md).
 | Run isolated-stack agent tests | `mise run test:agent:browser:isolated` | Creates a disposable profile, runs browser tests, and cleans up |
 | Run design-only real-stack tests | `mise run test:agent:design:isolated` | Same lifecycle, only `design-canvas.spec.ts` |
 | Run Electron agent tests | `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` | Main process, preload, IPC, clipboard, and shutdown |
+| Run the packaged-app Electron test | `mise run package:linux:unpacked`, then `mise run test:logged -- --name agent-electron-packaged -- mise run test:agent:electron:packaged` | Linux: the design journey against the packaged app's `file://` renderer, headless, on a disposable profile ([agent-testing.md](agent-testing.md#packaged-app-electron-spec)) |
 | Run Docker agent tests | `mise run test:logged -- --name agent-docker -- mise run test:agent:docker` | Opt-in container ownership and fixture coverage |
 | Qualify live paused interactions | `mise run test:logged -- --name paused-interactions-live -- mise run test:agent:paused-interactions` | Opt-in billed turns in a disposable profile; set `ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1` ([agent-testing.md](agent-testing.md#live-paused-interactions)) |
 | Run the live coordinator suite | `mise run test:agent:coordinator --credential-source <platform>` | Manual and opt-in: real provider turns, one disposable profile per platform ([agent-testing.md](agent-testing.md#live-coordinator-suite)) |
@@ -500,8 +501,18 @@ those contexts. WebKit engine coverage does **not** qualify shipping Safari or
 iOS. The suite covers sibling reads/frames, visible links, hostile workers,
 same-service iframe returns through a synthetic external identity provider,
 `srcset`, source maps, SPA deep links and history, IndexedDB,
-BroadcastChannel, Cache and worker isolation, frame and popup handling, and
-an IPv6-only (`::1`) service.
+BroadcastChannel, Cache and worker isolation, frame and popup handling,
+an IPv6-only (`::1`) service, upstream connection reuse and its closing on
+revocation and endpoint generation change, and legacy-route ETag revalidation
+(`upstream-pool.spec.ts`).
+
+With the Vite variable set, `vite-page-load.spec.ts` (Chromium only) also
+prints one `[preview-page-load]` line: medians of page-load time, requests,
+304s, bytes and upstream connections through the private origin and the
+legacy route. `ORKESTRATOR_TEST_PREVIEW_VITE_PAGE` picks the page,
+`ORKESTRATOR_TEST_PREVIEW_LOAD_SAMPLES` the samples, and
+`ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1` turns connection reuse off for an A/B
+comparison.
 
 Live Tailscale Serve header preservation is a separate opt-in transport check:
 
@@ -1423,6 +1434,7 @@ Use the default suite plus the additional evidence relevant to the change:
 | React component or store | Owning component/store tests and `mise run test:browser` when browser behavior matters |
 | User-visible or background renderer flow | Isolated-stack browser cycle, including inactive-environment rehydration |
 | Electron main/preload/IPC | Focused Electron tests plus `mise run test:agent:electron` |
+| Desktop packaging (`build` in `package.json`, `extraResources`) or how main loads the production renderer | `mise run package:linux:unpacked`, then `mise run test:agent:electron:packaged` on Linux |
 | Docker lifecycle or ownership | Local fixture coverage plus `mise run test:agent:docker` |
 | Service previews: private origins, publication, bootstrap, request forwarding, or the preview fixtures | `mise run test:preview:browser` (all three engines); add `mise run test:preview:docker` for target resolution, port publication or the relay, and `mise run test:agent:electron` for the desktop tunnel. See "Opt-in preview checks". |
 | iOS | `mise run test:all` on macOS with Xcode, or report that iOS was not run |

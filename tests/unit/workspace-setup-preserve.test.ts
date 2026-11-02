@@ -678,3 +678,137 @@ describe("workspace setup preserve/restore (functional)", () => {
     expect(ignored.status).toBe(0);
   });
 });
+
+describe("workspace setup clone move (volume storage)", () => {
+  function runMove(clone: string, workspace: string) {
+    const harness = `
+set -e
+RED=""; NC=""
+eval "$(sed -n '/^move_clone_into_workspace() {/,/^}$/p' "$1")"
+move_clone_into_workspace "$2" "$3"
+`;
+    return spawnSync("bash", ["-c", harness, "bash", setupScript, clone, workspace], {
+      encoding: "utf8",
+    });
+  }
+
+  function stagedClone(workspace: string): string {
+    const state = join(workspace, ".orkestrator");
+    const clone = join(state, ".clone-in-progress");
+    mkdirSync(join(clone, ".git", "objects"), { recursive: true });
+    mkdirSync(join(clone, "src"), { recursive: true });
+    writeFileSync(join(clone, ".git", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(clone, "src", "index.ts"), "export {};\n");
+    writeFileSync(join(clone, ".env.example"), "A=1\n");
+    writeFileSync(join(clone, "file with spaces"), "x");
+    symlinkSync("src/index.ts", join(clone, "entry"));
+    // A repository's own .orkestrator folder: the restore replaces it anyway.
+    mkdirSync(join(clone, ".orkestrator"), { recursive: true });
+    writeFileSync(join(clone, ".orkestrator", "tracked.json"), "{}");
+    writeFileSync(join(state, "storage-marker.json"), '{"environmentId":"env-1"}');
+    writeFileSync(join(state, ".clone-copy-in-progress"), "");
+    return clone;
+  }
+
+  test("renames every entry into the workspace instead of copying it", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-clone-move-"));
+    try {
+      const clone = stagedClone(workspace);
+      const sourceInode = statSync(join(clone, "src", "index.ts")).ino;
+      const gitInode = statSync(join(clone, ".git")).ino;
+
+      const result = runMove(clone, workspace);
+
+      expect(result.status).toBe(0);
+      expect(existsSync(clone)).toBe(false);
+      // Same inode: the entries were renamed within the volume, not copied.
+      expect(statSync(join(workspace, "src", "index.ts")).ino).toBe(sourceInode);
+      expect(statSync(join(workspace, ".git")).ino).toBe(gitInode);
+      expect(readFileSync(join(workspace, ".git", "HEAD"), "utf8")).toBe("ref: refs/heads/main\n");
+      expect(readFileSync(join(workspace, ".env.example"), "utf8")).toBe("A=1\n");
+      expect(readFileSync(join(workspace, "file with spaces"), "utf8")).toBe("x");
+      expect(readlinkSync(join(workspace, "entry"))).toBe("src/index.ts");
+      // The workspace's own state is untouched by the repository's folder.
+      expect(existsSync(join(workspace, ".orkestrator", "storage-marker.json"))).toBe(true);
+      expect(existsSync(join(workspace, ".orkestrator", "tracked.json"))).toBe(false);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("an entry that cannot be moved fails and keeps the staged clone for the retry", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-clone-move-"));
+    try {
+      const clone = stagedClone(workspace);
+      // Something already in the way: mv -n skips it silently.
+      mkdirSync(join(workspace, "src", "existing"), { recursive: true });
+
+      const result = runMove(clone, workspace);
+
+      expect(result.status).not.toBe(0);
+      expect(existsSync(join(clone, "src", "index.ts"))).toBe(true);
+      expect(existsSync(join(workspace, "src", "existing"))).toBe(true);
+      expect(existsSync(join(workspace, ".orkestrator", ".clone-copy-in-progress"))).toBe(true);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves tracked lost+found content in a clean checkout", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-lost-found-"));
+    try {
+      const clone = join(workspace, ".orkestrator", ".clone-in-progress");
+      mkdirSync(join(clone, "lost+found"), { recursive: true });
+      writeFileSync(join(clone, "lost+found", "fixture.txt"), "tracked");
+      const git = (...args: string[]) =>
+        spawnSync("git", ["-C", clone, ...args], { encoding: "utf8" });
+      expect(git("init").status).toBe(0);
+      expect(git("add", ".").status).toBe(0);
+      expect(
+        git(
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "-m",
+          "fixture",
+        ).status,
+      ).toBe(0);
+
+      expect(runMove(clone, workspace).status).toBe(0);
+      expect(readFileSync(join(workspace, "lost+found", "fixture.txt"), "utf8")).toBe("tracked");
+      const status = spawnSync("git", ["-C", workspace, "diff", "--exit-code", "HEAD"], {
+        encoding: "utf8",
+      });
+      expect(status.status).toBe(0);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("a filesystem lost+found collision fails without discarding repository content", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-lost-found-"));
+    try {
+      const clone = stagedClone(workspace);
+      mkdirSync(join(clone, "lost+found"));
+      writeFileSync(join(clone, "lost+found", "fixture.txt"), "tracked");
+      mkdirSync(join(workspace, "lost+found"));
+      writeFileSync(join(workspace, "lost+found", "recovered"), "filesystem");
+      expect(runMove(clone, workspace).status).not.toBe(0);
+      expect(readFileSync(join(clone, "lost+found", "fixture.txt"), "utf8")).toBe("tracked");
+      expect(readFileSync(join(workspace, "lost+found", "recovered"), "utf8")).toBe("filesystem");
+      expect(existsSync(join(workspace, ".orkestrator", ".clone-copy-in-progress"))).toBe(true);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("setup moves the volume clone with the helper rather than a byte copy", () => {
+    const setup = read("docker/workspace-setup.sh");
+    expect(setup).toContain('move_clone_into_workspace "$CLONE_DEST" /workspace || exit 1');
+    expect(setup).not.toContain('cp -a -n "$CLONE_DEST"');
+  });
+});

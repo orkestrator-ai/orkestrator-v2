@@ -46,6 +46,9 @@ import {
 import { useSessionStore } from "@/stores/sessionStore";
 import { refreshObservedAgentMailMailboxes, useAgentMailStore } from "@/stores/agentMailStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("web.resource-sync");
 
 /**
  * Binds the backend change feed to the stores that are read-through caches.
@@ -105,7 +108,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
         }
       }
     } catch (error) {
-      console.warn("[store-resource-sync] Failed to refresh config:", error);
+      log.warn("config.refresh-failed", { error: formatLogError(error) });
       throw error;
     }
   };
@@ -230,7 +233,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
 
   const requestPaneLayoutRefresh = (environmentId: string): void => {
     void refreshPaneLayout(environmentId).catch((error) => {
-      console.warn(`[store-resource-sync] Failed to refresh pane layout ${environmentId}:`, error);
+      log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
     });
   };
 
@@ -264,7 +267,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
         else unlisten = stop;
       })
       .catch((error) => {
-        console.warn("[store-resource-sync] Failed to observe setup completion:", error);
+        log.warn("setup-completion.observe-failed", { error: formatLogError(error) });
       });
     unsubscribes.push(() => unlisten?.());
   }
@@ -340,7 +343,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
         }
       } catch (error) {
         failed = true;
-        console.warn("[store-resource-sync] Authoritative project resync failed:", error);
+        log.warn("resync.project-failed", { error: formatLogError(error) });
       }
     }
     if (includes("environment")) {
@@ -364,7 +367,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
         }
       } catch (error) {
         failed = true;
-        console.warn("[store-resource-sync] Authoritative environment resync failed:", error);
+        log.warn("resync.environment-failed", { error: formatLogError(error) });
       }
     }
 
@@ -406,14 +409,14 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     for (const result of results) {
       if (result.status === "rejected") {
         failed = true;
-        console.warn("[store-resource-sync] Authoritative resync read failed:", result.reason);
+        log.warn("resync.read-failed", { error: formatLogError(result.reason) });
       }
     }
     const paneResults = await Promise.allSettled(paneEnvironmentIds.map(refreshPaneLayout));
     for (const result of paneResults) {
       if (result.status === "rejected") {
         failed = true;
-        console.warn("[store-resource-sync] Authoritative pane resync failed:", result.reason);
+        log.warn("resync.pane-failed", { error: formatLogError(result.reason) });
       }
     }
     if (failed) throw new Error("One or more authoritative resync reads failed");
@@ -449,7 +452,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   unsubscribes.push(
     onResourceChanged("agent-mail-summary", () => {
       return refreshAgentMailSummary().catch((error) => {
-        console.warn("[store-resource-sync] Failed to refresh agent mail summary:", error);
+        log.warn("agent-mail.summary-refresh-failed", { error: formatLogError(error) });
         throw error;
       });
     }),
@@ -463,7 +466,11 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
         .getState()
         .refreshMailbox(existing.descriptor.environmentId, existing.descriptor.tabId)
         .catch((error) => {
-          console.warn("[store-resource-sync] Failed to refresh agent mailbox:", error);
+          log.warn("agent-mail.mailbox-refresh-failed", {
+            environmentId: existing.descriptor.environmentId,
+            tabId: existing.descriptor.tabId,
+            error: formatLogError(error),
+          });
           throw error;
         });
     }),
@@ -476,10 +483,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       // that has never opened a tab still needs its queue if it opens one next.
       if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
       return hydratePromptQueuesForEnvironment(environmentId, promptQueueSources).catch((error) => {
-        console.warn(
-          `[store-resource-sync] Failed to refresh prompt queues for ${environmentId}:`,
-          error,
-        );
+        log.warn("prompt-queues.refresh-failed", { environmentId, error: formatLogError(error) });
         throw error;
       });
     }),
@@ -542,10 +546,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     onResourceChanged("pane-layout", ({ id: environmentId }) => {
       if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
       return refreshPaneLayout(environmentId).catch((error) => {
-        console.warn(
-          `[store-resource-sync] Failed to refresh pane layout ${environmentId}:`,
-          error,
-        );
+        log.warn("pane-layout.refresh-failed", { environmentId, error: formatLogError(error) });
         throw error;
       });
     }),
@@ -566,10 +567,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
           }
         })
         .catch((error) => {
-          console.warn(
-            `[store-resource-sync] Failed to refresh build pipeline ${pipelineId}:`,
-            error,
-          );
+          log.warn("build-pipeline.refresh-failed", { pipelineId, error: formatLogError(error) });
           throw error;
         });
     }),
@@ -578,7 +576,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   unsubscribes.push(
     onResourceChanged("multi-review", ({ id: workflowId }) => {
       return hydrateMultiReviewWorkflow(workflowId).catch((error) => {
-        console.warn(`[store-resource-sync] Failed to refresh multi review ${workflowId}:`, error);
+        log.warn("multi-review.refresh-failed", { workflowId, error: formatLogError(error) });
         throw error;
       });
     }),

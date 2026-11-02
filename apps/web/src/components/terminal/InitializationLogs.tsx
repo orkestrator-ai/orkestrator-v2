@@ -3,6 +3,9 @@ import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { getContainerLogs } from "@/lib/backend";
 import { Loader2, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("terminal");
 
 interface InitializationLogsProps {
   containerId: string;
@@ -80,7 +83,7 @@ function ContainerInitializationLogs({
       if (!state.hasValue) {
         if (!failureLoggedRef.current) {
           failureLoggedRef.current = true;
-          console.error("[InitializationLogs] Error loading logs:", errorMessage);
+          log.error("init-logs.load-failed", { error: formatLogError(errorMessage) });
         }
         setError(`Failed to load container logs: ${errorMessage}`);
         setIsLoading(false);
@@ -96,7 +99,7 @@ function ContainerInitializationLogs({
       // of the container — but says so rather than presenting stale output
       // under a spinner that implies it is live.
       if (state.failures === STALE_LOG_FAILURE_THRESHOLD) {
-        console.warn("[InitializationLogs] Container logs stopped refreshing:", errorMessage);
+        log.warn("init-logs.refresh-stopped", { error: formatLogError(errorMessage) });
       }
       if (state.failures >= STALE_LOG_FAILURE_THRESHOLD) setIsStale(true);
     },

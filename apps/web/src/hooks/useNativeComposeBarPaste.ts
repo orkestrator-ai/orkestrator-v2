@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useEffect, type RefObject } from "react";
 import { readImage } from "@/lib/native/clipboard";
 import { toast } from "sonner";
@@ -9,6 +10,8 @@ import {
 } from "@/lib/canvas-utils";
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
+
+const log = createLogger("web.native-agent");
 
 /** Maximum final PNG size in bytes (8MB) */
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
@@ -232,7 +235,7 @@ export function useNativeComposeBarPaste({
         } catch (error) {
           restoreTextPaste();
           if (!isExpectedClipboardError(error)) {
-            console.error(`[${logLabel}] Unexpected paste error:`, error);
+            log.error("paste.failed", { source: logLabel, error: formatLogError(error) });
           }
           if (pastedBlob && isCurrent())
             toast.error("Cannot paste image", { description: "Please try pasting it again." });
@@ -322,7 +325,7 @@ export function useNativeComposeBarPaste({
           });
         } catch (error) {
           restoreTextPaste();
-          console.error(`[${logLabel}] Unexpected paste error:`, error);
+          log.error("paste.failed", { source: logLabel, error: formatLogError(error) });
           if (isCurrent())
             toast.error("Cannot paste image", { description: "Please try pasting it again." });
         }

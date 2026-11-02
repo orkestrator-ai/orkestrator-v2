@@ -360,6 +360,20 @@ idle, 8 hours absolute). It outlives the tab that opened it and ends on service
 removal, an endpoint generation change, the access kill switch or credential
 rotation.
 
+The proxy reuses upstream connections (`apps/backend/src/preview-upstream-pool.ts`).
+After a cleanly framed response, the connection is kept idle for the access
+(attachment), endpoint generation and target it was opened for, and only that
+access reuses it. Every request still re-checks the access and resolves the
+target first. The pool is registered with the access service, so revoking or
+expiring the access, or a new endpoint generation (which revokes the old
+generation's access), closes the idle connections at once; a registry
+revocation also drops the service's pool directly. An idle connection that
+receives data or EOF is closed, never handed out. A safe request with no body
+(`GET`, `HEAD`, `OPTIONS`) whose reused connection turns out to have been
+closed before any response is sent once more on a fresh connection; no other
+request is retried. Upgrades always use a fresh connection. Application
+`ETag`s pass through unchanged on this route.
+
 Certificates are checked for coverage and expiry. A renewed certificate is
 detected and the listener is re-bound on the same port. A certificate that does
 not cover the preview hosts disables publication, and capabilities show why.
@@ -467,6 +481,7 @@ pooled per service; nothing is replayed after a reconnect.
 | Definition, endpoint generation, readiness | Backend `PreviewServiceRegistry` | Definitions persist; runtime state is rebuilt on restart under a new epoch |
 | Attachment and credential hash | Backend `PreviewAccessService` | Release (by the client, on the issuing backend, including after a connection change or window close), lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
 | Tunnel sockets and upstream TCP | Backend `PreviewTunnelServer` | Closing either leg closes both; revocation closes everything tracked for the attachment |
+| Idle upstream connections (private origins) | Backend `PreviewUpstreamPool`, per attachment | Revocation, expiry or generation change of the attachment, registry revocation of the service, 2 s idle, publication shutdown |
 | Local ingress listener and ingress secret | Electron `PreviewTransportManager` | Last attachment release plus a short retirement lease, connection change, window close, app quit |
 | Service partition cookies and storage | Electron session | **Reset site data** for that service only; cleared once its service is gone from the backend's list or its connection is forgotten, directory removed on the next start (shared legacy partitions of live connections: see [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md)) |
 | Browser preview session cookie | Browser holds the value; backend owns validity | Server-side idle and absolute expiry, revocation |
@@ -607,6 +622,7 @@ Defaults from `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`):
 | Tunnels | 16 per service, 128 per backend, 32 pending handshakes |
 | HTTP requests (publication) | 32 active per service, 128 per backend |
 | Upgrades (publication) | 8 per service, 128 per backend |
+| Idle upstream connections (publication) | 8 per access, 64 per backend, 2 s idle |
 | Tunnel queues | 256 KiB per direction, 64 MiB aggregate |
 | Headers | 32 KiB, 100 fields; 30 s to first response header |
 | Idle body | 60 s |

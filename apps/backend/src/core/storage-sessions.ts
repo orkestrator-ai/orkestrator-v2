@@ -3,6 +3,7 @@ import * as shared from "./storage-shared.js";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { StoreCorruptError } from "./storage-database.js";
 import { UsageHistoryStore, type RecordUsageTurnsInput } from "./usage-history-store.js";
+import type { UsageEnvironmentLabel } from "./usage-history-record.js";
 import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import {
@@ -205,6 +206,14 @@ export class SessionsRepository {
    */
   recordAgentUsageTurns(input: RecordUsageTurnsInput): number {
     return this.usageHistoryStore().recordTurns(input);
+  }
+
+  /**
+   * Stamps an environment's names onto its recorded usage, so the usage pane
+   * can still name it once it is deleted. Returns how many rows changed.
+   */
+  labelAgentUsageEnvironment(environmentId: string, label: UsageEnvironmentLabel): number {
+    return this.usageHistoryStore().labelEnvironment(environmentId, label);
   }
 
   /** The range report the usage panes render. */

@@ -1,6 +1,10 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { createLazyLoadFailureDiagnostic } from "@/components/LazyLoadBoundary";
 import { cn } from "@/lib/utils";
+
+const log = createLogger("web.chat");
 
 /**
  * The shared frame for rich transcript blocks (code, diagrams, tables,
@@ -156,12 +160,16 @@ class RichBlockErrorBoundary extends Component<BoundaryProps, { failed: boolean 
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo): void {
-    // Content-free: kind and error class only, never the block's source.
-    console.warn(
-      `[RichBlockFrame] ${this.props.kind} renderer failed:`,
-      error instanceof Error ? error.name : "error",
-      info.componentStack?.split("\n")[1]?.trim(),
-    );
+    // Content-free: kind, an allowlisted error class, a one-way fingerprint and
+    // the failing component's name. Never the block's source, the error's message
+    // or a component stack location, which can hold a path or URL.
+    const diagnostic = createLazyLoadFailureDiagnostic(error, info);
+    log.warn("rich-block.render-failed", {
+      kind: this.props.kind,
+      errorType: diagnostic.errorType,
+      fingerprint: diagnostic.fingerprint,
+      component: diagnostic.componentChain[0],
+    });
   }
 
   render(): ReactNode {

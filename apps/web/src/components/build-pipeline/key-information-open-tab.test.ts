@@ -1,0 +1,98 @@
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
+import { openKeyInformationTab } from "./key-information-open-tab";
+
+const ENVIRONMENT_ID = "env-1";
+
+function seed(tabs: TabInfo[]) {
+  usePaneLayoutStore.setState({
+    environments: new Map([
+      [
+        ENVIRONMENT_ID,
+        {
+          root: { kind: "leaf", id: "pane-1", tabs, activeTabId: tabs[0]?.id ?? null },
+          activePaneId: "pane-1",
+          containerId: null,
+        },
+      ],
+    ]),
+  });
+}
+
+function leaf(): PaneLeaf {
+  return usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)!.root as PaneLeaf;
+}
+
+function open(
+  tabs: TabInfo[],
+  pipelineId: string,
+  { maxTabs = 9, environmentId = ENVIRONMENT_ID } = {},
+) {
+  const addTab = mock((paneId: string, tab: TabInfo, environmentId: string) =>
+    usePaneLayoutStore.getState().addTab(paneId, tab, environmentId),
+  );
+  const onTabLimit = mock(() => {});
+  const opened = openKeyInformationTab({
+    environmentId: ENVIRONMENT_ID,
+    activePaneId: "pane-1",
+    allTabs: tabs,
+    maxTabs,
+    target: { environmentId, pipelineId },
+    addTab,
+    onTabLimit,
+  });
+  return { opened, addTab, onTabLimit };
+}
+
+const buildTab: TabInfo = {
+  id: "build",
+  type: "claude-build",
+  buildTabData: { environmentId: ENVIRONMENT_ID, pipelineId: "pipeline-1", taskId: "task-1" },
+};
+
+beforeEach(() => seed([buildTab]));
+
+describe("openKeyInformationTab", () => {
+  test("adds one key information tab for the pipeline and selects it", () => {
+    const { opened, addTab } = open([buildTab], "pipeline-1");
+    expect(opened).toBe(true);
+    expect(addTab).toHaveBeenCalledTimes(1);
+    const added = leaf().tabs.find((tab) => tab.type === "key-information")!;
+    expect(added.keyInformationTabData).toEqual({
+      environmentId: ENVIRONMENT_ID,
+      pipelineId: "pipeline-1",
+    });
+    expect(leaf().activeTabId).toBe(added.id);
+  });
+
+  test("focuses the pipeline's open tab instead of adding another, even at the tab limit", () => {
+    const tabs: TabInfo[] = [
+      buildTab,
+      {
+        id: "brief",
+        type: "key-information",
+        keyInformationTabData: { environmentId: ENVIRONMENT_ID, pipelineId: "pipeline-1" },
+      },
+    ];
+    seed(tabs);
+    usePaneLayoutStore.getState().setActiveTab("pane-1", "build", ENVIRONMENT_ID);
+    const { opened, addTab } = open(tabs, "pipeline-1", { maxTabs: 2 });
+    expect(opened).toBe(true);
+    expect(addTab).not.toHaveBeenCalled();
+    expect(leaf().activeTabId).toBe("brief");
+  });
+
+  test("another pipeline is a new tab, refused at the tab limit", () => {
+    const { opened, addTab, onTabLimit } = open([buildTab], "pipeline-2", { maxTabs: 1 });
+    expect(opened).toBe(false);
+    expect(addTab).not.toHaveBeenCalled();
+    expect(onTabLimit).toHaveBeenCalledTimes(1);
+  });
+
+  test("refuses a pipeline from another environment", () => {
+    const { opened, addTab } = open([buildTab], "pipeline-1", { environmentId: "env-2" });
+    expect(opened).toBe(false);
+    expect(addTab).not.toHaveBeenCalled();
+  });
+});

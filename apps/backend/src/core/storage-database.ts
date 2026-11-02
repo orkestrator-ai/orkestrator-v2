@@ -298,6 +298,7 @@ export class StorageDatabase {
       const existing = this.schemaVersion();
       if (existing > 0 && existing < target) options.beforeMigrate?.(this, existing, target);
       this.migrate(dataDir, migrations);
+      this.ensureIndexes();
       this.instanceId = (
         this.db.query("SELECT value FROM storage_meta WHERE key = 'instance'").get() as {
           value: string;
@@ -344,6 +345,25 @@ export class StorageDatabase {
         }
       })
       .exclusive();
+  }
+
+  /**
+   * Secondary indexes that change no stored value and no schema version, so
+   * they are created on open rather than by a numbered migration: an older
+   * build still opens the database and SQLite maintains an index it does not
+   * know about. `store_rows_position` turns an insert's next-position lookup
+   * (`max(position)` of one collection) and every ordered row fetch into an
+   * index walk instead of a scan of the collection. Creating it is one write
+   * on the first open after an upgrade; afterwards this reads the schema.
+   */
+  private ensureIndexes(): void {
+    const present = this.db
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'store_rows_position'")
+      .get();
+    if (present) return;
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS store_rows_position ON store_rows (store, collection, position)",
+    );
   }
 
   schemaVersion(): number {

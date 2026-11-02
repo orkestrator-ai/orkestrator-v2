@@ -987,3 +987,62 @@ describe("StorageDatabase row API guards", () => {
     expect(db.readStoreHeader("missing")).toBeNull();
   });
 });
+
+describe("StorageDatabase position index", () => {
+  const nextPositionQuery =
+    "SELECT coalesce(max(position) + 1, 0) AS next FROM store_rows WHERE store = ? AND collection = ?";
+
+  function plan(db: StorageDatabase, sql: string): string {
+    return (
+      db.db.query(`EXPLAIN QUERY PLAN ${sql}`).all("records", "") as Array<{ detail: string }>
+    )
+      .map((row) => row.detail)
+      .join("\n");
+  }
+
+  test("an insert's next position is an index lookup, not a scan of the collection", async () => {
+    const db = database(await dataDir());
+    db.writeStore("records", { a: 1, b: 2 });
+    expect(plan(db, nextPositionQuery)).toContain("store_rows_position");
+    db.updateStoreRow("records", "c", () => ({ result: undefined, value: 3 }));
+    db.transaction(() => db.rows("records").put("d", "4"));
+    expect(db.storeRowStats("records")!.map((row) => [row.key, row.position])).toEqual([
+      ["a", 0],
+      ["b", 1],
+      ["c", 2],
+      ["d", 3],
+    ]);
+  });
+
+  test("a database opened without the index gains it with its rows, revisions and version unchanged", async () => {
+    const directory = await dataDir();
+    const first = database(directory);
+    first.writeStore("records", { a: 1, b: 2 });
+    first.writeStore("items", [{ id: "x" }, { id: "y" }]);
+    // A database last opened by a build that predates the index.
+    first.db.exec("DROP INDEX store_rows_position");
+    const version = first.schemaVersion();
+    const dump = (db: StorageDatabase) => ({
+      stores: db.db.query("SELECT name, revision, layout, mode, document FROM stores").all(),
+      rows: db.db
+        .query(
+          "SELECT store, collection, key, position, owner, value FROM store_rows ORDER BY 1, 2, 3",
+        )
+        .all(),
+    });
+    const before = dump(first);
+    first.close();
+
+    const reopened = database(directory);
+    expect(
+      reopened.db
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'store_rows_position'",
+        )
+        .get(),
+    ).toEqual({ name: "store_rows_position" });
+    expect(reopened.schemaVersion()).toBe(version);
+    expect(dump(reopened)).toEqual(before);
+    expect(reopened.readStore("records")).toMatchObject({ value: { a: 1, b: 2 } });
+  });
+});

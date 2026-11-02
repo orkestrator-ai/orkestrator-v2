@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import {
   gitHubPullRequestKey,
   type GitHubPullRequestRef,
@@ -21,6 +22,19 @@ export function settlePullRequestFallback(ref: GitHubPullRequestRef, failed: boo
   const key = gitHubPullRequestKey(ref);
   const url = pending.get(key);
   pending.delete(key);
-  if (failed && url) return openInBrowser(url);
+  if (failed && url) {
+    // Delayed window.open may be blocked after transient activation expires.
+    // Keep a user-activated escape route even when automatic opening resolves.
+    toast.error("Could not load the pull request", {
+      duration: Infinity,
+      action: {
+        label: "Open on GitHub",
+        onClick: () => {
+          void openInBrowser(url).catch(() => toast.error("Could not open the link"));
+        },
+      },
+    });
+    return openInBrowser(url);
+  }
   return Promise.resolve();
 }

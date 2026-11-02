@@ -1,3 +1,4 @@
+import { armPullRequestFallback } from "./pull-request-load-fallback";
 import {
   DEFAULT_TERMINAL_LINK_TARGET,
   resolveTerminalLinkDefaultTarget,
@@ -93,6 +94,7 @@ export function createTerminalLinkActivator({
     }
     const pullRequest = event.shiftKey ? null : parseGitHubPullRequestLink(uri);
     if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) {
+      armPullRequestFallback(pullRequest, uri);
       return;
     }
     if (target === "browser-tab" && isLoopbackUrl(uri)) {

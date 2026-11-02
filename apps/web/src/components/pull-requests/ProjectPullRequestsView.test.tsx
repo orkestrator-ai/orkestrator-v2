@@ -171,3 +171,11 @@ test("project list and nested links use the side pane without changing the proje
   expect(useFilesPanelStore.getState().activeTab).toBe("pull-request:acme/api#7");
   expect(useProjectPullRequestsStore.getState().projects.project?.activeKey).toBe(activeKey);
 });
+
+test("explicit main-area action opens the PR selected in the side pane", async () => {
+  render(<ProjectPullRequestsView projectId="project" />);
+  fireEvent.click(await screen.findByText("Pull request 42"));
+  fireEvent.click(await screen.findByRole("button", { name: "Open pane PR in main area" }));
+  expect(await screen.findByRole("heading", { name: "Detail 42" })).toBeTruthy();
+  expect(useProjectPullRequestsStore.getState().projects.project?.tabs[0]?.ref).toEqual(prRef);
+});

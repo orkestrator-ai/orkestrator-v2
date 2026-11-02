@@ -102,3 +102,52 @@ test("an inaccessible recognized PR falls back to its original URL only once", a
   expect(calls).toEqual([url]);
   expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
 });
+
+test("reopening after failure waits for the pending new load and preserves a terminal deep link", async () => {
+  const { act } = await import("@testing-library/react");
+  const { createTerminalLinkActivator } = await import("@/lib/terminal-links");
+  const { openPullRequestUrl } = await import("@/lib/pull-request-opener");
+  const { FilesPanelPullRequests } =
+    await import("@/components/files-panel/FilesPanelPullRequests");
+  const calls: string[] = [];
+  installBackend({
+    get_github_pull_request: () => {
+      throw new Error("Denied");
+    },
+    open_in_browser: (args) => {
+      calls.push(String(args.url));
+    },
+  });
+  const url = "https://github.com/acme/widget/pull/42/files?view=split#diff-123";
+  createTerminalLinkActivator({ environmentId: "env", openExternal: async () => {} })(
+    { button: 0, ctrlKey: true, shiftKey: false, metaKey: false } as MouseEvent,
+    url,
+  );
+  render(
+    <TooltipProvider>
+      <FilesPanelPullRequests targetId="env" />
+    </TooltipProvider>,
+  );
+  await waitFor(() => expect(calls).toEqual([url]));
+  let resolve!: (detail: ReturnType<typeof makeDetail>) => void;
+  installBackend({
+    get_github_pull_request: () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+    open_in_browser: (args) => {
+      calls.push(String(args.url));
+    },
+    get_github_pull_request_files: () => makeFiles(),
+  });
+  await act(async () => {
+    await openPullRequestUrl(url);
+  });
+  await waitFor(() => expect(resolve).toBeDefined());
+  expect(calls).toEqual([url]);
+  await act(async () => {
+    resolve(makeDetail());
+  });
+  expect(await screen.findByRole("heading", { name: "feat: add usage history tab" })).toBeTruthy();
+  expect(calls).toEqual([url]);
+});

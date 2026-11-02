@@ -1,3 +1,10 @@
+import { Toaster } from "../../apps/web/src/components/ui/sonner";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "../../apps/web/src/components/ui/resizable";
+import { fixtureDetail } from "./pr-pane-detail";
 import { useLayoutEffect, type ReactNode } from "react";
 import { FilesPanelPullRequests } from "../../apps/web/src/components/files-panel/FilesPanelPullRequests";
 import { useFilesPanelStore } from "../../apps/web/src/stores/filesPanelStore";
@@ -19,7 +26,17 @@ export function PrPaneTranscriptFrame({ children }: { children: ReactNode }) {
     );
     window.orkestrator = {
       invoke: async (command: string) => {
-        if (command === "open_in_browser") return;
+        if (command === "open_in_browser") {
+          window.open("https://github.com/acme/widget/pull/42", "_blank");
+          return;
+        }
+        if (command === "get_github_pull_request") {
+          if (new URLSearchParams(location.search).has("delayedFailure")) {
+            await new Promise((resolve) => setTimeout(resolve, 6000));
+            throw new Error("Repository unavailable");
+          }
+          return fixtureDetail;
+        }
         throw new Error("Fixture repository unavailable");
       },
       listen: () => () => undefined,
@@ -31,27 +48,25 @@ export function PrPaneTranscriptFrame({ children }: { children: ReactNode }) {
     });
   }, []);
   return (
-    <div style={{ display: "flex", width: "100%" }}>
-      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
-      {isOpen && (
-        <aside
-          style={{
-            position: "fixed",
-            right: 0,
-            top: 0,
-            width: 360,
-            height: 800,
-            zIndex: 10,
-            background: "#18181b",
-          }}
-        >
-          <button onClick={() => useFilesPanelStore.setState({ isOpen: false })}>
-            Close PR pane
-          </button>
-          <FilesPanelPullRequests targetId="transcript-env" />
-        </aside>
-      )}
-    </div>
+    <>
+      <Toaster />
+      <ResizablePanelGroup orientation="horizontal" style={{ height: 860 }}>
+        <ResizablePanel defaultSize={isOpen ? 70 : 100} minSize={30}>
+          {children}
+        </ResizablePanel>
+        {isOpen && (
+          <>
+            <ResizableHandle />
+            <ResizablePanel defaultSize={30} minSize={20}>
+              <button onClick={() => useFilesPanelStore.setState({ isOpen: false })}>
+                Close PR pane
+              </button>
+              <FilesPanelPullRequests targetId="transcript-env" />
+            </ResizablePanel>
+          </>
+        )}
+      </ResizablePanelGroup>
+    </>
   );
 }
 

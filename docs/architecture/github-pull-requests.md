@@ -328,3 +328,14 @@ A failed merge or launch is retried after 60 s, doubling up to 15 minutes. A
 successful attempt also holds the same PR for 60 s, because a merge GitHub has
 accepted but not completed still reads as open and clean. Coordinators cannot
 call `set_environment_auto_merge`, as they cannot call `merge_environment_pr`.
+
+After an initial detail-load failure, the fallback also shows an **Open on
+GitHub** notification action. This remains clickable when a web browser blocks
+an automatic popup after user activation expires. Terminal fallbacks retain the
+complete clicked URL, including its path, query and fragment. Reopening a failed
+PR waits for the new activation load before deciding whether to fall back.
+
+The project Pull requests page retains its saved main-area tabs. To create one
+explicitly, select a PR in the right pane and use **Open pane PR in main area**
+in the project's PR tab bar. Ordinary list and transcript links continue to open
+the right pane.

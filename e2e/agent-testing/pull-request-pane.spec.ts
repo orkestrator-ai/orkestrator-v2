@@ -41,6 +41,17 @@ for (const width of [1440, 820]) {
       taskId: task.id,
       text: "https://github.com/acme/widget/pull/42",
     });
+    const nativeOpen = await page.evaluateHandle(() => window.open);
+    await page.route("**/__orkestrator/invoke", async (route) => {
+      if (route.request().postDataJSON()?.command !== "get_github_pull_request")
+        return route.continue();
+      await new Promise((resolve) => setTimeout(resolve, 6000));
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Fixture repository unavailable" }),
+      });
+    });
     await page.evaluate(() => {
       window.open = ((url: string) => {
         document.documentElement.dataset.externalPr = url;
@@ -81,6 +92,21 @@ for (const width of [1440, 820]) {
       );
       await expect.poll(scrollPositions).toEqual(scroll);
       await page.screenshot({ path: path.join(previewDir, `ticket-pr-after-${width}.png`) });
+      const fallback = page.getByRole("button", { name: "Open on GitHub", exact: true });
+      await expect(fallback).toBeVisible({ timeout: 15000 });
+      await page.evaluate((original) => {
+        window.open = original;
+      }, nativeOpen);
+      const popup = page.waitForEvent("popup");
+      await fallback.click();
+      await (await popup).close();
+      // Editing fallback below records the URL without opening another browser.
+      await page.evaluate(() => {
+        window.open = ((url: string) => {
+          document.documentElement.dataset.externalPr = url;
+          return null;
+        }) as typeof window.open;
+      });
       await closePanel.click();
       await expect.poll(scrollPositions).toEqual(scroll);
       await page.getByRole("tab", { name: "Kanban", exact: true }).focus();

@@ -567,6 +567,25 @@ fixture readiness, and a later UI attempt exposed stale startup and coordinator
 assertions. The successful run above supersedes those attempts. Original
 preparation artifacts were preserved.
 
+Review preparation must qualify the committed snapshot with `mise run
+test:agent:docker:isolated` (through `test:logged`). This one-shot task builds
+and smokes the image, provisions its own credential-free local/container
+profile, runs the same Docker fixture selection as `test:agent:docker`, then
+stops/resets the profile and removes its image tag. The scheduler declares
+coverage of `test:agent:docker`. Running that bare task after the earlier
+profile was reset produced a failed validation entry despite a separate later
+manual pass; that entry does not establish qualification. The one-shot path
+keeps setup, smoke, suite and cleanup in the preparation command's own result.
+Its tracked PATH shim handles exhausted pools for owned fixture networks only,
+checking host routes before explicit /29 allocation and preserving overlap
+refusals. No external helper or running profile is needed. Fresh qualification
+on 2026-11-02 passed through this one-shot path: image build and final-image
+smoke passed, followed by **20 passed, 4 live-provider skips, 0 failed, 0 flaky**
+(578.2 s suite; 608.3 s including build, smoke, setup and cleanup). The profile
+reported `missing` with no live processes after cleanup, and its image tag was
+absent. This focused pass does not replace the next preparation package's run
+against the committed snapshot.
+
 Native arm64 qualification remains open: an emulated build failed at the
 existing Chromium verifier after 273.2 seconds (GPU launch error 1002,
 QEMU target signal 5). No arm64 final image or smoke result exists; a native
@@ -717,7 +736,12 @@ would be less work but would leave acceptance coverage incomplete.
 Keep measurements, the final command, setup constraints and outcomes in this
 record (recommended): this remains readable after temporary artifacts expire.
 Keeping every failed attempt and local log path gives more chronology but no
-portable evidence. The coordinator scenario now explicitly selects Codex and
+portable evidence. For subsequent preparation, choose the self-contained Docker
+task (recommended): it records actual qualification and cleanup together but
+adds a small supervised setup path. Keeping the manual-profile command is
+simpler but requires a live profile that cleanup deliberately removes and
+cannot reproduce the recorded pass unaided. The coordinator scenario now
+explicitly selects Codex and
 asserts it persists; deriving the expectation from each snapshot tested display
 consistency but could miss an unexpected selection. Final-image smoke now
 checks linked Bun and bunx offline as `node`, with both the image home and an

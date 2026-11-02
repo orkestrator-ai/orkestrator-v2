@@ -8,6 +8,13 @@
     "mise run test:changed"
   ],
   "commandProfiles": {
+    "mise run test:agent:docker:isolated": {
+      "resources": ["workspace:*"],
+      "workers": 2,
+      "memoryMiB": 4096,
+      "noProgressTimeoutMs": 600000,
+      "covers": ["mise run test:agent:docker"]
+    },
     "mise run test:agent:browser:isolated": {
       "resources": ["workspace:*"],
       "workers": 2,

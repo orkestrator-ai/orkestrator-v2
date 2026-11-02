@@ -285,3 +285,20 @@ test("isolated browser overrides an inherited live revision-token opt-in", async
   expect(await runIsolatedBrowser(f)).toBe(0);
   expect((await f.events()).find((event) => event.task === "playwright")?.revisionTokens).toBe("0");
 });
+
+test("Docker qualification builds and smokes before starting the container fixture", async () => {
+  const f = await fixture();
+  // The fake commands exercise lifecycle ordering; Docker itself is covered by
+  // the opt-in real fixture run.
+  await writeFile(path.join(f.root, "docker"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  expect(await runIsolatedBrowser({ ...f, docker: true })).toBe(0);
+  const events = await f.events();
+  expect(events[0]?.task).toBe("docker:build:dev");
+  const start = events.find((event) => event.task === "dev:test")!;
+  expect(start.args).toContain("--fixture-environments");
+  expect(start.args).toContain("local,container");
+  const tests = events.find((event) => event.task === "playwright")!;
+  expect(tests.args).toContain("Docker fixture");
+  expect(events.slice(-2).map((event) => event.task)).toEqual(["dev:stop", "dev:reset"]);
+});

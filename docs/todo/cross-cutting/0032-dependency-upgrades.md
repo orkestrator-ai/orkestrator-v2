@@ -174,7 +174,18 @@ advisories. Everything left waits on an upstream release or a date.
 
 ### Task 7: review qualification status (2026-11-02)
 
-The Node 24.22.2 pin and required amd64 qualification are complete. Round 2 passed fresh image smoke and the Docker suite (20 passed, 4 live-provider skips). Explicit subnets for the disposable profile avoided exhausted default pools without changing shared networks or daemon/firewall settings. The repaired specs reuse the existing startup helper; the coordinator scenario explicitly selects Codex and checks that selection against both backend state and the displayed label. Node 26 remains deferred; native arm64 qualification is not claimed. See 1202 task 14 for the qualification command, setup constraints and cleanup outcome.
+The Node 24.22.2 pin and required amd64 qualification are complete. Round 2 passed fresh image smoke and the Docker suite (20 passed, 4 live-provider skips). Explicit subnets for the disposable profile avoided exhausted default pools without changing shared networks or daemon/firewall settings. The repaired specs reuse the existing startup helper; the coordinator scenario explicitly selects Codex and checks that selection against both backend state and the displayed label. Subsequent preparation uses `mise run test:agent:docker:isolated`, which builds
+and smokes the image and owns the credential-free Docker fixture lifecycle.
+The bare Docker task expects an already-running profile; its failed preparation
+entry cannot be superseded by a pass outside that validation package. The
+self-contained command is recommended over a manual profile: it adds setup
+code, but records reproducible qualification and cleanup in the same check.
+Fresh one-shot qualification on 2026-11-02 passed image build, final-image
+smoke and all 20 credential-free Docker cases (4 live-provider skips, no
+failures or flakes; 608.3 s overall). Profile and image cleanup were confirmed.
+Preparation must run this task against the committed snapshot for its own
+validation package. Node 26 remains deferred; native arm64 qualification is
+not claimed. See 1202 task 14 for the qualification command, setup constraints and cleanup outcome.
 
 ## Current state
 

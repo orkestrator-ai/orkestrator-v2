@@ -1,3 +1,4 @@
+import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import { configureLogger, createLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -773,14 +774,29 @@ describe("application logging shutdown", () => {
       },
     } satisfies InstalledApplicationLogging;
 
-    registerApplicationLoggingShutdown(app.host, logging, 5_000, {
-      settled: () => new Promise<void>(() => {}),
-      timeoutMs: 10,
-    });
-    app.emit();
-    await Bun.sleep(60);
-    expect(closed).toBe(true);
-    expect(app.quitCount).toBe(1);
+    const outputDeadline = installControlledTimeout(10, { label: "pending output deadline" });
+    const quitTask = installControlledTimeout(0, { label: "deferred quit" });
+    try {
+      registerApplicationLoggingShutdown(app.host, logging, 5_000, {
+        settled: () => new Promise<void>(() => {}),
+        timeoutMs: 10,
+      });
+      app.emit();
+      expect(closed).toBe(false);
+      expect(outputDeadline.advance()).toBe(1);
+      // Drain the hold's promise chain without depending on a shared host's
+      // timer scheduling. Quit must still wait for a separate macrotask.
+      for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+      expect(closed).toBe(true);
+      expect(app.quitCount).toBe(0);
+      expect(quitTask.advance()).toBe(1);
+      expect(app.quitCount).toBe(1);
+      outputDeadline.assertDrained();
+      quitTask.assertDrained();
+    } finally {
+      quitTask.restore();
+      outputDeadline.restore();
+    }
   });
 
   test("registers nothing when logging was not installed", () => {

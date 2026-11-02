@@ -241,3 +241,17 @@ No design implementation, assertion, timeout or skip changed.
 The notification-bar review on 2026-11-01 repeated the ledger assertion; the unchanged owner passed alone on the branch (1.2 s) and detached origin/main (1.0 s). Preparation used `mise run test`; its captured output does not name the granted worker count. Evidence: `.orkestrator/review-artifacts/review-validation-eb40d1d2-656b-44f0-9a8f-1c2970a9e415/validation-04.stdout.txt`.
 
 Reruns: `mise run test:logged -- --name fix-design-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` and the same owner command with `--name baseline-design-profiles` in detached main at `b965aea44`, with independently installed dependencies. The ledger still held `1841-1846-0123abcd.json` at line 505 in preparation; this remains an intermittent cleanup observation, not a confirmed root cause.
+
+## Live logging review repair validation — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-final -- mise run test`
+used workspace/root/bridges/protocol reservations 5/1/2/1. The recorded-profile
+case again saw `20543-20546-0123abcd.json` in the ledger after profile deletion
+(470.70 ms). Backend totals were 13,016 pass, 97 skip and one fail across
+870 files.
+
+The complete unchanged owner passed alone, exit 0 in 1.3 s:
+`mise run test:logged -- --name design-browser-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`.
+Evidence: `orkestrator-test-run.haynoB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. No implementation, assertion, deadline or
+skip changed; the ledger-removal timing cause remains unconfirmed.

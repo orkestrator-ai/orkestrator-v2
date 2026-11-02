@@ -59,6 +59,9 @@ const TOOL_RULES: Readonly<Record<CommandFailureTool, readonly Rule[]>> = {
     ["nothing-to-commit", /nothing to commit|no changes added to commit/i],
     ["push-rejected", /\[(?:remote )?rejected\]|non-fast-forward/i],
     ["identity-unknown", /please tell me who you are|unable to auto-detect email/i],
+    ["worktree-has-changes", /contains modified or untracked files/i],
+    ["not-a-worktree", /is not a working tree/i],
+    ["branch-not-merged", /is not fully merged/i],
   ],
   gh: [
     ["pull-request-exists", /a pull request for branch .* already exists/i],
@@ -79,6 +82,15 @@ const TOOL_RULES: Readonly<Record<CommandFailureTool, readonly Rule[]>> = {
     ["container-name-conflict", /name .* is already in use/i],
     ["image-not-found", /no such image|pull access denied|manifest .* not found/i],
     ["image-not-found", /manifest unknown|repository does not exist/i],
+    ["removal-in-progress", /removal of container .* is already in progress/i],
+    [
+      "image-in-use",
+      /image is (?:being used|referenced)|unable to (?:remove|delete) .*must be forced/i,
+    ],
+    ["volume-in-use", /volume is in use/i],
+    ["volume-not-found", /no such volume/i],
+    ["network-in-use", /has active endpoints/i],
+    ["network-not-found", /network .* not found/i],
   ],
   tmux: [
     ["session-exists", /duplicate session/i],

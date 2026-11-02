@@ -2,6 +2,24 @@ import { describe, expect, test } from "bun:test";
 import { formatLogError, isSafeLogError, logErrorFromWire } from "./log-error.js";
 
 describe("formatLogError", () => {
+  test("message: false keeps the name, code and frames but no text, in a cause too", () => {
+    const error = Object.assign(
+      new Error("the prompt quoted back", {
+        cause: new TypeError("more of the prompt"),
+      }),
+      { code: "E_PROVIDER" },
+    );
+    const formatted = formatLogError(error, { message: false });
+    expect(formatted.name).toBe("Error");
+    expect(formatted.code).toBe("E_PROVIDER");
+    expect(formatted.stack?.length).toBeGreaterThan(0);
+    expect(formatted.cause?.name).toBe("TypeError");
+    expect(JSON.stringify(formatted)).not.toContain("prompt");
+    expect(JSON.stringify(formatLogError("prompt text", { message: false }))).not.toContain(
+      "prompt",
+    );
+  });
+
   test("keeps name, code, errno, syscall and a bounded message", () => {
     const failure = Object.assign(new Error("open failed"), {
       code: "ENOENT",

@@ -20,6 +20,8 @@ export const PREVIEW_LOG_AREAS = defineLogAreas({
       "partitions.retry-forgotten-failed": "Retrying a forgotten preview cleanup failed.",
       "port-hints.persist-failed": "Preview port hints could not be saved.",
       "transport.close-failed": "A preview transport could not be closed.",
+      "ca-bundle.read-failed": "The upstream CA bundle could not be read.",
+      "publication.start-failed": "Private preview publication did not start.",
       ...THROTTLE_LOG_EVENTS,
     },
   },

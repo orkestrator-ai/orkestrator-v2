@@ -1,0 +1,28 @@
+import { defineLogAreas } from "./define.js";
+
+export const COORDINATOR_LOG_AREAS = defineLogAreas({
+  coordinator: {
+    description: "Coordinators: delegations, status wakes and their store.",
+    events: {
+      "delegation.open-failed": "A delegation could not be opened; `source` says for what.",
+      "deliver-now.drain-failed":
+        "The mail delivery pass after deliverNow failed; the next sweep delivers.",
+      "mail.move-failed": "Mail could not move to the new main coordinator.",
+      "work.move-failed": "Work could not move to the main coordinator.",
+      "wake.observe-remote-workflow-failed":
+        "A remote workflow could not be observed for status wakes.",
+      "wake.observe-pull-request-failed": "A pull request could not be observed for status wakes.",
+      "wake.observe-workflow-failed": "A workflow could not be observed for status wakes.",
+      "wake.deliver-failed":
+        "A workflow status wake could not be delivered; the next pass retries.",
+      "wake.waiting-check-failed": "A waiting worker could not be checked; the next pass retries.",
+      "wake.resolve-report-failed": "A finished Resolve tab could not be reported.",
+      "wake.waiting-report-failed": "A waiting worker could not be reported.",
+      "store.malformed": "The coordinator store was malformed and is treated as empty.",
+      "store.unsupported-version":
+        "The coordinator store has an unsupported version and is treated as empty.",
+      "store.invalid-workspace": "An invalid coordinator workspace record was ignored.",
+      "remote-worker.settle-failed": "A remote worker could not be settled.",
+    },
+  },
+});

@@ -15,6 +15,25 @@ import { TERMINAL_LOG_AREAS } from "./terminal.js";
 import { TMUX_LOG_AREAS } from "./tmux.js";
 import { UPDATER_LOG_AREAS } from "./updater.js";
 import { WEB_ANNOTATIONS_LOG_AREAS } from "./web-annotations.js";
+import { STORAGE_LOG_AREAS } from "./storage.js";
+import { BUILD_PIPELINE_LOG_AREAS } from "./build-pipeline.js";
+import { AGENT_BRANCH_LOG_AREAS } from "./agent-branch.js";
+import { CHANGE_TRACKING_LOG_AREAS } from "./change-tracking.js";
+import { COORDINATOR_LOG_AREAS } from "./coordinator.js";
+import { REVIEW_LOG_AREAS } from "./review.js";
+import { PUBLIC_API_LOG_AREAS } from "./public-api.js";
+import { AGENT_ACCOUNTS_LOG_AREAS } from "./agent-accounts.js";
+import { DOCKER_LOG_AREAS } from "./docker.js";
+import { MCP_LOG_AREAS } from "./mcp.js";
+import { DESIGN_LOG_AREAS } from "./design.js";
+import { GRAPH_LOG_AREAS } from "./graph.js";
+import { NODES_LOG_AREAS } from "./nodes.js";
+import { LINEAR_LOG_AREAS } from "./linear.js";
+import { USAGE_HISTORY_LOG_AREAS } from "./usage-history.js";
+import { FEATURE_LOG_AREAS } from "./feature.js";
+import { HOST_LOG_AREAS } from "./host.js";
+import { TRANSCRIPT_ARTIFACTS_LOG_AREAS } from "./transcript-artifacts.js";
+import { SCHEDULER_LOG_AREAS } from "./scheduler.js";
 
 export type { LogAreaSpec, ThrottleLogEvent } from "./define.js";
 export { COMMAND_FAILURE_REASONS, type CommandFailureReason } from "./command-failure-reasons.js";
@@ -43,4 +62,23 @@ export const LOG_VOCABULARY = {
   ...TMUX_LOG_AREAS,
   ...UPDATER_LOG_AREAS,
   ...WEB_ANNOTATIONS_LOG_AREAS,
+  ...STORAGE_LOG_AREAS,
+  ...BUILD_PIPELINE_LOG_AREAS,
+  ...AGENT_BRANCH_LOG_AREAS,
+  ...CHANGE_TRACKING_LOG_AREAS,
+  ...COORDINATOR_LOG_AREAS,
+  ...REVIEW_LOG_AREAS,
+  ...PUBLIC_API_LOG_AREAS,
+  ...AGENT_ACCOUNTS_LOG_AREAS,
+  ...DOCKER_LOG_AREAS,
+  ...MCP_LOG_AREAS,
+  ...DESIGN_LOG_AREAS,
+  ...GRAPH_LOG_AREAS,
+  ...NODES_LOG_AREAS,
+  ...LINEAR_LOG_AREAS,
+  ...USAGE_HISTORY_LOG_AREAS,
+  ...FEATURE_LOG_AREAS,
+  ...HOST_LOG_AREAS,
+  ...TRANSCRIPT_ARTIFACTS_LOG_AREAS,
+  ...SCHEDULER_LOG_AREAS,
 } as const;

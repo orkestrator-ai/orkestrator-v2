@@ -152,8 +152,14 @@ function stackFrames(target: object, message: string | undefined): string[] | un
   return frames.length > 0 ? frames : undefined;
 }
 
-function describe(error: unknown, includeStack: boolean, depth: number): LogErrorDetails {
+function describe(
+  error: unknown,
+  includeStack: boolean,
+  includeMessage: boolean,
+  depth: number,
+): LogErrorDetails {
   if (typeof error !== "object" || error === null) {
+    if (!includeMessage) return { name: "NonError" };
     return {
       name: "NonError",
       message:
@@ -174,7 +180,7 @@ function describe(error: unknown, includeStack: boolean, depth: number): LogErro
     -readonly [Key in keyof LogErrorDetails]: LogErrorDetails[Key];
   } = { name };
   if (commandFailure) details.outputOmitted = true;
-  else if (message) details.message = boundedText(message, MAX_MESSAGE_CHARS);
+  else if (message && includeMessage) details.message = boundedText(message, MAX_MESSAGE_CHARS);
   const code = read(error, "code");
   const safeCode = finite(code) ?? matching(code, CODE_PATTERN);
   if (safeCode !== undefined) details.code = safeCode;
@@ -194,7 +200,7 @@ function describe(error: unknown, includeStack: boolean, depth: number): LogErro
   if (Array.isArray(members)) details.errorCount = members.length;
   const cause = read(error, "cause") ?? (Array.isArray(members) ? members[0] : undefined);
   if (cause !== undefined && cause !== null && depth < MAX_CAUSE_DEPTH) {
-    details.cause = describe(cause, false, depth + 1);
+    details.cause = describe(cause, false, includeMessage, depth + 1);
   }
   return details;
 }
@@ -202,6 +208,12 @@ function describe(error: unknown, includeStack: boolean, depth: number): LogErro
 export interface FormatLogErrorOptions {
   /** Include bounded stack frames. Pass false on a hot path or an expected failure. */
   stack?: boolean;
+  /**
+   * Include the bounded, redacted message. Pass false where a message can quote
+   * content the logger cannot recognise, such as a provider error repeating a
+   * prompt. Applies to every `cause` too; the name, code and frames stay.
+   */
+  message?: boolean;
 }
 
 /**
@@ -213,7 +225,7 @@ export interface FormatLogErrorOptions {
  */
 export function formatLogError(error: unknown, options: FormatLogErrorOptions = {}): SafeLogError {
   try {
-    return brand(describe(error, options.stack !== false, 0));
+    return brand(describe(error, options.stack !== false, options.message !== false, 0));
   } catch {
     return brand({ name: "Error", message: "[unreadable]" });
   }

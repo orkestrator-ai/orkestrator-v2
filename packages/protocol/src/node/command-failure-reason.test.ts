@@ -39,6 +39,17 @@ const SAMPLES: Readonly<Record<CommandFailureReason, Sample>> = {
   "path-not-found": [failure("fatal: cannot change to '/x': No such file or directory")],
   "port-in-use": [failure("Bind for 0.0.0.0:80 failed: port is already allocated"), docker],
   "invalid-usage": [failure("usage: git branch [<options>]", { exitCode: 129 }), git],
+  "branch-not-merged": [
+    failure("error: the branch 'x' is not fully merged.", { exitCode: 1 }),
+    git,
+  ],
+  "worktree-has-changes": [
+    failure("fatal: '/tmp/x' contains modified or untracked files, use --force to delete it", {
+      exitCode: 128,
+    }),
+    git,
+  ],
+  "not-a-worktree": [failure("fatal: '/tmp/x' is not a working tree", { exitCode: 128 }), git],
   "branch-exists": [failure("fatal: a branch named 'x' already exists", { exitCode: 128 }), git],
   "branch-not-found": [failure("error: refname refs/heads/x not found", { exitCode: 128 }), git],
   "invalid-ref": [failure("fatal: 'a..b' is not a valid branch name", { exitCode: 128 }), git],
@@ -70,6 +81,37 @@ const SAMPLES: Readonly<Record<CommandFailureReason, Sample>> = {
   "daemon-error": [failure("docker: unrecognised failure", { exitCode: 125 }), docker],
   "container-not-found": [failure("Error response from daemon: No such container: abc"), docker],
   "container-not-running": [failure("Error: container abc is not running"), docker],
+  "removal-in-progress": [
+    failure("Error response from daemon: removal of container x is already in progress", {
+      exitCode: 1,
+    }),
+    docker,
+  ],
+  "image-in-use": [
+    failure(
+      "Error response from daemon: conflict: unable to remove repository reference (must be forced)",
+      {
+        exitCode: 1,
+      },
+    ),
+    docker,
+  ],
+  "volume-in-use": [
+    failure("Error response from daemon: remove x: volume is in use", { exitCode: 1 }),
+    docker,
+  ],
+  "volume-not-found": [
+    failure("Error response from daemon: get x: no such volume", { exitCode: 1 }),
+    docker,
+  ],
+  "network-in-use": [
+    failure("Error response from daemon: network x has active endpoints", { exitCode: 1 }),
+    docker,
+  ],
+  "network-not-found": [
+    failure("Error response from daemon: network x not found", { exitCode: 1 }),
+    docker,
+  ],
   "container-name-conflict": [failure('The container name "/x" is already in use'), docker],
   "image-not-found": [failure("Unable to find image: pull access denied for x"), docker],
   "server-not-running": [failure("no server running on /tmp/tmux-0/default"), tmux],

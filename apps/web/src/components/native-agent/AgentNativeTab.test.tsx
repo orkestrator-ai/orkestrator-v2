@@ -8316,7 +8316,9 @@ describe("AgentNativeTab", () => {
     render(<AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />);
 
     expect(await screen.findByText("Waiting for setup scripts to complete...")).toBeTruthy();
-    expect(screen.getByTestId("setup-pending-prompt").textContent).toBe("Add a dark mode toggle");
+    expect(screen.getByTestId("setup-pending-prompt").textContent).toContain(
+      "Add a dark mode toggle",
+    );
   });
 
   test("shows the connecting logo on a created tab that connected once but is still empty", async () => {

@@ -399,16 +399,16 @@ clone_repository() {
 # Moves a finished clone from its staging folder into the workspace. Both are
 # on the workspace volume, so each top-level entry is a rename rather than a
 # byte copy. The workspace holds only `.orkestrator` and `lost+found` at this
-# point; a repository's own copies of those are left behind with the staging
-# folder, as the restore of `.orkestrator` would replace them anyway. An entry
-# that could not be moved fails the step, and the caller's in-progress marker
+# point. Only repository-owned `.orkestrator` is skipped, since restore replaces
+# it. Repository-owned lost+found is moved normally; a collision fails explicitly.
+# An entry that could not be moved fails the step; the caller's in-progress marker
 # makes the next start clean up and clone again.
 move_clone_into_workspace() {
     local clone_dest="$1"
     local workspace="$2"
-    find "$clone_dest" -mindepth 1 -maxdepth 1 ! -name .orkestrator ! -name lost+found \
+    find "$clone_dest" -mindepth 1 -maxdepth 1 ! -name .orkestrator \
         -exec mv -n -- {} "$workspace"/ \; || return 1
-    if [ -n "$(find "$clone_dest" -mindepth 1 -maxdepth 1 ! -name .orkestrator ! -name lost+found -print -quit)" ]; then
+    if [ -n "$(find "$clone_dest" -mindepth 1 -maxdepth 1 ! -name .orkestrator -print -quit)" ]; then
         echo -e "${RED}Could not move the clone into the workspace.${NC}"
         return 1
     fi

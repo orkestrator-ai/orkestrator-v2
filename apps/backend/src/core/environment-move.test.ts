@@ -1624,6 +1624,66 @@ describe("same-disk move of a worktree git will not move", () => {
     await expectSubmodulesLinked(from);
   });
 
+  test.each(["repair", "relink"])(
+    "a failed source %s after rename-back retains recovery until all links are repaired",
+    async (failure) => {
+      const { root, projectPath, storage, context, startLocal } = await setup();
+      const environment = await startLocal();
+      const from = environment.worktreePath!;
+      await addNestedSubmodules(root, projectPath, from);
+      const destination = path.join(root, "elsewhere");
+      const to = path.join(destination, path.basename(from));
+      const run = shell.runCommand;
+      let fail = true;
+      const commandSpy = spyOn(shell, "runCommand").mockImplementation(
+        async (command, args, options) => {
+          if (fail && command === "git") {
+            // Destination repair succeeds, but relinking fails. Rename-back then
+            // succeeds before either source repair or source relinking fails.
+            if (args?.[0] === "config" && args.includes("core.worktree"))
+              throw new Error("relink failed");
+            if (failure === "repair" && args?.includes("repair") && args.includes(from))
+              throw new Error("source repair failed");
+          }
+          return run(command, args, options);
+        },
+      );
+
+      await expect(
+        moveEnvironmentTask(environment.id, destination, context, {
+          sessionHomes: isolatedHomes(root),
+        }),
+      ).rejects.toThrow("relink failed");
+      expect(await exists(from)).toBe(true);
+      expect(await exists(to)).toBe(false);
+      expect((await storage.getEnvironment(environment.id))?.worktreeMove?.phase).toBe("moving");
+      expect(() =>
+        context.runtime.environments.fence.assertAcceptsAgentWork(environment.id),
+      ).toThrow("recovery");
+
+      // A restart while the source is still unrepairable must also keep the
+      // journal and fence, including when only a submodule relink fails.
+      await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+      expect((await storage.getEnvironment(environment.id))?.worktreeMove).toBeDefined();
+      expect(() =>
+        context.runtime.environments.fence.assertAcceptsAgentWork(environment.id),
+      ).toThrow("recovery");
+
+      fail = false;
+      await recoverInterruptedEnvironmentMoves(context, { sessionHomes: isolatedHomes(root) });
+      commandSpy.mockRestore();
+      const recovered = (await storage.getEnvironment(environment.id))!;
+      expect(recovered.worktreePath).toBe(from);
+      expect(recovered.worktreeMove).toBeUndefined();
+      expect(() =>
+        context.runtime.environments.fence.assertAcceptsAgentWork(environment.id),
+      ).not.toThrow();
+      expect(await registeredWorktrees(projectPath)).toContain(from);
+      expect(await registeredWorktrees(projectPath)).not.toContain(to);
+      await expectSubmodulesLinked(from);
+    },
+  );
+
   test("a rejected commit renames the folder back", async () => {
     const { root, projectPath, storage, context, startLocal } = await setup();
     const environment = await startLocal();

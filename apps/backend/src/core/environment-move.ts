@@ -255,6 +255,10 @@ async function moveEnvironmentOnce(
             record,
             recheckDestination,
             onRecord: (next) => (record = next),
+            onRenamed: () => {
+              moved = true;
+              movedByRename = true;
+            },
           });
     if (viaGit.moved || viaRename.renamed) {
       moved = true;
@@ -447,6 +451,7 @@ async function renameWorktree(
     record: WorktreeMoveRecord;
     recheckDestination: () => void;
     onRecord: (record: WorktreeMoveRecord) => void;
+    onRenamed: () => void;
   },
 ): Promise<{ renamed: boolean }> {
   // Published before the rename: recovery adopts a destination whose source
@@ -462,16 +467,11 @@ async function renameWorktree(
     if ((error as NodeJS.ErrnoException).code === "EXDEV") return { renamed: false };
     throw error;
   }
-  try {
-    await runCommand("git", ["-C", projectPath, "worktree", "repair", to], {
-      timeoutMs: GIT_TIMEOUT_MS,
-    });
-    await relinkSubmodules(to, submodules);
-  } catch (error) {
-    // Left at the destination when the rename back fails: recovery adopts it.
-    await restoreRenamedWorktree(projectPath, to, from, submodules).catch(() => undefined);
-    throw error;
-  }
+  // Tell the caller before repair: even a failed repair needs full rollback,
+  // and a failed rollback must retain the journal regardless of path existence.
+  journal.onRenamed();
+  await repairWorktree(projectPath, to);
+  await relinkSubmodules(to, submodules);
   return { renamed: true };
 }
 
@@ -733,7 +733,7 @@ export async function recoverInterruptedEnvironmentMove(
   // A copy may have been repaired just before the backend stopped.
   if (fromExists) {
     await repairWorktree(projectPath, record.from);
-    await relinkSubmodules(record.from, record.submodules).catch(() => undefined);
+    await relinkSubmodules(record.from, record.submodules);
   }
   await storage.updateEnvironment(environment.id, {
     worktreeMove: null,

@@ -754,6 +754,58 @@ move_clone_into_workspace "$2" "$3"
     }
   });
 
+  test("preserves tracked lost+found content in a clean checkout", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-lost-found-"));
+    try {
+      const clone = join(workspace, ".orkestrator", ".clone-in-progress");
+      mkdirSync(join(clone, "lost+found"), { recursive: true });
+      writeFileSync(join(clone, "lost+found", "fixture.txt"), "tracked");
+      const git = (...args: string[]) =>
+        spawnSync("git", ["-C", clone, ...args], { encoding: "utf8" });
+      expect(git("init").status).toBe(0);
+      expect(git("add", ".").status).toBe(0);
+      expect(
+        git(
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "-m",
+          "fixture",
+        ).status,
+      ).toBe(0);
+
+      expect(runMove(clone, workspace).status).toBe(0);
+      expect(readFileSync(join(workspace, "lost+found", "fixture.txt"), "utf8")).toBe("tracked");
+      const status = spawnSync("git", ["-C", workspace, "diff", "--exit-code", "HEAD"], {
+        encoding: "utf8",
+      });
+      expect(status.status).toBe(0);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("a filesystem lost+found collision fails without discarding repository content", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ork-ws-lost-found-"));
+    try {
+      const clone = stagedClone(workspace);
+      mkdirSync(join(clone, "lost+found"));
+      writeFileSync(join(clone, "lost+found", "fixture.txt"), "tracked");
+      mkdirSync(join(workspace, "lost+found"));
+      writeFileSync(join(workspace, "lost+found", "recovered"), "filesystem");
+      expect(runMove(clone, workspace).status).not.toBe(0);
+      expect(readFileSync(join(clone, "lost+found", "fixture.txt"), "utf8")).toBe("tracked");
+      expect(readFileSync(join(workspace, "lost+found", "recovered"), "utf8")).toBe("filesystem");
+      expect(existsSync(join(workspace, ".orkestrator", ".clone-copy-in-progress"))).toBe(true);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("setup moves the volume clone with the helper rather than a byte copy", () => {
     const setup = read("docker/workspace-setup.sh");
     expect(setup).toContain('move_clone_into_workspace "$CLONE_DEST" /workspace || exit 1');

@@ -32,7 +32,7 @@ governs, marked "Decided".
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open.
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
@@ -254,19 +254,66 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
 
 **Problem.** Captures read and hash unchanged files, recount unchanged diffs every pass, and local scans spawn many git processes with no minimum gap.
 
-**Context.** The report's ST-1 to ST-6 and ST-13 to ST-21. fsmonitor is no longer enabled (`docs/architecture/git-scan-caches.md`), so ST-17's second option is gone.
+**Context.** The report's ST-1 to ST-6 and ST-13 to ST-21. fsmonitor is no longer enabled (`docs/architecture/git-scan-caches.md`), so ST-17's second option is gone. Done on 2026-11-02: ST-1 (a host capture reuses a settled stat-cache entry's oid after `fstat`, without reading or hashing), ST-2's first half (libc is `dlopen`ed once per process, and the `readlinkat` probe uses one scratch buffer) and ST-4 (a bounded LRU of line counts by blob pair in `snapshot-diff.ts`). The capture benchmark (`scripts/benchmark-change-tracking.ts`) gained the report's large-asset and 200-changed-file fixtures (`--only=assets,long-turn`). Tests: `capture-stat-reuse.test.ts` and `snapshot-diff-count-cache.test.ts`.
 
-**Investigation.** Confirmed 2026-11-01: `capture.ts` still calls `confinedRead` and hashes before consulting the stat cache (ST-1). The rest is not re-checked since the report.
+**Investigation.** Re-checked on 2026-11-02 against `main` at `38d55ee1`: ST-1, ST-2 and ST-4 were still as the report describes; the rest of this task was not re-checked. Measured on the shared build host under heavy load (load average 25 to 34), three interleaved runs each of the old and new code, 10 warm runs per workload, p50 range:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 1,000 files, one changed: warm capture | 114–261 ms | 47–141 ms |
+| 10,000 files, one changed: warm capture | 2,330–2,494 ms | 615–1,201 ms |
+| 200 files + 20 × 8 MiB assets: warm capture | 281–505 ms | 13–44 ms |
+| Long turn, 200 changed files vs the turn start: compare | 149–435 ms | 6–18 ms |
+
+A micro-benchmark over 10,000 small files two directories deep (5 rounds, median): the old `confinedRead` 621 ms, the new one 275 ms (so `dlopen` cost about 35 µs per file), and the stamp-matched skip 44 ms, which includes the whole ancestor walk. Caching directory handles could therefore save at most about 2 µs per file. What remains of a warm capture over many small files is ST-3: `ObjectStore.reuse` (`utimes` under the store lock) and the closure `has`, about 230 ms each per 10,000 files in one profiling run.
 
 **Decisions.**
 
-- **First step?**
+- **First step?** Decided 2026-11-01, done 2026-11-02.
   - **ST-1, ST-2 and ST-4 together, measured with the capture benchmark plus the large-asset and 200-changed-file fixtures the report names (recommended).**
     - Pros: the highest-impact items; one benchmark run proves all three.
     - Cons: the fixtures have to be written first.
   - **ST-16's minimum scan gap first.**
     - Pros: one small change with a clear effect during installs.
     - Cons: leaves the per-capture cost untouched.
+- **When may a matching stat stamp stand in for the content?** Done as recommended.
+  - **Only when the file's mtime and ctime were at least `STAT_SETTLE_WINDOW_MS` (2 s) old when it was read; a path hint drops its entry (recommended).**
+    - Pros: closes Git's "racily clean" case, where a same-size rewrite inside one timestamp tick keeps the stamp; a file stops being re-read 2 s after its last write; restore and watcher hints still force a read.
+    - Cons: files the agent is actively writing are read on every capture until they age; one more field (`settled`) in the stat cache.
+  - **Trust any matching stamp.**
+    - Pros: simplest; skips the most reads.
+    - Cons: a racy same-size rewrite would publish the old oid, a wrong capture result.
+  - **Trust it and also compare mtime with the capture's own start time, like Git's index.**
+    - Pros: the same protection as the window.
+    - Cons: needs the previous capture's start time carried with the cache, for no measurable gain over the window.
+- **ST-2's second half: cache directory handles within a capture?** Not done.
+  - **Leave the per-file ancestor walk (recommended).**
+    - Pros: the walk, open and `fstat` together cost about 4 µs per file; no open descriptors outlive a read, so there is no descriptor budget or reuse race to manage.
+    - Cons: a few redundant `openat` calls per file remain.
+  - **A capture-scoped, reference-counted handle cache.**
+    - Pros: fewer syscalls per file.
+    - Cons: at most about 20 ms per 10,000 files; needs begin/end hooks on the executor interface (host reads are issued one at a time per capture), a descriptor bound, and keeps a moved or replaced directory open for the rest of the pass.
+- **Which line counts are cached?** Done as recommended.
+  - **Exact counts and deterministic limits, keyed by kind, both oids and the two deterministic budget fields; a hit is used only while the store still holds both blobs (recommended).**
+    - Pros: content addressing means entries never go stale; a deleted or expired body still reads as `body-unavailable`, exactly as before; bounded at 8,192 entries and 4 MiB estimated.
+    - Cons: a hit still costs two `stat` calls; a corrupted (rather than missing) object is not noticed on a hit until its body is rendered.
+  - **Cache everything, including `cpu-budget` limits.**
+    - Pros: simplest.
+    - Cons: a wall-clock limit under load would stick for the rest of the process.
+- **Container captures?** Not done.
+  - **Leave the container helper as it is for now (recommended).**
+    - Pros: its hashing runs inside the container, off the backend's event loop, and only hashes cross the boundary.
+    - Cons: a container capture still reads every candidate file.
+  - **Send cached stamps to the helper so it can skip settled files too.**
+    - Pros: the same saving inside the container.
+    - Cons: a protocol change to the helper and a larger stdin per batch; needs container qualification.
+- **Next step for this task?**
+  - **ST-3: skip the closure `has` for objects proven present in this pass and the `utimes` inside the grace window (recommended).**
+    - Pros: it is now the largest part of a warm capture over many small files.
+    - Cons: touches the orphan fence that retention relies on, so the grace-window reasoning needs care.
+  - **ST-16's minimum scan gap.**
+    - Pros: small and independent.
+    - Cons: does not touch capture cost.
 
 ### 8. tmux and container polling
 
@@ -603,6 +650,23 @@ are installed from snapshot reads.
 A fixed one-second timer that is not reset by later chunks, so it is also the
 maximum wait. Every other change still persists through `schedulePersist`, and
 any such write carries the output so far.
+
+### Task 7: stat-stamp settle window
+
+A host capture skips reading a file only when its stat-cache entry is
+`settled`: mtime and ctime were at least 2 s old when it was last read. Chose
+2 s rather than one kernel tick so FAT's two-second timestamps and small clock
+steps are covered; the cost is that a file written in the last 2 s is read
+again. `WorktreeChangeOwner.invalidate(paths)` now also drops those paths'
+entries, which is what the comment in `service.ts` already claimed it did.
+The benchmark waits `--settle-ms` (2.5 s) after writing its fixtures so warm
+captures measure the settled path.
+
+### Task 7: line-count cache scope
+
+The cache is module-level, shared by every comparison in the process, because
+blob ids are content addresses; a hit is accepted only after `store.has` on
+both blobs, so a different or pruned store still reports `body-unavailable`.
 
 ### Task 8: idle cadence
 

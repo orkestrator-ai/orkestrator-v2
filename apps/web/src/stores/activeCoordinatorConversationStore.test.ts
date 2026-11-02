@@ -43,6 +43,37 @@ describe("activeCoordinatorConversationStore", () => {
     expect(useActiveCoordinatorConversationStore.getState().active).toBe(first);
   });
 
+  test("follows conversation focus, provider assignment and session creation", () => {
+    const store = useActiveCoordinatorConversationStore.getState();
+    store.publish(conversation);
+    const sideAgent: ActiveCoordinatorConversation = {
+      ...conversation,
+      tabId: "side-agent-tab",
+      data: {
+        platform: "codex",
+        environmentId: "coordinator:workspace-1:side-agent",
+        isLocal: true,
+      },
+    };
+    store.publish(sideAgent);
+    // Cleanup from the previously focused conversation must not erase the new one.
+    store.clear(conversation.projectId, conversation.tabId);
+    expect(useActiveCoordinatorConversationStore.getState().active).toEqual(sideAgent);
+
+    const attached = {
+      ...sideAgent,
+      data: { ...sideAgent.data, sessionId: "side-agent-session" },
+    };
+    store.publish(attached);
+    const tab = coordinatorConversationTab(
+      useActiveCoordinatorConversationStore.getState().active,
+      "project-1",
+      "coordinator",
+    );
+    expect(tab?.id).toBe("side-agent-tab");
+    expect(tab && getNativeAgentData(tab)).toEqual(attached.data);
+  });
+
   test("clears only its own entry", () => {
     const store = useActiveCoordinatorConversationStore.getState();
     store.publish(conversation);

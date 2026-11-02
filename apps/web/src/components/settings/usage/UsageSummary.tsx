@@ -217,11 +217,18 @@ export function UsageEnvironmentList({
               key={entry.environmentId}
               className="flex items-center gap-2.5 rounded-md px-2 py-1.5"
             >
-              <span className="min-w-0 flex-1 truncate text-xs text-foreground">
-                {entry.name ?? "Deleted environment"}
-                {entry.projectName ? (
-                  <span className="text-muted-foreground"> · {entry.projectName}</span>
-                ) : null}
+              {/* Project above, muted; the environment below, prominent. A
+                  deleted environment keeps the names it was deleted under. */}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[11px] leading-4 text-muted-foreground">
+                  {entry.projectName ?? "Unknown project"}
+                  {entry.deleted && entry.name ? (
+                    <span className="text-muted-foreground/70"> · Deleted</span>
+                  ) : null}
+                </span>
+                <span className="block truncate text-xs font-medium leading-5 text-foreground">
+                  {entry.name ?? "Deleted environment"}
+                </span>
               </span>
               <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                 {formatShare(metricValue(entry.totals, metric), whole)}

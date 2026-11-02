@@ -63,9 +63,57 @@ test("names the environment a usage row came from, and leaves a deleted one unna
   const report = await read({ days: 7 });
   const named = report.environments.find((entry) => entry.environmentId === "env-1");
   expect(named).toMatchObject({ name: "Feature branch", projectName: project.name });
+  expect(named?.deleted).toBeUndefined();
   const removed = report.environments.find((entry) => entry.environmentId === "env-gone");
   expect(removed?.name).toBeUndefined();
+  expect(removed?.deleted).toBe(true);
   expect(removed?.totals.totalTokens).toBe(1_000);
+});
+
+test("a deleted environment keeps the names it had when it was deleted", async () => {
+  const { storage, read, project } = await fixture();
+  storage.recordAgentUsageTurns({
+    sessionKey: "env-1:claude:tab-1",
+    environmentId: "env-1",
+    platform: "claude",
+    turns: [{ turnId: "t1", inputTokens: 10, outputTokens: 5, costUsd: 0.5, modelId: "opus" }],
+  });
+  await storage.removeEnvironment("env-1");
+  // The project going too must not take the stamped project name with it.
+  await storage.removeProject(project.id);
+
+  const report = await read({ days: 7 });
+  expect(report.environments).toEqual([
+    expect.objectContaining({
+      environmentId: "env-1",
+      name: "Feature branch",
+      projectName: project.name,
+      deleted: true,
+    }),
+  ]);
+});
+
+test("an environment deleted before names were kept falls back to its PR tombstone", async () => {
+  const { storage, read, project } = await fixture();
+  await storage.updateEnvironment("env-1", {
+    prUrl: "https://github.com/example/repo/pull/1",
+    prState: "merged",
+  });
+  await storage.removeEnvironment("env-1");
+  // Recorded after the deletion, so nothing stamped the row.
+  storage.recordAgentUsageTurns({
+    sessionKey: "env-1:claude:tab-1",
+    environmentId: "env-1",
+    platform: "claude",
+    turns: [{ turnId: "t1", inputTokens: 10, outputTokens: 5, costUsd: 0.5, modelId: "opus" }],
+  });
+
+  const [entry] = (await read({ days: 7 })).environments;
+  expect(entry).toMatchObject({
+    name: "Feature branch",
+    projectName: project.name,
+    deleted: true,
+  });
 });
 
 test("clamps the range and refuses an unknown argument", async () => {

@@ -743,6 +743,29 @@ export class ProjectsRepository {
     return rows.find((row) => row.id === environmentId) ?? null;
   }
 
+  /**
+   * Keeps the names of an environment being deleted with its recorded usage,
+   * which outlives it, so the usage pane can still say which environment and
+   * project the usage came from. Best effort: a failure costs the label, never
+   * the deletion.
+   */
+  private async labelRemovedEnvironmentUsage(environment: Environment): Promise<void> {
+    try {
+      const project = (await this.loadProjects()).find(
+        (candidate) => candidate.id === environment.projectId,
+      );
+      this.repos.sessions.labelAgentUsageEnvironment(environment.id, {
+        environmentName: environment.name,
+        ...(project?.name ? { projectName: project.name } : {}),
+      });
+    } catch (error) {
+      console.warn(
+        `[backend] could not keep usage names for ${environment.id}:`,
+        error instanceof Error ? error.name : "unknown",
+      );
+    }
+  }
+
   async removeEnvironment(environmentId: string): Promise<void> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
@@ -772,6 +795,7 @@ export class ProjectsRepository {
           final,
         ]);
       }
+      if (removed) await this.labelRemovedEnvironmentUsage(removed);
       await this.saveEnvironments(filtered);
       await this.scrubEnvironmentBackups(environmentId, true);
       this.context.changes.announce(

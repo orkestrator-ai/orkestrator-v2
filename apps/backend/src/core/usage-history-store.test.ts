@@ -375,3 +375,56 @@ test("records a republished backlog on the days its turns actually ran", async (
   // Only today's turn lands on today.
   expect(store.report({ days: 1 }).totals.turns).toBe(1);
 });
+
+test("names stamped on an environment's rows survive later turns and name its report entry", async () => {
+  const clock: Clock = { value: new Date("2026-10-20T10:00:00Z") };
+  const { store } = await storeWithClock(clock);
+  const base = { environmentId: "env-1", platform: "claude" as const };
+  store.recordTurns({ ...base, sessionKey: "env-1:claude:tab-1", turns: [turn("t1")] });
+  store.recordTurns({ ...base, sessionKey: "env-1:claude:tab-2", turns: [turn("t2")] });
+  store.recordTurns({
+    sessionKey: "env-2:claude:tab-1",
+    environmentId: "env-2",
+    platform: "claude",
+    turns: [turn("t3")],
+  });
+
+  expect(store.report({ days: 7 }).environments.every((entry) => !entry.name)).toBe(true);
+  const label = { environmentName: "Feature branch", projectName: "Orkestrator" };
+  expect(store.labelEnvironment("env-1", label)).toBe(2);
+  // The same label again writes nothing.
+  expect(store.labelEnvironment("env-1", label)).toBe(0);
+  // A turn recorded after the stamp keeps it: the row is re-parsed on write.
+  store.recordTurns({ ...base, sessionKey: "env-1:claude:tab-1", turns: [turn("t4")] });
+
+  const report = store.report({ days: 7 });
+  expect(report.environments.find((entry) => entry.environmentId === "env-1")).toMatchObject({
+    name: "Feature branch",
+    projectName: "Orkestrator",
+  });
+  expect(report.environments.find((entry) => entry.environmentId === "env-2")?.name).toBe(
+    undefined,
+  );
+  // A filtered read still names the environment.
+  expect(store.report({ days: 7, environmentId: "env-1" }).environments[0]?.name).toBe(
+    "Feature branch",
+  );
+});
+
+test("a label bounds its names and leaves an omitted one as it was", async () => {
+  const clock: Clock = { value: new Date("2026-10-20T10:00:00Z") };
+  const { store } = await storeWithClock(clock);
+  store.recordTurns({
+    sessionKey: "env-1:claude:tab-1",
+    environmentId: "env-1",
+    platform: "claude",
+    turns: [turn("t1")],
+  });
+  store.labelEnvironment("env-1", { environmentName: "x".repeat(500), projectName: "Project" });
+  store.labelEnvironment("env-1", { environmentName: "  Renamed  " });
+  const [entry] = store.report({ days: 7 }).environments;
+  expect(entry).toMatchObject({ name: "Renamed", projectName: "Project" });
+  store.labelEnvironment("env-1", { environmentName: "y".repeat(500) });
+  expect(store.report({ days: 7 }).environments[0]?.name?.length).toBe(200);
+  expect(store.labelEnvironment("missing", { environmentName: "Nobody" })).toBe(0);
+});

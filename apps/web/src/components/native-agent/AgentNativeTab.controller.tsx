@@ -3497,8 +3497,14 @@ export function SharedNativeAgentController({
         try {
           await updateControls(controls);
         } catch (error) {
-          // Some providers (Claude) refuse any settings change mid-turn.
-          if (phase !== "idle" && phase !== "error") {
+          // Match Claude's specific config-route refusal as serialized by the
+          // backend. Phase alone cannot distinguish a lock from invalid controls
+          // or transport failures, and may lag behind the provider's state.
+          if (
+            platform === "claude" &&
+            error instanceof Error &&
+            error.message === "Claude session config update failed (HTTP 409): Session is running"
+          ) {
             throw queuedSettingsLockedError(label, { cause: error });
           }
           throw error;

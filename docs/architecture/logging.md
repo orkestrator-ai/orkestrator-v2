@@ -447,6 +447,10 @@ covers `desktop.dialog`. The default is `info`. Bridge snapshots
 `bridge.diagnostics` is `debug` or `trace`, so `bridge=debug` or a global `debug`
 turns them on.
 
+Renderer-only areas (`web.*`, `terminal` and `terminal.setup`) stay registered in
+the vocabulary but are absent from these live override choices. They follow the
+renderer startup preference described [below](#the-renderer).
+
 ```mermaid
 flowchart LR
   S[Settings save] --> C[(config.json)]

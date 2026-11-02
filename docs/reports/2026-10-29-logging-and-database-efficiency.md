@@ -1583,6 +1583,9 @@ These were decided under AGENTS.md invariant 12, or follow from fields being sca
 
 `formatLogError` keeps an error's message, and a message can hold a path or URL: a
 failed clipboard image write reads `EACCES: permission denied, open '<path>'`. The
-logging guide documents this for every process. It reaches the browser console only,
-as the raw error did, so this slice leaves it there.
+logging guide documents this for every process. It reaches the browser console;
+at error level, `installRendererErrorRecorder` also keeps the line in memory and
+`collectBugReportClientContext` includes it in a user-started bug report. The report
+agent is instructed to redact it before filing a public issue, as with raw errors
+before this migration. This slice leaves that capture path unchanged.
 

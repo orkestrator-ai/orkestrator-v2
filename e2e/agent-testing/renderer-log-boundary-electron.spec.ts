@@ -45,6 +45,20 @@ async function waitForUrl(url: string): Promise<void> {
 
 const count = (text: string, line: string): number => text.split(line).length - 1;
 
+async function emitDebugProbes(window: Page): Promise<boolean> {
+  return window.evaluate(
+    async (modulePath) => {
+      const { createLogger } = await import(/* @vite-ignore */ modulePath);
+      const webLog = createLogger("web.window");
+      const terminalLog = createLogger("terminal");
+      webLog.debug("error.unhandled", { scope: "debug-boundary-probe" });
+      terminalLog.debug("connect.called", { scope: "debug-boundary-probe" });
+      return webLog.isEnabled("debug") && terminalLog.isEnabled("debug");
+    },
+    `/@fs${path.join(repositoryRoot, "packages/protocol/src/logger.ts")}`,
+  );
+}
+
 test.beforeAll(() => {
   const build = spawnSync("bun", ["scripts/electron-bundle.ts"], {
     cwd: packageRoot,
@@ -119,19 +133,33 @@ test("a real window sends its startup markers to the main process and none of it
       .toBe(true);
     const window = app.windows().find((page) => page.url().startsWith(rendererUrl)) as Page;
     await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await expect(window.getByRole("button", { name: "Global settings", exact: true })).toBeVisible({
+      timeout: 60_000,
+    });
 
-    const browserConsole: string[] = [];
-    window.on("console", (message) => browserConsole.push(message.text()));
+    const browserConsole: { type: string; text: string }[] = [];
+    window.on("console", (message) =>
+      browserConsole.push({ type: message.type(), text: message.text() }),
+    );
+    const debugProbes = () =>
+      browserConsole.filter((message) => message.text.includes("scope=debug-boundary-probe"));
 
-    // Raises the renderer's level, so its debug lines are written as well.
+    expect(await emitDebugProbes(window)).toBe(false);
+    expect(debugProbes()).toEqual([]);
+
+    // The preference takes effect only on reload, in the logger the app uses.
     await window.evaluate(() => localStorage.setItem("orkestrator:debug", "1"));
+    expect(await emitDebugProbes(window)).toBe(false);
     await window.reload();
     await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
-    await expect
-      .poll(() => browserConsole.filter((line) => /^\[(web\.|terminal)/.test(line)).length, {
-        timeout: 30_000,
-      })
-      .toBeGreaterThan(0);
+    await expect(window.getByRole("button", { name: "Global settings", exact: true })).toBeVisible({
+      timeout: 60_000,
+    });
+    expect(await emitDebugProbes(window)).toBe(true);
+    await expect.poll(debugProbes).toEqual([
+      { type: "debug", text: "[web.window] error.unhandled scope=debug-boundary-probe" },
+      { type: "debug", text: "[terminal] connect.called scope=debug-boundary-probe" },
+    ]);
 
     // A line in each migrated form, and text close to a marker. Reloading after
     // them orders the check: a marker from the next load comes after these in the
@@ -140,9 +168,15 @@ test("a real window sends its startup markers to the main process and none of it
       console.error("[web.window] error.unhandled error.name=Error");
       console.warn("[terminal] input.undelivered scope=probe");
       console.error("[DesktopStartup] ready marker-with-more-text");
+      localStorage.removeItem("orkestrator:debug");
     });
     await window.reload();
     await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    await expect(window.getByRole("button", { name: "Global settings", exact: true })).toBeVisible({
+      timeout: 60_000,
+    });
+    expect(await emitDebugProbes(window)).toBe(false);
+    expect(debugProbes()).toHaveLength(2);
 
     await expect
       .poll(() => count(mainConsole, "[DesktopStartup] ready"), { timeout: 30_000 })
@@ -151,7 +185,25 @@ test("a real window sends its startup markers to the main process and none of it
     expect(mainConsole).not.toContain("[web.");
     expect(mainConsole).not.toContain("[terminal");
     expect(mainConsole).not.toContain("marker-with-more-text");
-    expect(browserConsole).toContain("[DesktopStartup] ready");
+    expect(mainConsole).not.toContain("debug-boundary-probe");
+    expect(browserConsole.some((message) => message.text === "[DesktopStartup] ready")).toBe(true);
+
+    // The real settings UI must not offer controls for those renderer areas.
+    await window.getByRole("button", { name: "Global settings", exact: true }).click();
+    await window
+      .getByRole("navigation", { name: "Settings sections" })
+      .getByRole("button", { name: "Debug", exact: true })
+      .click();
+    await window.getByRole("button", { name: "Levels by area" }).click();
+    await expect(
+      window.getByRole("combobox", { name: "Log level for bridge", exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      window.getByRole("combobox", { name: "Log level for backend.activity", exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      window.getByRole("combobox", { name: /^Log level for (web\.|terminal(?:\.|$))/ }),
+    ).toHaveCount(0);
   } finally {
     await closeElectronWithin(launchedApp).catch(() => undefined);
     if (vite) await stopProcessGroup(vite).catch(() => undefined);

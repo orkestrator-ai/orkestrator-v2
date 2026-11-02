@@ -225,7 +225,7 @@ describe("SkillsSettings", () => {
   test("wraps the provider tab strip so every agent stays reachable", async () => {
     render(<SkillsSettings />);
 
-    const tabList = await screen.findByRole("tablist");
+    const tabList = await screen.findByRole("tablist", { name: "Agent" });
     const tabs = within(tabList).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent?.trim())).toEqual([
       "Claude",
@@ -1157,11 +1157,14 @@ for (const machine of [null, "other"]) {
 for (const embedded of [false, true]) {
   test(`${embedded ? "embedded" : "standalone"} skills owns its heading and keeps provider tabs in its header`, async () => {
     render(<SkillsSettings embedded={embedded} />);
-    const heading = screen.getByRole("heading", { name: "Skills", level: embedded ? 3 : 2 });
-    expect(
-      screen.queryByRole("heading", { name: "Skills", level: embedded ? 2 : 3 }) === null,
-    ).toBe(true);
+    const title = embedded ? "Skills" : "Skills and plugins";
+    const heading = screen.getByRole("heading", { name: title, level: embedded ? 3 : 2 });
+    expect(screen.queryByRole("heading", { name: title, level: embedded ? 2 : 3 }) === null).toBe(
+      true,
+    );
     const header = embedded ? heading.parentElement!.parentElement! : heading.closest("header")!;
+    // The dialog sizes an embedded pane; only the settings page caps its own width.
+    expect(header.parentElement!.classList.contains("max-w-6xl")).toBe(!embedded);
     expect(within(header).getByRole("tablist")).toBeTruthy();
     expect(within(header).getAllByRole("tab").length).toBeGreaterThan(1);
     await waitFor(() => expect(footerText()).toBe("0 skills · 0 of 0 directories present"));

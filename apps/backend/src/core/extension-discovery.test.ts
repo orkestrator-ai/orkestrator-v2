@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   createExtensionDiscoveryCache,
   discoverAgentExtensions,
+  discoverAgentPlugins,
   parseClaudeMcpList,
   parseClaudePlugins,
   parseCodexMcpList,
@@ -983,5 +984,66 @@ describe("createExtensionDiscoveryCache", () => {
       return catalogs("claude");
     });
     expect(runs).toBe(0);
+  });
+});
+
+describe("discoverAgentPlugins", () => {
+  test("reads only the plugin list, so no MCP server is health-checked", async () => {
+    const { run, calls } = fixtureRunner({
+      "claude plugin list --json": JSON.stringify([
+        { id: "vercel@official", scope: "user", enabled: true },
+        { id: "stripe@official", scope: "project", enabled: false },
+      ]),
+    });
+
+    await expect(discoverAgentPlugins("claude", run)).resolves.toEqual({
+      agent: "claude",
+      plugins: [
+        { name: "stripe", status: "disabled", source: "project" },
+        { name: "vercel", status: "configured", source: "user" },
+      ],
+    });
+    expect(calls).toEqual(["claude plugin list --json"]);
+  });
+
+  test("reads each CLI through its own command", async () => {
+    const { run, calls } = fixtureRunner({
+      "codex plugin list --json": "[]",
+      "grok plugin list --json": "[]",
+      "opencode debug config": "{}",
+      "pi list --no-approve": "No packages installed.",
+    });
+
+    for (const agent of ["codex", "grok", "opencode", "pi"] as const) {
+      await expect(discoverAgentPlugins(agent, run)).resolves.toEqual({ agent, plugins: [] });
+    }
+    expect(calls).toHaveLength(4);
+  });
+
+  test("says Cursor has no list rather than reporting an empty one", async () => {
+    const { run, calls } = fixtureRunner({});
+
+    await expect(discoverAgentPlugins("cursor", run)).resolves.toEqual({
+      agent: "cursor",
+      plugins: [],
+      pluginError: "Cursor's SDK bridge does not expose a plugin list.",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("reports a CLI that fails or prints nonsense rather than an empty list", async () => {
+    const missing = fixtureRunner({});
+    await expect(discoverAgentPlugins("claude", missing.run)).resolves.toEqual({
+      agent: "claude",
+      plugins: [],
+      pluginError: "Could not read Claude plugins.",
+    });
+
+    const garbled = fixtureRunner({ "grok plugin list --json": "not json" });
+    await expect(discoverAgentPlugins("grok", garbled.run)).resolves.toEqual({
+      agent: "grok",
+      plugins: [],
+      pluginError: "Could not read Grok plugins.",
+    });
   });
 });

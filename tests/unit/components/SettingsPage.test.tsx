@@ -187,7 +187,7 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     expect(container.querySelector(".animate-spin")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Skills" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skills and plugins" }));
 
     expect(screen.getByTestId("skills-settings")).toBeTruthy();
     expect(screen.queryByTestId("active-settings-section") === null).toBe(true);
@@ -204,7 +204,7 @@ describe("SettingsPage", () => {
     );
 
     render(<SettingsPage open onOpenChange={() => undefined} />);
-    fireEvent.click(screen.getByRole("button", { name: "Skills" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skills and plugins" }));
     expect(screen.getByTestId("skills-settings")).toBeTruthy();
 
     resolveConfig(defaultConfig());

@@ -9,7 +9,7 @@ import {
   listMachineAgentAccounts,
   setPreferredAgentIdentity,
 } from "./agent-accounts";
-import { startGitHubCliLogin } from "./docker-skills";
+import { listAgentPlugins, startGitHubCliLogin } from "./docker-skills";
 import { cursorSdkLoginStart } from "./config-integrations";
 import { startOpenCodeProviderLogin } from "./opencode-provider-auth";
 import { OutcomeUnknownError, portalStore } from "@/lib/portal/portal-store";
@@ -197,4 +197,22 @@ describe("automatic switching ticks", () => {
     expect(portal).not.toHaveBeenCalled();
     expect(nodeCalls()).toEqual([]);
   });
+});
+
+test("plugin catalog requests preserve the selected command node or leaf", async () => {
+  await listAgentPlugins("claude", null);
+  await listAgentPlugins("codex", "other-leaf");
+  expect(portal.mock.calls).toEqual([
+    ["list_agent_plugins", { provider: "claude" }],
+    [
+      "invoke_on_node",
+      {
+        nodeId: "other-leaf",
+        command: "list_agent_plugins",
+        args: { provider: "codex" },
+        requestKey: expect.any(String),
+      },
+    ],
+  ]);
+  expect(workspace).not.toHaveBeenCalled();
 });

@@ -1,10 +1,12 @@
 import type { PublicActionName } from "@orkestrator/protocol/public-api";
 import type { Environment } from "../models.js";
-import { boundedMessage } from "./errors.js";
 import { isSetupReady } from "./actions-environments.js";
 import type { PublicOperationRecord } from "./operation-ledger.js";
 import { publicEnvironmentSummary } from "./summaries.js";
 import type { OperationPatch, PublicActionContext } from "./types.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("public-api");
 
 /**
  * Backend-owned completion and recovery of public operations.
@@ -255,7 +257,10 @@ export async function reconcileOperation(
   try {
     patch = await reconcile(record, context);
   } catch (error) {
-    console.warn(`[public-api] Reconciling ${record.operationId} failed: ${boundedMessage(error)}`);
+    log.warn("operation.reconcile-failed", {
+      operationId: record.operationId,
+      error: formatLogError(error),
+    });
     return record;
   }
   if (!patch) return record;
@@ -333,7 +338,7 @@ export class PublicOperationReconciler {
     this.pendingEnvironments.clear();
     this.running = this.pass(environments)
       .catch((error: unknown) => {
-        console.warn(`[public-api] Operation reconciliation failed: ${boundedMessage(error)}`);
+        log.warn("reconcile.pass-failed", { error: formatLogError(error) });
       })
       .finally(() => {
         this.running = null;

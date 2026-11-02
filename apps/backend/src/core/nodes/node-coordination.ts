@@ -41,6 +41,9 @@ import { NodeProjectFiles } from "./node-project-files.js";
 import { NodeProjectCopies } from "./node-project-copy.js";
 import type { ProjectCopyRecord } from "@orkestrator/protocol/project-copy";
 import type { NodeService } from "./node-service.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("nodes");
 
 /**
  * Cross-node coordination for one backend: leaf mail (incoming coordinator
@@ -145,7 +148,7 @@ export class NodeCoordination {
   private resumeActions(): void {
     if (!this.recoveryStarted) return;
     void this.actions.resumeInterrupted().catch(() => {
-      console.warn("[nodes] Could not resume approved actions; will retry.");
+      log.warn("actions.resume-failed");
     });
   }
 
@@ -891,10 +894,9 @@ export class NodeCoordination {
         },
       )
       .catch((error: unknown) => {
-        console.warn(
-          "[nodes] Could not tell the coordinator a project copy finished:",
-          error instanceof Error ? error.name : "unknown",
-        );
+        log.warn("project-copy.notify-failed", {
+          error: formatLogError(error, { message: false }),
+        });
       });
   }
 

@@ -67,6 +67,9 @@ import {
   type PullRequestStatus,
 } from "./coordinator-pr-status.js";
 import type { Environment } from "./models.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
 
 /** How long a notice waits for others before waking the coordinator. */
 export const COORDINATOR_STATUS_COALESCE_MS = 10_000;
@@ -933,10 +936,7 @@ export class CoordinatorStatusWakes {
       this.timers.setTimeout(() => {
         this.changeTimers.delete(key);
         void this.observeWorkflow(kind, id, nodeId).catch((error: unknown) => {
-          console.warn(
-            "[coordinator] Could not observe a remote workflow for status wakes:",
-            error instanceof Error ? error.message : error,
-          );
+          log.warn("wake.observe-remote-workflow-failed", { error: formatLogError(error) });
         });
       }, RESOURCE_CHANGE_DEBOUNCE_MS),
     );
@@ -978,10 +978,7 @@ export class CoordinatorStatusWakes {
       this.timers.setTimeout(() => {
         this.changeTimers.delete(key);
         void this.observePullRequests(environmentId, nodeId).catch((error: unknown) => {
-          console.warn(
-            "[coordinator] Could not observe a pull request for status wakes:",
-            error instanceof Error ? error.message : error,
-          );
+          log.warn("wake.observe-pull-request-failed", { error: formatLogError(error) });
         });
       }, RESOURCE_CHANGE_DEBOUNCE_MS),
     );
@@ -1042,10 +1039,7 @@ export class CoordinatorStatusWakes {
       this.timers.setTimeout(() => {
         this.changeTimers.delete(key);
         void this.observeWorkflow(kind, change.id).catch((error: unknown) => {
-          console.warn(
-            "[coordinator] Could not observe a workflow for status wakes:",
-            error instanceof Error ? error.message : error,
-          );
+          log.warn("wake.observe-workflow-failed", { error: formatLogError(error) });
         });
       }, RESOURCE_CHANGE_DEBOUNCE_MS),
     );
@@ -1129,10 +1123,7 @@ export class CoordinatorStatusWakes {
         ) {
           await this.observeAssociation(state.workspaces, association, mode, state.workflows).catch(
             (error: unknown) => {
-              console.warn(
-                "[coordinator] Could not deliver a workflow status wake:",
-                error instanceof Error ? error.message : error,
-              );
+              log.warn("wake.deliver-failed", { error: formatLogError(error) });
             },
           );
         }
@@ -1143,10 +1134,7 @@ export class CoordinatorStatusWakes {
           continue;
         }
         await this.reconcileWaiting(state.workspaces, association).catch((error: unknown) => {
-          console.warn(
-            "[coordinator] Could not check a waiting worker:",
-            error instanceof Error ? error.message : error,
-          );
+          log.warn("wake.waiting-check-failed", { error: formatLogError(error) });
         });
       }
     });
@@ -1640,10 +1628,7 @@ export class CoordinatorStatusWakes {
         this.resolveTimers.delete(association.id);
         void this.observePullRequests(association.resourceId, association.nodeId).catch(
           (error: unknown) => {
-            console.warn(
-              "[coordinator] Could not report a finished Resolve tab:",
-              error instanceof Error ? error.message : error,
-            );
+            log.warn("wake.resolve-report-failed", { error: formatLogError(error) });
           },
         );
       }, delayMs),
@@ -1765,10 +1750,7 @@ export class CoordinatorStatusWakes {
           if (MODE_ORDER[await this.mode()] < MODE_ORDER.settled) return;
           await this.reconcileWaiting(state.workspaces, association);
         }).catch((error: unknown) => {
-          console.warn(
-            "[coordinator] Could not report a waiting worker:",
-            error instanceof Error ? error.message : error,
-          );
+          log.warn("wake.waiting-report-failed", { error: formatLogError(error) });
         });
       }, this.waitingDebounceMs),
     );

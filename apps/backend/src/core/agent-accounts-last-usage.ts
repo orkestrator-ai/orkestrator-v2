@@ -8,6 +8,9 @@ import {
   stalePlanUsageSnapshot,
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-accounts");
 
 /**
  * The last successful plan-usage reading of each account, kept on disk in
@@ -121,7 +124,7 @@ export class AgentAccountLastUsage {
         this.dirty.delete(file);
       } catch {
         this.dirty.add(file);
-        console.warn("[agent-accounts] Could not save the last plan usage reading");
+        log.warn("last-usage.save-failed");
       } finally {
         await fs.rm(temporary, { force: true }).catch(() => undefined);
       }

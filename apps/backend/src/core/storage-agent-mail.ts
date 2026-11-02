@@ -60,6 +60,9 @@ import {
   pairMessagesInLastHour,
 } from "./storage-agent-mail-budgets.js";
 import { coalescingWindow } from "./storage-agent-mail-injects.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-mail");
 
 const SETTLED_PLACEMENTS = new Set(["undeliverable", "bounced", "expired"]);
 
@@ -201,10 +204,7 @@ export class AgentMailRepository {
     if (sender.kind !== "tab" && sender.kind !== "coordinator" && sender.kind !== "node") return;
     if (sender.projectId !== workspace.projectId) return;
     await this.coordinatorMailResolver?.(workspace.projectId).catch((error) => {
-      console.warn(
-        "[agent-mail] Could not start the main coordinator:",
-        error instanceof Error ? error.message : error,
-      );
+      log.warn("coordinator.start-failed", { error: formatLogError(error) });
     });
   }
 
@@ -832,7 +832,7 @@ export class AgentMailRepository {
       store.revision += 1;
       await this.store.save(store);
       // Ids and decisions only: never subjects or bodies.
-      console.info("[agent-mail] placed", {
+      log.info("message.placed", () => ({
         messageId: message.id,
         from: message.from.kind,
         toEnvironmentId: message.toEnvironmentId,
@@ -843,7 +843,7 @@ export class AgentMailRepository {
         reason: message.placementReason ?? null,
         injectDepth,
         threadDepth: nextThreadDepth,
-      });
+      }));
       this.context.changes.announce("agent-mail", destinationId, recipient.projectId);
       this.context.changes.announce("agent-mail-summary", "all");
       return message;

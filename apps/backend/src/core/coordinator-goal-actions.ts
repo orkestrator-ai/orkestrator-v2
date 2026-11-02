@@ -23,6 +23,9 @@ import { goalIdForRequest } from "./native-agent-goal-service.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { nativeTabsOfLayout } from "./public-api/summaries.js";
 import { surfaceRecord as record } from "./worker-surface-runs.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
 
 /**
  * Backend commands behind a coordinator's worker goal tools. Each revalidates
@@ -239,10 +242,7 @@ async function delegationCovers(
     );
     return (opened as { opened?: unknown } | undefined)?.opened === true;
   } catch (error) {
-    console.warn(
-      "[coordinator] Could not open a delegation for a worker goal:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("delegation.open-failed", { source: "worker-goal", error: formatLogError(error) });
     return false;
   }
 }

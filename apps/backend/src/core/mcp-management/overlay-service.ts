@@ -48,6 +48,9 @@ import type {
   NativeEntry,
   SourceSpec,
 } from "./types.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("mcp-management");
 
 /** Keeps the inherited staged copy in step after a defaults refresh. */
 export interface StagedDefaultsWriter {
@@ -369,7 +372,7 @@ export class EnvironmentOverlays {
         );
       } catch (error) {
         const code = (error as { detail?: { code?: string } }).detail?.code ?? "unexpected";
-        console.warn(`[mcp-management] overlay materialise failed: code=${code}`);
+        log.warn("overlay.materialise-failed", { code });
       }
     }
     return written;

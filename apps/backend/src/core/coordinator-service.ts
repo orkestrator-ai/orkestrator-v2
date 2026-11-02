@@ -36,6 +36,9 @@ import {
 } from "./coordinator-status-wakes.js";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
 
 const MAX_STARTUP_ERROR_CHARS = 2_000;
 const DELEGATION_IDLE_RECONCILE_GRACE_MS = 15_000;
@@ -331,10 +334,7 @@ export class CoordinatorService {
         owed,
       )
       .catch((error) => {
-        console.warn(
-          "[coordinator] Could not move mail to the new main coordinator:",
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("mail.move-failed", { error: formatLogError(error) });
       });
   }
 
@@ -367,10 +367,7 @@ export class CoordinatorService {
           { force: true },
         )
         .catch((error) => {
-          console.warn(
-            "[coordinator] Could not move work to the main coordinator:",
-            error instanceof Error ? error.message : error,
-          );
+          log.warn("work.move-failed", { error: formatLogError(error) });
         });
     }
   }

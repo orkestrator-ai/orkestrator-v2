@@ -6,7 +6,7 @@ import {
   renderAgentMailCarrier,
   type AgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
@@ -183,7 +183,7 @@ export class AgentMailService {
           // settlement, not newly injectable mail, so they must not wake a
           // pass that would clear the backoff the finish just stored.
           void this.drainInjects({ includeDeferred: false }).catch((error) => {
-            console.warn("[agent-mail] Failed to drain newly received mail:", error);
+            log.warn("drain.new-mail-failed", { error: formatLogError(error) });
           });
         }
         return;
@@ -280,7 +280,7 @@ export class AgentMailService {
         this.synchronizedRevision = Math.max(this.synchronizedRevision, targetRevision);
       })
       .catch((error) => {
-        console.warn("[agent-mail] Failed to synchronize mailboxes:", error);
+        log.warn("presence.sync-failed", { error: formatLogError(error) });
       })
       .finally(() => {
         if (this.syncTask === task) this.syncTask = null;
@@ -422,13 +422,13 @@ export class AgentMailService {
     await this.applyInjectorMutation(() =>
       this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, result),
     );
-    console.info("[agent-mail] verified", {
+    log.info("inject.verified", () => ({
       messageId: message.id,
       toEnvironmentId: mailbox.environmentId,
       toTabId: mailbox.tabId,
       journal: status,
       outcome: result.outcome,
-    });
+    }));
   }
 
   private async reconcileSteer(
@@ -536,10 +536,7 @@ export class AgentMailService {
             await this.hooks
               .coordinatorMailForStoppedEnvironment?.(environment.id, message)
               .catch((error) => {
-                console.warn(
-                  "[agent-mail] Could not act on a stopped worker:",
-                  error instanceof Error ? error.message : error,
-                );
+                log.warn("stopped-worker.action-failed", { error: formatLogError(error) });
               });
           }
           continue;
@@ -744,14 +741,14 @@ export class AgentMailService {
             this.storage.finishAgentMailInject(mailbox.mailboxId, entry.id, result),
           );
         }
-        console.info("[agent-mail] dispatched", {
-          messageIds: batched.map((entry) => entry.id),
+        log.info("inject.dispatched", () => ({
+          messageIds: batched.map((entry) => entry.id).join(","),
           toEnvironmentId: mailbox.environmentId,
           toTabId: mailbox.tabId,
           outcome: result.outcome,
           reason: "reason" in result ? result.reason : null,
           via,
-        });
+        }));
       };
       if (steerRequestId) {
         let steered: MailSteerDispatchOutcome;

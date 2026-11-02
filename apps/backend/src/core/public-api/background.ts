@@ -1,5 +1,8 @@
 import { boundedMessage, isPublicActionError } from "./errors.js";
 import type { ExecuteOutcome, OperationHandle } from "./types.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("public-api");
 
 /**
  * Run backend work whose ownership must not depend on the HTTP request.
@@ -63,9 +66,10 @@ export async function runWithContinuation<T>(
       });
     })
     .catch((error: unknown) => {
-      console.warn(
-        `[public-api] Failed to record the outcome of ${operation.operationId}: ${boundedMessage(error)}`,
-      );
+      log.warn("outcome.record-failed", {
+        operationId: operation.operationId,
+        error: formatLogError(error),
+      });
     });
   return {
     state: "running",

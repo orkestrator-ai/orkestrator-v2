@@ -9,6 +9,9 @@ import type { Environment } from "../models.js";
 import { boundedMessage, PublicActionError } from "./errors.js";
 import { EXEC_CONTROL, EXEC_WORKER } from "./exec-worker.js";
 import type { OperationPatch } from "./types.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("public-api");
 
 /**
  * Control primitives for environment exec workers, kept free of the action
@@ -201,7 +204,7 @@ export async function stopEnvironmentExecWorkers(
     // does not stop them. Only container teardown can tolerate a failed drain.
     const environment = await context.storage.getEnvironment(environmentId);
     if (options.requireStopped || environment?.environmentType === "local") throw error;
-    console.warn(`[public-api] Could not stop goal checks: ${boundedMessage(error)}`);
+    log.warn("goal-checks.stop-failed", { error: formatLogError(error) });
   }
   // Partial storage adapters (compatibility fixtures) have no operation store.
   if (typeof context.storage.publicOperations?.listActivePublicOperations !== "function") return;
@@ -219,7 +222,7 @@ export async function stopEnvironmentExecWorkers(
     // Never block a stop/delete on the receipt store; workers still die with
     // their workspace and reconcile as interrupted.
     if (options.requireStopped) throw new Error("Exec workers could not be verified stopped");
-    console.warn(`[public-api] Could not list exec workers: ${boundedMessage(error)}`);
+    log.warn("exec.list-failed", { error: formatLogError(error) });
     return;
   }
   for (const record of active) {
@@ -241,9 +244,10 @@ export async function stopEnvironmentExecWorkers(
       );
     } catch (error) {
       if (options.requireStopped) throw new Error("Exec workers could not be verified stopped");
-      console.warn(
-        `[public-api] Could not cancel exec ${record.operationId}: ${boundedMessage(error)}`,
-      );
+      log.warn("exec.cancel-failed", {
+        operationId: record.operationId,
+        error: formatLogError(error),
+      });
     }
   }
 }
@@ -295,7 +299,7 @@ async function stopGoalCheckWorkers(
           cause: error,
         },
       );
-    console.warn(`[public-api] Could not list goal check workers: ${boundedMessage(error)}`);
+    log.warn("goal-workers.list-failed", { error: formatLogError(error) });
     return;
   }
   for (const operationId of operations) {

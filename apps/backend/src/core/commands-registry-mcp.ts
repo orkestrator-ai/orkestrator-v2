@@ -44,6 +44,9 @@ import {
 import { containerLabel } from "./portable-input-status.js";
 import { portableInputRevisionDirectory, replaceStagedInputFile } from "./portable-inputs.js";
 import type { Environment } from "./models.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("mcp-management");
 
 const PORT_FIELD: Record<AgentPlatform, keyof Environment> = {
   claude: "localClaudePort",
@@ -548,11 +551,12 @@ export async function withMcpCorrelation<T>(command: string, run: () => Promise<
     const known = mcpManagementErrorFromUnknown(error);
     const detail = known ?? mcpFailure("internal").detail;
     const correlationId = detail.correlationId ?? newCorrelationId();
-    console.warn(
-      `[mcp-management] ${command} failed: code=${detail.code} ref=${correlationId}${
-        known ? "" : ` cause=${error instanceof Error ? error.name : typeof error}`
-      }`,
-    );
+    log.warn("command.failed", {
+      command,
+      code: detail.code,
+      ref: correlationId,
+      ...(known ? {} : { error: formatLogError(error, { message: false }) }),
+    });
     throw new McpManagementFailure({ ...detail, correlationId });
   }
 }

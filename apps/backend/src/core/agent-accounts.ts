@@ -70,6 +70,9 @@ import {
   resetHostModelCatalogSeedCooldown,
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-accounts");
 
 /**
  * Added Claude and Codex logins: registry, switching, sign-in and per-account
@@ -653,16 +656,12 @@ async function finishReauthentication(
     if (previousIdentity.identityKey !== state.identityKey) {
       await context.runtime.accounts.lastUsage.forget(accountsRoot(context), platform, accountId);
     }
-    await discardNewAccount(context, entry).catch(() =>
-      console.warn("[agent-accounts] Temporary login cleanup failed"),
-    );
+    await discardNewAccount(context, entry).catch(() => log.warn("login-cleanup.failed"));
   });
   markLocalBridgesForLoginRefresh(context, platform);
   if (platform === "claude")
     await markContainersForClaudeLoginRefresh(context, true).catch(() =>
-      console.warn(
-        "[agent-accounts] Container login refresh will reconcile from its durable generation",
-      ),
+      log.warn("login-refresh.deferred"),
     );
 }
 

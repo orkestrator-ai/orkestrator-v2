@@ -99,6 +99,9 @@ import {
   summaryPrHealth,
   thisNodePrHealth,
 } from "./coordinator-pr-status.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("control-mcp");
 
 const MAX_PROMPT_LENGTH = 100_000;
 const MAX_TERMINAL_OUTPUT_CHARS = 256 * 1024;
@@ -384,10 +387,7 @@ async function tryOpenNodeDelegation(
     });
     return isRecord(result) && result.opened === true;
   } catch (error) {
-    console.warn(
-      "[control-mcp] Could not open a delegation on another node:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("delegation.remote-open-failed", { error: formatLogError(error) });
     return false;
   }
 }
@@ -401,10 +401,7 @@ async function tryOpenCoordinatorDelegation(
     const result = await invoke<unknown>("open_coordinator_delegation", { scope, ...input });
     return isRecord(result) && result.opened === true;
   } catch (error) {
-    console.warn(
-      "[control-mcp] Failed to open coordinator delegation:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("delegation.open-failed", { error: formatLogError(error) });
     return false;
   }
 }

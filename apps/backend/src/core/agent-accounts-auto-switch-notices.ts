@@ -10,6 +10,9 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import type { StorageService } from "./storage.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-accounts");
 
 /**
  * A machine this one controls moved by itself: tell this node's coordinators,
@@ -29,7 +32,7 @@ export function bridgeRemoteAutoSwitchNotices(input: {
       .catch(() => nodeId)
       .then((machineName) => input.mail(payload, machineName))
       .catch(() => {
-        console.warn("[agent-accounts] Another machine's automatic switch notice failed");
+        log.warn("switch-notice.failed", { audience: "other-machine" });
       });
   });
 }
@@ -80,7 +83,7 @@ export async function mailAutoSwitchNotice(
           },
         )
         .catch(() => {
-          console.warn("[agent-accounts] A coordinator's automatic switch notice failed");
+          log.warn("switch-notice.failed", { audience: "coordinator" });
         });
     }),
   );

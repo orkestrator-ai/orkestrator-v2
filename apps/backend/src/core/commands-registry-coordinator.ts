@@ -40,6 +40,9 @@ import {
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -471,10 +474,10 @@ export function registerCoordinatorCommands(
               stableRequestId,
             );
           } catch (error) {
-            console.warn(
-              "[coordinator] Failed to open a delegation for an outbound message:",
-              error instanceof Error ? error.message : error,
-            );
+            log.warn("delegation.open-failed", {
+              source: "outbound-message",
+              error: formatLogError(error),
+            });
           }
         }
         // Say plainly when the worker cannot read it yet: "pending" alone reads

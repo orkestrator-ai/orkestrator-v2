@@ -24,6 +24,9 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import type { DraftsRepository } from "./storage-drafts.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
 
 const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
@@ -71,7 +74,7 @@ export class CoordinatorsRepository {
       actionReceipts: [] as CoordinatorActionReceipt[],
     });
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      console.warn("[coordinator] Ignoring malformed coordinator store");
+      log.warn("store.malformed");
       return empty();
     }
     const store = value as {
@@ -87,14 +90,14 @@ export class CoordinatorsRepository {
       typeof store.workspaces !== "object" ||
       Array.isArray(store.workspaces)
     ) {
-      console.warn("[coordinator] Ignoring unsupported coordinator store version");
+      log.warn("store.unsupported-version");
       return empty();
     }
     const workspaces: Record<string, CoordinatorWorkspace> = {};
     for (const [projectId, workspace] of Object.entries(store.workspaces)) {
       // Codex-named bridge fields were upgraded once at import (storage-record-upgrades.ts).
       if (!isCoordinatorWorkspace(workspace) || workspace.projectId !== projectId) {
-        console.warn("[coordinator] Ignoring invalid coordinator workspace record");
+        log.warn("store.invalid-workspace");
         continue;
       }
       // Read-time migration to one main plus side agents, and to the session

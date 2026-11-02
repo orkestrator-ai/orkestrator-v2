@@ -5,7 +5,7 @@ Found on 2026-11-01 while finishing
 
 ## Task analysis
 
-Analysed 2026-11-01 against `main` at `0658de64`, from reading the code plus a probe of Claude Code 2.1.310 in print mode against a fake API; nothing here ran in a container. Re-checked 2026-11-02 against `main` at `38d55ee1`: the description still held (only `UserPromptSubmit` and `Stop` were installed, and the script accepted only `working` and `waiting`). Task 1 was acted on that day, and its image proof was made a committed test after the branch was rebased onto `main` at `ae7131f9`.
+Analysed 2026-11-01 against `main` at `0658de64`, from reading the code plus a probe of Claude Code 2.1.310 in print mode against a fake API; nothing here ran in a container. Re-checked 2026-11-02 against `main` at `38d55ee1`: the description still held (only `UserPromptSubmit` and `Stop` were installed, and the script accepted only `working` and `waiting`). Task 1 was acted on that day, and its image proof was made a committed test after the branch was rebased onto `main` at `ae7131f9`. The branch was rebased again onto `main` at `381b26f9` (which had changed `tmux-poll.ts` and `docker/entrypoint.sh`, with no conflict) and the image proof repeated there.
 
 ### Tasks
 
@@ -64,6 +64,7 @@ Made 2026-11-02 against `main` at `38d55ee1`.
 - The same proof is now a committed test, `apps/backend/tests/claude-terminal-failed-turn-docker.test.ts`, skipped without `ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE` like the other live signal tests and run by the Linux Engine workflow (`container-live-qualification.yml`). It takes the hooks from the image's own `/usr/local/bin/entrypoint.sh`, checks the manifest declares `claude-state-signal=3`, holds each fake API answer until the plain one-second poll (real `docker exec` reads, real storage) has seen `working`, then checks a refused turn ends `failed 2 0` / `idle` with `agent_failed` and a normal turn ends `waiting 4 1` / `waiting` with `agent_waiting`. It needs no route from the container to the host.
   - Passed on beelink against `orkestrator-v2:dev-94747542e191`, rebuilt from the rebased branch (`mise run docker:build:dev --profile failed-turn-1200`), in about 4 s.
   - Negative control: the same image with `main`'s `entrypoint.sh` and `orkestrator-state-signal.sh` copied over (a throwaway tag, removed afterwards). There the refused turn left `working 1 0` / `working`, and the test failed.
+  - Repeated after the rebase onto `381b26f9`: the image was rebuilt the same way (same tag, now carrying `main`'s user-skill staging too), and the test passed (1 pass, 15 assertions, about 2.3 s). The negative control was repeated on a throwaway `orkestrator-v2:dev-negctl1200-4eee6264` with `381b26f9`'s two scripts, removed afterwards: the committed test fails at its check that the image installs `StopFailure`, and an uncommitted copy without that check timed out waiting for the source to leave `working` after the refused turn.
 - The doorbell test (`claude-state-signal-docker.test.ts`) now drives `StopFailure` too. On beelink it times out before any of the new steps, because a container there cannot reach a host port at all (a plain `curl` to a host listener times out). It needs a host where containers reach the backend, as the Linux Engine CI workflow has.
 
 ### Task 1: an image test that does not need the host

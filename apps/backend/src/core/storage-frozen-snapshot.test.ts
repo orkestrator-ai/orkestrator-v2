@@ -133,6 +133,46 @@ describe("frozen store snapshots", () => {
     });
   });
 
+  test("reads buffered writes inside atomically and discards rolled-back snapshots", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await seedEnvironments(storage);
+      const before = await storage.readEnvironmentsSnapshot();
+      const { context } = storageInternals(storage);
+      await expect(
+        context.atomically(async () => {
+          await storage.updateEnvironment("e1", { name: "buffered" });
+          const snapshot = await storage.readEnvironmentsSnapshot();
+          expect(snapshot).toEqual(await storage.loadEnvironments());
+          expect(snapshot[0]!.name).toBe("buffered");
+          expect(Object.isFrozen(snapshot[0])).toBe(true);
+          throw new Error("rollback");
+        }),
+      ).rejects.toThrow("rollback");
+      expect(await storage.readEnvironmentsSnapshot()).toEqual(before);
+      await context.atomically(async () => {
+        await storage.updateEnvironment("e1", { name: "committed" });
+        expect((await storage.readEnvironmentsSnapshot())[0]!.name).toBe("committed");
+      });
+      expect((await storage.readEnvironmentsSnapshot())[0]!.name).toBe("committed");
+    });
+  });
+
+  test("a valid document-mode store falls back to the loader", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await seedEnvironments(storage);
+      await storage.readEnvironmentsSnapshot();
+      seedUnreadableStore(
+        dataDir,
+        "environments.json",
+        JSON.stringify([environment("document", 0)]),
+      );
+      const snapshot = await storage.readEnvironmentsSnapshot();
+      expect(snapshot).toEqual(await storage.loadEnvironments());
+      expect(snapshot[0]!.id).toBe("document");
+      expect(Object.isFrozen(snapshot[0])).toBe(true);
+    });
+  });
+
   test("a store over the retained bound is decoded but not kept", async () => {
     await withTemporaryStorage(async (storage) => {
       await seedEnvironments(storage);

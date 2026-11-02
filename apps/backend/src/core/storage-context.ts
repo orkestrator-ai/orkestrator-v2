@@ -852,7 +852,7 @@ export class StorageContext {
    * the row's new value drops is removed from every archived copy of that
    * record. Replacing an unreadable store (nothing shows what it held) prunes
    * every copy against the whole new value, as a whole-value save does. The
-   * pruning runs after the row commits, like the deletion scrubs.
+   * pruning intent commits with the row and replays after failure or restart.
    */
   updateSensitiveStoreRow<T>(
     filePath: string,
@@ -861,37 +861,48 @@ export class StorageContext {
   ): T {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("updateSensitiveStoreRow requires a database store");
-    if (this.openAtomicScope() || !hasLegacyJsonStore(this.dataDir, store)) {
+    if (!hasLegacyJsonStore(this.dataDir, store)) {
       return this.updateStoreRow(filePath, key, mutate);
     }
-    let unreadable = false;
-    if (this.storeHeldAsDocument(filePath)) {
-      try {
-        this.loadStoreStrict(filePath);
-      } catch (error) {
-        if (!(error instanceof StoreCorruptError)) throw error;
-        unreadable = true;
+    const cleanups: LegacyJsonCleanup[] = [];
+    let result!: T;
+    const write = () => {
+      let unreadable = false;
+      if (this.storeHeldAsDocument(filePath)) {
+        try {
+          this.loadStoreStrict(filePath);
+        } catch (error) {
+          if (!(error instanceof StoreCorruptError)) throw error;
+          unreadable = true;
+        }
       }
-    }
-    let previous: unknown;
-    let written: { value: unknown } | undefined;
-    const result = this.updateStoreRow(filePath, key, (current) => {
-      previous = current;
-      const update = mutate(current);
-      if (!update.delete && "value" in update) written = { value: update.value };
-      return update;
-    });
-    if (!written) return result;
-    const next = written.value;
-    if (unreadable) {
-      const whole = this.loadStoreStrict<unknown>(filePath)?.value ?? {};
-      this.scrubLegacyArchive(store, (value) => pruneRemovedContent(value, whole));
-    } else if (previous === undefined || pruneRemovedContent(previous, next) !== previous) {
-      this.scrubLegacyArchive(store, (value) => {
-        if (!isRecord(value)) throw new Error("Unattributable legacy backup");
-        if (!Object.hasOwn(value, key)) return value;
-        return { ...value, [key]: pruneRemovedContent(value[key], next) };
+      result = this.updateStoreRow(filePath, key, (previous) => {
+        const update = mutate(previous);
+        if (
+          !update.delete &&
+          "value" in update &&
+          (unreadable ||
+            previous === undefined ||
+            pruneRemovedContent(previous, update.value) !== previous)
+        ) {
+          cleanups.push({ store, kind: "prune-row", key, next: structuredClone(update.value) });
+        }
+        return update;
       });
+      if (unreadable && cleanups.length > 0) {
+        cleanups.splice(0, cleanups.length, {
+          store,
+          kind: "prune",
+          next: this.loadStoreStrict<unknown>(filePath)?.value ?? {},
+        });
+      }
+    };
+    const scope = this.openAtomicScope();
+    if (scope) {
+      write();
+      scope.archiveCleanups.push(...cleanups);
+    } else {
+      commitWithLegacyJsonCleanup(this.database, this.dataDir, write, cleanups);
     }
     return result;
   }

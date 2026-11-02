@@ -11,7 +11,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { createEnvironment, StorageService } from "./storage.js";
 import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
-import { seedUnreadableStore, storageDatabase } from "./storage-test-support.js";
+import { seedUnreadableStore, storageInternals, storageDatabase } from "./storage-test-support.js";
 
 class ArchiveProbe extends StorageService {
   committed(store: string): unknown {
@@ -156,6 +156,112 @@ describe("retired JSON archive", () => {
     expect(copy).not.toContain("ARCHIVED-MENTION-4e1a");
     expect(copy).toContain("OTHER-MENTION-kept");
     expect(JSON.parse(copy).draft.value).toEqual({ text: "kept text" });
+  });
+
+  test.each(["retry", "restart", "unrelated save", "remove then readd", "atomic"])(
+    "recovers draft row pruning on %s",
+    async (recovery) => {
+      const environment = createEnvironment("project-1");
+      const { storage, archive } = await migrated({
+        "environments.json": [environment],
+        "compose-drafts.json": {
+          draft: {
+            ...composeDraft("draft", environment.id, "kept"),
+            value: { text: "kept", nested: { secret: "REMOVED-DRAFT-SECRET" } },
+          },
+          other: composeDraft("other", environment.id, "other"),
+        },
+      });
+      const originalRename = syncFs.renameSync;
+      let renames = 0;
+      const rename = spyOn(syncFs, "renameSync").mockImplementation((from, to) => {
+        if (++renames === 2) throw new Error("archive rename failed");
+        return originalRename(from, to);
+      });
+      const save = () =>
+        storage.saveComposeDraft("draft", "environment", environment.id, { text: "edited" });
+      try {
+        await expect(
+          recovery === "atomic" ? storageInternals(storage).context.atomically(save) : save(),
+        ).rejects.toThrow("archive rename failed");
+        expect(
+          (storage.committed("compose-drafts") as Record<string, { value: unknown }>).draft!.value,
+        ).toEqual({ text: "edited" });
+        const copies = Object.entries(await archiveFiles(archive)).filter(([name]) =>
+          name.startsWith("compose-drafts.json"),
+        );
+        expect(copies.filter(([, copy]) => copy.includes("REMOVED-DRAFT-SECRET"))).toHaveLength(1);
+      } finally {
+        rename.mockRestore();
+      }
+      if (recovery === "restart") {
+        await storage.close();
+        const reopened = new ArchiveProbe(storage.getDataDir());
+        services.push(reopened);
+        await reopened.init();
+      } else if (recovery === "unrelated save") {
+        await storage.kanban.saveLinearAuth("new-key");
+      } else if (recovery === "remove then readd") {
+        await storage.saveComposeDraft("draft", "environment", environment.id, {
+          text: "edited",
+          nested: { secret: "REMOVED-DRAFT-SECRET" },
+        });
+      } else {
+        await save();
+      }
+      for (const [name, copy] of Object.entries(await archiveFiles(archive))) {
+        if (!name.startsWith("compose-drafts.json")) continue;
+        expect(copy).not.toContain("REMOVED-DRAFT-SECRET");
+        expect(copy).toContain("other");
+      }
+    },
+  );
+
+  test("replacing a corrupt document prunes every archived draft against the replacement", async () => {
+    const environment = createEnvironment("project-1");
+    const { storage, archive } = await migrated({
+      "environments.json": [environment],
+      "compose-drafts.json": {
+        draft: composeDraft("draft", environment.id, "kept"),
+        lost: composeDraft("lost", environment.id, "CORRUPT-DOCUMENT-SECRET"),
+      },
+    });
+    seedUnreadableStore(storage.getDataDir(), "compose-drafts.json");
+    await storage.saveComposeDraft("draft", "environment", environment.id, { text: "edited" });
+    for (const [name, copy] of Object.entries(await archiveFiles(archive))) {
+      if (!name.startsWith("compose-drafts.json")) continue;
+      expect(copy).not.toContain("CORRUPT-DOCUMENT-SECRET");
+      expect(JSON.parse(copy)).toEqual({ draft: composeDraft("draft", environment.id, "kept") });
+    }
+  });
+
+  test("a corrupt target row refuses the save without changing the archive or other rows", async () => {
+    const environment = createEnvironment("project-1");
+    const { storage, archive } = await migrated({
+      "environments.json": [environment],
+      "compose-drafts.json": {
+        draft: composeDraft("draft", environment.id, "kept"),
+        other: composeDraft("other", environment.id, "other"),
+      },
+    });
+    const database = storageDatabase(storage);
+    database.db
+      .query(
+        "UPDATE store_rows SET value = '{ torn' WHERE store = 'compose-drafts' AND key = 'draft'",
+      )
+      .run();
+    const before = await archiveFiles(archive);
+    const revision = database.readStoreSerialized("compose-drafts")!.revision;
+    await expect(
+      storage.saveComposeDraft("draft", "environment", environment.id, { text: "edited" }),
+    ).rejects.toThrow("compose-drafts");
+    expect(database.readStoreSerialized("compose-drafts")!.revision).toBe(revision);
+    expect(await archiveFiles(archive)).toEqual(before);
+    expect(
+      database.db
+        .query("SELECT value FROM store_rows WHERE store = 'compose-drafts' AND key = 'draft'")
+        .get(),
+    ).toEqual({ value: "{ torn" });
   });
 
   test("a delete prunes only the removed content from every archived copy", async () => {

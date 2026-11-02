@@ -522,9 +522,12 @@ The archive stays that pre-migration copy, except that deletes reach it:
   attributable predicate through `scrubSensitiveJsonBackups` or
   `scrubLegacyJsonStore`. Writes through `updateStore` or `updateStoreRow`
   never touch the archive, so a delete made that way must scrub explicitly.
-  `updateSensitiveStoreRow` prunes, after its commit, what the row's new value
-  drops from that record's archived copies; when it replaced an unreadable
-  store it prunes every copy against the whole new value.
+  `updateSensitiveStoreRow` commits a keyed pruning intent with the row
+  mutation, including inside `atomically()`. After commit it prunes what the
+  row's new value drops from that record's archived copies; when it replaced
+  an unreadable store it prunes every copy against the whole new value.
+  Failed cleanup replays on reopen or the next journaled write, before another
+  mutation can obscure a removal (including a later re-add).
 
 ## Testing
 

@@ -155,12 +155,12 @@ describe("StorageService store writers", () => {
     // StorageContext implements them.
     const allowed = new Set([...classes, "StorageContext"]);
     const primitive =
-      /^this\.(?:context\.)?(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow)$/;
+      /^this\.(?:context\.)?(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)$/;
     const outside: string[] = [];
     for (const full of backendSourceFiles()) {
       const source = readFileSync(full, "utf8");
       if (
-        !/\b(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow)\s*[<(]/.test(
+        !/\b(?:saveJson|saveSensitiveJson|deleteStore|updateStore|updateStoreRow|updateSensitiveStoreRow)\s*[<(]/.test(
           source,
         )
       ) {

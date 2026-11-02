@@ -78,9 +78,9 @@ function targetIdentity(target: BridgeLogPolicyTarget): string {
     .digest("hex");
 }
 
-function track(entries: Map<string, number>, id: string, seq: number): void {
+function track<T>(entries: Map<string, T>, id: string, value: T): void {
   entries.delete(id);
-  entries.set(id, seq);
+  entries.set(id, value);
   if (entries.size <= MAX_TRACKED_BRIDGES) return;
   const oldest = entries.keys().next().value;
   if (oldest !== undefined) entries.delete(oldest);
@@ -114,7 +114,7 @@ export class LogPolicyService {
   private stopped = false;
   /** The last sequence each bridge generation took, so a repeated start sends nothing. */
   private readonly delivered = new Map<string, number>();
-  private readonly wireSequences = new Map<string, number>();
+  private readonly wireSequences = new Map<string, { revision: number; seq: number }>();
   /** One delivery loop per bridge; a newer policy is picked up by the running loop. */
   private readonly delivering = new Set<string>();
   private activeRequests = 0;
@@ -229,13 +229,17 @@ export class LogPolicyService {
           staleRecoveries = 0;
           retrySeq = seq;
         }
-        const wireSeq = Math.max(seq, (this.wireSequences.get(id) ?? 0) + 1);
+        const previous = this.wireSequences.get(id);
+        const wireSeq =
+          previous?.revision === seq ? previous.seq : Math.max(seq, (previous?.seq ?? 0) + 1);
+        // Reserve before sending: a timed-out request can still arrive after a
+        // newer policy. Reuse only for retries of this exact policy revision.
+        track(this.wireSequences, id, { revision: seq, seq: wireSeq });
         let outcome = await this.post(target, wireSeq, this.detail);
         // A failed final attempt must not strand a policy that arrived in flight.
         if (seq !== this.seq) continue;
         if (outcome.kind === "applied") {
           track(this.delivered, id, seq);
-          track(this.wireSequences, id, wireSeq);
           this.reportedFailures.delete(id);
           failures = 0;
           continue;
@@ -254,7 +258,7 @@ export class LogPolicyService {
             outcome.seq <= Math.max(this.now(), seq) + MAX_SEQUENCE_SKEW_MS &&
             Number.isSafeInteger(outcome.seq + 1)
           ) {
-            track(this.wireSequences, id, outcome.seq);
+            track(this.wireSequences, id, { revision: seq, seq: outcome.seq + 1 });
             staleRecoveries += 1;
             continue;
           }

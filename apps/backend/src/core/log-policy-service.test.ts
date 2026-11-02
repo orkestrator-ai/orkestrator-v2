@@ -500,3 +500,24 @@ test("oversized chunked answers are cancelled and reported without consuming the
       ?.reason,
   ).toBe("malformed-answer");
 });
+
+test("a timed-out recovered sequence cannot be reused for a newer policy", async () => {
+  const held = Promise.withResolvers<void>();
+  const h = await harness({
+    answers: [
+      Response.json({ stale: true, seq: 5000 }),
+      async () => {
+        await held.promise;
+        throw new DOMException("timeout", "TimeoutError");
+      },
+    ],
+  });
+  h.service.start();
+  await h.settle();
+  await h.writeGlobal({ logDetail: { level: "debug", areaLevels: {} } });
+  h.service.configChanged();
+  held.resolve();
+  await h.settle();
+  expect(h.requests.map((request) => request.body.seq)).toEqual([1000, 5001, 5002]);
+  expect(h.requests.at(-1)!.body.level).toBe("debug");
+});

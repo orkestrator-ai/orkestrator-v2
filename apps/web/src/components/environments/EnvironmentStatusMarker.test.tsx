@@ -59,3 +59,40 @@ for (const local of [true, false]) {
     });
   }
 }
+
+test("synchronizes the actual ring on state and shape changes while retaining colour transitions", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "getAnimations");
+  const loop = {
+    animationName: "pulse",
+    startTime: 500,
+    effect: { getTiming: () => ({ iterations: Infinity }) },
+  };
+  const transition = { transitionProperty: "background-color", startTime: 500 };
+  const targets: Element[] = [];
+  Object.defineProperty(Element.prototype, "getAnimations", {
+    configurable: true,
+    value: function (this: Element) {
+      targets.push(this);
+      return [loop, transition];
+    },
+  });
+  try {
+    const { rerender, getByTestId } = render(
+      <EnvironmentStatusMarker local state="working" machine={null} />,
+    );
+    const ring = getByTestId("environment-status-ring");
+    expect(loop.startTime).toBe(0);
+    loop.startTime = 1000;
+    rerender(<EnvironmentStatusMarker local state="waiting" machine={null} />);
+    expect(loop.startTime).toBe(0);
+    loop.startTime = 1500;
+    rerender(<EnvironmentStatusMarker local={false} state="waiting" machine={null} />);
+    expect(loop.startTime).toBe(0);
+    expect(targets).toEqual([ring, ring, ring]);
+    expect(transition.startTime).toBe(500);
+  } finally {
+    cleanup();
+    if (descriptor) Object.defineProperty(Element.prototype, "getAnimations", descriptor);
+    else delete (Element.prototype as { getAnimations?: unknown }).getAnimations;
+  }
+});

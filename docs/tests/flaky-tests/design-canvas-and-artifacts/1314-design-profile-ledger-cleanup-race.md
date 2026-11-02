@@ -265,3 +265,15 @@ Result: 28 passed, 2 failed (5.3 s); both repeated the exact remaining-ledger as
 The same failure on main establishes independence from this branch. The owner
 and implementation are unchanged relative to main. No assertion, delay, skip,
 or unrelated implementation was changed; the existing flake remains open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.

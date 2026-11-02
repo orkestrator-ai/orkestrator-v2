@@ -789,10 +789,13 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
         continue;
       }
 
-      if (
-        window.orkestrator?.isolatedViewState &&
-        environment !== previous.environments.get(environmentId)
-      ) {
+      // Every pane-store write reaches this loop for every environment. An
+      // environment whose object and hydration both stayed put has nothing to
+      // persist, so skip it before sanitising and serialising its layout.
+      const previousEnvironment = previous.environments.get(environmentId);
+      if (previousHydration === "done" && environment === previousEnvironment) continue;
+
+      if (window.orkestrator?.isolatedViewState && environment !== previousEnvironment) {
         writeWindowPaneSelection(environmentId, environment);
       }
 
@@ -814,10 +817,8 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
         continue;
       }
 
-      if (environment === previous.environments.get(environmentId)) continue;
       if (lastEnqueued.get(environmentId) === serialized) continue;
 
-      const previousEnvironment = previous.environments.get(environmentId);
       const previousInput = previousEnvironment
         ? createPersistedPaneLayoutInput(previousEnvironment)
         : input;

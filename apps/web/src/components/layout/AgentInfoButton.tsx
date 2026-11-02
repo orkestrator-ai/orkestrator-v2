@@ -460,10 +460,12 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     },
     [activeSession],
   );
-  const neutralMessages = useMemo(
-    () => normalizeNativeMessages((neutralProjection?.messages ?? []) as NativeMessage[]),
-    [neutralProjection?.messages],
-  );
+  // Only the rewind and undo handlers need the normalised transcript, so it is
+  // built when one of them runs rather than on every projection update.
+  const latestUserMessage = () =>
+    normalizeNativeMessages((neutralProjection?.messages ?? []) as NativeMessage[])
+      .filter((message) => message.role === "user")
+      .at(-1);
   // The live projection's capabilities win; before one arrives, the shared
   // capability table answers for the platform instead of a provider list here.
   const sessionCapabilities =
@@ -1183,9 +1185,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                         className="justify-start gap-2"
                         onClick={() =>
                           void runAction("rewind", async () => {
-                            const target = neutralMessages
-                              .filter((message) => message.role === "user")
-                              .at(-1);
+                            const target = latestUserMessage();
                             if (!target?.id) throw new Error("No file checkpoint is available");
                             const { preview } = await performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
@@ -1252,9 +1252,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                         className="justify-start gap-2"
                         onClick={() =>
                           void runAction("undo", async () => {
-                            const messageId = neutralMessages
-                              .filter((message) => message.role === "user")
-                              .at(-1)?.id;
+                            const messageId = latestUserMessage()?.id;
                             await performNativeAgentSessionAction({
                               environmentId: activeSession.environmentId,
                               agent: activeSession.provider,

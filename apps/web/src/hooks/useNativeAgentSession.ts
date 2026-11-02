@@ -850,7 +850,19 @@ export function useNativeAgentSession<TMessage = unknown>({
     requestedProviderSessionId: string;
     replacementProviderSessionId: string;
   } | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(enabled);
+  const [isRefreshing, setIsRefreshingState] = useState(enabled);
+  /*
+   * Mirrors of the two in-flight flags, so a setter that would not change the
+   * value schedules no render. Background reads settle several times a second
+   * during a turn; each redundant flag write used to cost the whole tab a
+   * render.
+   */
+  const isRefreshingRef = useRef(enabled);
+  const setIsRefreshing = useCallback((value: boolean) => {
+    if (isRefreshingRef.current === value) return;
+    isRefreshingRef.current = value;
+    setIsRefreshingState(value);
+  }, []);
   /**
    * Whether an authoritative read has finished for the current identity.
    *
@@ -895,7 +907,13 @@ export function useNativeAgentSession<TMessage = unknown>({
    */
   const [sessionStateAvailability, setSessionStateAvailability] =
     useState<NativeAgentProgressiveCacheEntry["stateAvailability"]>("unavailable");
-  const [sessionStateRefreshing, setSessionStateRefreshing] = useState(false);
+  const [sessionStateRefreshing, setSessionStateRefreshingState] = useState(false);
+  const sessionStateRefreshingRef = useRef(false);
+  const setSessionStateRefreshing = useCallback((value: boolean) => {
+    if (sessionStateRefreshingRef.current === value) return;
+    sessionStateRefreshingRef.current = value;
+    setSessionStateRefreshingState(value);
+  }, []);
   const [sessionStateError, setSessionStateError] = useState<string | null>(
     matchingProgressiveCache?.stateError ?? null,
   );
@@ -918,13 +936,16 @@ export function useNativeAgentSession<TMessage = unknown>({
    * authoritative read shows `refreshing`, which is the genuine first-load
    * case the connecting state exists for.
    */
-  const beginSessionStateRefresh = useCallback(() => {
-    setSessionStateRefreshing(true);
-    if (sessionStateAvailabilityRef.current !== "current") {
-      markSessionStateAvailability("refreshing");
-    }
-    return sessionStateAvailabilityRef.current;
-  }, [markSessionStateAvailability]);
+  const beginSessionStateRefresh = useCallback(
+    (options?: { quiet?: boolean }) => {
+      if (!options?.quiet) setSessionStateRefreshing(true);
+      if (sessionStateAvailabilityRef.current !== "current") {
+        markSessionStateAvailability("refreshing");
+      }
+      return sessionStateAvailabilityRef.current;
+    },
+    [markSessionStateAvailability, setSessionStateRefreshing],
+  );
   const [isDispatching, setIsDispatching] = useState(false);
   /**
    * How much transcript this tab has asked for. Undefined keeps the backend
@@ -2153,7 +2174,14 @@ export function useNativeAgentSession<TMessage = unknown>({
       applyProjection(merged);
       return merged;
     },
-    [applyProjection, environmentId, historyRequestBudget, markSessionStateAvailability, platform],
+    [
+      applyProjection,
+      environmentId,
+      historyRequestBudget,
+      markSessionStateAvailability,
+      platform,
+      setSessionStateRefreshing,
+    ],
   );
 
   /**
@@ -2196,7 +2224,17 @@ export function useNativeAgentSession<TMessage = unknown>({
       refreshesInFlightRef.current += 1;
       const sequence = ++refreshSequenceRef.current;
       const operationEpoch = projectionOperationEpochRef.current;
-      setIsRefreshing(true);
+      // The in-flight flags only feed the connection surface, which ignores
+      // them while the tab holds an authoritative session state. A background
+      // poll over such a view keeps its in-flight state in the refs above and
+      // leaves the flags alone, instead of raising and clearing both on every
+      // tick. A read that loses that authority settles the surface itself
+      // (projection, availability, `hasCompletedRead`).
+      const quiet =
+        background &&
+        sessionStateAvailabilityRef.current === "current" &&
+        projectionRef.current !== null;
+      if (!quiet) setIsRefreshing(true);
       // Background polls confirm a view this tab already holds. Raising the
       // skeleton on every 500–1500 ms tick would flicker the indicator and the
       // live region even when the displayed transcript cannot change.
@@ -2206,7 +2244,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       try {
         if (await nativeAgentProgressiveSupported()) {
           setTranscriptError(null);
-          const retainedStateAvailability = beginSessionStateRefresh();
+          const retainedStateAvailability = beginSessionStateRefresh({ quiet });
           setSessionStateError(null);
           updateProgressiveCache({
             ...(background ? {} : { transcriptRefreshing: true }),
@@ -2634,6 +2672,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       planSyncMaterialization,
       platform,
       resetSyncState,
+      setIsRefreshing,
+      setSessionStateRefreshing,
       updateProgressiveCache,
     ],
   );
@@ -2803,6 +2843,8 @@ export function useNativeAgentSession<TMessage = unknown>({
     flushPendingReconcile,
     platform,
     refresh,
+    setIsRefreshing,
+    setSessionStateRefreshing,
   ]);
 
   // A new identity, or a session this hook is no longer allowed to read, has
@@ -2919,13 +2961,13 @@ export function useNativeAgentSession<TMessage = unknown>({
       // Connecting is the external system this effect owns, and its indicators
       // start and stop with it: `connect()` raises them synchronously, so going
       // inactive clears them here rather than in a separate render-time path.
-      // oxlint-disable-next-line react/set-state-in-effect
       setIsRefreshing(false);
+      // oxlint-disable-next-line react/set-state-in-effect
       setTranscriptRefreshing(false);
       return;
     }
     void connect().then(() => undefined);
-  }, [connect, enabled, isActive]);
+  }, [connect, enabled, isActive, setIsRefreshing]);
 
   /*
    * Background reads — the 500/1,500 ms cadence, resource-change hints, resync

@@ -129,6 +129,16 @@ export interface BuildTabData {
   isLocal?: boolean;
 }
 
+/**
+ * A build pipeline's key information read as a tab rather than the build
+ * tab's floating panel. Only the pipeline id is kept; the brief itself is
+ * read from the pipeline record, so the tab follows every update.
+ */
+export interface KeyInformationTabData {
+  environmentId: string;
+  pipelineId: string;
+}
+
 export interface MultiReviewTabData {
   environmentId: string;
   workflowId: string;
@@ -267,6 +277,8 @@ export interface TabInfo {
   nativeAgentData?: NativeAgentData;
   /** Data for claude-build tabs */
   buildTabData?: BuildTabData;
+  /** Data for a build pipeline's key information tab. */
+  keyInformationTabData?: KeyInformationTabData;
   /** Data for backend-owned Multi Review tabs. */
   multiReviewTabData?: MultiReviewTabData;
   /** Data for browser tabs */

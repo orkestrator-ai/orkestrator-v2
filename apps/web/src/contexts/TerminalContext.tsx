@@ -12,6 +12,7 @@ export type CreatableTabType =
   | "design-canvas"
   | "graph-designer"
   | "graph-run"
+  | "key-information"
   | "multi-review"
   | "pull-request";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
@@ -27,6 +28,7 @@ export type TabType =
   | "agent-native"
   | "claude-tmux"
   | "claude-build"
+  | "key-information"
   | "multi-review"
   | "pull-request";
 
@@ -73,6 +75,11 @@ export interface CreateTabOptions {
   graphTemplate?: import("@orkestrator/protocol/graphs/library").GraphTemplateRef;
   /** The run a `graph-run` tab shows (one tab per run; opening it again focuses that tab). */
   graphRun?: import("@/types/paneLayout").GraphRunTabData;
+  /**
+   * The build pipeline whose key information a `key-information` tab shows
+   * (one tab per pipeline; opening it again focuses that tab).
+   */
+  keyInformation?: import("@/types/paneLayout").KeyInformationTabData;
   /** Existing authoritative workflow opened by a Multi Review tab. */
   multiReviewId?: string;
   /** Reviewer transcript opened inside an existing Multi Review workflow. */

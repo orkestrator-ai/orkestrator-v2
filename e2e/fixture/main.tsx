@@ -37,6 +37,7 @@ import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
 import { AgentsMdApprovalFixture } from "./AgentsMdApprovalFixture";
 import { GraphRunFlowFixture } from "./GraphRunFlowFixture";
+import { KeyInformationTabFixture } from "./KeyInformationTabFixture";
 import { MultiReviewFlowFixture } from "./MultiReviewFlowFixture";
 import { PipelineFlowFixture } from "./PipelineFlowFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -1983,6 +1984,7 @@ function fixtureForPath() {
     return <MultiReviewRunningTileFixture />;
   }
   if (window.location.pathname === "/graph-run-flow") return <GraphRunFlowFixture />;
+  if (window.location.pathname === "/key-information-tab") return <KeyInformationTabFixture />;
   if (window.location.pathname === "/multi-review-flow") return <MultiReviewFlowFixture />;
   if (window.location.pathname === "/pipeline-flow") return <PipelineFlowFixture />;
   if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;

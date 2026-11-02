@@ -25,6 +25,7 @@ import {
   type LoginSnapshot,
 } from "@orkestrator/protocol/login-snapshots";
 import { claudeContainerPluginSettings } from "@orkestrator/protocol/node/claude-plugin-set";
+import { SHARED_SKILLS_INPUT } from "@orkestrator/protocol/container-recovery";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 
 /**
@@ -49,9 +50,10 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
 
 /**
  * Version 2 adds Cursor's `~/.cursor/mcp.json`; version 3 adds Claude's
- * `skills` and Grok's `commands`; version 4 withholds credentials in those trees.
+ * `skills` and Grok's `commands`; version 4 withholds credentials in those trees;
+ * version 5 adds the shared `~/.agents/skills` and stages a linked skill.
  */
-export const PORTABLE_INPUT_SPEC_VERSION = 4;
+export const PORTABLE_INPUT_SPEC_VERSION = 5;
 
 export type InputLimits = {
   fileBytes: number;
@@ -68,6 +70,44 @@ export const INPUT_LIMITS: InputLimits = {
   totalEntries: 20_000,
   totalBytes: 512 * 1024 * 1024,
 };
+
+/**
+ * The pseudo-provider for the shared user skills root, `~/.agents/skills`. It
+ * is staged once, for every provider that reads it (`SHARED_SKILL_READERS`),
+ * and carries no credentials of any provider.
+ */
+export { SHARED_SKILLS_INPUT };
+
+/**
+ * Platforms that list `~/.agents/skills` (`rootSpecsFor` in `agent-skills.ts`).
+ * Claude does not read it.
+ */
+export const SHARED_SKILL_READERS: readonly AgentPlatform[] = [
+  "codex",
+  "cursor",
+  "grok",
+  "opencode",
+  "pi",
+];
+
+/**
+ * The providers to stage, with {@link SHARED_SKILLS_INPUT} added when one of
+ * them reads the shared skills root and the image's entrypoint copies it
+ * (`imageCopiesSharedSkills`).
+ */
+export function withSharedSkillsInput<P extends ProviderInputSpec["provider"]>(
+  providers: ReadonlySet<P>,
+  imageCopiesSharedSkills: boolean,
+): Set<P | typeof SHARED_SKILLS_INPUT> {
+  const selected = new Set<P | typeof SHARED_SKILLS_INPUT>(providers);
+  if (
+    imageCopiesSharedSkills &&
+    SHARED_SKILL_READERS.some((platform) => selected.has(platform as P))
+  ) {
+    selected.add(SHARED_SKILLS_INPUT);
+  }
+  return selected;
+}
 
 type DirectoryMode =
   /** Copy the directory as one unit; over-bound skips the whole directory. */
@@ -88,6 +128,13 @@ export interface InputSource {
     mode: DirectoryMode;
     exclude?: readonly string[];
     withholdCredentials?: boolean;
+    /**
+     * A skill root. A link to a skill inside one of the run's skill roots may
+     * be staged from it (`ProviderCopier.linkedSkill`): in `entries` mode a
+     * top-level entry that links to a directory holding `SKILL.md` is copied
+     * as a real directory. Every other link is still skipped.
+     */
+    skills?: boolean;
   }[];
   /**
    * Files of `files` staged only through a filter, which returns what a
@@ -122,7 +169,7 @@ export interface InputFile {
 }
 
 export interface ProviderInputSpec {
-  provider: AgentPlatform | "git";
+  provider: AgentPlatform | "git" | typeof SHARED_SKILLS_INPUT;
   directories: InputSource[];
   files: InputFile[];
 }
@@ -244,8 +291,9 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           directories: [
             { path: "commands", mode: "entries" },
             // One unit per skill directory, like Grok's and Pi's skills. A
-            // skill linked in from `~/.agents/skills` is a symlink and skipped.
-            { path: "skills", mode: "entries", withholdCredentials: true },
+            // skill linked in from `~/.agents/skills` (an `npx skills`
+            // install) is staged as a real directory.
+            { path: "skills", mode: "entries", withholdCredentials: true, skills: true },
             { path: "agents", mode: "entries" },
             { path: "ide", mode: "entries" },
             { path: "plugins", mode: "entries" },
@@ -326,7 +374,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           ],
           directories: [
             { path: "rules", mode: "tree" },
-            { path: "skills", mode: "tree" },
+            { path: "skills", mode: "entries", skills: true },
             { path: "prompts", mode: "tree" },
             { path: "vendor_imports", mode: "tree" },
             // plugins/.plugin-appserver holds host-platform binaries.
@@ -365,7 +413,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           ],
           directories: [
             { path: "hooks", mode: "entries" },
-            { path: "skills", mode: "entries" },
+            { path: "skills", mode: "entries", skills: true },
             // Legacy flat commands (`*.md`), which Grok lists as user skills.
             { path: "commands", mode: "entries", withholdCredentials: true },
           ],
@@ -397,7 +445,7 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           ],
           // Sessions are the host's own history and are never staged.
           directories: [
-            { path: "agent/skills", mode: "entries" },
+            { path: "agent/skills", mode: "entries", skills: true },
             { path: "agent/prompts", mode: "entries" },
             { path: "agent/extensions", mode: "entries" },
             { path: "agent/themes", mode: "entries" },
@@ -419,6 +467,20 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           // `cli-config.json`) is the host's own and is never staged; the
           // container's login arrives through the backend's key sync.
           files: ["mcp.json"],
+        },
+      ],
+      files: [],
+    },
+    {
+      provider: SHARED_SKILLS_INPUT,
+      directories: [
+        {
+          stage: "agents-skills",
+          target: "/agents-skills",
+          root: path.join(hostHome, ".agents", "skills"),
+          // One unit per skill, like the provider skill roots. Newly portable,
+          // so credentials inside a skill are withheld.
+          directories: [{ path: ".", mode: "entries", withholdCredentials: true, skills: true }],
         },
       ],
       files: [],
@@ -621,12 +683,58 @@ async function listTree(
   return { entries, symlinks };
 }
 
+/** Whether `child` lies below `parent` (never `parent` itself). */
+function isStrictlyInside(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative !== "" && !path.isAbsolute(relative) && relative.split(path.sep)[0] !== "..";
+}
+
+/** Refuse roots broad enough to expose an entire source home. */
+function safeSkillRoot(real: string, homes: readonly string[]): boolean {
+  return (
+    real !== path.parse(real).root &&
+    !homes.some((home) => home === real || isStrictlyInside(home, real))
+  );
+}
+
+/**
+ * The real paths a linked skill may resolve into: `~/.agents/skills` and the
+ * skill roots of the providers staged in this run. A root that resolves to
+ * `/`, a home or an ancestor of one is dropped, so a linked root cannot make
+ * the whole home an allowed target.
+ */
+async function linkedSkillRoots(
+  spec: readonly ProviderInputSpec[],
+  providers: ReadonlySet<ProviderInputSpec["provider"]>,
+  homes: readonly string[],
+): Promise<string[]> {
+  const realHomes = await Promise.all(
+    homes.map((home) => realpath(home).catch(() => path.resolve(home))),
+  );
+  const roots = new Set<string>();
+  for (const entry of spec) {
+    if (entry.provider !== SHARED_SKILLS_INPUT && !providers.has(entry.provider)) continue;
+    for (const source of entry.directories) {
+      if (!source.root) continue;
+      for (const directory of source.directories ?? []) {
+        if (!directory.skills) continue;
+        const real = await realpath(path.join(source.root, directory.path)).catch(() => null);
+        if (!real || !safeSkillRoot(real, realHomes)) continue;
+        roots.add(real);
+      }
+    }
+  }
+  return [...roots];
+}
+
 class ProviderCopier {
   readonly summary: ProviderInputSummary;
   constructor(
     provider: ProviderInputSummary["provider"],
     private readonly total: Budget,
     private readonly limits: InputLimits,
+    /** Real paths a linked skill may resolve into ({@link linkedSkillRoots}). */
+    private readonly skillRoots: readonly string[] = [],
   ) {
     this.summary = { provider, files: 0, bytes: 0, skipped: {} };
   }
@@ -691,11 +799,15 @@ class ProviderCopier {
     destinationRoot: string,
     exclude: readonly string[],
     withholdCredentials = false,
+    followSkillLink = false,
   ): Promise<void> {
     const source = path.join(root, relative);
     const stat = await lstat(source).catch(() => null);
     if (!stat) return;
-    if (stat.isSymbolicLink()) throw new Skip("symlink");
+    if (stat.isSymbolicLink()) {
+      if (followSkillLink) return this.linkedSkill(source, relative, destinationRoot);
+      throw new Skip("symlink");
+    }
     if (stat.isFile()) {
       if (!this.total.fits(1, stat.size)) throw new Skip("aggregate-budget");
       const bytes = await copyRegularFile(
@@ -709,6 +821,58 @@ class ProviderCopier {
       return;
     }
     if (!stat.isDirectory()) throw new Skip("not-regular");
+    await this.tree(source, destinationRoot, relative, exclude, withholdCredentials);
+  }
+
+  /**
+   * Stages a top-level link of a skill root as a real directory, only when it
+   * resolves to a directory holding a regular `SKILL.md` below one of the
+   * run's skill roots, with no link between that root and the skill. Links
+   * inside the skill are skipped like any other. The skill's identity is
+   * checked again after copying, so a directory swapped in mid-copy is
+   * discarded. Credentials inside it are always withheld: the link reaches
+   * content the provider's own root did not hold.
+   */
+  private async linkedSkill(link: string, relative: string, destinationRoot: string) {
+    const target = await realpath(link).catch(() => null);
+    const container = target
+      ? this.skillRoots.find((root) => isStrictlyInside(target, root))
+      : undefined;
+    if (!target || !container) throw new Skip("symlink");
+    const before = await lstat(target);
+    if (before.isSymbolicLink() || !before.isDirectory()) throw new Skip("symlink");
+    await assertNoSymlinkAncestry(container, `${path.relative(container, target)}/SKILL.md`);
+    const marker = await lstat(path.join(target, "SKILL.md")).catch(() => null);
+    if (!marker?.isFile()) throw new Skip("symlink");
+    const sourceRelative = path.relative(container, target).split(path.sep).join("/");
+    // Reject sensitive source ancestry even when the destination uses a benign alias.
+    extensionCredentialGuard(sourceRelative)(Buffer.alloc(0));
+    await this.tree(target, destinationRoot, relative, [], true, async () => {
+      const after = await lstat(target).catch(() => null);
+      if (!after || after.ino !== before.ino || after.dev !== before.dev) {
+        throw new Skip("changed-while-reading");
+      }
+      try {
+        await assertNoSymlinkAncestry(container, `${sourceRelative}/SKILL.md`);
+        if ((await realpath(link)) !== target) throw new Skip("changed-while-reading");
+      } catch {
+        throw new Skip("changed-while-reading");
+      }
+    });
+  }
+
+  /**
+   * Copies the directory `source` to `destinationRoot/relative` all-or-nothing.
+   * `verify` runs after the last file, before anything is counted.
+   */
+  private async tree(
+    source: string,
+    destinationRoot: string,
+    relative: string,
+    exclude: readonly string[],
+    withholdCredentials: boolean,
+    verify?: () => Promise<void>,
+  ): Promise<void> {
     const { entries, symlinks } = await listTree(source, this.limits.directoryEntries, exclude);
     if (symlinks > 0) this.skip("symlink", symlinks);
     const bytes = entries.reduce((sum, entry) => sum + entry.size, 0);
@@ -747,6 +911,7 @@ class ProviderCopier {
           else throw error;
         }
       }
+      await verify?.();
     } catch (error) {
       await rm(path.join(destinationRoot, relative), { recursive: true, force: true });
       throw error;
@@ -761,6 +926,7 @@ class ProviderCopier {
       mode: DirectoryMode;
       exclude?: readonly string[];
       withholdCredentials?: boolean;
+      skills?: boolean;
     },
     destinationRoot: string,
   ): Promise<void> {
@@ -783,9 +949,9 @@ class ProviderCopier {
       if (!stat) return;
       if (stat.isSymbolicLink()) throw new Skip("symlink");
       if (!stat.isDirectory()) throw new Skip("not-regular");
-      const names = (await readdir(directory)).filter(
-        (name) => !(spec.exclude ?? []).includes(name),
-      );
+      const names = (await readdir(directory))
+        .sort()
+        .filter((name) => !(spec.exclude ?? []).includes(name));
       if (names.length > this.limits.directoryEntries) throw new Skip("too-many-entries");
       for (const name of names) {
         try {
@@ -795,6 +961,7 @@ class ProviderCopier {
             destinationRoot,
             [],
             spec.withholdCredentials,
+            spec.skills === true,
           );
         } catch (error) {
           if (error instanceof Skip) this.skip(error.reason);
@@ -847,15 +1014,26 @@ export async function stagePortableInputs(
   const summaries: ProviderInputSummary[] = [];
   const mounts: StagedMount[] = [];
   try {
-    for (const spec of portableInputSpec(roots)) {
+    const specs = portableInputSpec(roots);
+    const homes = await Promise.all(
+      [roots.home, ...(roots.agentTestHostHome ? [roots.agentTestHostHome] : [])].map((home) =>
+        realpath(home).catch(() => path.resolve(home)),
+      ),
+    );
+    const skillRoots = await linkedSkillRoots(specs, providers, homes);
+    for (const spec of specs) {
       if (!providers.has(spec.provider)) continue;
-      const copier = new ProviderCopier(spec.provider, total, limits);
+      const copier = new ProviderCopier(spec.provider, total, limits, skillRoots);
       for (const source of spec.directories) {
         if (!source.root) continue;
         // The home entry itself is resolved, as the bind mount it replaces
         // was (a dotfiles manager may link it); nothing below it is followed.
         const root = await realpath(source.root).catch(() => null);
         if (!root) continue;
+        if (spec.provider === SHARED_SKILLS_INPUT && !safeSkillRoot(root, homes)) {
+          copier.skip("symlink");
+          continue;
+        }
         const stageRoot = path.join(partial, source.stage);
         for (const file of source.files ?? []) {
           await copier.file(root, file, stageRoot, source.filteredFiles?.[file]);

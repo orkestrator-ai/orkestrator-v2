@@ -154,6 +154,31 @@ describe("PromptQueueDrainer", () => {
     }
   });
 
+  test("mail presence reuses recent tmux liveness while a dispatch probes it", async () => {
+    const context = await harness();
+    try {
+      expect(
+        await context.drainer.mailInjectPresence({ environmentId: ENVIRONMENT_ID, tabId: TAB_ID }),
+      ).toBe("idle");
+      await context.drainer.dispatchMailInject({
+        environmentId: ENVIRONMENT_ID,
+        tabId: TAB_ID,
+        text: "Peer mail",
+      });
+      const statusReads = context.calls.filter((call) => call.command === "claude_tmux_status");
+      expect(statusReads[0]?.args).toEqual({
+        environmentId: ENVIRONMENT_ID,
+        tabId: TAB_ID,
+        livenessMaxAgeMs: 3_000,
+      });
+      expect(statusReads.length).toBeGreaterThan(1);
+      for (const read of statusReads.slice(1))
+        expect(read.args).not.toHaveProperty("livenessMaxAgeMs");
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("holds mail instead of starting a stopped tmux session", async () => {
     const context = await harness();
     try {

@@ -707,6 +707,12 @@ export class OrkestratorBackend {
             local: local.has(session.environmentId),
           }));
       },
+      contentRevision: (session) =>
+        this.nativeAgents.humanPromptContentRevision(
+          session.environmentId,
+          session.agent as BuildPipelineAgent,
+          session.logicalSessionKey,
+        ),
       projection: (session) =>
         this.nativeAgents.humanPromptOutputIfRunning(
           session.environmentId,

@@ -1819,8 +1819,9 @@ export class ProjectsRepository {
           : acceptedTime,
       ).toISOString();
       const unreadBefore = environment.hasUnreadWork === true;
+      const unreadFailure = unreadBefore && environment.unreadReason === "agent_failed";
       environment.hasUnreadWork = true;
-      environment.unreadReason = reason;
+      if (reason !== "agent_finished" || !unreadFailure) environment.unreadReason = reason;
       await this.saveEnvironments(environments);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (!unreadBefore) this.notifyAttention(environment);

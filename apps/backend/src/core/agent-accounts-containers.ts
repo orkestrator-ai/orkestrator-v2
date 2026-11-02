@@ -38,6 +38,7 @@ import {
 import { containerLabel, providerCredentialsAllowed } from "./portable-input-status.js";
 import {
   containerBridgeOperationId,
+  containerBridgeOperationIdIn,
   enqueueContainerBridgeOperation,
 } from "./container-bridge-operations.js";
 import { agentAccountHome, prepareAgentAccountHome } from "./agent-accounts-homes.js";
@@ -968,7 +969,14 @@ async function restrictClaudeLogin(
  * `handover` is the login the keeper already read for this pass. It is used
  * when it belongs to the account and generation this sync pins, so one pass
  * reads the host login once (a `security` call on macOS) however many
- * containers it keeps current; anything else reads the login afresh.
+ * containers it keeps current; anything else reads the login afresh. When the
+ * container already holds exactly what it would be handed, the sync returns
+ * before reading its marker: the comparison is in memory, the marker read is
+ * a `docker exec`, and every path past it would write nothing anyway.
+ *
+ * `snapshot` is the keeper pass's one read of the configuration and the
+ * environments, used for the first gate. Delivery still re-reads both after
+ * host I/O, so a revoke during the pass fences it as before.
  */
 export async function syncContainerClaudeLoginUnlocked(
   context: CommandContext,
@@ -977,9 +985,11 @@ export async function syncContainerClaudeLoginUnlocked(
 ): Promise<boolean> {
   const runners = options.runners ?? defaultRunners;
   try {
-    const environment = await environmentForContainer(context, containerId);
+    const environment = options.snapshot
+      ? findEnvironmentForContainer(options.snapshot.environments, containerId)
+      : await environmentForContainer(context, containerId);
     if (!environment) return false;
-    const { global } = await context.storage.loadConfig();
+    const { global } = options.snapshot ?? (await context.storage.loadConfig());
     if (
       global.useHostClaudeCredentials === false ||
       !providerCredentialsAllowed(context, global.enabledAgentPlatforms, environment, "claude")
@@ -1004,14 +1014,24 @@ export async function syncContainerClaudeLoginUnlocked(
           }
         : {}),
     };
-    if ((await readMarker(runners, containerId, "claude")) !== expected) return false;
     const handover = options.handover;
-    const text =
+    const handoverText =
       handover &&
       handover.account.accountId === accountId &&
       handover.account.loginGeneration === generation
-        ? claudeLoginHandoff(context.runtime.accounts, handover.credentials)
-        : await freshContainerClaudeCredentials(context, global, active);
+        ? { text: claudeLoginHandoff(context.runtime.accounts, handover.credentials) }
+        : undefined;
+    if (
+      handoverText?.text &&
+      context.runtime.accounts.pushedClaudeLogin(containerId) ===
+        loginDigest(handoverText.text.payload)
+    ) {
+      return false;
+    }
+    if ((await readMarker(runners, containerId, "claude")) !== expected) return false;
+    const text = handoverText
+      ? handoverText.text
+      : await freshContainerClaudeCredentials(context, global, active);
     // Revocation is persisted before its queued cleanup. Re-read after host I/O
     // so a revoke requested during the read also fences this delivery.
     const current = await context.storage.getEnvironment(environment.id);
@@ -1054,10 +1074,17 @@ export interface ClaudeLoginHandover {
   credentials: string | undefined;
 }
 
+/** One keeper pass's reads of the configuration and the environments. */
+export interface ClaudeLoginPassSnapshot {
+  global: AppConfig["global"];
+  environments: readonly Environment[];
+}
+
 export interface ClaudeLoginSyncOptions {
   restrictWhenUnusable?: boolean;
   runners?: ContainerRunners;
   handover?: ClaudeLoginHandover;
+  snapshot?: ClaudeLoginPassSnapshot;
 }
 
 /** `syncContainerClaudeLoginUnlocked` under the container's Claude bridge-operation queue. */
@@ -1066,7 +1093,9 @@ export async function syncContainerClaudeLogin(
   containerId: string,
   options: ClaudeLoginSyncOptions = {},
 ): Promise<boolean> {
-  const operationId = await containerBridgeOperationId(context, containerId);
+  const operationId = options.snapshot
+    ? containerBridgeOperationIdIn(options.snapshot.environments, containerId)
+    : await containerBridgeOperationId(context, containerId);
   return enqueueContainerBridgeOperation(context, "claude", operationId, () =>
     syncContainerClaudeLoginUnlocked(context, operationId, options),
   );
@@ -1076,7 +1105,14 @@ async function environmentForContainer(
   context: CommandContext,
   containerId: string,
 ): Promise<Environment | undefined> {
-  return (await context.storage.loadEnvironments()).find(
+  return findEnvironmentForContainer(await context.storage.loadEnvironments(), containerId);
+}
+
+function findEnvironmentForContainer(
+  environments: readonly Environment[],
+  containerId: string,
+): Environment | undefined {
+  return environments.find(
     (candidate) => candidate.containerId && containerIdMatches(candidate.containerId, containerId),
   );
 }

@@ -81,3 +81,23 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+
+
+## Task 1202 review repair — 2026-11-02
+
+Original command: `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1 mise run test:logged -- --name address-default-suite-concurrent -- mise run test`, workspace/root/bridge/protocol grants 6/1/2/1.
+Group evidence: `orkestrator-test-run.WXZCOJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/`.
+
+Aggregate saw configuration count 1 after 150 ms (173.90 ms). Complete branch owner repeated it (291.54 ms; 20 pass/1 fail, 8.5 s); complete detached-main owner at 38d55ee14 passed (8.5 s). No failure independence is claimed from a passing main run. Branch artifact v0aFCH.
+
+The complete owner was rerun with `mise run test:logged -- --name address-opencode-tools-rerun -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`. No implementation, assertion, wait, timeout or skip was changed. This recurrence remains open.
+
+A bounded detached-main repeat reproduced the identical count assertion:
+`mise run test:logged -- --name address-main-opencode-repeat -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures --test-name-pattern 'reconciles in the background' --rerun-each=20`
+failed (19 pass/1 fail, 231.21 ms failing case, 9.0 s total). Main evidence:
+`orkestrator-test-run.QsTCer/address-main-opencode-repeat.log.gz`.
+
+Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
+13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
+3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
+The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.

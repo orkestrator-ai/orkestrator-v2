@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import { DesignCheckpointPreview, type DesignPreviewBridge } from "./DesignCheckpointPreview";
 
@@ -15,7 +15,11 @@ const frame: DesignFrame = {
 };
 
 function fakeBridge(ask: (operation: unknown) => Promise<unknown> = async () => undefined) {
-  const bridge = { ask: mock(ask), close: mock(() => {}) };
+  const bridge = {
+    open: mock(() => bridge),
+    ask: mock(ask),
+    close: mock(() => {}),
+  };
   const createBridge = mock((_target: Window) => bridge as unknown as DesignPreviewBridge);
   return { bridge, createBridge };
 }
@@ -50,8 +54,29 @@ describe("DesignCheckpointPreview", () => {
       expect(container.querySelector("figure")?.getAttribute("data-state")).toBe("ready"),
     );
 
+    expect(bridge.open).toHaveBeenCalledTimes(1);
     unmount();
     expect(bridge.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("a bridge replaced by a second load before React renders is never opened", () => {
+    const first = fakeBridge().bridge;
+    const second = fakeBridge().bridge;
+    const created = [first, second];
+    const createBridge = mock(() => created.shift() as unknown as DesignPreviewBridge);
+    const { container, unmount } = render(
+      <DesignCheckpointPreview frame={frame} label="Checkpoint" createBridge={createBridge} />,
+    );
+    const iframe = container.querySelector("iframe")!;
+    act(() => {
+      iframe.dispatchEvent(new Event("load"));
+      iframe.dispatchEvent(new Event("load"));
+    });
+    expect(createBridge).toHaveBeenCalledTimes(2);
+    expect(first.open).not.toHaveBeenCalled();
+    expect(second.open).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(second.close).toHaveBeenCalledTimes(1);
   });
 
   test("explains a frame that did not exist in the version", () => {

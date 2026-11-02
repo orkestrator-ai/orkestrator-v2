@@ -1,11 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { onAppShortcut } from "@/lib/app-shortcuts";
 import { DesignFrameBridge } from "./frame-bridge";
 
 describe("DesignFrameBridge", () => {
   test("bounds pending asks and rejects all of them on close", async () => {
     const target = { postMessage() {} } as unknown as Window;
-    const bridge = new DesignFrameBridge(target, 10_000);
+    const bridge = new DesignFrameBridge(target, 10_000).open();
     const pending = Array.from({ length: 32 }, () => bridge.ask({ op: "hierarchy" }));
     await expect(bridge.ask({ op: "hierarchy" })).rejects.toThrow("busy");
     bridge.close();
@@ -16,17 +16,43 @@ describe("DesignFrameBridge", () => {
 
   test("expires an unanswered ask", async () => {
     const target = { postMessage() {} } as unknown as Window;
-    const bridge = new DesignFrameBridge(target, 5);
+    const bridge = new DesignFrameBridge(target, 5).open();
     await expect(bridge.ask({ op: "hierarchy" })).rejects.toThrow("did not respond");
     bridge.close();
   });
 });
 
 describe("DesignFrameBridge lifecycle", () => {
+  test("listens only from open() until close(), and refuses asks before open", async () => {
+    const target = { postMessage() {} } as unknown as Window;
+    const added: unknown[] = [];
+    const removed: unknown[] = [];
+    const record =
+      (into: unknown[]) => (type: string, listener: EventListenerOrEventListenerObject | null) => {
+        if (type === "message") into.push(listener);
+      };
+    const add = spyOn(window, "addEventListener").mockImplementation(record(added));
+    const remove = spyOn(window, "removeEventListener").mockImplementation(record(removed));
+    try {
+      const bridge = new DesignFrameBridge(target, 1000);
+      expect(added).toHaveLength(0);
+      await expect(bridge.ask({ op: "serialize" })).rejects.toThrow("not open");
+      expect(bridge.open().open()).toBe(bridge);
+      expect(added).toHaveLength(1);
+      bridge.close();
+      expect(removed).toEqual(added);
+      bridge.open();
+      expect(added).toHaveLength(1);
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
+  });
+
   test("asks after close reject immediately and generations are distinct", async () => {
     const target = { postMessage() {} } as unknown as Window;
-    const first = new DesignFrameBridge(target, 1000);
-    const second = new DesignFrameBridge(target, 1000);
+    const first = new DesignFrameBridge(target, 1000).open();
+    const second = new DesignFrameBridge(target, 1000).open();
     expect(second.generation).toBeGreaterThan(first.generation);
     first.close();
     await expect(first.ask({ op: "serialize" })).rejects.toThrow("Frame closed");
@@ -36,7 +62,7 @@ describe("DesignFrameBridge lifecycle", () => {
   test("an escape message from the frame routes to the owner, not to a pending ask", () => {
     let escaped = 0;
     const target = { postMessage() {} } as unknown as Window;
-    const bridge = new DesignFrameBridge(target, 1000, () => escaped++);
+    const bridge = new DesignFrameBridge(target, 1000, () => escaped++).open();
     window.dispatchEvent(
       new MessageEvent("message", {
         source: target as unknown as MessageEventSource,
@@ -54,7 +80,7 @@ test("only the owned, live design frame can forward app shortcuts", () => {
     onAppShortcut(id, () => forwarded.push(id)),
   );
   const target = { postMessage() {} } as unknown as Window;
-  const bridge = new DesignFrameBridge(target);
+  const bridge = new DesignFrameBridge(target).open();
   const deliver = (source: Window, shortcut: unknown) =>
     window.dispatchEvent(
       new MessageEvent("message", {

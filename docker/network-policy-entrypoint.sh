@@ -141,7 +141,7 @@ fi
 umask 022
 printf '%s\n' "$firewall_boot" > "$FIREWALL_RESULT_DIR/firewall-boot"
 
-# Staged inputs (staged-inputs=3, see entrypoint.sh). The backend binds its
+# Staged inputs (staged-inputs=4, see entrypoint.sh). The backend binds its
 # staged revision read-only, owner-only (0700/0600) and owned by its own user,
 # so node (uid 1000) can open them only on a rootful daemon whose host user is
 # uid 1000. Under rootless Docker the backend's user is container root and
@@ -155,7 +155,7 @@ printf '%s\n' "$firewall_boot" > "$FIREWALL_RESULT_DIR/firewall-boot"
 STAGED_INPUT_RELAY_DIR=/run/orkestrator-inputs
 # The mount points below `/`, as the backend binds them
 # (apps/backend/src/core/portable-inputs.ts and the project seed files).
-STAGED_INPUT_MOUNTS="claude-config claude-config.json codex-home opencode-config opencode-data opencode-state/model.json grok-home grok-config pi-config cursor-config tmp/gitconfig project-env opencode-project-json"
+STAGED_INPUT_MOUNTS="claude-config claude-config.json codex-home opencode-config opencode-data opencode-state/model.json grok-home grok-config pi-config cursor-config agents-skills tmp/gitconfig project-env opencode-project-json"
 # The backend's own staging bounds (INPUT_LIMITS totals).
 STAGED_INPUT_RELAY_MAX_ENTRIES=20000
 STAGED_INPUT_RELAY_MAX_BYTES=536870912

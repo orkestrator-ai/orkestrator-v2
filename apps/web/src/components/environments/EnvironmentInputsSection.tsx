@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import type { EnvironmentInputStatus } from "@orkestrator/protocol/container-recovery";
+import {
+  SHARED_SKILLS_INPUT,
+  type EnvironmentInputStatus,
+} from "@orkestrator/protocol/container-recovery";
 import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
@@ -8,6 +11,7 @@ import { formatBytes } from "@/components/docker/docker-stats-format";
 
 function providerLabel(provider: string): string {
   if (provider === "git") return "Git identity";
+  if (provider === SHARED_SKILLS_INPUT) return "Shared skills";
   return isAgentPlatform(provider) ? AGENT_PLATFORM_LABELS[provider] : provider;
 }
 
@@ -128,7 +132,7 @@ export function EnvironmentInputsSection({
                       </span>
                     ) : null}
                   </span>
-                  {entry.provider !== "git" ? (
+                  {entry.provider !== "git" && entry.provider !== SHARED_SKILLS_INPUT ? (
                     <Button
                       type="button"
                       variant="ghost"

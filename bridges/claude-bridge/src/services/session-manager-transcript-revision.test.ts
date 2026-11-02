@@ -477,6 +477,13 @@ describe("GET /session/:id/transcript revisions", () => {
           token: beforeToken,
         });
 
+        const activityRevision = async () => {
+          const response = await app.request(`/session/${encodeURIComponent(session.id)}/activity`);
+          expect(response.status).toBe(200);
+          return ((await response.json()) as { contentRevision: string }).contentRevision;
+        };
+        const beforeActivity = await activityRevision();
+        expect(await activityRevision()).toBe(beforeActivity);
         await mutate();
         await waitFor(settled);
         await quiesce(session);
@@ -488,6 +495,11 @@ describe("GET /session/:id/transcript revisions", () => {
         if (row.epoch === "new") expect(after.contentEpoch).not.toBe(before.contentEpoch);
         else expect(after.contentEpoch).toBe(before.contentEpoch);
         row.check?.(after, session);
+        // Drive real SDK mutation handlers (including Bash results and stream
+        // deltas), then check the no-touch revision used by the prompt monitor.
+        const afterActivity = await activityRevision();
+        expect(afterActivity).not.toBe(beforeActivity);
+        expect(await activityRevision()).toBe(afterActivity);
 
         expect((await readTranscript(app, session.id, changed.token)).status).toBe("unchanged");
       } finally {

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { firstSegmentIsHost } from "@/lib/chat/inline-file-reference";
 
 /**
  * The transcript's inline-code chip (`MessageMarkdown`), so a path or command
@@ -41,6 +42,9 @@ const FILE_EXTENSIONS = new Set([
   "zsh",
 ]);
 
+const PRODUCT_NAMES = new Set(["Node.js", "Next.js"]);
+const LOCATION_SUFFIX = /(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)$/;
+
 const LEADING_PUNCTUATION = /^[("'[]+/;
 const TRAILING_PUNCTUATION = /[)"'\].,;:!?]+$/;
 
@@ -52,11 +56,12 @@ const TRAILING_PUNCTUATION = /[)"'\].,;:!?]+$/;
  * the brief is free text and a wrong guess is worse than a missed one.
  */
 export function isBarePathToken(word: string): boolean {
-  if (word.length < 3 || word.includes("://")) return false;
+  word = word.replace(LOCATION_SUFFIX, "");
+  if (word.length < 3 || word.includes("://") || firstSegmentIsHost(word)) return false;
   if (/^~\/\S/.test(word)) return true;
   const name = word.split("/").pop() ?? "";
   // Product names (`Node.js`, `Next.js`) are prose, not files.
-  if (name === word && /^[A-Z][a-z]+\.js$/.test(name)) return false;
+  if (name === word && PRODUCT_NAMES.has(name)) return false;
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return false;
   return FILE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
@@ -76,7 +81,7 @@ export function keyInformationSegments(text: string): Segment[] {
     if (kind === "text" && last?.kind === "text") last.value += value;
     else segments.push({ kind, value });
   };
-  const pattern = /`([^`\n]+)`|\S+/g;
+  const pattern = /`([^`\n]+)`|[^`\s]+|`/g;
   let index = 0;
   for (const match of text.matchAll(pattern)) {
     push("text", text.slice(index, match.index));
@@ -89,14 +94,16 @@ export function keyInformationSegments(text: string): Segment[] {
     const leading = LEADING_PUNCTUATION.exec(word)?.[0] ?? "";
     const rest = word.slice(leading.length);
     const trailing = TRAILING_PUNCTUATION.exec(rest)?.[0] ?? "";
-    const core = rest.slice(0, rest.length - trailing.length);
+    const citation = rest.slice(0, rest.length - trailing.length);
+    const location = LOCATION_SUFFIX.exec(citation)?.[0] ?? "";
+    const core = citation.slice(0, citation.length - location.length);
     if (!isBarePathToken(core)) {
       push("text", word);
       continue;
     }
     push("text", leading);
     push("code", core);
-    push("text", trailing);
+    push("text", location + trailing);
   }
   push("text", text.slice(index));
   return segments;

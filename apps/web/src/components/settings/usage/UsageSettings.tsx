@@ -7,7 +7,11 @@ import {
   normalizeAgentPlatforms,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-import { getUsageHistory, type UsageHistoryReport } from "@/lib/backend";
+import {
+  getUsageHistory,
+  type UsageEnvironmentSummary,
+  type UsageHistoryReport,
+} from "@/lib/backend";
 import { Button } from "@/components/ui/button";
 import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import {
@@ -80,6 +84,15 @@ export function usagePlatformFilterOptions(
   return AGENT_PLATFORMS.filter((entry) => offered.has(entry));
 }
 
+/** One line for the environment filter: the environment, its project, and whether it is gone. */
+export function usageEnvironmentOptionLabel(
+  entry: Pick<UsageEnvironmentSummary, "name" | "projectName" | "deleted">,
+): string {
+  if (!entry.name) return "Deleted environment";
+  const label = entry.projectName ? `${entry.name} · ${entry.projectName}` : entry.name;
+  return entry.deleted ? `${label} (deleted)` : label;
+}
+
 interface UsageLoad {
   /** The filter the answer belongs to; a stale one is still being replaced. */
   key: string;
@@ -133,11 +146,7 @@ export function UsageSettings() {
         setEnvironmentOptions(
           next.environments.map((entry) => ({
             id: entry.environmentId,
-            label: entry.name
-              ? entry.projectName
-                ? `${entry.name} · ${entry.projectName}`
-                : entry.name
-              : "Deleted environment",
+            label: usageEnvironmentOptionLabel(entry),
           })),
         );
       })

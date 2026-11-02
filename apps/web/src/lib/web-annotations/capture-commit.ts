@@ -120,6 +120,33 @@ function sourceHintsAdvertised(environmentId: string): boolean {
   return getWebAnnotationCache(environmentId).capabilities?.operations.sourceHints === true;
 }
 
+/**
+ * A target inside an open shadow root goes only to a backend that advertises
+ * `operations.shadowTargets`. Any other backend gets the scope it already
+ * knows, `unsupported` (`shadow-root`), so the note still saves and its pin
+ * reports unsupported, as before.
+ */
+export function withAdvertisedShadowScope(
+  capture: WebAnnotationCaptureInput,
+  advertised: boolean,
+): WebAnnotationCaptureInput {
+  const target = capture.target;
+  if (advertised || target.kind !== "element" || target.anchor.scope.kind !== "shadow") {
+    return capture;
+  }
+  return {
+    ...capture,
+    target: {
+      ...target,
+      anchor: { ...target.anchor, scope: { kind: "unsupported", reason: "shadow-root" } },
+    },
+  };
+}
+
+function shadowTargetsAdvertised(environmentId: string): boolean {
+  return getWebAnnotationCache(environmentId).capabilities?.operations.shadowTargets === true;
+}
+
 /** Durably note the receipt, then clear the spool record (both idempotent). */
 export async function acknowledgeCommittedCapture(
   api: BrowserPreviewCaptureApi,
@@ -202,12 +229,16 @@ export async function commitPendingCapture({
         if (!assetIds.includes(cropped.asset.id)) assetIds.push(cropped.asset.id);
       }
     }
+    const advertised = withAdvertisedShadowScope(
+      withAdvertisedSourceHints(record.capture, sourceHintsAdvertised(environmentId)),
+      shadowTargetsAdvertised(environmentId),
+    );
     const target =
-      record.capture.target.kind === "region" && record.regionCrop
-        ? { ...record.capture.target, imageRect: record.regionCrop.sourceRect }
-        : record.capture.target;
+      advertised.target.kind === "region" && record.regionCrop
+        ? { ...advertised.target, imageRect: record.regionCrop.sourceRect }
+        : advertised.target;
     const captureInput: WebAnnotationCaptureInput = {
-      ...withAdvertisedSourceHints(record.capture, sourceHintsAdvertised(environmentId)),
+      ...advertised,
       target,
       assetIds,
       redaction: mergedRedaction(record.capture, localRedaction, Boolean(record.imageDataUrl)),

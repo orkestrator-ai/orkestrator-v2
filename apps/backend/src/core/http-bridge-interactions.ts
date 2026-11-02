@@ -4,6 +4,7 @@ import {
   AGENT_INTERACTION_LIMITS,
   isAgentInteractionHold,
   isAgentInteractionResolution,
+  mcpServerInteractionSource,
   type AgentInteractionApplyOutcome,
   type AgentInteractionHold,
   type AgentInteractionQuestion,
@@ -391,10 +392,14 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     const tool = truncatedText(toolName, "tool", 256);
     const optionalLine = (label: string, value: unknown): string[] =>
       nonEmptyString(value) ? [`${label}: ${truncatedText(value, label)}`] : [];
+    // The serving MCP server travels as a structured source the card shows on
+    // its own line; the body names it only when the bridge's value cannot be
+    // one, so no request loses it.
+    const source = mcpServerInteractionSource(request.mcpServer, request.mcpServerSource);
     const body = truncatedJoinedText([
       ...(nonEmptyString(request.description) ? [truncatedText(request.description, tool)] : []),
       ...(kind === "permission" ? [`Tool: ${tool}`] : []),
-      ...optionalLine("MCP server", request.mcpServer),
+      ...(source ? [] : optionalLine("MCP server", request.mcpServer)),
       ...optionalLine("Command", command),
       ...paths.map((path) => `File: ${path}`),
       ...(rawPaths.length > paths.length
@@ -421,6 +426,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
         confirmLabel: "Approve",
         declineLabel: "Deny",
       },
+      ...(source ? { source } : {}),
       ...timing,
     });
     this.recordRuleDetail(mapped.id, claudeRuleDetail(request, kind));

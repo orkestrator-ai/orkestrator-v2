@@ -426,7 +426,7 @@ describe("two BackendRuntimes in one process", () => {
     const context: CommandContext = {
       ...contextFor(first),
       storage: {
-        loadEnvironments: async () => [
+        readEnvironmentsSnapshot: async () => [
           { id: "env-1", status: "running", containerId: "container-1" },
         ],
       } as unknown as StorageService,

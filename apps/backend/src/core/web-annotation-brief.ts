@@ -262,6 +262,16 @@ function sectionValues(
             name: anchor.semantic.name,
             ...(anchor.stableId ? { stableId: anchor.stableId } : {}),
             ...(anchor.scope.kind === "unsupported" ? { scope: anchor.scope } : {}),
+            // Inside open shadow roots: the host tags, outermost first, name
+            // the components to look in. Their selectors stay out of the brief.
+            ...(anchor.scope.kind === "shadow"
+              ? {
+                  scope: {
+                    kind: "shadow",
+                    hosts: anchor.scope.hosts.map((host) => host.tagName),
+                  },
+                }
+              : {}),
           },
         }
       : {}),

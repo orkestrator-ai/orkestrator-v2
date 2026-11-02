@@ -70,6 +70,7 @@ const PRIMITIVES = new Map<string, Primitive>([
   ["StorageContext.deleteStore", { kind: "write", write: "whole" }],
   ["StorageContext.updateStore", { kind: "write", write: "transactional" }],
   ["StorageContext.updateStoreRow", { kind: "write", write: "transactional" }],
+  ["StorageContext.updateSensitiveStoreRow", { kind: "write", write: "transactional" }],
   ["StorageContext.atomically", { kind: "atomically" }],
   ["StorageContext.serialize", { kind: "lease" }],
   ["StorageContext.file", { kind: "path" }],

@@ -25,7 +25,7 @@ describe("tmux runtime shutdown", () => {
     const loadEnvironments = mock(() => environments.promise);
     const context = {
       runtime,
-      storage: { loadEnvironments } as unknown as StorageService,
+      storage: { readEnvironmentsSnapshot: loadEnvironments } as unknown as StorageService,
     } as CommandContext;
     try {
       runtime.tmux.claudeStatePolls.start("existing", context);

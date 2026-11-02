@@ -22,9 +22,10 @@ import type { StorageService } from "./storage.js";
  * driven by the PR monitor's announced readings, never by a renderer, and use
  * the same conservative readiness rule as the "ready to merge" shimmer
  * (`@orkestrator/protocol/pr-merge-readiness`): an unknown or stale signal
- * waits rather than merging. Unlike the shimmer, failing or pending checks
- * GitHub does not require only hold a merge back while the machine's
- * `autoMergeRequireChecks` setting is on; required checks always do.
+ * waits rather than merging. Failing or pending checks GitHub does not
+ * require hold a merge back only while the machine's `autoMergeRequireChecks`
+ * setting is on, and the shimmer follows the same setting; required checks
+ * always do.
  *
  * Conflict resolution is launched at most once per conflict episode. The
  * Resolve job arms `prRecheckAfterAgentCompletionArmedAt`, which the monitor

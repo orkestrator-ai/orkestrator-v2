@@ -183,6 +183,7 @@ describe("/session/:id/interactions", () => {
         kind: "permission",
         toolName: "mcp__linear__create_issue",
         mcpServer: "linear",
+        mcpServerSource: "user",
         input: '{"title":"Bug"}',
       }),
     ]);

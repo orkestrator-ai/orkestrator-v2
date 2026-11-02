@@ -9,7 +9,8 @@ Analysed 2026-10-27 against `main` at `863b5782`. Statuses rechecked
 (`packages/toolchain/src/manifest.ts:6-12`, the bridges' `package.json`), and
 none of the tasks below had already merged. Rechecked again the same day
 against the upgraded pins (see "Recheck at the 2026-10-30 upgrade" under
-Assumptions and decisions).
+Assumptions and decisions). Task 4 rechecked 2026-11-02 against `main` at
+`38d55ee14` (Claude Agent SDK `0.3.314`) before its provenance half was built.
 
 The "Decided out" list is product decisions, not tasks; only where the current
 pins undercut one of them is it raised below (task 1).
@@ -19,7 +20,7 @@ pins undercut one of them is it raised below (task 1).
 1. **Re-check the backlog against current pins**: the "Needs verification" item; every pin in "Current state" has moved. Status: done (pins, verification note and Codex-goals wording refreshed; see Assumptions and decisions).
 2. **Delete the dead Claude compaction guard**: remove `isSdkCompactBoundaryMessage` and its imports. Status: done (`refactor(claude-bridge): delete dead compact-boundary guard`).
 3. **Claude in-process MCP server**: decide `createSdkMcpServer()` versus the HTTP loopback for Orkestrator tools. Status: done (decided out: keep HTTP; recorded under "Decided out").
-4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: open (depends on 0001's live runs for re-arm; provenance not started).
+4. **Claude permission lifecycle surfaces**: pending-permission re-arm on (re)initialize and MCP permission provenance. Status: open (depends on 0001's live runs) for re-arm; provenance done 2026-11-02 (an optional `source` on the shared interaction request, filled by Claude, shown on the card).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
 6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
 7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
@@ -98,6 +99,19 @@ pins undercut one of them is it raised below (task 1).
 **Context.** Touches the authorization lifecycle governed by 0001 and the deny-by-default invariant.
 
 **Investigation.** `pending_permission_requests` and `Query.reinitialize()` are in SDK `0.3.309`; `McpServerProvenance` appears eight times in `sdk.d.ts`. The bridge references none of them.
+
+Rechecked 2026-11-02 at SDK `0.3.314`: all three symbols are still there, and
+`canUseTool`'s third argument carries `mcpServer: { name, source }` for
+`mcp__*` tools. Since the analysis, the permission-rules work (todo 0723)
+started reading `mcpServer.name` in
+`bridges/claude-bridge/src/services/session-manager-parked-interactions.ts`
+and forwarding it as `mcpServer` (it makes an MCP request rule-eligible), and
+the backend mapper (`apps/backend/src/core/http-bridge-interactions.ts`) put it
+into the card's body text as `MCP server: <name>`. So the name already reached
+the card as one line of prose, but `source` (where the server's definition came
+from, which the SDK says is what trust should key on) was dropped, and nothing
+structured reached the shared contract for other consumers or providers.
+Re-arm is still untouched.
 
 **Decisions.**
 
@@ -336,12 +350,61 @@ enforces per-tab scope. An in-process server would still need a backend
 credential to proxy calls, so the loopback hop would move rather than
 disappear.
 
-### Task 4: left open
+### Task 4: left open (2026-10-30)
 
 Did not start it. Re-arm is recommended only after 0001's live runs, and those
 are still open (`0001-agent-interactions-and-permissions.md` tasks 3–7).
 Provenance is a protocol, bridge and renderer change that would have made this
 batch too big; nothing blocks it.
+
+### Task 4: provenance as an optional request-level `source` (2026-11-02)
+
+Took the recommended option for provenance and left re-arm open: it still
+waits on 0001's live runs (`0001-agent-interactions-and-permissions.md`
+tasks 3–7), as the ticket asked.
+
+- **Where the field lives.** Options: on `AgentInteractionRequest` beside
+  `hold` and `blocking` (chosen), or inside `presentation`. Request level
+  because provenance is a fact about who asked, not wording; a later provider
+  can fill it without touching presentation text, and the content-free
+  serializers (telemetry, transcript event, draft) already pick fields
+  explicitly, so it cannot leak into them. Presentation would have been where
+  the card reads everything else, but it would mix a fact with display copy.
+- **Shape.** `{ kind: "mcp-server", name, scope? }`. `kind` is a one-value
+  union so another kind of requester needs no new key; `name` is bounded at
+  256 (`AGENT_INTERACTION_LIMITS.maxSourceNameLength`, the bridge's existing
+  bound); `scope` is the SDK's `McpServerProvenance.source` kept only when it
+  is a short lowercase token (`/^[a-z][a-z0-9_-]{0,31}$/`). Alternatives were
+  forwarding the SDK's raw `source` string (rejected: it is an open set from
+  the vendor and would reach the renderer unchecked) or name only (rejected:
+  the scope is the part that helps judge a request).
+- **Scope wording.** One table in the protocol
+  (`agentInteractionSourceScopeLabel`): `project` reads "project settings",
+  `plugin` "a plugin", `sdk` "the agent host", and so on. An unknown scope reads
+  "other configuration", never as the host, following the SDK's own rule that
+  an unknown value is a configured source and never `sdk`.
+- **The old body line.** Options: keep `MCP server: <name>` in the body as
+  well (duplicates the new line on the card), or drop it when a source is
+  published (chosen). Dropping it would have cost the text-only consumers the
+  name, so the public CLI (`session.interactions`) and the build pipeline's
+  interaction summary now build their body through
+  `agentInteractionTextBody`, which puts `MCP server: <name> (from <scope>)`
+  first. The body line stays only when the bridge's name cannot become a
+  source (over 256 characters), so no request loses the name.
+- **Bridge.** `ClaudeToolApprovalRequest` gains `mcpServerSource`, filled
+  through the protocol's `mcpServerInteractionSource` so the bridge and the
+  contract share one pattern. A bridge that predates the field sends only
+  `mcpServer`, which still becomes a source without a scope.
+- **Card.** `NativeAgentInteractionCard` shows one muted line, "Requested by
+  MCP server **name** · from project settings", above the rest of the card
+  body. The name renders as text only (it is untrusted configuration), in a
+  monospace span that breaks anywhere so a long name wraps at narrow widths.
+  Requests without a source render exactly as before.
+- **Not filled.** Claude's MCP elicitation cards (`mcp-form`, `mcp-url`)
+  already name the server in their title, so they get no source; Codex,
+  OpenCode, Cursor, Grok and Pi do not report MCP provenance on approvals at
+  the current pins and send none. Nothing here changes how a request is
+  answered or which requests a permission rule may answer.
 
 ### Tasks 5, 6 and 9: keep deferred
 
@@ -495,9 +558,6 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - Pending-permission re-arm on (re)initialize: `pending_permission_requests` on
     the initialize response and `Query.reinitialize()`. This touches the
     authorization lifecycle.
-  - MCP permission provenance (`McpServerProvenance`, `mcp_server` on
-    permission requests). Needs a decision on how provenance shows in the shared
-    interaction card.
   - MCP Apps widgets (`readMcpResource`, the tool's `_meta.ui`), and the Codex
     equivalent. Both need a provider-neutral tool-card field before either
     bridge wires them.
@@ -619,6 +679,11 @@ in a throwaway Orkestrator profile (never the real data directory, never ports
   still present (checked 2026-10-30 in `bridges/claude-bridge/node_modules`).
   The Grok `1.0.67` `costUsdTicks` behaviour has not been checked live; the
   steps are under "Qualification".
+- The MCP provenance line (task 4) is covered by bridge, backend, protocol and
+  card tests with synthetic payloads; nobody has yet seen it on a card raised by
+  a real Claude CLI for an `mcp__*` tool under the `ask` policy, nor which
+  `source` value the CLI reports for the servers Orkestrator passes through
+  `mcpServers` (the SDK's documentation suggests `dynamic`).
 
 ## Related
 

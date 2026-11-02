@@ -15,6 +15,7 @@ import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
@@ -430,6 +431,58 @@ describe("CoordinatorPanel", () => {
     expect(renderAgentNativeTab.mock.calls.at(-1)?.[0]).toMatchObject({
       coordinatorProjectId: "project-1",
     });
+  });
+
+  test("publishes its focused conversation for the agent information button until unmounted", async () => {
+    const view = render(<CoordinatorPanel projectId="project-1" />);
+
+    await screen.findByTestId("native-agent");
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active).toEqual({
+        projectId: "project-1",
+        tabId: "coordinator-tab",
+        data: {
+          platform: "codex",
+          environmentId: coordinatorRuntimeId("coordinator-1", "conversation-1"),
+          isLocal: true,
+          sessionId: undefined,
+        },
+      }),
+    );
+
+    view.unmount();
+    expect(useActiveCoordinatorConversationStore.getState().active).toBe(null);
+  });
+
+  test("republishes a provider session ID attached after the conversation mounts", async () => {
+    render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active?.tabId).toBe(
+        "coordinator-tab",
+      ),
+    );
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [
+          { ...snapshot.workspace.conversations[0]!, providerSessionId: "attached-session" },
+        ],
+      },
+    };
+    act(() =>
+      dispatchResourceChange({
+        resource: "coordinator",
+        id: "project-1",
+        projectId: "project-1",
+        revision: 2,
+      }),
+    );
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active?.data.sessionId).toBe(
+        "attached-session",
+      ),
+    );
   });
 
   test.each([true, false])(
@@ -2064,11 +2117,25 @@ describe("CoordinatorPanel", () => {
     fireEvent.focusIn(agents[1]!, { relatedTarget: agents[0] });
     await waitFor(() => expect(select).toHaveBeenCalledWith("project-1", "side-1"));
     expect(agents[1]!.getAttribute("data-owns-shortcuts")).toBe("true");
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active).toMatchObject({
+        tabId: ensuredSnapshot.workspace.conversations.find(
+          (conversation) => conversation.id === "side-1",
+        )!.tabId,
+        data: { environmentId: coordinatorRuntimeId("coordinator-1", "side-1") },
+      }),
+    );
     const stop = (event: Event) => event.stopPropagation();
     agents[0]!.addEventListener("pointerdown", stop);
     fireEvent.pointerDown(agents[0]!);
     await waitFor(() => expect(select).toHaveBeenLastCalledWith("project-1", "conversation-1"));
     expect(agents[0]!.getAttribute("data-owns-shortcuts")).toBe("true");
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active).toMatchObject({
+        tabId: "coordinator-tab",
+        data: { environmentId: coordinatorRuntimeId("coordinator-1", "conversation-1") },
+      }),
+    );
     agents[0]!.removeEventListener("pointerdown", stop);
   });
 

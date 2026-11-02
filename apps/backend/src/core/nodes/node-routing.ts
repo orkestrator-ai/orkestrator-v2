@@ -67,6 +67,9 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "assert_coordinator_node_delegation_available",
   "open_coordinator_node_delegation",
   "send_coordinator_node_mail",
+  "get_coordinator_node_mailbox",
+  // A leaf coordinator's mail to its command node's coordinator is its own.
+  "send_coordinator_command_node_mail",
   "start_coordinator_node_build_pipeline",
   "launch_coordinator_node_multi_review",
   "coordinator_node_multi_review_surface",
@@ -125,6 +128,7 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
     isNodeExcludedCommand(command) ||
     [
       "deliver_node_mail",
+      "get_node_project_coordinator",
       "record_node_environment_origin",
       "stat_node_file",
       "read_node_file",

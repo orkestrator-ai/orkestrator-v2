@@ -151,7 +151,7 @@ test("Docker fixture rebuild keeps running while another environment is open and
   });
 
   // A reload rehydrates the same state from the backend.
-  await page.reload({ waitUntil: "domcontentloaded" });
+  await loadAppWithDevRetry(page, testInfo, () => page.reload({ waitUntil: "domcontentloaded" }));
   await openContainerSection(page);
   await expect(page.getByText("Before a rebuild").first()).toBeVisible({ timeout: 15_000 });
   await page.keyboard.press("Escape");

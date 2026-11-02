@@ -1,6 +1,11 @@
 import type { BackendId } from "@orkestrator/protocol/federation";
 
-import { describeLeafMail, NODE_OUTBOX_READY_EVENT, type OutboxItem } from "./node-mail.js";
+import {
+  describeLeafCoordinatorMail,
+  describeLeafMail,
+  NODE_OUTBOX_READY_EVENT,
+  type OutboxItem,
+} from "./node-mail.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("nodes");
@@ -15,6 +20,7 @@ const log = createLogger("nodes");
 
 export interface CollectorLink {
   readonly connected: boolean;
+  readonly hello?: { capabilities?: Record<string, number> } | null;
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }
 
@@ -33,6 +39,8 @@ export interface CollectorDeps {
     repositoryHint?: string;
     subject?: string;
     body: string;
+    nodePrefix?: string;
+    nodeParent?: { id: string; threadId: string; hopCount: number };
     requestId: string;
     /** The agent that sent it, on its node: node mail is authenticated by the link. */
     from: {
@@ -42,6 +50,8 @@ export interface CollectorDeps {
       tabId: string;
       environmentName?: string;
       tabName?: string;
+      /** The leaf's main coordinator for the project, not an agent. */
+      coordinator?: boolean;
     };
   }): Promise<void>;
 }
@@ -133,7 +143,11 @@ export class NodeMailCollector {
     for (let round = 0; round < 20; round += 1) {
       const batch = await link.invoke<{ items: OutboxItem[]; more: boolean }>(
         "collect_node_outbox",
-        { controllerId, after },
+        {
+          controllerId,
+          after,
+          ...(link.hello?.capabilities?.["node-coordinator-mail"] ? { coordinatorMail: true } : {}),
+        },
       );
       if (!batch?.items?.length) return !batch?.more && !failed;
       const delivered: number[] = [];
@@ -143,7 +157,13 @@ export class NodeMailCollector {
             ...(item.toCoordinator ? { toCoordinator: item.toCoordinator } : {}),
             ...(item.repositoryHint ? { repositoryHint: item.repositoryHint } : {}),
             ...(item.subject ? { subject: item.subject } : {}),
-            body: describeLeafMail(item, { nodeId, name }),
+            body: item.fromCoordinator ? item.body : describeLeafMail(item, { nodeId, name }),
+            ...(item.fromCoordinator
+              ? {
+                  nodePrefix: describeLeafCoordinatorMail({ ...item, body: "" }, { nodeId, name }),
+                  ...(item.nodeParent ? { nodeParent: item.nodeParent } : {}),
+                }
+              : {}),
             // Stable per item, so a redelivery after a lost ack is deduplicated.
             requestId: `node:${nodeId}:${item.seq}`,
             from: {
@@ -153,6 +173,7 @@ export class NodeMailCollector {
               tabId: item.fromTabId,
               ...(item.fromEnvironmentName ? { environmentName: item.fromEnvironmentName } : {}),
               ...(item.fromTabName ? { tabName: item.fromTabName } : {}),
+              ...(item.fromCoordinator ? { coordinator: true } : {}),
             },
           });
           delivered.push(item.seq);
@@ -168,6 +189,7 @@ export class NodeMailCollector {
         await link.invoke("ack_node_outbox", {
           controllerId,
           upTo: deliveredPrefix,
+          ...(link.hello?.capabilities?.["node-coordinator-mail"] ? { coordinatorMail: true } : {}),
           sequences: delivered,
         });
       }

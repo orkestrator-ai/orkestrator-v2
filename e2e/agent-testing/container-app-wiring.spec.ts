@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   newReviewValidationRun,
@@ -74,7 +75,7 @@ type CoordinatorSnapshot = {
     id: string;
     lifecycleState: string;
     repositoryContextRevision: number;
-    conversations: Array<{ id: string; role?: string }>;
+    conversations: Array<{ id: string; role?: string; agent?: AgentPlatform }>;
   };
   workflows: Array<{
     conversationId: string;
@@ -470,6 +471,11 @@ test("Docker fixture coordinator view follows delegations and context across swi
   expect(snapshot.workspace.lifecycleState).toBe("ready");
   const main = snapshot.workspace.conversations.find((item) => item.role === "main");
   if (!main) throw new Error("The coordinator has no main conversation");
+  await invoke<CoordinatorSnapshot>("assign_coordinator_conversation_agent", {
+    projectId: container.projectId,
+    conversationId: main.id,
+    agent: "codex",
+  });
   // An interrupted earlier run may have left delegations open on this
   // conversation; each closes with its environment, as these do.
   const openOn = (environmentId: string) =>
@@ -505,9 +511,17 @@ test("Docker fixture coordinator view follows delegations and context across swi
     const panel = target.locator("#project-panel-coordinator");
     await expect(panel).toBeVisible({ timeout: 15_000 });
     await expect(panel.getByText("Coordinator unavailable")).toHaveCount(0);
-    // No provider was started for the main conversation.
+    const current = await invoke<CoordinatorSnapshot>("ensure_project_coordinator", {
+      projectId: container.projectId,
+    });
+    const selected = current.workspace.conversations.find((item) => item.id === main.id);
+    expect(selected, "The original main conversation is retained").toBeDefined();
+    expect(selected?.agent, "The explicit coordinator selection survives returning").toBe("codex");
     await expect(
-      panel.getByRole("button", { name: "Coordinator, no agent chosen yet", exact: true }),
+      panel.getByRole("button", {
+        name: `Coordinator, ${AGENT_PLATFORM_LABELS.codex}`,
+        exact: true,
+      }),
     ).toBeVisible({ timeout: 15_000 });
     return panel;
   };

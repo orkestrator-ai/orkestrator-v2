@@ -8,14 +8,15 @@ const args = process.argv.slice(2);
 const supervised = args[0] === SUPERVISED_FLAG;
 if (supervised) args.shift();
 const design = args[0] === "--design";
+const docker = args[0] === "--docker";
 // Everything else is forwarded to the profile's `dev:test`, validated up front
 // so a typo fails before a profile is created.
-const profileArgs = args.slice(design ? 1 : 0).filter((argument) => argument !== "--");
+const profileArgs = args.slice(design || docker ? 1 : 0).filter((argument) => argument !== "--");
 try {
   isolatedProfileArguments(profileArgs);
 } catch (error) {
   throw new Error(
-    `Usage: test-agent-browser-isolated.ts [--design] [--credential-source <name>]… [--agent-platforms <list>] [--no-agent-credentials] [--use-dev-worktree-folder]\n${error instanceof Error ? error.message : error}`,
+    `Usage: test-agent-browser-isolated.ts [--design | --docker] [--credential-source <name>]… [--agent-platforms <list>] [--no-agent-credentials] [--use-dev-worktree-folder]\n${error instanceof Error ? error.message : error}`,
   );
 }
 
@@ -24,6 +25,7 @@ if (supervised) {
   try {
     process.exitCode = await runIsolatedBrowser({
       design,
+      docker,
       profileArgs,
       signal: owner.signal,
     });

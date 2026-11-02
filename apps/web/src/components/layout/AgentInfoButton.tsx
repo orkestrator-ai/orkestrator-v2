@@ -75,6 +75,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { agentMailCapabilities } from "@orkestrator/protocol/agent-mail";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { MultiReviewReviewer } from "@orkestrator/protocol/multi-review";
 import type { AgentSessionAccount } from "@orkestrator/protocol/agent-accounts";
 import { openAgentMailForTab } from "@/components/agent-mail/agent-mail-ui";
@@ -375,6 +376,15 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
   const isWorkflowSession = Boolean(
     activeSession?.buildPipelineId || activeSession?.multiReviewReviewer,
   );
+  /*
+   * A coordinator conversation reports like any agent tab: usage, limits,
+   * account and runtime. It has no Environment or pane layout to open a fork or
+   * a handoff in, and its read-only policy is fixed, so the controls that
+   * create tabs, change files or change that policy stay with environment tabs.
+   */
+  const isCoordinatorSession = Boolean(
+    activeSession && coordinatorIdFromRuntimeId(activeSession.environmentId),
+  );
   const enabledAgentPlatforms = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
@@ -387,7 +397,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
    * disabled is not a destination, and neither is the source itself.
    */
   const handoffDestinations =
-    activeSession && !isWorkflowSession
+    activeSession && !isWorkflowSession && !isCoordinatorSession
       ? (Object.keys(AGENT_PROVIDER_LABELS) as AgentProvider[]).filter(
           (provider) =>
             provider !== activeSession.provider && enabledAgentPlatforms.includes(provider),
@@ -472,7 +482,8 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     neutralProjection?.capabilities ??
     (activeSession ? nativeAgentCapabilities(activeSession.provider) : undefined);
   const sessionActions = sessionCapabilities?.actions;
-  const canFork = !isWorkflowSession && (sessionCapabilities?.fork ?? false);
+  const canFork =
+    !isWorkflowSession && !isCoordinatorSession && (sessionCapabilities?.fork ?? false);
   const canCompact = !isWorkflowSession && (sessionActions?.compact ?? false);
 
   const neutralContextUsage = neutralProjection?.contextUsage;
@@ -1027,7 +1038,9 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 refreshKey={`${neutralProjection?.generation}:${neutralProjection?.connection}:${neutralProjection?.turn.phase}`}
               />
 
-              {!isWorkflowSession && neutralProjection?.composer?.executionProfiles?.length ? (
+              {!isWorkflowSession &&
+              !isCoordinatorSession &&
+              neutralProjection?.composer?.executionProfiles?.length ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Execution profile
@@ -1067,19 +1080,21 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Session options
                   </div>
-                  <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      disabled={neutralControlUpdatePending || !neutralProjection}
-                      checked={neutralProjection?.composer?.includeLocalSettings ?? false}
-                      onChange={(event) => {
-                        void updateNeutralControls({
-                          includeLocalSettings: event.target.checked,
-                        });
-                      }}
-                    />
-                    Include .claude/settings.local.json
-                  </label>
+                  {isCoordinatorSession ? null : (
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        disabled={neutralControlUpdatePending || !neutralProjection}
+                        checked={neutralProjection?.composer?.includeLocalSettings ?? false}
+                        onChange={(event) => {
+                          void updateNeutralControls({
+                            includeLocalSettings: event.target.checked,
+                          });
+                        }}
+                      />
+                      Include .claude/settings.local.json
+                    </label>
+                  )}
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
@@ -1176,6 +1191,7 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                     ) : null}
 
                     {!isWorkflowSession &&
+                    !isCoordinatorSession &&
                     activeSession.provider === "claude" &&
                     currentSessionId ? (
                       <Button
@@ -1244,7 +1260,10 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       </Button>
                     ) : null}
 
-                    {!isWorkflowSession && currentSessionId && sessionActions?.undo ? (
+                    {!isWorkflowSession &&
+                    !isCoordinatorSession &&
+                    currentSessionId &&
+                    sessionActions?.undo ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1332,7 +1351,10 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                       </Button>
                     ) : null}
 
-                    {!isWorkflowSession && currentSessionId && sessionActions?.redo ? (
+                    {!isWorkflowSession &&
+                    !isCoordinatorSession &&
+                    currentSessionId &&
+                    sessionActions?.redo ? (
                       <Button
                         variant="outline"
                         size="sm"

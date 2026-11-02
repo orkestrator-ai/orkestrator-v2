@@ -294,7 +294,14 @@ export function registerCoordinatorWorkflowTools(
         "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment. Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set, or has given instructions for a step; any field you leave out keeps its saved default. Delivery follows the ticket's delivery policy when Verify passes (none means open-pr): set it on the ticket; push-no-pr pushes and stops, with no automatic review.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
-        taskId: z.string().trim().min(1).max(200),
+        taskId: z
+          .string()
+          .trim()
+          .min(1)
+          .max(200)
+          .describe(
+            "The id of a ticket in this project (on nodeId's copy when nodeId is set). The build is linked to it and records its criteria results, status and pull request there. Create the ticket with create_ticket first if there is none.",
+          ),
         environmentType: z.enum(["local", "containerized"]).default("local"),
         baseBranch: z.string().trim().min(1).max(500),
         baseCommit: z.string().regex(/^[0-9a-f]{40}$/i),

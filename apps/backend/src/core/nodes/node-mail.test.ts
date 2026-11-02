@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
 import {
+  coordinatorContactKey,
   emptyNodeMailState,
   LeafNodeMail,
   NODE_OUTBOX_READY_EVENT,
@@ -221,6 +222,51 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
     expect(
       await mail.route({ fromEnvironmentId: "e1", toEnvironmentId: "coordinator" }),
     ).toMatchObject({ controllerId: "bk_b" });
+  });
+});
+
+describe("routing a leaf coordinator's mail to a command node's coordinator", () => {
+  const key = coordinatorContactKey("p1");
+
+  test("refuses when no command node controls this node", async () => {
+    const { mail } = leaf([]);
+    await expect(mail.routeCoordinator({ contactKey: key })).rejects.toThrow(
+      "This node is not controlled by a command node",
+    );
+  });
+
+  test("a new message goes to the command node that last mailed this project's coordinator", async () => {
+    const { mail } = leaf(["bk_a", "bk_b"], "bk_b");
+    expect(await mail.routeCoordinator({ contactKey: key })).toEqual({
+      controllerId: "bk_b" as BackendId,
+      controllerName: "bk_b",
+    });
+    await mail.recordContact(key, coordinatorOf("bk_a"));
+    // The repository's main there, not one conversation: no mailbox.
+    expect(await mail.routeCoordinator({ contactKey: key })).toEqual({
+      controllerId: "bk_a" as BackendId,
+      controllerName: "bk_a",
+    });
+    // Another project's contact does not count.
+    expect(await mail.routeCoordinator({ contactKey: coordinatorContactKey("p2") })).toEqual({
+      controllerId: "bk_b" as BackendId,
+      controllerName: "bk_b",
+    });
+  });
+
+  test("a reply goes to the conversation that sent the message, and only while attached", async () => {
+    const { mail, attached } = leaf(["bk_a", "bk_b"], "bk_b");
+    await mail.recordThread("m1", coordinatorOf("bk_a"));
+    expect(await mail.routeCoordinator({ contactKey: key, replyToMessageId: "m1" })).toEqual(
+      coordinatorOf("bk_a"),
+    );
+    await expect(
+      mail.routeCoordinator({ contactKey: key, replyToMessageId: "unknown" }),
+    ).rejects.toThrow("did not come from a command node's coordinator");
+    attached.splice(0, 1);
+    await expect(
+      mail.routeCoordinator({ contactKey: key, replyToMessageId: "m1" }),
+    ).rejects.toThrow("no longer controls this node");
   });
 });
 

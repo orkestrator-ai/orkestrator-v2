@@ -414,7 +414,12 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(pins[0]).toMatch(
       new RegExp(`^${misePin.replaceAll(".", "\\.")}-debian@sha256:[0-9a-f]{64}$`),
     );
-    expect(dockerfile).toContain(`mise install --system bun@${misePin}`);
+    // The base image's Bun is registered with mise, never downloaded again.
+    expect(dockerfile).not.toContain("mise install --system bun@");
+    expect(dockerfile).toContain(
+      `MISE_DATA_DIR=/usr/local/share/mise mise link bun@${misePin} /opt/bun`,
+    );
+    expect(dockerfile).toContain("ln -s /usr/local/bin/bun /opt/bun/bin/bun");
     expect(dockerfile).toContain(`mise where bun@${misePin}`);
     expect(dockerfile).toContain(`mise exec bun@${misePin} -- bun --version`);
     expect(dockerfile).toContain('test -x "$BUN_INSTALL_DIR/bin/bun"');
@@ -993,7 +998,8 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     const nodeVersion = dockerfile.match(/^ARG NODE_VERSION=(\d+\.\d+\.\d+)$/m)?.[1];
 
     expect(nodeVersion).toBeDefined();
-    expect(Number(nodeVersion!.split(".")[0])).toBeGreaterThanOrEqual(22);
+    // Keep the security floor when updating the image runtime.
+    expect(semver.satisfies(nodeVersion!, ">=24.22.1")).toBe(true);
     expect(dockerfile).toContain(
       'npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"',
     );

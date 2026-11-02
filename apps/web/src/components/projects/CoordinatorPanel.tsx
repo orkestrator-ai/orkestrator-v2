@@ -60,6 +60,7 @@ import * as backend from "@/lib/backend";
 import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useStore } from "zustand";
@@ -500,6 +501,28 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const selected =
     conversations.find((item) => item.id === focusedId) ??
     conversations.find((item) => item.id === backendSelectedId);
+  // The window's agent information button reads the focused conversation as
+  // its active tab, so its usage, limits and account show as for any agent tab.
+  const workspaceId = snapshot?.workspace.id;
+  const selectedId = selected?.id;
+  const selectedTabId = selected?.tabId;
+  const selectedAgent = selected?.agent;
+  const selectedProviderSessionId = selected?.providerSessionId;
+  useEffect(() => {
+    if (!workspaceId || !selectedId || !selectedTabId) return;
+    const store = useActiveCoordinatorConversationStore.getState();
+    store.publish({
+      projectId,
+      tabId: selectedTabId,
+      data: {
+        platform: selectedAgent,
+        environmentId: coordinatorRuntimeId(workspaceId, selectedId),
+        isLocal: true,
+        sessionId: selectedProviderSessionId,
+      },
+    });
+    return () => store.clear(projectId, selectedTabId);
+  }, [projectId, selectedAgent, selectedId, selectedProviderSessionId, selectedTabId, workspaceId]);
   const environments = useEnvironmentStore((state) => state.environments);
   // Workers on other nodes are named from the command node's summaries.
   const nodes = useStore(portalStore.store, (state) => state.nodes);

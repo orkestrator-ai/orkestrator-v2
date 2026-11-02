@@ -27,6 +27,12 @@ function harness(options: { environment?: Record<string, unknown> } = {}) {
         return { id, ...changes };
       },
       getMultiReviewWorkflow: async () => null,
+      kanban: {
+        getKanbanTask: async (id: string) =>
+          ({ t1: { id: "t1", projectId: "p-leaf" }, other: { id: "other", projectId: "p-x" } })[
+            id
+          ] ?? null,
+      },
     },
     buildPipelines: {
       start: async (input: Record<string, unknown>) => {
@@ -80,7 +86,11 @@ describe("controller workflow commands", () => {
   test("a controller build runs this node's defaults and checks its own delegation base", async () => {
     const { run, started } = harness();
     await run("start_controller_build_pipeline", { input: build });
-    expect(started[0]).toMatchObject({ projectId: "p-leaf", taskId: "t1" });
+    expect(started[0]).toMatchObject({
+      projectId: "p-leaf",
+      taskId: "t1",
+      source: { type: "kanban", taskId: "t1" },
+    });
 
     await expect(
       run("start_controller_build_pipeline", {
@@ -90,6 +100,19 @@ describe("controller workflow commands", () => {
     await expect(
       run("start_controller_build_pipeline", { input: { ...build, projectId: "missing" } }),
     ).rejects.toThrow("does not exist on this node");
+  });
+
+  test("a controller build must name a ticket in this node's copy of the project", async () => {
+    const { run, started } = harness();
+    for (const taskId of ["missing", "other"]) {
+      await expect(
+        run("start_controller_build_pipeline", { input: { ...build, taskId } }),
+      ).rejects.toMatchObject({
+        code: "coordinator-build-ticket-required",
+        message: expect.stringContaining("Create the ticket with create_ticket first"),
+      });
+    }
+    expect(started).toEqual([]);
   });
 
   test("an existing environment must come from the delegation commit", async () => {

@@ -1102,8 +1102,8 @@ bridge builds back into the final stage: the workspace install and build
 layers would ship in the image's history even when deleted later.
 
 Runtimes:
-- Bun, installed in mise's shared system tool directory. The matching base-image
-  runtime bootstraps the image build before mise is installed.
+- Bun, the base image's own binary, registered in mise's shared system tool
+  directory with `mise link` (never downloaded a second time).
 - Node.js 24 LTS, installed over the base image and verified against the
   published checksum. The agent CLIs need genuine Node, not bun's node shim.
 
@@ -1843,14 +1843,16 @@ This project uses **shadcn/ui** components. When adding new UI:
 Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request.
 
 - Never merge pull requests; the user merges.
-- Workers finish by committing, rebasing on origin/main and pushing their branch without opening a PR, leave git status clean, then mail the coordinator; the coordinator runs Multi Review, which opens the PR.
+- Workers finish by committing, rebasing on the project's configured base branch (not a hard-coded main) and pushing their branch without opening a PR, leave git status clean, then report to the coordinator; a pipeline environment's own PR step opens the PR, and for a prompt environment the coordinator runs Multi Review and sees it through to the PR.
 - Never run the Orkestrator backend, the bundled CLI backend (packages/cli/dist/main.js) or the app against the real data directory, never install services, and never bind ports 34121 or 34122; use a throwaway profile for live checks.
 - Never change GitHub repository settings, branch protection or rulesets, and never publish packages or take other outward-facing actions without the user's explicit approval.
 - Coordinators never delete environments on their own initiative; only when the user asks, through the confirmed deletion request.
 - Never invent evidence; anything not actually observed is reported under Not done / needs live evidence.
-- Worker final messages use six sections: Problem, Solution, What was done, Decisions, Not done / needs live evidence, Tests run.
+- Worker final messages use seven sections: Problem, Solution, Context, What was done, Decisions (each with its options, the pros and cons of each, and a recommendation), Not done / needs live evidence, Tests run.
 - Every new or reworked file under docs/todo starts with a `## Task analysis` section: a line `Analysed <date> against main at <commit>`, a `### Tasks` numbered list giving each task a one-line status (open, done, or open (depends on N)), then one `### N. <task>` subsection per task.
 - Each todo task subsection has **Problem.**, **Context.**, **Investigation.** and **Decisions.** paragraphs; each decision lists its options with pros and cons and marks exactly one as (recommended), so a later worker can act on the file without asking.
 - After the Task analysis, a todo file keeps whichever of these sections apply, in this order: Current state, Outstanding work, Constraints and rationale, Open questions, Needs verification, Related, Replaces.
 - A worker that acts on a todo adds a `## Assumptions and decisions` section with one subsection per choice it made, naming the task it belongs to and saying what it chose and why, and updates the task statuses in the Tasks list.
 - Follow-up todos a worker creates during other work use the same format; when unsure, copy the layout of docs/todo/containers-and-environments/0241-leaked-reach-probe-networks.md.
+- The two kinds of environment are called pipeline environment (created through the build pipeline, which builds, reviews, fixes, verifies, opens the PR and resolves conflicts on its own) and prompt environment (runs a prompt; review and PR are started separately).
+- Coordinators use a pipeline environment by default whenever what is being built is known (a ticket, or settled with the user), and a prompt environment for investigation or interactive work that may stop or need back-and-forth; for a prompt environment the coordinator launches Multi Review when the work is ready and sees it through fix, PR and conflict resolution.

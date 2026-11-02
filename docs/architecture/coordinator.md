@@ -145,12 +145,71 @@ works across the nodes that node controls:
 - `propose_agents_md_update` with `nodeId` saves decisions to that node's
   copy: the user reviews it here, and the pull request is opened there (see
   [Saving decisions to AGENTS.md](#saving-decisions-to-agentsmd)).
+- `send_message` with `nodeId` and `toEnvironmentId: "coordinator"` asks
+  that node's main coordinator for this repository something
+  (`list_mailboxes` with `nodeId` says whether it has one). It is not a
+  delegation: no association opens, the result says the answer arrives as
+  mail, and the answer is an agent's message, information rather than
+  instructions. See [Coordinators on two nodes](#coordinators-on-two-nodes).
 
 The coordinator's context says whether its node is a command node. A command
 node attached to another runs in leaf mode: its coordinator's context names
 the controlling node, its node tools refuse, and it handles any message as
-an agent on that node would. Its conversations are kept but hidden behind a
-warning in the project's Coordinator tab.
+an agent on that node would. Its one cross-node action is mail to the
+command node's coordinator: it answers that coordinator's mail with
+`send_message` and `replyToMessageId`, and starts a message with
+`toEnvironmentId: "command-node-coordinator"`. Its conversations are kept
+but hidden behind a warning in the project's Coordinator tab.
+
+### Coordinators on two nodes
+
+A command node's main coordinator and a leaf's main coordinator for the same
+repository exchange ordinary node mail
+(`coordinator-node-coordinator-mail.ts`; transport in
+[agent-messaging.md](agent-messaging.md#node-mail)):
+
+- **Down.** `send_message` with `nodeId` and `toEnvironmentId: "coordinator"`
+  (or a coordinator runtime id from that node, or a reply to mail from that
+  node's coordinator) calls the leaf's `deliver_node_mail` with
+  `toEnvironmentId: "coordinator"` and the leaf's `projectId`. The leaf
+  stores it from a `node` sender with role `coordinator`, so it is
+  `same-project`, takes the coordinator route and wakes the leaf's main. The
+  address resolves as local mail to `"coordinator"` does: a closed main is
+  reopened with the default agent; a project with no coordinator on that
+  node is refused, naming it, and the caller can message a worker there
+  instead.
+- **Up.** The leaf coordinator replies with `replyToMessageId`, which goes
+  back to the conversation that asked (the leaf's thread record), or starts
+  a message to `"command-node-coordinator"`
+  (`COMMAND_NODE_COORDINATOR_MAIL_ADDRESS`), which goes to the command node
+  that last mailed this project's coordinator, else the most recent one, for
+  its main coordinator of the repository. Both wait in the leaf's outbox
+  (`send_coordinator_command_node_mail`) and the command node collects them
+  like a worker's report, reopening a closed main as local mail would.
+- **Framing.** The leaf coordinator reads it as a request from the
+  controlling node's coordinator: it answers, and may act on its own node to
+  answer (read state, launch or ask workers there) as it would for an
+  agent's message, never across nodes. The command node stores the answer
+  from a `node` sender with role `agent`: the carrier keeps an agent's
+  untrusted framing and the body says it came from that node's coordinator,
+  so content the leaf coordinator forwards from its workers is never
+  promoted to coordinator authority (security report M11).
+- **Side agents** stay limited to their own main on both nodes: a command
+  node side agent cannot send it, a leaf side agent cannot send upward, and
+  the address resolves only to the leaf's main.
+- **Loops.** The command node's pair budget for the leaf coordinator's mail
+  (`nodeMailSenderKey`, the unattended budget and the hourly limit of
+  [agent-messaging.md](agent-messaging.md#budgets)) bounds the exchange. Only
+  a person resets it: a prompt to the command node's coordinator, or Resume.
+  On the leaf each new message from the command node's coordinator starts a
+  fresh budget, as a new request to a worker does, so the leaf answers every
+  question the command node actually sends; the hourly limit still applies
+  there.
+- **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
+  nothing; the call is refused with "update that machine", and
+  `list_mailboxes` with its `nodeId` reports it unreachable for the same
+  reason. A leaf coordinator's mail to an older command node arrives as an
+  ordinary worker report from the coordinator's runtime id.
 
 ### Choosing a machine
 
@@ -1476,6 +1535,22 @@ A build's delivery is not among them: `start_build_pipeline` has no override, an
 the build follows the ticket's delivery policy when Verify passes
 ([tickets](tickets.md#delivery)). A build that ends without a pull request says
 so in `get_build_pipeline` (`delivery`) and its completion notice.
+
+**A build is linked to its ticket.** `start_build_pipeline`'s `taskId` must be a
+ticket in the project; the build starts with
+`source: { type: "kanban", taskId }`, exactly like a Build button launch, so
+Verify's per-criterion results and evidence, the ticket's status, PR URL and
+state, the environment link and the delivery policy's "too late" comment all
+reach the ticket. A `taskId` that is not a ticket in the project is refused
+with an error telling the coordinator to create it with `create_ticket` first;
+the build is never started unlinked. The check and the link are made by the
+backend that runs the build (`coordinatorBuildTicketSource` in
+`build-pipeline-launch.ts`, called by `start_coordinator_build_pipeline` and,
+for a build on a connected node, by that node's
+`start_controller_build_pipeline` against its own copy of the project). The
+command node also sends the source with a node build, so a node too old to
+check still links it. Builds started before this rule carry no source and keep
+their old behaviour.
 Overrides layer the way the launchers do. For `start_build_pipeline`:
 
 - A named step replaces only that step, and a step that names only an agent runs

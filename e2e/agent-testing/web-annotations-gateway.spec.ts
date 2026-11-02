@@ -32,6 +32,7 @@ import {
   type AgentInteractionRequest,
   type AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
+import { loadAppWithDevRetry } from "./dev-startup-retry";
 import { waitForLiveAnnotationRequest } from "./web-annotations-live";
 import { isSignInError } from "../../apps/desktop/scripts/dev/coordinator-live";
 import { reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
@@ -1040,7 +1041,7 @@ test("Docker fixture checks source hints inside the container and the thread sho
       },
     });
     await setup.page.setViewportSize({ width: 1440, height: 960 });
-    await setup.page.goto(status.browserUrl!);
+    await loadAppWithDevRetry(setup.page, testInfo, () => setup.page.goto(status.browserUrl!));
     await openEnvironment(setup.page, CONTAINER_ENVIRONMENT);
     const panel = setup.page.locator(`[data-annotation-panel="${browserTabId}"]`);
     await expect(panel.locator("[data-source-candidates] li")).toHaveText(

@@ -274,6 +274,63 @@ describe("useNativeAgentSession background read flags", () => {
     expect(result.current.sessionStateAvailability).toBe("unavailable");
   });
 
+  test.each(["error response", "thrown error"] as const)(
+    "quiet read stays pending after a state %s until the transcript settles",
+    async (failure) => {
+      transcriptUpdates = [() => transcriptSnapshot("transcript-1", [{ id: "m1", text: "one" }])];
+      stateUpdates = [() => stateSnapshot("state-1")];
+      const { result } = renderCountedSession();
+      await act(async () => {
+        await result.current.refresh();
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      transcriptUpdates = [
+        async () => {
+          await gate;
+          return transcriptSnapshot("transcript-2", [{ id: "m2", text: "two" }]);
+        },
+      ];
+      stateUpdates = [
+        () => {
+          if (failure === "thrown error") throw new Error("state read failed");
+          return {
+            viewVersion: 1,
+            status: "unavailable",
+            retryable: true,
+            error: "state read failed",
+          };
+        },
+      ];
+      let inFlight!: Promise<unknown>;
+      act(() => {
+        inFlight = result.current.refresh({ manual: false });
+      });
+      try {
+        await waitFor(() => expect(result.current.sessionStateAvailability).toBe("unavailable"));
+        expect(result.current.sessionStateError).toBe("state read failed");
+        expect(result.current.isRefreshing).toBe(true);
+      } finally {
+        await act(async () => {
+          release();
+          await inFlight;
+        });
+      }
+      expect(result.current.isRefreshing).toBe(false);
+      expect(result.current.sessionStateRefreshing).toBe(false);
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m2"]);
+      expect(result.current.sessionStateAvailability).toBe("unavailable");
+      stateUpdates = [() => stateSnapshot("state-recovered")];
+      await act(async () => {
+        await result.current.refresh({ manual: false });
+      });
+      expect(result.current.sessionStateAvailability).toBe("current");
+      expect(result.current.sessionStateError).toBeNull();
+    },
+  );
+
   test("a manual read still raises and clears the flags", async () => {
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [{ id: "m1", text: "one" }])];
     stateUpdates = [() => stateSnapshot("state-1")];

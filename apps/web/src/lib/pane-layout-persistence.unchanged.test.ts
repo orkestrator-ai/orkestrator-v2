@@ -94,7 +94,7 @@ describe("pane layout persistence with unchanged environments", () => {
     }
   });
 
-  test("retries a failed save on an unrelated environment update", async () => {
+  test("retries a failed save only after that environment changes", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       saved(environmentId, input),
     );
@@ -116,9 +116,15 @@ describe("pane layout persistence with unchanged environments", () => {
         .addTab("default", { id: "unrelated", type: "plain" }, "env-other");
       await waitForTimers();
       expect(usePaneLayoutStore.getState().environments.get("env-retry")).toBe(unchanged);
+      expect(save.mock.calls.filter(([id]) => id === "env-retry")).toHaveLength(1);
+      usePaneLayoutStore
+        .getState()
+        .addTab("default", { id: "retry-trigger", type: "plain" }, "env-retry");
+      await waitForTimers();
       const retries = save.mock.calls.filter(([id]) => id === "env-retry");
       expect(retries).toHaveLength(2);
-      expect(retries[1]?.[1]).toEqual(retries[0]?.[1]);
+      expect(JSON.stringify(retries[1]?.[1])).toContain("unsaved");
+      expect(JSON.stringify(retries[1]?.[1])).toContain("retry-trigger");
     } finally {
       stop();
     }

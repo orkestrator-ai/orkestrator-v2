@@ -236,6 +236,28 @@ describe("environment rebuild section lifecycle events", () => {
     expect(REBUILD_BACKSTOP_POLL_MS).toBeGreaterThan(REBUILD_POLL_MS);
   });
 
+  test("the slow backstop installs a newer snapshot when its event is missed", async () => {
+    const intervals = spyOn(globalThis, "setInterval");
+    current = snapshot(1, "preflight");
+    renderSection();
+    await screen.findByText(/Checking image and free space/);
+    await waitFor(() => expect(pollDelays(intervals).at(-1)).toBe(REBUILD_BACKSTOP_POLL_MS));
+    const tick = intervals.mock.calls.findLast(
+      ([, delay]) => delay === REBUILD_BACKSTOP_POLL_MS,
+    )?.[0] as () => void;
+
+    // The backend advances without delivering a lifecycle event or resync.
+    current = snapshot(2, "copying");
+    await act(async () => tick());
+    await screen.findByText(/Copying and verifying files/);
+    expect(reads).toBe(2);
+
+    current = snapshot(3, null);
+    await act(async () => tick());
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(reads).toBe(3);
+  });
+
   test("keeps the quick poll when the event subscription fails", async () => {
     const intervals = spyOn(globalThis, "setInterval");
     spyOn(events, "listen").mockImplementation(async () => {

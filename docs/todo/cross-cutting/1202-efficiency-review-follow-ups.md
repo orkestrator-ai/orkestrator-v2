@@ -378,15 +378,24 @@ it now fetches none, and the pin was updated.
 A failed restore is forgotten and retried on the next change to the
 environment list, and an environment that leaves and returns hydrates again.
 
+### Task 3: failed layout save cadence (WEB-4)
+
+Review correction on 2026-11-02: unchanged hydrated environments skip work even
+after a save failure. Retrying on every unrelated store update would introduce
+new behavior and repeated requests under persistent failure. The regression
+checks no retry after another environment changes, then a retry containing the
+unsaved layout when the failed environment itself changes.
+
 ### Task 3: quiet background reads (WEB-5)
 
 Made on 2026-11-02, on the branch `renderer-paths-optimization-845c78394eb7-r1`.
 A background read stays quiet only while session state is `current` and a
 projection is held, because only then does the connection surface ignore the
 flags. A read before that, or any manual read, raises them as before. If a
-quiet read loses authority (the session is gone), the projection,
-availability and `hasCompletedRead` settle the surface in the same commit, so
-it moves to its final state without a brief "connecting". The first poll after
+quiet read loses authority (missing state, an unavailable response, or a thrown
+read error), `isRefreshing` stays raised until the independent transcript read
+also settles. Deferred-transcript tests cover all three paths and recovery
+after both error forms. The first poll after
 a connecting read can still render once: React sometimes renders before it
 discards a same-value state write that follows a real update.
 
@@ -397,7 +406,9 @@ higher revision for the same environment, so a read that started before an
 event cannot roll progress back. A snapshot for a different environment always
 replaces the held one, as the unconditional setter did. The 15 s backstop and
 the 2 s fallback are exported as `REBUILD_BACKSTOP_POLL_MS` and
-`REBUILD_POLL_MS`.
+`REBUILD_POLL_MS`. A regression invokes the registered 15 s timer without
+emitting an event or resync and verifies both newer progress and completion
+are installed from snapshot reads.
 
 ### Task 6: ACP persistence interval
 

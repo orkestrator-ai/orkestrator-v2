@@ -2439,6 +2439,7 @@ export function useNativeAgentSession<TMessage = unknown>({
                 updateProgressiveCache({ stateToken: undefined, stateAvailability: "unavailable" });
               } else {
                 const message = update.error ?? "Session state is temporarily unavailable";
+                if (quiet) setIsRefreshing(true);
                 // Transcript reads may discard action-critical fields while
                 // state is unavailable. Recovery must reinstall those fields,
                 // not accept an `unchanged` reply against the old token.
@@ -2455,6 +2456,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             .catch((error) => {
               if (!stillCurrent()) return;
               const message = error instanceof Error ? error.message : String(error);
+              if (quiet) setIsRefreshing(true);
               progressiveStateTokenRef.current = undefined;
               markSessionStateAvailability("unavailable");
               setSessionStateError(message);

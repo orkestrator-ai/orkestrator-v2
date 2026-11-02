@@ -3,7 +3,8 @@
  *
  * A capture is a sequential observation, not an atomic filesystem snapshot:
  * every file is lstat'ed, read and lstat'ed again, and the inventory is listed
- * before and after the pass. A file that changed while it was read is retried
+ * before and after the pass. On the host, a file whose stamp matches a settled
+ * stat-cache entry is only stat'ed (see {@link StatCacheEntry}). A file that changed while it was read is retried
  * once and otherwise recorded as unstable; the result then says
  * `changed-during-capture` rather than pretending to be a point-in-time image.
  *

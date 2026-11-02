@@ -361,6 +361,35 @@ measurements for tuning, not guarantees:
 Warm captures reuse stat-identical blobs (`metadataReused` in coverage) and
 store only the changed blob and the new manifest.
 
+A host capture does not read or hash a file whose stat stamp
+(size, mtime, ctime, inode) matches a *settled* stat-cache entry: one whose
+mtime and ctime were already `STAT_SETTLE_WINDOW_MS` (2 s) old when it was
+read. A younger file is read on every capture, because a same-size rewrite
+inside one filesystem timestamp tick leaves the stamp unchanged (Git's
+"racily clean" case). A watcher hint for a path drops that path's entry, so
+the next capture reads it whatever its stamp says. Container captures still
+hash every file in place. Comparisons memoise line counts by blob pair in a
+bounded LRU (`snapshot-diff.ts`; 8,192 entries, 4 MiB estimated); a hit is
+used only while the store still holds both blobs, and unavailable bodies and
+`cpu-budget` limits are never cached.
+
+The efficiency report's fixtures (`--only=assets,long-turn`), measured on
+2026-11-02 on a shared Linux host under heavy load (load average 25 to 34),
+three interleaved runs each of the code before and after ST-1, ST-2 and
+ST-4, 10 warm runs per workload, p50 range:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 1,000 files, one changed: warm capture | 114–261 ms | 47–141 ms |
+| 10,000 files, one changed: warm capture | 2,330–2,494 ms | 615–1,201 ms |
+| 200 files + 20 × 8 MiB assets, one changed: warm capture | 281–505 ms | 13–44 ms |
+| Long turn, 200 changed files compared with the turn start each pass | 149–435 ms | 6–18 ms |
+
+The long turn's first pass still computes all 200 pairs (its p95). What
+remains of a warm capture over many small files is the object store's
+per-entry `reuse` (`utimes`) and the closure check (`has`), about 230 ms each
+per 10,000 files in one profiling run (ST-3 in the efficiency report).
+
 ## Known limitations
 
 Recorded so no capability is advertised beyond what is implemented:

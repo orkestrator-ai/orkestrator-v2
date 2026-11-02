@@ -791,9 +791,15 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
 
       // Every pane-store write reaches this loop for every environment. An
       // environment whose object and hydration both stayed put has nothing to
-      // persist, so skip it before sanitising and serialising its layout.
+      // persist unless a failed write cleared its retry marker. Skip only saved
+      // or queued layouts before sanitising and serialising them.
       const previousEnvironment = previous.environments.get(environmentId);
-      if (previousHydration === "done" && environment === previousEnvironment) continue;
+      if (
+        previousHydration === "done" &&
+        environment === previousEnvironment &&
+        lastEnqueued.has(environmentId)
+      )
+        continue;
 
       if (window.orkestrator?.isolatedViewState && environment !== previousEnvironment) {
         writeWindowPaneSelection(environmentId, environment);

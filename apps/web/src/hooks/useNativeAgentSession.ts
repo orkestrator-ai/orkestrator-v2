@@ -2431,6 +2431,9 @@ export function useNativeAgentSession<TMessage = unknown>({
                 });
               } else if (update.status === "missing") {
                 stateMissing = true;
+                // A quiet read no longer holds authority. Keep the connection
+                // pending until the independent transcript read also settles.
+                if (quiet) setIsRefreshing(true);
                 progressiveStateTokenRef.current = undefined;
                 markSessionStateAvailability("unavailable");
                 updateProgressiveCache({ stateToken: undefined, stateAvailability: "unavailable" });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -117,16 +117,25 @@ export function EnvironmentRebuildSection({
     );
   }, []);
 
-  const refreshSnapshot = useCallback(
-    () =>
-      backend.getContainerLifecycleSnapshot(environment.id).then(
-        (next) => applySnapshot(environment.id, next),
-        () => {
-          // The section stays usable; the backend re-checks everything anyway.
-        },
-      ),
-    [applySnapshot, environment.id],
-  );
+  const readGeneration = useRef(0);
+  useLayoutEffect(() => {
+    readGeneration.current += 1;
+    return () => {
+      readGeneration.current += 1;
+    };
+  }, [environment.id]);
+
+  const refreshSnapshot = useCallback(() => {
+    const generation = readGeneration.current;
+    return backend.getContainerLifecycleSnapshot(environment.id).then(
+      (next) => {
+        if (generation === readGeneration.current) applySnapshot(environment.id, next);
+      },
+      () => {
+        // The section stays usable; the backend re-checks everything anyway.
+      },
+    );
+  }, [applySnapshot, environment.id]);
 
   // The backend publishes every durable lifecycle write with its snapshot.
   // Subscribe before the first read, and read again whenever the transport
@@ -137,7 +146,11 @@ export function EnvironmentRebuildSection({
     void listenAuthoritative<ContainerLifecycleEvent>(
       CONTAINER_LIFECYCLE_EVENT,
       ({ payload }) => {
-        if (payload?.environmentId === environment.id && payload.snapshot) {
+        if (
+          !controller.signal.aborted &&
+          payload?.environmentId === environment.id &&
+          payload.snapshot
+        ) {
           applySnapshot(environment.id, payload.snapshot);
         }
       },

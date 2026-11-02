@@ -236,6 +236,44 @@ describe("useNativeAgentSession background read flags", () => {
     expect(seen.stateRefreshing.every((value) => !value)).toBe(true);
   });
 
+  test("authority loss stays pending until the independent transcript read settles", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [{ id: "m1", text: "one" }])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const { result } = renderCountedSession();
+    await act(async () => {
+      await result.current.refresh();
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    transcriptUpdates = [
+      async () => {
+        await gate;
+        return { viewVersion: 1, status: "missing" };
+      },
+    ];
+    stateUpdates = [() => ({ viewVersion: 1, status: "missing" })];
+    let inFlight!: Promise<unknown>;
+    act(() => {
+      inFlight = result.current.refresh({ manual: false });
+    });
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("unavailable"));
+    // These are the controller's fallback inputs: authority is gone, but the
+    // prior completed read must not expose retry controls during this batch.
+    expect(result.current.hasCompletedRead).toBe(true);
+    expect(result.current.isRefreshing).toBe(true);
+    expect(result.current.sessionStateError).toBeNull();
+    await act(async () => {
+      release();
+      await inFlight;
+    });
+    expect(result.current.isRefreshing).toBe(false);
+    expect(result.current.sessionStateRefreshing).toBe(false);
+    expect(result.current.projection).toBeNull();
+    expect(result.current.sessionStateAvailability).toBe("unavailable");
+  });
+
   test("a manual read still raises and clears the flags", async () => {
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [{ id: "m1", text: "one" }])];
     stateUpdates = [() => stateSnapshot("state-1")];

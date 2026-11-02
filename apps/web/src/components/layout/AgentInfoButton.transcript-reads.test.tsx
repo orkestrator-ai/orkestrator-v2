@@ -45,9 +45,13 @@ function message(id: string, role: "user" | "assistant"): NativeMessage {
   } as NativeMessage;
 }
 
-function seed(messages: NativeMessage[], revision: number) {
+function seed(
+  messages: NativeMessage[],
+  revision: number,
+  platform: "opencode" | "claude" = "opencode",
+) {
   useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
-    platform: "opencode",
+    platform,
     environmentId: ENVIRONMENT_ID,
     sessionId: "opencode-transcript-reads",
     connection: "connected",
@@ -55,16 +59,19 @@ function seed(messages: NativeMessage[], revision: number) {
     messages,
     interactions: [],
     composerControls: [],
-    capabilities: nativeAgentCapabilities("opencode"),
+    capabilities: nativeAgentCapabilities(platform),
     revision,
     generation: "opencode-generation",
   });
 }
 
-function nativeActions(): Array<{ kind: string; messageId?: string }> {
+function nativeActions(): Array<{ kind: string; messageId?: string; dryRun?: boolean }> {
   return nativeInvokeMock.mock.calls
     .filter(([command]) => command === "perform_native_agent_session_action")
-    .map(([, args]) => (args as { action: { kind: string; messageId?: string } }).action);
+    .map(
+      ([, args]) =>
+        (args as { action: { kind: string; messageId?: string; dryRun?: boolean } }).action,
+    );
 }
 
 beforeEach(() => {
@@ -82,6 +89,36 @@ afterEach(() => {
 });
 
 describe("AgentInfoButton transcript reads", () => {
+  test("rewind reads the latest prompt once for preview and confirmed execution", async () => {
+    const normalize = spyOn(adapters, "normalizeNativeMessages");
+    spyOn(window, "confirm").mockReturnValue(true);
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "perform_native_agent_session_action" ? { preview: {} } : undefined,
+    );
+    seed([message("u1", "user")], 1, "claude");
+    const tab = {
+      ...openCodeTab,
+      nativeAgentData: { ...openCodeTab.nativeAgentData!, platform: "claude" },
+    } as TabInfo;
+    render(<AgentInfoButton activeTab={tab} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
+    act(() =>
+      seed(
+        [message("u1", "user"), message("latest", "user"), message("a2", "assistant")],
+        2,
+        "claude",
+      ),
+    );
+    expect(normalize).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Rewind files" }));
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Claude files rewound"));
+    expect(normalize).toHaveBeenCalledTimes(1);
+    expect(nativeActions()).toEqual([
+      { kind: "rewind-files", messageId: "latest", dryRun: true },
+      { kind: "rewind-files", messageId: "latest" },
+    ]);
+  });
+
   test("streaming updates never normalise the transcript; undo does, once", async () => {
     const normalize = spyOn(adapters, "normalizeNativeMessages");
     const transcript = [message("u1", "user"), message("a1", "assistant")];

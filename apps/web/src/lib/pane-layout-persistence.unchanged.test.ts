@@ -94,6 +94,36 @@ describe("pane layout persistence with unchanged environments", () => {
     }
   });
 
+  test("retries a failed save on an unrelated environment update", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      saved(environmentId, input),
+    );
+    save.mockImplementationOnce(async () => {
+      throw new Error("save unavailable");
+    });
+    hydrate("env-retry", "original");
+    hydrate("env-other", "other");
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    try {
+      usePaneLayoutStore
+        .getState()
+        .addTab("default", { id: "unsaved", type: "plain" }, "env-retry");
+      await waitForTimers();
+      expect(save).toHaveBeenCalledTimes(1);
+      const unchanged = usePaneLayoutStore.getState().environments.get("env-retry");
+      usePaneLayoutStore
+        .getState()
+        .addTab("default", { id: "unrelated", type: "plain" }, "env-other");
+      await waitForTimers();
+      expect(usePaneLayoutStore.getState().environments.get("env-retry")).toBe(unchanged);
+      const retries = save.mock.calls.filter(([id]) => id === "env-retry");
+      expect(retries).toHaveLength(2);
+      expect(retries[1]?.[1]).toEqual(retries[0]?.[1]);
+    } finally {
+      stop();
+    }
+  });
+
   test("completing hydration still primes the cache without echoing the snapshot", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       saved(environmentId, input),

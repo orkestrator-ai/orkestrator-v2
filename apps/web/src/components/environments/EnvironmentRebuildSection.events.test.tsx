@@ -85,17 +85,21 @@ function pollDelays(intervals: { mock: { calls: unknown[][] } }): unknown[] {
   return intervals.mock.calls.map(([, delay]) => delay).filter((delay) => POLL_DELAYS.has(delay));
 }
 
-function renderSection() {
-  return render(
+function section(nextEnvironment = environment) {
+  return (
     <EnvironmentRebuildSection
-      environment={environment}
+      environment={nextEnvironment}
       dockerAvailable
       onRestart={async () => undefined}
       beforeRebuild={async () => undefined}
       onUpdate={() => undefined}
       onClose={() => undefined}
-    />,
+    />
   );
+}
+
+function renderSection() {
+  return render(section());
 }
 
 beforeEach(() => {
@@ -186,6 +190,37 @@ describe("environment rebuild section lifecycle events", () => {
       await gate;
     });
     expect(screen.getByText(/Copying and verifying files/)).toBeTruthy();
+  });
+
+  test("switching environments ignores late reads and events from the old subscription", async () => {
+    let release!: (value: ContainerLifecycleSnapshot) => void;
+    const late = new Promise<ContainerLifecycleSnapshot>((resolve) => {
+      release = resolve;
+    });
+    const nextEnvironment = { ...environment, id: "env-next" };
+    invokeMock.mockImplementation(async (command: string, args: { environmentId: string }) => {
+      if (command !== "get_container_lifecycle_snapshot") return undefined;
+      reads += 1;
+      return args.environmentId === environment.id && reads > 1 ? late : snapshot(1, "preflight");
+    });
+    const view = renderSection();
+    await screen.findByText(/Checking image and free space/);
+    emit(NATIVE_EVENT_STREAM_CONNECTED_EVENT);
+    await waitFor(() => expect(reads).toBe(2));
+    const oldHandlers = Array.from(listeners.get(CONTAINER_LIFECYCLE_EVENT) ?? []);
+    view.rerender(section(nextEnvironment));
+    await waitFor(() => expect(reads).toBe(3));
+    emitLifecycle(nextEnvironment.id, snapshot(3, "copying"));
+    await screen.findByText(/Copying and verifying files/);
+    await act(async () => {
+      release(snapshot(99, "quiescing"));
+      await late;
+      for (const handler of oldHandlers)
+        handler({ environmentId: environment.id, snapshot: snapshot(100, "quiescing") });
+    });
+    expect(screen.getByText(/Copying and verifying files/)).toBeTruthy();
+    emitLifecycle(nextEnvironment.id, snapshot(4, null));
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
   });
 
   test("polls only as a slow backstop while a rebuild runs with events live", async () => {

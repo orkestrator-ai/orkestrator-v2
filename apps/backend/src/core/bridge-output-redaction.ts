@@ -19,6 +19,7 @@ import {
   emitLogRecord,
   parseLogRecordLine,
   writeProcessOutputLine,
+  type LogRecord,
 } from "@orkestrator/protocol/logger";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 
@@ -78,17 +79,23 @@ export function createBridgeOutputForwarder(
 /**
  * One forwarded chunk of already redacted output, which may hold several lines.
  * Each is its own entry, because a bridge's multi-line chunk can mix records with
- * unstructured output. Redacting first means a record's fields are scrubbed too;
- * if redaction breaks a record it stays captured as output, like any other line.
+ * unstructured output. The forwarder's raw pass protects unstructured output;
+ * recognized records also need a decoded pass because JSON escapes can hide
+ * credential syntax. The parser bounds fields, error causes and stack frames.
  */
 export function relayBridgeOutput(stream: "stdout" | "stderr", source: string, text: string): void {
   for (const line of text.split("\n")) {
     if (!line) continue;
     const record = parseLogRecordLine(line);
     if (record) {
+      const redacted = JSON.parse(
+        JSON.stringify(record, (_key, value: unknown) =>
+          typeof value === "string" ? redactBridgeOutput(value) : value,
+        ),
+      ) as LogRecord;
       // First, so a record already at the field limit keeps it through the next relay.
-      const { source: _claimed, ...fields } = record.fields ?? {};
-      emitLogRecord({ ...record, fields: { source, ...fields } });
+      const { source: _claimed, ...fields } = redacted.fields ?? {};
+      emitLogRecord({ ...redacted, fields: { source, ...fields } });
     } else {
       writeProcessOutputLine(stream, `[${source}] ${line}`);
     }

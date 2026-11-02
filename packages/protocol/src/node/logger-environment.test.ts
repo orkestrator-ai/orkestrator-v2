@@ -89,6 +89,21 @@ describe("configureLoggerFromEnvironment", () => {
 });
 
 describe("configureBridgeLogger", () => {
+  test.each([undefined, "1", "0"])("consumes startup settings with relay=%s", (relay) => {
+    const env: NodeJS.ProcessEnv = {
+      [BRIDGE_LOG_RELAY_ENV]: relay,
+      [LOG_FORMAT_ENV]: "json",
+      [LOG_LEVEL_ENV]: "warn,bridge=debug",
+      PATH: "fixture-path",
+    };
+    configureBridgeLogger(env);
+    expect(getLogFormat()).toBe("json");
+    expect(createLogger("bridge.acp").isEnabled("debug")).toBe(true);
+    expect(createLogger("updater").isEnabled("info")).toBe(false);
+    // This is the environment any later agent or tool spawn snapshots.
+    expect({ ...env }).toEqual({ PATH: "fixture-path" });
+  });
+
   test("a bridge the backend relays writes JSON whatever format was asked for, and does not pass the flag on", () => {
     const env = { [BRIDGE_LOG_RELAY_ENV]: "1", [LOG_FORMAT_ENV]: "text" } as NodeJS.ProcessEnv;
     configureBridgeLogger(env);

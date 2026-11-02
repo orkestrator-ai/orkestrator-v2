@@ -956,8 +956,6 @@ async function startLocalServerAttempt(
     // watch for that and drain itself instead of orphaning its children.
     ORKESTRATOR_PARENT_PID: String(process.pid),
     ORKESTRATOR_BRIDGE_DEBUG: bridgeConfig.global.debugLogging === true ? "1" : "0",
-    // forwardBridgeOutput below reads this process's stdio and carries each level.
-    [BRIDGE_LOG_RELAY_ENV]: "1",
     ...(agentToolConnection
       ? {
           [ORKESTRATOR_AGENT_MCP_URL_ENV]: agentToolConnection.url,
@@ -965,6 +963,10 @@ async function startLocalServerAttempt(
         }
       : {}),
   };
+  // Only our bridges consume this launch flag. OpenCode can pass its environment
+  // to agent commands, so it must not inherit a relay request from the backend.
+  if (kind === "opencode") delete env[BRIDGE_LOG_RELAY_ENV];
+  else env[BRIDGE_LOG_RELAY_ENV] = "1";
   // A widened attachment boundary is inherited, not requested: a backend
   // started with this variable in its own environment would otherwise hand it
   // to every worker bridge. Only the branch below may name a root.

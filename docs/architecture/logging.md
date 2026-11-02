@@ -516,11 +516,15 @@ flowchart LR
 
 - **Who turns it on.** The backend sets `ORKESTRATOR_BRIDGE_LOG_RELAY=1` on a bridge
   it spawns and reads. `configureBridgeLogger`, which every bridge entrypoint calls,
-  makes that bridge write JSON lines and clears the flag, so an agent's child
-  process cannot inherit it. A bridge whose output nobody reads as records (one
-  started by hand, or a model catalogue probe) stays on the format its environment asks for.
-- **Redaction runs first, per chunk.** Record fields are scrubbed like any other
-  output. If redaction breaks a record's JSON, the line is kept as plain output.
+  makes that bridge write JSON lines and consumes the relay, format and level
+  variables, so agent commands cannot inherit those bridge startup settings.
+  OpenCode runs its own server and receives no relay flag, including an inherited one.
+  A bridge whose output nobody reads as records (one started by hand, or a model
+  catalogue probe) stays on the format its environment asks for.
+- **Redaction runs before and after decoding.** Raw output is scrubbed per chunk.
+  Recognized records then have every decoded string scrubbed, including formatted
+  errors, stack frames and causes, because JSON escaping can hide credential syntax.
+  If the raw pass breaks a record's JSON, the line is kept as plain output.
 - **`source` replaces the old `[kind:environment]` prefix on records.** The hop sets
   it, overriding anything the bridge claimed, and puts it first so a record already
   at the field limit keeps it through the next relay.

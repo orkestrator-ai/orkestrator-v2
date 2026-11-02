@@ -20,7 +20,7 @@
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, jest } from "bun:test";
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -33,7 +33,12 @@ import os from "node:os";
 
 import { dirname, join, resolve } from "node:path";
 
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import {
+  BRIDGE_LOG_RELAY_ENV,
+  LOG_FORMAT_ENV,
+  LOG_LEVEL_ENV,
+} from "@orkestrator/protocol/node/logger-environment";
 
 export const here = dirname(fileURLToPath(import.meta.url));
 
@@ -233,6 +238,10 @@ export async function spawnBridge(
   const stateDirectory = options.stateDirectory ?? (await temporaryDirectory());
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    // Readiness below recognizes the info-level text announcement. Agent tools
+    // can run this harness under a parent configured for JSON or error-only logs.
+    [LOG_FORMAT_ENV]: "text",
+    [LOG_LEVEL_ENV]: "info",
     ACP_PROVIDER: "cursor",
     ACP_AGENT_PATH: resolve(here, "testing/fake-agent.ts"),
     ACP_BRIDGE_TOKEN: token,
@@ -246,6 +255,7 @@ export async function spawnBridge(
     // measurement passes `ACP_MEASURE_COMMAND_CHANGES: undefined` and a `CWD`.
     ACP_MEASURE_COMMAND_CHANGES: "0",
   };
+  delete env[BRIDGE_LOG_RELAY_ENV];
   delete env.ACP_MAX_SESSIONS;
   // Grok fixtures run signed in. Without a login the bridge never starts Grok
   // (its `authenticate` would wait on an interactive sign-in), so a test that

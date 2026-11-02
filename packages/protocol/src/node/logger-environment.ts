@@ -78,11 +78,14 @@ export function configureLoggerFromEnvironment(
 /**
  * A bridge entrypoint's logging setup. A bridge the backend launched locally
  * writes JSON lines so the backend can re-emit each at its own level; any other
- * (a container's, one started by hand) follows the environment. The flag is
- * cleared so an agent's child process cannot inherit it and relay by accident.
+ * (a container's, one started by hand) follows the environment. These
+ * startup settings are consumed so agent commands do not inherit the bridge's
+ * format, level or relay request.
  */
 export function configureBridgeLogger(env: NodeJS.ProcessEnv = process.env): void {
   const relayToSupervisor = env[BRIDGE_LOG_RELAY_ENV] === "1";
   delete env[BRIDGE_LOG_RELAY_ENV];
   configureLoggerFromEnvironment(env, { relayToSupervisor });
+  delete env[LOG_FORMAT_ENV];
+  delete env[LOG_LEVEL_ENV];
 }

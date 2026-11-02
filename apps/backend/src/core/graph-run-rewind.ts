@@ -95,6 +95,9 @@ import {
   resetWorktreeToCommit,
   type EnvironmentGit,
 } from "./workspace-code-rewind.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 /** Cancel calls per admitted activation before a restart supersedes it regardless. */
 export const GRAPH_RESTART_CANCEL_ATTEMPTS = 3;
@@ -469,7 +472,11 @@ export class GraphRunRewinds {
         backupRef: code.backupRef!,
       });
     } catch (error) {
-      console.warn(`[graph-runs] Code rewind ${latest.id} of run ${run.id} is pending`);
+      log.warn("rewind.pending", {
+        rewindId: latest.id,
+        runId: run.id,
+        error: formatLogError(error, { message: false }),
+      });
       throw invalidState(
         `The rewind is recorded, but the reset did not finish: ${errorText(error)} It is retried before the run continues.`,
       );
@@ -790,8 +797,11 @@ export class GraphRunRewinds {
   }
 
   private log(kind: GraphRewindKind, run: GraphRun, scope: GraphRestartScope): void {
-    console.info(
-      `[graph-runs] ${kind} of run ${run.id}: ${scope.activations.length} activations, ${scope.artifacts.length} artifacts superseded`,
-    );
+    log.info("rewind.applied", {
+      kind,
+      runId: run.id,
+      activations: scope.activations.length,
+      artifacts: scope.artifacts.length,
+    });
   }
 }

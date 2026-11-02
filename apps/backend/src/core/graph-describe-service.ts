@@ -52,6 +52,9 @@ import {
   type PersistedGraphDescribeJob,
 } from "./storage-graph-describe.js";
 import { ElapsedPollGate } from "./workflow-poll-gate.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 /** Default spacing between passes of a running job. */
 export const GRAPH_DESCRIBE_POLL_MS = 3_000;
@@ -411,7 +414,7 @@ export class GraphDescribeService {
       const failures = (this.passFailures.get(environmentId) ?? 0) + 1;
       this.passFailures.set(environmentId, failures);
       // Content-free: the message never carries the description or the draft.
-      console.warn(`[graph-describe] A pass failed (${failures}/${MAX_PASS_FAILURES})`);
+      log.warn("describe.pass-failed", { failures, maxFailures: MAX_PASS_FAILURES });
       if (failures < MAX_PASS_FAILURES) return;
       this.passFailures.delete(environmentId);
       const current = this.jobs.getGraphDescribeJob(environmentId);

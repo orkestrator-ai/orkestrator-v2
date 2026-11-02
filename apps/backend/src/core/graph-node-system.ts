@@ -50,6 +50,9 @@ import { pushBranchAction } from "./graph-system-push.js";
 import { updateTicketAction } from "./graph-system-ticket.js";
 import { selectWorkspaceAction } from "./graph-system-select.js";
 import { runValidationAction, runValidationAndSealAction } from "./graph-system-validation.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 /** Every action, by name (`select-workspace` is item 403's). */
 export const GRAPH_SYSTEM_ACTION_HANDLERS: Readonly<
@@ -138,11 +141,11 @@ export class GraphNodeSystemExecutor implements GraphNodeExecutor {
     if (handler.cancel) {
       const actionContext = this.actionContext(context, this.stopController.signal);
       await handler.cancel(actionContext).catch((error: unknown) => {
-        console.warn("[graph-system] Could not stop the action's work", {
+        log.warn("system.stop-failed", {
           runId: context.run.id,
           nodeId: node.id,
           action: node.action,
-          error: error instanceof Error ? error.name : "unknown",
+          error: formatLogError(error, { message: false }),
         });
       });
     }
@@ -239,11 +242,12 @@ export class GraphNodeSystemExecutor implements GraphNodeExecutor {
         job.outcome = { state: "complete", outputs: { ...actionContext.outputs } };
       } catch (error) {
         job.outcome = failure(error);
-        console.warn("[graph-system] Action failed", {
+        log.warn("system.action-failed", {
           runId: context.run.id,
           nodeId: actionContext.node.id,
           action: actionContext.node.action,
           cause: job.outcome.state === "failed" ? job.outcome.cause : undefined,
+          error: formatLogError(error, { message: false }),
         });
       } finally {
         this.stopController.signal.removeEventListener("abort", stop);

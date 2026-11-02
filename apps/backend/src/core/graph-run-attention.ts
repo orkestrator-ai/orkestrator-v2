@@ -39,6 +39,9 @@ import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { AgentActivityCompletionOutcome, Environment } from "./models.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 /** Graph runs save in bursts (every pass); observe each run at most this often. */
 const GRAPH_RUN_ATTENTION_DEBOUNCE_MS = 500;
@@ -207,9 +210,11 @@ export class GraphRunAttention {
         this.changeTimers.delete(change.id);
         void this.observeRun(change.id).catch((error: unknown) => {
           // A code or error name only: a message may quote run content (invariant 9).
-          console.warn(
-            `[graph-runs] Could not update the sidebar for run ${change.id} (${graphAttentionErrorReason(error)})`,
-          );
+          log.warn("attention.update-failed", {
+            runId: change.id,
+            reason: graphAttentionErrorReason(error),
+            error: formatLogError(error, { message: false }),
+          });
         });
       }, this.debounceMs),
     );

@@ -24,6 +24,9 @@ import {
 } from "./graph-system-action.js";
 import type { GraphWorkspaceValue } from "./graph-system-push.js";
 import type { Environment } from "./models.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 const COMMIT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
@@ -139,11 +142,10 @@ export class GraphRunEnvironmentProvisioner implements GraphRunProvisioner {
     try {
       await this.deps.invoke("update_kanban_task", { taskId, environmentId });
     } catch (error) {
-      console.warn(
-        "[graphs] Could not link the run's ticket to its environment:",
-        run.id,
-        error instanceof Error ? error.name : "error",
-      );
+      log.warn("ticket.link-failed", {
+        runId: run.id,
+        error: formatLogError(error, { message: false }),
+      });
     }
   }
 

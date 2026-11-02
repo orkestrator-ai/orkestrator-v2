@@ -98,6 +98,9 @@ import {
   type WorkflowSupervisorStatus,
   type WorkflowWakeReason,
 } from "./workflow-supervisor.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("graph");
 
 /** Runs whose latest pass counts are kept for diagnostics and the benchmark. */
 const MAX_RETAINED_PASS_STATS = 256;
@@ -390,9 +393,12 @@ export class GraphRunService implements KeyedWorkflowOwner {
       if (removed.length > 0) {
         // Their sealed reference files live in the workspace (best effort).
         const files = await this.options.artifacts.removeRunFiles(environmentId, removed);
-        console.info(
-          `[graph-runs] Removed ${removed.length} finished runs of environment ${environmentId} beyond its history of ${this.historyLimit()}${files.failed > 0 ? ` (${files.failed} artifact directories left)` : ""}`,
-        );
+        log.info("history.pruned", {
+          environmentId,
+          removed: removed.length,
+          limit: this.historyLimit(),
+          artifactDirectoriesLeft: files.failed,
+        });
       }
       return removed;
     })().finally(() => {
@@ -407,7 +413,11 @@ export class GraphRunService implements KeyedWorkflowOwner {
     if (environmentId === undefined || this.stopped) return;
     void this.pruneRunHistory(environmentId).catch((error: unknown) => {
       const code = error instanceof GraphStorageError ? error.code : "error";
-      console.warn(`[graph-runs] Pruning the run history of ${environmentId} failed (${code})`);
+      log.warn("history.prune-failed", {
+        environmentId,
+        code,
+        error: formatLogError(error, { message: false }),
+      });
     });
   }
 
@@ -905,7 +915,11 @@ export class GraphRunService implements KeyedWorkflowOwner {
       return await this.rewinds.finishPending(run, { strict: true });
     } catch (error) {
       const code = error instanceof GraphRunRewindError ? error.code : "error";
-      console.warn(`[graph-runs] Run ${run.id} waits for its code rewind to finish (${code})`);
+      log.warn("rewind.waiting", {
+        runId: run.id,
+        code,
+        error: formatLogError(error, { message: false }),
+      });
       this.memory(run.id).nextDelayMs = GRAPH_RUN_HUMAN_WAIT_MS;
       return null;
     }
@@ -948,8 +962,10 @@ export class GraphRunService implements KeyedWorkflowOwner {
       const current = await this.storage.graphRuns.getGraphRun(run.id);
       if (current) await janitor.reconcile(current);
     }).catch((error: unknown) => {
-      const code = error instanceof Error ? error.name : "error";
-      console.warn(`[graph-runs] Branch worktree cleanup for run ${run.id} failed (${code})`);
+      log.warn("worktree.cleanup-failed", {
+        runId: run.id,
+        error: formatLogError(error, { message: false }),
+      });
     });
   }
 
@@ -1032,7 +1048,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
   private async passFailed(runId: string, error: unknown): Promise<GraphRun | null> {
     if (error instanceof GraphRunPassFencedError) return null;
     if (isGraphStorageError(error, "invalid-run") || isGraphStorageError(error, "newer-format")) {
-      console.warn(`[graph-runs] Run ${runId} is unreadable (${error.code}); not scheduled`);
+      log.warn("run.unreadable", { runId, code: error.code });
       this.supervisor?.note(runId, null);
       return null;
     }
@@ -1051,7 +1067,7 @@ export class GraphRunService implements KeyedWorkflowOwner {
       const failed = await this.failOnBound(runId, error).catch(() => null);
       if (failed) return failed;
     }
-    console.warn(`[graph-runs] Pass over run ${runId} failed (${code})`);
+    log.warn("run.pass-failed", { runId, code, error: formatLogError(error, { message: false }) });
     throw error;
   }
 

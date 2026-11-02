@@ -25,7 +25,6 @@ import { KanbanCard } from "./KanbanCard";
 import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
 import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
-import { ProjectNotesView } from "./ProjectNotesView";
 import { FeaturesView } from "./FeaturesView";
 import { ProjectPullRequestsView } from "@/components/pull-requests";
 import { LinearTicketsView } from "@/components/linear";
@@ -148,8 +147,6 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const clearTaskBuildStatus = useKanbanStore((s) => s.clearTaskBuildStatus);
   const screenTab = useUIStore((s) => s.projectBoardTab);
   const setScreenTab = useUIStore((s) => s.setProjectBoardTab);
-  const projectBoardNotesOpen = useUIStore((s) => s.projectBoardNotesOpen);
-  const setProjectBoardNotesOpen = useUIStore((s) => s.setProjectBoardNotesOpen);
 
   const buildPhaseRecord = useBuildPipelineStore(
     useShallow((s) => {
@@ -287,12 +284,6 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     },
     [clearTaskBuildStatus],
   );
-
-  if (projectBoardNotesOpen) {
-    return (
-      <ProjectNotesView projectId={projectId} onBack={() => setProjectBoardNotesOpen(false)} />
-    );
-  }
 
   return (
     <div className="flex flex-col h-full bg-background">

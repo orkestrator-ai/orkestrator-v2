@@ -28,7 +28,7 @@ const addRecentProject = (recentProjectIds: string[], projectId: string): string
  * the rest are the project board.
  */
 export type ProjectBoardTab =
-  "home" | "coordinator" | "kanban" | "github" | "linear" | "features" | "pull-requests";
+  "home" | "coordinator" | "kanban" | "github" | "linear" | "features" | "notes" | "pull-requests";
 export type EnvironmentSortMode = "project" | "activity";
 /**
  * How "By activity" orders environments: `priority` puts unread work, then
@@ -57,7 +57,6 @@ interface UIState {
   /** Most recently opened project IDs, newest first. */
   recentProjectIds: string[];
   projectBoardTab: ProjectBoardTab;
-  projectBoardNotesOpen: boolean;
   sidebarWidth: number;
   /** Project IDs that are collapsed in the hierarchical sidebar */
   collapsedProjects: string[];
@@ -95,7 +94,6 @@ interface UIState {
   /** Toggle the left projects/environments panel. */
   toggleSidebar: () => void;
   setProjectBoardTab: (tab: ProjectBoardTab) => void;
-  setProjectBoardNotesOpen: (open: boolean) => void;
   /** Select both project and environment at once (for hierarchical sidebar) */
   selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
   setSidebarWidth: (width: number) => void;
@@ -145,7 +143,6 @@ export const createUIStore = () =>
         sidebarOpen: true,
         recentProjectIds: [],
         projectBoardTab: initialProjectBoardTab(),
-        projectBoardNotesOpen: false,
         sidebarWidth: 280,
         collapsedProjects: [],
         projectCollapseChoices: [],
@@ -165,7 +162,6 @@ export const createUIStore = () =>
             selectedProjectId: projectId,
             projectSelectionRevision: state.projectSelectionRevision + 1,
             projectBoardTab: initialProjectBoardTab(),
-            projectBoardNotesOpen: false,
             selectedEnvironmentId: null,
             selectedEnvironmentIds: [],
             recentProjectIds: projectId
@@ -177,9 +173,7 @@ export const createUIStore = () =>
 
         toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 
-        setProjectBoardTab: (tab) => set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
-
-        setProjectBoardNotesOpen: (open) => set({ projectBoardNotesOpen: open }),
+        setProjectBoardTab: (tab) => set({ projectBoardTab: tab }),
 
         selectProjectAndEnvironment: (projectId, environmentId) =>
           set((state) => ({

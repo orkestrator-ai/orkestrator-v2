@@ -11,7 +11,6 @@ describe("uiStore", () => {
       sidebarOpen: true,
       recentProjectIds: [],
       projectBoardTab: "kanban",
-      projectBoardNotesOpen: false,
       sidebarWidth: 280,
       collapsedProjects: [],
       projectCollapseChoices: [],
@@ -29,7 +28,6 @@ describe("uiStore", () => {
     expect(state.selectedEnvironmentId).toBeNull();
     expect(state.recentProjectIds).toEqual([]);
     expect(state.projectBoardTab).toBe("kanban");
-    expect(state.projectBoardNotesOpen).toBe(false);
     expect(state.sidebarWidth).toBe(280);
     expect(state.collapsedProjects).toEqual([]);
     expect(state.selectedEnvironmentIds).toEqual([]);
@@ -101,21 +99,12 @@ describe("uiStore", () => {
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
   });
 
-  test("setProjectBoardTab updates the board tab and closes project notes", () => {
-    useUIStore.setState({ projectBoardTab: "kanban", projectBoardNotesOpen: true });
+  test("setProjectBoardTab updates the board tab", () => {
+    useUIStore.setState({ projectBoardTab: "kanban" });
 
-    useUIStore.getState().setProjectBoardTab("features");
+    useUIStore.getState().setProjectBoardTab("notes");
 
-    expect(useUIStore.getState().projectBoardTab).toBe("features");
-    expect(useUIStore.getState().projectBoardNotesOpen).toBe(false);
-  });
-
-  test("setProjectBoardNotesOpen toggles project notes", () => {
-    useUIStore.getState().setProjectBoardNotesOpen(true);
-    expect(useUIStore.getState().projectBoardNotesOpen).toBe(true);
-
-    useUIStore.getState().setProjectBoardNotesOpen(false);
-    expect(useUIStore.getState().projectBoardNotesOpen).toBe(false);
+    expect(useUIStore.getState().projectBoardTab).toBe("notes");
   });
 
   test("setSidebarWidth updates the width", () => {

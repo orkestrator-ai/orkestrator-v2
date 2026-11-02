@@ -52,7 +52,9 @@ interface KanbanState {
   currentProjectId: string | null;
   notes: string;
   notesLoading: boolean;
-  /** Why the last notes load failed, or null when the notes are trustworthy. */
+  /** A successful snapshot exists for currentNotesProjectId, even during refresh. */
+  notesLoaded: boolean;
+  /** Why the last notes load failed, including background refresh failures. */
   notesError: string | null;
   currentNotesProjectId: string | null;
 
@@ -100,6 +102,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
   currentProjectId: null,
   notes: "",
   notesLoading: false,
+  notesLoaded: false,
   notesError: null,
   currentNotesProjectId: null,
 
@@ -261,11 +264,11 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
   },
 
   loadNotes: async (projectId) => {
-    // Never expose the previous project's notes if this load fails. The editor
-    // enables itself once notesLoading clears, so stale content here could be
-    // edited and saved into the newly selected project.
+    // Refreshes retain the last successful snapshot and the live editor. Only
+    // a project switch clears content and requires a new successful load.
+    const sameProject = get().currentNotesProjectId === projectId;
     set({
-      notes: "",
+      ...(!sameProject ? { notes: "", notesLoaded: false } : {}),
       notesLoading: true,
       notesError: null,
       currentNotesProjectId: projectId,
@@ -273,13 +276,12 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
     try {
       const result = await getProjectNotes(projectId);
       if (get().currentNotesProjectId === projectId) {
-        set({ notes: result.content, notesLoading: false, notesError: null });
+        set({ notes: result.content, notesLoaded: true, notesLoading: false, notesError: null });
       }
     } catch (error) {
       log.error("notes.load-failed", { projectId, error: formatLogError(error) });
-      // The empty notes above are not this project's content, so the editor has
-      // to stay disabled: saving a keystroke into it could overwrite the real
-      // backend notes.
+      // Initial failures remain disabled; refresh failures retain the known
+      // snapshot and draft while exposing the retry action.
       if (get().currentNotesProjectId === projectId) {
         set({
           notesLoading: false,

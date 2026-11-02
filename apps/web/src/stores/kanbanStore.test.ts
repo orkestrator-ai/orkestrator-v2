@@ -192,6 +192,7 @@ describe("kanbanStore project notes", () => {
     useKanbanStore.setState({
       notes: "",
       notesLoading: false,
+      notesLoaded: false,
       notesError: null,
       currentNotesProjectId: null,
     });
@@ -238,13 +239,34 @@ describe("kanbanStore project notes", () => {
 
     await useKanbanStore.getState().loadNotes("project-2");
 
-    // The error is what keeps the editor disabled: an empty enabled editor
+    // The lack of a successful snapshot keeps the editor disabled: an empty enabled editor
     // saves its first keystroke over the project's real notes.
     expect(useKanbanStore.getState()).toMatchObject({
       notes: "",
       notesLoading: false,
       notesError: "unavailable",
       currentNotesProjectId: "project-2",
+    });
+  });
+
+  test("retains the loaded snapshot during a failed same-project refresh", async () => {
+    getProjectNotesMock.mockResolvedValueOnce({ content: "known notes" });
+    await useKanbanStore.getState().loadNotes("project-1");
+    const refresh = deferred<{ content: string }>();
+    getProjectNotesMock.mockImplementationOnce(() => refresh.promise);
+    const loading = useKanbanStore.getState().loadNotes("project-1");
+    expect(useKanbanStore.getState()).toMatchObject({
+      notes: "known notes",
+      notesLoaded: true,
+      notesLoading: true,
+    });
+    refresh.reject(new Error("refresh unavailable"));
+    await loading;
+    expect(useKanbanStore.getState()).toMatchObject({
+      notes: "known notes",
+      notesLoaded: true,
+      notesLoading: false,
+      notesError: "refresh unavailable",
     });
   });
 

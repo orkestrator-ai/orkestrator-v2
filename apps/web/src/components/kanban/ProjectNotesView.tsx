@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft } from "lucide-react";
+import { Info } from "lucide-react";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
@@ -11,23 +11,21 @@ const log = createLogger("web.kanban");
 
 interface ProjectNotesViewProps {
   projectId: string;
-  onBack: () => void;
 }
 
-export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
+export function ProjectNotesView({ projectId }: ProjectNotesViewProps) {
   const notes = useKanbanStore((s) => s.notes);
   const loadNotes = useKanbanStore((s) => s.loadNotes);
   const saveNotes = useKanbanStore((s) => s.saveNotes);
-  const notesLoading = useKanbanStore((s) => s.notesLoading);
+  const notesLoaded = useKanbanStore((s) => s.notesLoaded);
   const notesError = useKanbanStore((s) => s.notesError);
   const currentNotesProjectId = useKanbanStore((s) => s.currentNotesProjectId);
   const getProjectById = useProjectStore((s) => s.getProjectById);
 
   const project = getProjectById(projectId);
-  // A failed load leaves an empty editor that is not this project's content, so
-  // it must stay disabled until a retry succeeds. An enabled empty editor
-  // could save its first keystroke over the real backend notes.
-  const notesReady = currentNotesProjectId === projectId && !notesLoading && !notesError;
+  // A refresh must not restart durable-draft hydration or hide local edits.
+  // Initial loads and project switches still require a successful snapshot.
+  const notesReady = currentNotesProjectId === projectId && notesLoaded;
   const [draft, setDraft, , discardDurableDraft] = useDurableComposeDraft<string>({
     ownerType: "project",
     ownerId: projectId,
@@ -89,9 +87,6 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
       <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onBack} aria-label="Back">
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
         <h2 className="text-lg font-semibold text-foreground">
           {project?.name ?? "Project"} Notes
         </h2>
@@ -101,6 +96,21 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
             Save
           </Button>
         </div>
+      </div>
+
+      {/* Where the notes live and who sees them: they are easy to mistake for a
+          repository file such as AGENTS.md. Build pipeline, review and graph
+          agents receive them in their prompts. */}
+      <div
+        role="note"
+        className="flex items-start gap-2 border-b border-border bg-muted/40 px-6 py-2.5 text-xs text-muted-foreground"
+      >
+        <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <p>
+          Project notes are stored in Orkestrator, not in the repository. Unlike AGENTS.md, they are
+          never committed, but Orkestrator gives them to the agents that work on this project for
+          ticket builds, reviews and graphs.
+        </p>
       </div>
 
       {notesError && (

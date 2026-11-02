@@ -210,6 +210,7 @@ export async function withService(
     },
   ) => Promise<void>,
   options: {
+    realKanban?: boolean;
     toolMode?: boolean;
     workflowResultsWithoutTools?: boolean;
     completeEmptyValidation?: boolean;
@@ -326,6 +327,9 @@ export async function withService(
             : "running",
       } as T;
     }
+    if (options.realKanban && command === "create_environment") {
+      return (await storage.getEnvironment("env-1")) as T;
+    }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -333,10 +337,18 @@ export async function withService(
       return (await storage.getEnvironment("env-1")) as T;
     }
     if (command === "get_kanban_tasks") {
-      return [...kanbanTasks.values()] as T;
+      return (
+        options.realKanban
+          ? await storage.kanban.getKanbanTasks(String(args.projectId))
+          : [...kanbanTasks.values()]
+      ) as T;
     }
     if (command === "update_kanban_task") {
       const taskId = String(args.taskId);
+      if (options.realKanban) {
+        const { taskId: _taskId, ...updates } = args;
+        return (await storage.kanban.updateKanbanTask(taskId, updates)) as T;
+      }
       const task = kanbanTasks.get(taskId) ?? {
         id: taskId,
         status: "backlog",
@@ -348,6 +360,8 @@ export async function withService(
     }
     if (command === "add_kanban_comment") {
       const taskId = String(args.taskId);
+      if (options.realKanban)
+        return (await storage.kanban.addKanbanComment(taskId, String(args.text))) as T;
       const task = kanbanTasks.get(taskId) ?? {
         id: taskId,
         status: "backlog",

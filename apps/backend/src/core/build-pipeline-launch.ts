@@ -72,9 +72,14 @@ export async function saveTicketDeliveryPolicy(
 ): Promise<KanbanTask> {
   const delivery = task.sections?.delivery;
   if (delivery?.policy === policy) return task;
-  return storage.kanban.updateKanbanTask(task.id, {
-    sections: { delivery: { ...delivery, policy } },
-  });
+  return storage.kanban.updateKanbanTask(
+    task.id,
+    {
+      sections: { delivery: { ...delivery, policy } },
+    },
+    undefined,
+    { notifyDeliveryPolicyChange: false },
+  );
 }
 
 /**

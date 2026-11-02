@@ -92,6 +92,7 @@ import { backendClaudeStateSignal } from "./claude-state-signal.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 
 const activityLog = createLogger("backend.activity");
+const buildPipelineLog = createLogger("build.pipeline");
 
 /** Former activity-bundle cadence, per named job. */
 const ACTIVITY_JOB_MS = 2_000;
@@ -1279,7 +1280,7 @@ export class OrkestratorBackend {
       void this.buildPipelines
         .noteTicketDeliveryChange(taskId, projectId, policy)
         .catch((error) => {
-          console.warn("[BuildPipeline] Could not note a ticket's delivery change:", error);
+          buildPipelineLog.warn("delivery-policy.failed", { error: formatLogError(error) });
         });
     });
     // Stage agents keep the pipeline's key information through the agent tools.

@@ -155,3 +155,9 @@ describe("FeatureBuildFields build step speed", () => {
     expect(latest?.build).toMatchObject({ reasoningEffort: "high", fastMode: true });
   });
 });
+
+test("customized Ship card describes the selected push-only delivery", () => {
+  render(<Harness onModels={() => undefined} deliveryPolicy="push-no-pr" />);
+  expect(screen.getByText("Pushes the branch. No pull request is opened.")).toBeTruthy();
+  expect(screen.queryByText("Pushes the branch and opens the pull request.")).toBeNull();
+});

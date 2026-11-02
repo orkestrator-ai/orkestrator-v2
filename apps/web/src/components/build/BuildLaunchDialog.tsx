@@ -1,3 +1,4 @@
+import { DELIVERY_STEP_DESCRIPTIONS } from "@/lib/delivery-policy";
 import {
   effectiveDeliveryPolicy,
   type DeliveryPolicy,
@@ -203,13 +204,6 @@ const BUILD_STEPS: Array<{
     icon: <GitMerge className="size-4" />,
   },
 ];
-
-/** The Pull request card describes what the selected "When verified" will do. */
-const PR_CARD_DESCRIPTIONS: Record<DeliveryPolicy, string> = {
-  "open-pr": "Pushes the branch and opens the pull request.",
-  "push-no-pr": "Pushes the branch. No pull request is opened.",
-  "commit-only": "This step does not run: the commits stay in the environment.",
-};
 
 const ENVIRONMENT_OPTIONS: Array<{
   value: EnvironmentType;
@@ -1203,7 +1197,7 @@ export function BuildLaunchDialog({
                         title={card.title}
                         description={
                           card.key === "pr"
-                            ? PR_CARD_DESCRIPTIONS[deliveryChoice]
+                            ? DELIVERY_STEP_DESCRIPTIONS[deliveryChoice]
                             : card.description
                         }
                         icon={card.icon}

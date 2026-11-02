@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 /**
  * Public build pipeline operations: init and shutdown, admission, and every
  * user control (pause, resume, messages, retries, restarts, cancel, remove).
@@ -253,7 +254,9 @@ export class BuildPipelineLifecycle {
         if (this.ctx.stopped) return;
         await this.ctx.storage.sweepBuildPipelineTranscripts();
       } catch (error) {
-        console.warn("[build-pipeline] Transcript maintenance failed:", errorMessage(error));
+        createLogger("build.pipeline").warn("transcript-maintenance.failed", {
+          error: formatLogError(error),
+        });
       }
     })();
   }
@@ -515,15 +518,12 @@ export class BuildPipelineLifecycle {
           ? undefined
           : input.taskId;
     if (!ticketId) return input.deliveryPolicy;
-    try {
-      const tasks = await this.ctx.invoke<KanbanTask[]>("get_kanban_tasks", {
-        projectId: input.projectId,
-      });
-      const ticket = Array.isArray(tasks) ? tasks.find((task) => task.id === ticketId) : undefined;
-      return ticket?.sections?.delivery?.policy ?? input.deliveryPolicy;
-    } catch {
-      return input.deliveryPolicy;
-    }
+    const tasks = await this.ctx.invoke<KanbanTask[]>("get_kanban_tasks", {
+      projectId: input.projectId,
+    });
+    if (!Array.isArray(tasks)) throw new Error("Could not capture the ticket delivery policy");
+    const ticket = tasks.find((task) => task.id === ticketId);
+    return ticket?.sections?.delivery?.policy ?? input.deliveryPolicy;
   }
 
   async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
@@ -781,6 +781,7 @@ export class BuildPipelineLifecycle {
       const session = sessionForCurrentPhase(candidate);
       const resumePrompt = resumePromptFor(phase, {
         addressResult: session?.addressReportKind !== undefined,
+        deliveryPolicy: candidate.delivery?.policy,
       });
       const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;
       if (prompt && session?.status === "idle" && session.phase === sessionPhaseFor(phase)) {

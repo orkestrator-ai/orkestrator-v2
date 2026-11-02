@@ -9,6 +9,8 @@ import {
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import { createFeatureBuild } from "./feature-build.js";
+import { FeatureBuildTasks } from "./feature-build-tasks.js";
 import { launchBuildPipeline } from "./build-pipeline-launch.js";
 import { pushBranchPrompt } from "./build-pipeline-prompts.js";
 import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";
@@ -566,4 +568,248 @@ describe("reading whether the branch was pushed", () => {
     );
     expect(state).toEqual({ branch: "recorded", head: HEAD, remoteHead: null });
   });
+});
+
+describe("delivery recovery regressions", () => {
+  test("a pre-session Ship failure retains the push-only decision on retry", async () => {
+    await withService(async (service, storage, provider, invocations, controls) => {
+      setTicketPolicy(controls, "push-no-pr");
+      const create = provider.createSession.bind(provider);
+      let fail = true;
+      provider.createSession = async (phase, label, options) => {
+        if (phase === "pr" && fail) {
+          fail = false;
+          throw new Error("temporary session creation failure");
+        }
+        return create(phase, label, options);
+      };
+      const started = await service.start(startInput({ source: KANBAN_SOURCE }));
+      const failed = await advanceUntil(service, storage, started.id, finished);
+      expect(failed.phase).toBe("failed");
+      expect(failed.delivery?.policy).toBe("push-no-pr");
+      await service.retryStage(started.id);
+      const completed = await advanceUntil(service, storage, started.id, finished);
+      expect(completed.phase).toBe("complete");
+      expect(completed.sessions.find((entry) => entry.phase === "pr")?.label).toBe(
+        BRANCH_PUSH_SESSION_LABEL,
+      );
+      expect(provider.sent.at(-1)?.prompt).toContain("Push the current branch to origin");
+      expect(
+        invocations.some(
+          ({ command }) => command === "detect_pr_local" || command === "pr_monitor_watch",
+        ),
+      ).toBe(false);
+    });
+  });
+
+  test("a paused push-only Ship resumes without authorizing a PR", async () => {
+    await withService(async (service, storage, provider, invocations, controls) => {
+      setTicketPolicy(controls, "push-no-pr");
+      provider.runningPhases.add("pr");
+      const started = await service.start(startInput({ source: KANBAN_SOURCE }));
+      await advanceUntil(
+        service,
+        storage,
+        started.id,
+        (state) =>
+          state.phase === "creating-pr" &&
+          state.sessions.at(-1)?.phase === "pr" &&
+          state.sessions.at(-1)?.status === "running",
+      );
+      await service.pause(started.id);
+      provider.runningPhases.delete("pr");
+      const resumed = await service.resume(started.id);
+      expect(resumed.pendingPromptAttempt?.prompt).toContain(
+        "Do not create, edit, or reopen a pull request",
+      );
+      const completed = await advanceUntil(service, storage, started.id, finished);
+      expect(provider.sent.at(-1)?.prompt).toContain(
+        "Do not create, edit, or reopen a pull request",
+      );
+      expect(completed.phase).toBe("complete");
+      expect(completed.delivery?.policy).toBe("push-no-pr");
+      expect(invocations.some(({ command }) => command === "pr_monitor_watch")).toBe(false);
+    });
+  });
+
+  test("launch fails before admission when the ticket policy cannot be captured", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      setTicketPolicy(controls, "commit-only");
+      controls.failCommands.add("get_kanban_tasks");
+      await expect(service.start(startInput({ source: KANBAN_SOURCE }))).rejects.toThrow(
+        "get_kanban_tasks failed",
+      );
+      expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
+    });
+  });
+
+  test("completed builds and a later launch do not post too-late comments", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      setTicketPolicy(controls, "open-pr");
+      const started = await service.start(startInput({ source: KANBAN_SOURCE }));
+      await advanceUntil(service, storage, started.id, finished);
+      await service.noteTicketDeliveryChange(TICKET, "project-1", "push-no-pr");
+      expect(commentTexts(controls).some((text) => text.includes("Too late"))).toBe(false);
+    });
+  });
+
+  test("a legacy active PR session still warns on a late policy change", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
+      provider.runningPhases.add("pr");
+      const started = await service.start(startInput({ source: KANBAN_SOURCE }));
+      const active = await advanceUntil(
+        service,
+        storage,
+        started.id,
+        (state) => state.phase === "creating-pr",
+      );
+      delete active.delivery;
+      await storage.saveBuildPipeline(
+        active.id,
+        active.projectId,
+        active.environmentId,
+        1,
+        active,
+        active.backendRevision,
+      );
+      await service.noteTicketDeliveryChange(TICKET, "project-1", "commit-only");
+      expect(commentTexts(controls).join("\n")).toContain("Too late for this build");
+    });
+  });
+
+  test("a real ticket edit then deletion wins while Verify holds the pipeline lock", async () => {
+    await withService(
+      async (service, storage, provider, _invocations, controls) => {
+        const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "Body", {
+          sections: { delivery: { policy: "open-pr" } },
+        });
+        const notifications: Promise<void>[] = [];
+        storage.kanban.onDeliveryPolicyChange((id, projectId, policy) => {
+          notifications.push(service.noteTicketDeliveryChange(id, projectId, policy));
+        });
+        const started = await service.start(
+          startInput({ taskId: task.id, source: { type: "kanban", taskId: task.id } }),
+        );
+        await advanceUntil(service, storage, started.id, verifying);
+        let release!: () => void;
+        let entered!: () => void;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const ready = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        const structured = provider.structured.bind(provider);
+        provider.structured = async <T>(sessionId: string, requestId: string) => {
+          if (provider.phases.get(sessionId) === "verify") {
+            entered();
+            await held;
+          }
+          return structured<T>(sessionId, requestId);
+        };
+        const advancing = service.advanceNow(started.id);
+        try {
+          await ready;
+          await storage.kanban.updateKanbanTask(task.id, {
+            sections: { delivery: { policy: "commit-only" } },
+          });
+          await storage.kanban.deleteKanbanTask(task.id);
+          // The fallback is durable even before the listener obtains the lock.
+          const reopened = new (storage.constructor as typeof StorageService)(controls.dataDir);
+          expect(await reopened.kanban.getDeletedKanbanDeliveryPolicy(task.id, "project-1")).toBe(
+            "commit-only",
+          );
+        } finally {
+          release();
+        }
+        await advancing;
+        await Promise.all(notifications);
+        const completed = await advanceUntil(service, storage, started.id, finished);
+        expect(completed.phase).toBe("complete");
+        expect(completed.delivery?.policy).toBe("commit-only");
+        expect(provider.created.some((entry) => entry.phase === "pr")).toBe(false);
+      },
+      { realKanban: true },
+    );
+  });
+});
+
+test("feature builds retain commit-only through ticket deletion and reject failed launch capture", async () => {
+  await withService(
+    async (service, storage, provider, _invocations, controls) => {
+      await storage.addProject({
+        id: "project-1",
+        name: "Project",
+        localPath: "/tmp/repo",
+        addedAt: new Date().toISOString(),
+      } as import("./models.js").Project);
+      const context = {
+        storage,
+        runtime: { featureBuilds: new FeatureBuildTasks() },
+        buildPipelines: service,
+      };
+      const input = {
+        projectId: "project-1",
+        title: "Feature",
+        description: "Keep changes local",
+        environmentType: "local" as const,
+        agentType: "claude" as const,
+        deliveryPolicy: "commit-only" as const,
+      };
+      controls.failCommands.add("get_kanban_tasks");
+      await expect(
+        createFeatureBuild({ ...input, requestId: "feature-delivery" }, context),
+      ).rejects.toThrow("get_kanban_tasks failed");
+      expect(await storage.listBuildPipelines("project-1")).toHaveLength(0);
+      controls.failCommands.clear();
+      const started = await createFeatureBuild(
+        { ...input, requestId: "feature-delivery" },
+        context,
+      );
+      expect((await pipeline(storage, started.pipelineId)).deliveryPolicy).toBe("commit-only");
+      await storage.kanban.deleteKanbanTask(started.taskId);
+      const completed = await advanceUntil(service, storage, started.pipelineId, finished);
+      expect(completed.phase).toBe("complete");
+      expect(completed.delivery?.policy).toBe("commit-only");
+      expect(provider.created.some((entry) => entry.phase === "pr")).toBe(false);
+    },
+    { realKanban: true },
+  );
+});
+
+test("an identical feature retry follows the user's edited policy through Verify", async () => {
+  await withService(
+    async (service, storage, provider) => {
+      await storage.addProject({
+        id: "project-1",
+        name: "Project",
+        localPath: "/tmp/repo",
+        addedAt: new Date().toISOString(),
+      } as import("./models.js").Project);
+      const context = {
+        storage,
+        runtime: { featureBuilds: new FeatureBuildTasks() },
+        buildPipelines: service,
+      };
+      const request = {
+        projectId: "project-1",
+        title: "Feature",
+        description: "Respect edited delivery",
+        environmentType: "local" as const,
+        agentType: "claude" as const,
+        deliveryPolicy: "open-pr" as const,
+        requestId: "edited-feature",
+      };
+      const first = await createFeatureBuild(request, context);
+      await storage.kanban.updateKanbanTask(first.taskId, {
+        sections: { delivery: { policy: "commit-only" } },
+      });
+      const retried = await createFeatureBuild(request, context);
+      expect(retried.pipelineId).toBe(first.pipelineId);
+      const completed = await advanceUntil(service, storage, first.pipelineId, finished);
+      expect(completed.delivery?.policy).toBe("commit-only");
+      expect(provider.created.some((entry) => entry.phase === "pr")).toBe(false);
+    },
+    { realKanban: true },
+  );
 });

@@ -572,7 +572,9 @@ under its key; the retry gets `…:attempt-2`.
 
 `deliverVerifiedWork` (`build-pipeline-service-recovery.ts`) acts on the ticket's
 policy when Verify passes or is skipped; the policies and who chooses them are
-in [tickets.md](tickets.md#delivery).
+in [tickets.md](tickets.md#delivery). The decision is saved before creating a
+Ship session, so a failed session creation and retry keep the same policy.
+Resuming a paused push-only Ship explicitly forbids opening or editing a PR.
 
 - **`open-pr`** starts the PR stage as always.
 - **`push-no-pr`** starts the same Ship stage (`pr` session, `creating-pr` phase,

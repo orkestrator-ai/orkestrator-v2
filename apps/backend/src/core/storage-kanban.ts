@@ -2,6 +2,7 @@ import * as shared from "./storage-shared.js";
 import { createHash } from "node:crypto";
 import {
   applyTicketContentUpdate,
+  effectiveDeliveryPolicy,
   hasTicketContentUpdate,
   normalizeTicketContent,
   type AcceptanceCriterionCheck,
@@ -357,6 +358,7 @@ export class KanbanRepository {
     taskId: string,
     updates: Partial<Omit<KanbanTask, "sections" | "sectionsBasis">> & KanbanTaskContentInput,
     expectedProjectId?: string,
+    options: { notifyDeliveryPolicyChange?: boolean } = {},
   ): Promise<KanbanTask> {
     if (
       updates.status !== undefined &&
@@ -408,7 +410,7 @@ export class KanbanRepository {
       this.context.changes.announce("kanban", task.projectId);
       const updated = normalizeKanbanTask(task);
       const deliveryPolicy = updated.sections?.delivery?.policy;
-      if (deliveryPolicy !== oldDeliveryPolicy) {
+      if (deliveryPolicy !== oldDeliveryPolicy && options.notifyDeliveryPolicyChange !== false) {
         this.deliveryPolicyListener?.(updated.id, updated.projectId, deliveryPolicy);
       }
       return updated;
@@ -451,11 +453,33 @@ export class KanbanRepository {
     });
   }
 
+  // A deletion retains only the last publication restriction, not ticket content.
+  // Save it before removing the row so Verify can read it without the pipeline lock.
+  private deletedDeliveryFile(taskId: string): string {
+    const key = createHash("sha256").update(taskId).digest("hex");
+    return `${this.files.kanbanFile()}.delivery/${key}.json`;
+  }
+
+  async getDeletedKanbanDeliveryPolicy(
+    taskId: string,
+    projectId: string,
+  ): Promise<DeliveryPolicy | undefined> {
+    const saved = await this.context.loadJson<{ projectId: string; policy: DeliveryPolicy } | null>(
+      this.deletedDeliveryFile(taskId),
+      () => null,
+    );
+    return saved?.projectId === projectId ? saved.policy : undefined;
+  }
+
   async deleteKanbanTask(taskId: string): Promise<void> {
     await this.enqueueKanbanMutation(async () => {
       const tasks = await this.context.loadJson<KanbanTask[]>(this.files.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
+      await this.context.saveJson(this.deletedDeliveryFile(taskId), {
+        projectId: task.projectId,
+        policy: effectiveDeliveryPolicy(normalizeKanbanTask(task).sections?.delivery?.policy),
+      });
       await this.context.saveJson(
         this.files.kanbanFile(),
         tasks.filter((candidate) => candidate.id !== taskId),
@@ -1123,6 +1147,7 @@ export type KanbanStorage = Pick<
   | "updateKanbanTask"
   | "recordKanbanCriteriaChecks"
   | "deleteKanbanTask"
+  | "getDeletedKanbanDeliveryPolicy"
   | "onDeliveryPolicyChange"
   | "addKanbanComment"
   | "deleteKanbanComment"

@@ -1,3 +1,4 @@
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -421,9 +422,8 @@ describe("BuildChatTab rehydration", () => {
 
   test("warns once when hydration rejects and does not retry on store changes", async () => {
     const hydrationError = new Error("snapshot unavailable");
-    const warnMock = mock(() => {});
-    const realWarn = console.warn;
-    console.warn = warnMock;
+    const warnMock = mock((_entry: { line: string }) => {});
+    configureLogger({ sink: warnMock });
     getBuildPipelineControlMock.mockRejectedValueOnce(hydrationError);
 
     try {
@@ -440,8 +440,7 @@ describe("BuildChatTab rehydration", () => {
 
       await waitFor(() => {
         expect(warnMock).toHaveBeenCalledWith(
-          "[BuildChatTab] Failed to hydrate build pipeline:",
-          hydrationError,
+          expect.objectContaining({ line: expect.stringContaining("hydrate.failed") }),
         );
       });
 
@@ -461,7 +460,7 @@ describe("BuildChatTab rehydration", () => {
       expect(getBuildPipelineControlMock).toHaveBeenCalledTimes(1);
       expect(warnMock).toHaveBeenCalledTimes(1);
     } finally {
-      console.warn = realWarn;
+      resetLogger();
     }
   });
 

@@ -1,3 +1,4 @@
+import { DELIVERY_STEP_DESCRIPTIONS } from "@/lib/delivery-policy";
 import { Fragment, useCallback } from "react";
 import {
   ChevronDown,
@@ -279,6 +280,7 @@ export function FeatureBuildFields({
               </div>
               {customizeModels ? (
                 <FeatureBuildModelPickers
+                  deliveryPolicy={deliveryPolicy}
                   models={models}
                   onModelsChange={onModelsChange}
                   catalog={catalog}
@@ -297,6 +299,7 @@ export function FeatureBuildFields({
 }
 
 interface ModelPickersProps {
+  deliveryPolicy?: DeliveryPolicy;
   models: FeatureBuildModelState;
   onModelsChange: (models: FeatureBuildModelState) => void;
   catalog: AgentModelCatalog;
@@ -305,6 +308,7 @@ interface ModelPickersProps {
 }
 
 function FeatureBuildModelPickers({
+  deliveryPolicy,
   models,
   onModelsChange,
   catalog,
@@ -331,7 +335,11 @@ function FeatureBuildModelPickers({
     <StepRow
       key={step.key}
       title={step.title}
-      description={step.description}
+      description={
+        step.key === "pr"
+          ? DELIVERY_STEP_DESCRIPTIONS[deliveryPolicy ?? "open-pr"]
+          : step.description
+      }
       icon={step.icon}
       selection={models[step.key]}
       onSelectionChange={(selection) => onModelsChange({ ...models, [step.key]: selection })}

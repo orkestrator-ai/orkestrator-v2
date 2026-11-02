@@ -3,6 +3,7 @@
  * repair, verification and pull-request outcomes, terminal reconciliation with
  * the Kanban task or issue, and the durable interaction-resolution journal.
  */
+import { createLogger } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import {
   type BuildPipeline,
@@ -60,6 +61,8 @@ import {
 } from "./build-pipeline-prompts.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
+
+const deliveryLog = createLogger("build.pipeline");
 
 /**
  * The stage-supervisor operations recovery calls back into: completing a stage
@@ -322,6 +325,7 @@ export class BuildPipelineRecovery {
   async deliverVerifiedWork(pipeline: BuildPipeline): Promise<void> {
     const policy = await this.currentDeliveryPolicy(pipeline);
     pipeline.delivery = { policy, decidedAt: new Date().toISOString() };
+    await this.ctx.save(pipeline, pipeline.backendRevision);
     if (policy !== "commit-only") {
       await this.stageSupervisor.startStage(pipeline, "pr", "creating-pr");
       return;
@@ -348,7 +352,10 @@ export class BuildPipelineRecovery {
         return pipeline.deliveryPolicy;
       }
     }
-    return effectiveDeliveryPolicy(pipeline.deliveryPolicy);
+    const deletedPolicy = ticketId
+      ? await this.ctx.storage.kanban.getDeletedKanbanDeliveryPolicy(ticketId, pipeline.projectId)
+      : undefined;
+    return effectiveDeliveryPolicy(deletedPolicy ?? pipeline.deliveryPolicy);
   }
 
   /**
@@ -372,8 +379,11 @@ export class BuildPipelineRecovery {
           !latest || pipeline.createdAt > latest.createdAt ? pipeline : latest,
         undefined,
       );
-    if (!newest) return;
+    if (!newest || newest.phase === "complete" || newest.phase === "failed") return;
     await this.ctx.mutate(newest.id, async (candidate) => {
+      if (candidate.phase === "complete" || candidate.phase === "failed") return;
+      const linkedTask = await this.ctx.storage.kanban.getKanbanTask(taskId);
+      if (linkedTask?.buildPipelineId && linkedTask.buildPipelineId !== candidate.id) return;
       candidate.deliveryPolicy = effectiveDeliveryPolicy(policy);
       const tooLate = pipelineDeliveryTooLateNote(candidate, policy);
       if (tooLate) await this.updateKanbanLifecycle(candidate, { comment: `⚠️ ${tooLate}` });
@@ -607,7 +617,7 @@ export class BuildPipelineRecovery {
         })),
       });
     } catch {
-      console.warn("[BuildPipeline] Could not record acceptance criteria results on the ticket");
+      deliveryLog.warn("criteria.failed");
     }
   }
 

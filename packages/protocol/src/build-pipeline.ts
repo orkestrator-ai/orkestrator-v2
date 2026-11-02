@@ -755,10 +755,14 @@ export function pipelineDeliverySummary(
  * delivers nothing, so an edit cannot come too late for it.
  */
 export function pipelineDeliveryTooLateNote(
-  pipeline: Pick<BuildPipeline, "delivery" | "phase" | "error">,
+  pipeline: Pick<BuildPipeline, "delivery" | "phase" | "error"> &
+    Partial<Pick<BuildPipeline, "pausedFromPhase">>,
   ticketPolicy: DeliveryPolicy | undefined,
 ): string | undefined {
-  const { delivery } = pipeline;
+  if (pipeline.phase === "complete" || pipeline.phase === "failed") return undefined;
+  const phase = pipeline.phase === "paused" ? pipeline.pausedFromPhase : pipeline.phase;
+  const legacyShip = phase === "creating-pr" || phase === "resolving-conflicts";
+  const delivery = pipeline.delivery ?? (legacyShip ? { policy: "open-pr" as const } : undefined);
   if (!delivery || pipeline.error?.startsWith("Build cancelled")) return undefined;
   const wanted = effectiveDeliveryPolicy(ticketPolicy);
   if (wanted === delivery.policy) return undefined;

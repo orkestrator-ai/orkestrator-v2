@@ -168,15 +168,21 @@ tile while it runs.
 (`BuildPipeline.delivery`), and an edit cannot undo it. The ticket still accepts
 the edit, for the next build, and says it came too late for this one: a comment
 (`KanbanRepository.onDeliveryPolicyChange` hears every writer) and a note under
-the tile's dropdown (`pipelineDeliveryTooLateNote`). Restarting from Verify or
+the tile's dropdown (`pipelineDeliveryTooLateNote`). These warnings apply to
+active runs, including legacy PR-stage records without delivery metadata;
+completed runs and the policy write accompanying a new launch do not warn.
+Restarting from Verify or
 earlier clears the decision, so the next pass reads the ticket again. Retrying
 or restarting the push or the PR stage itself keeps it.
 
 **No ticket to read.** The pipeline keeps the last policy it saw
 (`BuildPipeline.deliveryPolicy`): captured at launch and refreshed on every
-change. A ticket deleted mid-run leaves the build following that copy, and the
-ticket lifecycle steps do nothing rather than fail the run. A failed read of the
-board is not a deleted ticket and fails the stage instead of guessing. A build
+change. Deletion durably retains the ticket's final policy before removing its
+row, so Verify sees an edit followed by deletion even when the pipeline listener
+is queued behind Verify's lock. The ticket lifecycle steps then do nothing
+rather than fail the run. A failed read of the board is not a deleted ticket:
+launch rejects admission without a captured policy, and a Verify read fails the
+stage instead of guessing. A build
 from a Linear or GitHub ticket has only this copy: the launch dialog's choice
 stays with that pipeline, and its completion comment says how it was delivered.
 

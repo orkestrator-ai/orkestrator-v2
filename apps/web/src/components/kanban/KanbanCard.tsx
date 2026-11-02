@@ -112,7 +112,7 @@ export function KanbanCard({
   task,
   onClick,
   isDragOverlay,
-  buildPhase,
+  buildPhase: fallbackBuildPhase,
   environmentName,
   canClearStatus,
   onClearStatus,
@@ -150,9 +150,19 @@ export function KanbanCard({
     ? { transform: `translate(${transform.x}px, ${transform.y}px)` }
     : undefined;
 
-  const pushesOnly = useBuildPipelineStore(
-    (s) => s.getPipelineByTaskId(task.id)?.delivery?.policy === "push-no-pr",
-  );
+  const pipeline = useBuildPipelineStore((s) => {
+    const linked = task.buildPipelineId ? s.pipelines.get(task.buildPipelineId) : undefined;
+    if (linked?.taskId === task.id) return linked;
+    let newest;
+    for (const candidate of s.pipelines.values()) {
+      if (candidate.taskId === task.id && (!newest || candidate.createdAt >= newest.createdAt)) {
+        newest = candidate;
+      }
+    }
+    return newest;
+  });
+  const buildPhase = pipeline?.phase ?? fallbackBuildPhase;
+  const pushesOnly = pipeline?.delivery?.policy === "push-no-pr";
   const phaseDisplay = buildPhase
     ? buildPhase === "creating-pr" && pushesOnly
       ? { ...getBuildPhaseDisplay(buildPhase), label: "Pushing" }

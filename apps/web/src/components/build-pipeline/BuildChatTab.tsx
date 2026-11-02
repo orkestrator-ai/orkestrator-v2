@@ -1,3 +1,4 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -121,7 +122,7 @@ export function BuildChatTab({
     if (pipeline || hydrationAttemptedFor.current === data.pipelineId) return;
     hydrationAttemptedFor.current = data.pipelineId;
     void hydrateBuildPipeline(data.pipelineId).catch((error) => {
-      console.warn("[BuildChatTab] Failed to hydrate build pipeline:", error);
+      createLogger("build.pipeline").warn("hydrate.failed", { error: formatLogError(error) });
     });
   }, [data.pipelineId, pipeline]);
 

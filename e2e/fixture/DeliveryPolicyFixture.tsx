@@ -1,3 +1,5 @@
+import { FeatureBuildFields } from "../../apps/web/src/components/environments/FeatureBuildFields";
+import { defaultFeatureBuildModels } from "../../apps/web/src/lib/feature-build-launch";
 import { useState } from "react";
 import {
   pipelineDeliveryTooLateNote,
@@ -33,14 +35,47 @@ export function DeliveryPolicyFixture() {
   const params = new URLSearchParams(window.location.search);
   const [policy, setPolicy] = useState(policyParam(params));
   const decided = params.get("decided") as DeliveryPolicy | null;
+  const [models, setModels] = useState(() =>
+    defaultFeatureBuildModels({
+      catalog,
+      build: { agent: "claude", model: "claude-a" },
+      review: { agent: "claude", model: "claude-a" },
+      review2: { agent: "claude", model: "claude-a" },
+      address: { agent: "claude", model: "claude-a" },
+      pr: { agent: "claude", model: "claude-a" },
+      resolve: { agent: "claude", model: "claude-a" },
+    }),
+  );
   const [confirmed, setConfirmed] = useState<DeliveryPolicy | null>(null);
   const run: Pick<BuildPipeline, "phase" | "delivery" | "error"> = {
-    phase: "creating-pr",
+    phase: params.has("complete") ? "complete" : "creating-pr",
     ...(decided ? { delivery: { policy: decided, decidedAt: "2026-11-02T00:00:00.000Z" } } : {}),
   };
   return (
     <main className="min-h-screen bg-background p-6 text-foreground">
-      {params.has("launch") ? (
+      {params.has("feature") ? (
+        <FeatureBuildFields
+          intent="feature"
+          onIntentChange={() => undefined}
+          name="Delivery policy"
+          onNameChange={() => undefined}
+          description="Keep the selected delivery policy through verification."
+          onDescriptionChange={() => undefined}
+          acceptanceCriteria="No PR is opened for push-only delivery."
+          onAcceptanceCriteriaChange={() => undefined}
+          advancedOpen
+          onAdvancedOpenChange={() => undefined}
+          customizeModels
+          onCustomizeModelsChange={() => undefined}
+          models={models}
+          onModelsChange={setModels}
+          catalog={catalog}
+          enabledPlatforms={["claude", "codex"]}
+          promptFields={null}
+          deliveryPolicy={policy}
+          onDeliveryPolicyChange={setPolicy}
+        />
+      ) : params.has("launch") ? (
         <>
           <output data-testid="confirmed-policy">{confirmed ?? "none"}</output>
           <BuildLaunchDialog

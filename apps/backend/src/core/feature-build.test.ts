@@ -910,3 +910,20 @@ exit 2
     });
   });
 });
+
+test("idempotent feature retry preserves edited policy and passes it as launch fallback", async () => {
+  await withStorage(async (storage) => {
+    const supervisor = fakeSupervisor();
+    const request = { ...input, requestId: "delivery-retry", deliveryPolicy: "open-pr" as const };
+    const context = { storage, runtime, buildPipelines: supervisor.service };
+    const first = await createFeatureBuild(request, context);
+    await storage.kanban.updateKanbanTask(first.taskId, {
+      sections: { delivery: { policy: "commit-only" } },
+    });
+    await createFeatureBuild(request, context);
+    expect((await storage.kanban.getKanbanTask(first.taskId))?.sections?.delivery?.policy).toBe(
+      "commit-only",
+    );
+    expect(supervisor.started.at(-1)?.deliveryPolicy).toBe("commit-only");
+  });
+});

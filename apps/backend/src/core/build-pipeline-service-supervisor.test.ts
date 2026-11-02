@@ -1337,6 +1337,7 @@ describe("BuildPipelineService", () => {
     let observedNamingPrompt: unknown;
     let buildPipelineEvents = 0;
     const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+      if (command === "get_kanban_tasks") return [] as T;
       if (command !== "create_environment") {
         throw new Error(`Unexpected command: ${command}`);
       }
@@ -1410,6 +1411,7 @@ describe("BuildPipelineService", () => {
     await storage.init();
     let observed: Record<string, unknown> = {};
     const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+      if (command === "get_kanban_tasks") return [] as T;
       if (command !== "create_environment") {
         throw new Error(`Unexpected command: ${command}`);
       }

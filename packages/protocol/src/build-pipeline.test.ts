@@ -2584,3 +2584,21 @@ describe("pipeline delivery", () => {
     expect(isStartBuildPipelineInput({ ...start, deliveryPolicy: "merge" })).toBe(false);
   });
 });
+
+test("legacy delivery warnings cover active Ship but exclude finished and pre-Verify runs", () => {
+  for (const phase of ["creating-pr", "resolving-conflicts"] as const) {
+    expect(pipelineDeliveryTooLateNote({ phase }, "commit-only")).toContain("Too late");
+  }
+  expect(
+    pipelineDeliveryTooLateNote({ phase: "paused", pausedFromPhase: "creating-pr" }, "push-no-pr"),
+  ).toContain("Too late");
+  for (const phase of ["building", "verifying", "complete", "failed"] as const) {
+    expect(pipelineDeliveryTooLateNote({ phase }, "commit-only")).toBeUndefined();
+  }
+  expect(
+    pipelineDeliveryTooLateNote(
+      { phase: "complete", delivery: { policy: "open-pr", decidedAt: "2026-11-02T00:00:00Z" } },
+      "commit-only",
+    ),
+  ).toBeUndefined();
+});

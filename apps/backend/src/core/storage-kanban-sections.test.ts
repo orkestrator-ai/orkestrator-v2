@@ -230,3 +230,26 @@ describe("Kanban ticket sections", () => {
     });
   });
 });
+
+test("launch policy writes do not notify the previous build and deletion retains the newest choice", async () => {
+  await withStorage(async (storage, dataDir) => {
+    const seen: string[] = [];
+    storage.kanban.onDeliveryPolicyChange(() => seen.push("changed"));
+    const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "Body");
+    const { saveTicketDeliveryPolicy } = await import("./build-pipeline-launch.js");
+    await saveTicketDeliveryPolicy(storage, task, "push-no-pr");
+    expect(seen).toEqual([]);
+    await storage.kanban.updateKanbanTask(task.id, {
+      sections: { delivery: { policy: "commit-only" } },
+    });
+    expect(seen).toEqual(["changed"]);
+    await storage.kanban.deleteKanbanTask(task.id);
+    const reopened = new StorageService(dataDir);
+    expect(await reopened.kanban.getDeletedKanbanDeliveryPolicy(task.id, "project-1")).toBe(
+      "commit-only",
+    );
+    expect(
+      await reopened.kanban.getDeletedKanbanDeliveryPolicy(task.id, "other-project"),
+    ).toBeUndefined();
+  });
+});

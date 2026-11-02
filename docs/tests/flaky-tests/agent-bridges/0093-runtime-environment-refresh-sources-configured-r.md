@@ -145,3 +145,12 @@ passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
 wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
 commit; the other owners listed here were unchanged. This green aggregate
 does not establish a root cause for the still-open intermittent cases.
+
+### Pipeline bell repair validation — 2026-11-02
+
+`mise run test:logged -- --name repair-full -- mise run test` at `2617fd20d`
+failed `runtime environment refresh > sources configured runtime helper and applies refreshed shell environment` (15008.29ms; timed out).
+The bridge group reserved two workers; evidence is host temporary directory
+`orkestrator-test-run.Db1a7X/bridges.log` (compressed on finalization).
+Unchanged owning-file rerun passed: `mise run test:logged -- --name repair-runtime-env -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures`.
+No root cause or independence from the branch is claimed; this case remains open.

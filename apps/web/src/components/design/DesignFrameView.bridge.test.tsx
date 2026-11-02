@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { StrictMode } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
 import { DesignCanvasContext, type DesignCanvasActions } from "./design-canvas-context";
@@ -108,6 +109,44 @@ afterEach(() => {
 });
 
 describe("DesignFrameView bridge lifetime", () => {
+  test("Strict Mode keeps the loaded bridge usable without a second iframe load", async () => {
+    // Strict Mode replays mount effects before the asynchronous load creates a
+    // bridge. Use real asks here: a listener count alone could hide a closed
+    // bridge registered after replay.
+    spyOn(DesignFrameBridge.prototype, "ask").mockRestore();
+    const { container, rerender, unmount } = render(<StrictMode>{view(true)}</StrictMode>);
+    const iframe = container.querySelector("iframe")!;
+    const target = iframe.contentWindow!;
+    const post = spyOn(target, "postMessage").mockImplementation((message) => {
+      queueMicrotask(() => {
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            source: target,
+            data: { channel: "orkestrator-design", requestId: message.requestId, result: "ok" },
+          }),
+        );
+      });
+    });
+    try {
+      await act(async () => {
+        iframe.dispatchEvent(new Event("load"));
+      });
+      const bridge = registered.get(frame.id)!;
+      expect(bridge.closed).toBe(false);
+      expect(messageListeners.size).toBe(1);
+      await expect(bridge.ask({ op: "setMode", mode: "inspect" })).resolves.toBe("ok");
+      rerender(<StrictMode>{view(true)}</StrictMode>);
+      expect(registered.get(frame.id)).toBe(bridge);
+      await expect(bridge.ask({ op: "setMode", mode: "preview" })).resolves.toBe("ok");
+      expect(messageListeners.size).toBe(1);
+      unmount();
+      expect(bridge.closed).toBe(true);
+      expect(messageListeners.size).toBe(0);
+    } finally {
+      post.mockRestore();
+    }
+  });
+
   test("two loads before React renders leave one bridge listening, not two", () => {
     const { container } = render(view(true));
     loadTwiceBeforeRender(container.querySelector("iframe")!);

@@ -139,7 +139,7 @@ export function createLifecycleHarness(options: LifecycleHarnessOptions = {}) {
 
   const service = new PrMonitorService({
     emit: (event, payload) => emitted.push({ event, payload }),
-    onWarning: (message) => warnings.push(message),
+    onWarning: (warning) => warnings.push(warning.event),
     now: () => new Date(time.now()).toISOString(),
     monotonicNow: time.now,
     schedule: (callback, delayMs) => {

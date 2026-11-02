@@ -105,7 +105,18 @@ export interface ScheduledJobServiceOptions {
   defaultTimeZone?: () => string;
   /** Human label of an owner, for lists. */
   ownerLabel?: (owner: ScheduleOwner) => Promise<string> | string;
-  log?: (message: string, error?: unknown) => void;
+  log?: (warning: ScheduledJobWarning, error?: unknown) => void;
+}
+
+/**
+ * A service step that failed. `event` is a `scheduler` log event; the job or
+ * fire id, when the step has one, is the only detail.
+ */
+export interface ScheduledJobWarning {
+  event:
+    "tick.failed" | "job.claim-failed" | "fire.heartbeat-failed" | "fire.outcome-record-failed";
+  jobId?: string;
+  fireId?: string;
 }
 
 function iso(ms: number): string {
@@ -180,7 +191,7 @@ export class ScheduledJobService {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.ticking = this.tick()
-      .catch((error: unknown) => this.options.log?.("[scheduled-jobs] Tick failed", error))
+      .catch((error: unknown) => this.options.log?.({ event: "tick.failed" }, error))
       .finally(() => {
         this.ticking = null;
         if (this.rerun) {
@@ -211,7 +222,7 @@ export class ScheduledJobService {
           return claim.job ? { result: claim.fire, value: claim.job } : { result: null };
         });
       } catch (error) {
-        this.options.log?.(`[scheduled-jobs] Could not claim ${job.id}`, error);
+        this.options.log?.({ event: "job.claim-failed", jobId: job.id }, error);
         continue;
       }
       if (claimed) this.startFire(job.id, claimed);
@@ -261,7 +272,7 @@ export class ScheduledJobService {
           return next ? { result: undefined, value: next } : { result: undefined };
         });
       } catch (error) {
-        this.options.log?.(`[scheduled-jobs] Heartbeat failed for ${fire.fireId}`, error);
+        this.options.log?.({ event: "fire.heartbeat-failed", fireId: fire.fireId }, error);
       }
     }, SCHEDULED_JOB_LIMITS.fireHeartbeatMs);
     (heartbeat as { unref?: () => void }).unref?.();
@@ -300,7 +311,7 @@ export class ScheduledJobService {
         return next ? { result: undefined, value: next } : { result: undefined };
       });
     } catch (error) {
-      this.options.log?.(`[scheduled-jobs] Could not record the outcome of ${fire.fireId}`, error);
+      this.options.log?.({ event: "fire.outcome-record-failed", fireId: fire.fireId }, error);
     }
   }
 

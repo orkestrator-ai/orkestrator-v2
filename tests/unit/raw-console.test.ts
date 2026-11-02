@@ -11,8 +11,10 @@ const oxlint = join(repoRoot, "node_modules/.bin/oxlint");
  * Paths excluded for good. A test's console is not the application log, and for
  * the rest `console` is the product: a CLI's and a script's output, a container
  * script with no logger to import, a bridge's build script, a live probe whose
- * stdout is the test's result channel, the renderer's build script, the four files
- * that wrap the console, and the renderer's startup markers, whose exact text the
+ * stdout is the test's result channel, the renderer's build script, the five files
+ * that wrap or write the console themselves (the logger, the application log
+ * writer, the fatal rejection guard, the backend's bounded console and the bug
+ * report recorder), and the renderer's startup markers, whose exact text the
  * desktop matches.
  * `fatal-rejections.ts` is serialized into workers, so it cannot import anything.
  */
@@ -45,20 +47,19 @@ const PERMANENT: readonly string[] = [
 ];
 
 const RAW_CONSOLE = /\bconsole\.(?:log|info|warn|error|debug|trace)\b/g;
-const TEST_FILE =
-  /\.test\.tsx?$|\/test\/|\/tests\/|\/testing\/|\/mocks\/|test-harness|test-support|test-helpers|test-fixtures|\/generated\//;
 
-interface LintOverride {
-  files: string[];
-  rules: Record<string, unknown>;
+interface LintConfig {
+  ignorePatterns: string[];
+  overrides: { files: string[]; rules: Record<string, unknown> }[];
+}
+
+function lintConfig(): LintConfig {
+  return JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8")) as LintConfig;
 }
 
 function consoleExclusions(): string[][] {
-  const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8")) as {
-    overrides: LintOverride[];
-  };
-  return config.overrides
-    .filter((override) => override.rules["no-restricted-globals"] === "off")
+  return lintConfig()
+    .overrides.filter((override) => override.rules["no-restricted-globals"] === "off")
     .map((override) => override.files);
 }
 
@@ -69,26 +70,23 @@ function trackedSources(): string[] {
     maxBuffer: 64 * 1024 * 1024,
   });
   expect(result.status).toBe(0);
-  return result.stdout
-    .split("\n")
-    .filter((file) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file) && !TEST_FILE.test(file));
+  return result.stdout.split("\n").filter((file) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file));
 }
 
-function rawConsoleSites(pattern: string, sources: string[]): number {
-  const matches = pattern.endsWith("/**")
-    ? sources.filter((file) => file.startsWith(pattern.slice(0, -2)))
-    : sources.filter((file) => file === pattern);
-  let sites = 0;
-  for (const file of matches) {
-    let text: string;
-    try {
-      text = readFileSync(join(repoRoot, file), "utf8");
-    } catch {
-      continue; // Listed but deleted in this working tree.
-    }
-    sites += text.match(RAW_CONSOLE)?.length ?? 0;
+/** Files lint checks for `console`: everything it does not ignore or exclude for good. */
+function lintedSources(): string[] {
+  const skipped = [...lintConfig().ignorePatterns, ...PERMANENT].map((glob) => new Bun.Glob(glob));
+  return trackedSources().filter((file) => !skipped.some((glob) => glob.match(file)));
+}
+
+function rawConsoleSites(file: string): number {
+  let text: string;
+  try {
+    text = readFileSync(join(repoRoot, file), "utf8");
+  } catch {
+    return 0; // Listed but deleted in this working tree.
   }
-  return sites;
+  return text.match(RAW_CONSOLE)?.length ?? 0;
 }
 
 function lintCodes(path: string, source: string): string[] {
@@ -117,46 +115,40 @@ function lintCodes(path: string, source: string): string[] {
 
 const RESTRICTED = "eslint(no-restricted-globals)";
 
-describe("raw console ratchet", () => {
-  test("the exclusions are exactly these lists, so a new one cannot slip in", () => {
+describe("raw console", () => {
+  test("the exclusions are exactly this list, so a new one cannot slip in", () => {
     expect(consoleExclusions()).toEqual([[...PERMANENT]]);
   });
 
-  test("the backend holds no raw console site outside its permanent exclusions", () => {
-    const sources = trackedSources().filter(
-      (file) =>
-        !file.startsWith("apps/backend/scripts/") && file !== "apps/backend/src/bounded-console.ts",
-    );
-    expect(rawConsoleSites("apps/backend/**", sources)).toBe(0);
+  // The migration is finished, so no path is left to burn down. Lint already
+  // refuses these sites; the scan also catches one hidden behind a disable
+  // directive, which the docs do not allow for this rule.
+  test("no linted source holds a raw console site", () => {
+    const sites = lintedSources()
+      .map((file) => [file, rawConsoleSites(file)] as const)
+      .filter(([, count]) => count > 0);
+    expect(sites).toEqual([]);
   });
 
-  test("the electron main process holds no raw console site", () => {
-    expect(rawConsoleSites("apps/desktop/electron/**", trackedSources())).toBe(0);
-  });
-
-  test("the renderer holds no raw console site outside the two files listed for good", () => {
-    const sources = trackedSources().filter(
-      (file) =>
-        !file.startsWith("apps/web/scripts/") &&
-        file !== "apps/web/src/lib/desktop-startup-marker.ts" &&
-        file !== "apps/web/src/lib/bug-report/renderer-errors.ts",
-    );
-    expect(rawConsoleSites("apps/web/**", sources)).toBe(0);
-    expect(rawConsoleSites("apps/web-public/**", sources)).toBe(0);
-  });
-
-  test("the bridges and their shared modules hold no raw console site", () => {
-    const sources = trackedSources().filter(
-      (file) => !/^bridges\/[^/]+\/scripts\/|\.live-probe\.ts$/.test(file),
-    );
-    for (const path of [
-      "bridges/**",
-      "packages/protocol/src/bridge-lifecycle.ts",
-      "packages/protocol/src/event-loop-stall-monitor.ts",
-      "packages/protocol/src/node/bridge-diagnostics.ts",
+  test("the scan reaches every application tree", () => {
+    const linted = lintedSources();
+    for (const prefix of [
+      "apps/backend/src/",
+      "apps/desktop/electron/",
+      "apps/web/src/",
+      "apps/web-public/src/",
+      "bridges/claude-bridge/src/",
+      "bridges/codex-bridge/src/",
+      "bridges/cursor-bridge/src/",
+      "bridges/pi-bridge/src/",
+      "bridges/acp-bridge/src/",
+      "packages/protocol/src/",
+      "packages/toolchain/src/",
     ]) {
-      expect(rawConsoleSites(path, sources)).toBe(0);
+      expect(linted.some((file) => file.startsWith(prefix))).toBe(true);
     }
+    expect(linted).not.toContain("apps/backend/src/bounded-console.ts");
+    expect(linted.some((file) => file.endsWith(".test.ts"))).toBe(false);
   });
 });
 

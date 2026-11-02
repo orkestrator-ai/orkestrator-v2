@@ -2683,9 +2683,10 @@ export class OrkestratorBackend {
         }
         return defaultOwnerLabel(owner);
       },
-      log: (message, error) =>
-        scheduledLog.warn("service.warning", {
-          detail: message,
+      log: ({ event, jobId, fireId }, error) =>
+        scheduledLog.warn(event, {
+          jobId,
+          fireId,
           ...(error === undefined ? {} : { error: formatLogError(error) }),
         }),
     });

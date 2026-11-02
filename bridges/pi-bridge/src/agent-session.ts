@@ -78,7 +78,12 @@ import {
 import { modelRuntime } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 import { applySessionEvent, providerDuration, replayNestedToolCalls } from "./translate.js";
-import { boundTranscript, chargeTranscript, forgetRevisedRows } from "./transcript.js";
+import {
+  boundTranscript,
+  chargeTranscript,
+  forgetRevisedRows,
+  forgetRowSize,
+} from "./transcript.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { newSessionState } from "./session-factory.js";
 
@@ -1685,6 +1690,8 @@ function applyHistoricToolResult(state: SessionState, message: ToolResultMessage
       const durationMs = providerDuration(message.durationMs);
       if (durationMs !== undefined) part.toolDurationMs = durationMs;
       replayNestedToolCalls(state.messages[index]!, toolCallId, message.nestedCalls);
+      // A rebuild, not a revision readers hold: only the bound must re-measure.
+      forgetRowSize(state, state.messages[index]!);
       return;
     }
   }

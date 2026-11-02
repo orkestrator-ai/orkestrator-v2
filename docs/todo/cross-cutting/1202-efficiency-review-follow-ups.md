@@ -31,7 +31,7 @@ governs, marked "Decided".
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open.
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
@@ -160,19 +160,53 @@ governs, marked "Decided".
 
 **Problem.** Bridges re-measure and re-serialise whole transcripts and tool cards per update, and Codex reads every session record per config read.
 
-**Context.** Done: ACP streaming output persists at most once a second (`scheduleStreamingPersist` in `acp-persist-writer.ts`) and measures the transcript every 1 MB (BR-1, BR-3), as decided on 2026-11-01. Neither has a new test; the existing bridge suite passes. One ACP test (`latches a fatal error when active children exceed the bounded registry`) fails on `0bd214ee` too when the file is run directly.
+**Context.** Done: ACP streaming output persists at most once a second (`scheduleStreamingPersist` in `acp-persist-writer.ts`) and measures the transcript every 1 MB (BR-1, BR-3), as decided on 2026-11-01. Neither has a new test; the existing bridge suite passes. One ACP test (`latches a fatal error when active children exceed the bounded registry`) fails on `0bd214ee` too when the file is run directly; it passed in the 2026-11-02 bridge run.
 
-**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-4 to BR-6 (`transcript-budget.ts` and the Pi, Cursor and ACP transcript helpers), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's duplicated helpers and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+Done 2026-11-02 (against `main` at `38d55ee1`), in the order decided below: the Pi, Cursor and ACP transcript helpers moved into `packages/protocol/src/node` first (BR-15's transcript half), then BR-4 to BR-6 were fixed there once.
+
+- `bridge-transcript-text.ts`: `sliceUtf8`, `boundUtf8Text` and `BoundedTextAppender`, which replaces Pi's and Cursor's identical `appendBounded`/`boundText`/`sliceToBytes` and ACP's `appendBounded`/`appendSaturating`/`truncateUtf8`/`truncateDisplayText`. The two truncation behaviours are kept as policies (`append-notice` for Pi and Cursor, `reserve-notice` for ACP), so each bridge's text is unchanged. BR-6: the appender remembers each owner's buffer byte length, used only while `current` is the very string it was taken from, so a delta costs its own bytes.
+- `bridge-transcript-bounds.ts`: one `createBridgeTranscriptBounds` for the bound wrapper, read bound, streaming check and revised-row bookkeeping Pi and Cursor each carried. The bridges' `transcript.ts` keep their exported names as thin bindings, so no call site changed.
+- BR-4, `TranscriptRowSizes` in `transcript-budget.ts`: a dirty bound re-serialises only the newest row and the rows noted since the last pass. The hook is the existing revised-row note (`noteRowRevised` for Pi and Cursor, ACP's `noteRevisedRow`), which every in-place change to an older row must already reach for `revisedMessageIds`. A remembered size is also tied to the row object and to the row after it, so a replaced history or a row that became newest again (Pi's refused-prompt rollback, ACP's withdrawn prompt) is measured again. One entry per retained row, rebuilt on every pass. Under `bun test` (`NODE_ENV=test`) every remembered size is re-checked and a stale one throws `StaleTranscriptSizeError`, so the three bridge suites prove their write paths note what they change. Two paths that change an older row without a reader note now invalidate it directly: Pi's history-replay result fold (`forgetRowSize`) and ACP's nested-part shedding.
+- BR-5, `EncodedObjectSizes` in `transcript-budget.ts`: Pi's `chargeToolPart`, Cursor's `chargeToolPart` and ACP's `commitToolPartMutation` measure a card with exactly `JSON.stringify`'s byte count, but re-measure only string fields that changed, and a field that extends its previous value costs one prefix comparison plus its new suffix. Object and array fields are still measured every time, because the bridges mutate some in place. Cursor's shell-delta `continues` fast path is unchanged.
+- Tests: `bridge-transcript-text.test.ts` replays random streams (multibyte, split surrogate pairs, notices, caps below the marker) through verbatim copies of the old bridge helpers and requires the same text; `transcript-budget.test.ts` checks the row cache (only the newest and noted rows are measured, follower and identity checks, count bound, verification) and that `boundTranscriptInPlace` with the cache leaves exactly the state it leaves without it, and checks `EncodedObjectSizes` against `encodedJsonBytes` through random edits; `bridge-transcript-bounds.test.ts` covers the shared wrapper. The Pi, Cursor and ACP bridge suites pass unchanged with verification on.
+
+**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+
+What BR-5 does not remove: Pi resends a running tool's whole accumulated output on every frame, and `renderToolCall` re-bounds it (`boundText`) before the charge, so a Pi frame still costs O(output) — now one prefix comparison instead of a whole-card serialisation. Getting below that needs Pi's tool rendering to take deltas. ACP's text charge (`Buffer.byteLength(text) * 2`) is not JSON-escaped, so it is not a strict upper bound on encoded growth; it only schedules the bound, which is exact, so it was left alone. Cursor's per-sub-agent byte check (`boundNestedParts` with `measureBytes`) still serialises each live row's nested parts on an exact pass. No before-and-after numbers were taken (task 1).
 
 **Decisions.**
 
-- **Fix each bridge or move the helpers first (BR-15)?**
+- **Fix each bridge or move the helpers first (BR-15)?** Decided 2026-11-01; done 2026-11-02 for the transcript helpers.
   - **Move the Codex and Cursor versions into `packages/protocol/src/node` first, then fix BR-4 to BR-6 there once (recommended).**
     - Pros: each fix lands once; the good versions already exist.
     - Cons: a protocol change, so `mise run test` across all bridges.
   - **Fix each bridge in place.**
     - Pros: smaller diffs.
     - Cons: three copies of every fix.
+- **What invalidates a remembered row size (BR-4)?** Done 2026-11-02 with the first option.
+  - **The existing revised-row note, plus row identity and follower checks, verified against a fresh measurement under `bun test` (recommended, taken).**
+    - Pros: reuses a hook every older-row change must already call; the newest row, where streaming writes without a note, is always measured; a missed note fails the bridge suites instead of shipping.
+    - Cons: a new write path that changes an older row without a note and without a test would make the bound measure that row stale (over or under by that change) until the row is noted or evicted.
+  - **A per-row version counter bumped by `rowChanged`, as the report suggested.**
+    - Pros: explicit.
+    - Cons: the same audit, plus a second hook every path must call.
+  - **Skip measuring while the last exact size plus the charged growth is under the budget.**
+    - Pros: no per-row state.
+    - Cons: relies on every charge being a strict upper bound, which ACP's text charge is not; a transcript at the budget still measures everything on every dirty read, which is the case that costs most.
+- **How to keep each bridge's truncated text identical (BR-15)?** Done 2026-11-02 with the first option.
+  - **One appender with two named policies (recommended, taken).**
+    - Pros: one implementation and memo; output unchanged, proven against copies of the old helpers.
+    - Cons: two behaviours remain; unifying them would change what users see at the cap.
+  - **Converge on one policy.**
+    - Pros: simpler.
+    - Cons: changes transcript text in one or two bridges, which this task must not do.
+- **Should the SSE replay rings move as part of BR-15?** Open.
+  - **Separately, after BR-7 (recommended).**
+    - Pros: Claude's ring adopting Codex's superseded-frame collapse changes what a reconnecting client is replayed, which needs its own replay tests; the transcript helpers did not depend on it.
+    - Cons: BR-15 stays half open.
+  - **Move Codex's `event-ring.ts` into protocol now and point Claude at it.**
+    - Pros: closes BR-15.
+    - Cons: a behaviour change to Claude's SSE replay in a task meant to leave output unchanged.
 
 ### 7. Change tracking and git scans
 

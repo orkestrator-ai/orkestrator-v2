@@ -299,7 +299,12 @@ async function startBackend(
     const line = out.split("\n").find((entry) => entry.includes('"orkestrator-backend-ready"'));
     if (line) {
       const ready = JSON.parse(line) as { url: string };
-      const version = /Starting Orkestrator (\S+)/.exec(out)?.[1] ?? "unknown";
+      // The second form is a release from before the backend moved onto the logger.
+      const version =
+        /\[backend\] starting version=(\S+)|Starting Orkestrator (\S+)/
+          .exec(out)
+          ?.slice(1)
+          .find(Boolean) ?? "unknown";
       log(`${label}: ${release.ref} (${release.commit.slice(0, 9)}, reports ${version}) ready`);
       return { label, release, url: ready.url, token, proc };
     }

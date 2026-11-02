@@ -2,8 +2,9 @@
 
 Status: Living. The shared logger, its vocabulary, how entries reach the log file,
 and the live settings that control them. Electron's main process and all five
-bridges are fully on it. The backend and renderer are migrating;
-`tests/unit/raw-console-ratchet.test.ts` lists what is left.
+bridges are fully on it, and so is the backend, bar the few sites
+[What is left in the backend](#what-is-left-in-the-backend) names. The renderer is
+migrating; `tests/unit/raw-console-ratchet.test.ts` lists what is left.
 
 ## Using it
 
@@ -217,6 +218,11 @@ lines only, taken after the message, so a multi-line message cannot come along.
 Stacks are on by default so that moving a site onto the logger keeps them. Pass
 `{ stack: false }` on a hot path or for an expected failure.
 
+Pass `{ message: false }` where a message can quote content the logger cannot
+recognise, such as a provider error repeating a prompt. It keeps the name, code and
+frames, and drops the message of every `cause` too. Sites that logged only
+`error.name` for that reason use it, so moving them onto the logger added no text.
+
 ### Paths in stack frames
 
 Frames show paths relative to the app, so a home directory name stays out of the
@@ -325,6 +331,9 @@ command-failure site checks that `reason` comes from the classifier.
 | `port-in-use` | The port is taken. | `port is already allocated`, `address already in use` |
 | `invalid-usage` | The tool rejected its arguments. | `usage:` at a line start, `unknown option` or `flag`; `git` exit 129 |
 | `branch-exists` | The target branch is taken. | `a branch named ... already exists` |
+| `branch-not-merged` | Deleting would lose unmerged commits. | `is not fully merged` |
+| `worktree-has-changes` | The worktree holds changes. | `contains modified or untracked files` |
+| `not-a-worktree` | Not a registered worktree. | `is not a working tree` |
 | `branch-not-found` | The branch does not exist. | `no branch named`, `refname ... not found`, `did not match any file(s) known to git` |
 | `invalid-ref` | A name or revision is bad. | `not a valid branch name` or `object name`, `bad revision`, `unknown revision`, `ambiguous argument` |
 | `ref-conflict` | An existing ref occupies the path. | `exists; cannot create`, `cannot lock ref ... is at ... but expected` |
@@ -350,6 +359,12 @@ command-failure site checks that `reason` comes from the classifier.
 | `container-not-found` | The container is gone. | `no such container` |
 | `container-not-running` | Stopped, paused or restarting. | `container ... is not running`, `paused`, `restarting` |
 | `container-name-conflict` | The name is taken. | `name ... is already in use` |
+| `removal-in-progress` | Already being removed. | `removal of container ... is already in progress` |
+| `image-in-use` | A container uses the image. | `image is being used` or `referenced`, `unable to remove ... must be forced` |
+| `volume-in-use` | A container uses the volume. | `volume is in use` |
+| `volume-not-found` | No such volume. | `no such volume` |
+| `network-in-use` | Containers are attached. | `has active endpoints` |
+| `network-not-found` | No such network. | `network ... not found` |
 | `image-not-found` | No such image. | `no such image`, `pull access denied`, `manifest ... not found`, `manifest unknown` |
 | `server-not-running` | No tmux server. | `no server running`, `failed to connect to server`, `no sessions`, socket missing/refused errors, `server exited`, `lost server` |
 | `session-not-found` | No such tmux target. | `can't find session`, `window` or `pane`, `session not found` |
@@ -716,7 +731,28 @@ record what was observed at the time and are left as they are.
 | `[agent-mail] waiting` | `[agent-mail] delivery.waiting` |
 | `[native-agent] ... older than the command catalogue` | `[native-agent] catalogue.outdated-bridge` |
 | `[ElectronBackend] Failed to rename ... git branch`, and the push and rollback lines | `[git] branch.rename-failed`, `branch.push-config-failed`, `branch.rollback-failed` |
-| `[Backend]` (unmigrated backend output) | Unchanged until the backend migrates |
+| `[Backend]` (raw process output the relay labels, and the fatal rejection guard) | Unchanged: such text has no level |
+| `[Backend]`, `[backend]`, `[ElectronBackend]` startup and shutdown lines | `[backend] starting`, `startup.step-failed step=<part>`, `notice.failed step=<part>`, `shutdown.step-failed step=<part>`, `shutdown.signal-received`, `shutdown.finished` |
+| `[backend]` environment deletion and cleanup, `[environment-status]`, `[environment-lifecycle]`, `[setup]` | `[environment] delete.step-failed step=<part>`, `cleanup.*`, `status.*`, `lifecycle.failed`, `setup.*` |
+| `[setup-terminal] <text>` | `[terminal] setup.*` |
+| `[build-pipeline]`, `[BuildPipeline]` | `[build-pipeline] <event>` |
+| `[FeatureBuild]`, `[feature-planning]` | `[feature] naming.fallback`, `planning.*` |
+| `[review-fanout]`, `[graph-agent]`, `[graph-describe]`, `[goal-verifier]` on an agent branch line | `[agent-branch] <event> owner=<name>` |
+| `[multi-review]` | `[review] <event>` |
+| `[pr]`, `[pr-monitor]`, `[pr-auto-merge]`, the `gh pr list` dump | `[pull-request] <event>`, `gh.pr-list-unparseable` with sizes only |
+| `[Storage]`, `[storage]` | `[storage] <event>` |
+| `[Tooling]`, `[Backend] Host executable discovery ready` | `[host] tool.available`, `tool.missing`, `path.discovered` |
+| `[Docker]`, `[container-start]`, `[container-lifecycle]`, `[claude-login-keeper]`, `[container-login-watcher]`, `[portable-inputs]`, `[github-ranges]` | `[docker] <event>` |
+| `[container-host-reachability]` | `[docker.reachability] <event>` |
+| `[graphs]`, `[graph-runs]`, `[graph-system]`, `[graph-describe]` | `[graph] launch.*`, `run.*`, `rewind.*`, `system.*`, `describe.*` |
+| `[goals]`, `[goal-verifier]` | `[native-agent.goal] <event>` |
+| `[opencode-provider]` | `[native-agent.opencode] <event>` |
+| `[native-agent-job]`, `[NativeAgentService]`, `[human-prompts]`, `[agent-handoffs]` | `[native-agent] <event>` |
+| `[ElectronBackend]` model catalogue lines | `[model-catalog] <event>` |
+| `[ElectronBackend] Installing ... support` | `[local-server] bridge-runtime.*` |
+| `[prompt-queue]`, `[pty]` | `[tmux] queue.*`, `[terminal] pty.*` |
+| `[backend]` design lines, `[design-renderer]` | `[design] <event>` |
+| `[backend]` reaper lines | `[local-server] reaper.*` |
 | `[Backend] Event loop stalled for N ms` | `[event-loop] stalled lagMs=N` |
 | `[claude-bridge]`, `[session-manager]`, `[session]`, `[events]`, `[config]`, `[mcp]`, `[plugins]`, `[plugin-config]`, `[mcp-config]`, `[event-emitter]` | `[bridge.claude]` |
 | `[codex-bridge]`, `[codex-bridge][app-server:N]` | `[bridge.codex]`, with `generation=N` for the second |
@@ -727,6 +763,27 @@ record what was observed at the time and are left as they are.
 | `[kind:environment]` on a bridge's raw output | Unchanged |
 | `[bridge-diagnostics] {json}` | `[bridge-diagnostics] <event> bridge=<name> payload="{json}"` |
 | `[DesktopStartup]` | Unchanged |
+
+## What is left in the backend
+
+`console.*` was the easy part to count. What remains does not show in the ratchet:
+
+- **`storage-config.ts`** keeps its one raw site until the live settings work merges,
+  which owns that file along with `log-policy-*.ts`, `backend-runtime.ts` and
+  `commands-registry-servers.ts`.
+- **Injected loggers** still receive `console` from `main.ts`, so they write their
+  old text and tags: `gateway-*.ts`, `terminal-websocket-server.ts`,
+  `managed-web-client.ts`, `startup-services.ts`, `gateway-port-policy.ts`,
+  `host-standalone-updater.ts`, `preview-publication.ts`, `preview-tunnel-server.ts`,
+  `preview-relay-supervisor.ts`, `core/preview-access.ts`,
+  `core/preview-service-registry.ts` and `core/transcript-artifacts/` (`runtime.ts`,
+  `preview-runner.ts`, `content-server.ts`). `apps/backend/**` stays excluded from the
+  lint rule until these go, and 22 of the sites the ratchet still counts are
+  `bounded-console.ts` and `scripts/`, whose console is the product.
+- **`detail` fields:** the PR monitor, auto-merge and diff stats services report through
+  an `onWarning(message, error)` callback, so their lines carry the service's own text in
+  `detail`. It holds identifiers only. Static events there would mean changing those
+  services' tests, which can wait for the cleanup slice.
 
 ## Adding to later processes
 

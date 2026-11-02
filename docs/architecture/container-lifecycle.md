@@ -1076,7 +1076,7 @@ as the password. Probe containers and the temporary network
 carry the owner and `host-reachability-probe` role labels (not the `app`
 label, so cleanup inventories never see them) and are removed after each
 check; leftovers are reaped by the next one. Every step is logged with the
-`[container-host-reachability]` prefix, one fixed-shape line per probe. The
+`[docker.reachability]` area, one `probe.result` or `check.probe` entry per probe. The
 probe URL carries no credential. Commands: `get_container_host_reachability`,
 `check_container_host_reachability`.
 

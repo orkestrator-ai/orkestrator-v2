@@ -53,8 +53,9 @@ How to read the result:
   survived, the signal was aimed at one PID.
 
 Builds with the 2026-10-26 fixes also log `[desktop] quit.stopping-backend`,
-`[Backend] Received SIGTERM; shutting down` and
-`[Backend] Shutdown finished; exiting with 0` on a normal quit. If those lines
+`[backend] shutdown.signal-received signal=SIGTERM` and
+`[backend] shutdown.finished code=0` on a normal quit (older builds wrote
+`[Backend] Received SIGTERM; shutting down`). If those lines
 are missing before an exit, the app did not quit by itself.
 
 ## 2. Who else was running

@@ -1494,3 +1494,42 @@ and `index.ts:2656`.
 message and still print it. So do sites logging `error.message` or `String(error)`,
 such as the reapers' lines in `local-server-reaper.ts`. The R1 backend slice covers
 all of these when it moves them to `formatLogError`.
+
+## Addendum: backend levels and evidence after the R1 backend slice
+
+The backend's direct `console` sites moved onto the shared logger. **No site moved to
+`debug`**: the four that are at `debug` already were. Every change below is still
+written by default, because `info` is written.
+
+| Was | Now | Why |
+| --- | --- | --- |
+| `warn` Reaping orphaned native session | `info` `[environment] orphan-session.reaped` | Routine housekeeping |
+| `warn` Reaping orphaned terminal | `info` `[terminal] orphan.reaped` | Routine housekeeping |
+| `warn` reaped orphaned tmux session | `info` `[tmux] orphan.reaped` | Routine housekeeping |
+| `warn` Reaped claude-tmux sessions, Reaping orphaned server | `info` `[local-server] reaper.tmux-reaped`, `reaper.server-reaping` | Routine; failures stay `warn` |
+| `warn` Stopping ... backend shutting down | `info` `[local-server] server.stopping` | Expected; any other reason stays `warn` |
+| `warn` Design startup removed stale profiles | `info` `[design] profiles.swept` | Routine housekeeping |
+| `warn` Retrying or continuing a turn | `info` `[native-agent] turn-recovery.retrying` | The automatic recovery working; exhausted stays `warn` |
+| `warn` `pdf-printed`, `pdf-preview` | `info` | Successes |
+
+A `console.log` became `info`, which changes nothing a reader can see, except that the
+desktop now shows it at its own level.
+
+What a line no longer holds:
+
+- `[environment] lifecycle.failed` lost a scrubbed stderr excerpt of up to 500 characters.
+  `reason`, `exitCode` and `signal` replace it, and the summary category stays. This is the
+  largest loss; a failure no rule names reads as `unclassified`. Eleven reasons were added
+  for what cleanup and container work hit, and more can follow from real logs.
+- A failed command's message went from every other site that logged `error.message` or
+  `String(error)`, reaper lines included, as `formatLogError` drops it.
+- `[pull-request] gh.pr-list-unparseable`, still at `debug`, holds sizes rather than the
+  output of `gh pr list`.
+- `[terminal] setup.pty-spawning` holds `argCount` rather than the arguments, and setup lines
+  no longer hold the environment's name, which can come from a prompt. The id stays.
+- The non-keyed fallback sweep in `core/index.ts` now uses `log.throttled`, so a lasting fault
+  writes one line and a summary per minute instead of a line every two seconds.
+
+Lines that gained evidence: a site that logged only an error's name or code now also has
+its frames, and a site logging a raw object now has a bounded form of it, through
+`formatLogError(error, { message: false })` and `formatLogError(error)`.

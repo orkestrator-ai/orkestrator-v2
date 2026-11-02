@@ -311,13 +311,14 @@ other step and `normalizeReviewPreparation` from the preparation step.
 
 ## Header and key information
 
-The tab header names the ticket and, under it, the phase and build agent. On
-its right sit the pipeline controls (retry, restart, pause, resume, cancel),
-then the **Key information** button, then the pipeline toolbar at the top
-right: the graph's collapse toggle, "N of M steps" and the elapsed time.
-`PipelineFlowView` still computes the toolbar and renders it through a portal
-into the header (`toolbarSlot`); a review pass opened as its own tab has no
-pipeline header and keeps the toolbar inline above its graph. There is no
+The tab header names the ticket and, under it, the phase, the build agent,
+"N of M steps" and the elapsed time (on their own line on a phone). On its
+right is one row of equal icon buttons: the pipeline controls (retry, restart,
+pause, resume, cancel), then **Key information**, then the graph's collapse
+toggle. `PipelineFlowView` still computes the progress and the toggle and
+renders them through portals into the header (`headerSlots`); a review pass
+opened as its own tab has no pipeline header and keeps both inline above its
+graph. There is no
 banner pointing at the review report: a review's outcome is on its node, in
 its inspector, and in the key information.
 

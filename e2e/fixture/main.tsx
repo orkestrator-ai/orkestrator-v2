@@ -1237,7 +1237,7 @@ const buildPipelineHeaderFixture: BuildPipeline = {
   controller: "backend",
 };
 
-/** A real-layout fixture for the header's narrowest three-control state. */
+/** A real-layout fixture for the header's narrowest state: all five action buttons. */
 function BuildPipelineHeaderFixture() {
   useEffect(() => {
     useBuildPipelineStore.setState({

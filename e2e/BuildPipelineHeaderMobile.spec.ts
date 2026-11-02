@@ -12,10 +12,22 @@ test("the build pipeline header keeps every control inside a phone viewport", as
   const buttons = ["Restart Build Stage", "Pause", "Cancel"].map((name) =>
     controls.getByRole("button", { name }),
   );
+  const actions = page.getByTestId("build-pipeline-header-actions").getByRole("button");
 
   await expect(header).toBeVisible();
   await expect(controls).toBeVisible();
   for (const button of buttons) await expect(button).toBeVisible();
+  await expect(actions).toHaveCount(5);
+  await expect(page.getByTestId("pipeline-progress")).toBeVisible();
+
+  // One row of identical buttons, with the timer on a line of its own.
+  const actionBoxes = await actions.evaluateAll((elements) =>
+    elements.map((element) => {
+      const { y, width, height } = element.getBoundingClientRect();
+      return { y, width, height };
+    }),
+  );
+  expect(new Set(actionBoxes.map((box) => `${box.y} ${box.width} ${box.height}`)).size).toBe(1);
 
   const geometry = await header.evaluate((element) => {
     if (!(element instanceof HTMLElement)) throw new Error("Missing build pipeline header");

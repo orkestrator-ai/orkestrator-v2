@@ -19,6 +19,8 @@ import {
   GitPullRequest,
   History,
   PackageCheck,
+  PanelTopClose,
+  PanelTopOpen,
   Pause,
   Play,
   RefreshCw,
@@ -46,6 +48,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FlowNodeModel } from "@/components/flow-graph/FlowGraph";
 import { FlowInspectorHeader, FlowInspectorPanel } from "@/components/flow-graph/FlowInspector";
 import { defaultFlowSelection } from "@/components/flow-graph/flow-graph-model";
@@ -159,11 +162,11 @@ export interface PipelineFlowViewProps {
   /** The error already rendered in this view's notices, to avoid repeating it. */
   visibleError?: string;
   /**
-   * Where the pipeline toolbar (the graph toggle, step count and elapsed time)
-   * renders: the tab header's slot, or inline above the graph when omitted.
-   * Null while the slot has not mounted yet.
+   * Where the tab header takes the step count and elapsed time and the graph
+   * toggle. Omitted, both render inline above the graph. A slot is null until
+   * it has mounted.
    */
-  toolbarSlot?: HTMLElement | null;
+  headerSlots?: { progress: HTMLElement | null; graphToggle: HTMLElement | null };
 }
 
 /**
@@ -186,7 +189,7 @@ export function PipelineFlowView({
   layout,
   notices,
   visibleError,
-  toolbarSlot,
+  headerSlots,
 }: PipelineFlowViewProps) {
   const panelId = `${useId()}inspector`;
   const graphId = `${panelId}-graph`;
@@ -568,21 +571,12 @@ export function PipelineFlowView({
     selected.session === currentSession &&
     pipelineAcceptsMessages(pipeline);
   const showTranscript = selected.session !== undefined && !selected.placeholder;
-  const inHeader = toolbarSlot !== undefined;
-  const graphToggle = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      className="h-7 gap-1.5 px-2 text-xs"
-      aria-expanded={!collapsed}
-      aria-controls={graphId}
-      onClick={() => setCollapsed(viewKey, !collapsed)}
-    >
-      {collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-      {passKey ? "Review" : "Pipeline"}
-    </Button>
-  );
+  const graphToggleProps = {
+    type: "button",
+    "aria-expanded": !collapsed,
+    "aria-controls": graphId,
+    onClick: () => setCollapsed(viewKey, !collapsed),
+  } as const;
   const progress = (
     <span
       data-testid="pipeline-progress"
@@ -611,9 +605,21 @@ export function PipelineFlowView({
               />
             </div>
           ) : null}
-          {inHeader ? null : (
+          {headerSlots ? null : (
             <div className="flex shrink-0 items-center gap-2 border-b border-divider px-3 py-1.5">
-              {graphToggle}
+              <Button
+                {...graphToggleProps}
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 px-2 text-xs"
+              >
+                {collapsed ? (
+                  <ChevronRight className="size-3.5" />
+                ) : (
+                  <ChevronDown className="size-3.5" />
+                )}
+                {passKey ? "Review" : "Pipeline"}
+              </Button>
               {progress}
               {collapsed ? (
                 <span className="ml-auto truncate text-[11px] text-muted-foreground">
@@ -720,13 +726,24 @@ export function PipelineFlowView({
         </div>
       </OverviewScroll>
       {codeRewind.dialog}
-      {toolbarSlot
+      {headerSlots?.progress ? createPortal(progress, headerSlots.progress) : null}
+      {headerSlots?.graphToggle
         ? createPortal(
-            <div data-testid="pipeline-toolbar" className="flex min-w-0 items-center gap-1">
-              {graphToggle}
-              {progress}
-            </div>,
-            toolbarSlot,
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button {...graphToggleProps} size="icon" variant="outline" aria-label="Pipeline">
+                  {collapsed ? (
+                    <PanelTopOpen className="size-4" />
+                  ) : (
+                    <PanelTopClose className="size-4" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={5}>
+                {collapsed ? "Show pipeline" : "Hide pipeline"}
+              </TooltipContent>
+            </Tooltip>,
+            headerSlots.graphToggle,
           )
         : null}
     </div>

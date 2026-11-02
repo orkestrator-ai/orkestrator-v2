@@ -103,8 +103,9 @@ export function BuildChatTab({
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const controls = usePipelineControls(pipeline, () => setPinnedId(null));
   const hydrationAttemptedFor = useRef<string | null>(null);
-  // The flow view renders its toolbar (graph toggle, steps, elapsed time) here.
-  const [toolbarSlot, setToolbarSlot] = useState<HTMLDivElement | null>(null);
+  // The flow view renders the step count, elapsed time and graph toggle here.
+  const [progressSlot, setProgressSlot] = useState<HTMLSpanElement | null>(null);
+  const [graphToggleSlot, setGraphToggleSlot] = useState<HTMLDivElement | null>(null);
 
   // The store is a cache of a backend-owned record, and the only other loader
   // is App's one-shot per-project hydration. If that failed or has not run for
@@ -216,7 +217,12 @@ export function BuildChatTab({
       >
         <div data-testid="build-pipeline-header-summary" className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{pipeline.taskTitle}</div>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <div
+            className={cn(
+              "mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground",
+              isMobile && "flex-wrap",
+            )}
+          >
             {active ? (
               <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
             ) : pipeline.phase === "complete" ? (
@@ -229,39 +235,44 @@ export function BuildChatTab({
             <span className="truncate">{phaseLabel}</span>
             <span aria-hidden="true">·</span>
             <span className="truncate">{agentLabel}</span>
+            {/* A phone has no room for it on this line, so it gets its own. */}
+            {isMobile ? null : <span aria-hidden="true">·</span>}
+            <span
+              ref={setProgressSlot}
+              data-testid="build-pipeline-header-progress"
+              className={cn("flex min-w-0", isMobile && "basis-full")}
+            />
           </div>
         </div>
-        {headerControls.length > 0 && (
-          <div
-            data-testid="build-pipeline-header-controls"
-            className="flex shrink-0 items-center gap-1.5"
-          >
-            {headerControls.map(({ key, label, icon: Icon, onClick }) => (
-              <Tooltip key={key}>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    aria-label={label}
-                    disabled={controls.pending}
-                    onClick={onClick}
-                  >
-                    <Icon className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" sideOffset={5}>
-                  {label}
-                </TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
-        )}
-        <PipelineKeyInformationButton keyInformation={pipeline.keyInformation} compact={isMobile} />
         <div
-          ref={setToolbarSlot}
-          data-testid="build-pipeline-header-toolbar"
-          className="flex min-w-0 shrink items-center"
-        />
+          data-testid="build-pipeline-header-actions"
+          className="flex shrink-0 items-center gap-1.5"
+        >
+          {headerControls.length > 0 && (
+            <div data-testid="build-pipeline-header-controls" className="flex items-center gap-1.5">
+              {headerControls.map(({ key, label, icon: Icon, onClick }) => (
+                <Tooltip key={key}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      aria-label={label}
+                      disabled={controls.pending}
+                      onClick={onClick}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" sideOffset={5}>
+                    {label}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+          )}
+          <PipelineKeyInformationButton keyInformation={pipeline.keyInformation} />
+          <div ref={setGraphToggleSlot} className="flex size-9 shrink-0" />
+        </div>
       </div>
 
       <PipelineFlowView
@@ -273,7 +284,7 @@ export function BuildChatTab({
         pinnedId={pinnedId}
         onPin={setPinnedId}
         layout={layout}
-        toolbarSlot={toolbarSlot}
+        headerSlots={{ progress: progressSlot, graphToggle: graphToggleSlot }}
         visibleError={interactionFailure ? undefined : pipeline.error}
         notices={
           <>

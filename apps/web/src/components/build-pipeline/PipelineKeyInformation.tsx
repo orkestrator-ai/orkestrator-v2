@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   CheckCircle2,
   CircleDashed,
-  ClipboardList,
+  FileText,
   MinusCircle,
   X,
   XCircle,
@@ -16,6 +16,7 @@ import {
   type KeyInformationTestResult,
 } from "@orkestrator/protocol/build-pipeline-key-information";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 const AUTHOR_LABELS: Record<KeyInformationAuthor, string> = {
@@ -60,11 +61,8 @@ const ISSUE_STATUS: Record<KeyInformationIssueStatus, { label: string; className
  */
 export function PipelineKeyInformationButton({
   keyInformation,
-  compact = false,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
-  /** Icon only, for the narrow header. */
-  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
@@ -94,20 +92,25 @@ export function PipelineKeyInformationButton({
 
   return (
     <>
-      <Button
-        ref={buttonRef}
-        type="button"
-        size="sm"
-        variant={open ? "secondary" : "outline"}
-        className={cn("h-7 shrink-0 gap-1.5 text-xs", compact && "w-7 px-0")}
-        aria-label={compact ? "Key information" : undefined}
-        aria-expanded={open}
-        aria-controls={open ? panelId : undefined}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <ClipboardList className="size-3.5" />
-        {compact ? null : "Key information"}
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            ref={buttonRef}
+            type="button"
+            size="icon"
+            variant={open ? "secondary" : "outline"}
+            aria-label="Key information"
+            aria-expanded={open}
+            aria-controls={open ? panelId : undefined}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <FileText className="size-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={5}>
+          Key information
+        </TooltipContent>
+      </Tooltip>
       {open ? (
         <div
           ref={panelRef}

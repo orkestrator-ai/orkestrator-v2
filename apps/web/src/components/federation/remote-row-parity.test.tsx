@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { ReactNode } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   environmentKey,
   environmentRef,
@@ -22,6 +22,7 @@ import { useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { useConfigStore } from "@/stores/configStore";
 import { useUIStore } from "@/stores/uiStore";
 import {
   connectionList,
@@ -319,3 +320,36 @@ test("a machine-qualified row describes change counts along with unread work and
     }),
   ).toBeTruthy();
 });
+
+for (const state of ["current", "stale", "blocked"] as const) {
+  test(`remote row reacts to the checks setting with an unchanged ${state} PR summary`, () => {
+    const initialConfig = useConfigStore.getState().config;
+    const row = environment("feature", {
+      environmentType: "local",
+      prState: "open",
+      prHasMergeConflicts: false,
+      prMergeability: state === "blocked" ? "blocked" : "unstable",
+      prMonitorConfirmed: true,
+      prCheckSummary: { passed: 13, total: 14, pending: 0 },
+    });
+    const machine = machineView([row]);
+    if (state === "stale") machine.freshness = "stale";
+    try {
+      useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
+      render(<RemoteEnvironmentItem machine={machine} environment={row} />);
+      const button = screen.getByRole("button", { name: "feature, on Machine A, Idle" });
+      // No rerender or summary replacement: only the live config changes.
+      for (const requireChecks of [true, false, true]) {
+        act(() =>
+          useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+        );
+        expect(button.querySelector("[data-merge-ready]") !== null).toBe(
+          state === "current" && !requireChecks,
+        );
+      }
+    } finally {
+      cleanup();
+      useConfigStore.setState({ config: initialConfig });
+    }
+  });
+}

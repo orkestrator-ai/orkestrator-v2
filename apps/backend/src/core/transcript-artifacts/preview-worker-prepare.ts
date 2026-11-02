@@ -6,7 +6,7 @@
  * Two fixed routes, chosen by checked-in data only, never by a request:
  * - `pull`: the published, digest-pinned image recorded in
  *   `published-image.json` (shipped as `artifact-runtime/published-image.json`)
- *   by the publish-preview-worker workflow or publish.sh, used only when the
+ *   by publish.sh, used only when the
  *   pin's context digest equals the digest of the context this backend ships
  *   and the pulled image carries the same digest label;
  * - `build`: `docker build` of the worker build context the backend build

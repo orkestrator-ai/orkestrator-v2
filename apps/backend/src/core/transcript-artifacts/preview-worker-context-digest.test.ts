@@ -78,12 +78,8 @@ describe("worker context digest", () => {
     await expect(workerContextDigest(dir)).rejects.toThrow("unexpected entry");
   });
 
-  test("the publish workflow labels images with the label preparation checks", async () => {
+  test("the publish script labels images with the label preparation checks", async () => {
     const root = path.resolve(import.meta.dir, "../../../../..");
-    const workflow = Bun.YAML.parse(
-      await Bun.file(path.join(root, ".github/workflows/publish-preview-worker.yml")).text(),
-    ) as { env: Record<string, string> };
-    expect(workflow.env.CONTEXT_LABEL).toBe(WORKER_CONTEXT_LABEL);
     expect(
       await Bun.file(path.join(root, "docker/artifact-preview-worker/publish.sh")).text(),
     ).toContain(`--label "${WORKER_CONTEXT_LABEL}=$context_digest"`);

@@ -161,7 +161,10 @@ interface ExecManager {
   handleControlMessage(...args: unknown[]): unknown;
 }
 
-/** Exported for contract tests; production installs once, only with debugging enabled. */
+/**
+ * Exported for contract tests; production installs once, the first time detail is
+ * on, and leaves it in place after that: its callbacks only move counters.
+ */
 export function instrumentSdk(seam: SdkDiagnosticSeam): () => void {
   const detector = seam.stallDetectorPrototype;
   const controller = seam.execControllerPrototype;
@@ -187,7 +190,17 @@ export function instrumentSdk(seam: SdkDiagnosticSeam): () => void {
     return startTimer.apply(this, args);
   };
   detector.trackActivity = function (...args) {
-    safely(() => owners.get(this)?.transportActivity(this, args[0], args[1]));
+    safely(() => {
+      // A transport already running when detail was turned on never reached the
+      // patched `startTimer`. Its read loop still carries the turn's scope.
+      if (!owners.has(this)) {
+        const scope = scopes.getStore();
+        if (!scope) return;
+        owners.set(this, scope);
+        scope.transport(this);
+      }
+      owners.get(this)?.transportActivity(this, args[0], args[1]);
+    });
     return trackActivity.apply(this, args);
   };
   controller.run = function (this: { controlledExecManager: ExecManager }, ...args) {
@@ -294,14 +307,20 @@ export class CursorSdkDiagnostics {
   private closed = false;
   private run?: string;
   private readonly session?: string;
-  private readonly coverage: string;
+  private coverage: string = "unavailable";
 
   constructor(
     sessionId: string,
     private readonly now: () => number = Date.now,
     private readonly write: BridgeDiagnosticWrite = writeBridgeDiagnostic,
+    private readonly isActive: () => boolean = () => true,
   ) {
     this.session = hash(sessionId);
+    if (isActive()) this.installSeam();
+  }
+
+  /** Idempotent. A scope stays usable if detail is only turned on later in its turn. */
+  installSeam(): void {
     this.coverage = install();
   }
 
@@ -381,7 +400,7 @@ export class CursorSdkDiagnostics {
   }
 
   report(event: string): void {
-    if (this.closed || !bridgeDiagnosticsActive()) return;
+    if (this.closed || !this.isActive() || !bridgeDiagnosticsActive()) return;
     safely(() => {
       const now = this.now();
       const transports = this.transports.slice(0, 4).map((observation) => {

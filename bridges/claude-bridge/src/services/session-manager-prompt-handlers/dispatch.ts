@@ -73,7 +73,7 @@ export async function handleTurnMessage(turn: TurnState, message: SDKMessage): P
   if (diagnostics && !turn.queryEnded) observeClaudeMessage(diagnostics, message);
   // Fires once per streamed delta — i.e. per token. Both the object
   // literal and the write are guarded, not just the write.
-  if (isDebugLoggingEnabled) {
+  if (isDebugLoggingEnabled()) {
     debugLog("[session-manager] SDK event received", {
       sessionId,
       type: message.type,

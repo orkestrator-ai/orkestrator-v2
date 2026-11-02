@@ -21,6 +21,8 @@
 - **Evidence:** `orkestrator-test-run.LzSOdM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, enclosing `orkestrator-test-run.WvH9mv/merge-default-tests.log.gz`, and the first owner rerun in `orkestrator-test-run.cSDOnQ`, under the host temporary directory.
 - **Assessment:** host contention is consistent with the result, but remains unconfirmed. The owner, readiness implementation and lifecycle fixtures matched the original main merge parent exactly; no implementation, assertion, deadline or skip changed. The aggregate remains non-green.
 
+
+
 ## Safe error formatting review recurrence — 2026-11-01
 
 - **Original command:** `mise run test` against `ae4084d15c71e0e0644530b9c38b581bb9b280be`; captured package `.orkestrator/review-artifacts/review-validation-3ad92a25-6e3a-4d7c-876c-260073a2f6f9/review-package-889ea18990f90016b53a23fec9903ab237ce65d41578ca56458956ddd95071d4.json`.
@@ -73,3 +75,22 @@ cd apps/backend && bun test ./tests/container-readiness.test.ts --preload ../../
 ```
 
 That change does not touch this test or its readiness code, so this adds a sighting, not a cause.
+
+
+## Live logging merge validation — 2026-11-02
+
+`mise run test:logged -- --name merge-default -- mise run test`, merging
+`668a2f7431757be53815855debe23450f12019e5` into `b7a783e0806df3ce99150c35f8a906a3751d11a2`,
+repeated the line-441 assertion: expected at least two probes, received one
+(465.62 ms). The backend used three isolated workers and reported 13,115 passed,
+97 skipped and one failed across 878 files (178.67 s). The aggregate took
+282.3 s; bridge and protocol groups passed. Other terminal-link assertions and
+two repository checks also failed in the workspace/root groups.
+
+The complete unchanged owner passed alone (exit 0, 5.8 s):
+`mise run test:logged -- --name merge-readiness-owner -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures`.
+The logged runner retained no passing per-file counts. Neither this owner nor
+its readiness implementation was edited. This is another observation of the
+existing intermittent case; no assertion, deadline or skip changed.
+
+Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.obbBHe/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

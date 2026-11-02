@@ -1,3 +1,4 @@
+import { setLiveBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 /**
  * Turn lifecycle.
  *
@@ -149,7 +150,8 @@ describe("dispatchPrompt", () => {
           input({ prompt: "PRIVATE PROMPT" }),
         );
         completion = handle.completion;
-        expect(Boolean(state.diagnostics)).toBe(enabled);
+        // Open either way, so a setting changed mid-turn has the turn so far to report.
+        expect(state.diagnostics).toBeDefined();
         applySessionEvent(state, {
           type: "tool_execution_start",
           toolCallId: "PRIVATE ID",
@@ -192,6 +194,38 @@ describe("dispatchPrompt", () => {
       }
     },
   );
+
+  test("detail turned on mid-turn reports the running tool at once", async () => {
+    const previousInfo = console.info;
+    const lines: string[] = [];
+    setLiveBridgeDiagnostics(false);
+    console.info = (line: unknown) => lines.push(String(line));
+    const state = runningState();
+    const stub = stubSession();
+    let completion: Promise<void> | undefined;
+    try {
+      const handle = await dispatchPrompt(state, stub.session, input({ prompt: "PRIVATE PROMPT" }));
+      completion = handle.completion;
+      applySessionEvent(state, {
+        type: "tool_execution_start",
+        toolCallId: "PRIVATE ID",
+        toolName: "bash",
+        args: { command: "PRIVATE COMMAND" },
+      });
+      expect(lines).toHaveLength(0);
+      setLiveBridgeDiagnostics(true);
+      const snapshots = bridgeDiagnosticPayloads(lines);
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]).toMatchObject({ event: "heartbeat", pendingToolCount: 1 });
+      expect(snapshots[0]?.pendingTools[0].kind).toBe("bash");
+      expect(lines.join("\n")).not.toContain("PRIVATE");
+    } finally {
+      stub.finish();
+      await completion;
+      console.info = previousInfo;
+      setLiveBridgeDiagnostics(undefined);
+    }
+  });
 
   test("resolves as soon as the prompt is accepted, not when the turn ends", async () => {
     const state = runningState();

@@ -1,3 +1,4 @@
+import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { BRIDGE_LOG_RELAY_ENV } from "@orkestrator/protocol/node/logger-environment";
 import {
   COORDINATOR_RESEARCH_MCP_ENV,
@@ -259,7 +260,7 @@ async function recordBugReportBridge(
     .catch(() => undefined);
 }
 
-async function localRuntimeEnvironment(
+export async function localRuntimeEnvironment(
   environmentId: string,
   context: CommandContext,
 ): Promise<Environment | null> {
@@ -740,7 +741,15 @@ export async function startLocalServerUnlocked(
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await startLocalServerAttempt(environmentId, context, kind);
+      const started = await startLocalServerAttempt(environmentId, context, kind);
+      if (kind !== "opencode" && started.authToken) {
+        context.runtime.logPolicy?.bridgeStarted({
+          agent: kind,
+          baseUrl: `http://127.0.0.1:${started.port}`,
+          authToken: started.authToken,
+        });
+      }
+      return started;
     } catch (error) {
       // A failed attempt has already stopped its server and cleared its
       // fields, so the next one starts clean.
@@ -955,7 +964,9 @@ async function startLocalServerAttempt(
     // without running its shutdown path. Advertising our PID lets each bridge
     // watch for that and drain itself instead of orphaning its children.
     ORKESTRATOR_PARENT_PID: String(process.pid),
-    ORKESTRATOR_BRIDGE_DEBUG: bridgeConfig.global.debugLogging === true ? "1" : "0",
+    ORKESTRATOR_BRIDGE_DEBUG: bridgeDebugEnvValue(bridgeConfig.global),
+    // forwardBridgeOutput below reads this process's stdio and carries each level.
+    [BRIDGE_LOG_RELAY_ENV]: "1",
     ...(agentToolConnection
       ? {
           [ORKESTRATOR_AGENT_MCP_URL_ENV]: agentToolConnection.url,

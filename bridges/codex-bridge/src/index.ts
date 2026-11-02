@@ -1,3 +1,8 @@
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import {
+  applyBridgeLogPolicy,
+  readBridgeLogPolicyBody,
+} from "@orkestrator/protocol/node/bridge-log-policy";
 import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
@@ -1105,6 +1110,12 @@ app.use("/session/:id/transcript", async (c, next) => {
   c.res.headers.append("Vary", "Accept-Encoding");
 });
 app.use("/session/:id/transcript", compress({ encoding: "gzip" }));
+
+// The live logging settings. Metadata only; see `applyBridgeLogPolicy`.
+app.post(BRIDGE_LOG_POLICY_ROUTE, async (c) => {
+  const answer = applyBridgeLogPolicy(await readBridgeLogPolicyBody(c.req.raw));
+  return c.json(answer.body, answer.status);
+});
 
 app.get("/global/health", (c) => {
   const health = appServerRuntime.getHealth();

@@ -1,6 +1,11 @@
 // Claude Bridge Server
 // Wraps the Claude Agent SDK and exposes HTTP/SSE endpoints for Orkestrator AI
 
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import {
+  applyBridgeLogPolicy,
+  readBridgeLogPolicyBody,
+} from "@orkestrator/protocol/node/bridge-log-policy";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -159,11 +164,9 @@ app.use("*", async (c, next) => {
   }
   await next();
 });
-// Request logging is debug-only; see `createRequestLogger`.
-const requestLogger = createRequestLogger();
-if (requestLogger) {
-  app.use("*", requestLogger);
-}
+// Request logging is debug-only, and follows a change to that setting; see
+// `createRequestLogger`.
+app.use("*", createRequestLogger());
 app.use("/session/:id/messages", async (c, next) => {
   await next();
   c.res.headers.append("Vary", "Accept-Encoding");
@@ -197,6 +200,12 @@ app.post("/global/auth/logout", (c) =>
 app.post("/global/refresh-catalog", async (c) => {
   await refreshClaudeCatalogs();
   return c.json({ ok: true });
+});
+
+// The live logging settings. Metadata only; see `applyBridgeLogPolicy`.
+app.post(BRIDGE_LOG_POLICY_ROUTE, async (c) => {
+  const answer = applyBridgeLogPolicy(await readBridgeLogPolicyBody(c.req.raw));
+  return c.json(answer.body, answer.status);
 });
 
 // Mount routes

@@ -158,6 +158,7 @@ import {
 } from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
+  readApplicationLogPolicy,
   registerApplicationLoggingShutdown,
 } from "./application-logging.js";
 import {
@@ -191,6 +192,8 @@ import { DesktopWindowContexts, emitToContents } from "./desktop-window-contexts
 import { installSocketTypeOfServiceGuard } from "./socket-tos-guard.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logger-environment";
+import { applyLogDetail } from "@orkestrator/protocol/node/log-policy";
+import { createLiveLogPolicy } from "./live-log-policy.js";
 import { createUpdaterLibraryLogger } from "./updater-log.js";
 
 configureLoggerFromEnvironment(process.env);
@@ -237,10 +240,20 @@ app.setPath(
 // content server's frame-ancestors can name it). Must precede `ready`; the
 // scheme is only ever handled on each live host's private session.
 protocol.registerSchemesAsPrivileged([ARTIFACT_SHELL_SCHEME_PRIVILEGES]);
+// Before the writer's first line. The backend's settings changes reach this
+// process through `applyStoredLogPolicy`, so none of this waits for a restart.
+applyLogDetail(readApplicationLogPolicy(app.getPath("userData")).detail);
 const applicationLogging =
   runtimeFlavor === "production"
     ? installProductionApplicationLogging({ dataDir: app.getPath("userData") })
     : null;
+
+const liveLogPolicy = createLiveLogPolicy({
+  dataDir: app.getPath("userData"),
+  logging: applicationLogging,
+});
+const applyStoredLogPolicy = liveLogPolicy.apply;
+app.on("will-quit", () => liveLogPolicy.dispose());
 
 // Must follow the `userData` override above: the lock is scoped to that path.
 const isPrimaryInstance = claimSingleInstanceLock(app);
@@ -1463,8 +1476,10 @@ async function startApplication(): Promise<void> {
       strictDockerOwner: runtimeFlavor === "agent-test",
       strictGatewayPort: runtimeFlavor === "agent-test",
       credentialSources: runtimeProfile?.credentialSources,
+      onLogPolicyChanged: applyStoredLogPolicy,
       onEvent: (event, payload) => {
         hostUpdates?.handleEvent(event, payload);
+        liveLogPolicy.onEvent(event, payload);
         if (connectionManager) connectionManager.handleLocalEvent(event, payload);
       },
       onUnexpectedExit: (error) => {

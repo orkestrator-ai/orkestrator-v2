@@ -98,11 +98,31 @@ export function readBridgeDebugFlag(value: string | undefined): boolean {
   return value?.trim() === "1";
 }
 
+/**
+ * The setting the backend last sent, or undefined before it has sent one. Until
+ * then the environment is the startup default; after that the environment no
+ * longer decides, in either direction.
+ */
+let liveDiagnostics: boolean | undefined;
+/** Open scopes, so turning detail on reports them now rather than at the next tick. */
+const liveScopes = new Set<BridgeRunDiagnostics>();
+
+export function liveBridgeDiagnostics(): boolean | undefined {
+  return liveDiagnostics;
+}
+
+/** Applies at once to every open scope, turns already running included. */
+export function setLiveBridgeDiagnostics(enabled: boolean | undefined): void {
+  liveDiagnostics = enabled;
+  for (const scope of Array.from(liveScopes)) scope.syncActive();
+}
+
 /** A common flag takes precedence over legacy per-bridge overrides, including explicit off. */
 export function bridgeDebugEnabled(
   bridge: BridgeName,
   env: Record<string, string | undefined> = process.env,
 ): boolean {
+  if (liveDiagnostics !== undefined && env === process.env) return liveDiagnostics;
   const value = env.ORKESTRATOR_BRIDGE_DEBUG ?? env[`${bridge.toUpperCase()}_BRIDGE_DEBUG`];
   return readBridgeDebugFlag(value);
 }
@@ -212,6 +232,10 @@ function writeDiagnostic(
  * snapshot per minute off the producer path. No raw SDK logger is enabled:
  * its errors, arguments and payloads can contain credentials or user content.
  * Lifetime belongs to the backend turn, including while the UI is unmounted.
+ *
+ * A scope counts whether or not it is writing. Turning detail on mid-turn is how
+ * someone looks at a stuck agent, so the first snapshot has to cover the turn so
+ * far: which tools are pending and when anything last moved.
  */
 export class BridgeRunDiagnostics {
   private readonly counters: Record<Counter, number> = {
@@ -241,6 +265,7 @@ export class BridgeRunDiagnostics {
   private cancelReason?: CancellationReason;
   private run?: string;
   private closed = false;
+  private wasActive: boolean;
   private readonly timer: ReturnType<typeof setInterval>;
 
   constructor(
@@ -250,11 +275,21 @@ export class BridgeRunDiagnostics {
     private readonly write: BridgeDiagnosticWrite = writeBridgeDiagnostic,
     private readonly intervalMs = INTERVAL_MS,
     private readonly metrics: () => Record<string, unknown> = () => ({}),
+    protected readonly active: () => boolean = () => true,
   ) {
     this.startedAt = this.lastTick = now();
+    this.wasActive = active();
     this.timer = setInterval(() => this.report("heartbeat"), intervalMs);
     this.timer.unref();
+    liveScopes.add(this);
     this.report("send-started");
+  }
+
+  /** The setting may have changed: a scope turned on reports where the turn is now. */
+  syncActive(): void {
+    const active = this.active();
+    if (active && !this.wasActive) this.report("heartbeat");
+    this.wasActive = active;
   }
 
   sent(runId: string): void {
@@ -357,7 +392,7 @@ export class BridgeRunDiagnostics {
     const tickDelayMs =
       event === "heartbeat" ? Math.max(0, now - this.lastTick - this.intervalMs) : 0;
     if (event === "heartbeat") this.lastTick = now;
-    if (!bridgeDiagnosticsActive()) return;
+    if (!this.active() || !bridgeDiagnosticsActive()) return;
     const pendingTools = Array.from(this.pending.entries())
       .slice(0, MAX_REPORTED_TOOLS)
       .map(([id, tool]) => ({
@@ -410,6 +445,7 @@ export class BridgeRunDiagnostics {
     this.phase = phase;
     this.report("closed");
     this.closed = true;
+    liveScopes.delete(this);
     clearInterval(this.timer);
     this.pending.clear();
   }
@@ -419,17 +455,18 @@ export function createBridgeDiagnostics(
   bridge: BridgeName,
   state: DiagnosticState,
   metrics?: () => Record<string, unknown>,
-): BridgeRunDiagnostics | undefined {
-  return bridgeDebugEnabled(bridge)
-    ? new BridgeRunDiagnostics(bridge, state, undefined, undefined, undefined, metrics)
-    : undefined;
+): BridgeRunDiagnostics {
+  return new BridgeRunDiagnostics(bridge, state, undefined, undefined, undefined, metrics, () =>
+    bridgeDebugEnabled(bridge),
+  );
 }
 
 /** Batch legacy diagnostic sites too: no write per token and no arbitrary payloads. */
 export function createBufferedDebugLogger(
   bridge: BridgeName,
   allowedEvents: ReadonlySet<string>,
-  enabled = bridgeDebugEnabled(bridge),
+  /** Read per call, so a setting changed mid-turn applies to the next event. */
+  enabled: () => boolean = () => bridgeDebugEnabled(bridge),
   write: BridgeDiagnosticWrite = writeBridgeDiagnostic,
 ) {
   const entries = new Map<
@@ -439,7 +476,7 @@ export function createBufferedDebugLogger(
   let dropped = 0;
   let closed = false;
   const flush = () => {
-    if (!enabled || closed || (entries.size === 0 && dropped === 0)) return;
+    if (closed || (entries.size === 0 && dropped === 0)) return;
     try {
       writeDiagnostic(
         bridge,
@@ -456,11 +493,11 @@ export function createBufferedDebugLogger(
     entries.clear();
     dropped = 0;
   };
-  const timer = enabled ? setInterval(flush, INTERVAL_MS) : undefined;
-  timer?.unref();
+  const timer = setInterval(flush, INTERVAL_MS);
+  timer.unref();
   return {
     record(event: unknown, ...args: unknown[]) {
-      if (!enabled || closed || !bridgeDiagnosticsActive()) return;
+      if (closed || !enabled() || !bridgeDiagnosticsActive()) return;
       if (typeof event !== "string" || event.length > 160 || !allowedEvents.has(event)) {
         dropped++;
         return;
@@ -483,7 +520,7 @@ export function createBufferedDebugLogger(
     close() {
       flush();
       closed = true;
-      if (timer) clearInterval(timer);
+      clearInterval(timer);
       entries.clear();
     },
   };

@@ -16,6 +16,7 @@ import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MAX_GATEWAY_EVENT_FRAME_BYTES } from "@orkestrator/protocol/gateway-event-stream";
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { applyPiHostCredentialEnvironment } from "../../backend/src/core/host-agent-credentials";
 import type { CommandContext } from "../../backend/src/core/commands-context";
 import { defaultConfig } from "../../backend/src/core/storage";
@@ -32,6 +33,7 @@ import {
   agentTestDockerConfigDir,
   agentTestKeychainDir,
   createBackendProcessEnvironment,
+  relayBackendLine,
   desktopGatewayPort,
   getBrowserGatewayStatus,
   hostDockerConfigDir,
@@ -2158,4 +2160,59 @@ while :; do sleep 0.05; done`);
     },
     SPAWN_TIMEOUT_MS,
   );
+});
+
+describe("relaying the backend's logging settings", () => {
+  const record = (event: string) =>
+    JSON.stringify({
+      orklog: 1,
+      ts: "2026-11-01T00:00:00.000Z",
+      level: "info",
+      area: "logging",
+      event,
+    });
+
+  test("the audit line asks for a re-read and is written by the listener's call", () => {
+    const lines: string[] = [];
+    configureLogger({ sink: ({ line }) => lines.push(line) });
+    try {
+      let audit: (() => void) | undefined;
+      relayBackendLine("stdout", record("policy.changed"), (next) => {
+        audit = next;
+      });
+      expect(lines).toHaveLength(0);
+      audit?.();
+      expect(lines).toEqual(["[logging] policy.changed"]);
+    } finally {
+      resetLogger();
+    }
+  });
+
+  test("every other line is relayed as it always was", () => {
+    const lines: string[] = [];
+    configureLogger({ sink: ({ line }) => lines.push(line) });
+    try {
+      let calls = 0;
+      const listener = () => {
+        calls += 1;
+      };
+      relayBackendLine("stdout", record("capture.started"), listener);
+      relayBackendLine("stderr", "a crash dump", listener);
+      expect(calls).toBe(0);
+      expect(lines).toEqual(["[logging] capture.started", "[Backend] a crash dump"]);
+    } finally {
+      resetLogger();
+    }
+  });
+
+  test("without a listener the audit line still reaches the log", () => {
+    const lines: string[] = [];
+    configureLogger({ sink: ({ line }) => lines.push(line) });
+    try {
+      relayBackendLine("stdout", record("policy.changed"), undefined);
+      expect(lines).toEqual(["[logging] policy.changed"]);
+    } finally {
+      resetLogger();
+    }
+  });
 });

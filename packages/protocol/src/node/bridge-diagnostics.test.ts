@@ -1,10 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   bridgeDebugEnabled,
   BridgeRunDiagnostics,
+  createBridgeDiagnostics,
   createBufferedDebugLogger,
   MAX_BRIDGE_DIAGNOSTIC_BYTES,
   safeDiagnosticMetrics,
+  setLiveBridgeDiagnostics,
   writeBridgeDiagnostic,
 } from "./bridge-diagnostics.js";
 import { configureLogger, emitLogRecord, parseLogRecordLine } from "../logger.js";
@@ -54,8 +56,11 @@ describe("shared bridge diagnostics", () => {
 
   test("debug events are batched and only source-defined labels and scalar metrics survive", () => {
     const lines: string[] = [];
-    const logger = createBufferedDebugLogger("claude", new Set(["result"]), true, ({ payload }) =>
-      lines.push(payload),
+    const logger = createBufferedDebugLogger(
+      "claude",
+      new Set(["result"]),
+      () => true,
+      ({ payload }) => lines.push(payload),
     );
     try {
       for (let i = 0; i < 10000; i++)
@@ -83,14 +88,20 @@ describe("shared bridge diagnostics", () => {
   test("disabled loggers do not emit; event queues and emitted entries are bounded", () => {
     const lines: string[] = [];
     const labels = new Set(Array.from({ length: 100 }, (_, i) => `event-${i}`));
-    const disabled = createBufferedDebugLogger("claude", labels, false, ({ payload }) =>
-      lines.push(payload),
+    const disabled = createBufferedDebugLogger(
+      "claude",
+      labels,
+      () => false,
+      ({ payload }) => lines.push(payload),
     );
     disabled.record("event-1");
     disabled.close();
     expect(lines).toHaveLength(0);
-    const logger = createBufferedDebugLogger("claude", labels, true, ({ payload }) =>
-      lines.push(payload),
+    const logger = createBufferedDebugLogger(
+      "claude",
+      labels,
+      () => true,
+      ({ payload }) => lines.push(payload),
     );
     for (const label of labels) logger.record(label, { durationMs: 5 });
     logger.close();
@@ -165,7 +176,7 @@ describe("shared bridge diagnostics", () => {
         expect(capture.records()[1]?.fields?.payload).toBe(whole);
 
         const labels = Array.from({ length: 16 }, (_, index) => `${"e".repeat(150)}-${index}`);
-        const logger = createBufferedDebugLogger("claude", new Set(labels), true);
+        const logger = createBufferedDebugLogger("claude", new Set(labels), () => true);
         const metrics = Object.fromEntries(
           [
             "httpStatus",
@@ -218,7 +229,7 @@ describe("shared bridge diagnostics", () => {
             return {};
           },
         );
-        const logger = createBufferedDebugLogger("acp", new Set(["label"]), true);
+        const logger = createBufferedDebugLogger("acp", new Set(["label"]), () => true);
         expect(capture.records()).toHaveLength(1);
         expect(metricsReads).toBe(1);
 
@@ -244,5 +255,99 @@ describe("shared bridge diagnostics", () => {
         capture.restore();
       }
     });
+  });
+});
+
+describe("diagnostics that follow a live setting", () => {
+  const state = { id: "session-1", status: "running" };
+  const originalFlag = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+  let capture: ReturnType<typeof captureLogs>;
+  let lines: string[] = [];
+
+  beforeEach(() => {
+    capture = captureLogs();
+    lines = capture.lines;
+    delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    setLiveBridgeDiagnostics(undefined);
+  });
+
+  afterEach(() => {
+    capture.restore();
+    if (originalFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    else process.env.ORKESTRATOR_BRIDGE_DEBUG = originalFlag;
+    setLiveBridgeDiagnostics(undefined);
+  });
+
+  const parsed = () => bridgeDiagnosticPayloads(lines);
+
+  test("a scope opened while off writes nothing, and counts anyway", () => {
+    const scope = createBridgeDiagnostics("pi", state);
+    scope.activity("message_update");
+    scope.tool("call-1", "shell", "started");
+    scope.report("heartbeat");
+    expect(lines).toEqual([]);
+    scope.close();
+    expect(lines).toEqual([]);
+  });
+
+  test("turning detail on mid-turn reports the turn so far at once", () => {
+    const scope = createBridgeDiagnostics("pi", state);
+    scope.activity("message_update");
+    scope.tool("call-1", "shell", "started");
+    setLiveBridgeDiagnostics(true);
+    const [snapshot] = parsed();
+    expect(snapshot.event).toBe("heartbeat");
+    expect(snapshot.deltaCount).toBe(1);
+    expect(snapshot.pendingToolCount).toBe(1);
+    expect(snapshot.pendingTools[0].kind).toBe("shell");
+    scope.close();
+    expect(parsed().at(-1)?.event).toBe("closed");
+  });
+
+  test("turning detail off stops a scope mid-turn; turning it on again resumes", () => {
+    setLiveBridgeDiagnostics(true);
+    const scope = createBridgeDiagnostics("pi", state);
+    expect(parsed().map((entry) => entry.event)).toEqual(["send-started"]);
+    setLiveBridgeDiagnostics(false);
+    scope.report("heartbeat");
+    expect(lines).toHaveLength(1);
+    setLiveBridgeDiagnostics(true);
+    expect(lines).toHaveLength(2);
+    // Already on: a repeated setting is not a second snapshot.
+    setLiveBridgeDiagnostics(true);
+    expect(lines).toHaveLength(2);
+    scope.close();
+  });
+
+  test("a closed scope is not reported again", () => {
+    const scope = createBridgeDiagnostics("pi", state);
+    scope.close();
+    setLiveBridgeDiagnostics(true);
+    expect(lines).toEqual([]);
+  });
+
+  test("a live setting overrides the environment in both directions", () => {
+    process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
+    expect(bridgeDebugEnabled("codex")).toBe(true);
+    setLiveBridgeDiagnostics(false);
+    expect(bridgeDebugEnabled("codex")).toBe(false);
+    process.env.ORKESTRATOR_BRIDGE_DEBUG = "0";
+    setLiveBridgeDiagnostics(true);
+    expect(bridgeDebugEnabled("codex")).toBe(true);
+    // An injected environment is a question about that environment, not this process.
+    expect(bridgeDebugEnabled("codex", { ORKESTRATOR_BRIDGE_DEBUG: "0" })).toBe(false);
+  });
+
+  test("a buffered logger follows the setting from its next event", () => {
+    let enabled = false;
+    const logger = createBufferedDebugLogger("claude", new Set(["result"]), () => enabled);
+    logger.record("result");
+    logger.flush();
+    expect(lines).toEqual([]);
+    enabled = true;
+    logger.record("result");
+    logger.flush();
+    expect(parsed()[0].events[0]).toMatchObject({ event: "result", count: 1 });
+    logger.close();
   });
 });

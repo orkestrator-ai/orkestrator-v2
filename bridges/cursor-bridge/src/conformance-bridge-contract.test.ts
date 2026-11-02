@@ -41,6 +41,14 @@ runBridgeContractSuite({
         });
         return { status: response.status, body: await parse(response) };
       },
+      async unauthenticatedRequest(method, path, body) {
+        const response = await harness.call(path, {
+          method,
+          headers: { authorization: "" },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        return { status: response.status, body: await parse(response) };
+      },
       async createSession(options = {}) {
         return (await harness.createSession(options)).id;
       },

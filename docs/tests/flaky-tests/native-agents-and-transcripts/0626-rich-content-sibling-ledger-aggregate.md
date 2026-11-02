@@ -86,3 +86,26 @@ mise run test:logged -- --name transcript-review-failures-isolated -- bun test -
 
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4NhQjk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** recurrence confirmed by the unchanged owner pass. Shared-host scheduling pressure is a hypothesis, not an established cause. No implementation, assertion, deadline or skip in the owning file changed; the aggregate remains non-green.
+
+## Live logging review repair validation — 2026-11-01
+
+Original command: `mise run test:logged -- --name review-repair-default -- mise run test`
+on the shared macOS host, workspace/root/bridges/protocol reservations 5/1/2/1,
+with the web package using two workers and the bridge packages one worker each.
+The run waited 925 seconds for another worktree's aggregate reservation while
+browser and Electron checks were also active. No assertion, timeout, skip or
+implementation in this owner changed.
+
+The sibling ledger again had length zero instead of one at line 187
+(266.51 ms). The complete unchanged owner passed in 2.7 s:
+`mise run test:logged -- --name conversation-revocation-owner -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures`.
+Evidence: aggregate `orkestrator-test-run.BSqVX9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed at finalization). The cause remains unknown.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.

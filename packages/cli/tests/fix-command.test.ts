@@ -230,7 +230,7 @@ describe("the fix prompt", () => {
     });
     const prompt = buildFixPrompt(facts);
     expect(prompt).toContain("debug logging is off");
-    expect(prompt).toContain("Settings → Debug → Save Logs for Debugging");
+    expect(prompt).toContain("Settings → Debug → Save Logs to Disk");
     expect(prompt).toContain("Log files: none");
   });
 });

@@ -20,6 +20,7 @@
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.
  */
+import { parseLogRecordLine } from "@orkestrator/protocol/logger";
 import { afterEach, jest } from "bun:test";
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -311,6 +312,9 @@ export async function spawnBridge(
       if (line.startsWith("[bridge.acp] server.listening") && line.includes(` port=${port}`)) {
         listening = true;
       }
+      // A bridge relaying to the backend writes the same line as a record.
+      const record = parseLogRecordLine(line);
+      if (record?.event === "server.listening" && record.fields?.port === port) listening = true;
     });
     let ready: "ready" | "exited" | "starting";
     try {

@@ -40,7 +40,7 @@ class EventEmitter {
     // Guarded rather than passed through `debugLog`: this runs on every
     // streamed frame, and the object literal would otherwise be allocated
     // per emit only to be dropped.
-    if (isDebugLoggingEnabled) {
+    if (isDebugLoggingEnabled()) {
       debugLog("[event-emitter] Emitting event", {
         type: event.type,
         sessionId: event.sessionId,

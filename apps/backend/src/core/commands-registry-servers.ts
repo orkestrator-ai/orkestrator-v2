@@ -1,5 +1,7 @@
+import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { containerBridgeOperationId } from "./container-bridge-operations.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext, CommandHandler } from "./commands-context.js";
+import type { LocalServerKind } from "./local-server-runtime.js";
 import {
   boundedBackgroundLaunch,
   boundedTailCommand,
@@ -110,10 +112,35 @@ async function containerAgentHasLiveWork(
     : false;
 }
 
+/**
+ * Registers a command that starts a container bridge, or finds it running, and
+ * resends the logging settings to it: its `ORKESTRATOR_BRIDGE_DEBUG` is only the
+ * startup default, and it may have missed a change while it was down.
+ */
+function containerBridgeStartRegistrar(register: CommandRegistrar) {
+  return (name: string, agent: LocalServerKind, handler: CommandHandler): void => {
+    register(name, async (args, context) => {
+      const started = (await handler(args, context)) as {
+        hostPort?: number;
+        authToken?: string;
+      };
+      if (started?.hostPort && started.authToken) {
+        context.runtime.logPolicy?.bridgeStarted({
+          agent,
+          baseUrl: `http://127.0.0.1:${started.hostPort}`,
+          authToken: started.authToken,
+        });
+      }
+      return started;
+    });
+  };
+}
+
 export function registerServerCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
+  const registerBridgeStart = containerBridgeStartRegistrar(register);
   const { claudeModelCatalogRefreshes, validatedClaudeModelCatalogs, commands } = dependencies;
   register("start_opencode_server", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
@@ -226,7 +253,7 @@ export function registerServerCommands(
       asOpenCodeModelCatalog(args.models),
     );
   });
-  register("start_claude_server", async ({ containerId }, context) => {
+  registerBridgeStart("start_claude_server", "claude", async ({ containerId }, context) => {
     const id = await containerBridgeOperationId(context, asString(containerId, "containerId"));
     return enqueueContainerBridgeOperation(context, "claude", id, async () => {
       await reconcileContainerAgentAccount(
@@ -242,7 +269,7 @@ export function registerServerCommands(
       return startContainerClaudeServer(
         id,
         connection,
-        global.debugLogging === true,
+        bridgeDebugEnvValue(global) === "1",
         global.claudeBackgroundCommandLimitHours,
       );
     });
@@ -343,7 +370,7 @@ export function registerServerCommands(
     claudeModelCatalogRefreshes.set(id, refresh);
     return refresh;
   });
-  register("start_codex_server", ({ containerId }, context) => {
+  registerBridgeStart("start_codex_server", "codex", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     return enqueueContainerBridgeOperation(context, "codex", id, async () => {
       await reconcileContainerAgentAccount(
@@ -405,7 +432,7 @@ export function registerServerCommands(
           export CWD=/workspace
           export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
           export CODEX_BRIDGE_TOKEN=${quoteShell(authToken)}
-          export ORKESTRATOR_BRIDGE_DEBUG=${config.global.debugLogging === true ? "1" : "0"}
+          export ORKESTRATOR_BRIDGE_DEBUG=${bridgeDebugEnvValue(config.global)}
           ${bridgeLogEnvironmentExports()}
           ${
             agentToolConnection
@@ -500,7 +527,7 @@ export function registerServerCommands(
       provider === "cursor"
         ? "[c]ursor-bridge/dist/index.js"
         : "[a]cp-bridge/dist/index.js --provider=grok";
-    register(`start_${provider}_server`, async ({ containerId }, context) => {
+    registerBridgeStart(`start_${provider}_server`, provider, async ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       probeContainerAgentTools(context, id);
       const operationId = provider === "grok" ? await containerBridgeOperationId(context, id) : id;
@@ -560,7 +587,7 @@ export function registerServerCommands(
           export PORT=${containerPort}
           export HOSTNAME=0.0.0.0
           export CWD=/workspace
-          export ORKESTRATOR_BRIDGE_DEBUG=${bridgeConfig.global.debugLogging === true ? "1" : "0"}
+          export ORKESTRATOR_BRIDGE_DEBUG=${bridgeDebugEnvValue(bridgeConfig.global)}
           ${bridgeLogEnvironmentExports()}
           ${
             useCursorSdk
@@ -659,11 +686,12 @@ function probeContainerAgentTools(context: CommandContext, containerId: string):
  * access-only, before every start (`syncContainerLoginUnlocked`).
  */
 function registerPiServerCommands(register: CommandRegistrar): void {
+  const registerBridgeStart = containerBridgeStartRegistrar(register);
   const tokenFile = "/tmp/pi-bridge-token";
   const logFile = "/tmp/pi-bridge.log";
   const processPattern = "[p]i-bridge/dist/index.js";
 
-  register("start_pi_server", async ({ containerId }, context) => {
+  registerBridgeStart("start_pi_server", "pi", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     probeContainerAgentTools(context, id);
     const operationId = await containerBridgeOperationId(context, id);
@@ -698,7 +726,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
           export PI_SESSION_DIR=/home/node/.pi/agent/sessions
           export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state
           export PI_BRIDGE_TOKEN=${quoteShell(token)}
-          export ORKESTRATOR_BRIDGE_DEBUG=${config.global.debugLogging === true ? "1" : "0"}
+          export ORKESTRATOR_BRIDGE_DEBUG=${bridgeDebugEnvValue(config.global)}
           ${bridgeLogEnvironmentExports()}
           ${boundedBackgroundLaunch("bun /opt/pi-bridge/dist/index.js", logFile)}
         `,

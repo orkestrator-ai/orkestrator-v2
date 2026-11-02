@@ -31,6 +31,8 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "dispatch-probe-absent": yes,
     "steer-dispatch-probe-unknown": yes,
     "bounded-recovery-summary": yes,
+    "log-policy-metadata-only": yes,
+    "log-policy-authenticated": yes,
   },
   pi: {
     "unknown-session-in-band": yes,
@@ -45,6 +47,8 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "bounded-recovery-summary": no(
       "runtime-health publishes no bounded-state occupancy or limits (steer journal and queue sizes are internal)",
     ),
+    "log-policy-metadata-only": yes,
+    "log-policy-authenticated": yes,
   },
   claude: {
     "unknown-session-in-band": yes,
@@ -63,6 +67,10 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "dispatch-probe-absent": yes,
     "steer-dispatch-probe-unknown": yes,
     "bounded-recovery-summary": no("runtime-health publishes no bounded-state occupancy or limits"),
+    "log-policy-metadata-only": yes,
+    "log-policy-authenticated": no(
+      "this adapter runs in process with auth off; index-auth.test.ts covers the route",
+    ),
   },
   codex: {
     "unknown-session-in-band": yes,
@@ -81,6 +89,8 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "dispatch-probe-absent": yes,
     "steer-dispatch-probe-unknown": yes,
     "bounded-recovery-summary": no("runtime-health publishes no bounded-state occupancy or limits"),
+    "log-policy-metadata-only": yes,
+    "log-policy-authenticated": yes,
   },
   acp: {
     "unknown-session-in-band": yes,
@@ -97,5 +107,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
       "no steer route: Grok interjections are journaled prompts, and there is no /steer/dispatch probe",
     ),
     "bounded-recovery-summary": no("runtime-health publishes no bounded-state occupancy or limits"),
+    "log-policy-metadata-only": yes,
+    "log-policy-authenticated": yes,
   },
 };

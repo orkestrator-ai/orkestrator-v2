@@ -34,3 +34,22 @@ printf 'bridge\\n'
     },
   );
 });
+
+test("strict host-port discovery distinguishes unpublished ports from failed inspection", async () => {
+  const { getHostPort } = await import("./commands-container-exec.js");
+  rememberNetworkOwner("runtime", null);
+  await withDockerScript(
+    `#!/bin/sh
+printf '{"4097/tcp":[{"HostIp":"127.0.0.1","HostPort":"5100"}],"4098/tcp":null}\\n'
+`,
+    async () => {
+      expect(await getHostPort("runtime", 4097, "tcp", undefined, true)).toBe(5100);
+      expect(await getHostPort("runtime", 4098, "tcp", undefined, true)).toBeNull();
+      expect(await getHostPort("runtime", 4099, "tcp", undefined, true)).toBeNull();
+    },
+  );
+  await withDockerScript("#!/bin/sh\nexit 1\n", async () => {
+    await expect(getHostPort("runtime", 4097, "tcp", undefined, true)).rejects.toThrow();
+    expect(await getHostPort("runtime", 4097)).toBeNull();
+  });
+});

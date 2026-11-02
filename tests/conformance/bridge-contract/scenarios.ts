@@ -12,6 +12,7 @@
  * `finally`, so no scenario depends on another's sessions or state files.
  * Assertions compare small, content-free JSON bodies only.
  */
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import { describe, expect, test } from "bun:test";
 import { BRIDGE_CONTRACT_CAPABILITIES } from "./capabilities.js";
 
@@ -47,6 +48,8 @@ export interface BridgeContractHandle {
     path: string,
     body?: Record<string, unknown>,
   ): Promise<ContractResponse>;
+  /** `request` carrying no credential at all. */
+  unauthenticatedRequest?: BridgeContractHandle["request"];
   /** Create a session through the bridge's real create route. */
   createSession(options?: { clientSessionKey?: string }): Promise<string>;
   /** A prompt body this bridge accepts, carrying `requestId`. */
@@ -403,6 +406,61 @@ export const CONTRACT_SCENARIOS = [
         expect(record.bytes).toBeLessThanOrEqual(record.limitBytes);
       }
       expect(occupancy.some((record) => record.saturated)).toBe(true);
+    },
+  },
+  {
+    id: "log-policy-metadata-only",
+    title: "the logging settings route applies in band and touches no session",
+    requires: [],
+    async run(bridge) {
+      const id = await bridge.createSession();
+      const before = await activity(bridge, id);
+      uniqueCounter += 1;
+      const seq = Date.now() + uniqueCounter;
+
+      const detailed = await bridge.request("POST", BRIDGE_LOG_POLICY_ROUTE, {
+        seq,
+        level: "info",
+        areaLevels: { "bridge.diagnostics": "debug" },
+      });
+      expect(detailed.status).toBe(200);
+      expect(detailed.body).toEqual({ applied: true, seq, diagnostics: true });
+
+      const older = await bridge.request("POST", BRIDGE_LOG_POLICY_ROUTE, {
+        seq: seq - 1,
+        level: "error",
+        areaLevels: {},
+      });
+      expect(older.status).toBe(200);
+      expect(older.body).toEqual({ applied: false, stale: true, seq });
+
+      const invalid = await bridge.request("POST", BRIDGE_LOG_POLICY_ROUTE, {
+        seq: seq + 1,
+        level: "loud",
+      });
+      expect(invalid.status).toBe(400);
+
+      const quiet = await bridge.request("POST", BRIDGE_LOG_POLICY_ROUTE, {
+        seq: seq + 1,
+        level: "info",
+        areaLevels: {},
+      });
+      expect(quiet.body).toEqual({ applied: true, seq: seq + 1, diagnostics: false });
+
+      expect(await activity(bridge, id)).toEqual(before);
+    },
+  },
+  {
+    id: "log-policy-authenticated",
+    title: "the logging settings route refuses a request without the bridge token",
+    requires: ["unauthenticatedRequest"],
+    async run(bridge) {
+      const refused = await bridge.unauthenticatedRequest!("POST", BRIDGE_LOG_POLICY_ROUTE, {
+        seq: Number.MAX_SAFE_INTEGER,
+        level: "trace",
+        areaLevels: {},
+      });
+      expect(refused.status).toBe(401);
     },
   },
 ] as const satisfies readonly ContractScenario[];

@@ -1,4 +1,6 @@
 import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
+import { setLiveBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
+import { isDebugLoggingEnabled } from "./logger.js";
 import { describe, expect, jest, mock, test } from "bun:test";
 import type {
   MessagePatchEventData,
@@ -380,6 +382,45 @@ describe("sendPrompt", () => {
 
     expect(getSessionInitData(session.id)?.agents).toEqual([]);
     expect(session.status).toBe("idle");
+  });
+
+  test("detail turned on mid-turn reports the running turn at once, then every minute", async () => {
+    jest.useFakeTimers();
+    const lines: string[] = [];
+    const originalInfo = console.info;
+    console.info = (line: unknown) => {
+      lines.push(String(line));
+    };
+    setLiveBridgeDiagnostics(false);
+    let finish: (() => void) | undefined;
+    let promptPromise: Promise<unknown> | undefined;
+    try {
+      const session = createSession("stuck provider");
+      track(session.id);
+      promptPromise = sendPrompt(session.id, "PRIVATE PROMPT");
+      const call = await nextQueryCall();
+      finish = () => call.finish();
+      jest.advanceTimersByTime(60_001);
+      const snapshots = () => bridgeDiagnosticPayloads(lines);
+      expect(snapshots()).toHaveLength(0);
+      expect(isDebugLoggingEnabled()).toBe(false);
+
+      setLiveBridgeDiagnostics(true);
+      expect(isDebugLoggingEnabled()).toBe(true);
+      expect(snapshots()).toHaveLength(1);
+      expect(snapshots()[0]).toMatchObject({ event: "heartbeat", terminal: "pending" });
+      jest.advanceTimersByTime(60_001);
+      expect(snapshots().length).toBeGreaterThan(1);
+      expect(lines.join("\n")).not.toContain("PRIVATE PROMPT");
+      call.finish();
+      await promptPromise;
+    } finally {
+      finish?.();
+      await promptPromise;
+      console.info = originalInfo;
+      setLiveBridgeDiagnostics(undefined);
+      jest.useRealTimers();
+    }
   });
 
   test.each([false, true])(

@@ -604,7 +604,7 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
   }
 
   lastIdleTranscriptSweep = { scanned, evicted: evicted.length, skipped };
-  if (isDebugLoggingEnabled || evicted.length > 0) {
+  if (isDebugLoggingEnabled() || evicted.length > 0) {
     debugLog("[session-manager] Idle hydrated transcript sweep", {
       scanned,
       evicted: evicted.length,

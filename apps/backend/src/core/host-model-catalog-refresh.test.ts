@@ -140,10 +140,17 @@ afterEach(async () => {
 
 describe("host model catalogue refresh", () => {
   test.each([false, true])(
-    "passes debugLogging=%s to every short-lived bridge process",
+    "passes bridge detail=%s to every short-lived bridge process, whatever saving says",
     async (enabled) => {
       const config = await storage.loadConfig();
-      await storage.updateGlobalConfig({ ...config.global, debugLogging: enabled });
+      await storage.updateGlobalConfig({
+        ...config.global,
+        debugLogging: !enabled,
+        logDetail: {
+          level: "info",
+          areaLevels: enabled ? { bridge: "debug" } : {},
+        },
+      });
       stubBridgeSpawn((spawned) =>
         listenAsBridge(Number(spawned.env.PORT), (url, response) => {
           if (url !== "/global/models") return false;

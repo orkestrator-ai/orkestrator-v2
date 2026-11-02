@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
 
@@ -115,7 +116,7 @@ describe("Electron backend command registry", () => {
       },
     });
     const commands = createCommandRegistry();
-    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+    const warning = captureLogs();
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
@@ -170,13 +171,20 @@ exit 0
           payload: snapshot,
         });
         await Promise.resolve();
-        expect(warning).toHaveBeenCalledWith(
-          "[ElectronBackend] Failed to persist the Claude model catalogue:",
-          "injected host cache failure",
+        expect(warning.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "models",
+            event: "cache.write-failed",
+            fields: expect.objectContaining({
+              agent: "claude",
+              error: expect.objectContaining({ message: "injected host cache failure" }),
+            }),
+          }),
         );
       });
     } finally {
-      warning.mockRestore();
+      warning.restore();
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
       if (pid) {
         try {
@@ -206,6 +214,8 @@ exit 0
     const { context } = createContext(environment, {
       globalConfig: { codexMaxConcurrentThreads: 9, debugLogging: true },
     });
+    const bridgeStarted = mock((_target: { agent: string; baseUrl: string }) => undefined);
+    context.runtime.logPolicy = { bridgeStarted } as never;
     const commands = createCommandRegistry();
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
@@ -272,6 +282,12 @@ exit 0
         expect(execLog).not.toContain("CODEX_HOME=");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
+        // Every start, including one that finds it running: the service dedupes.
+        expect(bridgeStarted).toHaveBeenCalled();
+        expect(bridgeStarted.mock.calls[0]![0]).toMatchObject({
+          agent: "codex",
+          baseUrl: `http://127.0.0.1:${hostPort}`,
+        });
         expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
         expect(execLog).not.toContain("setsid node");
       });

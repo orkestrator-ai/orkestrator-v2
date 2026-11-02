@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { LogDetailSettings } from "./LogDetailSettings";
 import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 import * as backend from "@/lib/backend";
@@ -340,6 +341,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setDebugLogging,
     debugLogRetentionDays,
     setDebugLogRetentionDays,
+    logDetail,
+    setLogDetail,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,
@@ -2169,7 +2172,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         ) : null}
       </div>
       <div className="space-y-3">
-        <SettingsSectionHeader title="Save Logs for Debugging">
+        <SettingsSectionHeader title="Save Logs to Disk">
           Write application logs to disk for troubleshooting
         </SettingsSectionHeader>
         <button
@@ -2224,9 +2227,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </p>
           )}
           <p className="text-xs text-muted-foreground">
-            Expired production logs are removed at startup and periodically while the app runs. Logs
-            also roll over to a new file once one grows large, and the oldest are dropped if the
-            directory as a whole gets too big.
+            While saving is on, expired production logs are removed periodically. Logs also roll
+            over to a new file once one grows large, and the oldest are dropped if the directory as
+            a whole gets too big.
           </p>
         </div>
 
@@ -2304,9 +2307,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </AlertDialog>
         </div>
         <p className="text-xs text-muted-foreground/60">
-          Enabling logging or changing retention requires an app restart to take effect.
+          Changes apply straight away, with no restart and without interrupting running agents.
         </p>
       </div>
+      <LogDetailSettings value={logDetail} onChange={setLogDetail} />
     </SettingsPageLayout>
   );
 

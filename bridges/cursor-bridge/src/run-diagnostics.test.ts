@@ -1,5 +1,6 @@
 import { bridgeDiagnosticPayload } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
-import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
+import { setLiveBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 import type { SDKAgent } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
 import {
@@ -65,7 +66,17 @@ describe("Cursor stall diagnostics", () => {
     try {
       delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
       delete process.env.CURSOR_BRIDGE_DEBUG;
-      expect(createRunDiagnostics(newSessionState())).toBeUndefined();
+      const lines: string[] = [];
+      const previousInfo = console.info;
+      console.info = (line: unknown) => lines.push(String(line));
+      try {
+        const scope = createRunDiagnostics(newSessionState());
+        scope.report("heartbeat");
+        scope.close();
+        expect(lines).toEqual([]);
+      } finally {
+        console.info = previousInfo;
+      }
     } finally {
       if (previousShared === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
       else process.env.ORKESTRATOR_BRIDGE_DEBUG = previousShared;
@@ -329,5 +340,44 @@ describe("Cursor stall diagnostics", () => {
       if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
       else process.env.ORKESTRATOR_BRIDGE_DEBUG = previous;
     }
+  });
+});
+
+describe("detail turned on while a turn is already running", () => {
+  const originalInfo = console.info;
+  afterEach(() => {
+    console.info = originalInfo;
+    setLiveBridgeDiagnostics(undefined);
+    resetSdkDiagnosticsForTests();
+  });
+
+  test("the running turn's public scope reports at once and the SDK seam installs then", () => {
+    const lines: string[] = [];
+    console.info = (line: unknown) => lines.push(String(line));
+    let installs = 0;
+    resetSdkDiagnosticsForTests({
+      __orkestratorDiagnosticsV1() {
+        installs += 1;
+        return () => undefined;
+      },
+    });
+    setLiveBridgeDiagnostics(false);
+    const scope = createRunDiagnostics(newSessionState());
+    scope.delta({ type: "tool-call-started", callId: "call-1", toolCall: { type: "shell" } });
+    expect(lines).toEqual([]);
+    expect(installs).toBe(0);
+
+    setLiveBridgeDiagnostics(true);
+    expect(installs).toBe(1);
+    const entries = lines.flatMap((line) => bridgeDiagnosticPayload(line) ?? []);
+    const publicSnapshot = entries.find((entry) => entry.pendingToolCount !== undefined);
+    expect(publicSnapshot).toMatchObject({
+      event: "heartbeat",
+      pendingToolCount: 1,
+      deltaCount: 1,
+    });
+    const sdkSnapshot = entries.find((entry) => entry.event === "sdk-snapshot");
+    expect(sdkSnapshot?.coverage).toBe("installed");
+    scope.close();
   });
 });

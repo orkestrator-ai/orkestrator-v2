@@ -7,6 +7,7 @@ import { GATEWAY_LOG_AREAS } from "./gateway.js";
 import { LOCAL_SERVER_LOG_AREAS } from "./local-server.js";
 import { GIT_LOG_AREAS } from "./git.js";
 import { LOGGING_LOG_AREAS } from "./logging.js";
+import { MODEL_LOG_AREAS } from "./models.js";
 import { NATIVE_AGENT_LOG_AREAS } from "./native-agent.js";
 import { PREVIEW_LOG_AREAS } from "./preview.js";
 import { RUNTIME_LOG_AREAS } from "./runtime.js";
@@ -34,6 +35,7 @@ export const LOG_VOCABULARY = {
   ...LOCAL_SERVER_LOG_AREAS,
   ...GIT_LOG_AREAS,
   ...LOGGING_LOG_AREAS,
+  ...MODEL_LOG_AREAS,
   ...NATIVE_AGENT_LOG_AREAS,
   ...PREVIEW_LOG_AREAS,
   ...RUNTIME_LOG_AREAS,

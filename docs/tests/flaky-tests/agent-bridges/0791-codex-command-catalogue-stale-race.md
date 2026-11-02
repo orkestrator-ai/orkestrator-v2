@@ -364,6 +364,65 @@ changed; the existing timing investigation remains open.
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.8VTwNj/bridges.log.gz`
 and `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.53Ejpu/repair-catalogue-owner.log.gz`.
 
+## Live logging review repair validation — 2026-11-01
+
+Original command: `mise run test:logged -- --name review-repair-default -- mise run test`
+on the shared macOS host, workspace/root/bridges/protocol reservations 5/1/2/1,
+with the web package using two workers and the bridge packages one worker each.
+The run waited 925 seconds for another worktree's aggregate reservation while
+browser and Electron checks were also active. No assertion, timeout, skip or
+implementation in this owner changed.
+
+`a cold app-server child > two pre-plugin answers stay stale until late plugins
+are observed and confirmed` expected `stale`, received `ready` at line 273
+(80.14 ms). The complete unchanged owner passed in 1.3 s:
+`mise run test:logged -- --name codex-catalogue-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures`.
+Evidence: aggregate `orkestrator-test-run.BSqVX9/bridges.log` (compressed at
+finalization). The settling timer remains an unconfirmed cause.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.
+
+## Live logging merge with the bridge logger migration — 2026-11-02
+
+`mise run test:logged -- --name bridge-codex -- bun run --cwd bridges/codex-bridge test:bridge`
+failed `an explicit refresh cannot replace the baseline for an already armed delay`
+(expected `stale`, received `ready`, 76.78 ms) and `a failed settling read leaves the
+list stale until a read succeeds` (settling wait timed out at 2,053.76 ms). The
+unchanged owner then ran alone three times with `bun test
+src/commands/codex-command-catalogue.test.ts --only-failures` from `bridges/codex-bridge`:
+it passed twice and failed once, so it also fails solo. Neither the catalogue nor its
+test is touched by this change.
+
+
+## Live logging round 2 repair — 2026-11-02
+
+Preparation at `dccae0434` (`mise run test`, workspace/root/bridges/protocol
+reservations 5/1/2/1) failed the two-pre-plugin stale/ready assertion (64.87 ms)
+and the failed-settling-read wait (2,044.86 ms). The unchanged catalogue owner
+then failed its first-answer settling wait alone on this branch (29 pass,
+one fail, 3.31 s):
+
+`mise run test:logged -- --name branch-codex-owner -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+
+An identical complete-owner confirmation with name `branch-codex-owner-confirm`
+passed (30 tests, exit 0, 1.3 s). On detached `origin/main` at `88c3c6bac`,
+with independently installed frozen dependencies, the same owner with
+`--rerun-each=20` reported 597 pass and three failures: two armed-delay
+stale/ready mismatches (51.26 and 82.31 ms), and the exact preparation
+pre-plugin mismatch (54.92 ms). A focused 30-repeat main run of the
+failed-settling-read case passed; that particular timeout was not reproduced
+on main. The real-clock settling investigation remains open. No catalogue
+code, assertion, timeout, or skip changed.
+
+Evidence preserved in `output/agent-testing/review-fix-53284689/`:
+`branch-codex-owner.log.gz` and `baseline-codex-catalogue.log.gz`.
+
 ## Safe error formatting second review — 2026-11-02
 
 `mise run test:logged -- --name r5-round2-default-suite -- mise run test`

@@ -1232,9 +1232,12 @@ export interface AppConfig {
      * the graph commands, tools and already-open graph tabs are unaffected.
      */
     experimentalGraphs?: boolean;
+    /** "Save logs to disk": whether application logs are written. Applies live. */
     debugLogging?: boolean;
-    /** Number of days production application logs remain on disk. */
+    /** Number of days production application logs remain on disk. Applies live. */
     debugLogRetentionDays?: number;
+    /** "Log detail": levels for every process, running bridges included. Applies live. */
+    logDetail?: import("@orkestrator/protocol/log-policy").LogDetail;
     webClientEnabled?: boolean;
     /** Audible cues for background events that need the user's attention. */
     notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;

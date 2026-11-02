@@ -242,6 +242,56 @@ The notification-bar review on 2026-11-01 repeated the ledger assertion; the unc
 
 Reruns: `mise run test:logged -- --name fix-design-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` and the same owner command with `--name baseline-design-profiles` in detached main at `b965aea44`, with independently installed dependencies. The ledger still held `1841-1846-0123abcd.json` at line 505 in preparation; this remains an intermittent cleanup observation, not a confirmed root cause.
 
+## Live logging review repair validation — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-final -- mise run test`
+used workspace/root/bridges/protocol reservations 5/1/2/1. The recorded-profile
+case again saw `20543-20546-0123abcd.json` in the ledger after profile deletion
+(470.70 ms). Backend totals were 13,016 pass, 97 skip and one fail across
+870 files.
+
+The complete unchanged owner passed alone, exit 0 in 1.3 s:
+`mise run test:logged -- --name design-browser-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`.
+Evidence: `orkestrator-test-run.haynoB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. No implementation, assertion, deadline or
+skip changed; the ledger-removal timing cause remains unconfirmed.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.
+
+On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test` (69.12 ms). The owner passed alone: `bun test ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --only-failures` (37 pass, 0 fail).
+
+
+## Live logging round 2 final validation — 2026-11-02
+
+`mise run test:logged -- --name fix-default-final -- mise run test` finished
+in 562.0 s with one failure: `design service startup > removes the recorded
+profile of a backend that was killed` found `82613-82614-0123abcd.json` in the
+ledger at line 505 after the profile disappeared (247.91 ms). Backend totals
+were 13,070 pass, one fail; all other workspace packages and the root,
+bridges and protocol groups passed. Reservations were workspace/root/bridges/
+protocol 5/1/2/1, with two backend workers.
+
+The complete unchanged owner passed alone (37 tests, exit 0, 0.4 s):
+
+`mise run test:logged -- --name branch-design-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+
+Detached `origin/main` at `88c3c6bac`, with independently installed frozen
+dependencies, reproduced the exact line-505 ledger assertion twice in a
+20-repeat complete-owner run (738 pass, two fail, 4.7 s; failures at 127.79
+and 79.18 ms):
+
+`mise run test:logged -- --name baseline-design-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --rerun-each=20`
+
+Neither the implementation nor its test differs from main in this branch.
+No assertion, deadline or skip changed. This is evidence of the existing race,
+not a fix. Logs are preserved in `output/agent-testing/review-fix-53284689/`:
+`default-final-workspace.log.gz` and `baseline-design-profiles-owner.log.gz`.
 
 ## Safe error formatting second review — 2026-11-02
 
@@ -277,4 +327,3 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
-On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test` (69.12 ms). The owner passed alone: `bun test ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --only-failures` (37 pass, 0 fail).

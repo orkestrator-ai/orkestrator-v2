@@ -96,6 +96,14 @@ runBridgeContractSuite({
 
     return {
       request,
+      async unauthenticatedRequest(method, path, body) {
+        const response = await nativeFetch(`${origin}${path}`, {
+          method,
+          headers: { "content-type": "application/json" },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        return { status: response.status, body: await parse(response) };
+      },
       async createSession(options = {}) {
         const created = await request("POST", "/session/create", options);
         if (created.status !== 201) throw new Error(`create answered ${created.status}`);

@@ -1,3 +1,5 @@
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import { applyBridgeLogPolicy } from "@orkestrator/protocol/node/bridge-log-policy";
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 /**
  * The bridge's HTTP surface.
@@ -258,6 +260,11 @@ export async function route(
       const answer = await answerSessionActivityBatch(request, sessionActivityObservation, {
         contentLength: request.headers["content-length"],
       });
+      return json(response, answer.status, answer.body);
+    }
+    // The live logging settings. Metadata only; see `applyBridgeLogPolicy`.
+    if (url.pathname === BRIDGE_LOG_POLICY_ROUTE && request.method === "POST") {
+      const answer = applyBridgeLogPolicy(await readJson(request));
       return json(response, answer.status, answer.body);
     }
     const handled = await routeGlobal(request, response, url);

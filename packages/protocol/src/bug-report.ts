@@ -201,7 +201,7 @@ export function describeBugReportLogs(
 ): string[] {
   const state = facts.debugLogging
     ? "on"
-    : "off (Settings → Debug → Save Logs for Debugging); new events are not being written";
+    : "off (Settings → Debug → Save Logs to Disk); new events are not being written";
   const lines = [`- Logs directory: ${facts.logsDir} — debug logging is ${state}`];
   if (facts.recentLogs.length === 0) {
     lines.push("- Log files: none");
@@ -237,7 +237,7 @@ export function bugReportDiagnosticsSection(connectionLine: string): string[] {
     "Gather evidence yourself instead of asking me to copy it. Before each command, say in one sentence what it checks. Stay read-only: do not edit, delete, move, restart, reinstall or update anything, and do not change Orkestrator's data directory or settings. If something needs changing, explain it and let me do it.",
     "Useful sources:",
     "- Log files: `orkestrator-ai-YYYY-MM-DD.log` is the desktop app (it includes its backend's output), `orkestrator-backend-YYYY-MM-DD.log` a standalone backend; JSON mode uses `.jsonl` instead of `.log`. A busy day continues in `.1.log`, `.2.log` (or `.1.jsonl`, `.2.jsonl`), and so on. Search around the time of the problem (errors, warnings, stack traces, the environment or session name) rather than reading whole files.",
-    "- If debug logging is off or the logs predate the problem, ask me to turn on Settings → Debug → Save Logs for Debugging, reproduce the problem, and tell you when I have.",
+    "- If debug logging is off or the logs predate the problem, ask me to turn on Settings → Debug → Save Logs to Disk, reproduce the problem, and tell you when I have.",
     connectionLine,
     "- Docker environments: `docker version`, `docker ps -a`, and `docker logs --tail 200 <container>` for the affected container.",
     "- Versions: `<agent> --version` for the agents involved, `git --version`, `gh --version`; on macOS, `defaults read /Applications/OrkestratorV2.app/Contents/Info.plist CFBundleShortVersionString` for the desktop app.",

@@ -11,6 +11,7 @@ import {
 } from "@orkestrator/protocol/controller-settings";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
+import { parseLogDetail } from "@orkestrator/protocol/log-policy";
 import { isMultiReviewEngine } from "@orkestrator/protocol/multi-review";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import {
@@ -341,7 +342,12 @@ export class ConfigRepository {
     await this.enqueueConfigMutation(async () => {
       const own = await this.loadOwnConfig();
       const current = options.preserveCredentials ? own : null;
-      const ownGlobal = this.keepOwnInheritedValues(validated.global, own.global);
+      const kept = this.keepOwnInheritedValues(validated.global, own.global);
+      // A save that predates the split of the logging setting keeps the stored one.
+      const ownGlobal =
+        kept.logDetail === undefined && own.global.logDetail !== undefined
+          ? { ...kept, logDetail: own.global.logDetail }
+          : kept;
       const next = current
         ? {
             ...validated,
@@ -710,8 +716,17 @@ export class ConfigRepository {
     if (multiReviewEngine !== undefined && !isMultiReviewEngine(multiReviewEngine)) {
       throw new Error("The Multi Review engine must be bespoke or graph");
     }
+    // Absent is a save that predates the setting; `commitGlobalConfig` keeps the
+    // stored one. A value that does not parse is refused rather than dropped, or
+    // a bridge left at detail the user thinks they changed would look like a bug.
+    const requestedLogDetail = reviewValidated.logDetail as unknown;
+    const logDetail = requestedLogDetail === undefined ? null : parseLogDetail(requestedLogDetail);
+    if (requestedLogDetail !== undefined && !logDetail) {
+      throw new Error("Log detail must name a valid level for each area");
+    }
     const validated: AppConfig["global"] = {
       ...reviewValidated,
+      ...(logDetail ? { logDetail } : {}),
       ...(reviewLensPresets === undefined
         ? {}
         : { reviewLensPresets: sanitizeReviewLensPresets(reviewLensPresets) }),
@@ -779,6 +794,9 @@ export class ConfigRepository {
     // A settings save that predates the engine setting keeps the stored one.
     if (validated.multiReviewEngine === undefined && config.global.multiReviewEngine !== undefined)
       validated.multiReviewEngine = config.global.multiReviewEngine;
+    // Likewise a save that predates the split of the logging setting.
+    if (validated.logDetail === undefined && config.global.logDetail !== undefined)
+      validated.logDetail = config.global.logDetail;
     if (
       validated.containerResourceLimits === undefined &&
       config.global.containerResourceLimits !== undefined

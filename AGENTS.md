@@ -27,7 +27,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
 | How projects or environments are listed or displayed (`components/sidebar/`, `EnvironmentItem*`, `components/federation/RemoteMachineTree.tsx`, `FederatedSidebarSections.tsx`, `lib/federation/aggregate.ts`, `node-summaries.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#one-presentation-for-both-paths) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
-| Logging, `createLogger`, log areas and events, the Electron relay | [`docs/architecture/logging.md`](docs/architecture/logging.md) |
+| Logging, `createLogger`, log areas and events, the Electron relay, live logging settings | [`docs/architecture/logging.md`](docs/architecture/logging.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
 | The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |

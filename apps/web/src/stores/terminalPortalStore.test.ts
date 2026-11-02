@@ -180,7 +180,7 @@ describe.each([
     window.addEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, listener);
 
     try {
-      handler(data)(linkEvent(modifiers), "https://example.com/internal?q=1");
+      handler(data)(linkEvent(modifiers), "http://localhost:5173/internal?q=1");
     } finally {
       window.removeEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, listener);
     }
@@ -189,7 +189,7 @@ describe.each([
       {
         environmentId: "source-env",
         sourceTabId: "source-tab",
-        url: "https://example.com/internal?q=1",
+        url: "http://localhost:5173/internal?q=1",
       },
     ]);
     expect(invokeMock).not.toHaveBeenCalled();

@@ -332,29 +332,18 @@ so there the `build.sh` or data-directory pin is trusted as before; rebuild
 with `build.sh` after changing the worker. The replaced image is left for
 Docker's own pruning (`docker image prune` removes it once nothing tags it).
 
-Publishing. The `publish-preview-worker` workflow
-(`.github/workflows/publish-preview-worker.yml`) runs on every main push that
-touches the context's inputs (the worker directory, the transcript-artifact
-sources, the protocol sources, `bun.lock`, `mise.toml`) and on demand. It
-stages the context once and computes its digest; if
-`ghcr.io/orkestrator-ai/orkestrator-v2/artifact-preview-worker:ctx-<digest
-hex>` already exists nothing is rebuilt. Otherwise it builds `linux/amd64`
-and `linux/arm64` on native runners from those exact bytes, labelled with the
-context digest, pushes them by digest, joins them into one manifest list
-tagged `ctx-<hex>` and `sha-<commit>`, and attests its provenance. It then
-checks that both platforms carry the label and that the image can be pulled
-anonymously, and opens a pull request that rewrites `published-image.json`
-(`write-pin.ts`: `image`, `tag`, `digest`, `contextDigest`, `publishedAt`).
-Merging it pins packaged installs built from that context. A pin lags main by
-one pull request after each worker change; until it is merged, a release
-ships a pin for an older context, which its installs ignore and build
-locally. Two one-time maintainer steps: make the GHCR package public (a new
-package starts private, and the workflow does not propose a pin it cannot
-pull anonymously), and allow GitHub Actions to create pull requests in the
-repository settings. A pull request opened with `GITHUB_TOKEN` does not start
-CI; close and reopen it to run the checks. `docker/artifact-preview-worker/publish.sh
-<repository> [tag]` does the same by hand after `docker login` (tag defaults
-to `ctx-<hex>`). Nothing in the product pushes or logs in.
+Publishing. Nothing publishes the worker image automatically, and the
+checked-in `published-image.json` holds `null`, so every install builds the
+worker from its shipped context. The `publish-preview-worker` workflow that
+published one image per context digest and proposed pin pull requests was
+removed in November 2026: the image is the Playwright base plus a few small
+files, so a pull saves little over a local build, and the workflow needed a
+pin pull request merged before each release. `docker/artifact-preview-worker/publish.sh
+<repository> [tag]` can still publish an image and write the pin by hand after
+`docker login` (tag defaults to `ctx-<hex>`). Removing the pull route altogether
+is tracked in
+[todo 2681](../todo/transcripts-and-observation/2681-remove-preview-worker-pull-route.md).
+Nothing in the product pushes or logs in.
 
 Packaging. The worker image installs `playwright-core` with `npm ci` from
 `docker/artifact-preview-worker/package-lock.json` (generated with the base

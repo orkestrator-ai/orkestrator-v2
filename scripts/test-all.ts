@@ -197,9 +197,10 @@ export function boundConsoleLines(text: string): string {
  * Watchdog budgets. Groups stream their child output live (see
  * `TURBO_GROUP_OUTPUT_FLAGS`), so a five-minute gap really does mean the group
  * stopped working.
- * The absolute deadline is deliberately several times the slowest group ever
- * recorded — around four minutes for the workspace group on a cold cache — so
- * it only catches a wedged run, never a slow one.
+ * The absolute deadline only catches a wedged run, never a slow one. On a
+ * 4-core CI runner the workspace group runs its package tasks one at a time and
+ * now takes close to 30 minutes, so CI raises it through
+ * `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS`.
  */
 export const DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS = 5 * 60 * 1_000;
 export const DEFAULT_TEST_GROUP_TIMEOUT_MS = 30 * 60 * 1_000;

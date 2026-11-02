@@ -142,7 +142,7 @@ test("nothing shows, and nothing is read, with one machine", async () => {
   nodes = [];
   renderReadings();
   await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
-  expect(screen.queryByTestId("machine-cpu-readings")).toBeNull();
+  expect(screen.queryByTestId("machine-cpu-readings") === null).toBe(true);
   expect(usageCalls).toEqual([]);
 });
 

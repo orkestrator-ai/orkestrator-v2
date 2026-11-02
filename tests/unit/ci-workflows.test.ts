@@ -7,7 +7,18 @@ const read = (relativePath: string) =>
 
 type Workflow = {
   concurrency: { group: string; "cancel-in-progress": string };
-  jobs: Record<string, { name: string }>;
+  jobs: Record<
+    string,
+    {
+      name: string;
+      needs?: string;
+      "runs-on"?: string;
+      permissions?: Record<string, string>;
+      outputs?: Record<string, string>;
+      strategy?: { matrix: { runner: string[] } };
+      steps?: { id?: string; run?: string; env?: Record<string, string> }[];
+    }
+  >;
 };
 
 const workflow = (name: string) =>
@@ -38,6 +49,38 @@ describe("CI workflow contracts", () => {
     expect(contexts.length).toBeGreaterThan(0);
     const jobNames = Object.values(workflow("ci").jobs).map((job) => job.name);
     for (const context of contexts) expect(jobNames).toContain(context);
+  });
+
+  test("the complete CI suite has a 45-minute group deadline", () => {
+    const step = workflow("ci").jobs.test!.steps!.find((step) => step.run === "mise run test:full");
+    expect(step?.env?.ORKESTRATOR_TEST_GROUP_TIMEOUT_MS).toBe("2700000");
+  });
+
+  test("CI compares independently installed worker contexts across hosts", () => {
+    const jobs = workflow("ci").jobs;
+    const baseline = jobs["worker-context"]!;
+    const parity = jobs["worker-context-parity"]!;
+    expect(baseline["runs-on"]).toBe("ubuntu-24.04");
+    expect(baseline.outputs?.digest).toBe("${{ steps.context.outputs.digest }}");
+    expect(parity.needs).toBe("worker-context");
+    expect(parity["runs-on"]).toBe("${{ matrix.runner }}");
+    expect(parity.strategy?.matrix.runner).toEqual(["ubuntu-24.04-arm", "macos-15"]);
+    for (const job of [baseline, parity]) {
+      expect(job.permissions).toEqual({ contents: "read" });
+      expect(job.steps?.some((step) => step.run === "bun install --frozen-lockfile")).toBe(true);
+      const stage = job.steps?.find((step) =>
+        step.run?.includes("bun docker/artifact-preview-worker/stage-context.ts"),
+      );
+      expect(stage?.run).toContain('test "$(bun --version)" = "$(mise current bun)"');
+      expect(stage?.run).toContain("bun docker/artifact-preview-worker/context-digest.ts");
+    }
+    const digest = baseline.steps?.find((step) => step.id === "context");
+    expect(digest?.run).toContain('echo "digest=$digest" >> "$GITHUB_OUTPUT"');
+    const comparison = parity.steps?.find((step) => step.env?.CONTEXT_DIGEST);
+    expect(comparison?.env?.CONTEXT_DIGEST).toBe("${{ needs.worker-context.outputs.digest }}");
+    expect(comparison?.run).toContain(
+      'test "$(bun docker/artifact-preview-worker/context-digest.ts "${RUNNER_TEMP}/worker-context")" = "$CONTEXT_DIGEST"',
+    );
   });
 
   test("the test job installs every tool a host-gated test needs", () => {
@@ -78,45 +121,5 @@ describe("CI workflow contracts", () => {
     // Without the gate every live test skips and the job passes vacuously.
     expect(source).toContain('RUN_LIVE_DOCKER_TESTS: "1"');
     expect(source).not.toContain("orkestrator-v2:latest");
-  });
-
-  test("the preview worker image is published per build context and pinned through a pull request", () => {
-    const source = read(".github/workflows/publish-preview-worker.yml");
-    const parsed = Bun.YAML.parse(source) as {
-      on: { push: { branches: string[]; paths: string[] }; workflow_dispatch: unknown };
-      env: Record<string, string>;
-      jobs: Record<string, { if?: string; permissions?: Record<string, string> }>;
-    };
-    expect(parsed.on.push.branches).toEqual(["main"]);
-    expect("workflow_dispatch" in parsed.on).toBe(true);
-    // Every input of the staged context triggers a run (a missed one only
-    // leaves the pin stale, which installs survive by building locally).
-    expect(parsed.on.push.paths).toEqual(
-      expect.arrayContaining([
-        "docker/artifact-preview-worker/**",
-        "apps/backend/src/core/transcript-artifacts/**",
-        "packages/protocol/src/**",
-        "bun.lock",
-      ]),
-    );
-    // The label the backend checks after a pull is the one the image carries
-    // (the backend's preview-worker-context-digest test pins the same value).
-    expect(parsed.env.CONTEXT_LABEL).toBe("orkestrator.artifact-preview-worker.context");
-    expect(source).toContain(
-      "${{ env.CONTEXT_LABEL }}=${{ needs.context.outputs.context-digest }}",
-    );
-    expect(source).toContain("bun docker/artifact-preview-worker/stage-context.ts");
-    expect(source).toContain("bun docker/artifact-preview-worker/context-digest.ts");
-    expect(source).toContain("bun docker/artifact-preview-worker/write-pin.ts");
-    // Native runners for each architecture, pushed by digest, no emulation.
-    expect(source).toContain("runner: ubuntu-24.04-arm");
-    expect(source).toContain("push-by-digest=true,name-canonical=true,push=true");
-    expect(source).not.toContain("docker/setup-qemu-action@");
-    // An existing image for the context is not rebuilt, and only main is pinned.
-    expect(parsed.jobs.build?.if).toBe("needs.context.outputs.exists != 'true'");
-    expect(source).toContain("github.ref == 'refs/heads/main'");
-    // Only the pin job can write to the repository.
-    for (const [name, job] of Object.entries(parsed.jobs))
-      expect(job.permissions?.contents, name).toBe(name === "publish" ? "write" : "read");
   });
 });

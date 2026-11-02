@@ -1,8 +1,7 @@
 /**
  * Rewrites published-image.json, the checked-in digest pin of the published
  * artifact preview worker, after validating every field the backend checks
- * (`readPublishedWorkerImage`). Used by publish.sh and the
- * publish-preview-worker workflow.
+ * (`readPublishedWorkerImage`). Used by publish.sh.
  * Usage: bun write-pin.ts <repository> <tag> <manifest digest> <context digest> [pin file]
  * Prints `changed` or `unchanged` (the image, digest and context digest
  * already match; the file is left alone).

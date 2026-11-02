@@ -438,7 +438,7 @@ describe("NativeAgentInteractionCard", () => {
     const line = screen.getByTestId("interaction-source");
     // The configured name is untrusted text: shown verbatim, never as markup.
     expect(line.textContent).toBe("Requested by MCP server <b>linear</b> · from project settings");
-    expect(line.querySelector("b")).toBeNull();
+    expect(line.querySelector("b") === null).toBe(true);
     view.unmount();
 
     render(
@@ -453,7 +453,7 @@ describe("NativeAgentInteractionCard", () => {
     cleanup();
 
     render(<NativeAgentInteractionCard interaction={permission()} onResolve={onResolve} />);
-    expect(screen.queryByTestId("interaction-source")).toBeNull();
+    expect(screen.queryByTestId("interaction-source") === null).toBe(true);
     expect(screen.getByText("Tool: mcp__linear__create_issue")).toBeTruthy();
   });
 

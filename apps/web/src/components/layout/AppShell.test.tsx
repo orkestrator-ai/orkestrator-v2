@@ -256,12 +256,12 @@ describe("AppShell", () => {
     isMobile = false;
     act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
     const view = render(<AppShell>Workspace</AppShell>);
-    expect(screen.queryByText("Files panel")).toBeNull();
+    expect(screen.queryByText("Files panel") === null).toBe(true);
 
     isMobile = true;
     view.rerender(<AppShell>Workspace</AppShell>);
-    expect(screen.queryByRole("complementary", { name: "Workspace files" })).toBeNull();
-    expect(screen.queryByText("Files panel")).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Workspace files" }) === null).toBe(true);
+    expect(screen.queryByText("Files panel") === null).toBe(true);
     expect(filesPanelOpen).toBe(true);
 
     // Returning to the local workspace reveals the retained sheet state.

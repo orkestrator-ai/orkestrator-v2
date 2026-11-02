@@ -283,7 +283,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
         );
         handler!.activate(
           new MouseEvent("click", { button: 0, ...modifier, shiftKey: true }),
-          "https://example.com/internal",
+          "http://localhost:5173/internal",
           range,
         );
         for (const button of [0, 1, 2]) {
@@ -311,7 +311,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
           {
             environmentId: "source-env",
             sourceTabId: "source-pane",
-            url: "https://example.com/internal",
+            url: "http://localhost:5173/internal",
           },
         ]);
       } finally {
@@ -765,14 +765,14 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       expect(handler).toBeDefined();
       handler!.activate(
         new MouseEvent("click", { button: 0, ctrlKey: true, shiftKey: true }),
-        "https://example.com/fallback",
+        "http://localhost:5173/fallback",
         {
           start: { x: 1, y: 1 },
           end: { x: 10, y: 1 },
         },
       );
       expect(requests).toEqual([
-        { environmentId: "", sourceTabId: "tab-1", url: "https://example.com/fallback" },
+        { environmentId: "", sourceTabId: "tab-1", url: "http://localhost:5173/fallback" },
       ]);
       expect(invoke).not.toHaveBeenCalled();
     } finally {

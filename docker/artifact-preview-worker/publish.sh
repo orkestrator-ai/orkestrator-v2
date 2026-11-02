@@ -5,9 +5,10 @@
 # context a backend ships, `transcript_artifact_prepare_worker` pulls exactly
 # <image>@<digest> instead of building that context.
 #
-# The publish-preview-worker workflow does the same on every main push that
-# changes the context and opens a pull request with the new pin; use this
-# script only when that workflow cannot run.
+# There is no automatic publishing: the publish-preview-worker workflow was
+# removed in November 2026 because the pin saves little over a local build.
+# Removing this pull route altogether is tracked in
+# docs/todo/transcripts-and-observation/2681-remove-preview-worker-pull-route.md.
 #
 # Usage (maintainer only; requires `docker login <registry>` beforehand):
 #   docker/artifact-preview-worker/publish.sh <repository> [tag]

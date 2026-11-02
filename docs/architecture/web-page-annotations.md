@@ -262,14 +262,30 @@ status.
 A saved target is a description, never a live element handle. An element
 anchor (`anchorFor` in `browser-preview-anchor-script.ts`) records:
 
-- a stable `id` or `data-testid`, only when it is unique in the document at
-  capture time;
+- a stable `id` or `data-testid`, only when it is unique in its document or
+  shadow root at capture time;
 - semantic identity: tag, implicit role and accessible name;
 - visible text with a short prefix and suffix (whitespace is normalized for
   comparison, the original is stored);
-- up to eight ancestor descriptors and a CSS path;
-- the root scope. Targets inside iframes, shadow roots or closed roots are
-  recorded as `unsupported`, never as a top-level selector.
+- up to eight ancestor descriptors (in the composed tree, so a shadow
+  target's hosts are among them) and a CSS path within its own root;
+- the root scope: `document`, or `shadow` with the root path through open
+  shadow roots (`hosts`, outermost first, at most
+  `WEB_ANNOTATION_MAX_SHADOW_DEPTH` = 8; each host is its tag, a stable id
+  unique in its containing root, and a CSS path within that root). Targets
+  inside iframes, closed roots, detached trees or deeper paths are recorded as
+  `unsupported`, never as a top-level selector.
+
+Element mode hit-tests the document and then each open shadow root under the
+point, because the document retargets a hit inside a shadow root to its host.
+A hit a root reports outside itself (slotted light content) is not followed.
+↑ from a root's top-level element moves to its host, and ↓ on a host steps
+into its open root. A closed root exposes no `shadowRoot` to page script, so
+its host is the target, as it always was. A host is an ordinary element in its
+own root: selecting one records that root's scope, not `unsupported`.
+Desktop clients send a `shadow` scope only to a backend that advertises
+`operations.shadowTargets`; any other backend receives the older
+`{ kind: "unsupported", reason: "shadow-root" }` for the same target.
 
 A text range stores its quote with context plus the anchor of its containing
 element.
@@ -284,10 +300,17 @@ identity.
 
 1. **Route and scope** (Electron main, `browser-preview-capture-pins.ts`). A
    note for another logical route is `missing` with `offPage` and is never
-   queried against the current page. Page and legacy targets, non-document
+   queried against the current page. Page and legacy targets, `unsupported`
    scopes and pages without an addressable identity are `unsupported`. A
    region names captured pixels, so it is `stale` and `historical` unless the
-   document generation and viewport width are unchanged.
+   document generation and viewport width are unchanged. In the page, a
+   `shadow` scope resolves its root path first: each host must match exactly
+   one element with its tag in the root that contains it (its stable id when
+   that is unique, else its CSS path) and still have an open shadow root.
+   None, or a host that is closed or not yet attached, is `missing`; several
+   are `ambiguous`; an empty or over-long path is `unsupported`. Rules 2 to 5
+   then run inside the innermost root only, so a document element with the
+   same id or name is never a candidate.
 2. **Stable id.** A unique match whose tag, role and name (or text) still
    agree is `matched`. A unique match that disagrees is `stale`: the id was
    reused or the label changed. Duplicate ids fall through to later rules.
@@ -304,6 +327,7 @@ identity.
    disagreeing candidate was found, otherwise `missing`.
 
 Text ranges search a bounded, whitespace-normalized text map of the document.
+A text selection inside a shadow root is still refused at capture.
 A unique occurrence corroborated by its prefix or suffix (or the only
 occurrence when no context was stored) matches; several are `ambiguous`; a
 contradicted one is `stale`.
@@ -322,8 +346,10 @@ request's frozen target.
 for up to `visiblePins` (50) open notes on the current page. Unmatched and
 off-page notes are listed in the panel with their state. A `MutationObserver`
 re-resolves after DOM replacement (hot reload, re-render) on a coalesced
-schedule: at most one trailing pass per 750 ms, a pause after 120 passes until
-the host re-sends pins, no work while the document is hidden, and a shared
+schedule. A document observer never sees inside a shadow root, so each open
+root a pass resolves into (at most 64) is observed as well. The schedule is
+at most one trailing pass per 750 ms, a pause after 120 passes until the host
+re-sends pins, no work while the document is hidden, and a shared
 budget of 60,000 node visits or 120 ms per pass. Pins are redrawn (not
 re-resolved) on scroll, resize, a settled font load (`loadingdone` /
 `loadingerror`) and a change in the document's size, so a web font that
@@ -613,7 +639,11 @@ What has actually been exercised on a real stack (details and dates in
 - Pending questions and approvals are answerable from the request card only
   when their bodies can be read from the destination session's projection;
   otherwise the card offers **Answer in chat**.
-- iframes and shadow roots are unsupported; use Region. A page too large to
+- iframes, closed shadow roots and text selections inside shadow roots are
+  unsupported; use Region. Element targets inside open shadow roots are
+  supported. Sensitive-field masks are found only in the document, not inside
+  shadow roots, and a pin whose host attaches its shadow root only after pins
+  were shown resolves on the next DOM change or re-send. A page too large to
   search in time is labelled as such rather than as a missing target.
 - Pixel differences are not implemented and are never advertised. A thread
   summary for a different session is a deterministic excerpt of recent

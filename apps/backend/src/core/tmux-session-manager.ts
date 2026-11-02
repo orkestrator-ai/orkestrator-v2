@@ -183,6 +183,8 @@ export class TmuxSession {
    */
   private accountHomeOwner: TerminalRuntime | null = null;
   private readonly pollTick: (intervalMs: number) => Promise<void>;
+  /** The latest `has-session` answer and when it arrived; see {@link recentLiveness}. */
+  private lastLiveness: { alive: boolean; at: number } | undefined;
   private readonly now: () => number;
   private readonly sleep: (delayMs: number) => Promise<void>;
 
@@ -941,7 +943,19 @@ export class TmuxSession {
 
   async tmuxAlive(): Promise<boolean> {
     const out = await this.backend.exec([this.tmuxCommand, "has-session", "-t", this.tmuxSession]);
-    return out.status === 0;
+    const alive = out.status === 0;
+    this.lastLiveness = { alive, at: this.now() };
+    return alive;
+  }
+
+  /**
+   * The latest liveness answer, usually the poll loop's own check, when it is
+   * no older than `maxAgeMs`; otherwise `undefined` and the caller probes. A
+   * failed probe records nothing, so it never stands in for an answer.
+   */
+  recentLiveness(maxAgeMs: number): boolean | undefined {
+    const last = this.lastLiveness;
+    return last && this.now() - last.at <= maxAgeMs ? last.alive : undefined;
   }
 
   private async sendTextUnlocked(text: string): Promise<void> {

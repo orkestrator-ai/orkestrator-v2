@@ -166,3 +166,12 @@ Main failure evidence: host temporary directory
 The main reproduction establishes that this recorded failure is pre-existing;
 its intermittent cause remains unknown. No runtime owner, assertion or deadline
 was changed.
+
+### Pipeline bell repair validation — 2026-11-02
+
+`mise run test:logged -- --name repair-full -- mise run test` at `2617fd20d`
+failed `runtime environment refresh > sources configured runtime helper and applies refreshed shell environment` (15008.29ms; timed out).
+The bridge group reserved two workers; evidence is host temporary directory
+`orkestrator-test-run.Db1a7X/bridges.log` (compressed on finalization).
+Unchanged owning-file rerun passed: `mise run test:logged -- --name repair-runtime-env -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures`.
+No root cause or independence from the branch is claimed; this case remains open.

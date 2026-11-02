@@ -324,6 +324,9 @@ export interface HumanPromptList {
   prompts: HumanPromptEntry[];
 }
 
+/** How many of the newest transcript rows {@link humanPromptObservation} scans. */
+export const HUMAN_PROMPT_OBSERVATION_ROWS = 64;
+
 /** Bounded, no-touch observation of live shell output before display projection. */
 export function humanPromptObservation(
   messages: unknown,
@@ -365,7 +368,11 @@ export function humanPromptObservation(
   };
   if (Array.isArray(messages)) {
     // Newest first, so a large history cannot starve the active call.
-    for (let i = messages.length - 1; i >= Math.max(0, messages.length - 64); i--) {
+    for (
+      let i = messages.length - 1;
+      i >= Math.max(0, messages.length - HUMAN_PROMPT_OBSERVATION_ROWS);
+      i--
+    ) {
       const message = messages[i];
       if (object(message)) walk(message.parts);
     }

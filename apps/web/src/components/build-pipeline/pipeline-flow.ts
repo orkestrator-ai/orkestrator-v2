@@ -19,6 +19,7 @@
 import {
   REVIEW_PACKAGE_SESSION_LABEL,
   isActiveBuildPhase,
+  isCancelledBuildPipeline,
   isReviewPackagePreparationSession,
   isSupersededPipelineSession,
   pipelineIndependentReviewSlot,
@@ -325,14 +326,6 @@ function numbered(name: string, occurrence: number): string {
   return occurrence <= 1 ? name : `${name} ${occurrence}`;
 }
 
-function isCancelled(pipeline: BuildPipeline): boolean {
-  return (
-    pipeline.phase === "failed" &&
-    !pipeline.failureContext &&
-    (pipeline.error?.startsWith("Build cancelled") ?? false)
-  );
-}
-
 /** The phase the pipeline stopped in, when it is paused or failed. */
 function stoppedPhase(pipeline: BuildPipeline): ResumableBuildPhase | undefined {
   if (pipeline.phase === "paused") return pipeline.pausedFromPhase;
@@ -392,7 +385,7 @@ function sessionState(
   }
   if (current) {
     if (pipeline.phase === "paused") return "paused";
-    if (isCancelled(pipeline)) return "cancelled";
+    if (isCancelledBuildPipeline(pipeline)) return "cancelled";
     if (isActiveBuildPhase(pipeline.phase)) {
       const kind = PHASE_KIND[pipeline.phase as ResumableBuildPhase];
       const sessionKind = pipelineSessionKind(session);
@@ -532,7 +525,7 @@ export function pipelineFlowModel(
   };
   const active = isActiveBuildPhase(pipeline.phase);
   const complete = pipeline.phase === "complete";
-  const cancelled = isCancelled(pipeline);
+  const cancelled = isCancelledBuildPipeline(pipeline);
   const stopped = stoppedPhase(pipeline);
   // Between a restart and its replacement session the current index still
   // names the superseded session; it is history, not the running step.

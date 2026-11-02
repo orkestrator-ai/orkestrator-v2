@@ -60,12 +60,14 @@ import {
 } from "./acp-transcript.js";
 import { schedulePersist, scheduleStreamingPersist } from "./acp-persist-writer.js";
 import { formatAcpProviderError } from "./acp-errors.js";
+import { EncodedObjectSizes } from "@orkestrator/protocol/node/transcript-budget";
 import {
   currentAssistantMessage,
   droppedToolCall,
   findToolPart,
   findTurnPart,
   noteMessageMutation,
+  forgetRowSize,
   notePartMutation,
   toolPartIn,
   turnStartIndex,
@@ -153,9 +155,14 @@ function shedNestedParts(
     if (shed.has(index)) removed.unshift(...owner.parts.splice(index, 1));
   }
   rememberTrimmedToolCalls(owner, removed);
+  // The owner can be an older row, and a push that then fails the turn
+  // reaches no mutation note.
+  forgetRowSize(state, owner);
   state.droppedParts += removed.length;
   state.transcriptTruncated = true;
 }
+
+const toolPartSizes = new EncodedObjectSizes();
 
 /**
  * Bill the rendered part against the transcript dirty counter and persist.
@@ -169,7 +176,9 @@ export function commitToolPartMutation(
 ): boolean {
   state.revision += 1;
   notePartMutation(state, part);
-  const serializedBytes = Buffer.byteLength(JSON.stringify(part));
+  // Unchanged string fields cost nothing and a grown one only its suffix; see
+  // `EncodedObjectSizes`.
+  const serializedBytes = toolPartSizes.measure(part);
   state.uncheckedTranscriptBytes += Math.max(0, serializedBytes - (source.chargedBytes ?? 0));
   source.chargedBytes = serializedBytes;
   const transcriptTruncated =

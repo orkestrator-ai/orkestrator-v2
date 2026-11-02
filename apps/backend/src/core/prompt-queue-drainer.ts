@@ -20,6 +20,14 @@ const QUEUE_RETRY_BASE_MS = 2_000;
 const QUEUE_RETRY_CEILING_MS = 60_000;
 const MAX_QUEUE_DISPATCH_ATTEMPTS = 5;
 
+/**
+ * How old a tmux liveness answer mail presence may reuse. The tab's poll loop
+ * checks `has-session` about every 2 s busy or idle, and presence refreshes on
+ * the same cadence, so a fresh probe per refresh only repeats the loop's. A
+ * dispatch still reads liveness itself (`claude_tmux_status` without this).
+ */
+const TMUX_PRESENCE_LIVENESS_MAX_AGE_MS = 3_000;
+
 /** Backend view of a tmux tab, as `claude_tmux_status` reports it. */
 interface TmuxStatusSnapshot {
   running?: unknown;
@@ -205,7 +213,10 @@ export class PromptQueueDrainer {
         queue.messages.length > 0)
     )
       return "working";
-    const status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", input);
+    const status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", {
+      ...input,
+      livenessMaxAgeMs: TMUX_PRESENCE_LIVENESS_MAX_AGE_MS,
+    });
     return status?.running && status.busy !== true ? "idle" : "working";
   }
 

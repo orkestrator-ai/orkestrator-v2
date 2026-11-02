@@ -10,3 +10,13 @@
 - **Aggregate evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.PbLvVn/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name tunnel-alone -- bun test --cwd apps/backend ./src/preview-tunnel-server.test.ts --parallel=1` passed (exit 0, 1.1 s).
 - **Hypothesis:** a hook's server start or close exceeded five seconds under load. Unconfirmed; the previous `mise run test` on the same branch passed this file. No implementation, assertion, deadline or skip changed.
+
+### Pipeline bell repair validation — 2026-11-02
+
+`mise run test:logged -- --name repair-full -- mise run test` at `2617fd20d`
+failed `PreviewTunnelServer > admission bounds tunnels per service and releases on close`
+at 5277.08 ms (5-second deadline). Workspace reserved six worker slots.
+Unchanged owner passed alone in 5.4 s:
+`mise run test:logged -- --name repair-preview-owner -- bun test --cwd apps/backend ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures`.
+Evidence: host temporary `orkestrator-test-run.Db1a7X/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed at finalization). Cause and target-branch independence remain unproven.

@@ -15,6 +15,7 @@
 import { randomBytes } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
+  EncodedObjectSizes,
   encodedJsonBytes,
   jsonStringContentBytes,
 } from "@orkestrator/protocol/node/transcript-budget";
@@ -965,6 +966,8 @@ function upsertToolPart(
   return part;
 }
 
+const toolPartSizes = new EncodedObjectSizes();
+
 /**
  * Charge only what a patch added.
  *
@@ -974,7 +977,10 @@ function upsertToolPart(
  */
 function chargeToolPart(state: SessionState, part: BridgeToolPart): void {
   const source = toolSourceStates.get(part) ?? {};
-  const size = Buffer.byteLength(JSON.stringify(part));
+  // Re-measures only the string fields that changed: a running command's
+  // output, which Pi resends whole, costs one prefix comparison and its new
+  // suffix rather than a full serialization of the card per frame.
+  const size = toolPartSizes.measure(part);
   chargeTranscript(state, Math.max(0, size - (source.chargedBytes ?? 0)));
   source.chargedBytes = size;
   toolSourceStates.set(part, source);

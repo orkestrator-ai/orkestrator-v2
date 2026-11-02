@@ -13,9 +13,9 @@ export const GATEWAY_LOG_AREAS = defineLogAreas({
       "control.listening": "The backend control listener is up.",
       "browser.listening": "The browser listener is up.",
       "browser.unavailable":
-        "The browser listener could not start; the control or loopback listener remains.",
+        "The browser listener could not start; control remains if started, or loopback is attempted.",
       "browser.unavailable-degraded":
-        "No browser listener was started (`reason=no-tailscale-address`); another listener remains.",
+        "No browser listener was started (`reason=no-tailscale-address`); control remains if started, or loopback is attempted.",
       "loopback.listening": "The loopback client listener is up.",
       "loopback.unavailable": "The loopback client listener could not start.",
       "auth-token.stored": "The gateway token's file was written. The path only, never the token.",

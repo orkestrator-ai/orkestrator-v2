@@ -46,6 +46,15 @@ const PERMANENT: readonly string[] = [
   "apps/web/src/lib/bug-report/renderer-errors.ts",
 ];
 
+// Generated protocol, fixtures and build outputs only. Pin this separately from
+// the permanent console exemptions: widening lint's ignores must be reviewed too.
+const IGNORED = [
+  "bridges/codex-bridge/src/app-server/generated/**",
+  "test-fixtures/**",
+  "output/**",
+  "binaries/**",
+];
+
 const RAW_CONSOLE = /\bconsole\.(?:log|info|warn|error|debug|trace)\b/g;
 
 interface LintConfig {
@@ -63,9 +72,9 @@ function consoleExclusions(): string[][] {
     .map((override) => override.files);
 }
 
-function trackedSources(): string[] {
+function trackedSources(root = repoRoot): string[] {
   const result = spawnSync("git", ["ls-files", "-co", "--exclude-standard"], {
-    cwd: repoRoot,
+    cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -74,19 +83,39 @@ function trackedSources(): string[] {
 }
 
 /** Files lint checks for `console`: everything it does not ignore or exclude for good. */
-function lintedSources(): string[] {
-  const skipped = [...lintConfig().ignorePatterns, ...PERMANENT].map((glob) => new Bun.Glob(glob));
-  return trackedSources().filter((file) => !skipped.some((glob) => glob.match(file)));
+function lintedSources(root = repoRoot): string[] {
+  const skipped = [...IGNORED, ...PERMANENT].map((glob) => new Bun.Glob(glob));
+  return trackedSources(root).filter((file) => !skipped.some((glob) => glob.match(file)));
 }
 
-function rawConsoleSites(file: string): number {
+function rawConsoleSites(file: string, root: string): number {
   let text: string;
   try {
-    text = readFileSync(join(repoRoot, file), "utf8");
+    text = readFileSync(join(root, file), "utf8");
   } catch {
     return 0; // Listed but deleted in this working tree.
   }
-  return text.match(RAW_CONSOLE)?.length ?? 0;
+  // Lint covers all console references. Refuse suppressions of that rule so
+  // aliases, computed access and less common methods cannot bypass it.
+  const disables = Array.from(
+    text.matchAll(
+      /\/\/[ \t]*((?:oxlint|eslint)-disable[^\n]*)|\/\*\s*((?:oxlint|eslint)-disable[\s\S]*?)\*\//g,
+    ),
+  ).filter((comment) => {
+    const directive = (comment[1] ?? comment[2] ?? "").match(
+      /^\s*(?:oxlint|eslint)-disable(?:-next-line|-line)?\b([\s\S]*)/,
+    );
+    if (!directive) return false;
+    const rules = directive[1]!.split("--")[0]!.trim();
+    return !rules || /\bno-restricted-globals\b/.test(rules);
+  });
+  return (text.match(RAW_CONSOLE)?.length ?? 0) + disables.length;
+}
+
+function scanViolations(root = repoRoot) {
+  return lintedSources(root)
+    .map((file) => [file, rawConsoleSites(file, root)] as const)
+    .filter(([, count]) => count > 0);
 }
 
 function lintCodes(path: string, source: string): string[] {
@@ -118,16 +147,39 @@ const RESTRICTED = "eslint(no-restricted-globals)";
 describe("raw console", () => {
   test("the exclusions are exactly this list, so a new one cannot slip in", () => {
     expect(consoleExclusions()).toEqual([[...PERMANENT]]);
+    expect(lintConfig().ignorePatterns).toEqual(IGNORED);
   });
 
   // The migration is finished, so no path is left to burn down. Lint already
   // refuses these sites; the scan also catches one hidden behind a disable
   // directive, which the docs do not allow for this rule.
   test("no linted source holds a raw console site", () => {
-    const sites = lintedSources()
-      .map((file) => [file, rawConsoleSites(file)] as const)
-      .filter(([, count]) => count > 0);
-    expect(sites).toEqual([]);
+    expect(scanViolations()).toEqual([]);
+  });
+
+  test.each([
+    'console.warn("x");',
+    "// oxlint-disable-next-line no-restricted-globals\nconsole.table([]);",
+    "/* oxlint-disable no-restricted-globals */\nconst out = console; out.dir({});",
+    '/* eslint-disable */\nconsole?.["assert"](false);',
+    'console["time"]("x"); // eslint-disable-line no-restricted-globals',
+    'const url = "https://example.com"; /* oxlint-disable-line no-restricted-globals */ console.dir(url);',
+    "/* oxlint-disable\n no-restricted-globals, no-unused-vars */\nconsole.group();",
+    "/* oxlint-disable -- blanket suppression */\nconsole.timeEnd();",
+  ])("the repository scan rejects a planted source: %s", (source) => {
+    const root = mkdtempSync(join(tmpdir(), "orkestrator-console-scan-"));
+    try {
+      expect(spawnSync("git", ["init", "--quiet", root]).status).toBe(0);
+      const file = "apps/backend/src/probe.ts";
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), source);
+      expect(scanViolations(root).map(([path]) => path)).toEqual([file]);
+      // A suppression for a different rule does not trip the console guard.
+      writeFileSync(join(root, file), "/* oxlint-disable no-unused-vars */\nconst value = 1;");
+      expect(scanViolations(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("the scan reaches every application tree", () => {

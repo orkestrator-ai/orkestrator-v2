@@ -113,8 +113,10 @@ fatal rejection guard (serialized into workers, so it imports nothing), the
 backend's `bounded-console.ts`, the renderer's bug-report recorder, which wraps
 `console.error`, and `desktop-startup-marker.ts`, which writes the startup markers
 the desktop matches exactly. `tests/unit/raw-console.test.ts` pins that list and
-scans every other source for a raw console site, which also catches one hidden
-behind a disable directive. Adding to the list needs the same case as these.
+the lint ignore patterns. It scans other sources for the six common console
+methods and rejects directives disabling `no-restricted-globals`, including
+blanket disables, so lint continues to catch other methods and console aliases.
+Adding to the list needs the same case as these.
 
 ## Module boundaries
 

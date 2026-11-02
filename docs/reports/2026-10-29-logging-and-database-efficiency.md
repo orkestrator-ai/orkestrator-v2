@@ -1645,8 +1645,9 @@ permanent exclusions [linting.md](../development/linting.md#raw-console) lists.
 | `[bridge.claude] sse.keepalive-failed` | `debug` | `warn` | **Restored.** Before the bridge slice this was a raw `console.debug`, which always wrote. The slice made it a logger `debug`, off by default, so a failed keepalive left no line unless Log Detail was raised. It reports a failure, so it is `warn` and written by default again. |
 
 Nothing else changed level. The Codex bridge's `sse.keepalive-failed` stays at
-`warn`, where the bridge slice moved it from `error`: the bridge closes the stream
-and the client reconnects. The Claude bridge's deliberate demotions stay at `debug`:
+`warn`, where the bridge slice moved it from `error`: Codex logs the failure and
+keeps the stream open so later frames can still flow. Claude closes its connection.
+The Claude bridge's deliberate demotions stay at `debug`:
 `sse.subscribe-requested`, `sse.opened`, `sse.aborted`, `sse.cleanup`, `models.*`,
 `server.starting`, `prompt.accepted` and `question.answers-prepared`. Every
 converted warning below keeps its level.
@@ -1686,12 +1687,14 @@ now `reason=no-tailscale-address`.
 
 ### `detail` fields kept
 
-Each holds text from our own code, never content:
+Most hold text from our own code; protocol violations have a peer-supplied exception:
 
 - `[docker.reachability] firewall.detected`: which host firewall is active, and ufw's
   default input policy, one word matched from its config.
 - `[bridge.codex] app-server.protocol-violation`, `app-server.invariant-violation`:
-  a fixed description of the rule broken. The line preview stays out.
+  descriptions of the rule broken. An unknown-response protocol violation includes
+  the peer-supplied response ID, which can be any string; this detail is not
+  guaranteed content-free. The line preview stays out.
 - `[bridge.codex] app-server.stderr`: identifier-shaped tokens (`level`, `target`,
   `code`) and a byte count, never the line.
 - `[bridge.codex] recorder.notice`: dynamic and ours. It warns that notification

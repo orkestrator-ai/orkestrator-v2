@@ -763,9 +763,11 @@ everywhere except one permanent list of exclusions: tests, scripts, the CLI,
 application log writer, the fatal rejection guard, `bounded-console.ts`, the
 renderer's startup marker module and the bug-report error recorder.
 [linting.md](../development/linting.md#raw-console) says why each stays.
-`tests/unit/raw-console.test.ts` pins that list and scans every other source for a raw
-site, so a disable directive cannot hide one either. To log from a test or harness
-without the console, inject a logger or use a capture:
+`tests/unit/raw-console.test.ts` pins that list and the lint ignore patterns. It
+scans other sources for the six common console methods and rejects directives
+that disable `no-restricted-globals` (including blanket disables), so lint still
+checks other methods, optional or bracket access, and aliases. To log from a test
+or harness without the console, inject a logger or use a capture:
 
 ```ts
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -877,12 +879,13 @@ record what was observed at the time and are left as they are.
   step's event and its identifiers (`environmentId`, `jobId`, `fireId`, and a PR
   `state`), never a message. The runtime logs that event as it stands, so each step is
   listed in its area's vocabulary.
-- **The `detail` fields left hold our own text.** `[docker.reachability]
+- **Most remaining `detail` fields hold our own text.** `[docker.reachability]
   firewall.detected` names the active host firewall, with ufw's default input policy
   (one word from its config). In the Codex bridge, `app-server.protocol-violation` and
-  `app-server.invariant-violation` carry a fixed description of the rule broken, and
-  `app-server.stderr` a summary of identifier-shaped tokens and a byte count, never the
-  line. `recorder.notice` is dynamic and ours: it warns that notification recording is
+  `app-server.invariant-violation` describe the rule broken. An unknown-response
+  protocol violation includes the peer-supplied response ID, which can be any
+  string; this detail is not guaranteed content-free. `app-server.stderr` carries a
+  summary of identifier-shaped tokens and a byte count, never the line. `recorder.notice` is dynamic and ours: it warns that notification recording is
   on or refused, naming the directory the developer set in
   `CODEX_BRIDGE_RECORD_NOTIFICATIONS`. It is loud on purpose, and a recording's content
   never reaches it.

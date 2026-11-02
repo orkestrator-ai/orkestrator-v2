@@ -179,6 +179,7 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
       partitionFor: () => "persist:release-failure",
       sessionFor: () => new FakeSession(),
       clientKey: "release-failure",
+      logger: { warn },
     });
     function harnessCommand<T>(command: string, args: Record<string, unknown>): Promise<T> {
       const commands = createCommandRegistry();

@@ -1498,7 +1498,7 @@ all of these when it moves them to `formatLogError`.
 ## Addendum: backend levels and evidence after the R1 backend slice
 
 The backend's direct `console` sites moved onto the shared logger. **No site moved to
-`debug`**: the four that are at `debug` already were. Every change below is still
+`debug`**: those at `debug` already were. Every change below is still
 written by default, because `info` is written.
 
 | Was | Now | Why |
@@ -1519,7 +1519,7 @@ What a line no longer holds:
 
 - `[environment] lifecycle.failed` lost a scrubbed stderr excerpt of up to 500 characters.
   `reason`, `exitCode` and `signal` replace it, and the summary category stays. This is the
-  largest loss; a failure no rule names reads as `unclassified`. Eleven reasons were added
+  largest loss; a failure no rule names reads as `unclassified`. Nine reasons were added
   for what cleanup and container work hit, and more can follow from real logs.
 - A failed command's message went from every other site that logged `error.message` or
   `String(error)`, reaper lines included, as `formatLogError` drops it.

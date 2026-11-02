@@ -73,6 +73,23 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   ways out — retry under the same idempotency key, or discard — rather than the
   storage-level refusal, which names an invariant the user cannot act on.
 
+## Logging settings route
+
+`POST /debug/log-policy` ([`logging.md`](../docs/architecture/logging.md#the-bridge-route))
+is served through `applyBridgeLogPolicy` on every bridge, behind the same token
+as its other routes. A new bridge must serve it, and the shared bridge contract
+checks that it does.
+
+- **Metadata only.** Like `/activity`, it must never touch liveness, hydrate a
+  transcript, re-attach a session or wait on a turn. It has to answer while a turn
+  is stuck, because that is why someone changed the setting.
+- **A 404 or 405 means an older bridge.** Never treat it as an error, and never
+  let it affect a session. That bridge keeps working and applies the setting at its
+  next start.
+- **Diagnostic scopes stay open whether or not detail is on.** Gate the writes, not
+  the scope, or turning detail on cannot cover a turn already running. Read
+  `bridgeDebugEnabled` per use, never once at module load.
+
 ## Transcript rows
 
 Every bridge writes one transcript row per model response (one step of the

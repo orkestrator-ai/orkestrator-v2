@@ -31,6 +31,14 @@
  */
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.codex");
+
+/** Fixed text plus the path the user chose; a recording's content never comes here. */
+function recorderNotice(message: string): void {
+  log.warn("recorder.notice", { detail: message });
+}
 
 /** A recording past this size is already far more than any fixture needs. */
 export const DEFAULT_MAX_RECORDING_BYTES = 64 * 1024 * 1024;
@@ -95,7 +103,7 @@ export class NotificationRecorder {
       options.appendFileImpl ?? ((path, contents) => appendFile(path, contents, "utf8"));
     this.ensureDirImpl =
       options.ensureDirImpl ?? ((path) => mkdir(path, { recursive: true }).then(() => undefined));
-    this.warnImpl = options.warnImpl ?? ((message) => console.error(message));
+    this.warnImpl = options.warnImpl ?? recorderNotice;
     this.now = options.now ?? Date.now;
     this.stats = {
       fileName: options.fileName,
@@ -176,7 +184,7 @@ export class NotificationRecorder {
     if (this.lastWarnedAt !== null && now - this.lastWarnedAt < this.warnIntervalMs) return;
     this.lastWarnedAt = now;
     this.warnImpl(
-      `[codex-bridge] RECORDING app-server notifications to ${this.path} ` +
+      `RECORDING app-server notifications to ${this.path} ` +
         `(${this.stats.linesRecorded} lines). Prompts, file contents and absolute paths ` +
         "are written verbatim. Unset CODEX_BRIDGE_RECORD_NOTIFICATIONS to stop.",
     );
@@ -202,7 +210,7 @@ export class NotificationRecorder {
       // affect the session it is recording.
       this.stats.writeErrors += 1;
       this.stats.linesDropped += pending.length;
-      console.error(`[codex-bridge] Failed to write notification recording: ${String(error)}`);
+      log.error("recorder.write-failed", { error: formatLogError(error, { stack: false }) });
     }
   }
 
@@ -234,14 +242,14 @@ export function createRecorderFromEnv(options: {
   warn?: (message: string) => void;
 }): NotificationRecorder | null {
   const env = options.env ?? process.env;
-  const warn = options.warn ?? ((message: string) => console.error(message));
+  const warn = options.warn ?? recorderNotice;
   const directory = env.CODEX_BRIDGE_RECORD_NOTIFICATIONS?.trim();
   if (!directory) return null;
 
   if (env[RECORD_CONFIRM_ENV]?.trim() !== "1") {
     // Loud, because the user asked for something and is not getting it.
     warn(
-      `[codex-bridge] Ignoring CODEX_BRIDGE_RECORD_NOTIFICATIONS=${directory}: recordings ` +
+      `Ignoring CODEX_BRIDGE_RECORD_NOTIFICATIONS=${directory}: recordings ` +
         "capture every prompt, file content and absolute path verbatim, so they also " +
         `require ${RECORD_CONFIRM_ENV}=1. Not recording.`,
     );

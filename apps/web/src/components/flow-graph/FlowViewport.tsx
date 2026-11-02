@@ -6,7 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Maximize, Minimize, Minus, Plus, Scan } from "lucide-react";
+import { Maximize, Minimize, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
@@ -421,8 +421,9 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * −, the zoom level (which resets to 100%), +, Fit when the graph offers it
- * (`onFit`), and Fullscreen. Over the wide graph's
+ * −, the zoom level, +, and Fullscreen. The zoom level resets to 100%; when
+ * the graph offers Fit (`onFit`), at 100% it fits instead, so it toggles
+ * between the two. Over the wide graph's
  * bottom-right corner; at the top of the stacked column, where they stay in
  * reach while it scrolls. Touch targets are 44 px wherever the pointer is
  * coarse, and always in the stacked layout, which is the phone layout.
@@ -442,7 +443,7 @@ export function FlowZoomControls({
   onZoomOut: () => void;
   onZoomIn: () => void;
   onReset: () => void;
-  /** Shows a Fit button. Multi Review leaves it out (removed in #1199). */
+  /** Makes the zoom level fit the graph when at 100%. Multi Review leaves it out (#1199). */
   onFit?: () => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
@@ -451,6 +452,7 @@ export function FlowZoomControls({
   testIdPrefix: string;
 }) {
   const percent = Math.round(zoom * 100);
+  const fits = onFit !== undefined && percent === 100;
   const touch = placement === "inline";
   const CONTROL_CLASS = cn("rounded-md", touch ? "size-11" : "size-7 pointer-coarse:size-11");
   return (
@@ -482,10 +484,10 @@ export function FlowZoomControls({
           "min-w-12 rounded-md px-1.5 font-mono text-[11px] tabular-nums",
           touch ? "h-11 min-w-14" : "h-7 pointer-coarse:h-11",
         )}
-        aria-label={`Zoom ${percent}%, reset to 100%`}
-        title="Reset to 100%"
+        aria-label={`Zoom ${percent}%, ${fits ? "fit to view" : "reset to 100%"}`}
+        title={fits ? "Fit to view" : "Reset to 100%"}
         data-testid={`${testIdPrefix}-zoom-level`}
-        onClick={onReset}
+        onClick={fits ? onFit : onReset}
       >
         {percent}%
       </Button>
@@ -501,20 +503,6 @@ export function FlowZoomControls({
       >
         <Plus className="size-3.5" />
       </Button>
-      {onFit ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={CONTROL_CLASS}
-          aria-label="Fit the whole pipeline"
-          title="Fit the whole pipeline"
-          data-testid={`${testIdPrefix}-fit`}
-          onClick={onFit}
-        >
-          <Scan className="size-3.5" />
-        </Button>
-      ) : null}
       <Button
         type="button"
         variant="ghost"

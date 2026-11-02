@@ -25,13 +25,29 @@ describe("readDebugFlag", () => {
 });
 
 describe("createRequestLogger", () => {
-  test("returns no middleware when debug logging is off", () => {
-    expect(createRequestLogger(false)).toBeNull();
-  });
+  test("follows the setting per request, so a change needs no restart", async () => {
+    const records: unknown[] = [];
+    let enabled = false;
+    const app = new Hono();
+    app.use(
+      "*",
+      createRequestLogger(
+        () => enabled,
+        (...parts) => {
+          records.push(parts);
+        },
+      ),
+    );
+    app.get("/global/health", (context) => context.text("ok"));
 
-  test("returns middleware when debug logging is on", () => {
-    const middleware = createRequestLogger(true);
-    expect(typeof middleware).toBe("function");
+    expect((await app.request("/global/health")).status).toBe(200);
+    expect(records).toEqual([]);
+    enabled = true;
+    await app.request("/global/health");
+    expect(records).toHaveLength(1);
+    enabled = false;
+    await app.request("/global/health");
+    expect(records).toHaveLength(1);
   });
 
   test("never records URL paths or query parameters", async () => {
@@ -40,9 +56,12 @@ describe("createRequestLogger", () => {
     const app = new Hono();
     app.use(
       "*",
-      createRequestLogger(true, (...parts) => {
-        records.push(parts);
-      })!,
+      createRequestLogger(
+        () => true,
+        (...parts) => {
+          records.push(parts);
+        },
+      ),
     );
     app.get("/event/subscribe", (context) => context.text("ok"));
 

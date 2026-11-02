@@ -1,3 +1,5 @@
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
 import { gitHubGitCredentials } from "./github-git-credentials.js";
@@ -64,13 +66,18 @@ export async function refreshClaudeModelCatalog(
         return dependencies.startContainerClaudeServer(
           containerId,
           undefined,
-          global.debugLogging === true,
+          bridgeDebugEnvValue(global) === "1",
           global.claudeBackgroundCommandLimitHours,
         );
       },
     );
     port = started.hostPort;
     authToken = started.authToken;
+    context.runtime.logPolicy?.bridgeStarted({
+      agent: "claude",
+      baseUrl: `http://127.0.0.1:${started.hostPort}`,
+      authToken: started.authToken,
+    });
   }
 
   const catalog = await dependencies.fetchClaudeBridgeModelCatalog(port, authToken, forceRefresh);
@@ -92,10 +99,10 @@ export async function refreshClaudeModelCatalog(
     // authoritative per-environment refresh. Do not hold a successful response
     // or event behind storage lock contention or an unrelated cache failure.
     void context.storage.cacheAgentModelCatalog("claude", catalog.models).catch((error) => {
-      console.warn(
-        "[ElectronBackend] Failed to persist the Claude model catalogue:",
-        conciseError(error),
-      );
+      createLogger("models").warn("cache.write-failed", {
+        agent: "claude",
+        error: formatLogError(error),
+      });
     });
   }
   return snapshot;

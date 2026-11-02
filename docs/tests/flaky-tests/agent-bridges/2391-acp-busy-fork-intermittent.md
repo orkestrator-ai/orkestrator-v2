@@ -14,3 +14,11 @@ mise run test:logged -- --name fix-acp-fork -- bun test --cwd bridges/acp-bridge
 ```
 
 The main run used `--name baseline-acp-fork`. This establishes intermittency; it does not establish the cause. No bridge source, assertion, timeout or skip changed.
+
+Seen again on 2026-11-01 in the shared-logger bridge migration: `mise run test:changed` expected 409 and received 200 after 212.42 ms, in the bridges group. The owner then passed alone three times (26 pass, 0 fail each):
+
+```sh
+bun test ./src/acp-fork.test.ts --preload ../../tests/setup-node.ts --only-failures
+```
+
+That change touches this bridge's logging but not its fork or prompt paths, so this adds a sighting, not a cause.

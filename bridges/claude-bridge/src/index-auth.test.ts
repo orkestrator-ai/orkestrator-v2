@@ -1,3 +1,6 @@
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import { resetBridgeLogPolicyForTests } from "@orkestrator/protocol/node/bridge-log-policy";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, test } from "bun:test";
 import { TransformStream } from "node:stream/web";
 import type { AddressInfo } from "node:net";
@@ -86,6 +89,66 @@ describe("bridge authentication and origin policy", () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  test("protects the logging settings route", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
+    try {
+      const request = (headers: Record<string, string>) =>
+        app.request(BRIDGE_LOG_POLICY_ROUTE, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ seq: 1, level: "info", areaLevels: {} }),
+        });
+      expect((await request({})).status).toBe(401);
+      expect((await request({ Authorization: "Bearer wrong" })).status).toBe(401);
+      expect((await request({ Authorization: `Bearer ${AUTH_TOKEN}` })).status).toBe(200);
+    } finally {
+      __testing.setBridgeAuthForTesting();
+      resetBridgeLogPolicyForTests();
+    }
+  });
+
+  test("the route changes what a running bridge's own request handlers log", async () => {
+    __testing.setBridgeAuthForTesting(AUTH_TOKEN);
+    const capture = captureLogs();
+    const headers = { Authorization: `Bearer ${AUTH_TOKEN}` };
+    const subscribe = async () => {
+      const controller = new AbortController();
+      const response = await app.request("/event/subscribe", {
+        headers,
+        signal: controller.signal,
+      });
+      controller.abort();
+      await response.body?.cancel();
+    };
+    const subscribeLines = () =>
+      capture.records().filter((record) => record.event === "sse.subscribe-requested");
+    const setLevels = async (seq: number, areaLevels: Record<string, string>) => {
+      const response = await app.request(BRIDGE_LOG_POLICY_ROUTE, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ seq, level: "info", areaLevels }),
+      });
+      expect(response.status).toBe(200);
+    };
+    try {
+      await subscribe();
+      expect(subscribeLines()).toHaveLength(0);
+
+      await setLevels(1, { bridge: "debug" });
+      await subscribe();
+      expect(subscribeLines()).toHaveLength(1);
+      expect(subscribeLines()[0]).toMatchObject({ level: "debug", area: "bridge.claude" });
+
+      await setLevels(2, {});
+      await subscribe();
+      expect(subscribeLines()).toHaveLength(1);
+    } finally {
+      capture.restore();
+      __testing.setBridgeAuthForTesting();
+      resetBridgeLogPolicyForTests();
+    }
   });
 
   test("protects data routes while leaving only the minimal process health public", async () => {

@@ -18,7 +18,9 @@
  *   so `clean` already means required reviews and required checks are
  *   satisfied, the branch is not behind a base that must be up to date, and
  *   the pull request is not a draft. `unstable` (a non-required check failing
- *   or still running) is not ready: the shimmer stops on any failing check.
+ *   or still running) is not ready unless the caller passes
+ *   `requireChecks: false`. The shimmer and auto-merge both pass this
+ *   machine's "Require checks to pass" setting; coordinator status does not.
  * - `checkSummary`: the separately fetched check rollup, when the monitor has
  *   one. It can only veto: any failing or pending check means "not ready".
  * - `viewerCanMerge`: whether the credential Orkestrator merges with has push,

@@ -112,6 +112,7 @@ import {
 } from "@/hooks/useVirtuosoScrollState";
 import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
 import { useAutoLoadEarlier } from "./useAutoLoadEarlier";
+import { readTranscriptTail } from "./transcript-tail";
 import {
   adoptNativeAgentSession,
   beginNativeAgentSignIn,
@@ -163,8 +164,10 @@ import {
   composerOccupiedError,
   describePromptQueueActionError,
   PromptQueueActionError,
+  queuedSettingsLockedError,
   webAnnotationQueueItemFrozenError,
 } from "@/lib/prompt-queue-errors";
+import { queuedPromptControlRestore } from "./queued-prompt-controls";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import {
@@ -243,7 +246,7 @@ import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { ThreadChangesHeader } from "@/components/changes/ThreadChangesHeader";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
-import { isClaudeAuthenticationFailureMessage, isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
+import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
 import {
   createStartupPromptPreviewMessage,
   INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
@@ -1136,9 +1139,11 @@ export function SharedNativeAgentController({
     load: loadEarlierAutomatically,
   });
   const turnRows = useMemo(() => withGoalTurnsAsPrompts(normalizedMessages), [normalizedMessages]);
-  const latestAssistantMessage = [...normalizedMessages]
-    .reverse()
-    .find((message) => message.role === "assistant");
+  const transcriptTail = useMemo(
+    () => readTranscriptTail(normalizedMessages, turnRows),
+    [normalizedMessages, turnRows],
+  );
+  const latestAssistantMessage = transcriptTail.latestAssistantMessage;
   // Claude answers a turn it cannot run with this notice as an ordinary reply.
   // Only while it is still the latest exchange: once the user sends again, the
   // moment to sign in has passed and the card would be stale history.
@@ -1147,8 +1152,7 @@ export function SharedNativeAgentController({
     latestAssistantMessage !== undefined &&
     isClaudeNotLoggedInNotice(latestAssistantMessage) &&
     turnRows.at(-1)?.role !== "user" &&
-    normalizedMessages.lastIndexOf(latestAssistantMessage) >
-      turnRows.findLastIndex((message) => message.role === "user")
+    transcriptTail.latestAssistantIndex > transcriptTail.lastUserTurnIndex
       ? latestAssistantMessage.content
       : null;
   // The backend holds the refused prompt; the card says so only when it will
@@ -1177,12 +1181,8 @@ export function SharedNativeAgentController({
   // notice is the structured signal for it and clears once a model answers, so
   // it pins the card. It never locks the composer. A terminal auth error row
   // after the last prompt already carries the card.
-  const lastUserIndex = turnRows.findLastIndex((message) => message.role === "user");
   const claudeAuthNotice =
-    platform === "claude" &&
-    !normalizedMessages
-      .slice(lastUserIndex + 1)
-      .some((message) => isClaudeAuthenticationFailureMessage(message))
+    platform === "claude" && !transcriptTail.authFailureSinceLastUserTurn
       ? signInAuthNotice
       : undefined;
   // When this notice was first seen, for the same reason as `authRequiredSince`
@@ -3049,7 +3049,7 @@ export function SharedNativeAgentController({
         environmentId={data.environmentId}
         setupPhase={environment?.setupPhase}
         subtext={`${label} will connect automatically once setup finishes`}
-        pendingPrompt={startupPromptPreview?.text}
+        pendingPrompt={startupPromptPreview ?? undefined}
       />
     );
   }
@@ -3490,25 +3490,24 @@ export function SharedNativeAgentController({
           })
         : [];
       // Keep the queued item recoverable if restoring its settings fails.
-      await updateControls({
-        ...(typeof queued.model === "string" ? { modelId: queued.model } : {}),
-        ...(typeof queued.reasoningEffort === "string"
-          ? { reasoningId: queued.reasoningEffort }
-          : {}),
-        ...(queued.mode === "build" || queued.mode === "plan" ? { mode: queued.mode } : {}),
-        ...(typeof queued.fastMode === "boolean" ? { fastMode: queued.fastMode } : {}),
-        ...(typeof queued.executionAgent === "string"
-          ? { executionProfileId: queued.executionAgent }
-          : typeof queued.agent === "string"
-            ? { executionProfileId: queued.agent }
-            : {}),
-        ...(typeof queued.includeLocalSettings === "boolean"
-          ? { includeLocalSettings: queued.includeLocalSettings }
-          : {}),
-        ...(typeof queued.promptSuggestions === "boolean"
-          ? { promptSuggestions: queued.promptSuggestions }
-          : {}),
-      });
+      const controls = queuedPromptControlRestore(queued, composer, effectiveComposeProfileId);
+      if (Object.keys(controls).length > 0) {
+        try {
+          await updateControls(controls);
+        } catch (error) {
+          // Match Claude's specific config-route refusal as serialized by the
+          // backend. Phase alone cannot distinguish a lock from invalid controls
+          // or transport failures, and may lag behind the provider's state.
+          if (
+            platform === "claude" &&
+            error instanceof Error &&
+            error.message === "Claude session config update failed (HTTP 409): Session is running"
+          ) {
+            throw queuedSettingsLockedError(label, { cause: error });
+          }
+          throw error;
+        }
+      }
       await removeQueued(message.id);
       updateDraft(sessionKey, {
         text: message.text,

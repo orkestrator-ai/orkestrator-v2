@@ -16,6 +16,7 @@ import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useConfigStore } from "@/stores/configStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -138,14 +139,14 @@ mock.module("@/hooks", () => ({
 
 mock.module("@/stores", () => ({
   ...realStoresSnapshot,
-  useFilesPanelStore: <T,>(selector?: (state: { isOpen: boolean }) => T) =>
-    selectState({ isOpen: filesPanelOpen }, selector),
+  useFilesPanelStore: <T,>(selector?: (state: { isOpen: boolean; activeTab: string }) => T) =>
+    selectState({ isOpen: filesPanelOpen, activeTab: "changes" }, selector),
   useUIStore: Object.assign(
     <T,>(selector?: (state: ReturnType<typeof uiStore.getState>) => T) =>
       uiStore((state) =>
         selectState({ ...state, selectedProjectId, selectedEnvironmentId }, selector),
       ),
-    { getState: uiStore.getState },
+    { getState: uiStore.getState, subscribe: uiStore.subscribe },
   ),
   useProjectStore: <T,>(
     selector?: (state: { projects: Array<{ id: string; name: string }> }) => T,
@@ -163,9 +164,7 @@ mock.module("@/stores", () => ({
       },
       selector,
     ),
-  useConfigStore: <T,>(
-    selector?: (state: { config: { global: { terminalAppearance?: undefined } } }) => T,
-  ) => selectState({ config: { global: {} } }, selector),
+  useConfigStore: realStoresSnapshot.useConfigStore,
 }));
 
 mock.module("@/lib/native/window", () => ({
@@ -252,6 +251,25 @@ afterEach(() => {
 });
 
 describe("AppShell", () => {
+  test("an open files sheet stays hidden over a remote workspace across layout changes", () => {
+    filesPanelOpen = true;
+    isMobile = false;
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+    const view = render(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByText("Files panel")).toBeNull();
+
+    isMobile = true;
+    view.rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByRole("complementary", { name: "Workspace files" })).toBeNull();
+    expect(screen.queryByText("Files panel")).toBeNull();
+    expect(filesPanelOpen).toBe(true);
+
+    // Returning to the local workspace reveals the retained sheet state.
+    act(() => useRemoteWorkspaceStore.getState().showLocal());
+    expect(screen.getByRole("complementary", { name: "Workspace files" })).toBeTruthy();
+    expect(screen.getByText("Files panel")).toBeTruthy();
+  });
+
   test("derives the mobile title and uses the grid action presentation", () => {
     const { container } = render(<AppShell>Workspace</AppShell>);
 
@@ -391,6 +409,64 @@ describe("AppShell", () => {
     expect(describedText).not.toContain(label);
     expect(screen.queryByRole("tooltip")?.textContent ?? "").not.toContain(label);
   });
+
+  for (const state of ["current", "stale", "blocked"] as const) {
+    test(`selected remote title reacts to the checks setting with an unchanged ${state} PR summary`, async () => {
+      const initialConfig = useConfigStore.getState().config;
+      const data = sharedIdDataset("idle");
+      Object.assign(data.environments["project-1"]![0]!, {
+        prUrl: "https://github.com/acme/repo/pull/4",
+        prState: "open",
+        hasMergeConflicts: false,
+        prMergeability: state === "blocked" ? "blocked" : "unstable",
+        environmentType: "local",
+        prMonitorConfirmed: true,
+        prCheckSummary: { passed: 13, total: 14, pending: 0 },
+      });
+      installDesktopFake({
+        list: connectionList([remoteConnection("leaf", "Leaf", "teal")]),
+        datasets: { leaf: data },
+      });
+      useRemoteWorkspaceStore.setState({
+        active: { nodeId: "bk_leaf", projectId: "project-1", environmentId: "env-1" },
+      });
+      try {
+        useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: true });
+        render(
+          <FederationProvider>
+            <AppShell>Workspace</AppShell>
+          </FederationProvider>,
+        );
+        await waitFor(() =>
+          expect(portalStore.getState().nodes[0]?.environments[0]?.prMonitorConfirmed).toBe(true),
+        );
+        if (state === "stale") {
+          act(() =>
+            portalStore.store.setState((current) => ({
+              nodes: current.nodes.map((node) => ({ ...node, freshness: "stale" })),
+            })),
+          );
+        }
+        const nodes = portalStore.getState().nodes;
+        const title = screen.getByRole("button", { name: "app - feature", hidden: true });
+        for (const requireChecks of [true, false, true]) {
+          act(() =>
+            useConfigStore.getState().updateGlobalConfig({ autoMergeRequireChecks: requireChecks }),
+          );
+          expect(title.querySelector("[data-merge-ready]") !== null).toBe(
+            state === "current" && !requireChecks,
+          );
+          expect(portalStore.getState().nodes).toBe(nodes);
+          expect(document.title).toBe("app - feature");
+        }
+      } finally {
+        cleanup();
+        uninstallDesktopFake();
+        portalStore.store.setState(INITIAL_PORTAL, true);
+        useConfigStore.setState({ config: initialConfig });
+      }
+    });
+  }
 
   test("remote mobile titles stay plain for current clean summaries without monitor health", async () => {
     const data = sharedIdDataset("idle");

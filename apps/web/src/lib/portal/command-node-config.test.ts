@@ -15,6 +15,7 @@ function config(owner: string): AppConfig {
   return {
     version: owner,
     global: {
+      terminalLinkDefaultTarget: owner === "command" ? "browser-tab" : "external",
       terminalScrollback: owner === "command" ? 5_000 : 1_000,
       enabledAgentPlatforms: owner === "command" ? ["codex"] : ["claude"],
       agentSettings: { defaultAgent: "codex" },
@@ -85,6 +86,7 @@ describe("settings belong to the command node", () => {
     const portal = installLeafWindow();
     const loaded = await getConfig();
     expect(loaded.global.terminalScrollback).toBe(5_000);
+    expect(loaded.global.terminalLinkDefaultTarget).toBe("browser-tab");
     expect(Object.keys(loaded.repositories)).toEqual(["leaf-project"]);
 
     const global = { ...loaded.global, terminalScrollback: 7_000 };
@@ -187,6 +189,7 @@ describe("Settings edits a machine picked in its header", () => {
       requestKey: expect.any(String),
     });
     expect(loaded.global.terminalScrollback).toBe(5_000);
+    expect(loaded.global.terminalLinkDefaultTarget).toBe("browser-tab");
     expect(loaded.global.allowedDomains).toEqual(["leaf.test"]);
     expect(Object.keys(loaded.repositories)).toEqual(["leaf-project"]);
   });
@@ -275,6 +278,42 @@ describe("patching global settings", () => {
       unset: ["sshAgentSocketPath"],
     });
   });
+
+  test.each(["leaf-window", "selected-machine"] as const)(
+    "%s saves terminal link preferences on the command node and returns effective config",
+    async (context) => {
+      const portal = context === "leaf-window" ? installLeafWindow() : undefined;
+      if (!portal) installCommandWindow();
+      const commandInvoke = portal?.invoke ?? invokeMock;
+      commandInvoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+        if (command === "invoke_on_node") return { outcome: "ok", result: config("leaf") };
+        if (command === "patch_global_config") {
+          return {
+            ...config("command"),
+            global: { ...config("command").global, ...(args?.patch as Record<string, unknown>) },
+          };
+        }
+        return config("command");
+      });
+      const saved = await patchGlobalConfig(
+        { terminalLinkDefaultTarget: "external" },
+        context === "selected-machine" ? { machine: "bk_leaf" } : undefined,
+      );
+      expect(commandInvoke).toHaveBeenCalledWith("patch_global_config", {
+        patch: { terminalLinkDefaultTarget: "external" },
+      });
+      expect(saved.global.terminalLinkDefaultTarget).toBe("external");
+      expect(invokeMock).not.toHaveBeenCalledWith(
+        "invoke_on_node",
+        expect.objectContaining({
+          command: "patch_global_config",
+        }),
+      );
+      if (portal) {
+        expect(invokeMock).not.toHaveBeenCalledWith("patch_global_config", expect.anything());
+      }
+    },
+  );
 
   test("a leaf window writes nothing to a node with no changed keys", async () => {
     const portal = installLeafWindow();

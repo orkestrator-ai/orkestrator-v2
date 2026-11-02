@@ -38,15 +38,13 @@ import { DiskUsageSettings } from "./DiskUsageSettings";
 import { UsageSettings } from "./usage/UsageSettings";
 import { McpSettings } from "./McpSettings";
 import { ProviderMcpSettings } from "./mcp-servers/ProviderMcpSettings";
-import { PreviewSettings } from "./PreviewSettings";
-import { WebAnnotationSettings } from "./WebAnnotationSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
 import { MachinesSettings } from "./machines/MachinesSettings";
 import { SoundsSettings } from "./SoundsSettings";
 import { SchedulesSettings } from "./SchedulesSettings";
 import { PermissionsSettings } from "./PermissionsSettings";
-import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS, SettingsPageLayout } from "./SettingsPageLayout";
+import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import {
   AccountMachineProvider,
   useAccountMachineStore,
@@ -95,7 +93,7 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
     label: "Pi",
     icon: <AgentPlatformIcon platform="pi" accent className="h-4 w-4" />,
   },
-  { id: "skills", label: "Skills", icon: <Sparkles className="h-4 w-4" /> },
+  { id: "skills", label: "Skills and plugins", icon: <Sparkles className="h-4 w-4" /> },
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
@@ -153,6 +151,7 @@ export function SettingsScopeBanner({
   const mixed = [
     "defaults",
     "terminal",
+    "previews",
     "claude",
     "codex",
     "cursor",
@@ -292,11 +291,6 @@ export function SettingsPage({
                 <McpSettings />
               ) : activeSection === "mcp-servers" ? (
                 <ProviderMcpSettings />
-              ) : activeSection === "previews" ? (
-                <SettingsPageLayout title="Browser previews">
-                  <PreviewSettings />
-                  <WebAnnotationSettings />
-                </SettingsPageLayout>
               ) : activeSection === "messaging" ? (
                 <MessagingSettings />
               ) : activeSection === "schedules" && schedulingEnabled ? (

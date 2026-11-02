@@ -112,6 +112,13 @@ export type InputSkipReason =
   | "changed-while-reading"
   | "login-withheld";
 
+/**
+ * The `provider` of the shared user skills (`~/.agents/skills`) in an inputs
+ * summary. It is staged for every platform that reads that root, holds no
+ * login and has nothing to revoke.
+ */
+export const SHARED_SKILLS_INPUT = "shared-skills";
+
 /** Counts only: skipped names are user file names and never leave the backend. */
 export interface ProviderInputSummary {
   provider: string;

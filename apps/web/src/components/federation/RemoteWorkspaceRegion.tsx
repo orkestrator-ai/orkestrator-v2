@@ -9,6 +9,7 @@ import {
 } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { requestAppShortcut } from "@/lib/app-shortcuts";
 import { openBugReport } from "@/lib/bug-report/open-bug-report";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
@@ -21,7 +22,9 @@ import {
   type RealmSelectRequest,
   type ShellToRealmMessage,
 } from "@/lib/federation/workspace-realm";
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { isGlobalSettingsSection, requestGlobalSettings } from "@/lib/settings-navigation";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
 import {
@@ -152,12 +155,17 @@ function selectRequest(request: RealmRequest | undefined): Omit<RealmSelectReque
  * Delivery of the window's requests to one realm: the request the realm was
  * opened with is in its URL; later ones are sent once the realm says it is
  * listening, and each at most once. The realm also follows the window's
- * sidebar, which its toolbar toggles, and its grouping, which decides
- * whether the node's coordinator opens directly.
+ * sidebar, which its toolbar toggles, its files panel state, which is one
+ * state for every machine, and its grouping, which decides whether the node's
+ * coordinator opens directly.
  */
 function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) => void) | null) {
   const request = useRemoteWorkspaceStore((state) => state.requests[nodeId]);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
+  // The phone layout's files panel is a full-screen sheet of this window's own
+  // node, and a realm shows none there, so the state is only shared on desktop.
+  const phoneLayout = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
   const storedGrouping = useMachineViewStore((state) => state.grouping);
   const sortMode = useUIStore((state) => state.environmentSortMode);
   const grouping: RealmGrouping = sortMode === "activity" ? "activity" : storedGrouping;
@@ -165,9 +173,9 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
   const ready = useRef(false);
   const selection = useRef<Omit<RealmSelectRequest, "type">>({});
   // The latest values, for the callbacks below; kept current after each render.
-  const latest = useRef({ request, sidebarOpen, grouping, send });
+  const latest = useRef({ request, sidebarOpen, filesPanelOpen, phoneLayout, grouping, send });
   useLayoutEffect(() => {
-    latest.current = { request, sidebarOpen, grouping, send };
+    latest.current = { request, sidebarOpen, filesPanelOpen, phoneLayout, grouping, send };
   });
 
   const flush = useCallback(() => {
@@ -185,6 +193,10 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
   useEffect(() => {
     if (send && ready.current) send({ type: "sidebar", open: sidebarOpen });
   }, [send, sidebarOpen]);
+
+  useEffect(() => {
+    if (send && ready.current && !phoneLayout) send({ type: "filesPanel", open: filesPanelOpen });
+  }, [send, filesPanelOpen, phoneLayout]);
 
   useEffect(() => {
     if (send && ready.current) send({ type: "grouping", grouping });
@@ -248,6 +260,9 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
       if (message.type === "ready") {
         ready.current = true;
         latest.current.send?.({ type: "sidebar", open: latest.current.sidebarOpen });
+        if (!latest.current.phoneLayout) {
+          latest.current.send?.({ type: "filesPanel", open: latest.current.filesPanelOpen });
+        }
         latest.current.send?.({ type: "grouping", grouping: latest.current.grouping });
         flush();
         flushPanel();
@@ -260,6 +275,11 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
       } else if (message.type === "sidebar") {
         const ui = useUIStore.getState();
         if (ui.sidebarOpen !== message.open) ui.toggleSidebar();
+      } else if (message.type === "filesPanel") {
+        if (latest.current.phoneLayout) return;
+        if (useFilesPanelStore.getState().isOpen !== message.open) {
+          useFilesPanelStore.setState({ isOpen: message.open });
+        }
       } else if (message.type === "settings") {
         if (isGlobalSettingsSection(message.section)) requestGlobalSettings(message.section);
       } else if (message.type === "bugReport") {

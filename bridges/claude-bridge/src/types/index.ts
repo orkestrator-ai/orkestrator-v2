@@ -1086,6 +1086,12 @@ export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase 
   blockedPath?: string;
   /** For an `mcp__*` tool, the server that serves it. */
   mcpServer?: string;
+  /**
+   * Where that server's definition came from, as the SDK's
+   * `McpServerProvenance.source` reports it (`user`, `project`, `plugin`,
+   * `sdk`, …): a short lowercase token, otherwise omitted. Display only.
+   */
+  mcpServerSource?: string;
   /** `command-approval` only. */
   command?: string;
   /** `file-approval` only. */

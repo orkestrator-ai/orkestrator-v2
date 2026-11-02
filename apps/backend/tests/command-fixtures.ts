@@ -558,6 +558,9 @@ export async function createCommandFixtures() {
           environments.filter((environment) => environment.projectId === projectId),
         ),
         loadEnvironments: mock(async () => environments),
+        readEnvironmentsSnapshot: mock(async () =>
+          structuredClone(environments).map((environment) => Object.freeze(environment)),
+        ),
         addEnvironment: mock(async (environment: Environment) => {
           environment.order =
             Math.max(
@@ -626,6 +629,7 @@ export async function createCommandFixtures() {
         deletePaneLayout: mock(async () => undefined),
         listBuildPipelines: mock(async () => []),
         listAllBuildPipelines: mock(async () => []),
+        getAgentMailSummary: mock(async () => ({ revision: 0, mailboxes: [] })),
         listMultiReviewWorkflows: mock(async () => []),
         getProject: mock(async (projectId: string) => {
           if (options.project) return options.project.id === projectId ? options.project : null;

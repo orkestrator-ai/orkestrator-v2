@@ -15,7 +15,7 @@ with [agent-testing.md](agent-testing.md).
 | Test one file | `mise run test:logged -- --name focused -- bun test ./path/to/file.test.ts --parallel=1 --only-failures` | First feedback while editing one owner |
 | Test root unit tests | `mise run test:logged -- --name root-unit -- mise run test:unit` | Root `tests/unit` only |
 | Test changed code | `mise run test:changed` | Fast local feedback across affected packages and files |
-| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; excludes the [slow tier](#test-tiers) |
+| Test the repository | `mise run test` | Authoritative default, non-iOS validation before handoff; excludes the [slow tier](#test-tiers). Only pre-review implementation workers skip it when Multi Review or a build pipeline comes next; review preparation must schedule it when applicable |
 | Test the slow tier | `mise run test:slow` | On demand only: tests that wait on real processes, servers, or wall-clock time |
 | Test both tiers | `mise run test:full` | What CI runs; default and slow tiers |
 | Test everything, including iOS | `mise run test:all` | Release-sensitive or iOS validation on a Mac with Xcode |
@@ -24,6 +24,7 @@ with [agent-testing.md](agent-testing.md).
 | Run isolated-stack agent tests | `mise run test:agent:browser:isolated` | Creates a disposable profile, runs browser tests, and cleans up |
 | Run design-only real-stack tests | `mise run test:agent:design:isolated` | Same lifecycle, only `design-canvas.spec.ts` |
 | Run Electron agent tests | `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` | Main process, preload, IPC, clipboard, and shutdown |
+| Run the packaged-app Electron test | `mise run package:linux:unpacked`, then `mise run test:logged -- --name agent-electron-packaged -- mise run test:agent:electron:packaged` | Linux: the design journey against the packaged app's `file://` renderer, headless, on a disposable profile ([agent-testing.md](agent-testing.md#packaged-app-electron-spec)) |
 | Run Docker agent tests | `mise run test:logged -- --name agent-docker -- mise run test:agent:docker` | Opt-in container ownership and fixture coverage |
 | Qualify live paused interactions | `mise run test:logged -- --name paused-interactions-live -- mise run test:agent:paused-interactions` | Opt-in billed turns in a disposable profile; set `ORKESTRATOR_AGENT_TEST_LIVE_PAUSED_INTERACTIONS=1` ([agent-testing.md](agent-testing.md#live-paused-interactions)) |
 | Run the live coordinator suite | `mise run test:agent:coordinator --credential-source <platform>` | Manual and opt-in: real provider turns, one disposable profile per platform ([agent-testing.md](agent-testing.md#live-coordinator-suite)) |
@@ -32,12 +33,19 @@ Choose validation scope using [AGENTS.md](../../AGENTS.md#choosing-validation-fo
 before applying this loop. Documentation-only changes need only
 `mise run format:check`.
 
+Only pre-review implementation workers defer the full pass when Multi Review
+or a build pipeline follows. Review preparation must discover and schedule every
+applicable validation command from AGENTS.md, including `mise run test`, once
+against the committed branch. The worker exemption does not apply to preparation
+and must never cause preparation to defer its own validation to a later review.
+When no review follows, implementation workers run the required full validation.
+
 A normal code implementation loop is:
 
 1. Run the owning test file while iterating.
 2. Run `mise run test:changed` after the local behavior is green.
 3. Run `mise run check` through `test:logged` and run `mise run test` before
-   handoff.
+   handoff, except for pre-review implementation workers as described above.
 4. Add the relevant browser, agent, Docker, or iOS suite when the changed area
    requires it.
 
@@ -493,8 +501,18 @@ those contexts. WebKit engine coverage does **not** qualify shipping Safari or
 iOS. The suite covers sibling reads/frames, visible links, hostile workers,
 same-service iframe returns through a synthetic external identity provider,
 `srcset`, source maps, SPA deep links and history, IndexedDB,
-BroadcastChannel, Cache and worker isolation, frame and popup handling, and
-an IPv6-only (`::1`) service.
+BroadcastChannel, Cache and worker isolation, frame and popup handling,
+an IPv6-only (`::1`) service, upstream connection reuse and its closing on
+revocation and endpoint generation change, and legacy-route ETag revalidation
+(`upstream-pool.spec.ts`).
+
+With the Vite variable set, `vite-page-load.spec.ts` (Chromium only) also
+prints one `[preview-page-load]` line: medians of page-load time, requests,
+304s, bytes and upstream connections through the private origin and the
+legacy route. `ORKESTRATOR_TEST_PREVIEW_VITE_PAGE` picks the page,
+`ORKESTRATOR_TEST_PREVIEW_LOAD_SAMPLES` the samples, and
+`ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1` turns connection reuse off for an A/B
+comparison.
 
 Live Tailscale Serve header preservation is a separate opt-in transport check:
 
@@ -1416,6 +1434,7 @@ Use the default suite plus the additional evidence relevant to the change:
 | React component or store | Owning component/store tests and `mise run test:browser` when browser behavior matters |
 | User-visible or background renderer flow | Isolated-stack browser cycle, including inactive-environment rehydration |
 | Electron main/preload/IPC | Focused Electron tests plus `mise run test:agent:electron` |
+| Desktop packaging (`build` in `package.json`, `extraResources`) or how main loads the production renderer | `mise run package:linux:unpacked`, then `mise run test:agent:electron:packaged` on Linux |
 | Docker lifecycle or ownership | Local fixture coverage plus `mise run test:agent:docker` |
 | Service previews: private origins, publication, bootstrap, request forwarding, or the preview fixtures | `mise run test:preview:browser` (all three engines); add `mise run test:preview:docker` for target resolution, port publication or the relay, and `mise run test:agent:electron` for the desktop tunnel. See "Opt-in preview checks". |
 | iOS | `mise run test:all` on macOS with Xcode, or report that iOS was not run |

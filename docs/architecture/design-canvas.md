@@ -516,7 +516,11 @@ one tab and one live session.
 survival, accessibility-tree, label-in-name, reduced-motion, 200% and 400% zoom
 and narrow-pane checks, and
 `e2e/agent-testing/design-canvas-electron.spec.ts` (`mise run test:agent:electron`)
-drives the canvas in the real Electron window. The opt-in
+drives the canvas in the real Electron window, with the renderer served by
+Vite; `design-canvas-packaged-electron.spec.ts`
+(`mise run test:agent:electron:packaged`, after
+`mise run package:linux:unpacked`) runs the same journey against the packaged
+Linux app and its `file://` renderer. The opt-in
 `core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)
 exports from a running container and interrupts it.
 `scripts/benchmark-design.ts` measures transfer, commit and latency fixtures,

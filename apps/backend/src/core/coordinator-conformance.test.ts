@@ -19,12 +19,14 @@ import { resolvePiMcpServers } from "../../../../bridges/pi-bridge/src/mcp-confi
 import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_PR_RULE,
+  COORDINATOR_VALIDATION_RULE,
   type CoordinatorProviderTier,
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   COORDINATOR_WORKER_NO_PR_INSTRUCTION,
+  COORDINATOR_WORKER_VALIDATION_INSTRUCTION,
 } from "@orkestrator/protocol/review-evidence-frames";
 import {
   describeNativeAgentExecutionPolicy,
@@ -321,6 +323,43 @@ describe("coordinator read-only conformance", () => {
       COORDINATOR_JOB_DELEGATION_INSTRUCTION,
     ]) {
       expect(instruction).toContain(COORDINATOR_WORKER_NO_PR_INSTRUCTION);
+    }
+  });
+
+  test("full validation belongs to review, not to the worker handing off to it", () => {
+    // Coordinators used to close a brief with "run the full suite once", then
+    // start a Multi Review whose first step runs that suite on the same commit.
+    expect(COORDINATOR_VALIDATION_RULE).toContain("when review comes next never ask a worker");
+    expect(COORDINATOR_VALIDATION_RULE).toContain("focused checks");
+    expect(COORDINATOR_VALIDATION_RULE).toContain(
+      "State in every worker prompt whether review follows",
+    );
+    expect(COORDINATOR_VALIDATION_RULE).toContain(
+      "When no review follows, explicitly ask the worker to run all validation required by the repository before handoff",
+    );
+    // A full run is still right when its result is the point.
+    expect(COORDINATOR_VALIDATION_RULE).toContain("the user asks for one");
+    expect(COORDINATOR_VALIDATION_RULE).toContain("diagnosing a suite failure");
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).toContain(
+      "When the prompt below says review follows",
+    );
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).toContain(
+      "unless it explicitly asks you to run them",
+    );
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).toContain(
+      "When no review follows or the prompt does not say, follow the repository's validation requirements before handoff",
+    );
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).toContain(
+      "Report any required full validation you did not run",
+    );
+    expect(COORDINATOR_WORKER_VALIDATION_INSTRUCTION).not.toContain(
+      "review runs full validation once against your committed work",
+    );
+    for (const instruction of [
+      COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
+      COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+    ]) {
+      expect(instruction).toContain(COORDINATOR_WORKER_VALIDATION_INSTRUCTION);
     }
   });
 });

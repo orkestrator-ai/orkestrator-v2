@@ -1495,6 +1495,24 @@ export function isActiveBuildPhase(phase: BuildPhase): boolean {
   return phase !== "paused" && phase !== "complete" && phase !== "failed";
 }
 
+/** The start of the error a cancelled pipeline records; cancel has no phase of its own. */
+export const BUILD_CANCELLED_ERROR = "Build cancelled";
+
+/**
+ * True when a `failed` pipeline was stopped by someone's cancel rather than by
+ * an error: cancel ends in `failed` with {@link BUILD_CANCELLED_ERROR} and no
+ * failure context.
+ */
+export function isCancelledBuildPipeline(
+  pipeline: Pick<BuildPipeline, "phase" | "error" | "failureContext">,
+): boolean {
+  return (
+    pipeline.phase === "failed" &&
+    !pipeline.failureContext &&
+    (pipeline.error?.startsWith(BUILD_CANCELLED_ERROR) ?? false)
+  );
+}
+
 const SETUP_BUILD_PHASES = new Set<BuildPhase>([
   "creating-environment",
   "starting-environment",

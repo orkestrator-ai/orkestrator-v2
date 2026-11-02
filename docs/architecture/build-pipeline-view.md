@@ -57,10 +57,11 @@ Multi Review and the pipeline draw with the same components in
 A workflow supplies the nodes in keyboard order, a layout function from width
 to geometry, the edges, ports and the stacked stages. Multi Review keeps its
 own five-column layout (`multiReviewFlowLayout`) and looks and behaves as
-before. The shared zoom controls offer Fit ("Fit the whole pipeline") when a
-graph passes `fitControl`: it zooms out, never past 100% in and never below
-20%, until the whole wide graph shows in its viewport, or the stacked column in
-the panel that scrolls it, and scrolls back to the start. The pipeline turns it
+before. The shared zoom controls offer Fit when a graph passes `fitControl`. There is
+no separate button: the zoom level toggles, fitting the graph when it reads
+100% and resetting to 100% otherwise. Fit zooms out, never past 100% in and
+never below 20%, until the whole wide graph shows in its viewport, or the
+stacked column in the panel that scrolls it, and scrolls back to the start. The pipeline turns it
 on, since its unrolled passes grow the line without bound. Multi Review leaves
 it off: it removed Fit in #1199 and its browser suite asserts it stays gone.
 
@@ -319,13 +320,14 @@ other step and `normalizeReviewPreparation` from the preparation step.
 
 ## Header and key information
 
-The tab header names the ticket and, under it, the phase and build agent. On
-its right sit the pipeline controls (retry, restart, pause, resume, cancel),
-then the **Key information** button, then the pipeline toolbar at the top
-right: the graph's collapse toggle, "N of M steps" and the elapsed time.
-`PipelineFlowView` still computes the toolbar and renders it through a portal
-into the header (`toolbarSlot`); a review pass opened as its own tab has no
-pipeline header and keeps the toolbar inline above its graph. There is no
+The tab header names the ticket and, under it, the phase, the build agent,
+"N of M steps" and the elapsed time (on their own line on a phone). On its
+right is one row of equal icon buttons: the pipeline controls (retry, restart,
+pause, resume, cancel), then **Key information**, then the graph's collapse
+toggle. `PipelineFlowView` still computes the progress and the toggle and
+renders them through portals into the header (`headerSlots`); a review pass
+opened as its own tab has no pipeline header and keeps both inline above its
+graph. There is no
 banner pointing at the review report: a review's outcome is on its node, in
 its inspector, and in the key information.
 
@@ -554,6 +556,12 @@ action.
    retried on every supervisor pass, logged once per reason, and each control
    in the meantime says the rewind has not finished; the reset completes, and
    the step starts, once the container answers again.
+   Deleting the pipeline is the one control that does not wait: inside the
+   pipeline lock it drops the record, with its unrun reset, without cancelling
+   first (admission required an idle pipeline, so there is nothing to stop).
+   That is the way out when the reset can never run, for example because the
+   workspace was recreated or the branch moved by hand. Pause and cancel still
+   wait for the reset.
 4. **Pushed commits and the pull request.** When the upstream had commits the
    reset dropped, every Ship until a live Ship completes after the rewind is
    told to push with `git push --force-with-lease` (never plain `--force`, never

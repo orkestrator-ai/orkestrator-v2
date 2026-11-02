@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { pathToFileURL } from "node:url";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import {
@@ -16,7 +16,58 @@ import {
   nativeFetch,
   here,
   waitForExit,
+  waitFor,
 } from "./acp-test-harness";
+
+test("parent logging settings cannot change readiness or leak through the bridge to its children", async () => {
+  const keys = ["ORKESTRATOR_LOG_FORMAT", "ORKESTRATOR_LOG_LEVEL", "ORKESTRATOR_BRIDGE_LOG_RELAY"];
+  const previous = keys.map((key) => process.env[key]);
+  const resultPath = resolve(await temporaryDirectory(), "child-logger-settings.json");
+  process.env.ORKESTRATOR_LOG_FORMAT = "json";
+  process.env.ORKESTRATOR_LOG_LEVEL = "error";
+  process.env.ORKESTRATOR_BRIDGE_LOG_RELAY = "1";
+  try {
+    const bridge = await spawnBridge(
+      {},
+      {
+        spawnChild: (env) => {
+          expect(env.ORKESTRATOR_LOG_FORMAT).toBe("text");
+          expect(env.ORKESTRATOR_LOG_LEVEL).toBe("info");
+          expect(env.ORKESTRATOR_BRIDGE_LOG_RELAY).toBeUndefined();
+          return spawn(
+            process.execPath,
+            [
+              "--eval",
+              `
+          await import(${JSON.stringify(pathToFileURL(resolve(here, "index.ts")).href)});
+          const child = Bun.spawnSync([process.execPath, "--eval", ${JSON.stringify(
+            `process.stdout.write(JSON.stringify(${JSON.stringify(keys)}.map(key => process.env[key] ?? null)))`,
+          )}], { env: { ...process.env } });
+          if (child.exitCode !== 0) throw new Error("Child environment probe failed");
+          await Bun.write(${JSON.stringify(resultPath)}, child.stdout);
+        `,
+            ],
+            { env, stdio: ["pipe", "pipe", "pipe"] },
+          );
+        },
+      },
+    );
+    try {
+      const inherited = await waitFor(
+        () => readFile(resultPath, "utf8").catch(() => ""),
+        (text) => text.length > 0,
+      );
+      expect(JSON.parse(inherited)).toEqual([null, null, null]);
+    } finally {
+      await stopChild(bridge.child);
+    }
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+  }
+});
 
 describe("ACP test harness child tracking", () => {
   test(

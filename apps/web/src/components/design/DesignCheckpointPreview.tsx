@@ -5,7 +5,7 @@ import { createUuid } from "@/lib/uuid";
 import { DesignFrameBridge } from "./frame-bridge";
 
 /** The only bridge surface a preview uses: it renders, never edits. */
-export type DesignPreviewBridge = Pick<DesignFrameBridge, "ask" | "close">;
+export type DesignPreviewBridge = Pick<DesignFrameBridge, "open" | "ask" | "close">;
 
 function defaultBridge(target: Window): DesignPreviewBridge {
   return new DesignFrameBridge(target, 3000);
@@ -34,8 +34,10 @@ export function DesignCheckpointPreview({
   const [state, setState] = useState<"rendering" | "ready" | "failed">("rendering");
   const html = useMemo(() => designBootstrap(createUuid()), []);
 
+  // Open and close pair here: a bridge replaced before it was committed never listens.
   useEffect(() => {
     if (!bridge) return;
+    bridge.open();
     return () => bridge.close();
   }, [bridge]);
 

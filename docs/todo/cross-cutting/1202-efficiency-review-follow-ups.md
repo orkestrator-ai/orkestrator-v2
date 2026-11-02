@@ -27,20 +27,20 @@ governs, marked "Decided".
 ### Tasks
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
-2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7 and ST-8 done).
-3. **Renderer re-renders and refetches**: WEB-4 to WEB-19 and GW-13, plus WEB-2's narrower subscriptions. Status: open (WEB-2 and WEB-3 done).
+2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open.
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
-10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: open (BG-3's messaging-disabled gate done).
-11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-4 done; GW-2 done in 0052).
+10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
+11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open.
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open.
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
 
 ### 1. Baseline and before-and-after numbers
@@ -65,37 +65,102 @@ governs, marked "Decided".
 
 **Problem.** Some keyed paths still decode or rewrite a whole store for one row.
 
-**Context.** Done: `getEnvironment`, `getNativeAgentSession`, `getPromptQueue`, `getComposeDraft`, `getPaneLayout` and `getSession` read one row (`loadStoreRow`), and `updateStoreRow` carries a cached store forward (`storage-database.ts`). SQLite pragmas (ST-12) were decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task.
+**Context.** Done: `getEnvironment`, `getNativeAgentSession`, `getPromptQueue`, `getComposeDraft`, `getPaneLayout` and `getSession` read one row (`loadStoreRow`), and `updateStoreRow` carries a cached store forward (`storage-database.ts`). SQLite pragmas (ST-12) were decided 2026-11-01: unchanged, revisited only if fsync cost still shows after this task. Done 2026-11-02 (branch `keyed-storage-row-e11a908a8276-r1`, re-checked against `main` at `38d55ee14`):
 
-**Investigation.** Still whole-store: the lease-held native session mutations in `storage-native.ts` (more than 20 call sites load the store inside the key's lease), `workerProjection`'s `listNativeAgentSessions()` (`index.ts`), each background job decoding the environment and session stores on its own (BG-5), compose-draft saves taking a global lease and a full load while typing (ST-10, `storage-drafts.ts`), and `updateStoreRow` throwing for keyed array layouts (`storage-database.ts`). Inserts scan their collection for the next position (ST-11). #1423 gave agent mail a revision-keyed read model and dropped the pretty-printed size check, so ST-9's remainder (pending injects as their own collection, a body-free mailbox list) needs re-checking before work.
+- BG-5: `FrozenStoreSnapshot` (`storage-frozen-snapshot.ts`) keeps one deeply frozen decoded copy per committed revision, re-decoding only rows whose serialized value changed, one copy per store and none above 64 MiB of serialized rows. `readEnvironmentsSnapshot` and `readNativeAgentSessionsSnapshot` serve it to the activity sweep and its read-only helpers (`runtimeStopRequested`, `hasObservedLiveWork`, `hasActiveCheckoutWork`), the interaction tracker sweep, the tmux reconcile, the human-prompt monitor's `workingSessions`, `workerProjection`, `workerSessionActivity` and the pending-rename reconcile (`commands-registry.ts`, every 2 s while an environment has a rename intent, else 30 s).
+- ST-10, compose drafts: a save or single delete reads and writes only its row (`updateSensitiveStoreRow`, which keeps `saveSensitiveJson`'s archive pruning by journaling a keyed `prune-row` cleanup in the row's transaction); owner sweeps are one `updateStore` that writes nothing when the owner has no draft. The store lease stays.
+- ST-11: `store_rows_position` on `(store, collection, position)`, created on open.
+
+**Investigation.** Re-checked 2026-11-02. Still whole-store: the lease-held native session mutations in `storage-native.ts` (22 call sites still load the whole store inside the key's lease, TX-4's rest), `updateStoreRow` throwing for keyed array layouts (`storage-database.ts`), and the record-store writers the report names under ST-10 (`storage-projects.ts`, `storage-sessions.ts`). Environments are an array store written whole under the environment lease by many paths, with attributable archive scrubs, so moving one writer to row writes breaks the one-kind-of-writer rule (`storage-writer-guards.test.ts`); every writer of the store has to move together, and array row writes have to exist first. Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
 
 **Decisions.**
 
-- **How to share decoded stores between background readers (BG-5)?**
+- **How to share decoded stores between background readers (BG-5)?** Done as recommended.
   - **One frozen decoded snapshot per store revision, the pattern #1423 used for mail (recommended).**
     - Pros: proven here; callers cannot mutate shared state.
     - Cons: callers that mutate their result must copy first, so each caller has to be checked.
   - **Pass one snapshot per sweep through each job's arguments.**
     - Pros: no cache.
     - Cons: touches every job signature; does not help unrelated jobs in the same second.
+- **BG-5: replace `listNativeAgentSessions` itself, or add snapshot reads beside it?** Decided 2026-11-02: beside it.
+  - **New `read*Snapshot` methods, moving callers one at a time once each is checked (recommended).**
+    - Pros: a caller is moved only when it is known not to write; the test harnesses of the moved callers return frozen data, so a write fails there.
+    - Cons: two read paths per store; unmoved callers still decode the store.
+  - **Make `listNativeAgentSessions` (and later `loadEnvironments`) return the frozen copy.**
+    - Pros: every caller benefits at once.
+    - Cons: 30 callers, several of which pass records to code that may write them; a missed one throws in production.
+- **ST-10, compose drafts: drop the store lease?** Decided 2026-11-02: keep it.
+  - **Keep the lease; one row read and write inside it (recommended).**
+    - Pros: saves stay ordered against the owner checks they await and against the owner deletion sweeps, exactly as before.
+    - Cons: still one lease claim and release per save.
+  - **A per-key lease, with the owner fences re-checked inside the row transaction.**
+    - Pros: drafts of different tabs save concurrently, and a save costs no store-wide lease.
+    - Cons: needs synchronous fences for project removal and coordinator conversation close that do not exist today.
+- **ST-10, compose drafts: how to keep the retired JSON archive pruning?** Decided 2026-11-02: journaled with the row.
+  - **`updateSensitiveStoreRow`: journal a keyed pruning intent (`prune-row`) in the same transaction as the row update, through the existing durable cleanup journal (`commitWithLegacyJsonCleanup`, `storage-stores.ts`), or one whole-value `prune` intent when the store was unreadable; inside `atomically()` the intent joins the scope's cleanups and commits with it (recommended).**
+    - Pros: the same pruning a whole-value save did, for one record, with the same recovery guarantee: an interrupted or failed pruning is replayed on reopen or before the next journaled write, before another mutation (a later re-add included) can obscure the removal; nothing is read when no archive is left (it expires 14 days after migration).
+    - Cons: one more cleanup variant in the journal, and each journaled save stores a copy of the row's new value in the private cleanup store until the pruning finishes.
+  - **Prune after the row commits, with no durable intent.**
+    - Pros: smaller; no journal entry per save.
+    - Cons: a crash or an archive write failure between the two leaves removed sensitive content in that archived copy until it expires.
+  - **Fall back to the whole-store save while an archive exists.**
+    - Pros: byte-for-byte the old behaviour.
+    - Cons: two kinds of writer for one store, which the writer guard refuses.
+- **ST-11: index or a stored next position?** Decided 2026-11-02.
+  - **An index on `(store, collection, position)`, created on open (recommended).**
+    - Pros: no stored value or schema version changes, so an older build still opens the database; ordered row fetches use it too.
+    - Cons: one more index to maintain on inserts and deletes; it is built once on the first open after the upgrade.
+  - **A numbered migration, or the next position kept in `stores`.**
+    - Pros: a migration follows the documented pattern.
+    - Cons: a new version locks every older build out of the database, and a stored counter is new stored data to keep consistent.
+- **ST-10's remaining writers: next step?**
+  - **Add array-layout `updateStoreRow` with tests, then move every environment writer at once (recommended).**
+    - Pros: environments are the largest store written whole for one field.
+    - Cons: one large change touching every environment mutation, its archive scrubs and the deletion fences.
+  - **Move the record stores (sessions, projects) first.**
+    - Pros: `updateStoreRow` already supports them.
+    - Cons: smaller stores, so less gained.
 
 ### 3. Renderer re-renders and refetches
 
 **Problem.** Several renderer paths serialise or re-render far more than changed.
 
-**Context.** Done: unchanged polls keep the identity object and the projection store's recency condition is gone (WEB-2); per-environment lists hydrate once per id and the status and PR setters skip no-ops (WEB-3, `useHydrateOncePerEnvironment.ts`).
+**Context.** Done 2026-11-01: unchanged polls keep the identity object and the projection store's recency condition is gone (WEB-2); per-environment lists hydrate once per id and the status and PR setters skip no-ops (WEB-3, `useHydrateOncePerEnvironment.ts`). Done 2026-11-02, each re-checked against `main` at `38d55ee1` first (all five were still true; #1585's transcript rework did not touch `AgentInfoButton`), each with a test that fails on the previous code:
 
-**Investigation.** Not re-checked since the report: pane-layout persistence serialises every layout before its identity check (WEB-4), background polls toggle loading flags (WEB-5), the live-head merge has no identity shortcut (WEB-6), broad store subscriptions in `AppShell` and `usePullRequest` (WEB-7), the agent-info header normalising the whole transcript (WEB-8), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), the smaller WEB-12 to WEB-19, and dialogs polling state the backend pushes (GW-13). WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done.
+- WEB-4: `pane-layout-persistence.ts` skips an environment whose object and hydration are both unchanged before sanitising and serialising it (`pane-layout-persistence.unchanged.test.ts`: a write to one environment serialised the other's layout once per write before).
+- WEB-5: a background read over an authoritative session state (`stateAvailability` current and a projection held) no longer raises and clears `isRefreshing` and `sessionStateRefreshing`, and both setters skip writes that would not change the value (`useNativeAgentSession.background-flags.test.tsx`: steady polls went from one hook render per tick to none; manual reads and reads before any authoritative state still raise the flags). The transcript skeleton flag had already been gated on `background`.
+- WEB-8: `AgentInfoButton` normalises the transcript only inside the rewind and undo handlers (`AgentInfoButton.transcript-reads.test.tsx`: six projection updates normalised six times before, now none until the click, then once).
+- WEB-15: the native tab's tail reads (latest assistant row, latest prompt, auth failure since it) are one memoised pass, `readTranscriptTail` in `components/native-agent/transcript-tail.ts` (`transcript-tail.test.ts` pins equality with the old expressions, goal turns included).
+- GW-13: `EnvironmentRebuildSection` follows `container-lifecycle-updated` through `listenAuthoritative` (subscribe, then read; re-read on resync), keeps the higher-revision snapshot when reads and events cross, and polls every 15 s while a rebuild runs instead of every 2 s (2 s again if the subscription fails). The event name and `ContainerLifecycleEvent` payload now live in `@orkestrator/protocol/container-lifecycle` (`EnvironmentRebuildSection.events.test.tsx`).
+
+**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the live-head merge has no identity shortcut (WEB-6), broad store subscriptions in `AppShell` and `usePullRequest` (WEB-7), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), and the smaller WEB-12 to WEB-14 and WEB-16 to WEB-19. WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
 
 **Decisions.**
 
-- **Order of work?**
+- **Order of work?** Decided 2026-11-02 (first batch done).
   - **WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 first, each a local change; then WEB-7 and WEB-9 (recommended).**
     - Pros: the report's Phase 1 items first; each is testable on its own.
     - Cons: WEB-9's bundle gain waits.
   - **WEB-9 first.**
     - Pros: every launch benefits.
     - Cons: needs a build-size check per step and touches many imports.
+- **What should still poll once the rebuild section follows lifecycle events (GW-13)?**
+  - **A 15 s backstop read while a rebuild runs, 2 s when the subscription failed (recommended, done).**
+    - Pros: progress arrives as it is written; a lost event costs at most 15 s even on a transport that cannot report a gap.
+    - Cons: still one read every 15 s per open dialog during a rebuild.
+  - **No polling at all; rely on events and resync.**
+    - Pros: no reads while nothing changes.
+    - Cons: a dropped event on a transport without a resync signal leaves the dialog stale until it is reopened.
+  - **Keep the 2 s poll and add the listener.**
+    - Pros: no behaviour risk.
+    - Cons: keeps the cost GW-13 is about.
+- **Should `ProjectCopyDialog` and `useUserCommands` lose their 3 s backstops too (GW-13)?**
+  - **Leave them (recommended, done).**
+    - Pros: both already update from events; each backstop runs only while work is in flight and covers a transport (portal) or resource (ephemeral `user-command`) whose missed hints nothing else detects.
+    - Cons: a few extra reads per in-flight copy or command.
+  - **Lengthen or remove them.**
+    - Pros: fewer reads.
+    - Cons: needs a gap signal for the portal stream and the ephemeral resource first.
 
 ### 4. Live agent view requests
 
@@ -137,19 +202,53 @@ governs, marked "Decided".
 
 **Problem.** Bridges re-measure and re-serialise whole transcripts and tool cards per update, and Codex reads every session record per config read.
 
-**Context.** Done: ACP streaming output persists at most once a second (`scheduleStreamingPersist` in `acp-persist-writer.ts`) and measures the transcript every 1 MB (BR-1, BR-3), as decided on 2026-11-01. Neither has a new test; the existing bridge suite passes. One ACP test (`latches a fatal error when active children exceed the bounded registry`) fails on `0bd214ee` too when the file is run directly.
+**Context.** Done: ACP streaming output persists at most once a second (`scheduleStreamingPersist` in `acp-persist-writer.ts`) and measures the transcript every 1 MB (BR-1, BR-3), as decided on 2026-11-01. Neither has a new test; the existing bridge suite passes. One ACP test (`latches a fatal error when active children exceed the bounded registry`) fails on `0bd214ee` too when the file is run directly; it passed in the 2026-11-02 bridge run.
 
-**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-4 to BR-6 (`transcript-budget.ts` and the Pi, Cursor and ACP transcript helpers), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's duplicated helpers and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+Done 2026-11-02 (against `main` at `38d55ee1`), in the order decided below: the Pi, Cursor and ACP transcript helpers moved into `packages/protocol/src/node` first (BR-15's transcript half), then BR-4 to BR-6 were fixed there once.
+
+- `bridge-transcript-text.ts`: `sliceUtf8`, `boundUtf8Text` and `BoundedTextAppender`, which replaces Pi's and Cursor's identical `appendBounded`/`boundText`/`sliceToBytes` and ACP's `appendBounded`/`appendSaturating`/`truncateUtf8`/`truncateDisplayText`. The two truncation behaviours are kept as policies (`append-notice` for Pi and Cursor, `reserve-notice` for ACP), so each bridge's text is unchanged. BR-6: the appender remembers each owner's buffer byte length, used only while `current` is the very string it was taken from, so a delta costs its own bytes.
+- `bridge-transcript-bounds.ts`: one `createBridgeTranscriptBounds` for the bound wrapper, read bound, streaming check and revised-row bookkeeping Pi and Cursor each carried. The bridges' `transcript.ts` keep their exported names as thin bindings, so no call site changed.
+- BR-4, `TranscriptRowSizes` in `transcript-budget.ts`: a dirty bound re-serialises only the newest row and the rows noted since the last pass. The hook is the existing revised-row note (`noteRowRevised` for Pi and Cursor, ACP's `noteRevisedRow`), which every in-place change to an older row must already reach for `revisedMessageIds`. A remembered size is also tied to the row object and to the row after it, so a replaced history or a row that became newest again (Pi's refused-prompt rollback, ACP's withdrawn prompt) is measured again. One entry per retained row, rebuilt on every pass. Under `bun test` (`NODE_ENV=test`) every remembered size is re-checked and a stale one throws `StaleTranscriptSizeError`, so the three bridge suites prove their write paths note what they change. Two paths that change an older row without a reader note now invalidate it directly: Pi's history-replay result fold (`forgetRowSize`) and ACP's nested-part shedding.
+- BR-5, `EncodedObjectSizes` in `transcript-budget.ts`: Pi's `chargeToolPart`, Cursor's `chargeToolPart` and ACP's `commitToolPartMutation` measure a card with exactly `JSON.stringify`'s byte count, but re-measure only string fields that changed, and a field that extends its previous value costs one prefix comparison plus its new suffix. Object and array fields are still measured every time, because the bridges mutate some in place. Cursor's shell-delta `continues` fast path is unchanged.
+- Tests: `bridge-transcript-text.test.ts` replays random streams (multibyte, split surrogate pairs, notices, caps below the marker) through verbatim copies of the old bridge helpers and requires the same text; `transcript-budget.test.ts` checks the row cache (only the newest and noted rows are measured, follower and identity checks, count bound, verification) and that `boundTranscriptInPlace` with the cache leaves exactly the state it leaves without it, and checks `EncodedObjectSizes` against `encodedJsonBytes` through random edits; `bridge-transcript-bounds.test.ts` covers the shared wrapper. The Pi, Cursor and ACP bridge suites pass unchanged with verification on.
+
+**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+
+What BR-5 does not remove: Pi resends a running tool's whole accumulated output on every frame, and `renderToolCall` re-bounds it (`boundText`) before the charge, so a Pi frame still costs O(output) — now one prefix comparison instead of a whole-card serialisation. Getting below that needs Pi's tool rendering to take deltas. ACP's text charge (`Buffer.byteLength(text) * 2`) is not JSON-escaped, so it is not a strict upper bound on encoded growth; it only schedules the bound, which is exact, so it was left alone. Cursor's per-sub-agent byte check (`boundNestedParts` with `measureBytes`) still serialises each live row's nested parts on an exact pass. No before-and-after numbers were taken (task 1).
 
 **Decisions.**
 
-- **Fix each bridge or move the helpers first (BR-15)?**
+- **Fix each bridge or move the helpers first (BR-15)?** Decided 2026-11-01; done 2026-11-02 for the transcript helpers.
   - **Move the Codex and Cursor versions into `packages/protocol/src/node` first, then fix BR-4 to BR-6 there once (recommended).**
     - Pros: each fix lands once; the good versions already exist.
     - Cons: a protocol change, so `mise run test` across all bridges.
   - **Fix each bridge in place.**
     - Pros: smaller diffs.
     - Cons: three copies of every fix.
+- **What invalidates a remembered row size (BR-4)?** Done 2026-11-02 with the first option.
+  - **The existing revised-row note, plus row identity and follower checks, verified against a fresh measurement under `bun test` (recommended, taken).**
+    - Pros: reuses a hook every older-row change must already call; the newest row, where streaming writes without a note, is always measured; a missed note fails the bridge suites instead of shipping.
+    - Cons: a new write path that changes an older row without a note and without a test would make the bound measure that row stale (over or under by that change) until the row is noted or evicted.
+  - **A per-row version counter bumped by `rowChanged`, as the report suggested.**
+    - Pros: explicit.
+    - Cons: the same audit, plus a second hook every path must call.
+  - **Skip measuring while the last exact size plus the charged growth is under the budget.**
+    - Pros: no per-row state.
+    - Cons: relies on every charge being a strict upper bound, which ACP's text charge is not; a transcript at the budget still measures everything on every dirty read, which is the case that costs most.
+- **How to keep each bridge's truncated text identical (BR-15)?** Done 2026-11-02 with the first option.
+  - **One appender with two named policies (recommended, taken).**
+    - Pros: one implementation and memo; output unchanged, proven against copies of the old helpers.
+    - Cons: two behaviours remain; unifying them would change what users see at the cap.
+  - **Converge on one policy.**
+    - Pros: simpler.
+    - Cons: changes transcript text in one or two bridges, which this task must not do.
+- **Should the SSE replay rings move as part of BR-15?** Open.
+  - **Separately, after BR-7 (recommended).**
+    - Pros: Claude's ring adopting Codex's superseded-frame collapse changes what a reconnecting client is replayed, which needs its own replay tests; the transcript helpers did not depend on it.
+    - Cons: BR-15 stays half open.
+  - **Move Codex's `event-ring.ts` into protocol now and point Claude at it.**
+    - Pros: closes BR-15.
+    - Cons: a behaviour change to Claude's SSE replay in a task meant to leave output unchanged.
 
 ### 7. Change tracking and git scans
 
@@ -207,39 +306,112 @@ governs, marked "Decided".
 
 ### 10. Other background jobs
 
-**Problem.** Some 2 s and 5 s jobs still do per-item work that could be skipped.
+**Problem.** Some 2 s and 5 s jobs still did per-item work that could be skipped.
 
-**Context.** Done: mail presence returns early while messaging is disabled. It still refreshes while paused (see Assumptions and decisions).
+**Context.** Done on 2026-11-01: mail presence returns early while messaging is disabled; it still refreshes while paused (see Assumptions and decisions). Done on 2026-11-02, re-checked against `main` at `38d55ee14` first (all four were still true there):
 
-**Investigation.** Still to do: BG-3's skip of environments that are not running before any store read, and reuse of the tmux loop's liveness result instead of another `has-session`; BG-9 (`contentRevision` for the human-prompt monitor); BG-11; BG-12.
+- BG-3. `refreshPresenceOnce` (`agent-mail-service.ts`) reads each environment once per pass and records a stopped one's presence without any per-mailbox read: native `environment_stopped` when the environment is missing, being deleted or not running; tmux `environment_unready` when it is not ready for agents. Those are the answers the per-mailbox reads give, so the inject-backoff reset on a change is unchanged. Coordinator runtimes and unreadable rows still take the per-mailbox read. Tmux presence passes `livenessMaxAgeMs: 3000` to `claude_tmux_status`, which takes the session's last `has-session` answer (`TmuxSession.recentLiveness`, recorded by every `tmuxAlive`) when it is that recent and probes otherwise. A dispatch still probes.
+- BG-9. `AgentHumanPromptMonitor` reuses a working session's last observation while `NativeAgentService.humanPromptContentRevision` (provider session id plus the activity sweep's `contentRevision`) is unchanged, for at most 30 s (`HUMAN_PROMPT_PROJECTION_REUSE_MS`). Background task files are still read every pass. Providers that report no revision (OpenCode, Cursor, Pi, Grok) are read every pass as before. OpenCode's `humanPromptOutput` normalises only the newest 64 rows (`normalizeOpenCodeTranscriptTail`, `HUMAN_PROMPT_OBSERVATION_ROWS`) instead of the whole retained history.
+- BG-11. `BuildPipelineReviewFanout.reviewHost` builds the shared package prompt (review instruction plus project notes) once per pass for the package it describes; a failed build is dropped.
+- BG-12. `syncContainerClaudeLoginUnlocked` compares the pushed digest of a matching keeper handover before the marker `docker exec`; the keeper passes its one read of configuration and environments (`ClaudeLoginPassSnapshot`) for the first gate, and delivery still re-reads its fences after host I/O.
+
+**Investigation.** Counted with the new tests run against the old code: a stopped environment's native mailbox did 1 presence read per pass (now 0), a stopped tmux mailbox 1 (now 0); a four-reviewer dispatch pass read the project notes 5 times (now 2, one of which is the pass's own); four human-prompt passes over a session whose revision changed once made 4 bridge reads (now 2); an unchanged Claude login cost one marker `docker exec` per container per keeper pass (now none). These are unit counts, not the live `recurringWork` diagnostics task 1 asks for.
 
 **Decisions.**
 
 - **BG-3: where does a stopped environment get skipped?**
-  - **In `refreshPresenceOnce`, from the environment's status before any per-mailbox read (recommended).**
+  - **In `refreshPresenceOnce`, from the environment's status before any per-mailbox read (recommended, done).**
     - Pros: one place; no reads for stopped environments.
-    - Cons: needs the environment list once per pass, which task 2's shared snapshot makes cheap.
+    - Cons: one environment read per environment per pass; defers the native read's backstop that clears a refused mail dispatch (see Assumptions and decisions).
   - **Compute presence lazily on `list_mailboxes`.**
     - Pros: no periodic work at all.
     - Cons: delivery decisions in the inject drain also read presence, so it changes their timing.
+- **BG-9: what may the monitor skip on an unchanged revision?**
+  - **The bridge observation only, reusing the last one for at most 30 s; task files are read every pass (recommended, done).**
+    - Pros: an unchanged session costs no request; a file that grows outside the revision is still seen.
+    - Cons: only Claude and Codex report a revision; the cache holds up to 256 bounded observations.
+  - **Skip the whole session, files included.**
+    - Pros: no work at all.
+    - Cons: misses a background task's sign-in prompt, which only appears in its output file.
+- **BG-12: what does the digest check skip?**
+  - **The marker read, and only when the keeper's handover is for the pinned account and generation (recommended, done).**
+    - Pros: no extra host credential read; every path past it would have written nothing.
+    - Cons: the handover's MCP digests are remembered before the marker check.
+  - **Read the login afresh to compare even without a matching handover.**
+    - Pros: covers every caller.
+    - Cons: adds a host credential read (a `security` call on macOS) where the marker would have stopped the sync.
 
 ### 11. Gateway and preview proxy
 
-**Problem.** The preview proxy never reuses upstream connections and strips ETags, and several per-frame costs remain.
+**Problem.** Per-frame and per-request costs remain in the gateway (GW-5, GW-6, GW-10 to GW-12, GW-14 to GW-16). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9) are fixed.
 
-**Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14).
+**Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14). Done on 2026-11-02:
 
-**Investigation.** Not re-checked since the report: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), GW-8 (`preview-forward.ts` sets `keepAlive: false`), GW-9 to GW-12, GW-14 to GW-16.
+- GW-8: the private-origin proxy keeps idle upstream connections (`apps/backend/src/preview-upstream-pool.ts`). A connection is reused only by the access (attachment), endpoint generation and target it was opened for, after the access and target are re-checked. The pool is registered with the access service, so revocation, expiry and a new endpoint generation close it at once; a registry revocation also drops it. Bounds: 8 idle per access, 64 per backend, 2 s idle. A safe bodyless request whose reused connection was already closed is resent once on a fresh connection (`preview-forward.ts`); nothing else is retried. Counters `upstream.opened`, `upstream.reused`, `upstream.stale_retry` and the gauge `publication.upstream_idle` are in preview diagnostics.
+- GW-9: when the gateway proxy compresses a body, or the legacy browser-preview route rewrites one, it sends a weak ETag derived from the upstream tag, `W/"<upstream>|ork:<w|s>:<coding>[:<rewrite key>]"`, instead of none, and turns it back into the upstream's exact tag on `If-None-Match` (`apps/backend/src/gateway-proxy-etag.ts`). The application's 304 is answered with the client's tag. Reloads now revalidate, so GW-10's rewrite runs only on first loads and changed modules.
+- Tests: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`. The whole `test:preview:browser` suite with the Vite fixture passed twice in Chromium, Firefox and WebKit (58 passed, 2 skipped: the Chromium-only measurement). On beelink WebKit ran only with Ubuntu 24.04's `libicu74`, `libxml2` and `libflite1` libraries added to a private copy of the WebKit bundle (see 2680).
+
+**Investigation.** Re-checked on 2026-11-02 against `main` at `38d55ee14`. GW-8 held for the private origin only: `preview-http-proxy.ts` supplied no `reuse` hook although the forwarder and HTTP client supported one, while Electron's local ingress already pooled its tunnel connections and the legacy route already reused connections through Bun's HTTP client. GW-9 held for the legacy browser-preview route and the compressing loopback proxy; the private origin already passed ETags through, so its reloads already got 304s.
+
+Measured with `vite-page-load.spec.ts` (Chromium, the pinned Vite 7.3.6 fixture in an isolated copy plus a generated 150-module page, `/wide.html`; medians of 5 loads per run, 3 runs each). "Again" is a second load in the same tab, "cold" a load after clearing the HTTP cache.
+
+| Wide page (156 requests) | Before | After |
+| --- | --- | --- |
+| Private origin, upstream connections: first / again / cold | 155 / 155 / 155 | 7 / 1 / 1 |
+| Legacy route, bytes on a repeat load | 121 KB (no revalidation) | 0 (154 of 154 answered 304) |
+| Legacy route, 304s at the gateway on a repeat load | 0 | 154 |
+
+The fixture's own page (7 requests): private-origin connections 6 / 6 / 6 before, 3 / 1 / 1 after; legacy repeat-load bytes 43.5 KB before, 0 after. Page-load times were taken on beelink with about ten builds running (load average 30 to 55) and moved more with host load than with the change: wide-page private-origin first load 418 ms median before and 622 ms after, but in different load windows. An interleaved A/B on the same build (four alternating runs with reuse on and off, `ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1`, load average about 50) gave wide-page private-origin medians of 753 ms on / 744 ms off for a first load, 540 / 577 ms for a repeat load and 611 / 645 ms after clearing the cache, with 7 / 1 / 1 against 155 / 155 / 155 upstream connections: within noise. On loopback a TCP connect costs well under a millisecond, so the gain is in connections, sockets and, for TLS and relay targets, handshakes, not visible milliseconds. Raw lines are in `output/efficiency/preview-page-load/` of the build worktree (git-ignored).
+
+Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), GW-10 to GW-12, GW-14 to GW-16.
 
 **Decisions.**
 
-- **First step?**
+- **First step?** Decided 2026-11-01 and done 2026-11-02.
   - **GW-8 and GW-9 together, measured with a Vite fixture page load (recommended).**
     - Pros: the largest wins for preview users; GW-9 also removes most of GW-10's rewrite work.
     - Cons: the pool needs revocation on endpoint generation change and access revocation, which `test:preview:browser` must cover.
   - **GW-6 first.**
     - Pros: fixes a correctness-adjacent desync of quiet channels.
     - Cons: only users of the opt-in terminal WebSocket benefit.
+- **What keys the pool?** Done.
+  - **Access (attachment), endpoint generation and target (recommended).**
+    - Pros: a connection serves only the browser session that opened it; the access service's existing resource tracking closes it on revocation, expiry and generation change with no new revocation path.
+    - Cons: two browser sessions of one service do not share connections.
+  - **Service and endpoint generation.**
+    - Pros: more reuse across sessions.
+    - Cons: a revoked session's connection could serve another one, and revocation needs a separate per-service path.
+- **Idle bounds?** Done.
+  - **8 per access, 64 per backend, 2 s idle (recommended).**
+    - Pros: below the 5 s keep-alive timeout of Node's HTTP server (Vite's), so the application rarely closes a connection about to be reused; matches Electron's ingress pool and a browser's six connections per host.
+    - Cons: a pause of more than 2 s between navigations pays a new connect.
+  - **Longer idle (30 s or more).**
+    - Pros: reuse across slower navigation.
+    - Cons: more races with application keep-alive timeouts and more sockets held per idle tab.
+- **A reused connection the application had closed?** Done.
+  - **Resend once on a fresh connection, only for `GET`, `HEAD` and `OPTIONS` without a body, only when nothing was answered (recommended).**
+    - Pros: what browsers do (RFC 9112 §9.3.1); hides the keep-alive race from users; nothing to replay.
+    - Cons: a safe request reaches the application twice if it closed after reading the request; requests with a body never take an idle connection.
+  - **Never retry.**
+    - Pros: the forwarder keeps its "never retries" rule.
+    - Cons: an occasional 502 on a page load whenever the application's keep-alive timer fires.
+- **Derived tag format?** Done.
+  - **`W/"<upstream>|ork:<w|s>:<coding>[:<rewrite key>]"`, the key hashing route prefix, port and the rewriter's source (recommended).**
+    - Pros: rebuilds the upstream tag exactly, weak prefix included (Vite compares `If-None-Match` as a plain string); a tag never revalidates bytes rewritten for another route or by another build.
+    - Cons: an Orkestrator update that changes the rewriter costs one full reload per module.
+  - **The report's `W/"<upstream>|<encoding>|rw<prefix-hash>"`.**
+    - Pros: shorter.
+    - Cons: loses whether the upstream tag was weak, so Vite would never answer 304; a rewriter change would revalidate stale rewrites.
+- **Next step?** Open.
+  - **GW-6, the terminal WebSocket flush that ignores `bufferedAmount` (recommended).**
+    - Pros: correctness-adjacent; small.
+    - Cons: only users of the opt-in terminal WebSocket benefit.
+  - **GW-10, one combined rewrite regex with a no-match fast path.**
+    - Pros: cheaper first loads on the legacy route.
+    - Cons: GW-9 already removed the rewrite from repeat loads, and the legacy route is a fallback.
+  - **GW-11 and GW-12, per-node federation event names and one cursor frame per skipped range.**
+    - Pros: less replay-window pressure for federation users.
+    - Cons: federation only; touches replay invariants.
 
 ### 12. Local desktop transport
 
@@ -297,11 +469,30 @@ governs, marked "Decided".
 
 ### 15. Container data transfer
 
-**Problem.** Each environment clones from the remote again, copies its clone byte for byte inside one volume, and copies agent-home inputs in full on every start.
+**Problem.** Each environment clones from the remote again (DK-13) and copies agent-home inputs in full on every start (DK-14). Until 2026-11-02 it also copied its clone byte for byte inside one volume (DK-12), and a same-disk move of a worktree with submodules copied the whole worktree (DK-15).
 
 **Context.** Decided 2026-11-01: do this now, ahead of the measurement gate. Files: `docker/workspace-setup.sh` (DK-12, DK-13), `portable-inputs.ts` and the entrypoints (DK-14), `environment-move.ts` (DK-15). Container storage rules in `docs/architecture/container-lifecycle.md` apply: no removal outside lifecycle operations.
 
-**Investigation.** Not started. Unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
+Done 2026-11-02 against `main` at `38d55ee1`:
+
+- DK-12: `move_clone_into_workspace` in `docker/workspace-setup.sh` renames each top-level entry of the staged clone (`/workspace/.orkestrator/.clone-in-progress`) into `/workspace` instead of `cp -a -n` then `rm -rf`. Tests: `tests/unit/workspace-setup-preserve.test.ts` ("workspace setup clone move").
+- DK-15: when git refuses to move a worktree because it has submodules, `renameWorktree` in `environment-move.ts` renames the folder, runs `git worktree repair` and re-links the submodules. It copies only when the rename answers `EXDEV`. Tests: `environment-move.test.ts` ("same-disk move of a worktree git will not move"). `docs/development/disk-usage.md` describes the new behaviour.
+- DK-14 is left open on purpose: another build edits `portable-inputs.ts` at the same time. DK-13 (the mirror) is also still open.
+
+**Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move. Still unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
+
+Measurements, beelink (btrfs host, about ten builds running at once, so timings are noisy), three runs each:
+
+| Item | Setup | Before | After |
+| --- | --- | --- | --- |
+| DK-12 | Clone of this repository (206 MB, 8,478 files), Docker volume on btrfs, move step only | 400–602 ms; extra peak disk 0–31 MB, because `cp` reflinks on btrfs | 9–42 ms; no extra disk |
+| DK-12 | Same clone, tmpfs volume (no reflinks, like ext4 or Docker Desktop's VM disk) | 134–153 ms; extra peak disk 206 MB, a second whole clone | 8–21 ms; no extra disk |
+| DK-12 | Real helper in a container, then `git status` | n/a | 26 ms; clean status, `.orkestrator` intact |
+| DK-15 | Whole `move_environment`, worktree with nested submodules and 200 MB in 2,000 files, tmpfs | 128–141 ms; one `cp`; extra peak disk 196 MB | 87–128 ms; no `cp`; extra peak disk 1–8 MB (sampling noise) |
+| DK-15 | Same, on btrfs | 260–1,119 ms; one `cp` (reflinked) | 160–232 ms; no `cp` |
+| DK-15 | Same, 20,000 files of 10 KB, btrfs | 1,399–1,947 ms | 120–147 ms |
+
+The DK-12 numbers came from a throwaway script that runs the old and new steps on a scratch volume. The DK-15 numbers came from a temporary benchmark test that was not committed: it timed `moveEnvironmentTask` and sampled `statfs` every 5 ms, once with the old `environment-move.ts` and once with the new one.
 
 **Decisions.**
 
@@ -312,6 +503,26 @@ governs, marked "Decided".
   - **DK-13 first.**
     - Pros: the largest saving for big repositories.
     - Cons: a new mounted resource to create, refresh, bound and clean up before anything else lands.
+  - Taken 2026-11-02: DK-12 and DK-15 now; DK-14 next, once the other `portable-inputs.ts` build has merged, then DK-13.
+- **DK-12: how is the clone moved?** (decided 2026-11-02)
+  - **`mv -n` per top-level entry, skipping `.orkestrator` and `lost+found`, then a check that nothing was left behind (taken).**
+    - Pros: one rename per entry within the volume. The existing `.clone-copy-in-progress` marker keeps the step resumable. The check catches an entry `mv -n` skipped, which GNU coreutils 9.7 (the image's) does silently with exit status 0. Per-entry `mv` without `-t` also runs on macOS, where the unit test runs.
+    - Cons: one `mv` process per top-level entry (dozens, not thousands).
+  - **`mv -n -t /workspace` with `find ... {} +`, as the report suggested.**
+    - Pros: one process.
+    - Cons: GNU-only `-t`; on its own it does not notice a skipped entry.
+  - **Clone straight into `/workspace`.**
+    - Pros: no move at all.
+    - Cons: the clone would sit beside the storage marker with no staging folder, so an interrupted clone could not be told apart from user files.
+  - A repository's own `.orkestrator` folder is left in the staging folder and deleted with it. The old merge copied it, but the restore of `.orkestrator` straight afterwards replaced it anyway, so the end state is the same.
+- **DK-15: where does the rename go?** (decided 2026-11-02)
+  - **Keep `git worktree move` first and rename only when git refuses because of submodules; copy only on `EXDEV` (taken).**
+    - Pros: git still checks the ordinary case (locked worktrees, its own records). The submodule case gets the same journal as the copy: the record, with its submodules, is saved before the rename, so restart recovery adopts a destination whose source is gone and re-links it.
+    - Cons: two code paths that rename.
+  - **Replace `git worktree move` with `rename` plus `git worktree repair` for every move.**
+    - Pros: one path.
+    - Cons: drops git's own checks and rewrites a path that already works.
+  - When git reports a cross-device error the move goes straight to the copy, without trying a rename that would fail. A failed repair or re-link, or a rejected path commit, renames the folder back and repairs the source. `git worktree move` cannot undo the rename, because git refuses submodules in that direction too. If renaming back fails, the record stays and restart recovery adopts the destination.
 
 ### 16. CLI and logging
 
@@ -355,6 +566,38 @@ it now fetches none, and the pin was updated.
 A failed restore is forgotten and retried on the next change to the
 environment list, and an environment that leaves and returns hydrates again.
 
+### Task 3: failed layout save cadence (WEB-4)
+
+Review correction on 2026-11-02: unchanged hydrated environments skip work even
+after a save failure. Retrying on every unrelated store update would introduce
+new behavior and repeated requests under persistent failure. The regression
+checks no retry after another environment changes, then a retry containing the
+unsaved layout when the failed environment itself changes.
+
+### Task 3: quiet background reads (WEB-5)
+
+Made on 2026-11-02, on the branch `renderer-paths-optimization-845c78394eb7-r1`.
+A background read stays quiet only while session state is `current` and a
+projection is held, because only then does the connection surface ignore the
+flags. A read before that, or any manual read, raises them as before. If a
+quiet read loses authority (missing state, an unavailable response, or a thrown
+read error), `isRefreshing` stays raised until the independent transcript read
+also settles. Deferred-transcript tests cover all three paths and recovery
+after both error forms. The first poll after
+a connecting read can still render once: React sometimes renders before it
+discards a same-value state write that follows a real update.
+
+### Task 3: snapshot ordering in the rebuild section (GW-13)
+
+Reads and events apply through one setter that keeps the snapshot with the
+higher revision for the same environment, so a read that started before an
+event cannot roll progress back. A snapshot for a different environment always
+replaces the held one, as the unconditional setter did. The 15 s backstop and
+the 2 s fallback are exported as `REBUILD_BACKSTOP_POLL_MS` and
+`REBUILD_POLL_MS`. A regression invokes the registered 15 s timer without
+emitting an event or resync and verifies both newer progress and completion
+are installed from snapshot reads.
+
 ### Task 6: ACP persistence interval
 
 A fixed one-second timer that is not reset by later chunks, so it is also the
@@ -371,6 +614,38 @@ interval to be seen, within the 2 s approval budget.
 
 Presence still refreshes while messaging is paused, because pausing only holds
 delivery and the mail surfaces stay visible.
+
+### Task 10: refused mail dispatch on a stopped environment
+
+Made on 2026-11-02. The native presence read also clears a session's refused
+mail dispatch when the refusal could not clear it itself. Skipping that read
+for a stopped environment defers this backstop until the environment runs
+again; the drain never dispatches to a stopped environment and calls the same
+read before any delivery, so mail is not affected. Chosen because keeping the
+session read would leave a per-mailbox read for every stopped environment,
+which is what BG-3 removes.
+
+### Task 10: tmux liveness age
+
+Made on 2026-11-02. Presence reuses a `has-session` answer up to 3 s old. The
+poll loop checks about every 2 s busy or idle and removes a session it finds
+dead, so a dead session reads `working` (status null) within about 2 s either
+way. Mail dispatch keeps its own probe, so a stale answer can only delay a
+presence change, never send mail to a dead session.
+
+### Task 10: reviewer prompt failures
+
+Made on 2026-11-02. A rejected shared-prompt build is dropped from the pass's
+memo, so the next reviewer reads the instruction and notes again, as each did
+before.
+
+### Task 10: digest-first MCP digests
+
+Made on 2026-11-02. Building the handoff remembers the active login's MCP
+refresh-token digests (`hostMcpRefreshDigests`). It now does so before the
+marker check, for a container on another account too. The digests are the
+active account's and the call is idempotent for the same login, so a later
+handoff carries the same list it would have carried anyway.
 
 ## Current state
 

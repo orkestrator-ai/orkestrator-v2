@@ -434,8 +434,8 @@ describe("EnvironmentItem activity marker", () => {
 
     const icon = getRowRing(container);
     expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
-    expect(icon.getAttribute("class")).toContain("bg-red-500/50");
-    expect(icon?.getAttribute("class")).toContain("animate-pulse");
+    expect(icon.getAttribute("class")).toContain("environment-working-spinner");
+    expect(icon?.getAttribute("class")).not.toContain("animate-pulse");
   });
 
   test("hydrates a working icon from the backend-owned environment snapshot", () => {
@@ -448,7 +448,7 @@ describe("EnvironmentItem activity marker", () => {
 
     const icon = getRowRing(container);
     expect(getRowMarker(container).getAttribute("data-shape")).toBe("square");
-    expect(icon.getAttribute("class")).toContain("bg-red-500/50");
+    expect(icon.getAttribute("class")).toContain("environment-working-spinner");
   });
 
   test("keeps a newer runtime observation over an older backend snapshot", () => {
@@ -662,7 +662,7 @@ describe("EnvironmentItem activity marker", () => {
     expect(icon.getAttribute("class")).toContain("border-muted-foreground/40");
     expect(icon.getAttribute("class")).not.toContain("opacity-0");
     expect(icon.getAttribute("class")).not.toContain("animate-pulse");
-    expect(icon.getAttribute("class")).not.toContain("bg-red-500/50");
+    expect(icon.getAttribute("class")).not.toContain("environment-working-spinner");
     expect(getRowMarker(container).getAttribute("data-state")).toBe("inactive");
   });
 });

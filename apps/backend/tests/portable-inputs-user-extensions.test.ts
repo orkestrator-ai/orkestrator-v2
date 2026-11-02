@@ -61,7 +61,8 @@ async function extensionsFixture() {
     path.join(root, "outside", "secret.txt"),
     path.join(claude, "skills", "fixture-review", "escape.txt"),
   );
-  // A skill linked in from ~/.agents/skills (an `npx skills` install) is a link.
+  // A skill linked in from ~/.agents/skills (an `npx skills` install) is a
+  // link, staged as a real directory (portable-inputs-shared-skills.test.ts).
   await write(
     path.join(home, ".agents", "skills", "fixture-shared", "SKILL.md"),
     "---\nname: fixture-shared\ndescription: Shared\n---\nShared.\n",
@@ -172,7 +173,7 @@ async function stageAndImport(prepare?: (home: string) => Promise<void>) {
 }
 
 describe("user skills and commands in containers", () => {
-  test("stages Claude's skills and Grok's commands, never links or provider state", async () => {
+  test("stages Claude's skills and Grok's commands, never other links or provider state", async () => {
     const { dataDir, home } = await extensionsFixture();
     const staged = await stagePortableInputs(
       dataDir,
@@ -186,6 +187,7 @@ describe("user skills and commands in containers", () => {
     ).toEqual([
       "claude-config/skills/fixture-review/SKILL.md",
       "claude-config/skills/fixture-review/scripts/run.sh",
+      "claude-config/skills/fixture-shared/SKILL.md",
       "grok-home/commands/fixture-user-cmd.md",
       "grok-home/commands/nested/deeper.md",
       "grok-home/skills/fixture-grok-skill/SKILL.md",
@@ -194,10 +196,10 @@ describe("user skills and commands in containers", () => {
       const content = await fs.readFile(path.join(staged.directory, file), "utf8");
       expect(content).not.toContain("SENTINEL");
     }
-    // The link inside a skill and the linked-in skill (Claude), and the
-    // linked command (Grok), are counted, never followed.
+    // The link inside a skill (Claude) and the linked command (Grok) are
+    // counted, never followed.
     expect(staged.providers.find((entry) => entry.provider === "claude")?.skipped).toEqual({
-      symlink: 2,
+      symlink: 1,
     });
     expect(staged.providers.find((entry) => entry.provider === "grok")?.skipped).toEqual({
       symlink: 1,
@@ -284,6 +286,7 @@ describe("user skills and commands in containers", () => {
     expect(await listFiles(path.join(containerHome, ".claude"))).toEqual([
       "skills/fixture-review/SKILL.md",
       "skills/fixture-review/scripts/run.sh",
+      "skills/fixture-shared/SKILL.md",
     ]);
     expect(await listFiles(path.join(containerHome, ".grok"))).toEqual([
       "commands/fixture-user-cmd.md",

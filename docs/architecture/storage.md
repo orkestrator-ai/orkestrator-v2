@@ -189,6 +189,12 @@ Kanban, `environmentId` for sessions). `loadStoreRowsByOwner` reads one
 project's board or one environment's sessions without assembling the store,
 and `loadStoreRow` reads one row by key the same way.
 
+`store_rows_position` indexes `(store, collection, position)`, so an insert's
+next position (`max(position) + 1` of its collection) is one index lookup
+rather than a scan of the collection. It changes no stored value, so
+`StorageDatabase` creates it on open instead of through a numbered migration:
+the schema version does not move and an older build still opens the database.
+
 Each store row records its layout, so `assembleStoredValue` rebuilds the value
 without the registry. Scripts use `readStorageDatabaseStore`, which opens the
 database read-only and never migrates.
@@ -207,7 +213,10 @@ from that.
 - **`updateStoreRow(file, key, mutate, { collection })`**: the same for one row
   of a `record` store or of one `envelope` collection. It neither parses nor
   rewrites the other rows, so a write costs O(row) and holders of different
-  keys' leases cannot overwrite each other.
+  keys' leases cannot overwrite each other. `updateSensitiveStoreRow` is the
+  same for a record store holding sensitive content: it also prunes what the
+  row's new value drops from the retired JSON archive, as `saveSensitiveJson`
+  does (see "Retired JSON archive").
 - **`serialize(target, description, operation, options)`**: an
   asynchronous critical section. An in-process FIFO per target plus a
   cross-process **lease** in the `leases` table (owner token and heartbeat;
@@ -231,6 +240,14 @@ from that.
   their commit, so a create that overlaps the deletion cannot leave a record
   behind. Lease rows whose holder stopped heartbeating an hour ago are purged
   at start-up.
+
+  Compose drafts keep the store's lease, because a save awaits its owner
+  checks (environment, coordinator conversation or project) and must stay
+  ordered against the owner deletion sweeps. Inside it a save or a single
+  delete is one `updateSensitiveStoreRow` that checks the owner and the
+  draft's `revision` in its own transaction, so typing never decodes or
+  rewrites the other drafts. An owner sweep is one `updateStore` that removes
+  only that owner's rows and writes nothing when the owner has none.
 
   Looped and Multi Review workflows keep **one lease per store for writers**:
   a save awaits its environment check, and launch and the environment sweep
@@ -310,6 +327,18 @@ caches the store at the committed revision takes its row from that cache and
 fetches nothing; a miss does not fill the cache. Legacy document representations retain the
 whole-document fallback. `getResourceSnapshotRevision` hashes the database
 identity and that revision.
+
+Read-only background callers that walk every environment or native session
+(the activity sweep, the interaction tracker, the tmux reconcile, the
+human-prompt monitor and worker activity reads) use
+`readEnvironmentsSnapshot` and `readNativeAgentSessionsSnapshot` instead of
+`loadEnvironments` and `listNativeAgentSessions`. These return one deeply
+frozen decoded copy per committed revision (`FrozenStoreSnapshot`, the
+pattern of the agent mail read model): an unchanged store costs one revision
+check, and a changed one re-decodes only the rows whose serialized value
+changed. Each repository keeps one copy and does not keep a store whose
+serialized rows exceed 64 MiB. Writing to a record from a snapshot throws,
+so a caller that changes what it read uses the mutable loaders.
 
 Reads are charged to the innermost recurring job by what the caller got, not
 by where the rows came from, so an extra read shows however warm the cache
@@ -493,6 +522,12 @@ The archive stays that pre-migration copy, except that deletes reach it:
   attributable predicate through `scrubSensitiveJsonBackups` or
   `scrubLegacyJsonStore`. Writes through `updateStore` or `updateStoreRow`
   never touch the archive, so a delete made that way must scrub explicitly.
+  `updateSensitiveStoreRow` commits a keyed pruning intent with the row
+  mutation, including inside `atomically()`. After commit it prunes what the
+  row's new value drops from that record's archived copies; when it replaced
+  an unreadable store it prunes every copy against the whole new value.
+  Failed cleanup replays on reopen or the next journaled write, before another
+  mutation can obscure a removal (including a later re-add).
 
 ## Testing
 

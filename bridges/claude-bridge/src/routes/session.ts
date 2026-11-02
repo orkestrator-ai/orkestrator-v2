@@ -96,6 +96,9 @@ import { resolveUltracodeEffort } from "../services/ultracode.js";
 import { registerSessionCloseRoute } from "./session-close.js";
 import { readSessionActivityObservation } from "./session-activity.js";
 import { registerSessionTranscriptRoutes } from "./session-transcript.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 const session = new Hono();
 const TRANSCRIPT_GENERATION = randomUUID();
@@ -237,10 +240,7 @@ session.post("/create", async (c) => {
     const newSession = policy
       ? await createOrRecoverSession(title, clientSessionKey, policy)
       : await createOrRecoverSession(title, clientSessionKey);
-    console.debug("[session] Created session", {
-      sessionId: newSession.id,
-      title: newSession.title,
-    });
+    log.info("session.created", { sessionId: newSession.id });
 
     const response: CreateSessionResponse = {
       sessionId: newSession.id,
@@ -249,7 +249,7 @@ session.post("/create", async (c) => {
 
     return c.json(response, 201);
   } catch (error) {
-    console.error("[session] Error creating session:", error);
+    log.error("session.create-failed", { error: formatLogError(error) });
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to create session" },
       500,
@@ -265,7 +265,7 @@ session.get("/list", async (c) => {
   try {
     await reconcilePersistedSessions();
   } catch (error) {
-    console.error("[session] Failed to reconcile persisted sessions:", error);
+    log.warn("sessions.reconcile-failed", { error: formatLogError(error) });
   }
   const sessions = listSessions();
 
@@ -304,7 +304,7 @@ async function resolveSession(
   try {
     return { ok: true, session: getSession(id) ?? (await ensurePersistedSession(id)) };
   } catch (error) {
-    console.error(`[session] ${failureMessage}:`, error);
+    log.error("session.resolve-failed", { action: failureMessage, error: formatLogError(error) });
     return {
       ok: false,
       body: { error: errorMessage(error, failureMessage) },
@@ -332,7 +332,7 @@ session.get("/:id", async (c) => {
     try {
       await hydratePersistedSessionMessages(id);
     } catch (error) {
-      console.error("[session] Failed to hydrate session task state:", error);
+      log.error("session.task-state-hydrate-failed", { error: formatLogError(error) });
       return c.json(
         { error: errorMessage(error, "Failed to hydrate session task state") },
         sessionErrorStatus(error),
@@ -417,10 +417,7 @@ session.get("/:id/usage", async (c) => {
     const contextUsage = await refreshClaudeContextUsage(resolved.session);
     return c.json({ contextUsage });
   } catch (error) {
-    console.warn(
-      "[session] Detailed context usage request failed:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("context-usage.read-failed", { error: formatLogError(error, { stack: false }) });
     return c.json({ error: "Context usage is temporarily unavailable" }, 503);
   }
 });
@@ -545,10 +542,7 @@ session.get("/:id/commands", async (c) => {
   try {
     return c.json(await readClaudeCommandCatalogue(c.req.param("id")));
   } catch (error) {
-    console.warn(
-      "[session] Command catalogue read failed:",
-      error instanceof Error ? error.message : "unknown error",
-    );
+    log.warn("commands.read-failed", { error: formatLogError(error, { stack: false }) });
     return c.json({ error: errorMessage(error, "Claude command discovery failed") }, 503);
   }
 });
@@ -967,7 +961,7 @@ session.post("/:id/prompt", async (c) => {
           },
           (error) => {
             rejectStarted?.(error);
-            console.error("[session] Error processing prompt:", error);
+            log.error("prompt.processing-failed", { error: formatLogError(error) });
           },
         );
         return { started, completion };
@@ -982,7 +976,7 @@ session.post("/:id/prompt", async (c) => {
           duplicate: true,
         });
       }
-      console.debug("[session] Prompt accepted", { sessionId: id });
+      log.debug("prompt.accepted", { sessionId: id });
       return c.json(
         {
           status: "processing",
@@ -999,7 +993,7 @@ session.post("/:id/prompt", async (c) => {
       return c.json({ error: "Session is restoring files from a checkpoint" }, 409);
     }
 
-    console.debug("[session] Prompt received", {
+    log.info("prompt.received", {
       sessionId: id,
       promptLength: prompt.length,
       model,
@@ -1030,10 +1024,10 @@ session.post("/:id/prompt", async (c) => {
       ...(workflowResultTurn ? { workflowResultTurn } : {}),
       ...(providerPrompt !== undefined ? { providerPrompt } : {}),
     }).catch((error) => {
-      console.error("[session] Error processing prompt:", error);
+      log.error("prompt.processing-failed", { error: formatLogError(error) });
     });
 
-    console.debug("[session] Prompt accepted", { sessionId: id });
+    log.debug("prompt.accepted", { sessionId: id });
     return c.json(
       {
         status: "processing",
@@ -1043,7 +1037,7 @@ session.post("/:id/prompt", async (c) => {
       202,
     );
   } catch (error) {
-    console.error("[session] Error sending prompt:", error);
+    log.error("prompt.send-failed", { error: formatLogError(error) });
     return c.json(
       { error: errorMessage(error, "Failed to send prompt") },
       sessionErrorStatus(error),
@@ -1105,7 +1099,7 @@ session.delete("/:id", async (c) => {
     }
     return c.json({ error: "Session not found" }, 404);
   } catch (error) {
-    console.error("[session] Failed to delete session:", error);
+    log.error("session.delete-failed", { error: formatLogError(error) });
     return c.json(
       { error: errorMessage(error, "Failed to delete session") },
       sessionErrorStatus(error),
@@ -1128,7 +1122,7 @@ session.post("/:id/rename", async (c) => {
       ? c.json({ status: "renamed", title })
       : c.json({ error: "Session not found" }, 404);
   } catch (error) {
-    console.error("[session] Failed to rename session:", error);
+    log.error("session.rename-failed", { error: formatLogError(error) });
     return c.json(
       { error: errorMessage(error, "Failed to rename session") },
       sessionErrorStatus(error),
@@ -1175,7 +1169,7 @@ session.post("/:id/fork", async (c) => {
       201,
     );
   } catch (error) {
-    console.error("[session] Failed to fork session:", error);
+    log.error("session.fork-failed", { error: formatLogError(error) });
     return c.json(
       { error: errorMessage(error, "Failed to fork session") },
       sessionErrorStatus(error),
@@ -1196,7 +1190,7 @@ session.post("/:id/compact", async (c) => {
     return c.json({ error: "Session is restoring files from a checkpoint" }, 409);
   }
   void sendPrompt(id, "/compact").catch((error) => {
-    console.error("[session] Claude compaction failed:", error);
+    log.error("session.compact-failed", { error: formatLogError(error) });
   });
   return c.json({ status: "processing" }, 202);
 });
@@ -1214,7 +1208,7 @@ session.post("/:id/rewind", async (c) => {
     const result = await rewindSessionFiles(id, messageId, dryRun);
     return c.json({ status: dryRun ? "previewed" : "rewound", result });
   } catch (error) {
-    console.error("[session] Failed to rewind session files:", error);
+    log.error("session.rewind-failed", { error: formatLogError(error) });
     return c.json(
       { error: errorMessage(error, "Failed to rewind session files") },
       sessionErrorStatus(error),
@@ -1230,7 +1224,7 @@ session.post("/:id/tasks/:taskId/stop", async (c) => {
     // user can see it — nothing live can currently reach it.
     return c.json({ error: stopped.message }, stopped.reason === "no_control_channel" ? 409 : 404);
   } catch (error) {
-    console.error("[session] Failed to stop background task:", error);
+    log.error("task.stop-route-failed", { error: formatLogError(error) });
     return c.json(
       { error: errorMessage(error, "Failed to stop background task") },
       sessionErrorStatus(error),
@@ -1382,7 +1376,7 @@ session.post("/:id/questions/:questionId/answer", questionAnswerBodyLimit, async
     const pendingQuestion = pendingQuestions.find((q) => q.id === questionId);
 
     if (!pendingQuestion) {
-      console.log("[session] Pending question not found:", questionId);
+      log.info("question.stale", { questionId });
       return c.json(stalePrompt("Question is no longer pending"), STALE_PROMPT_STATUS);
     }
 
@@ -1401,7 +1395,7 @@ session.post("/:id/questions/:questionId/answer", questionAnswerBodyLimit, async
       );
     });
 
-    console.debug("[session] Prepared question answers", {
+    log.debug("question.answers-prepared", {
       questionId,
       questionCount: pendingQuestion.questions.length,
       answerCount: answersArray.reduce((count, answers) => count + answers.length, 0),
@@ -1417,7 +1411,7 @@ session.post("/:id/questions/:questionId/answer", questionAnswerBodyLimit, async
       return c.json(stalePrompt("Question is no longer pending"), STALE_PROMPT_STATUS);
     }
   } catch (error) {
-    console.error("[session] Error answering question:", error);
+    log.error("question.answer-failed", { error: formatLogError(error) });
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to answer question" },
       500,
@@ -1484,7 +1478,7 @@ session.post("/:id/plan-approvals/:approvalId/respond", planApprovalBodyLimit, a
       );
     }
 
-    console.log("[session] Plan approval response received", {
+    log.info("plan-approval.response-received", {
       sessionId,
       approvalId,
       approved,
@@ -1499,7 +1493,7 @@ session.post("/:id/plan-approvals/:approvalId/respond", planApprovalBodyLimit, a
       return c.json(stalePrompt("Plan approval is no longer pending"), STALE_PROMPT_STATUS);
     }
   } catch (error) {
-    console.error("[session] Error responding to plan approval:", error);
+    log.error("plan-approval.response-failed", { error: formatLogError(error) });
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to respond to plan approval" },
       500,

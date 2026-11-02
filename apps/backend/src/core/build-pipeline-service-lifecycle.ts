@@ -7,7 +7,9 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
  */
 import { DEFAULT_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline-stages.js";
 import { randomUUID } from "node:crypto";
+import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
+  BUILD_CANCELLED_ERROR,
   type BuildPipeline,
   type PipelineSession,
   type PipelineSessionPhase,
@@ -39,7 +41,7 @@ import {
 import { backfillBuildPipelineReviewReports } from "./storage-record-upgrades.js";
 import type { KanbanTask } from "./storage-shared-core.js";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
-import type { Environment } from "./models.js";
+import type { Environment, PersistedBuildPipeline } from "./models.js";
 import { type BuildPipelineProvider, PromptRejectedError } from "./build-pipeline-provider.js";
 import {
   errorMessage,
@@ -93,6 +95,7 @@ import { probeReviewWorktree } from "./review-worktree-probe.js";
 
 /** Stage IDs of this form ask to prepare the review package again from the named session. */
 const PACKAGE_STAGE_PREFIX = "review-package:";
+const log = createLogger("backend.activity");
 
 type RestartTarget =
   | { kind: "validation" }
@@ -1832,8 +1835,8 @@ export class BuildPipelineLifecycle {
       pipeline.phase = "failed";
       pipeline.error =
         abortErrors.length > 0
-          ? `Build cancelled, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`
-          : "Build cancelled";
+          ? `${BUILD_CANCELLED_ERROR}, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`
+          : BUILD_CANCELLED_ERROR;
       delete pipeline.pendingPromptAttempt;
       delete pipeline.activePromptContext;
       delete pipeline.pendingUserMessages;
@@ -1897,15 +1900,20 @@ export class BuildPipelineLifecycle {
   }
 
   async remove(pipelineId: string): Promise<void> {
-    const record = await this.ctx.storage.getBuildPipeline(pipelineId);
+    let record = await this.ctx.storage.getBuildPipeline(pipelineId);
+    let deleted = false;
+    if (record && isBuildPipeline(record.snapshot) && hasPendingCodeRewind(record.snapshot)) {
+      ({ deleted, record } = await this.deleteWithPendingCodeRewind(pipelineId));
+    }
     if (
+      !deleted &&
       record &&
       isBuildPipeline(record.snapshot) &&
       (isActiveBuildPhase(record.snapshot.phase) || record.snapshot.reviewFanout !== undefined)
     ) {
       await this.cancel(pipelineId);
     }
-    await this.ctx.storage.deleteBuildPipeline(pipelineId);
+    if (!deleted) await this.ctx.storage.deleteBuildPipeline(pipelineId);
     if (record && isBuildPipeline(record.snapshot)) {
       this.ctx.transcriptCheckpoints.forget(record.snapshot.sessions);
     }
@@ -1937,6 +1945,41 @@ export class BuildPipelineLifecycle {
     }
   }
 
+  /**
+   * Deletes a pipeline whose newest code rewind is still pending, skipping
+   * `cancel`: cancel would first finish the reset, and a reset that cannot run
+   * (the container is gone, or the branch moved since the rewind was
+   * previewed) would then block the delete for good. Nothing is left to
+   * cancel, because admitting the rewind required an idle pipeline and no
+   * agent starts until the reset finishes. The pipeline lock keeps the
+   * supervisor from finishing the reset while, or after, the record goes.
+   *
+   * Returns the record as it stood under the lock; `deleted` is false when the
+   * reset finished first, and the caller then removes the pipeline as usual.
+   */
+  private async deleteWithPendingCodeRewind(
+    pipelineId: string,
+  ): Promise<{ deleted: boolean; record: PersistedBuildPipeline | null }> {
+    return this.ctx.withLock(pipelineId, async () => {
+      const record = await this.ctx.storage.getBuildPipeline(pipelineId);
+      if (!record || !isBuildPipeline(record.snapshot) || !hasPendingCodeRewind(record.snapshot)) {
+        return { deleted: false, record };
+      }
+      await this.ctx.storage.deleteBuildPipeline(pipelineId);
+      // Update the ticket without terminal reconciliation, which saves the
+      // pipeline and must never run after its record has been deleted.
+      try {
+        await this.recovery.updateKanbanLifecycle(
+          record.snapshot,
+          buildPipelineKanbanUpdate("failed"),
+        );
+      } catch {
+        log.warn("job.failed", { scope: "deleted-pipeline-kanban-update" });
+      }
+      return { deleted: true, record };
+    });
+  }
+
   async retryCompletionComment(pipelineId: string): Promise<BuildPipeline> {
     await this.ctx.mutate(pipelineId, (candidate) => {
       delete candidate.completionCommentStatus;
@@ -1950,4 +1993,9 @@ export class BuildPipelineLifecycle {
     }
     return pipeline;
   }
+}
+
+/** Whether the newest rewind journaled a code reset that has not run yet. */
+function hasPendingCodeRewind(pipeline: BuildPipeline): boolean {
+  return pipeline.rewinds?.at(-1)?.code?.pending === true;
 }

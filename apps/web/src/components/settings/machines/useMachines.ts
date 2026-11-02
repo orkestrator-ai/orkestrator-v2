@@ -13,6 +13,7 @@ import {
 import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { getNodeStatus, listNodes, nodeErrorText } from "@/lib/backend/command-nodes";
 import { subscribeToConnections } from "@/lib/connections";
+import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { portalInvoke, portalListen, workspaceTarget } from "@/lib/portal/portal-transport";
 import { buildMachineList, type MachineEntry } from "./machine-list";
 
@@ -122,6 +123,7 @@ export function useMachines() {
     };
   }, [loadNodes]);
 
+  const layout = usePortalLayout();
   const workspaceNodeId = workspaceTarget()?.nodeId ?? null;
   const entries = useMemo<MachineEntry[]>(
     () =>
@@ -132,13 +134,15 @@ export function useMachines() {
         selfProfile,
         workspaceNodeId,
         selfAddress: api ? null : browserAddress(),
+        machineOrder: layout.machineOrder,
       }),
-    [api, connections, nodes, selfProfile, status, workspaceNodeId],
+    [api, connections, layout.machineOrder, nodes, selfProfile, status, workspaceNodeId],
   );
 
   return {
     api,
     entries,
+    layout,
     connections,
     connectionsError,
     status,

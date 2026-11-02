@@ -184,6 +184,7 @@ Repository tasks live in `mise.toml`. Use `mise run <task>`, not npm. Isolated r
 mise run package:mac      # Unpacked macOS app, local ad-hoc signing
 mise run package:release  # Signed, notarised macOS DMG (needs Developer ID)
 mise run package:linux    # Unpacked Linux app under XDG_DATA_HOME
+mise run package:linux:unpacked  # The same build under release/, not installed
 ```
 
 Published desktop releases and the in-app updater are described in [`docs/development/releasing.md`](docs/development/releasing.md). Container images are published to `ghcr.io/orkestrator-ai/orkestrator-v2`.

@@ -116,3 +116,62 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 - **Evidence:** `orkestrator-test-run.oNZxqS/bridges.log` below the host temporary
   directory (compressed at aggregate finalization). This confirms the existing
   timing-sensitive recurrence; no runtime environment code or deadline changed.
+
+## Live logging review repair validation — 2026-11-01
+
+Original command: `mise run test:logged -- --name review-repair-default -- mise run test`
+on the shared macOS host, workspace/root/bridges/protocol reservations 5/1/2/1,
+with the web package using two workers and the bridge packages one worker each.
+The run waited 925 seconds for another worktree's aggregate reservation while
+browser and Electron checks were also active. No assertion, timeout, skip or
+implementation in this owner changed.
+
+The source-helper case timed out at 15,048.06 ms. Its first unchanged owner
+rerun also timed out (15,012.73 ms, eight pass and one fail):
+`mise run test:logged -- --name codex-runtime-env-owner -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures`.
+A second unchanged owner passed in 0.6 s with the same arguments and name
+`codex-runtime-env-owner-rerun`. Detached origin/main `4626c4d7a` also passed its
+owner in 0.6 s; that pass is not evidence that the timeout is main-specific.
+This confirms intermittence; the cause remains unknown.
+
+Evidence: aggregate `orkestrator-test-run.BSqVX9/bridges.log` (compressed at
+aggregate finalization), first owner `orkestrator-test-run.8in1Rk/codex-runtime-env-owner.log.gz`,
+below the host temporary directory.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.
+
+
+## MCP provenance review — 2026-11-02
+
+Preparation's `mise run test` timed out the source-helper case at 15,004.30 ms.
+An unchanged two-worker owner on the provenance branch also timed out at
+15,012.99 ms (eight pass, one fail; logged name `repair-runtime-owner`,
+`orkestrator-test-run.172pGI/repair-runtime-owner.log.gz`). Independently installed
+detached `origin/main` at `38d55ee14` passed twice (0.5 s and 0.8 s), then
+reproduced the same 15,003.51 ms timeout (eight pass, one fail):
+
+```sh
+mise run test:logged -- --name main-runtime-env-final -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=2 --only-failures
+```
+
+Main failure evidence: host temporary directory
+`orkestrator-test-run.KPu07l/main-runtime-env-final.log.gz`, also copied to
+`output/visual-previews/review-validation-evidence/` in the provenance worktree.
+The main reproduction establishes that this recorded failure is pre-existing;
+its intermittent cause remains unknown. No runtime owner, assertion or deadline
+was changed.
+
+### Pipeline bell repair validation — 2026-11-02
+
+`mise run test:logged -- --name repair-full -- mise run test` at `2617fd20d`
+failed `runtime environment refresh > sources configured runtime helper and applies refreshed shell environment` (15008.29ms; timed out).
+The bridge group reserved two workers; evidence is host temporary directory
+`orkestrator-test-run.Db1a7X/bridges.log` (compressed on finalization).
+Unchanged owning-file rerun passed: `mise run test:logged -- --name repair-runtime-env -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures`.
+No root cause or independence from the branch is claimed; this case remains open.

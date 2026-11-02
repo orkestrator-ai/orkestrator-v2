@@ -628,6 +628,8 @@ export interface PersistedBuildPipeline {
   environmentId: string;
   snapshot: unknown;
   updatedAt: string;
+  /** Entry into the current complete/failed/paused phase; metadata saves keep it. */
+  activityEndedAt?: string;
   revision: number;
 }
 
@@ -1212,6 +1214,8 @@ export interface AppConfig {
       backgroundColor: string;
     };
     terminalScrollback: number;
+    /** Where ⌘-click on a terminal link opens; ⌘⇧-click opens the other. Absent is `external`. */
+    terminalLinkDefaultTarget?: import("@orkestrator/protocol/terminal-link-target").TerminalLinkDefaultTarget;
     terminalHistoryEnabled?: boolean;
     terminalHistoryRetentionMb?: number;
     terminalHistoryGlobalRetentionMb?: number;
@@ -1230,9 +1234,12 @@ export interface AppConfig {
      * the graph commands, tools and already-open graph tabs are unaffected.
      */
     experimentalGraphs?: boolean;
+    /** "Save logs to disk": whether application logs are written. Applies live. */
     debugLogging?: boolean;
-    /** Number of days production application logs remain on disk. */
+    /** Number of days production application logs remain on disk. Applies live. */
     debugLogRetentionDays?: number;
+    /** "Log detail": levels for every process, running bridges included. Applies live. */
+    logDetail?: import("@orkestrator/protocol/log-policy").LogDetail;
     webClientEnabled?: boolean;
     /** Audible cues for background events that need the user's attention. */
     notificationSounds?: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings;

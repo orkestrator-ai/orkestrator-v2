@@ -356,3 +356,90 @@ describe("StorageService config migration", () => {
     }
   });
 });
+
+describe("the split of the logging setting", () => {
+  async function withStorage(
+    global: Record<string, unknown> | null,
+    run: (storage: StorageService, dataDir: string) => Promise<void>,
+  ): Promise<void> {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-log-detail-"));
+    try {
+      if (global) {
+        await fs.writeFile(
+          path.join(dataDir, "config.json"),
+          JSON.stringify({ version: "1", schemaVersion: 2, global, repositories: {} }),
+        );
+      }
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      await run(storage, dataDir);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  }
+
+  test("upgrading with Debug logging on keeps saving and bridge detail, durably", async () => {
+    await withStorage(
+      { debugLogging: true, debugLogRetentionDays: 30 },
+      async (storage, dataDir) => {
+        const { global } = await storage.loadConfig();
+        expect(global.debugLogging).toBe(true);
+        expect(global.debugLogRetentionDays).toBe(30);
+        expect(global.logDetail).toEqual({ level: "info", areaLevels: { bridge: "debug" } });
+        // Written once: the file itself now says it, for the desktop to read too.
+        const onDisk = JSON.parse(await fs.readFile(path.join(dataDir, "config.json"), "utf8"));
+        expect(onDisk.global.logDetail).toEqual({ level: "info", areaLevels: { bridge: "debug" } });
+      },
+    );
+  });
+
+  test("upgrading with it off changes nothing", async () => {
+    await withStorage({ debugLogging: false }, async (storage) => {
+      const { global } = await storage.loadConfig();
+      expect(global.debugLogging).toBe(false);
+      expect(global.logDetail).toEqual({ level: "info", areaLevels: {} });
+    });
+  });
+
+  test("a new install starts at the defaults", async () => {
+    await withStorage(null, async (storage) => {
+      const { global } = await storage.loadConfig();
+      expect(global.debugLogging).toBe(false);
+      expect(global.logDetail).toEqual({ level: "info", areaLevels: {} });
+    });
+  });
+
+  test("after the upgrade, turning saving off leaves detail alone", async () => {
+    await withStorage({ debugLogging: true }, async (storage) => {
+      await storage.patchGlobalConfig({ debugLogging: false });
+      const { global } = await storage.loadConfig();
+      expect(global.debugLogging).toBe(false);
+      expect(global.logDetail).toEqual({ level: "info", areaLevels: { bridge: "debug" } });
+    });
+  });
+
+  test("a save from a client that predates the setting keeps the stored one", async () => {
+    await withStorage(null, async (storage) => {
+      const custom = { level: "warn" as const, areaLevels: { updater: "trace" as const } };
+      await storage.patchGlobalConfig({ logDetail: custom });
+      const current = (await storage.loadConfig()).global;
+      const { logDetail: _omitted, ...olderClient } = current;
+      await storage.updateGlobalConfig({ ...olderClient, terminalScrollback: 1234 });
+      expect((await storage.loadConfig()).global.logDetail).toEqual(custom);
+      const whole = await storage.loadConfig();
+      const { logDetail: _alsoOmitted, ...olderGlobal } = whole.global;
+      await storage.saveConfig({ ...whole, global: olderGlobal });
+      expect((await storage.loadConfig()).global.logDetail).toEqual(custom);
+    });
+  });
+
+  test("a setting that does not parse is refused rather than stored", async () => {
+    await withStorage(null, async (storage) => {
+      await expect(
+        storage.patchGlobalConfig({
+          logDetail: { level: "loud", areaLevels: {} } as never,
+        }),
+      ).rejects.toThrow("Log detail");
+    });
+  });
+});

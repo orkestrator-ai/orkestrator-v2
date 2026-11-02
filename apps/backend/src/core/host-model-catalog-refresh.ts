@@ -1,3 +1,4 @@
+import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
   CLAUDE_PINNED_RUNTIME_ENV,
@@ -178,8 +179,7 @@ async function refreshClaude(
     CLAUDE_CLI_PATH: resolveClaudeBinary(context),
     ...(resolveClaudeBinary(context) !== "claude" ? CLAUDE_PINNED_RUNTIME_ENV : {}),
     ORKESTRATOR_PARENT_PID: String(process.pid),
-    ORKESTRATOR_BRIDGE_DEBUG:
-      (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
+    ORKESTRATOR_BRIDGE_DEBUG: bridgeDebugEnvValue((await context.storage.loadConfig()).global),
   };
   await applyClaudeHostCredentialEnvironment(context, env);
   const catalog = await withShortLivedBridge(
@@ -225,8 +225,7 @@ async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
         ),
         ORKESTRATOR_VERSION: APP_VERSION,
         ORKESTRATOR_PARENT_PID: String(process.pid),
-        ORKESTRATOR_BRIDGE_DEBUG:
-          (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
+        ORKESTRATOR_BRIDGE_DEBUG: bridgeDebugEnvValue((await context.storage.loadConfig()).global),
       },
     },
     async (port, authToken) => {
@@ -266,8 +265,7 @@ async function refreshAcp(
     ...process.env,
     CWD: workingDirectory,
     ORKESTRATOR_PARENT_PID: String(process.pid),
-    ORKESTRATOR_BRIDGE_DEBUG:
-      (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
+    ORKESTRATOR_BRIDGE_DEBUG: bridgeDebugEnvValue((await context.storage.loadConfig()).global),
   };
   if (useCursorSdk) {
     env.CURSOR_BRIDGE_TOKEN = token;
@@ -357,8 +355,7 @@ export async function withHostOpenCodeServer<T>(
         OPENCODE_SERVER_USERNAME: "opencode",
         OPENCODE_SERVER_PASSWORD: token,
         ORKESTRATOR_PARENT_PID: String(process.pid),
-        ORKESTRATOR_BRIDGE_DEBUG:
-          (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
+        ORKESTRATOR_BRIDGE_DEBUG: bridgeDebugEnvValue((await context.storage.loadConfig()).global),
       },
     },
     (port) => use({ baseUrl: `http://127.0.0.1:${port}`, directory: cwd, headers }),

@@ -439,21 +439,57 @@ function parseCommandResult(
   }
 }
 
+/** How each CLI reports its plugins. Cursor has no CLI, so it is not here. */
+const PLUGIN_READS: Record<
+  Exclude<AgentExtensionId, "cursor">,
+  { args: string[]; parse: (output: string) => ExtensionItem[]; error: string }
+> = {
+  claude: {
+    args: ["plugin", "list", "--json"],
+    parse: parseClaudePlugins,
+    error: "Could not read Claude plugins.",
+  },
+  codex: {
+    args: ["plugin", "list", "--json"],
+    parse: parseCodexPlugins,
+    error: "Could not read Codex plugins.",
+  },
+  grok: {
+    args: ["plugin", "list", "--json"],
+    parse: parseGrokPlugins,
+    error: "Could not read Grok plugins.",
+  },
+  opencode: {
+    args: ["debug", "config"],
+    parse: parseOpenCodePlugins,
+    error: "Could not read OpenCode plugins.",
+  },
+  pi: {
+    args: ["list", "--no-approve"],
+    parse: parsePiPackages,
+    error: "Could not read Pi packages.",
+  },
+};
+
+function parsePluginRead(
+  agent: keyof typeof PLUGIN_READS,
+  result: PromiseSettledResult<string>,
+): { items: ExtensionItem[]; error?: string } {
+  const read = PLUGIN_READS[agent];
+  return parseCommandResult(result, read.parse, read.error);
+}
+
 async function discoverClaude(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [mcp, plugins] = await Promise.allSettled([
     run("claude", ["mcp", "list"]),
-    run("claude", ["plugin", "list", "--json"]),
+    run("claude", PLUGIN_READS.claude.args),
   ]);
   const mcpResult = parseCommandResult(
     mcp,
     parseClaudeMcpList,
     "Could not read Claude MCP servers.",
   );
-  const pluginResult = parseCommandResult(
-    plugins,
-    parseClaudePlugins,
-    "Could not read Claude plugins.",
-  );
+  const pluginResult = parsePluginRead("claude", plugins);
   return {
     agent: "claude",
     mcpServers: mcpResult.items,
@@ -466,14 +502,10 @@ async function discoverClaude(run: ExtensionCommandRunner): Promise<AgentExtensi
 async function discoverCodex(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [mcp, plugins] = await Promise.allSettled([
     run("codex", ["mcp", "list", "--json"]),
-    run("codex", ["plugin", "list", "--json"]),
+    run("codex", PLUGIN_READS.codex.args),
   ]);
   const mcpResult = parseCommandResult(mcp, parseCodexMcpList, "Could not read Codex MCP servers.");
-  const pluginResult = parseCommandResult(
-    plugins,
-    parseCodexPlugins,
-    "Could not read Codex plugins.",
-  );
+  const pluginResult = parsePluginRead("codex", plugins);
   return {
     agent: "codex",
     mcpServers: mcpResult.items,
@@ -536,12 +568,8 @@ export function parsePiPackages(output: string): ExtensionItem[] {
  * a settings pane.
  */
 async function discoverPi(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
-  const [packages] = await Promise.allSettled([run("pi", ["list", "--no-approve"])]);
-  const packageResult = parseCommandResult(
-    packages,
-    parsePiPackages,
-    "Could not read Pi packages.",
-  );
+  const [packages] = await Promise.allSettled([run("pi", PLUGIN_READS.pi.args)]);
+  const packageResult = parsePluginRead("pi", packages);
   return {
     agent: "pi",
     mcpServers: [],
@@ -553,14 +581,10 @@ async function discoverPi(run: ExtensionCommandRunner): Promise<AgentExtensionCa
 async function discoverGrok(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [mcp, plugins] = await Promise.allSettled([
     run("grok", ["mcp", "list", "--json"]),
-    run("grok", ["plugin", "list", "--json"]),
+    run("grok", PLUGIN_READS.grok.args),
   ]);
   const mcpResult = parseCommandResult(mcp, parseGrokMcpList, "Could not read Grok MCP servers.");
-  const pluginResult = parseCommandResult(
-    plugins,
-    parseGrokPlugins,
-    "Could not read Grok plugins.",
-  );
+  const pluginResult = parsePluginRead("grok", plugins);
   return {
     agent: "grok",
     mcpServers: mcpResult.items,
@@ -577,17 +601,13 @@ async function discoverOpenCode(run: ExtensionCommandRunner): Promise<AgentExten
   // around both parses reported a partial success as a total failure: a config
   // whose `mcp` block had drifted into a shape the MCP parser rejects blanked
   // the plugin list too, and vice versa.
-  const [config] = await Promise.allSettled([run("opencode", ["debug", "config"])]);
+  const [config] = await Promise.allSettled([run("opencode", PLUGIN_READS.opencode.args)]);
   const mcpResult = parseCommandResult(
     config,
     parseOpenCodeMcpServers,
     "Could not read OpenCode MCP servers.",
   );
-  const pluginResult = parseCommandResult(
-    config,
-    parseOpenCodePlugins,
-    "Could not read OpenCode plugins.",
-  );
+  const pluginResult = parsePluginRead("opencode", config);
   return {
     agent: "opencode",
     mcpServers: mcpResult.items,
@@ -608,6 +628,30 @@ export async function discoverAgentExtensions(
     discoverOpenCode(run),
     discoverPi(run),
   ]);
+}
+
+export type AgentPluginCatalog = Pick<AgentExtensionCatalog, "agent" | "plugins" | "pluginError">;
+
+/**
+ * One agent's plugins, without its MCP servers. `claude mcp list` health-checks
+ * every server it knows, which a page that only lists plugins has no reason to
+ * set off.
+ */
+export async function discoverAgentPlugins(
+  agent: AgentExtensionId,
+  run: ExtensionCommandRunner,
+): Promise<AgentPluginCatalog> {
+  if (agent === "cursor") {
+    const { plugins, pluginError } = await discoverCursor();
+    return { agent, plugins, pluginError };
+  }
+  const [output] = await Promise.allSettled([run(agent, PLUGIN_READS[agent].args)]);
+  const result = parsePluginRead(agent, output);
+  return {
+    agent,
+    plugins: result.items,
+    ...(result.error ? { pluginError: result.error } : {}),
+  };
 }
 
 export const EXTENSION_DISCOVERY_TTL_MS = 60_000;

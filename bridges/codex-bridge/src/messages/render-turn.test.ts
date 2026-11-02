@@ -1703,7 +1703,7 @@ describe("renderTurn", () => {
       text: "parent after child",
     });
 
-    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    const error = spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const rendered = await renderTurn(accumulator, {
         threadId: "thread-1",

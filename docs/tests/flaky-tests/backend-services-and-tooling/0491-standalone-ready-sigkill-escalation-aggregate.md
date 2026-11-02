@@ -145,3 +145,29 @@ no new cause was established.
 This repeats the early escalation assertion already tracked here. Host scheduling
 pressure remains a hypothesis; no implementation, assertion, timeout or skip
 changed. The isolated pass does not make the aggregate green.
+
+
+## Live logging round 2 repair — 2026-11-02
+
+Preparation at `dccae0434` failed the SIGTERM-to-SIGKILL assertion after
+133.41 ms: SIGKILL had already arrived at the first assertion. The required
+aggregate rerun (`mise run test:logged -- --name fix-default -- mise run test`)
+passed that case but failed `waitForStandaloneBackendReady > times out with a
+named diagnostic without waiting for stdout to close`: expected elapsed time
+below 200 ms, observed 234.54 ms (236.30 ms case duration).
+Backend used two workers in the five-slot workspace group; backend totals were
+13,069 pass, two fail (the other failure was the fsmonitor scan in case 1253).
+
+`mise run test:logged -- --name branch-standalone-ready -- bun test --cwd apps/backend ./tests/standalone-ready.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+passed the complete unchanged owner (0.6 s). The complete owner also passed
+30 repetitions on detached `origin/main` `88c3c6bac` with independently installed
+dependencies (13.6 s). Neither timing failure reproduced there; they are not
+claimed environmental. No implementation, assertion, deadline or skip changed.
+
+Evidence: `output/agent-testing/review-fix-53284689/default-workspace.log.gz`.
+
+
+The final exact aggregate rerun (`fix-default-final`, 562.0 s) passed this
+owner unchanged. Its only failure was the independently reproduced design
+profile ledger race in case 1314. This passing rerun does not establish a
+timing fix for the earlier observation.

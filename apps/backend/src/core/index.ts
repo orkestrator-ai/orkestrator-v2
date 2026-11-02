@@ -1,3 +1,6 @@
+import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
+import { listRunningBridgeTargets } from "./log-policy-bridges.js";
+import { startLogPolicyService } from "./log-policy-service.js";
 import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
 import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
@@ -66,6 +69,7 @@ import {
 } from "./agent-accounts-auto-switch-notices.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
+import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
@@ -302,6 +306,8 @@ export class OrkestratorBackend {
   private readonly agentMail: AgentMailService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly runtime: BackendRuntime;
+  private readonly applicationLogging: InstalledApplicationLogging | null;
+  private stopLogPolicyListener: (() => void) | null = null;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   /** Remote-initiated updates of this host; see host-maintenance.ts. */
@@ -389,6 +395,8 @@ export class OrkestratorBackend {
 
   constructor(options: {
     dataDir: string;
+    /** This process's own log writer; null or absent when the desktop records its output. */
+    applicationLogging?: InstalledApplicationLogging | null;
     toolchainBinDir: string;
     appRoot: string;
     resourceRoot: string;
@@ -568,6 +576,7 @@ export class OrkestratorBackend {
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
+    this.applicationLogging = options.applicationLogging ?? null;
     this.runtime =
       options.runtime ??
       new BackendRuntime({
@@ -576,6 +585,11 @@ export class OrkestratorBackend {
         worktreeSignal:
           process.env.NODE_ENV === "test" ? undefined : containerWorktreeSignalInstaller,
         prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery },
+        // Docker-backed, like the worktree signal: summary reads in unit tests
+        // relay only what a `check_docker` answered.
+        ...(process.env.NODE_ENV === "test"
+          ? {}
+          : { dockerAvailability: { probe: () => checkDockerAvailability() } }),
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
           claudeStatePolls: { signal: backendClaudeStateSignal() },
@@ -676,8 +690,8 @@ export class OrkestratorBackend {
       prompts: humanPrompts,
       workingSessions: async () => {
         const [sessions, environments] = await Promise.all([
-          storage.listNativeAgentSessions(),
-          storage.loadEnvironments(),
+          storage.readNativeAgentSessionsSnapshot(),
+          storage.readEnvironmentsSnapshot(),
         ]);
         const local = new Set(
           environments
@@ -701,6 +715,12 @@ export class OrkestratorBackend {
             local: local.has(session.environmentId),
           }));
       },
+      contentRevision: (session) =>
+        this.nativeAgents.humanPromptContentRevision(
+          session.environmentId,
+          session.agent as BuildPipelineAgent,
+          session.logicalSessionKey,
+        ),
       projection: (session) =>
         this.nativeAgents.humanPromptOutputIfRunning(
           session.environmentId,
@@ -1698,7 +1718,7 @@ export class OrkestratorBackend {
     messageLimit: number,
   ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
-    const session = (await this.context.storage.listNativeAgentSessions()).find(
+    const session = (await this.context.storage.readNativeAgentSessionsSnapshot()).find(
       (candidate) =>
         candidate.environmentId === environmentId &&
         candidate.logicalSessionKey === logicalSessionKey,
@@ -1748,6 +1768,8 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    // After `init`, which applies the upgrade from the single logging switch.
+    this.startLogPolicy();
     try {
       this.runtime.changeTracking?.start();
     } catch (error) {
@@ -2704,9 +2726,20 @@ export class OrkestratorBackend {
     return (await handler(args, this.context)) as T;
   }
 
+  private startLogPolicy(): void {
+    const policy = startLogPolicyService(this.context.storage, {
+      logging: this.applicationLogging,
+      listRunningBridges: (onTarget) => listRunningBridgeTargets(this.context, onTarget),
+    });
+    this.runtime.logPolicy = policy.service;
+    this.stopLogPolicyListener = policy.stop;
+  }
+
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    this.stopLogPolicyListener?.();
+    this.runtime.logPolicy?.stop();
     // Bounded and never rejects: a running host check removes its probe
     // network (or shutdown removes it) before the process exits.
     const reachabilitySettled = this.containerHostReachability?.dispose();

@@ -1,7 +1,32 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type Modifier,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   AppWindow,
   Download,
+  GripVertical,
   Loader2,
   Plus,
   RefreshCw,
@@ -12,6 +37,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { discardNodeDetach, nodeErrorText } from "@/lib/backend/command-nodes";
 import { requestCommandHandover } from "@/lib/command-handover";
+import { arrangeMachines } from "@/lib/federation/sidebar-layout";
+import { updatePortalLayout } from "@/lib/portal/portal-layout";
 import { onMachineUpdatesRequest, takeMachineUpdatesRequest } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import { AddMachineDialog } from "./AddMachineDialog";
@@ -25,15 +52,22 @@ import { useMaintenanceSummaries, type MaintenanceSummary } from "./useMaintenan
 import { MachineAgentAccountsSection } from "./MachineAgentAccountsSection";
 import { SETTINGS_CARD_CLASS, SettingsPageLayout } from "../SettingsPageLayout";
 
+/** A row only moves up and down; sideways it would be clipped by the table's frame. */
+const verticalOnly: Modifier = ({ transform }) => ({ ...transform, x: 0 });
+
 /**
  * Every machine this client works with, in one list: the machine it is
  * connected to, the machines that one controls, and (on the desktop) the
  * machines saved on this device. Each has its settings, a window of its own
  * and its updates.
+ *
+ * The command node stays at the top. The machines it controls are dragged into
+ * the order it keeps for them, which the sidebar and the title bar's CPU
+ * readings follow too.
  */
 export function MachinesSettings() {
   const machines = useMachines();
-  const { api, entries, status, nodes, nodesError, connections, connectionsError, loaded } =
+  const { api, entries, layout, status, nodes, nodesError, connections, connectionsError, loaded } =
     machines;
   const { summaries, record } = useMaintenanceSummaries(entries);
   const [adding, setAdding] = useState(false);
@@ -67,6 +101,32 @@ export function MachinesSettings() {
       connection.address ? [connection.address] : [],
     ),
   ];
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const movable = entries.flatMap((entry) =>
+    entry.role === "node" && entry.nodeId ? [{ connectionId: entry.nodeId }] : [],
+  );
+  // A leaf's own machines are suspended and its command node's to manage.
+  const reorderable = !leaf && movable.length > 1;
+  const moveMachine = ({ active, over }: DragEndEvent) => {
+    if (!over) return;
+    const selfId = selfEntry?.nodeId ?? null;
+    const machineOrder = arrangeMachines(
+      selfId ? [{ connectionId: selfId }, ...movable] : movable,
+      movable,
+      layout,
+      selfId,
+      String(active.id),
+      String(over.id),
+    );
+    if (!machineOrder) return;
+    updatePortalLayout({ machineOrder }).catch((error: unknown) =>
+      toast.error("Could not save the machine order", { description: errorText(error) }),
+    );
+  };
 
   const openWindow = async (entry: MachineEntry) => {
     if (!api?.openWindow || !entry.connection) return;
@@ -168,41 +228,69 @@ export function MachinesSettings() {
             Loading machines…
           </div>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
-            <table className="w-full table-fixed text-sm" data-testid="machine-list">
-              <thead className="border-b border-zinc-800 bg-zinc-900/55 text-left text-xs text-zinc-500">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">Machine</th>
-                  <th className="hidden w-28 px-4 py-2.5 font-medium md:table-cell">Orkestrator</th>
-                  <th className="w-[8.5rem] px-3 py-2.5 text-right font-medium sm:w-[15rem] sm:px-4">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800/80">
-                {entries.map((entry) => (
-                  <MachineRow
-                    key={entry.key}
-                    entry={entry}
-                    api={api}
-                    summary={summaries[entry.key]}
-                    openingWindow={openingWindow === entry.key}
-                    onSettings={() => setSettingsKey(entry.key)}
-                    onUpdates={() => setUpdatesKey(entry.key)}
-                    onOpenWindow={() => void openWindow(entry)}
-                    leaf={leaf}
-                  />
-                ))}
-                {entries.length === 0 ? (
+          // The context sits outside the table: it renders its live region as a <div>.
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            modifiers={[verticalOnly]}
+            onDragEnd={moveMachine}
+          >
+            <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30">
+              <table className="w-full table-fixed text-sm" data-testid="machine-list">
+                <thead className="border-b border-zinc-800 bg-zinc-900/55 text-left text-xs text-zinc-500">
                   <tr>
-                    <td colSpan={3} className="px-4 py-8 text-center text-sm text-zinc-500">
-                      No machines yet.
-                    </td>
+                    <th className="px-4 py-2.5 font-medium">Machine</th>
+                    <th className="hidden w-28 px-4 py-2.5 font-medium md:table-cell">
+                      Orkestrator
+                    </th>
+                    <th className="w-[8.5rem] px-3 py-2.5 text-right font-medium sm:w-[15rem] sm:px-4">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/80">
+                  <SortableContext
+                    items={movable.map((machine) => machine.connectionId)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {entries.map((entry) => {
+                      const row: MachineRowProps = {
+                        entry,
+                        api,
+                        summary: summaries[entry.key],
+                        openingWindow: openingWindow === entry.key,
+                        onSettings: () => setSettingsKey(entry.key),
+                        onUpdates: () => setUpdatesKey(entry.key),
+                        onOpenWindow: () => void openWindow(entry),
+                        leaf,
+                      };
+                      return reorderable && entry.role === "node" && entry.nodeId ? (
+                        <SortableMachineRow key={entry.key} sortableId={entry.nodeId} {...row} />
+                      ) : (
+                        <MachineRow
+                          key={entry.key}
+                          {...row}
+                          // Reserves the grip's width so the dots line up.
+                          grip={
+                            reorderable ? (
+                              <span aria-hidden="true" className={MACHINE_GRIP_SLOT_CLASS} />
+                            ) : null
+                          }
+                        />
+                      );
+                    })}
+                  </SortableContext>
+                  {entries.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-4 py-8 text-center text-sm text-zinc-500">
+                        No machines yet.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </DndContext>
         )}
 
         {leaf ? (
@@ -265,16 +353,9 @@ export function MachinesSettings() {
   );
 }
 
-function MachineRow({
-  entry,
-  api,
-  summary,
-  openingWindow,
-  onSettings,
-  onUpdates,
-  onOpenWindow,
-  leaf,
-}: {
+const MACHINE_GRIP_SLOT_CLASS = "-mr-1.5 -ml-1.5 h-5 w-4 shrink-0";
+
+interface MachineRowProps {
   entry: MachineEntry;
   api: ConnectionsApi | null;
   summary: MaintenanceSummary | undefined;
@@ -284,6 +365,63 @@ function MachineRow({
   onOpenWindow: () => void;
   /** The connected machine is controlled by another, so it is not the command node. */
   leaf: boolean;
+}
+
+/** A machine the command node controls, moved by its grip. */
+function SortableMachineRow({ sortableId, ...row }: MachineRowProps & { sortableId: string }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: sortableId });
+  return (
+    <MachineRow
+      {...row}
+      rowRef={setNodeRef}
+      rowStyle={{ transform: CSS.Translate.toString(transform), transition }}
+      dragging={isDragging}
+      grip={
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          aria-label={`Reorder ${row.entry.name}`}
+          title="Drag to reorder"
+          className={cn(
+            MACHINE_GRIP_SLOT_CLASS,
+            "flex cursor-grab touch-none items-center justify-center rounded text-zinc-600 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+          )}
+        >
+          <GripVertical className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      }
+    />
+  );
+}
+
+function MachineRow({
+  entry,
+  api,
+  summary,
+  openingWindow,
+  onSettings,
+  onUpdates,
+  onOpenWindow,
+  leaf,
+  grip,
+  rowRef,
+  rowStyle,
+  dragging = false,
+}: MachineRowProps & {
+  grip?: ReactNode;
+  rowRef?: Ref<HTMLTableRowElement>;
+  rowStyle?: CSSProperties;
+  dragging?: boolean;
 }) {
   const snapshot = summary?.snapshot ?? null;
   const issues = snapshot ? maintenanceIssues(snapshot) : [];
@@ -308,12 +446,18 @@ function MachineRow({
 
   return (
     <tr
+      ref={rowRef}
+      style={rowStyle}
       data-testid="machine-row"
       data-machine={entry.key}
-      className={cn(entry.current && "bg-emerald-500/[0.035]")}
+      className={cn(
+        entry.current && "bg-emerald-500/[0.035]",
+        dragging && "relative z-10 bg-zinc-900 shadow-lg",
+      )}
     >
       <td className="py-3.5 pr-2 pl-3 align-top sm:px-4">
         <div className="flex min-w-0 gap-3">
+          {grip}
           <MachineStatusDot
             colorToken={entry.colorToken}
             connected={entry.connected}

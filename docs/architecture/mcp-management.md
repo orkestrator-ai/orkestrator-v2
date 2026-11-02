@@ -236,10 +236,13 @@ is not permission to execute. The editor never changes an execution policy.
   - The skill catalogues and their skill-file read allowlists follow the same
     install rule (`claudeInstalledPluginIdEnablement`), so a turned-off or
     never-enabled install's skills are neither listed nor readable (todo
-    0205). Settings → Skills on the host (`agent-skills.ts`) reads user
+    0205). Settings → Skills and plugins on the host (`agent-skills.ts`) reads user
     settings only, from `$CLAUDE_CONFIG_DIR/settings.json` or else
     `~/.claude/settings.json`: it has no project, so a project's settings can
-    still change which plugin skills a single session loads. The environment
+    still change which plugin skills a single session loads. That page's plugin
+    list (`list_agent_plugins`) is the CLI's own `plugin list`, run from the
+    home directory and only when its Plugins view is opened, so it can name a
+    plugin the skill scan does not, such as a disabled one. The environment
     scanner (`environment-agent-skills.ts`) reads user and project settings,
     as an ordinary session does; local settings are an opt-in per prompt and
     never change its default. Fixtures in `agent-skills.test.ts` ("Claude

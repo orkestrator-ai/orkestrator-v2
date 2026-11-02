@@ -170,6 +170,158 @@ describe("formatLogError", () => {
   });
 });
 
+/** A home-directory name appears in each input and must not appear in the frame. */
+const FRAME_PATHS: ReadonlyArray<[label: string, frame: string, expected: string]> = [
+  [
+    "a workspace, named frame",
+    "    at run (/Users/private/repo/apps/backend/src/core/shell.ts:10:5)",
+    "at run (apps/backend/src/core/shell.ts:10:5)",
+  ],
+  [
+    "a workspace, anonymous frame",
+    "    at /home/private/repo/packages/protocol/src/logger.ts:3:1",
+    "at packages/protocol/src/logger.ts:3:1",
+  ],
+  [
+    "a checkout under a directory also called apps",
+    "    at f (/Users/private/project/apps/orkestrator-v2/apps/web/src/a.ts:1:2)",
+    "at f (apps/web/src/a.ts:1:2)",
+  ],
+  [
+    "a file URL",
+    "    at file:///Users/private/repo/bridges/claude-bridge/src/index.ts:1:2",
+    "at bridges/claude-bridge/src/index.ts:1:2",
+  ],
+  [
+    "a dependency",
+    "    at g (/Users/private/repo/apps/backend/node_modules/hono/dist/x.js:9:9)",
+    "at g (node_modules/hono/dist/x.js:9:9)",
+  ],
+  [
+    "a directory with spaces",
+    "    at h (/Users/private name/Library/Application Support/x/dist/main.js:1:1)",
+    "at h (.../main.js:1:1)",
+  ],
+  [
+    "a directory with parentheses",
+    "    at h (/Users/private/copy (2)/lib/main.js:1:1)",
+    "at h (.../main.js:1:1)",
+  ],
+  [
+    "a packaged app",
+    "    at i (/Applications/Private App.app/Contents/Resources/app.asar/dist/main.js:4:2)",
+    "at i (Resources/app.asar/dist/main.js:4:2)",
+  ],
+  [
+    "a deployed bridge",
+    "    at j (/opt/codex-bridge/dist/index.js:4:2)",
+    "at j (codex-bridge/dist/index.js:4:2)",
+  ],
+  [
+    "a Windows path",
+    "    at k (C:\\Users\\private\\repo\\apps\\desktop\\main.js:1:1)",
+    "at k (apps/desktop/main.js:1:1)",
+  ],
+  [
+    "a Windows path outside the app",
+    "    at k (C:\\Users\\private\\other\\main.js:1:1)",
+    "at k (.../main.js:1:1)",
+  ],
+  [
+    "a UNC path",
+    String.raw`    at k (\\private-server\private-share\repo\apps\desktop\main.js:1:1)`,
+    "at k (apps/desktop/main.js:1:1)",
+  ],
+  [
+    "an extended drive path",
+    String.raw`    at k (\\?\C:\Users\private\repo\apps\desktop\main.js:1:1)`,
+    "at k (apps/desktop/main.js:1:1)",
+  ],
+  [
+    "an extended UNC path",
+    String.raw`    at k (\\?\UNC\private-server\private-share\repo\apps\desktop\main.js:1:1)`,
+    "at k (apps/desktop/main.js:1:1)",
+  ],
+  [
+    "a UNC path outside the app",
+    String.raw`    at k (\\private-server\private-share\other\main.js:1:1)`,
+    "at k (.../main.js:1:1)",
+  ],
+  ["a path outside the app", "    at l (/Users/private/other/x.ts:2:2)", "at l (.../x.ts:2:2)"],
+  [
+    "a web URL, losing its origin and query",
+    "    at m (http://localhost:5173/src/a.tsx?private=1:3:4)",
+    "at m (src/a.tsx:3:4)",
+  ],
+  [
+    "an eval, with both of its locations",
+    "    at eval (eval at n (/Users/private/repo/apps/web/src/a.ts:1:1), <anonymous>:1:1)",
+    "at eval (eval at n (apps/web/src/a.ts:1:1), <anonymous>:1:1)",
+  ],
+  ["a path with no line number", "    at o (/Users/private/x.ts)", "at o (.../x.ts)"],
+];
+
+describe("stack frame paths", () => {
+  function framed(frame: string): readonly string[] | undefined {
+    const failure = new Error("m");
+    failure.stack = `Error: m\n${frame}`;
+    return formatLogError(failure).stack;
+  }
+
+  test.each(FRAME_PATHS)("%s", (_label, frame, expected) => {
+    const [relative] = framed(frame)!;
+    expect(relative).toBe(expected);
+    const revived = logErrorFromWire({ name: "Error", stack: [frame] })!;
+    expect(revived.stack).toEqual([expected]);
+    expect(logErrorFromWire(revived)?.stack).toEqual([expected]);
+    expect(relative).not.toContain("private");
+  });
+
+  test.each([
+    ["a runtime frame", "    at moduleEvaluation (native:1:11)"],
+    ["a node builtin", "    at f (node:internal/process/task_queues:95:5)"],
+    ["an anonymous frame", "    at <anonymous>"],
+    ["a slash inside a function name", "    at Foo/bar (native:1:1)"],
+    ["an already relative path", "    at f (apps/web/src/a.ts:1:2)"],
+  ])("%s stays as it was", (_label, frame) => {
+    expect(framed(frame)).toEqual([frame.trim()]);
+  });
+
+  test("a real stack from this file is relative, with no home directory", () => {
+    const [frame] = formatLogError(new Error("m")).stack!;
+    expect(frame).toContain("packages/protocol/src/log-error.test.ts:");
+    expect(JSON.stringify(formatLogError(new Error("m")).stack)).not.toContain(process.env.HOME!);
+  });
+
+  test("a relayed frame is made relative too, so an older sender cannot reintroduce a path", () => {
+    const revived = logErrorFromWire({
+      name: "Error",
+      stack: ["at f (/Users/private/repo/apps/backend/src/a.ts:1:1)"],
+    })!;
+    expect(revived.stack).toEqual(["at f (apps/backend/src/a.ts:1:1)"]);
+  });
+
+  test("relativizing is idempotent, so a relayed frame is unchanged", () => {
+    for (const [, frame, expected] of FRAME_PATHS) {
+      const [once] = framed(frame)!;
+      expect(framed(`    ${once}`)).toEqual([expected]);
+    }
+  });
+
+  test("a deep path keeps its location, and the frame stays bounded", () => {
+    const deep = `/Users/private/${"d/".repeat(600)}apps/web/src/a.ts`;
+    const [frame] = framed(`    at f (${deep}:1:1)`)!;
+    expect(frame).not.toContain("private");
+    expect(frame!.length).toBeLessThanOrEqual(240);
+  });
+
+  test("a secret in a frame is still redacted", () => {
+    const [frame] = framed("    at f (http://user:hunter2hunter2@host/a?token=abcdef123456:1:1)")!;
+    expect(frame).not.toContain("hunter2");
+    expect(frame).not.toContain("abcdef123456");
+  });
+});
+
 describe("logErrorFromWire", () => {
   test("rebuilds a relayed error with the same bounds and drops unknown keys", () => {
     const revived = logErrorFromWire({

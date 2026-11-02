@@ -31,6 +31,7 @@ export const INHERITED_GLOBAL_SETTING_KEYS = [
   "sessionTitleGeneration",
   "terminalAppearance",
   "terminalScrollback",
+  "terminalLinkDefaultTarget",
   "agentMessaging",
   // The automatic-account ticks, by email. Each machine applies them to its own logins.
   "agentAccountAutoSwitch",

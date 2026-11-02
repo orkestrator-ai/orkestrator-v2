@@ -37,6 +37,8 @@ import {
   setPreferredAgentIdentity,
 } from "@/lib/backend";
 import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federation/node-events";
+import { inMachineOrder } from "@/lib/federation/sidebar-layout";
+import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { requestCloseGlobalSettings, requestGlobalSettings } from "@/lib/settings-navigation";
 import { useAccountMachineStore } from "@/components/settings/account-machine";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -587,6 +589,7 @@ export function MachineAgentAccountsSection({
    */
   wide?: boolean;
 }) {
+  const { machineOrder } = usePortalLayout();
   const [machines, setMachines] = useState<MachineAgentAccounts[] | null>(null);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const pending = useRef(new Set<string>());
@@ -845,8 +848,13 @@ export function MachineAgentAccountsSection({
     }
   };
 
-  const shown = (machines ?? []).filter((machine) =>
-    selfOnly ? machine.self : nodeId ? machine.nodeId === nodeId : true,
+  const shown = inMachineOrder(
+    (machines ?? []).filter((machine) =>
+      selfOnly ? machine.self : nodeId ? machine.nodeId === nodeId : true,
+    ),
+    (machine) => machine.nodeId,
+    machineOrder,
+    machines?.find((machine) => machine.self)?.nodeId ?? null,
   );
   const signInPlatforms = HOST_SIGN_IN_PLATFORMS.filter((platform) =>
     shown.some((machine) => machine.signIns?.[platform]),

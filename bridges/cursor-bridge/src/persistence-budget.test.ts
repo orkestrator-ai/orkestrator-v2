@@ -608,10 +608,12 @@ describe("the real state file at its default ceiling", () => {
 
 describe("saturated streaming", () => {
   let harness: RouterHarness;
+  let info: Mock<typeof console.info>;
   let warn: Mock<typeof console.warn>;
 
   beforeEach(async () => {
     harness = await startRouterHarness();
+    info = spyOn(console, "info").mockImplementation(() => undefined);
     warn = spyOn(console, "warn").mockImplementation(() => undefined);
   });
 
@@ -619,6 +621,7 @@ describe("saturated streaming", () => {
     try {
       await harness.close();
     } finally {
+      info.mockRestore();
       warn.mockRestore();
     }
   });
@@ -675,9 +678,9 @@ describe("saturated streaming", () => {
       }) as typeof realWriteFile,
     });
     const failingWarnings = () =>
-      warn.mock.calls.filter((call) => String(call[0]).includes("state publication failing"));
+      warn.mock.calls.filter((call) => String(call[0]).includes("state.publication-failing"));
     const recoveredWarnings = () =>
-      warn.mock.calls.filter((call) => String(call[0]).includes("state publication recovered"));
+      info.mock.calls.filter((call) => String(call[0]).includes("state.publication-recovered"));
     const persistenceNotice = () =>
       state.health.listNotices().find((notice) => notice.method === "persistence");
     try {

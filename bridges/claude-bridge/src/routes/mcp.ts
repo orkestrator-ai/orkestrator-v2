@@ -1,6 +1,9 @@
 // MCP (Model Context Protocol) routes
 import { Hono } from "hono";
 import { getMcpServerInfo } from "../services/mcp-config.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 const mcp = new Hono();
 
@@ -19,7 +22,7 @@ mcp.get("/servers", async (c) => {
       cwd,
     });
   } catch (error) {
-    console.error("[mcp] Error getting MCP servers:", error);
+    log.error("mcp.read-failed", { error: formatLogError(error) });
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to get MCP servers" },
       500,

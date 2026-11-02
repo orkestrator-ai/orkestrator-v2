@@ -1,3 +1,8 @@
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import {
+  applyBridgeLogPolicy,
+  readBridgeLogPolicyBody,
+} from "@orkestrator/protocol/node/bridge-log-policy";
 import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
@@ -80,6 +85,12 @@ import {
   type BridgeModel,
 } from "./models-cache.js";
 import { applyRuntimeEnvironmentOutput, refreshRuntimeEnvironment } from "./runtime-env.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
+
+const log = createLogger("bridge.codex");
+
+configureBridgeLogger();
 
 const WORKFLOW_RESULT_TOOL_NAMES = new Set(WORKFLOW_RESULT_KINDS.map(workflowResultToolName));
 
@@ -181,9 +192,11 @@ app.onError((error, c) => {
     const response = (error as { getResponse(): Response }).getResponse();
     return c.newResponse(response.body, response);
   }
-  console.error(
-    `[codex-bridge] ${c.req.method} ${c.req.path} failed: ${redactSecrets(error.stack ?? `${error.name}: ${error.message}`)}`,
-  );
+  log.error("http.request-failed", {
+    method: c.req.method,
+    path: c.req.path,
+    error: formatLogError(error),
+  });
   return c.text("Internal Server Error", 500);
 });
 export const MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
@@ -245,10 +258,10 @@ function notifyObservers(event: SseEvent, revision: number): void {
   for (const observer of observers) {
     try {
       void Promise.resolve(observer(event, revision, "{}")).catch((error) => {
-        console.error("[codex-bridge] Failed to notify SSE observer:", error);
+        log.warn("sse.observer-failed", { error: formatLogError(error) });
       });
     } catch (error) {
-      console.error("[codex-bridge] Failed to notify SSE observer:", error);
+      log.warn("sse.observer-failed", { error: formatLogError(error) });
     }
   }
 }
@@ -451,7 +464,7 @@ async function writeCodexRawLog(
       "utf8",
     );
   } catch (error) {
-    console.error("[codex-bridge] Failed to write raw Codex log:", error);
+    log.warn("raw-log.write-failed", { error: formatLogError(error) });
   }
 }
 
@@ -474,7 +487,7 @@ function createShutdownHandler(
     clearTimer(timer);
     void stopEngine()
       .catch((error) => {
-        console.warn("[codex-bridge] Failed to stop the Codex engine:", error);
+        log.warn("engine.stop-failed", { error: formatLogError(error) });
       })
       .finally(() => exit(0));
   };
@@ -484,7 +497,7 @@ function createParentExitHandler(
   interrupt: (budgetMs: number) => Promise<number>,
   shutdown: () => void,
   report: (turns: number, elapsedMs: number) => void = (turns, ms) => {
-    console.error(`[codex-bridge] Stopped ${turns} running turn(s) in ${ms} ms`);
+    log.info("turns.stopped", { turns, elapsedMs: ms });
   },
 ): () => Promise<void> {
   return async () => {
@@ -534,7 +547,7 @@ function serializeSseEventData(
     // client's cursor depends on. Emit a placeholder and keep going.
     // The thrown value can originate from a payload getter. Never copy it into
     // logs, which must not contain prompts, file contents, or attachment data.
-    console.error("[codex-bridge] Failed to serialize an SSE payload");
+    log.error("sse.payload-serialize-failed");
     return JSON.stringify({
       sessionId: event.sessionId,
       error: "payload could not be serialized",
@@ -637,7 +650,7 @@ function emit(event: SseEvent): void {
     // can throw before JSON.stringify gets its chance to contain them, so retain
     // the same placeholder and still advance the bridge-wide cursor.
     // As above, the thrown value is payload-controlled and must not reach logs.
-    console.error("[codex-bridge] Failed to snapshot an SSE payload");
+    log.error("sse.payload-snapshot-failed");
     payload = { error: "payload could not be serialized" };
     eager = subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
     messageId = undefined;
@@ -656,10 +669,10 @@ function emit(event: SseEvent): void {
   for (const subscriber of subscribers) {
     try {
       void Promise.resolve(subscriber(event, revision, eager ?? "{}")).catch((error) => {
-        console.error("[codex-bridge] Failed to notify SSE subscriber:", error);
+        log.warn("sse.subscriber-failed", { error: formatLogError(error) });
       });
     } catch (error) {
-      console.error("[codex-bridge] Failed to notify SSE subscriber:", error);
+      log.warn("sse.subscriber-failed", { error: formatLogError(error) });
     }
   }
 }
@@ -695,10 +708,7 @@ async function writePersistedBridgeCache(models: BridgeModel[]): Promise<void> {
       JSON.stringify({ version: BRIDGE_MODEL_CACHE_VERSION, at: Date.now(), models }, null, 2),
     );
   } catch (error) {
-    console.warn(
-      "[codex-bridge] Failed to persist model cache:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("models.cache-persist-failed", { error: formatLogError(error, { stack: false }) });
   }
 }
 
@@ -727,10 +737,7 @@ async function fetchLiveModelsFromCli(
     const models = parseModelCatalog(stdout);
     return models.length > 0 ? models : null;
   } catch (error) {
-    console.warn(
-      "[codex-bridge] `codex debug models` failed:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("models.debug-read-failed", { error: formatLogError(error, { stack: false }) });
     return null;
   }
 }
@@ -808,7 +815,7 @@ async function sweepIdleThreads(
   try {
     await runtime.sweepIdle();
   } catch (error) {
-    console.warn("[codex-bridge] Idle sweep failed:", error);
+    log.warn("idle-sweep.failed", { error: formatLogError(error) });
   }
 }
 
@@ -865,16 +872,11 @@ async function startSelectedEngine(
   }
   try {
     await runtime.start();
-    console.error(
-      `[codex-bridge] app-server engine ready (codex ${runtime.getHealth().codexVersion ?? "unknown"})`,
-    );
+    log.info("engine.ready", { codexVersion: runtime.getHealth().codexVersion ?? "unknown" });
   } catch (error) {
     // Reported through /global/health rather than crashing: the backend polls
     // health, and a dead process gives it nothing to read.
-    console.error(
-      "[codex-bridge] Failed to start the app-server engine:",
-      error instanceof Error ? error.message : error,
-    );
+    log.error("engine.start-failed", { error: formatLogError(error, { stack: false }) });
   }
 }
 
@@ -982,7 +984,7 @@ function startSseKeepalive(
       id: String(eventRing.latestRevision),
       data: "{}",
     }).catch((error) => {
-      console.error("[codex-bridge] Failed to write SSE keepalive:", error);
+      log.warn("sse.keepalive-failed", { error: formatLogError(error, { stack: false }) });
     });
   }, intervalMs);
 }
@@ -1108,6 +1110,12 @@ app.use("/session/:id/transcript", async (c, next) => {
   c.res.headers.append("Vary", "Accept-Encoding");
 });
 app.use("/session/:id/transcript", compress({ encoding: "gzip" }));
+
+// The live logging settings. Metadata only; see `applyBridgeLogPolicy`.
+app.post(BRIDGE_LOG_POLICY_ROUTE, async (c) => {
+  const answer = applyBridgeLogPolicy(await readBridgeLogPolicyBody(c.req.raw));
+  return c.json(answer.body, answer.status);
+});
 
 app.get("/global/health", (c) => {
   const health = appServerRuntime.getHealth();
@@ -1353,10 +1361,7 @@ app.get("/session/:id/usage", async (c) => {
     if (contextUsage === null) return c.json({ error: "Session not found" }, 404);
     return c.json({ contextUsage });
   } catch (error) {
-    console.warn(
-      "[codex-bridge] Account usage read failed:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("account.usage-read-failed", { error: formatLogError(error, { stack: false }) });
     return c.json({ error: "Account usage is temporarily unavailable" }, 503);
   }
 });
@@ -1968,9 +1973,7 @@ app.get("/event/subscribe", (c) => {
     const failSlowSubscriber = (reason: string) => {
       if (!open) return;
       open = false;
-      console.error(
-        `[codex-bridge] Closing SSE subscriber (${reason}); the client will reconnect and replay from its cursor`,
-      );
+      log.info("sse.closed", { reason });
       resolveConnectionClosed();
     };
     const writeWhileOpen = createSerializedSseWriter(
@@ -2208,7 +2211,7 @@ if (parentPid !== null) {
   startParentWatchdog({
     parentPid,
     onParentExit: () => {
-      console.error(`[codex-bridge] Backend process ${parentPid} is gone; shutting down`);
+      log.warn("parent.gone", { parentPid });
       // Nothing supervises a turn once its backend is gone: stop it now rather
       // than letting the agent keep editing until the drain kills app-server.
       void createParentExitHandler(

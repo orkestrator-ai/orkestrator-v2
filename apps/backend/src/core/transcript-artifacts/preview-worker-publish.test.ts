@@ -80,8 +80,15 @@ const label = process.env.CONTEXT_DIGEST;
 if (args[0] === "pull") {
   if (!process.env.DOCKER_CONFIG || process.env.DOCKER_CONFIG === process.env.ORIGINAL_CONFIG) process.exit(9);
   if (args.includes(process.env.FAIL_PLATFORM)) process.exit(1);
-} else if (args[0] === "image") {
+} else if (args[0] === "create") {
+  if (!args.includes("never")) process.exit(3);
+  console.log("qualify-container");
+} else if (args[0] === "container") {
   console.log(process.env.BAD_LABEL || label);
+} else if (args[0] === "rm") {
+  if (args.at(-1) !== "qualify-container") process.exit(4);
+} else if (args[0] === "image" && args[1] === "rm") {
+  if (args.at(-1) !== process.env.REFERENCE) process.exit(5);
 } else if (args.includes("--raw")) {
   console.log(JSON.stringify({ manifests: ["amd64", ...(process.env.MISSING_ARM ? [] : ["arm64"])].map(architecture => ({ platform: { os: "linux", architecture } })) }));
 } else if (args.at(-1)?.includes(".Image")) {

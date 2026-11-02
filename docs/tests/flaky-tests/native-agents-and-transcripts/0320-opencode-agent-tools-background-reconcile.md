@@ -46,3 +46,58 @@ implementation, assertion, timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name agent-tools-alone -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1` passed (2.6 s).
 - **Evidence:** `orkestrator-test-run.aPuQa7` below the host temporary directory.
 - **Assessment:** confirms recurrence. The branch does not touch agent-tool configuration; nothing changed in the test.
+
+
+## Safe error formatting second review — 2026-11-02
+
+Preparation ran `mise run test` at `de952cc0accc820c6d57425323428cc993794a54`.
+The backend used three isolated workers and reported 13,006 passed, 97 skipped,
+and five failed across 870 files (440.83 s). Original evidence is preserved at
+`.orkestrator/review-artifacts/review-validation-b03e0cc0-820a-4723-8d36-20d1666dfe82/validation-04.stdout.txt`.
+
+This case observed configurationCount() remained one rather than zero at line 195 (194.70 ms).
+
+The complete unchanged owner passed on the fix branch as part of
+`mise run test:logged -- --name r5-round2-recorded-owners -- bun test --cwd apps/backend ./tests/container-readiness.test.ts ./src/core/commands-agent-tools.test.ts ./tests/codex-subagent-cards.test.ts ./src/core/nodes/node-files.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 14.2 s; passing per-file counts were not retained by the runner).
+
+A detached `origin/main` worktree at `9dbd7f1cc9981789ab352056bea84a1007c99959`
+used its own `mise exec -- bun install --frozen-lockfile` dependencies.
+Its complete owner check was `mise run test:logged -- --name r5-round2-main-agent-tools -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures` (failed, 20 passed and one failed (3.9 s)).
+Result: the identical line-195 assertion received one after the 150 ms wait. Failure evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.ozqrnq/`.
+
+The same failure on main establishes independence from this branch. The owner
+and implementation are unchanged relative to main. No assertion, delay, skip,
+or unrelated implementation was changed; the existing flake remains open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+
+
+## Task 1202 review repair — 2026-11-02
+
+Original command: `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1 mise run test:logged -- --name address-default-suite-concurrent -- mise run test`, workspace/root/bridge/protocol grants 6/1/2/1.
+Group evidence: `orkestrator-test-run.WXZCOJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/`.
+
+Aggregate saw configuration count 1 after 150 ms (173.90 ms). Complete branch owner repeated it (291.54 ms; 20 pass/1 fail, 8.5 s); complete detached-main owner at 38d55ee14 passed (8.5 s). No failure independence is claimed from a passing main run. Branch artifact v0aFCH.
+
+The complete owner was rerun with `mise run test:logged -- --name address-opencode-tools-rerun -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`. No implementation, assertion, wait, timeout or skip was changed. This recurrence remains open.
+
+A bounded detached-main repeat reproduced the identical count assertion:
+`mise run test:logged -- --name address-main-opencode-repeat -- bun test --cwd apps/backend ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures --test-name-pattern 'reconciles in the background' --rerun-each=20`
+failed (19 pass/1 fail, 231.21 ms failing case, 9.0 s total). Main evidence:
+`orkestrator-test-run.QsTCer/address-main-opencode-repeat.log.gz`.
+
+Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
+13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
+3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
+The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.

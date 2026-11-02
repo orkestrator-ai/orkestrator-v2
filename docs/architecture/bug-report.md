@@ -1,8 +1,9 @@
 # Report a bug
 
-The sidebar's bottom bar has a Bug button (right; Settings is on the left). It
-opens a sheet in which a coding agent interviews the user, reads the backend
-host's logs, and drafts a GitHub issue for `orkestrator-ai/orkestrator-v2`.
+The sidebar's bottom bar has a Bug button (right; global, repository and
+environment settings are on the left). It opens a sheet in which a coding
+agent interviews the user, reads the backend host's logs, and drafts a GitHub
+issue for `orkestrator-ai/orkestrator-v2`.
 The user approves the draft and Orkestrator files it. This is the desktop and
 web counterpart of `orkestrator --fix AGENT`
 ([public-cli.md](public-cli.md)), and both share their instructions.

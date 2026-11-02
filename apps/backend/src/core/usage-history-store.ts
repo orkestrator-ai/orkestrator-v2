@@ -19,10 +19,12 @@ import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
 import type { StorageDatabase } from "./storage-database.js";
 import { USAGE_HISTORY_STORE } from "./usage-history-layout.js";
 import {
+  applyLabelToRecord,
   applyTurnToRecord,
   emptyUsageSessionRecord,
   parseUsageSessionRecord,
   pruneRecordDays,
+  type UsageEnvironmentLabel,
   type UsageSessionRecord,
 } from "./usage-history-record.js";
 
@@ -49,7 +51,10 @@ import {
  * Usage rows outlive the session, the environment and the project they came
  * from: a report of the last ninety days must not change because an
  * environment was deleted yesterday. They hold no conversation content, so
- * there is nothing in them to scrub.
+ * there is nothing in them to scrub. So that a deleted environment's usage
+ * still says where it came from, deletion stamps the environment and project
+ * names onto its rows ({@link UsageHistoryStore.labelEnvironment}) and the
+ * report carries the newest stamp.
  */
 
 /** Rows retained before the least recently used are dropped. */
@@ -129,6 +134,7 @@ export class UsageHistoryStore {
     const modelSessions = new Map<string, Set<string>>();
     const environmentTotals = new Map<string, UsageTotals>();
     const environmentSessions = new Map<string, number>();
+    const environmentLabels = new Map<string, { label: UsageEnvironmentLabel; at: string }>();
     const totals = emptyUsageTotals();
     const recordedPlatforms = new Set<AgentPlatform>();
     let sessions = 0;
@@ -143,6 +149,20 @@ export class UsageHistoryStore {
         if (!recordingSince || day < recordingSince) recordingSince = day;
       }
       recordedPlatforms.add(record.platform);
+      // An environment is named by its newest stamped row, whichever platform
+      // or range that row falls in: the name belongs to the environment.
+      if (record.environmentName || record.projectName) {
+        const previous = environmentLabels.get(record.environmentId);
+        if (!previous || record.lastSeenAt > previous.at) {
+          environmentLabels.set(record.environmentId, {
+            label: {
+              ...(record.environmentName ? { environmentName: record.environmentName } : {}),
+              ...(record.projectName ? { projectName: record.projectName } : {}),
+            },
+            at: record.lastSeenAt,
+          });
+        }
+      }
       if (query.platform && record.platform !== query.platform) continue;
       if (query.environmentId && record.environmentId !== query.environmentId) continue;
       let sessionCounted = false;
@@ -206,11 +226,16 @@ export class UsageHistoryStore {
       .sort((left, right) => right.totals.totalTokens - left.totals.totalTokens);
 
     const environments: UsageEnvironmentSummary[] = [...environmentTotals.entries()]
-      .map(([environmentId, value]) => ({
-        environmentId,
-        totals: value,
-        sessions: environmentSessions.get(environmentId) ?? 0,
-      }))
+      .map(([environmentId, value]) => {
+        const label = environmentLabels.get(environmentId)?.label;
+        return {
+          environmentId,
+          ...(label?.environmentName ? { name: label.environmentName } : {}),
+          ...(label?.projectName ? { projectName: label.projectName } : {}),
+          totals: value,
+          sessions: environmentSessions.get(environmentId) ?? 0,
+        };
+      })
       .sort((left, right) => right.totals.totalTokens - left.totals.totalTokens);
 
     return {
@@ -226,6 +251,31 @@ export class UsageHistoryStore {
       ...(recordingSince ? { recordingSince } : {}),
       recordedPlatforms: AGENT_PLATFORMS.filter((platform) => recordedPlatforms.has(platform)),
     };
+  }
+
+  /**
+   * Stamps the environment's names onto every row it owns, so its usage keeps
+   * them after the environment is deleted. Returns how many rows changed.
+   * Rows only: an environment that never recorded usage leaves nothing behind.
+   */
+  labelEnvironment(environmentId: string, label: UsageEnvironmentLabel): number {
+    if (!environmentId) return 0;
+    const database = this.options.database();
+    if (!database.hasStore(USAGE_HISTORY_STORE)) return 0;
+    const keys = database
+      .rows(USAGE_HISTORY_STORE)
+      .list({ owner: environmentId, values: false })
+      .map((entry) => entry.key);
+    let changed = 0;
+    for (const key of keys) {
+      const updated = database.updateStoreRow<boolean>(USAGE_HISTORY_STORE, key, (current) => {
+        const record = parseUsageSessionRecord(current);
+        if (!record || !applyLabelToRecord(record, label)) return { result: false };
+        return { result: true, value: record };
+      });
+      if (updated) changed += 1;
+    }
+    return changed;
   }
 
   /** Removes every row of one environment. Only an explicit purge calls this. */

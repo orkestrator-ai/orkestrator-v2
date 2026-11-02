@@ -10,8 +10,8 @@ import {
 } from "./build-chat-tab-test-support";
 
 /**
- * The build tab header: the pipeline's progress at the top right and the Key
- * information panel beside it.
+ * The build tab header: the pipeline's progress under the title, then the row
+ * of equal icon buttons holding the Key information panel and the graph toggle.
  */
 
 afterAll(restoreBuildChatTabMocks);
@@ -87,19 +87,32 @@ describe("BuildChatTab header", () => {
     cleanup();
   });
 
-  test("puts the pipeline's progress in the header, right of the key information button", () => {
+  test("puts the pipeline's progress after the phase and agent under the title", () => {
     renderTab(reviewed);
 
-    const toolbar = within(header()).getByTestId("pipeline-toolbar");
-    expect(within(toolbar).getByRole("button", { name: "Pipeline" })).toBeTruthy();
-    expect(within(toolbar).getByTestId("pipeline-progress").textContent).toMatch(
-      /^\d+ of \d+ steps · /,
-    );
-    // The toolbar is the header's last element: the top right.
-    const children = Array.from(header().children);
-    expect(children.at(-1)!.contains(toolbar)).toBe(true);
-    const keyButton = within(header()).getByRole("button", { name: /Key information/ });
-    expect(children.indexOf(keyButton)).toBe(children.length - 2);
+    const summary = within(header()).getByTestId("build-pipeline-header-summary");
+    const progress = within(summary).getByTestId("pipeline-progress");
+    expect(progress.textContent).toMatch(/^\d+ of \d+ steps · /);
+    expect(progress.closest("div")?.textContent).toMatch(/Codex·\d+ of \d+ steps/);
+  });
+
+  test("lays the header's actions out as one row of equal icon buttons", () => {
+    renderTab({ ...pipeline, phase: "building", backendRevision: 95 });
+
+    const buttons = within(
+      within(header()).getByTestId("build-pipeline-header-actions"),
+    ).getAllByRole("button");
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Restart Build Stage",
+      "Pause",
+      "Cancel",
+      "Key information",
+      "Pipeline",
+    ]);
+    for (const button of buttons) {
+      expect(button.getAttribute("data-size")).toBe("icon");
+      expect(button.textContent?.trim()).toBe("");
+    }
   });
 
   test("the header's Pipeline toggle still collapses the graph", () => {
@@ -169,6 +182,33 @@ describe("BuildChatTab key information", () => {
     expect(within(verification).getByText("Pros were missing.")).toBeTruthy();
 
     expect(within(panel).getByText(/by Verify · round 1/)).toBeTruthy();
+  });
+
+  test("renders code chips throughout the recorded brief", () => {
+    renderTab({
+      ...reviewed,
+      keyInformation: {
+        ...keyInformation,
+        statement: "Run (`npm test`),`bun test`.",
+        context: "See src/a.ts:12 and App.js; Node.js uses example.com/a.ts.",
+        solution: "Update Index.js.",
+        workDone: ["Changed src/b.ts#L12"],
+      },
+      backendRevision: 96,
+    });
+    const panel = openPanel();
+    expect(Array.from(panel.querySelectorAll("code"), (code) => code.textContent)).toEqual([
+      "npm test",
+      "bun test",
+      "src/a.ts",
+      "App.js",
+      "Index.js",
+      "src/b.ts",
+    ]);
+    expect(within(panel).getByRole("region", { name: "Context" }).textContent).toContain(
+      "See src/a.ts:12 and App.js; Node.js uses example.com/a.ts.",
+    );
+    expect(panel.textContent).not.toContain("`");
   });
 
   test("names the first section Problem by default", () => {

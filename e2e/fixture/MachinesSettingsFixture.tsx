@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
+import { FederationProvider } from "../../apps/web/src/components/federation/FederationProvider";
+import { MachineCpuReadings } from "../../apps/web/src/components/federation/MachineCpuReadings";
 import { AppDialogHost } from "../../apps/web/src/components/layout/AppDialogHost";
+import { SystemUsageIndicator } from "../../apps/web/src/components/layout/SystemUsageIndicator";
 import { portalStore } from "../../apps/web/src/lib/portal/portal-store";
 import { onGlobalSettingsCloseRequest } from "../../apps/web/src/lib/settings-navigation";
 import { useAppDialogStore } from "../../apps/web/src/stores/appDialogStore";
@@ -68,6 +71,44 @@ const deskNode = {
   source: "portal",
 };
 
+// `?fleet`: a command node with several machines, for ordering and the CPU readings.
+const fleetMode = new URLSearchParams(window.location.search).has("fleet");
+const FLEET_CPU: Record<string, number> = {
+  bk_self: 45,
+  bk_build: 12,
+  bk_laptop: 3,
+  bk_rack: 80,
+  bk_spare: 27,
+};
+const fleetNodes = (
+  [
+    ["build", "Build box", "blue", "connected"],
+    ["laptop", "Laptop", "amber", "connected"],
+    ["rack", "Rack", "orange", "connected"],
+    ["spare", "Spare", "rose", "connected"],
+    ["attic", "Attic", "slate", "unavailable"],
+  ] as const
+).map(([id, displayName, colorToken, state]) => ({
+  ...deskNode,
+  nodeId: `bk_${id}`,
+  displayName,
+  colorToken,
+  fallbackName: id,
+  routes: [{ ...deskNode.routes[0]!, origin: `https://${id}.tailnet.ts.net` }],
+  connection: { ...deskNode.connection, state },
+}));
+let fleetMachineOrder: string[] = [];
+
+function usageSample(nodeId: string) {
+  return {
+    cpuPercent: FLEET_CPU[nodeId],
+    ramPercent: 58,
+    gpuPercent: 8,
+    diskPercent: 70,
+    sampledAt: new Date().toISOString(),
+  };
+}
+
 function snapshot(version: string, latestVersion: string | null) {
   return {
     revision: 1,
@@ -109,7 +150,8 @@ function snapshot(version: string, latestVersion: string | null) {
   };
 }
 
-function routed(command: string): unknown {
+function routed(command: string, nodeId: string): unknown {
+  if (command === "get_system_usage") return usageSample(nodeId);
   if (command === "get_host_maintenance") return snapshot("2.25.0", "2.26.0");
   if (command === "get_backend_profile") {
     return { revision: 2, displayName: deskNode.displayName, colorToken: "teal", updatedAt: "t" };
@@ -175,9 +217,38 @@ function installMachinesFixture() {
               revision: 1,
               mode: "command",
               suspended: false,
-              nodes: [deskNode],
+              nodes: fleetMode ? fleetNodes : [deskNode],
               pendingDetaches: [],
             };
+          case "get_node_summaries":
+            return {
+              selfId: "bk_self",
+              nodes: fleetMode
+                ? fleetNodes.map((view) => ({
+                    nodeId: view.nodeId,
+                    view,
+                    projects: [],
+                    environments: [],
+                    truncated: false,
+                    freshness: "current",
+                    loadedAt: 1,
+                  }))
+                : [],
+            };
+          case "get_portal_layout":
+            return {
+              revision: 1,
+              machineOrder: fleetMachineOrder,
+              projectOrder: [],
+              projectFolders: {},
+              repositoryOrder: [],
+            };
+          case "update_portal_layout":
+            fleetMachineOrder = args?.machineOrder as string[];
+            localStorage.setItem("machines-fixture-machine-order", fleetMachineOrder.join(","));
+            return undefined;
+          case "get_system_usage":
+            return usageSample("bk_self");
           case "get_backend_profile":
             return { revision: 1, displayName: "Studio", colorToken: "violet", updatedAt: "t" };
           case "get_host_maintenance":
@@ -194,6 +265,17 @@ function installMachinesFixture() {
                   snapshot: hostAccounts(),
                   signIns: hostSignIns(),
                 },
+                ...(fleetMode
+                  ? fleetNodes.map((node) => ({
+                      nodeId: node.nodeId,
+                      name: node.displayName,
+                      colorToken: node.colorToken,
+                      self: false,
+                      state: "ok",
+                      snapshot: hostAccounts(),
+                      signIns: hostSignIns(),
+                    }))
+                  : []),
               ],
             };
           // The overview re-reads a machine once its event subscription is in place.
@@ -202,7 +284,10 @@ function installMachinesFixture() {
           case "read_host_agent_sign_ins":
             return hostSignIns();
           case "invoke_on_node":
-            return { outcome: "ok", result: routed(String(args?.command)) };
+            return {
+              outcome: "ok",
+              result: routed(String(args?.command), String(args?.nodeId)),
+            };
           case "add_node":
             localStorage.setItem("machines-fixture-add-node", JSON.stringify(args));
             return { ...deskNode, nodeId: "bk_new", displayName: "New" };
@@ -213,7 +298,10 @@ function installMachinesFixture() {
       return value as T;
     },
     connections: {
-      list: async () => connections,
+      list: async () =>
+        fleetMode
+          ? { ...connections, connections: connections.connections.slice(0, 1) }
+          : connections,
       probe: async () => true,
       connect: async (input: ConnectToRemoteInput) => {
         localStorage.setItem("machines-fixture-connect", JSON.stringify(input));
@@ -233,6 +321,22 @@ export function MachinesSettingsFixture() {
   useState(installMachinesFixture);
   const [showMachines, setShowMachines] = useState(true);
   useEffect(() => onGlobalSettingsCloseRequest(() => setShowMachines(false)), []);
+  if (fleetMode) {
+    return (
+      <FederationProvider>
+        <header
+          data-testid="fleet-title-bar"
+          className="flex h-[var(--desktop-title-bar-height)] items-center justify-end border-b border-border/80 bg-chrome pr-1.5"
+        >
+          <MachineCpuReadings />
+          <SystemUsageIndicator />
+        </header>
+        <main className="p-4">
+          <MachinesSettings />
+        </main>
+      </FederationProvider>
+    );
+  }
   if (new URLSearchParams(window.location.search).has("accountLayout")) {
     return (
       <FullscreenSettingsLayout

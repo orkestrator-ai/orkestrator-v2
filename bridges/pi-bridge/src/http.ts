@@ -1,3 +1,5 @@
+import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
+import { applyBridgeLogPolicy } from "@orkestrator/protocol/node/bridge-log-policy";
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
 /**
  * The bridge's HTTP surface.
@@ -147,6 +149,9 @@ import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
 } from "@orkestrator/protocol/session-activity-batch";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.pi");
 
 class HttpError extends Error {
   constructor(
@@ -257,6 +262,11 @@ export async function route(
       });
       return json(response, answer.status, answer.body);
     }
+    // The live logging settings. Metadata only; see `applyBridgeLogPolicy`.
+    if (url.pathname === BRIDGE_LOG_POLICY_ROUTE && request.method === "POST") {
+      const answer = applyBridgeLogPolicy(await readJson(request));
+      return json(response, answer.status, answer.body);
+    }
     const handled = await routeGlobal(request, response, url);
     if (handled) return;
     return await routeSession(request, response, url, clientSignal);
@@ -276,7 +286,7 @@ export async function route(
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
     }
-    console.error("[pi-bridge] Unexpected HTTP route failure");
+    log.error("http.route-failed");
     return json(response, 500, { error: "Internal bridge error" });
   }
 }

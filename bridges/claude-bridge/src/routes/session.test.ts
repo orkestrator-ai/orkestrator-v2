@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, test, mock, beforeEach, spyOn } from "bun:test";
 import { Hono } from "hono";
 import { gunzipSync } from "node:zlib";
+import { configureLogger } from "@orkestrator/protocol/logger";
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
@@ -2848,6 +2849,7 @@ describe("session routes", () => {
         },
       ]);
       const debugSpy = spyOn(console, "debug").mockImplementation(() => undefined);
+      configureLogger({ areaLevels: { "bridge.claude": "debug" } });
 
       try {
         const res = await jsonRequest("POST", "/session/s-1/questions/q-private/answer", {
@@ -2856,12 +2858,11 @@ describe("session routes", () => {
 
         expect(res.status).toBe(200);
         expect(JSON.stringify(debugSpy.mock.calls)).not.toContain(secretAnswer);
-        expect(debugSpy).toHaveBeenCalledWith("[session] Prepared question answers", {
-          questionId: "q-private",
-          questionCount: 1,
-          answerCount: 1,
-        });
+        expect(debugSpy).toHaveBeenCalledWith(
+          "[bridge.claude] question.answers-prepared questionId=q-private questionCount=1 answerCount=1",
+        );
       } finally {
+        configureLogger({ areaLevels: {} });
         debugSpy.mockRestore();
       }
     });
@@ -3244,7 +3245,7 @@ describe("session routes", () => {
           toolUseId: "tool-private",
         },
       ]);
-      const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
+      const logSpy = spyOn(console, "info").mockImplementation(() => undefined);
 
       try {
         const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-private/respond", {
@@ -3254,12 +3255,9 @@ describe("session routes", () => {
 
         expect(res.status).toBe(200);
         expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateFeedback);
-        expect(logSpy).toHaveBeenCalledWith("[session] Plan approval response received", {
-          sessionId: "s-1",
-          approvalId: "a-private",
-          approved: false,
-          hasFeedback: true,
-        });
+        expect(logSpy).toHaveBeenCalledWith(
+          "[bridge.claude] plan-approval.response-received sessionId=s-1 approvalId=a-private approved=false hasFeedback=true",
+        );
       } finally {
         logSpy.mockRestore();
       }
@@ -3873,8 +3871,9 @@ describe("persisted session routes", () => {
         expect(await jsonBody(res)).toEqual({ status: "processing" });
         await Promise.resolve();
         expect(logged).toHaveBeenCalledWith(
-          "[session] Claude compaction failed:",
-          expect.objectContaining({ message: "provider disconnected" }),
+          expect.stringContaining(
+            '[bridge.claude] session.compact-failed error.name=Error error.message="provider disconnected"',
+          ),
         );
       } finally {
         console.error = originalError;

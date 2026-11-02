@@ -5,6 +5,7 @@ import type {
   CoordinatorResearchMcpServer,
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
+import type { LogDetail } from "@orkestrator/protocol/log-policy";
 import type { MultiReviewEngine } from "@orkestrator/protocol/multi-review";
 import {
   isShippedReviewLensPresetList,
@@ -14,6 +15,10 @@ import {
   DEFAULT_SESSION_TITLE_GENERATION_POLICY,
   type SessionTitleGenerationPolicy,
 } from "@orkestrator/protocol/session-title-generation";
+import {
+  DEFAULT_TERMINAL_LINK_TARGET,
+  type TerminalLinkDefaultTarget,
+} from "@orkestrator/protocol/terminal-link-target";
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
 import type { GlobalConfig, PreferredEditor, TerminalAppearance } from "@/types";
@@ -44,6 +49,7 @@ export interface CoreFieldsSnapshot {
   sessionTitleGeneration: SessionTitleGenerationPolicy;
   terminalAppearance: TerminalAppearance;
   terminalScrollback: number;
+  terminalLinkDefaultTarget: TerminalLinkDefaultTarget;
   terminalHistoryEnabled: boolean;
   terminalHistoryRetentionMb: number;
   terminalHistoryGlobalRetentionMb: number;
@@ -53,6 +59,7 @@ export interface CoreFieldsSnapshot {
   experimentalGraphs: boolean;
   debugLogging: boolean;
   debugLogRetentionDays: number;
+  logDetail: LogDetail;
   webClientEnabled: boolean;
   reviewInstruction: string;
   /** Resolved: the shipped five when none are stored. */
@@ -88,6 +95,7 @@ const STORED_AS_IS = [
   "experimentalGraphs",
   "debugLogging",
   "debugLogRetentionDays",
+  "logDetail",
   "webClientEnabled",
   "multiReviewEngine",
 ] as const satisfies readonly (keyof CoreFieldsSnapshot & keyof GlobalConfig)[];
@@ -104,6 +112,7 @@ const ABSENT_WHEN: {
   claudeBackgroundCommandLimitHours: (value) =>
     value === DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,
   sessionTitleGeneration: (value) => value === DEFAULT_SESSION_TITLE_GENERATION_POLICY,
+  terminalLinkDefaultTarget: (value) => value === DEFAULT_TERMINAL_LINK_TARGET,
   reviewInstruction: (value) => value === DEFAULT_REVIEW_INSTRUCTION,
   reviewLensPresets: (value) => isShippedReviewLensPresetList(value),
 };

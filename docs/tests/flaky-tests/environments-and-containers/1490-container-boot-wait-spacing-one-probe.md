@@ -20,3 +20,77 @@
 - **After the aggregate completed:** `mise run test:logged -- --name merge-container-readiness-after-aggregate -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the complete unchanged owner, exit 0 (7.6 s).
 - **Evidence:** `orkestrator-test-run.LzSOdM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, enclosing `orkestrator-test-run.WvH9mv/merge-default-tests.log.gz`, and the first owner rerun in `orkestrator-test-run.cSDOnQ`, under the host temporary directory.
 - **Assessment:** host contention is consistent with the result, but remains unconfirmed. The owner, readiness implementation and lifecycle fixtures matched the original main merge parent exactly; no implementation, assertion, deadline or skip changed. The aggregate remains non-green.
+
+
+
+## Safe error formatting review recurrence — 2026-11-01
+
+- **Original command:** `mise run test` against `ae4084d15c71e0e0644530b9c38b581bb9b280be`; captured package `.orkestrator/review-artifacts/review-validation-3ad92a25-6e3a-4d7c-876c-260073a2f6f9/review-package-889ea18990f90016b53a23fec9903ab237ce65d41578ca56458956ddd95071d4.json`.
+- **Worker configuration:** concurrent workspace/root/bridge/protocol groups, reservations 5/1/2/1; the captured backend parallel setting is not printed in the retained output.
+- **Failure:** the same test expected at least two probes but received one at line 441 (476.96 ms, 450 ms deadline). Workspace was the sole failing group; root, bridges and protocol lockfile passed.
+- **Suite counts:** backend 13,008 passed, 97 skipped, one failed across 13,106 tests in 870 files (272.40 s).
+- **Evidence:** original `validation-04.stdout.txt` lines 3482–3498 in that artifact directory; output is preserved unchanged.
+- **Isolated rerun:** `mise run test:logged -- --name r5-readiness-owner -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures` passed (exit 0, 6.8 s) without changing this test or the readiness implementation.
+- **Assessment:** credible recurrence of the existing timing flake. This establishes isolated success, not its cause; no assertion, deadline or skip was changed. The exact failed command was rerun through `mise run test:logged -- --name r5-default-suite-rerun -- mise run test` and passed all four groups (exit 0, 338.5 s). No root-cause fix to this existing flake is claimed.
+
+
+## Safe error formatting second review — 2026-11-02
+
+Preparation ran `mise run test` at `de952cc0accc820c6d57425323428cc993794a54`.
+The backend used three isolated workers and reported 13,006 passed, 97 skipped,
+and five failed across 870 files (440.83 s). Original evidence is preserved at
+`.orkestrator/review-artifacts/review-validation-b03e0cc0-820a-4723-8d36-20d1666dfe82/validation-04.stdout.txt`.
+
+This case observed one probe rather than at least two at line 441 (881.83 ms).
+
+The complete unchanged owner passed on the fix branch as part of
+`mise run test:logged -- --name r5-round2-recorded-owners -- bun test --cwd apps/backend ./tests/container-readiness.test.ts ./src/core/commands-agent-tools.test.ts ./tests/codex-subagent-cards.test.ts ./src/core/nodes/node-files.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 14.2 s; passing per-file counts were not retained by the runner).
+
+A detached `origin/main` worktree at `9dbd7f1cc9981789ab352056bea84a1007c99959`
+used its own `mise exec -- bun install --frozen-lockfile` dependencies.
+Its complete owner check was `mise run test:logged -- --name r5-round2-main-readiness -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures` (7.6 s).
+The targeted repeat command was `mise run test:logged -- --name r5-round2-main-readiness-repeat -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --test-name-pattern 'a probe that comes back early' --rerun-each=20 --parallel=1 --only-failures`.
+Result: 17 passed, 3 failed (11.7 s); the same line-441 assertion received one probe. Failure evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.IhLGH8/`.
+
+The same failure on main establishes independence from this branch. The owner
+and implementation are unchanged relative to main. No assertion, delay, skip,
+or unrelated implementation was changed; the existing flake remains open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+Seen again on 2026-11-02 in the shared-logger bridge migration: `mise run test`, in the workspace group, expected at least 2 and received 1 after 453.07 ms. The owner then passed alone three times on the branch and three times on `f80a181e6` (20 pass, 0 fail each), with the host at a load average near 26:
+
+```sh
+cd apps/backend && bun test ./tests/container-readiness.test.ts --preload ../../tests/setup-node.ts --only-failures
+```
+
+That change does not touch this test or its readiness code, so this adds a sighting, not a cause.
+
+
+## Live logging merge validation — 2026-11-02
+
+`mise run test:logged -- --name merge-default -- mise run test`, merging
+`668a2f7431757be53815855debe23450f12019e5` into `b7a783e0806df3ce99150c35f8a906a3751d11a2`,
+repeated the line-441 assertion: expected at least two probes, received one
+(465.62 ms). The backend used three isolated workers and reported 13,115 passed,
+97 skipped and one failed across 878 files (178.67 s). The aggregate took
+282.3 s; bridge and protocol groups passed. Other terminal-link assertions and
+two repository checks also failed in the workspace/root groups.
+
+The complete unchanged owner passed alone (exit 0, 5.8 s):
+`mise run test:logged -- --name merge-readiness-owner -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures`.
+The logged runner retained no passing per-file counts. Neither this owner nor
+its readiness implementation was edited. This is another observation of the
+existing intermittent case; no assertion, deadline or skip changed.
+
+Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.obbBHe/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

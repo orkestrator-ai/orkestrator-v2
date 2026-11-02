@@ -406,6 +406,18 @@ export interface ContainerLifecycleSnapshot {
   bootPhase: ContainerBootPhase | null;
 }
 
+/**
+ * Published after every durable lifecycle write, carrying the new snapshot.
+ * Its `revision` lets a client that also reads the snapshot keep the newer of
+ * the two; a client that may have missed events re-reads on resync.
+ */
+export const CONTAINER_LIFECYCLE_EVENT = "container-lifecycle-updated";
+
+export interface ContainerLifecycleEvent {
+  environmentId: string;
+  snapshot: ContainerLifecycleSnapshot;
+}
+
 export function emptyContainerLifecycle(): EnvironmentContainerLifecycle {
   return {
     schemaVersion: CONTAINER_LIFECYCLE_SCHEMA_VERSION,

@@ -11,6 +11,16 @@ import {
 export const LOG_LEVEL_ENV = "ORKESTRATOR_LOG_LEVEL";
 /** `text` (the default) or `json` for JSON lines. */
 export const LOG_FORMAT_ENV = "ORKESTRATOR_LOG_FORMAT";
+/** Set by the backend on a local bridge whose stdio it reads and relays. */
+export const BRIDGE_LOG_RELAY_ENV = "ORKESTRATOR_BRIDGE_LOG_RELAY";
+
+// Keep a bridge's explicit override private after consuming its startup env.
+// Agent/tool children must not inherit it, but live settings still respect it.
+const bridgeLogLevelOverrides = new WeakMap<NodeJS.ProcessEnv, string | undefined>();
+
+export function logLevelEnvironmentValue(env: NodeJS.ProcessEnv): string | undefined {
+  return env[LOG_LEVEL_ENV] ?? bridgeLogLevelOverrides.get(env);
+}
 
 export interface ParsedLogLevels {
   level?: LogLevel;
@@ -71,4 +81,20 @@ export function configureLoggerFromEnvironment(
   if (requestedFormat && requestedFormat !== "json" && requestedFormat !== "text") {
     log.warn("config.invalid", { variable: LOG_FORMAT_ENV, entries: 1 });
   }
+}
+
+/**
+ * A bridge entrypoint's logging setup. A bridge the backend launched locally
+ * writes JSON lines so the backend can re-emit each at its own level; any other
+ * (a container's, one started by hand) follows the environment. These
+ * startup settings are consumed so agent commands do not inherit the bridge's
+ * format, level or relay request.
+ */
+export function configureBridgeLogger(env: NodeJS.ProcessEnv = process.env): void {
+  const relayToSupervisor = env[BRIDGE_LOG_RELAY_ENV] === "1";
+  bridgeLogLevelOverrides.set(env, env[LOG_LEVEL_ENV]);
+  delete env[BRIDGE_LOG_RELAY_ENV];
+  configureLoggerFromEnvironment(env, { relayToSupervisor });
+  delete env[LOG_FORMAT_ENV];
+  delete env[LOG_LEVEL_ENV];
 }

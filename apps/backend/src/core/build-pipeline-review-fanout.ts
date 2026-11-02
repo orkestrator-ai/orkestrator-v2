@@ -461,6 +461,30 @@ export class BuildPipelineReviewFanout {
   }
 
   private reviewHost(pipeline: BuildPipeline, targetBranch: string): ReviewFanoutHost {
+    // The package prompt is the same for every reviewer the pass dispatches,
+    // and building it reads the review instruction and the project notes, so
+    // it is built once per pass for the package it describes. A failed build
+    // is dropped, so the next reviewer reads again as it did before.
+    let sharedPrompt: { reviewPackage: object; prompt: Promise<string> } | undefined;
+    const sharedReviewerPrompt = (
+      reviewPackage: NonNullable<BuildPipeline["reviewPackage"]>,
+    ): Promise<string> => {
+      if (sharedPrompt?.reviewPackage === reviewPackage) return sharedPrompt.prompt;
+      const entry = {
+        reviewPackage,
+        prompt: (async () =>
+          createDiscoveryPrompt({
+            reviewPackage,
+            reviewInstruction: await this.deps.reviewInstruction(),
+            context: await this.deps.reviewContext(pipeline),
+          }))(),
+      };
+      sharedPrompt = entry;
+      entry.prompt.catch(() => {
+        if (sharedPrompt === entry) sharedPrompt = undefined;
+      });
+      return entry.prompt;
+    };
     return {
       workflowId: pipeline.id,
       targetBranch,
@@ -568,11 +592,7 @@ export class BuildPipelineReviewFanout {
         // the only per-reviewer text, and they come last, in that order.
         return withBuildStepInstructions(
           [
-            createDiscoveryPrompt({
-              reviewPackage,
-              reviewInstruction: await this.deps.reviewInstruction(),
-              context: await this.deps.reviewContext(pipeline),
-            }),
+            await sharedReviewerPrompt(reviewPackage),
             reviewerPanelTail(index + 1, count, reviewer.lens),
           ].join("\n\n"),
           pipelineReviewerInstructions(pipeline, index),

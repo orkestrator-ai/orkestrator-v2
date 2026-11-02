@@ -26,7 +26,10 @@ import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
 import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShellLayout";
 import { getApplicationTitle } from "@/lib/application-title";
-import { useEnvironmentIdNameSignal } from "@/hooks/useEnvironmentNameSignal";
+import {
+  useEnvironmentIdNameSignal,
+  useShimmerRequiresChecks,
+} from "@/hooks/useEnvironmentNameSignal";
 import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import { viewFromNodeSummary } from "@/components/federation/useMachineViews";
 import { AgentInfoButton } from "./AgentInfoButton";
@@ -37,6 +40,7 @@ import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
 import { GlobalSettingsHost } from "./GlobalSettingsHost";
 import { BugReportSheet } from "@/components/bug-report/BugReportSheet";
+import { MachineCpuReadings } from "@/components/federation/MachineCpuReadings";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
 import {
   RealmAgentInfoTrigger,
@@ -95,6 +99,7 @@ function useFilesPanelPullRequestWidth(open: boolean) {
 /** Names of the other node's project and environment the central region shows. */
 function useRemoteWorkspaceNames(active: RemoteWorkspaceSelection | null) {
   const { portalState } = useFederation();
+  const requireChecks = useShimmerRequiresChecks();
   return useMemo(() => {
     if (!active) return null;
     const node = portalState.nodes.find((candidate) => candidate.nodeId === active.nodeId);
@@ -109,10 +114,10 @@ function useRemoteWorkspaceNames(active: RemoteWorkspaceSelection | null) {
       environmentName: environment?.name ?? null,
       readyToMerge:
         node && environment
-          ? isNodeEnvironmentReadyToMerge(environment, viewFromNodeSummary(node))
+          ? isNodeEnvironmentReadyToMerge(environment, viewFromNodeSummary(node), requireChecks)
           : false,
     };
-  }, [active, portalState.nodes]);
+  }, [active, portalState.nodes, requireChecks]);
 }
 
 export function AppShell({ children }: AppShellProps) {
@@ -289,7 +294,7 @@ export function AppShell({ children }: AppShellProps) {
           titleNameSignal={
             remoteNames ? (remoteNames.readyToMerge ? "merge-ready" : null) : localNameSignal
           }
-          filesPanelOpen={filesPanelOpen}
+          filesPanelOpen={filesPanelOpen && !remoteShown}
           centralPanelStyle={centralPanelThemeVars}
           actionBar={<ActionBar presentation="grid" />}
           agentInfoButton={
@@ -347,6 +352,7 @@ export function AppShell({ children }: AppShellProps) {
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
+              <MachineCpuReadings />
               {/*
                 Another node's workspace reports its agent and machine, so
                 they show here as this node's do.

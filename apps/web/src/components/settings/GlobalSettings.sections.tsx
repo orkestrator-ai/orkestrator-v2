@@ -3,6 +3,9 @@ import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettin
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import { DataSavingSetting } from "./DataSavingSetting";
+import { PreviewSettings } from "./PreviewSettings";
+import { TerminalLinkTargetSetting } from "./TerminalLinkTargetSetting";
+import { WebAnnotationSettings } from "./WebAnnotationSettings";
 import type {
   CoordinatorResearchMcpServer,
   CoordinatorWebResearch,
@@ -33,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { LogDetailSettings } from "./LogDetailSettings";
 import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 import * as backend from "@/lib/backend";
@@ -317,6 +321,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     terminalBackgroundColor,
     terminalScrollback,
     setTerminalScrollback,
+    terminalLinkDefaultTarget,
+    setTerminalLinkDefaultTarget,
     terminalHistoryEnabled,
     setTerminalHistoryEnabled,
     terminalHistoryRetentionMb,
@@ -335,6 +341,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setDebugLogging,
     debugLogRetentionDays,
     setDebugLogRetentionDays,
+    logDetail,
+    setLogDetail,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,
@@ -852,7 +860,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <SettingsRow
             label="Require checks to pass"
             htmlFor="auto-merge-require-checks"
-            description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass."
+            description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass. An environment's name shimmers green by the same rule."
           >
             <Switch
               id="auto-merge-require-checks"
@@ -2164,7 +2172,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         ) : null}
       </div>
       <div className="space-y-3">
-        <SettingsSectionHeader title="Save Logs for Debugging">
+        <SettingsSectionHeader title="Save Logs to Disk">
           Write application logs to disk for troubleshooting
         </SettingsSectionHeader>
         <button
@@ -2219,9 +2227,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </p>
           )}
           <p className="text-xs text-muted-foreground">
-            Expired production logs are removed at startup and periodically while the app runs. Logs
-            also roll over to a new file once one grows large, and the oldest are dropped if the
-            directory as a whole gets too big.
+            While saving is on, expired production logs are removed periodically. Logs also roll
+            over to a new file once one grows large, and the oldest are dropped if the directory as
+            a whole gets too big.
           </p>
         </div>
 
@@ -2299,9 +2307,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </AlertDialog>
         </div>
         <p className="text-xs text-muted-foreground/60">
-          Enabling logging or changing retention requires an app restart to take effect.
+          Changes apply straight away, with no restart and without interrupting running agents.
         </p>
       </div>
+      <LogDetailSettings value={logDetail} onChange={setLogDetail} />
     </SettingsPageLayout>
   );
 
@@ -2421,6 +2430,16 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     grok: () => renderPlatform("grok"),
     pi: () => renderPlatform("pi"),
     terminal: renderTerminal,
+    previews: () => (
+      <SettingsPageLayout title="Browser previews">
+        <TerminalLinkTargetSetting
+          value={terminalLinkDefaultTarget}
+          onChange={setTerminalLinkDefaultTarget}
+        />
+        <PreviewSettings />
+        <WebAnnotationSettings />
+      </SettingsPageLayout>
+    ),
     network: renderNetwork,
     "web-client": renderWebClient,
     container: renderContainer,

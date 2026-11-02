@@ -150,3 +150,62 @@ skip changed; the isolated pass does not make the aggregate green.
 - **Complete unchanged owning-file rerun:** `mise run test:logged -- --name merge-codex-subagent-isolated -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` passed (one test, 1.1 s).
 - **Evidence:** `/tmp/orkestrator-test-run.egszoc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.DtSUk4/merge-tests-final.log.gz`.
 - **Assessment:** recurrence of the existing cold-restart observation mismatch. The first default aggregate's workspace group passed. No owning-test assertion, timeout or skip was changed; the isolated pass does not make the final aggregate green.
+
+## Live logging review repair validation — 2026-11-01/02
+
+`mise run test:logged -- --name review-repair-default -- mise run test` used
+workspace/root/bridges/protocol reservations 5/1/2/1 on a shared macOS host.
+The cold-restart card case expected `idle`, received `recovering` at line 170
+(1,745.45 ms). The complete unchanged owner passed alone, exit 0 in 3.7 s:
+`mise run test:logged -- --name codex-subagent-cards-owner -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures`.
+
+The outer command reached its 1,800-second guard after a 925-second capacity
+wait, so final workspace totals were unavailable. Evidence remains in the raw
+`orkestrator-test-run.BSqVX9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+and the outer compressed `orkestrator-test-run.JX4kAV/review-repair-default.log.gz`
+below the host temporary directory. No implementation, assertion, deadline or
+skip changed. This repeats the known intermittent cold-restart projection state;
+its cause remains unconfirmed.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.
+
+## Safe error formatting second review — 2026-11-02
+
+Preparation ran `mise run test` at `de952cc0accc820c6d57425323428cc993794a54`.
+The backend used three isolated workers and reported 13,006 passed, 97 skipped,
+and five failed across 870 files (440.83 s). Original evidence is preserved at
+`.orkestrator/review-artifacts/review-validation-b03e0cc0-820a-4723-8d36-20d1666dfe82/validation-04.stdout.txt`.
+
+This case observed cold.turn.phase was recovering rather than idle at line 170 (1242.23 ms).
+
+The complete unchanged owner passed on the fix branch as part of
+`mise run test:logged -- --name r5-round2-recorded-owners -- bun test --cwd apps/backend ./tests/container-readiness.test.ts ./src/core/commands-agent-tools.test.ts ./tests/codex-subagent-cards.test.ts ./src/core/nodes/node-files.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 14.2 s; passing per-file counts were not retained by the runner).
+
+A detached `origin/main` worktree at `9dbd7f1cc9981789ab352056bea84a1007c99959`
+used its own `mise exec -- bun install --frozen-lockfile` dependencies.
+Its complete owner check was `mise run test:logged -- --name r5-round2-main-child-cards -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` (3.7 s).
+The targeted repeat command was `mise run test:logged -- --name r5-round2-main-cards-repeat -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --test-name-pattern 'each child keeps one card' --rerun-each=20 --parallel=1 --only-failures`.
+Result: 18 passed, 2 failed (25.6 s); one repeated the exact recovering-versus-idle assertion at line 170, and one had a partial child snapshot at line 140. Failure evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.awzwf2/`.
+
+The same failure on main establishes independence from this branch. The owner
+and implementation are unchanged relative to main. No assertion, delay, skip,
+or unrelated implementation was changed; the existing flake remains open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.

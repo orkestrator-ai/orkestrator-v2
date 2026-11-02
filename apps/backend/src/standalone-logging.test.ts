@@ -54,15 +54,29 @@ describe("standalone backend logging", () => {
     expect(env).toEqual({ PATH: "/test/bin" });
   });
 
-  test("stays off for isolated test profiles and when Debug logging is off", async () => {
+  test("stays off for isolated test profiles", async () => {
     const enabled = await dataDirWithDebugLogging(true);
     expect(
       installStandaloneBackendLogging({ dataDir: enabled, runtimeFlavor: "agent-test" }, {}),
     ).toBeNull();
-    const disabled = await dataDirWithDebugLogging(false);
-    expect(
-      installStandaloneBackendLogging({ dataDir: disabled, runtimeFlavor: "production" }, {}),
-    ).toBeNull();
+  });
+
+  test("installs with saving off, so turning it on needs no restart", async () => {
+    const dataDir = await dataDirWithDebugLogging(false);
+    const logging = installStandaloneBackendLogging({ dataDir, runtimeFlavor: "production" }, {});
+    expect(logging).not.toBeNull();
+    try {
+      console.warn("before saving was on");
+      logging!.updateSettings({ enabled: true, retentionDays: 7 });
+      console.warn("after saving was on");
+      await logging!.flush();
+      const files = await readdir(path.join(dataDir, "logs"));
+      const contents = await readFile(path.join(dataDir, "logs", files[0]!), "utf8");
+      expect(contents).toContain("after saving was on");
+      expect(contents).not.toContain("before saving was on");
+    } finally {
+      await logging!.stop();
+    }
   });
 
   test("a stalled flush cannot hold shutdown open", async () => {
@@ -71,7 +85,8 @@ describe("standalone backend logging", () => {
     await stopStandaloneBackendLogging(
       {
         logDirectory: "/unused",
-        retentionDays: 1,
+        settings: () => ({ enabled: true, retentionDays: 1 }),
+        updateSettings: () => {},
         flush: () => never,
         stop: () => never,
         dropStats: () => ({ droppedEntries: 0, droppedBytes: 0 }),

@@ -34,6 +34,9 @@ import {
   claudeUserSettingsPath,
 } from "./claude-home.js";
 import { readJsonSliceCached } from "./json-file-cache.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 /**
  * SDK plugin config type - matching the SDK's expected format
@@ -192,7 +195,7 @@ export function remapInstalledPlugins(
   installedPlugins: Pick<InstalledPluginsFile, "plugins">,
 ): PluginConfig[] {
   return remapInstalledPluginPaths(pluginsDir, installedPlugins, (installPath) =>
-    console.warn(`[plugin-config] Skipping plugin with unsafe install path: "${installPath}"`),
+    log.warn("plugin.unsafe-path", { path: installPath }),
   );
 }
 
@@ -312,9 +315,7 @@ export async function getPluginsForSdk(
       });
     } else {
       const pluginName = config.path.split("/").pop() || "unknown";
-      console.warn(
-        `[plugin-config] Skipping plugin "${pluginName}" - path does not exist: "${config.path}"`,
-      );
+      log.warn("plugin.path-missing", { pluginName, path: config.path });
     }
   }
 

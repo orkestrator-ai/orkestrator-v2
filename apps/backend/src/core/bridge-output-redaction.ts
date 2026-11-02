@@ -1,7 +1,7 @@
 /**
  * Scrubbing a local bridge's stdout and stderr before the backend logs it.
  *
- * The backend forwards that output to `console.debug`/`console.error`, and with
+ * The backend re-emits that output through its own logger, and with
  * Debug logging on `application-logging.ts` writes it to `<dataDir>/logs`. No
  * bridge prints auth data today, and the auth canary tests hold each auth path
  * to that; this covers a log line nobody has written yet.
@@ -15,6 +15,12 @@
  * Lines are reassembled before redaction, bounded so a bridge that never
  * prints a newline cannot grow the buffer.
  */
+import {
+  emitLogRecord,
+  parseLogRecordLine,
+  writeProcessOutputLine,
+  type LogRecord,
+} from "@orkestrator/protocol/logger";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 
 const EXTRA_RULES: Array<{ pattern: RegExp; replacement: string }> = [
@@ -68,4 +74,30 @@ export function createBridgeOutputForwarder(
       write(redactBridgeOutput(rest));
     },
   };
+}
+
+/**
+ * One forwarded chunk of already redacted output, which may hold several lines.
+ * Each is its own entry, because a bridge's multi-line chunk can mix records with
+ * unstructured output. The forwarder's raw pass protects unstructured output;
+ * recognized records also need a decoded pass because JSON escapes can hide
+ * credential syntax. The parser bounds fields, error causes and stack frames.
+ */
+export function relayBridgeOutput(stream: "stdout" | "stderr", source: string, text: string): void {
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const record = parseLogRecordLine(line);
+    if (record) {
+      const redacted = JSON.parse(
+        JSON.stringify(record, (_key, value: unknown) =>
+          typeof value === "string" ? redactBridgeOutput(value) : value,
+        ),
+      ) as LogRecord;
+      // First, so a record already at the field limit keeps it through the next relay.
+      const { source: _claimed, ...fields } = redacted.fields ?? {};
+      emitLogRecord({ ...redacted, fields: { source, ...fields } });
+    } else {
+      writeProcessOutputLine(stream, `[${source}] ${line}`);
+    }
+  }
 }

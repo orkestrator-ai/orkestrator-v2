@@ -20,6 +20,7 @@ import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-default
 import { normalizeAgentAccountAutoSwitchSettings } from "@orkestrator/protocol/agent-account-auto-switch";
 import { sanitizeReviewLensPresets } from "@orkestrator/protocol/review-lens";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
+import { resolveLogDetail } from "@orkestrator/protocol/log-policy";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
 import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
@@ -37,6 +38,7 @@ import {
   isSessionTitleGenerationPolicy,
   resolveSessionTitleGenerationPolicy,
 } from "@orkestrator/protocol/session-title-generation";
+import { isTerminalLinkDefaultTarget } from "@orkestrator/protocol/terminal-link-target";
 import {
   LEGACY_GLOBAL_AGENT_KEYS,
   LEGACY_REPOSITORY_AGENT_KEYS,
@@ -83,6 +85,13 @@ export function validateSessionTitleGeneration(value: unknown): void {
   }
 }
 
+/** Absent means links open externally. */
+export function validateTerminalLinkDefaultTarget(value: unknown): void {
+  if (value !== undefined && !isTerminalLinkDefaultTarget(value)) {
+    throw new Error("terminalLinkDefaultTarget must be external or browser-tab.");
+  }
+}
+
 export function migrateLegacyReviewInstruction(global: JsonRecord): JsonRecord {
   if (
     global.reviewInstruction === undefined &&
@@ -112,6 +121,7 @@ export function validateConfigReviewInstruction(value: unknown): AppConfig {
   validateCodexMaxConcurrentThreads(global.codexMaxConcurrentThreads);
   validateClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours);
   validateSessionTitleGeneration(global.sessionTitleGeneration);
+  validateTerminalLinkDefaultTarget(global.terminalLinkDefaultTarget);
   return {
     ...value,
     global,
@@ -127,6 +137,7 @@ export function validateGlobalReviewInstruction(value: unknown): AppConfig["glob
   validateCodexMaxConcurrentThreads(global.codexMaxConcurrentThreads);
   validateClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours);
   validateSessionTitleGeneration(global.sessionTitleGeneration);
+  validateTerminalLinkDefaultTarget(global.terminalLinkDefaultTarget);
   return global as unknown as AppConfig["global"];
 }
 
@@ -183,7 +194,13 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.sessionTitleGeneration === undefined
       ? undefined
       : resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration);
+  const terminalLinkDefaultTarget = isTerminalLinkDefaultTarget(global.terminalLinkDefaultTarget)
+    ? global.terminalLinkDefaultTarget
+    : undefined;
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
+  // The one-time upgrade from a single `debugLogging` switch: whoever had it on
+  // keeps saving (the switch itself) and bridge detail (this mapping).
+  const logDetail = resolveLogDetail(global);
   const terminalHistoryRetention = normalizeTerminalHistoryRetention({
     enabled: global.terminalHistoryEnabled,
     sessionMb: global.terminalHistoryRetentionMb,
@@ -330,7 +347,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
     global.claudeBackgroundCommandLimitHours === claudeBackgroundCommandLimitHours &&
     global.sessionTitleGeneration === sessionTitleGeneration &&
+    global.terminalLinkDefaultTarget === terminalLinkDefaultTarget &&
     global.debugLogRetentionDays === debugLogRetentionDays &&
+    JSON.stringify(global.logDetail) === JSON.stringify(logDetail) &&
     global.terminalHistoryEnabled === terminalHistoryRetention.enabled &&
     global.terminalHistoryRetentionMb === terminalHistoryRetention.sessionMb &&
     global.terminalHistoryGlobalRetentionMb === terminalHistoryRetention.globalMb &&
@@ -363,7 +382,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       codexMaxConcurrentThreads,
       claudeBackgroundCommandLimitHours,
       sessionTitleGeneration,
+      terminalLinkDefaultTarget,
       debugLogRetentionDays,
+      logDetail,
       terminalHistoryEnabled: terminalHistoryRetention.enabled,
       terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,
       terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,

@@ -707,9 +707,9 @@ describe("/event/subscribe", () => {
 
   test("closes a subscriber whose handshake replay buffer exceeds its cap", async () => {
     const cursor = __testing.eventRingForTesting().latestRevision;
-    const originalError = console.error;
+    const originalError = console.info;
     const errors: string[] = [];
-    console.error = ((message: unknown) => errors.push(String(message))) as typeof console.error;
+    console.info = ((message: unknown) => errors.push(String(message))) as typeof console.info;
     __testing.setSseRouteTestHooksForTesting({
       maxBufferedReplayEvents: 2,
       afterSubscriberRegistered: () => {
@@ -729,7 +729,7 @@ describe("/event/subscribe", () => {
       ).toHaveLength(0);
       expect(errors.some((message) => message.includes("replay buffer overflowed"))).toBe(true);
     } finally {
-      console.error = originalError;
+      console.info = originalError;
       __testing.setSseRouteTestHooksForTesting(null);
     }
   });

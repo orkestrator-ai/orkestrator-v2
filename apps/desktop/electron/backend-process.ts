@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/node/application-logging";
+import { isLogPolicyChangedRecord } from "@orkestrator/protocol/node/log-policy";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
   isHostMaintenanceSnapshot,
@@ -42,11 +43,30 @@ const desktopLog = createLogger("desktop");
  * level. Anything else (an unmigrated console call, a crash dump) is captured as
  * it always was: stdout as LOG, stderr as ERROR.
  */
-function relayBackendLine(stream: "stdout" | "stderr", line: string): void {
+export function relayBackendLine(
+  stream: "stdout" | "stderr",
+  line: string,
+  onLogPolicyChanged: BackendLogPolicyListener | undefined,
+): void {
   const record = parseLogRecordLine(line);
-  if (record) emitLogRecord(record);
-  else writeProcessOutputLine(stream, `[Backend] ${line}`);
+  if (!record) {
+    writeProcessOutputLine(stream, `[Backend] ${line}`);
+    return;
+  }
+  // Only a hint to re-read `config.json`, because any output can imitate a
+  // record: an imitation costs one read and cannot change what the file says.
+  if (onLogPolicyChanged && isLogPolicyChangedRecord(record)) {
+    onLogPolicyChanged(() => emitLogRecord(record));
+    return;
+  }
+  emitLogRecord(record);
 }
+
+/**
+ * The backend's logging settings changed. Applies them, and calls `audit` to write
+ * the backend's audit line at the point where it reaches the log either way.
+ */
+export type BackendLogPolicyListener = (audit?: () => void) => void;
 
 /** The readiness line, or null for any other stdout line. */
 function parseReadyMessage(line: string): ReadyMessage | null {
@@ -775,6 +795,7 @@ export class BackendProcess {
     credentialSources?: AgentPlatform[];
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
+    onLogPolicyChanged?: BackendLogPolicyListener;
   }): Promise<BackendHttpClient> {
     if (this.client) return this.client;
     if (this.starting) return this.starting;
@@ -809,6 +830,7 @@ export class BackendProcess {
     credentialSources?: AgentPlatform[];
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
+    onLogPolicyChanged?: BackendLogPolicyListener;
   }): Promise<BackendHttpClient> {
     const bun = options.isDev ? "bun" : path.join(options.resourceRoot, "bin", "bun");
     const entry = options.isDev
@@ -898,7 +920,7 @@ export class BackendProcess {
     // must not become a log-entry boundary or split a single record.
     if (child.stderr) {
       createInterface({ input: child.stderr }).on("line", (line) => {
-        relayBackendLine("stderr", line);
+        relayBackendLine("stderr", line, options.onLogPolicyChanged);
       });
     }
 
@@ -949,9 +971,12 @@ export class BackendProcess {
         lines.on("line", (line) => {
           const message = parseReadyMessage(line);
           if (message) finish(message);
-          else relayBackendLine("stdout", line);
+          else relayBackendLine("stdout", line, options.onLogPolicyChanged);
         });
       });
+      // A change this process missed while the backend was down, and the
+      // backend's one-time upgrade of an older config.
+      options.onLogPolicyChanged?.();
       const auth = JSON.parse(await readFile(ready.authFile, "utf8")) as { token?: unknown };
       if (typeof auth.token !== "string" || auth.token.length < 16) {
         throw new Error("Backend authentication file does not contain a valid token");

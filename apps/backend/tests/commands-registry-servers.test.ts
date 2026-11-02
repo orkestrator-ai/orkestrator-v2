@@ -1,5 +1,6 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
 
@@ -32,6 +33,15 @@ import type { CommandContext } from "./command-fixtures";
 type ServerStart = { hostPort: number; wasRunning: boolean; authToken: string };
 
 describe("Electron backend command registry", () => {
+  let previousLogLevel: string | undefined;
+  beforeEach(() => {
+    previousLogLevel = process.env.ORKESTRATOR_LOG_LEVEL;
+    process.env.ORKESTRATOR_LOG_LEVEL = "warn,bridge=debug";
+  });
+  afterEach(() => {
+    if (previousLogLevel === undefined) delete process.env.ORKESTRATOR_LOG_LEVEL;
+    else process.env.ORKESTRATOR_LOG_LEVEL = previousLogLevel;
+  });
   test.each([true, false])(
     "reads OpenCode preferences with XDG_STATE_HOME set: %s",
     async (useXdg) => {
@@ -106,7 +116,7 @@ describe("Electron backend command registry", () => {
       },
     });
     const commands = createCommandRegistry();
-    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+    const warning = captureLogs();
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
@@ -161,13 +171,20 @@ exit 0
           payload: snapshot,
         });
         await Promise.resolve();
-        expect(warning).toHaveBeenCalledWith(
-          "[ElectronBackend] Failed to persist the Claude model catalogue:",
-          "injected host cache failure",
+        expect(warning.records()).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            area: "models",
+            event: "cache.write-failed",
+            fields: expect.objectContaining({
+              agent: "claude",
+              error: expect.objectContaining({ message: "injected host cache failure" }),
+            }),
+          }),
         );
       });
     } finally {
-      warning.mockRestore();
+      warning.restore();
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
       if (pid) {
         try {
@@ -197,6 +214,8 @@ exit 0
     const { context } = createContext(environment, {
       globalConfig: { codexMaxConcurrentThreads: 9, debugLogging: true },
     });
+    const bridgeStarted = mock((_target: { agent: string; baseUrl: string }) => undefined);
+    context.runtime.logPolicy = { bridgeStarted } as never;
     const commands = createCommandRegistry();
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
@@ -253,6 +272,8 @@ exit 0
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("/tmp/codex-bridge-token");
         expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
+        expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
+        expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
         // Skills and templates resolve against the container's workspace and
         // the container user's own CODEX_HOME, never a host path.
@@ -261,6 +282,12 @@ exit 0
         expect(execLog).not.toContain("CODEX_HOME=");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
+        // Every start, including one that finds it running: the service dedupes.
+        expect(bridgeStarted).toHaveBeenCalled();
+        expect(bridgeStarted.mock.calls[0]![0]).toMatchObject({
+          agent: "codex",
+          baseUrl: `http://127.0.0.1:${hostPort}`,
+        });
         expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
         expect(execLog).not.toContain("setsid node");
       });
@@ -397,6 +424,8 @@ exit 0
         expect(execLog).not.toContain("export ACP_PROVIDER=");
         expect(execLog).not.toContain("export ACP_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CURSOR_BRIDGE_TOKEN=");
+        expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
+        expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
         expect(execLog).toContain(
           "export CURSOR_BRIDGE_STATE_DIR=/tmp/orkestrator-cursor-sdk-state",
@@ -666,6 +695,8 @@ exit 0
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain(`export ACP_PROVIDER=${provider}`);
         expect(execLog).toContain("export ACP_BRIDGE_TOKEN=");
+        expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
+        expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
         expect(execLog).toContain(`export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${provider}`);
         expect(execLog).toContain("export HOSTNAME=0.0.0.0");
@@ -834,6 +865,8 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("export PI_AGENT_DIR=/home/node/.pi/agent");
+        expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
+        expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
         // Templates, skills and extensions resolve in the container's workspace.
         expect(execLog).toContain("export CWD=/workspace");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
@@ -1440,6 +1473,8 @@ exit 0
           expect(execLog).not.toContain("export CWD=");
           expect(execLog).toContain("/tmp/claude-bridge-token");
           expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
+          expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
+          expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
           expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
           expect(execLog).toContain(
             "export ORKESTRATOR_GITHUB_CREDENTIAL_FILE='/tmp/orkestrator-ai/github-token'",

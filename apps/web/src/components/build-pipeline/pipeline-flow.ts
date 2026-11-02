@@ -24,6 +24,7 @@ import {
   REVIEW_PACKAGE_SESSION_LABEL,
   isActiveBuildPhase,
   isBranchPushSession,
+  isCancelledBuildPipeline,
   pipelineReachedPullRequestStage,
   isReviewPackagePreparationSession,
   isSupersededPipelineSession,
@@ -336,14 +337,6 @@ function numbered(name: string, occurrence: number): string {
   return occurrence <= 1 ? name : `${name} ${occurrence}`;
 }
 
-function isCancelled(pipeline: BuildPipeline): boolean {
-  return (
-    pipeline.phase === "failed" &&
-    !pipeline.failureContext &&
-    (pipeline.error?.startsWith("Build cancelled") ?? false)
-  );
-}
-
 /** The phase the pipeline stopped in, when it is paused or failed. */
 function stoppedPhase(pipeline: BuildPipeline): ResumableBuildPhase | undefined {
   if (pipeline.phase === "paused") return pipeline.pausedFromPhase;
@@ -403,7 +396,7 @@ function sessionState(
   }
   if (current) {
     if (pipeline.phase === "paused") return "paused";
-    if (isCancelled(pipeline)) return "cancelled";
+    if (isCancelledBuildPipeline(pipeline)) return "cancelled";
     if (isActiveBuildPhase(pipeline.phase)) {
       const kind = PHASE_KIND[pipeline.phase as ResumableBuildPhase];
       const sessionKind = pipelineSessionKind(session);
@@ -543,7 +536,7 @@ export function pipelineFlowModel(
   };
   const active = isActiveBuildPhase(pipeline.phase);
   const complete = pipeline.phase === "complete";
-  const cancelled = isCancelled(pipeline);
+  const cancelled = isCancelledBuildPipeline(pipeline);
   // What the run did once it decided, else what it will do as things stand: the
   // ticket can still change this until Verify passes.
   const plannedDelivery =

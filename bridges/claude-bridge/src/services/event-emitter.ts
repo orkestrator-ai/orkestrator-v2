@@ -3,6 +3,9 @@
 
 import type { SSEEvent } from "../types/index.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.claude");
 
 type EventCallback = (event: SSEEvent, revision: number) => void;
 
@@ -37,7 +40,7 @@ class EventEmitter {
     // Guarded rather than passed through `debugLog`: this runs on every
     // streamed frame, and the object literal would otherwise be allocated
     // per emit only to be dropped.
-    if (isDebugLoggingEnabled) {
+    if (isDebugLoggingEnabled()) {
       debugLog("[event-emitter] Emitting event", {
         type: event.type,
         sessionId: event.sessionId,
@@ -48,7 +51,7 @@ class EventEmitter {
       try {
         callback(event, revision);
       } catch (error) {
-        console.error("[event-emitter] Error in subscriber callback:", error);
+        log.error("event-subscriber.failed", { error: formatLogError(error) });
       }
     }
   }

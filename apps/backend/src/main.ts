@@ -31,7 +31,11 @@ import {
 } from "./standalone-logging.js";
 import { installBoundedConsole } from "./bounded-console.js";
 import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
-import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/node/application-logging";
+import {
+  DESKTOP_SUPERVISED_ENV,
+  readApplicationLogPolicy,
+} from "@orkestrator/protocol/node/application-logging";
+import { applyLogDetail } from "@orkestrator/protocol/node/log-policy";
 import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logger-environment";
 
 assertSupportedPlatform();
@@ -74,6 +78,9 @@ await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 // Installed before startup logs anything worth keeping. A no-op under Electron,
 // which already records this process's output.
 const standaloneLogging = installStandaloneBackendLogging(options);
+// Before anything logs at a level the settings may turn off. The backend's log
+// policy service keeps this live from here on.
+applyLogDetail(readApplicationLogPolicy(options.dataDir).detail);
 console.info(`[Backend] Starting Orkestrator ${APP_VERSION}`);
 await logGatewayPortPolicy(options, process.env, console, liveInstanceIn);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({
@@ -103,6 +110,7 @@ const managedWebClient = options.desktopWebClient
   : null;
 const backend = new OrkestratorBackend({
   dataDir: options.dataDir,
+  applicationLogging: standaloneLogging,
   toolchainBinDir: options.toolchainBinDir,
   appRoot: options.appRoot,
   resourceRoot: options.resourceRoot,

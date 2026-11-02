@@ -512,10 +512,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         hydrateWorkflow={mock(async () => workflow)}
       />,
     );
-    expect(screen.queryByTestId("multi-review-auto-pr-notice")).toBeNull();
+    expect(screen.queryByTestId("multi-review-auto-pr-notice") === null).toBe(true);
     expect(
-      screen.queryByText("The fix request was delivered. The fix session is ready to open."),
-    ).toBeNull();
+      screen.queryByText("The fix request was delivered. The fix session is ready to open.") ===
+        null,
+    ).toBe(true);
     selectFlowNode("Pull request,");
     expect(inspector().getByText(/The fix completed, so a PR tab was launched/)).toBeTruthy();
   });
@@ -1811,7 +1812,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     act(() => useMultiReviewStore.getState().replaceWorkflow(delivered));
 
     expect(await screen.findByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(screen.queryByText(/fix session is ready to open/i)).toBeNull();
+    expect(screen.queryByText(/fix session is ready to open/i) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
 
     view.rerender(
@@ -1821,7 +1822,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
     expect(screen.getByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(screen.queryByText(/fix session is ready to open/i)).toBeNull();
+    expect(screen.queryByText(/fix session is ready to open/i) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
   });
 
@@ -2284,7 +2285,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
     expect(await screen.findByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(screen.queryByText(/fix session is ready to open/i)).toBeNull();
+    expect(screen.queryByText(/fix session is ready to open/i) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
   });
 

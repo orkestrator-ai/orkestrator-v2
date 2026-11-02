@@ -81,6 +81,7 @@ import {
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
+  COORDINATOR_VALIDATION_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
@@ -1260,6 +1261,7 @@ export class NativeAgentService {
             `${COORDINATOR_WORKER_PROMPT_FORMAT_RULE}\n` +
             `${COORDINATOR_LAUNCH_DEFAULTS_RULE}\n` +
             `${COORDINATOR_PR_RULE}\n` +
+            `${COORDINATOR_VALIDATION_RULE}\n` +
             `${COORDINATOR_AGENTS_MD_RULE}\n` +
             ((await schedulingEnabled(this.storage))
               ? `${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}\n`
@@ -4093,6 +4095,25 @@ export class NativeAgentService {
         state: "idle",
       });
     }
+  }
+
+  /**
+   * Opaque token for what {@link humanPromptOutputIfRunning} reads, from the
+   * activity sweep's last observation: the provider session and its content
+   * revision. No read of any kind. `undefined` when the bridge reports no
+   * revision, so the human-prompt monitor reads that session every time.
+   */
+  humanPromptContentRevision(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): string | undefined {
+    const observed = this.launches.observedActivity(
+      shared.nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    return observed?.contentRevision === undefined
+      ? undefined
+      : `${observed.providerSessionId}\0${observed.contentRevision}`;
   }
 
   /** Background observation bypasses the tab-facing projection and its shared cache. */

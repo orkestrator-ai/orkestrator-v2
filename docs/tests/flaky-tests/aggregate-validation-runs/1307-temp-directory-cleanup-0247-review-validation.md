@@ -76,3 +76,29 @@ workspace guard passed. Changed-file formatting, lint, and backend production
 and test typechecking passed. Preparation's passing repository-wide lint and
 typecheck were reused; neither was rerun globally. No live-agent, Docker,
 Electron or iOS qualification was performed for these test-only changes.
+
+## Live logging review repair validation — 2026-11-01
+
+Original command: `mise run test:logged -- --name review-repair-default -- mise run test`
+on the shared macOS host, workspace/root/bridges/protocol reservations 5/1/2/1,
+with the web package using two workers and the bridge packages one worker each.
+The run waited 925 seconds for another worktree's aggregate reservation while
+browser and Electron checks were also active. No assertion, timeout, skip or
+implementation in this owner changed.
+
+The same `incremental parse reuse > a long streamed answer parses each completed
+segment once` case in `apps/web/src/lib/chat/rich-markdown/incremental-parse.test.tsx`
+hit its five-second deadline (5,860.79 ms). The complete unchanged owner passed
+in 14.6 s:
+`mise run test:logged -- --name incremental-parse-owner -- bun test --cwd apps/web ./src/lib/chat/rich-markdown/incremental-parse.test.tsx --parallel=1 --only-failures`.
+Evidence: aggregate `orkestrator-test-run.BSqVX9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed at finalization). This is an intermittent deadline failure; host
+contention is a hypothesis, not a demonstrated cause.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.

@@ -1,0 +1,25 @@
+import { defineConfig } from "@playwright/test";
+import path from "node:path";
+import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
+
+// See playwright.electron.config.ts: workers inherit a private TMPDIR.
+process.once("exit", enterPrivateTestTmpdir());
+
+const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? "electron-packaged";
+const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "electron-packaged");
+
+/**
+ * Electron specs that launch the packaged app (`mise run
+ * package:linux:unpacked`) rather than the dev bundle and Vite. Kept apart
+ * from playwright.electron.config.ts because they need that build first.
+ */
+export default defineConfig({
+  testDir: import.meta.dirname,
+  testMatch: ["design-canvas-packaged-electron.spec.ts"],
+  workers: 1,
+  timeout: 120_000,
+  reporter: [["line"], ["json", { outputFile: path.join(outputRoot, "results.json") }]],
+  outputDir: path.join(outputRoot, "artifacts"),
+  use: { trace: "retain-on-failure", screenshot: "only-on-failure" },
+});

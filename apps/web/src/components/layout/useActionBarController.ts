@@ -28,7 +28,7 @@ import type {
   ActionDefaultKey,
   ResolvedActionDefault,
 } from "@orkestrator/protocol/action-defaults";
-import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
+import { usePullRequest, useEnvironments } from "@/hooks";
 import {
   createPushChangesPrompt,
   createReviewPrompt,
@@ -41,7 +41,6 @@ import { createOrkestratorScriptPrompt } from "@orkestrator/protocol/orkestrator
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import * as backend from "@/lib/backend";
 import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
-import { useAppDialogStore } from "@/stores/appDialogStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
@@ -142,7 +141,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const workspaceReady = isEnvironmentSetupSettled(selectedEnvironment);
   const setupRunning = selectedEnvironment?.setupPhase === "running";
   const getProjectById = useProjectStore((state) => state.getProjectById);
-  const { updateProject } = useProjects();
   const config = useConfigStore((state) => state.config);
   const { createTab, selectTab, tabCount } = useTerminalContext();
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
@@ -156,17 +154,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
 
-  // Settings dialogs are pinned by id, not by snapshot: the store stays the
-  // single source of truth, so a background update to the pinned entity is
-  // reflected live and a deletion closes the dialog instead of leaving an
-  // orphaned copy whose saves would silently no-op. Environment settings open
-  // in `AppDialogHost`, the one host the projects drawer also uses.
-  const openAppDialog = useAppDialogStore((state) => state.open);
-  const openEnvironmentSettings = useCallback(
-    (environmentId: string) => openAppDialog({ kind: "environment-settings", environmentId }),
-    [openAppDialog],
-  );
-  const [repoSettingsProjectId, setRepoSettingsProjectId] = useState<string | null>(null);
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [runCommands, setRunCommands] = useState<string[] | null>(null);
@@ -247,17 +234,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [scrollLeft, setScrollLeft] = useState(0);
 
   const selectedProject = selectedProjectId ? getProjectById(selectedProjectId) : null;
-  const repoSettingsProject = useProjectStore((state) =>
-    repoSettingsProjectId
-      ? (state.projects.find((project) => project.id === repoSettingsProjectId) ?? null)
-      : null,
-  );
-  // The pinned entity disappeared (deleted, or the project list was replaced).
-  // Drop the pin too, so a later entity that happens to reuse the id cannot
-  // resurrect a dialog the user never reopened.
-  useEffect(() => {
-    if (repoSettingsProjectId && !repoSettingsProject) setRepoSettingsProjectId(null);
-  }, [repoSettingsProject, repoSettingsProjectId]);
   // A project's page runs on its project home, the environment that works
   // directly in the checkout: the toolbar's environment controls target it
   // while the project tabs choose between its own tabs and the board panels.
@@ -357,7 +333,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       selectedEnvironment?.lifecycleOperation === "merging"),
   );
 
-  const repoName = selectedProject?.name ?? null;
   const isLocalEnvironment = selectedEnvironment?.environmentType === "local";
   const isLocalReady = isLocalEnvironment && !!selectedEnvironment?.worktreePath;
   const isRunning =
@@ -2144,7 +2119,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     workspaceReady,
     setupRunning,
     getProjectById,
-    updateProject,
     config,
     createTab,
     selectTab,
@@ -2156,9 +2130,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     hasChanges,
     sidebarOpen,
     toggleSidebar,
-    repoSettingsProjectId,
-    setRepoSettingsProjectId,
-    openEnvironmentSettings,
     isOpeningEditor,
     setIsOpeningEditor,
     editorError,
@@ -2222,12 +2193,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     scrollLeft,
     setScrollLeft,
     selectedProject,
-    repoSettingsProject,
     isProjectView,
     hasProjectCheckout,
     isCleanupTargetDeleting,
     isMerging,
-    repoName,
     isLocalEnvironment,
     isLocalReady,
     isRunning,

@@ -84,6 +84,9 @@ import {
   type JsonObject,
   type SessionState,
 } from "./state.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("bridge.cursor");
 
 export class CredentialError extends Error {
   constructor(message: string) {
@@ -950,10 +953,7 @@ export async function setResumableAgentArchived(
     const options = { cwd: workingDirectory };
     await (archived ? api.archive(agentId, options) : api.unarchive(agentId, options));
   } catch (error) {
-    console.warn(
-      `[cursor-bridge] Agent.${archived ? "archive" : "unarchive"} failed:`,
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("agent.archive-failed", { archived, error: formatLogError(error, { stack: false }) });
     return "failed";
   } finally {
     agentArchiveOperations.delete(agentId);

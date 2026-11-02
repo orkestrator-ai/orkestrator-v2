@@ -831,7 +831,8 @@ with a pull request carry, besides `prUrl` and `prState`,
 `failed`, `pending` and `total` counts, plus `requiredFailed`, or null) and `prReadyToMerge` with
 `prNotReadyReason` when false (`coordinator-pr-status.ts`). Readiness is
 `evaluatePrMergeReadiness` (`packages/protocol/src/pr-merge-readiness.ts`),
-the rule behind the sidebar's shimmer, with the PR monitor's confirmation as
+the rule behind the sidebar's shimmer, with checks always required (the
+coordinator ignores the auto-merge setting) and the PR monitor's confirmation as
 its freshness: this node's announced monitor state
 (`get_environment_pr_health`, which never asks GitHub), or for another
 node's rows the health its summaries relay while that node is connected and
@@ -898,6 +899,22 @@ repeat it in their descriptions. Every delegation frame tells the worker the
 same (`COORDINATOR_WORKER_NO_PR_INSTRUCTION` in
 `packages/protocol/src/review-evidence-frames.ts`): commit and report, and do
 not open a pull request even if the prompt asks for one.
+
+Full validation follows the same split. Multi Review and build pipelines start
+by running it once against the committed branch
+([review preparation](review-preparation.md)), so a full pass just before them
+repeats the work on the same commit. `COORDINATOR_VALIDATION_RULE` tells the main
+coordinator to ask for focused checks when review comes next, in the same places
+as the PR rule (the tool descriptions in short form). A full run is still right
+when the user asks for one or its result is what the coordinator needs to
+learn. The coordinator states whether review follows in every worker prompt;
+when none follows, it must explicitly request all repository-required validation
+before handoff. Every delegation frame (`COORDINATOR_WORKER_VALIDATION_INSTRUCTION`)
+defers full passes only when the prompt says review follows, yielding to an
+explicit full-run request. Otherwise the worker follows repository validation
+requirements and reports any required full validation it did not run. A follow-up
+sent as mail or to an existing tab does not carry that instruction, so there the
+coordinator's rule is the only guard.
 
 A coordinator turn ends when it has delegated. It does not wait for the worker,
 so the composer stays open. A prompt typed during a turn is queued and runs

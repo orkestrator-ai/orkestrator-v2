@@ -729,8 +729,8 @@ export interface FlowGraphProps {
   /** The shortest the graph's viewport sizes itself to; 460 px by default. */
   minHeight?: number;
   /**
-   * Offers a Fit control that zooms the whole graph into view. Multi Review
-   * leaves it off: Fit was removed there in #1199.
+   * Lets the zoom level, clicked at 100%, zoom the whole graph into view.
+   * Multi Review leaves it off: Fit was removed there in #1199.
    */
   fitControl?: boolean;
   /** How a failed node's face shows its error; its first line by default. */

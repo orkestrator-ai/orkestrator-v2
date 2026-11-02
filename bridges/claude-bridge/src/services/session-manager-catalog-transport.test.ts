@@ -117,6 +117,38 @@ describe("catalog reads against a closed transport", () => {
     await finish();
   });
 
+  test("a live CLI still reports a server as connecting", async () => {
+    queryControlOverrides.mcpServerStatus = mock(async () => [
+      { name: "slow", status: "pending" as const },
+      { name: "context7", status: "connected" as const },
+    ]);
+    const { session, finish } = await inspectDuringTurn([], (s) => Boolean(s.queryControl));
+    const rows = await readSessionMcpServers(session.id);
+    expect(rows.map(({ id, status }) => [id, status])).toEqual([
+      ["slow", "connecting"],
+      ["context7", "connected"],
+    ]);
+    await finish();
+  });
+
+  test("a connecting row reads unknown when the query dies mid-read", async () => {
+    queryControlOverrides.mcpServerStatus = mock(async () => [
+      { name: "slow", status: "pending" as const },
+      { name: "context7", status: "connected" as const },
+    ]);
+    const { session, finish } = await inspectDuringTurn([], (s) => Boolean(s.queryControl));
+    await readSessionMcpServers(session.id);
+    session.queryControl!.mcpServerStatus = mock(async () => {
+      throw closedTransport();
+    });
+    const rows = await readSessionMcpServers(session.id);
+    expect(rows.map(({ id, status }) => [id, status])).toEqual([
+      ["slow", "unknown"],
+      ["context7", "connected"],
+    ]);
+    await finish();
+  });
+
   test("a genuine catalogue failure still propagates", async () => {
     queryControlOverrides.mcpServerStatus = mock(async () => [
       { name: "context7", status: "connected" as const },
@@ -257,7 +289,48 @@ describe("Claude MCP inventory without a live control", () => {
     const rows = await readSessionMcpServers(session.id);
     expect(rows.map(({ id, status, scope }) => ({ id, status, scope }))).toEqual([
       { id: "late", status: "connected", scope: "project" },
-      { id: "orkestrator", status: "connecting", scope: "orkestrator" },
+      // The probe has closed and never knew this server, so nothing is
+      // connecting it any more.
+      { id: "orkestrator", status: "unknown", scope: "orkestrator" },
+    ]);
+  });
+
+  test("a row the probe itself leaves pending reads unknown once it closes", async () => {
+    const session = idleSession("probe pending");
+    await runTurn(session.id, [
+      init({ mcp_servers: [{ name: "late", status: "failed", source: "project" }] }),
+      { type: "result", subtype: "success" },
+    ]);
+    queryControlOverrides.mcpServerStatus = async () => [{ name: "late", status: "pending" }];
+    await performSessionMcpAction(session.id, "late", "reconnect");
+    await nextQueryCall();
+    const rows = await readSessionMcpServers(session.id);
+    expect(rows.map(({ id, status, actions }) => ({ id, status, actions }))).toEqual([
+      { id: "late", status: "unknown", actions: ["reconnect", "disable"] },
+    ]);
+  });
+
+  test("a CLI that exits before any read leaves no row connecting", async () => {
+    const session = idleSession("init pending");
+    await runTurn(session.id, [
+      init({
+        mcp_servers: [
+          { name: "orkestrator", status: "pending", source: "dynamic" },
+          { name: "docs", status: "connected", source: "project" },
+        ],
+      }),
+      { type: "result", subtype: "success" },
+    ]);
+    const rows = await readSessionMcpServers(session.id);
+    expect(rows.map(({ id, status, actions }) => ({ id, status, actions }))).toEqual([
+      // A click still runs a reconnect.
+      { id: "orkestrator", status: "unknown", actions: ["reconnect", "disable"] },
+      { id: "docs", status: "connected", actions: ["reconnect", "disable"] },
+    ]);
+    // Only the served copy changes; the stored row keeps what the CLI said.
+    expect(session.mcpInventory?.map(({ id, status }) => [id, status])).toEqual([
+      ["orkestrator", "connecting"],
+      ["docs", "connected"],
     ]);
   });
 
@@ -281,11 +354,12 @@ describe("Claude MCP inventory without a live control", () => {
       }),
       { type: "result", subtype: "success" },
     ]);
-    // The turn's process has exited, so the read falls back to the init rows.
+    // The turn's process has exited, so the read falls back to the init rows,
+    // and a pending one is not reported as still connecting.
     const servers = await readSessionMcpServers(session.id);
     expect(servers.map(({ name, status, scope }) => ({ name, status, scope }))).toEqual([
       { name: "docs", status: "connected", scope: "project" },
-      { name: "slow", status: "connecting", scope: "user" },
+      { name: "slow", status: "unknown", scope: "user" },
       { name: "oauth", status: "needs-auth", scope: undefined },
       { name: "off", status: "disabled", scope: "local" },
       { name: "broken", status: "failed", scope: undefined },

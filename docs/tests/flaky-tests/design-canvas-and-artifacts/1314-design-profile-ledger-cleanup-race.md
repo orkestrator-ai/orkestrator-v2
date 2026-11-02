@@ -241,3 +241,112 @@ No design implementation, assertion, timeout or skip changed.
 The notification-bar review on 2026-11-01 repeated the ledger assertion; the unchanged owner passed alone on the branch (1.2 s) and detached origin/main (1.0 s). Preparation used `mise run test`; its captured output does not name the granted worker count. Evidence: `.orkestrator/review-artifacts/review-validation-eb40d1d2-656b-44f0-9a8f-1c2970a9e415/validation-04.stdout.txt`.
 
 Reruns: `mise run test:logged -- --name fix-design-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` and the same owner command with `--name baseline-design-profiles` in detached main at `b965aea44`, with independently installed dependencies. The ledger still held `1841-1846-0123abcd.json` at line 505 in preparation; this remains an intermittent cleanup observation, not a confirmed root cause.
+
+## Live logging review repair validation — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-final -- mise run test`
+used workspace/root/bridges/protocol reservations 5/1/2/1. The recorded-profile
+case again saw `20543-20546-0123abcd.json` in the ledger after profile deletion
+(470.70 ms). Backend totals were 13,016 pass, 97 skip and one fail across
+870 files.
+
+The complete unchanged owner passed alone, exit 0 in 1.3 s:
+`mise run test:logged -- --name design-browser-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`.
+Evidence: `orkestrator-test-run.haynoB/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+below the host temporary directory. No implementation, assertion, deadline or
+skip changed; the ledger-removal timing cause remains unconfirmed.
+
+### Final default-suite verification — 2026-11-02
+
+`mise run test:logged -- --name review-repair-default-controlled -- mise run test`
+passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
+wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
+commit; the other owners listed here were unchanged. This green aggregate
+does not establish a root cause for the still-open intermittent cases.
+
+On 2026-11-02, the shared-logger bridge migration saw this fail once in `mise run test` (69.12 ms). The owner passed alone: `bun test ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --only-failures` (37 pass, 0 fail).
+
+
+## Live logging round 2 final validation — 2026-11-02
+
+`mise run test:logged -- --name fix-default-final -- mise run test` finished
+in 562.0 s with one failure: `design service startup > removes the recorded
+profile of a backend that was killed` found `82613-82614-0123abcd.json` in the
+ledger at line 505 after the profile disappeared (247.91 ms). Backend totals
+were 13,070 pass, one fail; all other workspace packages and the root,
+bridges and protocol groups passed. Reservations were workspace/root/bridges/
+protocol 5/1/2/1, with two backend workers.
+
+The complete unchanged owner passed alone (37 tests, exit 0, 0.4 s):
+
+`mise run test:logged -- --name branch-design-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+
+Detached `origin/main` at `88c3c6bac`, with independently installed frozen
+dependencies, reproduced the exact line-505 ledger assertion twice in a
+20-repeat complete-owner run (738 pass, two fail, 4.7 s; failures at 127.79
+and 79.18 ms):
+
+`mise run test:logged -- --name baseline-design-profiles-owner -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --rerun-each=20`
+
+Neither the implementation nor its test differs from main in this branch.
+No assertion, deadline or skip changed. This is evidence of the existing race,
+not a fix. Logs are preserved in `output/agent-testing/review-fix-53284689/`:
+`default-final-workspace.log.gz` and `baseline-design-profiles-owner.log.gz`.
+
+## Safe error formatting second review — 2026-11-02
+
+Preparation ran `mise run test` at `de952cc0accc820c6d57425323428cc993794a54`.
+The backend used three isolated workers and reported 13,006 passed, 97 skipped,
+and five failed across 870 files (440.83 s). Original evidence is preserved at
+`.orkestrator/review-artifacts/review-validation-b03e0cc0-820a-4723-8d36-20d1666dfe82/validation-04.stdout.txt`.
+
+This case observed a JSON ledger entry remained at line 505 (286.29 ms).
+
+The complete unchanged owner passed on the fix branch as part of
+`mise run test:logged -- --name r5-round2-recorded-owners -- bun test --cwd apps/backend ./tests/container-readiness.test.ts ./src/core/commands-agent-tools.test.ts ./tests/codex-subagent-cards.test.ts ./src/core/nodes/node-files.test.ts ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures`
+(exit zero, 14.2 s; passing per-file counts were not retained by the runner).
+
+A detached `origin/main` worktree at `9dbd7f1cc9981789ab352056bea84a1007c99959`
+used its own `mise exec -- bun install --frozen-lockfile` dependencies.
+Its complete owner check was `mise run test:logged -- --name r5-round2-main-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` (1.4 s).
+The targeted repeat command was `mise run test:logged -- --name r5-round2-main-profiles-repeat -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --test-name-pattern 'removes the recorded profile of a backend that was killed' --rerun-each=30 --parallel=1 --only-failures`.
+Result: 28 passed, 2 failed (5.3 s); both repeated the exact remaining-ledger assertion at line 505. Failure evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.ocSX3U/`.
+
+The same failure on main establishes independence from this branch. The owner
+and implementation are unchanged relative to main. No assertion, delay, skip,
+or unrelated implementation was changed; the existing flake remains open.
+
+### Exact aggregate rerun outcome
+
+`mise run test:logged -- --name r5-round2-default-suite -- mise run test`
+finished with exit 1 (919.0 s, including about 663 s of admission wait).
+Workspace, root and protocol groups passed. All five original backend assertion
+failures passed in this run. The sole failing group was bridges: the Codex
+catalogue disposal assertion recorded in case 0791. No root-cause fix to these
+existing timing cases is claimed. Final status evidence is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
+compressed group logs are in that same directory. The enclosing log is
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+
+
+## Packaged design review — 2026-11-02
+
+Preparation at `92acc91a0d737b49f734f64162b24df49c53a190` ran `mise run test`.
+The exact case `design service startup > removes the recorded profile of a backend that was killed`
+failed at line 505 after 97.10 ms: a JSON ledger entry remained after the profile disappeared.
+Original evidence: `.orkestrator/review-artifacts/review-validation-abc8c2c9-251b-4d62-a839-c1971ab9e1db/validation-04.stdout.txt`.
+The root group reported 3,423 passed, one skipped, three unrelated terminal failures;
+the web group reported 11,233 passed, ten skipped, four unrelated terminal failures.
+The captured backend tail does not retain its totals or worker count.
+
+On the fix branch, the unchanged complete owner passed (37 tests, 2.1 s):
+`NODE_ENV=test mise run test:logged -- --name fix-profiles-exact -- bash -c 'cd apps/backend && bun test ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures'`.
+
+A detached origin/main worktree at `38d55ee146c5bc29bdfb338c4f93f9de5f0cd787`,
+with independently installed frozen dependencies, passed the same owner once (37 tests, 1.5 s).
+Repeating the entire owner with one worker reproduced the exact line-505 failure on run 11:
+ten runs each passed all 37 tests; the last run passed 36 and failed one (143.41 ms).
+Command: `NODE_ENV=test mise run test:logged -- --name baseline-profiles-repeat -- bash -c 'cd apps/backend && for attempt in {1..30}; do bun test ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures || exit 1; done'`.
+Evidence: `/tmp/orkestrator-test-run.6dslpJ/baseline-profiles-repeat.log.gz` (19.0 s).
+This confirms the existing cleanup race independently of the packaged-app changes;
+no assertion, skip or production cleanup behavior was changed.

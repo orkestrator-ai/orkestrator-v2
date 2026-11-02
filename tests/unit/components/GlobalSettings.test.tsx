@@ -1350,7 +1350,8 @@ describe("GlobalSettings", () => {
     expect(screen.getByText("Codex Raw Event Logging")).toBeTruthy();
     rerender(<GlobalSettings activeSection="debug" />);
     expect(screen.getByText("App version")).toBeTruthy();
-    expect(screen.getByText("Save Logs for Debugging")).toBeTruthy();
+    expect(screen.getByText("Save Logs to Disk")).toBeTruthy();
+    expect(screen.getByText("Log Detail")).toBeTruthy();
   });
 
   test("saves one shared custom review instruction", async () => {
@@ -2230,6 +2231,23 @@ describe("GlobalSettings", () => {
     expect(mockGetAppVersion).toHaveBeenCalledTimes(1);
   });
 
+  test("says saving and detail apply live, and saves a level on its own", async () => {
+    render(<GlobalSettings activeSection="debug" />);
+    expect(await screen.findByText(/apply straight away/)).toBeTruthy();
+    expect(screen.queryByText(/restart to take effect/)).toBeNull();
+    fireEvent.click(screen.getByRole("combobox", { name: "Default log level" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Debug" }));
+    await flushAutoSave();
+    await waitFor(() =>
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ logDetail: { level: "debug", areaLevels: {} } }),
+        SAVE_OPTIONS,
+      ),
+    );
+    const patch = mockPatchGlobalConfig.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty("debugLogging");
+  });
+
   test("saves debug logging retention, reports storage, and cleans up its log directory", async () => {
     mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
     render(<GlobalSettings activeSection="debug" />);
@@ -2420,6 +2438,30 @@ describe("GlobalSettings", () => {
           terminalAppearance: expect.objectContaining({ fontFamily: "JetBrains Mono" }),
           terminalScrollback: 5100,
         }),
+        SAVE_OPTIONS,
+      ),
+    );
+  });
+
+  test("saves the terminal link default and describes the alternative gesture", async () => {
+    render(<GlobalSettings activeSection="previews" />);
+
+    const target = screen.getByRole("combobox", { name: "Open terminal links in" });
+    expect(target.textContent).toContain("External browser");
+    expect(screen.getByText(/opens it in a preview tab\./)).toBeTruthy();
+
+    fireEvent.keyDown(target, { key: "ArrowDown" });
+    await screen.findByRole("listbox");
+    const option = screen.getByRole("option", { name: "Preview tab" });
+    fireEvent.pointerDown(option, { pointerType: "mouse" });
+    fireEvent.pointerUp(option, { pointerType: "mouse" });
+    await waitFor(() => expect(target.textContent).toContain("Preview tab"));
+    expect(screen.getByText(/opens it in your external browser\./)).toBeTruthy();
+    await flushAutoSave();
+
+    await waitFor(() =>
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalLinkDefaultTarget: "browser-tab" }),
         SAVE_OPTIONS,
       ),
     );

@@ -452,8 +452,11 @@ command node.
   dialogs: Add Project, New Environment, Repository Settings, Delete Project
   or an environment's Settings), the realm's own selection (for the sidebar's
   highlight), the sidebar's open state (the realm's toolbar toggles it),
-  requests to open settings (they belong to the command node), and a ready
-  handshake so nothing asked while a realm loads is lost.
+  whether the files panel is open (one state for the window and all its
+  realms, shared in both directions; the phone layout, where the panel is a
+  full-screen sheet of the window's own node, does not share it), requests to
+  open settings (they belong to the command node), and a ready handshake so
+  nothing asked while a realm loads is lost.
 - **Creating on another node** opens that node's New Environment dialog in
   its realm, so the node's defaults — the command node's inherited settings
   laid over its own — and start apply as they would there.
@@ -492,7 +495,13 @@ command node.
   merged lists the command node's projects (with its folders) come first and
   every other node's follow. Anything new goes after whatever precedes it in
   that default. A node that is not connected is hidden from the merged lists
-  but keeps its entries, so its projects return to their place. Within a
+  but keeps its entries, so its projects return to their place. The machine
+  order is also set by dragging rows in Settings > Machines, and the machine
+  lists outside the sidebar follow it with the command node always first
+  (`inMachineOrder`): that list, the Settings machine strip, the agent accounts
+  table and the title bar's per-machine CPU readings
+  (`MachineCpuReadings`, one coordinated read per machine, routed through the
+  command node). Within a
   node's own section, project, folder and environment order belong to that
   node: a drag there is written to the owner (`arrange_projects`,
   `reorder_environments`), and moving a project into a folder of the merged

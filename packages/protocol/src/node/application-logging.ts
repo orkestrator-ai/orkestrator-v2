@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatWithOptions } from "node:util";
 
 import { normalizeDebugLogRetentionDays } from "../debug-logging.js";
+import { defaultLogDetail, resolveLogDetail, type LogDetail } from "../log-policy.js";
 import {
   createLogger,
   escapeLogLine,
@@ -75,7 +76,14 @@ export type ApplicationLogDropStats = {
 
 export type InstalledApplicationLogging = {
   logDirectory: string;
-  retentionDays: number;
+  /** The settings in force now; `updateSettings` replaces them. */
+  settings(): ApplicationLogSettings;
+  /**
+   * Applies "Save logs to disk" and retention at once. Off stops new entries and
+   * announces any drop not yet reported; on starts writing; a change while on
+   * sweeps straight away, so a shorter retention does not wait for the next tick.
+   */
+  updateSettings(next: ApplicationLogSettings): void;
   flush(): Promise<void>;
   stop(): Promise<void>;
   /** Unreported drops. Non-zero means the log has an unmarked gap in flight. */
@@ -86,20 +94,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-export function readApplicationLogSettings(dataDir: string): ApplicationLogSettings {
+/** Both logging settings, as `config.json` holds them now. */
+export type ApplicationLogPolicy = {
+  saving: ApplicationLogSettings;
+  detail: LogDetail;
+};
+
+/**
+ * Reads the file rather than asking the backend: the desktop needs these before
+ * its backend exists, and they may predate the backend's one-time upgrade, which
+ * `resolveLogDetail` applies the same way here.
+ */
+export function readApplicationLogPolicy(dataDir: string): ApplicationLogPolicy {
+  return (
+    readStoredApplicationLogPolicy(dataDir) ?? {
+      saving: {
+        enabled: false,
+        retentionDays: normalizeDebugLogRetentionDays(undefined),
+      },
+      detail: defaultLogDetail(),
+    }
+  );
+}
+
+/**
+ * The same read, null when the file cannot be read or parsed. A process already
+ * running keeps what it has on null: an unreadable file is no reason to turn off
+ * saving, or the detail, that someone turned on to catch a problem.
+ */
+export function readStoredApplicationLogPolicy(dataDir: string): ApplicationLogPolicy | null {
   try {
     const parsed = JSON.parse(readFileSync(path.join(dataDir, "config.json"), "utf8")) as unknown;
     const global = isRecord(parsed) && isRecord(parsed.global) ? parsed.global : {};
     return {
-      enabled: global.debugLogging === true,
-      retentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
+      saving: {
+        enabled: global.debugLogging === true,
+        retentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
+      },
+      detail: resolveLogDetail(global),
     };
   } catch {
-    return {
-      enabled: false,
-      retentionDays: normalizeDebugLogRetentionDays(undefined),
-    };
+    return null;
   }
+}
+
+export function readApplicationLogSettings(dataDir: string): ApplicationLogSettings {
+  return readApplicationLogPolicy(dataDir).saving;
 }
 
 /**
@@ -324,9 +364,8 @@ export function installProductionApplicationLogging(options: {
   now?: () => Date;
   cleanupIntervalMs?: number;
   bounds?: Partial<ApplicationLogBounds>;
-}): InstalledApplicationLogging | null {
-  const settings = readApplicationLogSettings(options.dataDir);
-  if (!settings.enabled) return null;
+}): InstalledApplicationLogging {
+  let settings = readApplicationLogSettings(options.dataDir);
 
   const logDirectory = path.join(options.dataDir, "logs");
   const filePrefix = options.filePrefix ?? DESKTOP_LOG_FILE_PREFIX;
@@ -409,7 +448,8 @@ export function installProductionApplicationLogging(options: {
   };
 
   const enqueue = (level: string, args: unknown[]) => {
-    if (stopped) return;
+    // Off costs one comparison per console call: no formatting, no queue.
+    if (stopped || !settings.enabled) return;
     const format = getLogFormat();
     const timestamp = now().toISOString();
     const formatted = formatWithOptions(
@@ -443,26 +483,65 @@ export function installProductionApplicationLogging(options: {
     };
   }
 
-  const prune = () =>
-    pruneExpiredApplicationLogs(logDirectory, settings.retentionDays, Date.now(), bounds).catch(
-      (error) => {
-        originalMethods.error.call(
-          console,
-          renderLogLine("error", "logging", "prune.failed", { error: formatLogError(error) }),
-        );
-      },
-    );
+  // A sweep follows saving: files already on disk stay while it is off, as they
+  // always have, and the Debug settings' clean-up button stays the way to remove them.
+  const prune = async () => {
+    if (!settings.enabled) return;
+    await pruneExpiredApplicationLogs(
+      logDirectory,
+      settings.retentionDays,
+      Date.now(),
+      bounds,
+    ).catch((error) => {
+      originalMethods.error.call(
+        console,
+        renderLogLine("error", "logging", "prune.failed", { error: formatLogError(error) }),
+      );
+    });
+  };
+  const logs = createLogger("logging");
+  const announceStart = () => {
+    logs.info("capture.started", {
+      directory: logDirectory,
+      retentionDays: settings.retentionDays,
+    });
+  };
+  // A drop in the final window would otherwise never be announced.
+  const flushDropMarker = () => {
+    const marker = dropMarker(now().toISOString());
+    if (!marker) return;
+    droppedEntries = 0;
+    droppedBytes = 0;
+    write(marker, getLogFormat());
+  };
   void prune();
   const cleanupTimer = setInterval(prune, options.cleanupIntervalMs ?? LOG_CLEANUP_INTERVAL_MS);
   cleanupTimer.unref();
-  createLogger("logging").info("capture.started", {
-    directory: logDirectory,
-    retentionDays: settings.retentionDays,
-  });
+  if (settings.enabled) announceStart();
 
   return {
     logDirectory,
-    retentionDays: settings.retentionDays,
+    settings: () => ({ ...settings }),
+    updateSettings(next) {
+      if (stopped) return;
+      const previous = settings;
+      const normalized: ApplicationLogSettings = {
+        enabled: next.enabled === true,
+        retentionDays: normalizeDebugLogRetentionDays(next.retentionDays),
+      };
+      if (previous.enabled && !normalized.enabled) {
+        logs.info("capture.stopped", { directory: logDirectory });
+        flushDropMarker();
+      }
+      settings = normalized;
+      if (!previous.enabled && normalized.enabled) announceStart();
+      if (
+        normalized.enabled &&
+        (!previous.enabled || previous.retentionDays !== normalized.retentionDays)
+      ) {
+        void prune();
+      }
+    },
     flush: () => pending,
     dropStats: () => ({ droppedEntries, droppedBytes }),
     async stop() {
@@ -472,13 +551,7 @@ export function installProductionApplicationLogging(options: {
         for (const level of Object.keys(originalMethods) as Array<keyof typeof originalMethods>) {
           console[level] = originalMethods[level];
         }
-        // A drop in the final window would otherwise never be announced.
-        const marker = dropMarker(now().toISOString());
-        if (marker) {
-          droppedEntries = 0;
-          droppedBytes = 0;
-          write(marker, getLogFormat());
-        }
+        flushDropMarker();
       }
       await pending;
     },

@@ -2,11 +2,11 @@
 
 ## Task analysis
 
-Analysed 2026-11-01 on the branch that fixed [1163](1163-claude-probe-reconnect-inventory.md).
+Analysed 2026-11-01 on the branch that fixed [1163](1163-claude-probe-reconnect-inventory.md). Rechecked 2026-11-02 against main at 38d55ee14: unchanged, `readSessionMcpServers` still served the retained init rows as they were.
 
 ### Tasks
 
-1. **Stop showing a dead CLI's servers as connecting**: a `connecting` row with no CLI behind it should say that its state is unknown. Status: open.
+1. **Stop showing a dead CLI's servers as connecting**: a `connecting` row with no CLI behind it should say that its state is unknown. Status: done.
 
 ### 1. Stop showing a dead CLI's servers as connecting
 
@@ -30,20 +30,34 @@ Analysed 2026-11-01 on the branch that fixed [1163](1163-claude-probe-reconnect-
 
 - Rated low because the state clears on the next turn and a click on the row still runs a reconnect.
 
+### Task 1: map on the way out, not in the stored row
+
+Chose the recommended option. `readSessionMcpServers` (`bridges/claude-bridge/src/services/session-manager-catalog.ts`) serves every retained `connecting` row as `unknown` through `inventoryWithoutCli` whenever no readable control answers. `session.mcpInventory` is left as the CLI reported it. Rewriting the stored row was the alternative; it would lose the CLI's last word for nothing, since a running CLI's next answer replaces the whole list anyway, and 1163 keeps a row's last state on purpose.
+
+### Task 1: the probe path needs nothing of its own
+
+A probe is closed before `performSessionMcpAction` returns, and the panel reads the list through `readSessionMcpServers` afterwards. So the same read covers both the rows the probe did not touch and a row the probe itself left `pending`. No mapping was added inside `applyProbeMcpStatus`.
+
+### Task 1: a read that loses the race with the CLI exiting counts as no CLI
+
+When `mcpServerStatus()` fails with the SDK's closed-transport error, the CLI has gone even though `readableControl` returned it a moment earlier. That fallback now serves the same mapped rows instead of the raw retained list. A live CLI that answers `pending` still reads `connecting`.
+
+### Task 1: the row keeps its actions
+
+An `unknown` row keeps `reconnect` and `disable`, so a click still runs a reconnect through a probe. The renderer already has a dot for `unknown` (`AgentInfoButton.panels.tsx`).
+
+### Task 1: the second option was not built
+
+Reading a final status before the bridge closes a refused turn's CLI was not built. The to-do already notes the servers usually have not connected by then, so it would add a control request on the close path for little gain.
+
 ## Current state
 
-- The panel shows `connecting` for a CLI that has exited.
-- `mcp-ui-matrix.spec.ts` avoids this state with a hook that holds the CLI open, so it does not guard it.
+- A retained `connecting` row reads `unknown` when no CLI can answer, on the session path, the probe path and a read that loses the race with the CLI exiting. Bridge tests in `session-manager-catalog-transport.test.ts` cover each, and that a live CLI still reports `connecting`.
+- `mcp-ui-matrix.spec.ts` still avoids this state with a hook that holds the CLI open, so it does not guard it in a real browser.
 
-## Outstanding work
+## Needs verification
 
-### Code
-
-1. Report a retained `connecting` row as unknown when no CLI is running.
-
-### Qualification
-
-- A component or bridge test is enough; a credential-free CLI reproduces it in a real browser.
+- The fix was not observed in a real browser. A credential-free `dev:test` profile running `mcp-ui-matrix.spec.ts` without its hold-open hook should now show `unknown` rather than `connecting` after the CLI exits.
 
 ## Constraints and rationale
 

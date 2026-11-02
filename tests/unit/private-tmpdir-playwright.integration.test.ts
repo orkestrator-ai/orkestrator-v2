@@ -118,6 +118,7 @@ describe.skipIf(!CHROMIUM)("Playwright private TMPDIR wiring", () => {
     "e2e/agent-testing/playwright.browser.config.ts",
     "e2e/agent-testing/playwright.coordinator.config.ts",
     "e2e/agent-testing/playwright.electron.config.ts",
+    "e2e/agent-testing/playwright.packaged-electron.config.ts",
     "e2e/preview/playwright.preview.config.ts",
   ]) {
     for (const outlives of [false, true]) {

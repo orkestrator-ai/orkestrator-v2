@@ -109,7 +109,9 @@ product or which wraps the console (tests, scripts, the CLI, container scripts,
 the logger itself), and one for paths not migrated yet.
 `tests/unit/raw-console-ratchet.test.ts` pins both lists and a site limit per
 unmigrated path, so those limits only fall. Migrating a path removes its entry
-from the override and the test together.
+from the override and the test together. The bridges and their shared protocol
+modules are migrated; a bridge's `scripts/` and `*.live-probe.ts` files are among
+those whose console is the product.
 
 ## Module boundaries
 

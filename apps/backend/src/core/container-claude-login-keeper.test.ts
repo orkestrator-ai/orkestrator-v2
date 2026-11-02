@@ -8,7 +8,7 @@ import {
   ContainerClaudeLoginKeeper,
 } from "./container-claude-login-keeper.js";
 import * as credentialFiles from "./commands-files.js";
-import type { ClaudeLoginHandover } from "./agent-accounts-containers.js";
+import type { ClaudeLoginHandover, ClaudeLoginPassSnapshot } from "./agent-accounts-containers.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 const runtimes: BackendRuntime[] = [];
@@ -51,6 +51,8 @@ function harness(options: {
   const reads: number[] = [];
   const synced: string[] = [];
   const handovers: Array<ClaudeLoginHandover | undefined> = [];
+  const snapshots: Array<ClaudeLoginPassSnapshot | undefined> = [];
+  const storageReads = { config: 0, environments: 0 };
   const refreshed: string[] = [];
   let credentialIndex = 0;
   const context = {
@@ -60,15 +62,21 @@ function harness(options: {
     registryWriterLease:
       options.leaseHeld === undefined ? undefined : { isHeld: () => options.leaseHeld },
     storage: {
-      loadConfig: async () => ({
-        global: {
-          enabledAgentPlatforms: ["claude"],
-          ...(options.useHostClaudeCredentials === false
-            ? { useHostClaudeCredentials: false }
-            : {}),
-        },
-      }),
-      loadEnvironments: async () => options.environments,
+      loadConfig: async () => {
+        storageReads.config += 1;
+        return {
+          global: {
+            enabledAgentPlatforms: ["claude"],
+            ...(options.useHostClaudeCredentials === false
+              ? { useHostClaudeCredentials: false }
+              : {}),
+          },
+        };
+      },
+      loadEnvironments: async () => {
+        storageReads.environments += 1;
+        return options.environments;
+      },
       agentAccounts: {
         loadAgentAccounts: async () => ({ accounts: [], active: {} }),
       },
@@ -86,9 +94,10 @@ function harness(options: {
     readCredentials: read,
     readLocalCredentials: read,
     hasLocalTokenBridges: () => options.localBridges === true,
-    syncContainer: async (containerId, handover) => {
+    syncContainer: async (containerId, handover, snapshot) => {
       synced.push(containerId);
       handovers.push(handover);
+      snapshots.push(snapshot);
     },
     refreshHostLogin: async (account) => {
       refreshed.push(account.accountId);
@@ -100,6 +109,8 @@ function harness(options: {
     reads,
     synced,
     handovers,
+    snapshots,
+    storageReads,
     refreshed,
     advance: (ms: number) => {
       now += ms;
@@ -136,6 +147,19 @@ describe("ContainerClaudeLoginKeeper", () => {
       { account: { accountId: "default" }, credentials: login(NOW + 8 * 60 * 60_000) },
       { account: { accountId: "default" }, credentials: login(NOW + 8 * 60 * 60_000) },
     ]);
+  });
+
+  test("hands every container sync the pass's one read of configuration and environments", async () => {
+    const environments = [environment("a"), environment("b"), environment("c")];
+    const run = harness({ environments, credentials: [login(NOW + 8 * 60 * 60_000)] });
+    await run.keeper.tick();
+    expect(run.storageReads.environments).toBe(1);
+    expect(run.snapshots).toHaveLength(3);
+    for (const snapshot of run.snapshots) {
+      expect(snapshot?.environments).toBe(environments);
+      expect(snapshot?.global.enabledAgentPlatforms).toEqual(["claude"]);
+    }
+    expect(new Set(run.snapshots).size).toBe(1);
   });
 
   test("a pass that refreshes the host hands containers the login read after the refresh", async () => {

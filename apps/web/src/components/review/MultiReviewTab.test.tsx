@@ -1,3 +1,4 @@
+import * as backend from "@/lib/backend";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -468,6 +469,26 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         }),
       );
       expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      const external = spyOn(backend, "openInBrowser").mockResolvedValue(undefined);
+      try {
+        for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+          useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+          fireEvent.click(screen.getByRole("button", { name: "View pull request" }), modifier);
+          await waitFor(() =>
+            expect(external).toHaveBeenCalledWith("https://github.com/o/r/pull/42"),
+          );
+          expect(useFilesPanelStore.getState().isOpen).toBe(false);
+          external.mockClear();
+        }
+        fireEvent.contextMenu(pr);
+        fireEvent.click(screen.getByRole("menuitem", { name: "Open on GitHub" }));
+        await waitFor(() =>
+          expect(external).toHaveBeenCalledWith("https://github.com/o/r/pull/42"),
+        );
+        expect(useFilesPanelStore.getState().isOpen).toBe(false);
+      } finally {
+        external.mockRestore();
+      }
       // The PR tab is not in this layout, so there is no session to show.
       expect(
         (screen.getByRole("button", { name: "Open PR session" }) as HTMLButtonElement).disabled,

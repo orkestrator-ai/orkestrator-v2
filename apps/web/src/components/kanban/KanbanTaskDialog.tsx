@@ -55,7 +55,12 @@ import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
 import { readImage } from "@/lib/native/clipboard";
 import { getKanbanImageData } from "@/lib/backend";
-import { openPullRequestUrl } from "@/lib/pull-request-opener";
+import {
+  openPullRequestUrl,
+  openPullRequestInApp,
+  PullRequestOpenerProvider,
+  usePullRequestOpener,
+} from "@/lib/pull-request-opener";
 import {
   composeDraftKey,
   discardComposeDraft,
@@ -141,6 +146,7 @@ export function CommentText({
   /** Called after a link opened in the app (the PR pane) rather than the browser. */
   onOpenedInApp?: () => void;
 }) {
+  const opener = usePullRequestOpener();
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
   if (parts.length === 1) return <>{text}</>;
   return (
@@ -153,7 +159,7 @@ export function CommentText({
             onClick={(e) => {
               e.preventDefault();
               // A pull request opens in the right-hand PR pane; Cmd/Ctrl-click opens GitHub.
-              void openPullRequestUrl(part, { external: e.metaKey || e.ctrlKey })
+              void openPullRequestUrl(part, { external: e.metaKey || e.ctrlKey, opener })
                 .then((inApp) => {
                   if (inApp) onOpenedInApp?.();
                 })
@@ -1042,7 +1048,14 @@ export function KanbanTaskDialog({
   if (!task) return null;
 
   return (
-    <>
+    <PullRequestOpenerProvider
+      open={(ref, view) => {
+        // Preserve unsaved edits and use the browser while the modal cannot close.
+        if (isEditing || !openPullRequestInApp(ref, view)) return false;
+        handleOpenChange(false);
+        return true;
+      }}
+    >
       {fileInput}
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
@@ -1237,10 +1250,7 @@ export function KanbanTaskDialog({
                           <p className="whitespace-pre-wrap text-foreground flex-1">
                             {/* The PR pane sits behind this modal, so a pull
                                 request opened there closes it unless edits are open. */}
-                            <CommentText
-                              text={comment.text}
-                              onOpenedInApp={isEditing ? undefined : () => handleOpenChange(false)}
-                            />
+                            <CommentText text={comment.text} />
                           </p>
                           <Button
                             variant="ghost"
@@ -1335,6 +1345,6 @@ export function KanbanTaskDialog({
         onConfirm={handleBuildConfirmed}
       />
       {renderPreviewDialog()}
-    </>
+    </PullRequestOpenerProvider>
   );
 }

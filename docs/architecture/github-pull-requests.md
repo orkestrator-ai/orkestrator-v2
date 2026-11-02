@@ -99,7 +99,9 @@ call sites.
   inside a pull request opened in the main area.
 - **Modal hosts.** The agent mail sheet and the Kanban ticket dialog cover
   the PR pane, so a pull request that opens in the pane closes them (the
-  ticket dialog only when it is not being edited).
+  ticket dialog only when it is not being edited). Ticket-section Markdown
+  and comments share that policy. While editing, PR links open in the external
+  browser so unsaved changes remain available in the dialog.
 - **Hosts with their own tabs.** Inside the files panel a linked pull request
   opens as another panel tab. The project's Pull requests page is a pull
   request browser of its own, so its list rows and links open as tabs of that

@@ -189,3 +189,8 @@ deadline or implementation changed. Exact commands and evidence are recorded in
   passed, exit 0, in 51.1 s.
 - **Evidence:** `/tmp/orkestrator-test-run.kXXcAm/browser.log.gz`.
   No transcript implementation, assertion, deadline or skip changed. Cause remains unconfirmed.
+
+
+## PR pane review — 2026-11-02
+
+Preparation browser validation reported desktop `unresolved` instead of `converged`. The complete unchanged StreamingTranscript and VirtuosoFollow owners passed with one worker on detached `origin/main` d7cdfaa8b (`baseline-scroll-owners`, 51.5 s). The exact two desktop cases also passed three repeats each with two workers (`baseline-scroll`, 7.6 s). No cause established. Preparation evidence remains in `.orkestrator/review-artifacts/review-validation-d66c3b2c-a4b1-42da-b180-8fa7b6582c7b/` (validation-04.stdout.txt and validation-05.stderr.txt). Browser preparation reported 1146 passed, 10 failed, 117 skipped, 3 flaky. Default-suite preparation reported two failed owners; aggregate worker grants were not retained in the package. No assertion, timeout, skip or implementation was changed in these owners.

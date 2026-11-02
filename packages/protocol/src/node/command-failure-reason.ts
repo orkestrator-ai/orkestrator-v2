@@ -59,9 +59,12 @@ const TOOL_RULES: Readonly<Record<CommandFailureTool, readonly Rule[]>> = {
     ["nothing-to-commit", /nothing to commit|no changes added to commit/i],
     ["push-rejected", /\[(?:remote )?rejected\]|non-fast-forward/i],
     ["identity-unknown", /please tell me who you are|unable to auto-detect email/i],
-    ["worktree-has-changes", /contains modified or untracked files/i],
-    ["not-a-worktree", /is not a working tree/i],
-    ["branch-not-merged", /is not fully merged/i],
+    [
+      "worktree-has-changes",
+      /^fatal: [^\n]*['"] contains modified or untracked files(?:, use --force to delete it)?\.?\s*$/im,
+    ],
+    ["not-a-worktree", /^fatal: [^\n]*['"] is not a working tree\.?\s*$/im],
+    ["branch-not-merged", /^(?:error|fatal): [^\n]*['"] is not fully merged\.?\s*$/im],
   ],
   gh: [
     ["pull-request-exists", /a pull request for branch .* already exists/i],

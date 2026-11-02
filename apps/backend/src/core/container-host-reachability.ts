@@ -16,9 +16,13 @@ import type { DockerTopology } from "@orkestrator/protocol/image-manifest";
 import { DOCKER_LABEL_OWNER, DOCKER_LABEL_RESOURCE_ROLE } from "./constants.js";
 import { runCommand } from "./shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+import {
+  type CommandFailureFields,
+  classifyCommandFailure,
+} from "@orkestrator/protocol/node/command-failure-reason";
 
 const log = createLogger("docker.reachability");
+const probeFailures = new WeakMap<ContainerHostProbe, CommandFailureFields>();
 
 /**
  * Container → host agent tools reachability.
@@ -775,6 +779,7 @@ export class ContainerHostReachabilityService {
     }
     const started = this.now();
     let classification: ProbeClassification;
+    let failure: CommandFailureFields | undefined;
     try {
       const { stdout, stderr } = await this.run(
         "docker",
@@ -793,6 +798,7 @@ export class ContainerHostReachabilityService {
       classification = classifyProbeOutput(`${stdout}\n${stderr}`);
     } catch (error) {
       classification = { outcome: "error", httpStatus: null, detail: boundedError(error) };
+      failure = classifyCommandFailure(error, { tools: ["docker"] });
     }
     const probe: ContainerHostProbe = {
       scope: "environment-container",
@@ -804,6 +810,7 @@ export class ContainerHostReachabilityService {
       elapsedMs: Math.max(0, this.now() - started),
       detail: classification.detail,
     };
+    if (failure) probeFailures.set(probe, failure);
     this.containerCache.set(containerId, { at: this.now(), port, probe });
     if (this.containerCache.size > 256) {
       const oldest = this.containerCache.keys().next().value;
@@ -1083,10 +1090,13 @@ export class ContainerHostReachabilityService {
       elapsedMs,
       probes: result.probes.length,
     });
-    for (const probe of result.probes) {
+    // Log the original probes: publication clones the UI snapshot.
+    for (const probe of next.probes) {
       log[probe.outcome === "reachable" ? "info" : "warn"]("check.probe", () => probeFields(probe));
     }
-    if (result.status !== "reachable") log[level]("check.summary", { summary: result.summary });
+    if (result.status !== "reachable") {
+      log[level]("check.summary", { status: result.status, reason: result.reason, elapsedMs });
+    }
     if (result.status === "blocked" && result.remediation) {
       for (const command of result.remediation.commands) {
         log.warn("check.remediation", { command });
@@ -1181,6 +1191,7 @@ export class ContainerHostReachabilityService {
     const name = `ork-${this.deps.ownerNamespace}-reach-${randomBytes(4).toString("hex")}`;
     const started = this.now();
     let classification: ProbeClassification;
+    let failure: CommandFailureFields | undefined;
     this.probeContainers.add(name);
     try {
       const { stdout, stderr } = await this.run(
@@ -1214,6 +1225,7 @@ export class ContainerHostReachabilityService {
       classification = classifyProbeOutput(`${stdout}\n${stderr}`);
     } catch (error) {
       classification = { outcome: "error", httpStatus: null, detail: boundedError(error) };
+      failure = classifyCommandFailure(error, { tools: ["docker"] });
       // A timed-out `docker run` can leave the container behind.
       if (!this.closed) {
         await this.run("docker", ["rm", "-f", name], { timeoutMs: 15_000 }).catch(() => undefined);
@@ -1228,7 +1240,7 @@ export class ContainerHostReachabilityService {
       scope === "default-bridge"
         ? ((await this.networkSubnet("bridge")) ?? subnets[0] ?? null)
         : (subnets[0] ?? null);
-    return {
+    const probe: ContainerHostProbe = {
       scope,
       network,
       subnet,
@@ -1239,6 +1251,8 @@ export class ContainerHostReachabilityService {
       detail: classification.detail,
       ...(hostTarget && hostTarget !== "host-gateway" ? { hostAddress: hostTarget } : {}),
     };
+    if (failure) probeFailures.set(probe, failure);
+    return probe;
   }
 
   private async createProbeNetwork(): Promise<{ name: string; subnet: string | null } | null> {
@@ -1431,7 +1445,7 @@ function probeFields(probe: ContainerHostProbe) {
     outcome: probe.outcome,
     http: probe.httpStatus ?? null,
     elapsedMs: probe.elapsedMs,
-    detail: probe.detail ?? null,
+    ...probeFailures.get(probe),
   };
 }
 

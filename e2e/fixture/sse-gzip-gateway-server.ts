@@ -1,9 +1,12 @@
+import { configureLogger } from "@orkestrator/protocol/logger";
 /** Disposable real gateway in `--compression on` for the browser gzip SSE scenario. */
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { OrkestratorGateway } from "../../apps/backend/src/gateway";
+
+configureLogger({ sink: ({ line }) => process.stderr.write(`${line}\n`) });
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-sse-gzip-browser-"));
 const token = randomBytes(24).toString("hex");
@@ -24,7 +27,6 @@ const gateway: OrkestratorGateway = new OrkestratorGateway({
   agentTestMode: true,
   allowNonTailscaleBind: true,
   env: { ORKESTRATOR_GATEWAY_TOKEN: token },
-  logger: { debug() {}, info() {}, warn() {}, error() {} },
 });
 try {
   const info = await gateway.start();

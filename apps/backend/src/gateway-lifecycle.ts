@@ -220,10 +220,7 @@ export class GatewayLifecycle {
   ): Promise<{ bindAddress: string; port: number; url: string }> {
     const server = createServer((request, response) => {
       this.router.handle(request, response, listenerKind).catch((error: unknown) => {
-        log.throttled("error", "request.failed", {
-          error,
-          fields: () => ({ error: formatLogError(error) }),
-        });
+        log.error("request.failed", { listener: listenerKind, error: formatLogError(error) });
         if (!response.headersSent) {
           jsonResponse(response, 500, {
             error: error instanceof Error ? error.message : String(error),

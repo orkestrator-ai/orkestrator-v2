@@ -1,3 +1,4 @@
+import { configureLogger } from "@orkestrator/protocol/logger";
 /**
  * Test-only isolated backend for the preview latency baseline self-test
  * (`scripts/preview-latency-baseline.ts`, `preview-latency-baseline.test.ts`).
@@ -142,6 +143,7 @@ export async function startPreviewBaselineHarness(): Promise<PreviewBaselineHarn
 }
 
 if (import.meta.main) {
+  configureLogger({ sink: ({ line }) => process.stderr.write(`${line}\n`) });
   installFatalRejectionGuard({ label: "[preview-baseline-harness]" });
   const harness = await startPreviewBaselineHarness();
   let closing = false;

@@ -7,7 +7,8 @@ import {
   type SignalHealthStatus,
 } from "./recurring-diagnostics.js";
 import type { WorktreeChangeHint, WorktreeWatcher } from "./worktree-watcher.js";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("diff-stats");
 
@@ -145,7 +146,7 @@ export class ContainerWorktreeSignals {
   private readonly nowMs: () => number;
   private readonly delay: (callback: () => void, delayMs: number) => unknown;
   private readonly cancelDelay: (timer: unknown) => void;
-  private readonly onWarning: (message: string) => void;
+  private readonly onWarning?: (message: string) => void;
   private readonly demotions: Partial<Record<SignalDemotionReason, number>> = {};
   private acceptedRings = 0;
 
@@ -162,8 +163,7 @@ export class ContainerWorktreeSignals {
       });
     this.cancelDelay =
       options.cancelDelay ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
-    this.onWarning =
-      options.onWarning ?? ((message) => log.warn("signal.demoted", { detail: message }));
+    this.onWarning = options.onWarning;
   }
 
   /** The `startContainerWatcher` of `DiffStatsService`. */
@@ -266,13 +266,7 @@ export class ContainerWorktreeSignals {
     })()
       .catch((error: unknown) => {
         if (current()) {
-          this.demote(
-            lineage,
-            "arm-failed",
-            `Could not arm the worktree signal for ${containerId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          this.demote(lineage, "arm-failed", error);
         } else {
           this.revoke(lineage);
         }
@@ -360,16 +354,28 @@ export class ContainerWorktreeSignals {
     }, CONTAINER_WORKTREE_SIGNAL_MISS_GRACE_MS);
   }
 
-  private demote(lineage: Lineage, reason: SignalDemotionReason, detail?: string): void {
+  private demote(lineage: Lineage, reason: SignalDemotionReason, error?: unknown): void {
     const wasQualified = lineage.qualified;
     lineage.qualified = false;
     lineage.demoted = true;
     this.demotions[reason] = (this.demotions[reason] ?? 0) + 1;
     this.revoke(lineage);
-    this.onWarning(
-      detail ??
+    if (this.onWarning) {
+      this.onWarning(
         `Worktree signal in ${lineage.containerId} ${DEMOTION_TEXT[reason]}; scanning on timers until it is re-armed`,
-    );
+      );
+    } else {
+      log.warn("signal.demoted", {
+        containerId: lineage.containerId,
+        demotion: reason,
+        ...(error === undefined
+          ? {}
+          : {
+              ...classifyCommandFailure(error, { tools: ["docker"] }),
+              error: formatLogError(error, { message: false }),
+            }),
+      });
+    }
     if (wasQualified) lineage.options.onCoverageChange?.();
     this.scheduleRetry(lineage);
   }

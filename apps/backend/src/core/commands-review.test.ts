@@ -21,9 +21,28 @@ import {
 } from "./commands-review.js";
 import { StorageService } from "./storage.js";
 import { EnvironmentUnavailableError } from "./workspace-code-rewind.js";
+import { parsePrDetectionOutput } from "./commands-review.js";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { configureLogger } from "@orkestrator/protocol/logger";
 import * as shell from "./shell.js";
 
 const temporaryDirectories: string[] = [];
+
+test("unusable PR diagnostics retain counts without prompt-derived branch names", () => {
+  const logs = captureLogs();
+  configureLogger({ level: "debug" });
+  try {
+    expect(() => parsePrDetectionOutput("[{}]", "PRIVATE-PROMPT-BRANCH")).toThrow(
+      "Failed to parse",
+    );
+    expect(
+      logs.records().find((entry) => entry.event === "gh.pr-list-unparseable")?.fields,
+    ).toEqual({ outputChars: 4, candidates: 0 });
+    expect(logs.lines.join("\n")).not.toContain("PRIVATE-PROMPT-BRANCH");
+  } finally {
+    logs.restore();
+  }
+});
 
 function packageFixture(): ReviewPackage {
   return {

@@ -1,3 +1,4 @@
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 /**
  * The build pipeline stage supervisor: the whole-store tick, the per-pipeline
  * lock, and the state machine each pass advances (provisioning, stage start and
@@ -35,7 +36,6 @@ import {
 } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
-  errorMessage,
   sessionForCurrentPhase,
   resumablePhase,
   discardPreparationResult,
@@ -345,13 +345,22 @@ export class BuildPipelineSupervisor {
         this.pendingRewindFailures.delete(pipeline.id);
       } catch (error) {
         // Keep the durable intent and restart target intact for retry/startup.
-        const reason = errorMessage(error);
+        // The wrapper is user-facing and can quote Git output. Only classify its cause.
+        const failure = classifyCommandFailure(
+          error instanceof Error ? (error.cause ?? error) : error,
+          { tools: ["docker", "git"] },
+        );
+        const reason = JSON.stringify(failure);
         if (this.pendingRewindFailures.get(pipeline.id) !== reason) {
           if (this.pendingRewindFailures.size >= MAX_WORKSPACE_WAITS_NOTED) {
             this.pendingRewindFailures.clear();
           }
           this.pendingRewindFailures.set(pipeline.id, reason);
-          log.warn("rewind.pending", { pipelineId: pipeline.id, reason });
+          log.warn("rewind.pending", {
+            pipelineId: pipeline.id,
+            ...failure,
+            error: formatLogError(error, { message: false }),
+          });
         }
       }
       return;

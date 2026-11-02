@@ -1582,7 +1582,7 @@ export function buildPrDetectionCandidate(
   };
 }
 
-export function parsePrDetectionOutput(stdout: string, branch: string): PrDetectionResult | null {
+export function parsePrDetectionOutput(stdout: string, _branch: string): PrDetectionResult | null {
   const trimmed = stdout.trim();
   if (isExpectedPrAbsenceOutput(trimmed)) return null;
 
@@ -1610,7 +1610,6 @@ export function parsePrDetectionOutput(stdout: string, branch: string): PrDetect
   const result = candidates[0]?.result;
   if (!result) {
     log.debug("gh.pr-list-unparseable", () => ({
-      branch,
       outputChars: trimmed.length,
       candidates: candidates.length,
     }));

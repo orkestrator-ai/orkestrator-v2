@@ -34,6 +34,52 @@ import {
 } from "./gateway-test-harness.js";
 
 describe("remote gateway", () => {
+  test("independent request failures each log diagnostics and still send a failure response", async () => {
+    const logs = captureLogs();
+    try {
+      for (const owner of ["first", "second"]) {
+        const { gateway, info } = await startGateway();
+        const lifecycle = (
+          gateway as unknown as {
+            lifecycle: {
+              router: {
+                handle: (
+                  request: unknown,
+                  response: import("node:http").ServerResponse,
+                ) => Promise<void>;
+              };
+            };
+          }
+        ).lifecycle;
+        let calls = 0;
+        lifecycle.router.handle = async (_request, response) => {
+          calls += 1;
+          if (calls === 2) {
+            response.end("ok");
+            return;
+          }
+          throw new Error(`${owner}-failure-${calls}`);
+        };
+        for (let call = 1; call <= 3; call += 1) {
+          const result = await requestUrl(`${info.url}/operation-${call}`);
+          expect(result.status).toBe(call === 2 ? 200 : 500);
+          if (call !== 2) expect(result.json()).toEqual({ error: `${owner}-failure-${call}` });
+        }
+      }
+      const failures = logs.records().filter((entry) => entry.event === "request.failed");
+      expect(failures).toHaveLength(4);
+      for (const message of [
+        "first-failure-1",
+        "first-failure-3",
+        "second-failure-1",
+        "second-failure-3",
+      ]) {
+        expect(JSON.stringify(failures)).toContain(message);
+      }
+    } finally {
+      logs.restore();
+    }
+  });
   test("separates content-coded metadata from full transformed-representation stripping", () => {
     const upstream = (): OutgoingHttpHeaders => ({
       etag: '"upstream"',

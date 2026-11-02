@@ -1,3 +1,4 @@
+import { configureLogger } from "@orkestrator/protocol/logger";
 /**
  * Remote client bandwidth baseline (todo 0052; plans/stream-efficience.md,
  * Phase 2). Runs the real gateway in this process against a fake backend and
@@ -1000,6 +1001,7 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
+  configureLogger({ sink: ({ line }) => process.stderr.write(`${line}\n`) });
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(error instanceof UsageError ? 2 : 1);

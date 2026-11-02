@@ -17,6 +17,20 @@ const gh = { tools: ["gh"] } as const;
 const docker = { tools: ["docker"] } as const;
 const tmux = { tools: ["tmux"] } as const;
 
+test("Git resource names cannot impersonate worktree and branch diagnostic suffixes", () => {
+  for (const phrase of [
+    "is not a working tree",
+    "contains modified or untracked files",
+    "is not fully merged",
+  ]) {
+    const result = classifyCommandFailure(
+      failure(`fatal: '/tmp/${phrase}' is a main working tree`, { exitCode: 128 }),
+      git,
+    );
+    expect(result).toEqual({ reason: "unclassified", exitCode: 128, signal: null });
+  }
+});
+
 /** One real shape per reason. A reason nothing can produce fails the coverage test. */
 const SAMPLES: Readonly<Record<CommandFailureReason, Sample>> = {
   "timed-out": [failure("Command timed out after 5 ms", { timedOut: true, exitCode: null })],

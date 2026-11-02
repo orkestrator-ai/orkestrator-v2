@@ -1,3 +1,4 @@
+import { CommandFailedError } from "./shell.js";
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   isBuildPipeline,
@@ -651,8 +652,15 @@ describe("rewinding the code to a step", () => {
   test("a journaled reset the container cannot run yet says so, logs once and finishes later", async () => {
     const fake = fakeGit();
     let unavailable = false;
+    let commandFailure = false;
     const git: EnvironmentGit = async (id, args) => {
-      if (unavailable && args[0] === "update-ref") {
+      if (unavailable && commandFailure && args[0] === "reset") {
+        throw new CommandFailedError(
+          "Permission denied PRIVATE-GIT-REWIND password=credential-rewind-marker",
+          { exitCode: 128 },
+        );
+      }
+      if (unavailable && !commandFailure && args[0] === "update-ref") {
         throw new EnvironmentUnavailableError(
           "The environment's container is not running. Start the environment, then try again.",
         );
@@ -677,9 +685,19 @@ describe("rewinding the code to a step", () => {
           const logged = () =>
             warn.mock.calls.filter((call) => String(call[0]).includes("rewind.pending"));
           expect(logged()).toHaveLength(1);
-          expect(String(logged()[0]![0])).toContain(waiting);
+          expect(String(logged()[0]![0])).toContain("reason=unclassified");
+          expect(String(logged()[0]![0])).not.toContain(waiting);
           expect(provider.created.length).toBe(created);
           expect(controls.currentHead).toBe(C3);
+
+          commandFailure = true;
+          await service.advanceNow(started.id);
+          const safeLog = String(logged().at(-1)![0]);
+          expect(safeLog).toContain("reason=permission-denied");
+          expect(safeLog).toContain("exitCode=128");
+          expect(safeLog).toContain(started.id);
+          expect(safeLog).not.toContain("PRIVATE-GIT-REWIND");
+          expect(safeLog).not.toContain("credential-rewind-marker");
 
           unavailable = false;
           await service.advanceNow(started.id);
@@ -687,7 +705,7 @@ describe("rewinding the code to a step", () => {
           expect(fake.refs.size).toBe(1);
           await service.advanceNow(started.id);
           expect(provider.created.slice(created).map((entry) => entry.phase)).toEqual(["build"]);
-          expect(logged()).toHaveLength(1);
+          expect(logged()).toHaveLength(2);
         },
         { environmentGit: git },
       );

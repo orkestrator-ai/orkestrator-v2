@@ -38,7 +38,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "check.started": "A reachability check started.",
       "check.finished": "A reachability check finished.",
       "check.probe": "One probe of a finished check.",
-      "check.summary": "The text the user sees for a check that did not find the host reachable.",
+      "check.summary":
+        "Content-free status and reason for a check that did not find the host reachable.",
       "check.remediation": "One command the user can run to unblock containers.",
       "shutdown.awaiting-network": "Shutdown is waiting for probe network preparation.",
       "shutdown.cleanup-deferred": "Probe network cleanup waits until its preparation settles.",

@@ -548,6 +548,57 @@ function service(
 }
 
 describe("ContainerHostReachabilityService.check", () => {
+  for (const rejected of [false, true]) {
+    test(`probe logs omit private diagnostics (${rejected ? "rejected" : "resolved"} command)`, async () => {
+      const privateOutput = "PRIVATE-PROBE password=credential-probe-marker";
+      const failure = new CommandFailedError(
+        `Cannot connect to the Docker daemon ${privateOutput}`,
+        { exitCode: 125 },
+      );
+      const runner = fakeRunner({
+        probeOutput: () => privateOutput,
+        execOutput: () => (rejected ? failure : privateOutput),
+        onCall: async (call) => {
+          if (rejected && call[1] === "run") throw failure;
+        },
+      });
+      const { svc, logs, warnings } = service({
+        runner,
+        run: async (command, args, options) => {
+          const result = await runner.run(command, args, options);
+          return command === "docker" && ["run", "exec"].includes(args?.[0] ?? "")
+            ? { ...result, stderr: "PRIVATE-PROBE-STDERR password=stderr-credential-marker" }
+            : result;
+        },
+      });
+      try {
+        const result = await svc.check("boot");
+        // UI diagnostics remain available; logs carry only fixed metadata.
+        expect(result.probes[0]?.detail).toContain("PRIVATE-PROBE");
+        await svc.checkEnvironmentContainer("container-private", { reason: "bridge-ready" });
+        const records = warnings().filter((entry) =>
+          ["probe.result", "check.probe", "check.summary"].includes(entry.event),
+        );
+        expect(new Set(records.map((entry) => entry.event))).toEqual(
+          new Set(["probe.result", "check.probe", "check.summary"]),
+        );
+        for (const entry of records.filter((entry) => entry.event !== "check.summary")) {
+          expect(entry.fields).toMatchObject({
+            outcome: "error",
+            elapsedMs: expect.any(Number),
+            http: null,
+          });
+          if (rejected)
+            expect(entry.fields).toMatchObject({ reason: "daemon-unavailable", exitCode: 125 });
+        }
+        expect(logs.join("\n")).not.toContain("PRIVATE-PROBE");
+        expect(logs.join("\n")).not.toContain("credential-probe-marker");
+        expect(logs.join("\n")).not.toContain("stderr-credential-marker");
+      } finally {
+        await svc.dispose();
+      }
+    });
+  }
   test("a firewall that drops container traffic is reported with the ufw fix and logged", async () => {
     const { svc, runner, events, logs } = service({
       runner: fakeRunner({ probeOutput: () => BUSYBOX_TIMEOUT }),

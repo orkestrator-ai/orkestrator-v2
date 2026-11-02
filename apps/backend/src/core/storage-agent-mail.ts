@@ -153,8 +153,13 @@ export class AgentMailRepository {
         : { ...input, toTabId: await this.repos.agentMailboxes.recipientTab(sender, input) };
     }
     const workspaces = await this.repos.coordinators.listCoordinatorWorkspaces();
+    // A node sender's project is the recipient's own copy of the repository:
+    // a command node's coordinator mailing this node's coordinator.
     const projectId =
-      sender.kind === "tab" || sender.kind === "coordinator" || sender.kind === "system"
+      sender.kind === "tab" ||
+      sender.kind === "coordinator" ||
+      sender.kind === "system" ||
+      sender.kind === "node"
         ? sender.projectId
         : undefined;
     const workspace = alias
@@ -632,11 +637,15 @@ export class AgentMailRepository {
           : null;
       // Only admission of a new delegation, a user prompt, or Resume resets
       // the pair budget. Follow-ups and main/side mail consume the same lineage.
+      // A command node's coordinator asking this node's coordinator is a new
+      // request as it is to a worker: the pair that bounds that exchange is
+      // the command node's, where the answers land and nothing but its user
+      // resets the budget (docs/architecture/agent-messaging.md, "Node mail").
       const startsBudget =
         options.newDelegation === true &&
         (sender.kind === "coordinator" ||
           (sender.kind === "node" && sender.role === "coordinator")) &&
-        recipient.ownerKind !== "coordinator";
+        (recipient.ownerKind !== "coordinator" || sender.kind === "node");
       const pairEpoch = startsBudget
         ? store.revision
         : budgetSenderId

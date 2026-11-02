@@ -249,6 +249,8 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         "subject",
         "body",
         "steer",
+        // The leaf's project, for mail to its coordinator ("coordinator").
+        "projectId",
       ],
       "arguments",
     );
@@ -277,6 +279,14 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       deliverNow: settled.deliverNow,
       deliverNowNote: settled.deliverNowNote,
     };
+  });
+
+  // Whether a project here has a coordinator a command node's coordinator can
+  // mail (`deliver_node_mail` to "coordinator").
+  register("get_node_project_coordinator", async (args, context) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    if (typeof args.projectId !== "string") throw new Error("Expected projectId.");
+    return coordination(context).projectCoordinator(args.projectId);
   });
 
   // Whether coordinator mail to a worker tab has reached a turn yet; a

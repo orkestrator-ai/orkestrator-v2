@@ -6,10 +6,12 @@
  */
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { coordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
+import { nodeMailReplyTarget } from "./node-mail-reply-target.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
+  COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
@@ -1859,8 +1861,9 @@ export async function createControlMcp(
       "list_mailboxes",
       {
         title: "List agent mailboxes",
-        description:
-          "List durable agent-message destinations without transcript or filesystem content.",
+        description: coordinatorScope
+          ? 'List durable agent-message destinations without transcript or filesystem content. With nodeId, says whether that node\'s copy of this project has a coordinator you can reach with send_message, nodeId and toEnvironmentId "coordinator".'
+          : "List durable agent-message destinations without transcript or filesystem content.",
         inputSchema: z.object({
           q: z.string().trim().max(200).optional(),
           offset: z.number().int().min(0).default(0),
@@ -1872,6 +1875,16 @@ export async function createControlMcp(
       async ({ q, offset, limit, nodeId }) => {
         if (operator)
           return operatorListMailboxes(callerOnNode(operator, nodeId), { q, offset, limit });
+        if (coordinatorScope && nodeId) {
+          // Another node's mailboxes are not listed; whether its coordinator
+          // for this project can be reached is.
+          const reach = await invoke<unknown>("get_coordinator_node_mailbox", {
+            scope: coordinatorScope,
+            nodeId,
+          });
+          if (!isRecord(reach)) throw new Error("That node returned no mailbox information");
+          return toolResult(reach);
+        }
         coordinatorNodeRefused(nodeId);
         const page = await invoke<unknown>("list_agent_mailboxes", {
           q,
@@ -1891,7 +1904,7 @@ export async function createControlMcp(
       {
         title: coordinatorScope ? "Send a coordinator message" : "Send an external agent message",
         description: coordinatorScope
-          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued.'
+          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. On a command node, nodeId with toEnvironmentId "coordinator" asks that node\'s main coordinator for this project (list_mailboxes with nodeId says whether it has one); its answer arrives as mail. On a node in leaf mode, toEnvironmentId "command-node-coordinator" starts a message to the controlling command node\'s coordinator, and replyToMessageId answers its mail; that is the only cross-node send there. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued.'
           : "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
@@ -1920,7 +1933,7 @@ export async function createControlMcp(
             : {}),
           nodeId: nodeIdField.describe(
             coordinatorScope
-              ? "Message an agent on that node (a nodeId from list_nodes); toEnvironmentId is that node's environment. A reply to mail from another node goes back to it without nodeId."
+              ? 'Message an agent on that node (a nodeId from list_nodes); toEnvironmentId is that node\'s environment, or "coordinator" for its main coordinator. A reply to mail from another node goes back to it without nodeId.'
               : "Message an agent on that machine (a nodeId from list_nodes); toEnvironmentId is that machine's environment. Omit for this machine.",
           ),
         }),
@@ -1944,8 +1957,11 @@ export async function createControlMcp(
                 ...(input.toTabId ? { toTabId: input.toTabId } : {}),
               }
             : null;
-          if (!remote && input.replyToMessageId) {
-            // A reply to an agent on another node goes back across the node link.
+          let upward = !remote && input.toEnvironmentId === COMMAND_NODE_COORDINATOR_MAIL_ADDRESS;
+          if (!remote && !upward && input.replyToMessageId) {
+            // A reply to mail from another node goes back across the node
+            // link: to its agent or coordinator there, or, from a leaf's
+            // coordinator, up to the command node's coordinator.
             const own = await ownConversationMailbox(invoke, coordinatorScope);
             const parent = own
               ? await invoke<unknown>("get_agent_mail_message", {
@@ -1953,19 +1969,32 @@ export async function createControlMcp(
                   messageId: input.replyToMessageId,
                 }).catch(() => null)
               : null;
-            const from = isRecord(parent) && isRecord(parent.from) ? parent.from : null;
-            if (
-              from?.kind === "node" &&
-              typeof from.nodeId === "string" &&
-              typeof from.environmentId === "string" &&
-              typeof from.tabId === "string"
-            ) {
+            const replyTarget = nodeMailReplyTarget(isRecord(parent) ? parent.from : null);
+            if (replyTarget?.kind === "command-node") upward = true;
+            else if (replyTarget) {
               remote = {
-                nodeId: from.nodeId,
-                toEnvironmentId: from.environmentId,
-                toTabId: from.tabId,
+                nodeId: replyTarget.nodeId,
+                toEnvironmentId: replyTarget.toEnvironmentId,
+                ...(replyTarget.toTabId ? { toTabId: replyTarget.toTabId } : {}),
               };
             }
+          }
+          if (upward) {
+            const sent = await invoke<unknown>("send_coordinator_command_node_mail", {
+              scope: coordinatorScope,
+              requestId: input.requestId,
+              ...(input.subject ? { subject: input.subject } : {}),
+              body: input.body,
+              ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+            });
+            if (!isRecord(sent)) throw new Error("Message send returned no result");
+            const { coordinatorDelegationOpened: _opened, ...summary } = sent;
+            return toolResult({
+              message: summary,
+              ...(deliverNow === true
+                ? coordinatorDeliverNowResult(summary, { unsupported: true })
+                : {}),
+            });
           }
           if (remote) {
             const sent = await invoke<unknown>("send_coordinator_node_mail", {
@@ -1981,10 +2010,15 @@ export async function createControlMcp(
               coordinatorDelegationOpened,
               deliverNow: remoteOutcome,
               deliverNowNote: remoteNote,
+              // Mail to another node's coordinator says what happens next.
+              delivery,
+              wake,
+              nextStep,
               ...summary
             } = sent;
             return toolResult({
               message: summary,
+              ...(delivery !== undefined ? { delivery, wake, nextStep } : {}),
               // The leaf's outcome when it could steer; an older leaf cannot.
               ...(deliverNow !== true
                 ? {}

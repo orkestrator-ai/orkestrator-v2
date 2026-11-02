@@ -207,6 +207,20 @@ starts a pair budget as a local delegation does. A leaf agent's report to a
 coordinator waiting on it is held for that remote delegation like a local
 worker's, and released when the delegation settles.
 
+The two nodes' main coordinators for a repository use the same link
+([coordinator.md](coordinator.md#coordinators-on-two-nodes)). The command
+node's coordinator sends to `nodeId` with `toEnvironmentId: "coordinator"`;
+`deliver_node_mail` resolves that on the leaf as local mail to
+`"coordinator"`, from a `node` sender with role `coordinator`, and only to a
+leaf whose hello advertises `node-coordinator-mail`. The leaf coordinator
+replies with `replyToMessageId` or writes to `"command-node-coordinator"`;
+both go through the outbox (`OutboxItem.fromCoordinator`) and arrive on the
+command node from a `node` sender with role `agent`, so they keep an agent's
+untrusted framing. Mail from a command node's coordinator starts a new pair
+budget on the leaf even to its coordinator; the leaf coordinator's mail
+never resets the command node's, so that side's unattended budget and
+hourly limit stop two coordinators waking each other.
+
 A waking route ignores the default inject policy and inject depth. Only an
 explicit per-tab **Off**, a mute, or the pair hop budget stops it; per-tab
 `idle` and `inherit` both count as on. Mail sent before routes existed keeps
@@ -711,4 +725,6 @@ capability row says so.
 | Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/lib/chat/agent-mail-tool-call.ts` (mail tool calls), `apps/web/src/components/chat/MailTile.tsx`, `MailToolPart.tsx` |
 | Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
 | Coordinator status wakes | `apps/backend/src/core/coordinator-status-wakes.ts` |
+| Node mail (leaf side, outbox, collection) | `apps/backend/src/core/nodes/node-mail.ts`, `node-mail-collector.ts`, `node-coordination.ts` |
+| Coordinator ↔ coordinator node mail | `apps/backend/src/core/coordinator-node-coordinator-mail.ts`, `node-mail-reply-target.ts`; scenarios in `coordinator-node-coordinator-mail.test.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |

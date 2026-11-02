@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  COORDINATOR_MAIL_ADDRESS,
   coordinatorMainConversation,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
@@ -27,9 +28,12 @@ import { executeAgentAccountSwitch } from "./node-account-switch.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import {
+  coordinatorContactKey,
+  describeCommandCoordinatorMail,
   describeCoordinatorMail,
   emptyNodeMailState,
   LeafNodeMail,
+  type OutboxItem,
   type CoordinatorMailbox,
   type LocalCoordinatorContact,
   type NodeMailState,
@@ -344,6 +348,12 @@ export class NodeCoordination {
       throw new Error("Expected a body of at most 32 KiB.");
     const requestId =
       typeof args.requestId === "string" ? args.requestId.slice(0, 200) : randomUUID();
+    if (toEnvironmentId === COORDINATOR_MAIL_ADDRESS) {
+      return this.deliverToProjectCoordinator(args, controllerId, controller.displayName, mailbox, {
+        requestId,
+        body,
+      });
+    }
     const environment = await this.options.storage.getEnvironment(toEnvironmentId);
     if (!environment) throw new Error("That environment does not exist on this node.");
     // The attached command node's coordinator, authenticated by the node link:
@@ -387,6 +397,141 @@ export class NodeCoordination {
       placement: message.placement,
       ...(message.placementReason ? { placementReason: message.placementReason } : {}),
       ...(message.injectedVia ? { injectedVia: message.injectedVia } : {}),
+    };
+  }
+
+  /**
+   * The command node's coordinator asking this node's main coordinator for
+   * the project. Stored as node mail from a coordinator, so it is
+   * same-project, takes the coordinator route and wakes it; the address
+   * resolves as local mail to "coordinator" does, starting a closed main with
+   * the default agent. A project with no coordinator at all is refused.
+   */
+  private async deliverToProjectCoordinator(
+    args: Record<string, unknown>,
+    controllerId: BackendId,
+    controllerName: string,
+    mailbox: CoordinatorMailbox,
+    input: { requestId: string; body: string },
+  ): Promise<{
+    messageId: string;
+    toTabId: string;
+    toEnvironmentId: string;
+    toEnvironmentName: string;
+    toTabName?: string;
+    placement: string;
+    placementReason?: string;
+  }> {
+    const storage = this.options.storage;
+    const projectId = typeof args.projectId === "string" ? args.projectId : "";
+    if (!projectId) throw new Error("Expected projectId for mail to this node's coordinator.");
+    const project = await storage.getProject(projectId);
+    if (!project) throw new Error("That project does not exist on this node.");
+    if (!(await storage.coordinators.getCoordinatorWorkspace(projectId))) {
+      throw new Error(
+        `This node has no coordinator for ${project.name}; message a worker here instead, or ask the user to open one on this node.`,
+      );
+    }
+    const message = await storage.sendAgentMail(
+      {
+        kind: "node",
+        nodeId: controllerId,
+        nodeName: controllerName,
+        role: "coordinator",
+        projectId,
+        environmentId: mailbox.coordinatorEnvironmentId,
+        tabId: mailbox.coordinatorTabId,
+        title: `Coordinator on ${controllerName}`,
+      },
+      {
+        requestId: `node:${controllerId}:${input.requestId}`.slice(0, 256),
+        toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
+        toTabId: "",
+        ...(typeof args.subject === "string" ? { subject: args.subject.slice(0, 200) } : {}),
+        body: describeCommandCoordinatorMail(input.body, controllerName),
+      },
+      { newDelegation: true },
+    );
+    // Its answer goes back to this conversation; a new message from this
+    // project's coordinator goes to the command node that mailed it last.
+    await this.leafMail.recordThread(message.id, mailbox);
+    await this.leafMail.recordContact(coordinatorContactKey(projectId), mailbox);
+    const toTabName = await mailboxDisplayName(storage, message.toEnvironmentId, message.toTabId);
+    return {
+      messageId: message.id,
+      toEnvironmentId: message.toEnvironmentId,
+      toTabId: message.toTabId,
+      toEnvironmentName: "Coordinator",
+      ...(toTabName ? { toTabName } : {}),
+      placement: message.placement,
+      ...(message.placementReason ? { placementReason: message.placementReason } : {}),
+    };
+  }
+
+  /** Whether a project here has a coordinator a command node's coordinator can mail. */
+  async projectCoordinator(projectId: string): Promise<{
+    hasCoordinator: boolean;
+    main: { title: string; agent: string | null } | null;
+  }> {
+    const workspace = await this.options.storage.coordinators.getCoordinatorWorkspace(projectId);
+    const main = workspace ? coordinatorMainConversation(workspace) : undefined;
+    return {
+      hasCoordinator: Boolean(workspace),
+      main: main ? { title: main.title, agent: main.agent ?? null } : null,
+    };
+  }
+
+  /**
+   * This node's main coordinator writing to a command node's coordinator: a
+   * reply to that coordinator's message, or a new message for the
+   * repository's main coordinator there. Queued in the outbox like a worker's
+   * report; the command node collects it.
+   */
+  async sendFromCoordinator(input: {
+    projectId: string;
+    coordinatorEnvironmentId: string;
+    coordinatorTabId: string;
+    requestId: string;
+    subject?: string;
+    body: string;
+    replyToMessageId?: string;
+  }): Promise<{ item: OutboxItem; controllerId: BackendId; controllerName?: string }> {
+    const destination = await this.leafMail.routeCoordinator({
+      contactKey: coordinatorContactKey(input.projectId),
+      ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+    });
+    const project = await this.options.storage.getProject(input.projectId).catch(() => null);
+    const hint = repositoryHint(project?.gitUrl);
+    const tabName = await mailboxDisplayName(
+      this.options.storage,
+      input.coordinatorEnvironmentId,
+      input.coordinatorTabId,
+    );
+    const mailbox = destination as Partial<CoordinatorMailbox>;
+    const item = await this.leafMail.enqueue(destination.controllerId, {
+      requestId: input.requestId,
+      fromEnvironmentId: input.coordinatorEnvironmentId,
+      fromTabId: input.coordinatorTabId,
+      fromEnvironmentName: "Coordinator",
+      ...(tabName ? { fromTabName: tabName } : {}),
+      ...(hint ? { repositoryHint: hint } : {}),
+      ...(mailbox.coordinatorEnvironmentId && mailbox.coordinatorTabId
+        ? {
+            toCoordinator: {
+              environmentId: mailbox.coordinatorEnvironmentId,
+              tabId: mailbox.coordinatorTabId,
+            },
+          }
+        : {}),
+      ...(input.subject ? { subject: input.subject } : {}),
+      body: input.body,
+      fromCoordinator: true,
+      ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+    });
+    return {
+      item,
+      controllerId: destination.controllerId,
+      ...(destination.controllerName ? { controllerName: destination.controllerName } : {}),
     };
   }
 
@@ -443,6 +588,8 @@ export class NodeCoordination {
       tabId: string;
       environmentName?: string;
       tabName?: string;
+      /** The leaf's main coordinator for the project, not an agent. */
+      coordinator?: boolean;
     };
   }): Promise<void> {
     const storage = this.options.storage;
@@ -475,12 +622,20 @@ export class NodeCoordination {
           )
         : undefined;
       const main = workspace ? coordinatorMainConversation(workspace) : null;
-      if (!workspace || !main) {
+      if (workspace && !main && input.from?.coordinator) {
+        // A leaf coordinator's new message reaches the main as local mail to
+        // "coordinator" would, starting a closed one with the default agent.
+        address = { environmentId: COORDINATOR_MAIL_ADDRESS, tabId: "" };
+      } else if (!workspace || !main) {
         throw Object.assign(new Error("No open coordinator for that project on this node."), {
           code: "no-coordinator",
         });
+      } else {
+        address = {
+          environmentId: coordinatorRuntimeId(workspace.id, main.id),
+          tabId: main.tabId,
+        };
       }
-      address = { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
       projectId = workspace.projectId;
     }
     // A worker on a node this one controls reports like a worker here: the
@@ -492,6 +647,9 @@ export class NodeCoordination {
             kind: "node",
             nodeId: input.from.nodeId,
             nodeName: input.from.nodeName,
+            // A leaf's coordinator too: it answers this node's coordinator
+            // but has no authority over it, so its mail (and anything it
+            // forwards from its workers) keeps an agent's untrusted framing.
             role: "agent",
             projectId,
             environmentId: input.from.environmentId,

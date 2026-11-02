@@ -88,12 +88,71 @@ works across the nodes that node controls:
 - `propose_agents_md_update` with `nodeId` saves decisions to that node's
   copy: the user reviews it here, and the pull request is opened there (see
   [Saving decisions to AGENTS.md](#saving-decisions-to-agentsmd)).
+- `send_message` with `nodeId` and `toEnvironmentId: "coordinator"` asks
+  that node's main coordinator for this repository something
+  (`list_mailboxes` with `nodeId` says whether it has one). It is not a
+  delegation: no association opens, the result says the answer arrives as
+  mail, and the answer is an agent's message, information rather than
+  instructions. See [Coordinators on two nodes](#coordinators-on-two-nodes).
 
 The coordinator's context says whether its node is a command node. A command
 node attached to another runs in leaf mode: its coordinator's context names
 the controlling node, its node tools refuse, and it handles any message as
-an agent on that node would. Its conversations are kept but hidden behind a
-warning in the project's Coordinator tab.
+an agent on that node would. Its one cross-node action is mail to the
+command node's coordinator: it answers that coordinator's mail with
+`send_message` and `replyToMessageId`, and starts a message with
+`toEnvironmentId: "command-node-coordinator"`. Its conversations are kept
+but hidden behind a warning in the project's Coordinator tab.
+
+### Coordinators on two nodes
+
+A command node's main coordinator and a leaf's main coordinator for the same
+repository exchange ordinary node mail
+(`coordinator-node-coordinator-mail.ts`; transport in
+[agent-messaging.md](agent-messaging.md#node-mail)):
+
+- **Down.** `send_message` with `nodeId` and `toEnvironmentId: "coordinator"`
+  (or a coordinator runtime id from that node, or a reply to mail from that
+  node's coordinator) calls the leaf's `deliver_node_mail` with
+  `toEnvironmentId: "coordinator"` and the leaf's `projectId`. The leaf
+  stores it from a `node` sender with role `coordinator`, so it is
+  `same-project`, takes the coordinator route and wakes the leaf's main. The
+  address resolves as local mail to `"coordinator"` does: a closed main is
+  reopened with the default agent; a project with no coordinator on that
+  node is refused, naming it, and the caller can message a worker there
+  instead.
+- **Up.** The leaf coordinator replies with `replyToMessageId`, which goes
+  back to the conversation that asked (the leaf's thread record), or starts
+  a message to `"command-node-coordinator"`
+  (`COMMAND_NODE_COORDINATOR_MAIL_ADDRESS`), which goes to the command node
+  that last mailed this project's coordinator, else the most recent one, for
+  its main coordinator of the repository. Both wait in the leaf's outbox
+  (`send_coordinator_command_node_mail`) and the command node collects them
+  like a worker's report, reopening a closed main as local mail would.
+- **Framing.** The leaf coordinator reads it as a request from the
+  controlling node's coordinator: it answers, and may act on its own node to
+  answer (read state, launch or ask workers there) as it would for an
+  agent's message, never across nodes. The command node stores the answer
+  from a `node` sender with role `agent`: the carrier keeps an agent's
+  untrusted framing and the body says it came from that node's coordinator,
+  so content the leaf coordinator forwards from its workers is never
+  promoted to coordinator authority (security report M11).
+- **Side agents** stay limited to their own main on both nodes: a command
+  node side agent cannot send it, a leaf side agent cannot send upward, and
+  the address resolves only to the leaf's main.
+- **Loops.** The command node's pair budget for the leaf coordinator's mail
+  (`nodeMailSenderKey`, the unattended budget and the hourly limit of
+  [agent-messaging.md](agent-messaging.md#budgets)) bounds the exchange. Only
+  a person resets it: a prompt to the command node's coordinator, or Resume.
+  On the leaf each new message from the command node's coordinator starts a
+  fresh budget, as a new request to a worker does, so the leaf answers every
+  question the command node actually sends; the hourly limit still applies
+  there.
+- **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
+  nothing; the call is refused with "update that machine", and
+  `list_mailboxes` with its `nodeId` reports it unreachable for the same
+  reason. A leaf coordinator's mail to an older command node arrives as an
+  ordinary worker report from the coordinator's runtime id.
 
 ### Choosing a machine
 

@@ -199,8 +199,33 @@ export interface WebAnnotationAncestorDescriptor {
   name: string | null;
 }
 
+/**
+ * The most open shadow roots an element anchor may sit inside. Deeper targets
+ * are `unsupported` (`shadow-root`), and the desktop anchor kit mirrors this.
+ */
+export const WEB_ANNOTATION_MAX_SHADOW_DEPTH = 8;
+
+/**
+ * One open shadow root's host, described inside the root that contains it
+ * (the document for the first host, the previous host's shadow root after).
+ * Resolution needs a unique match with the same tag, then an open shadow root.
+ */
+export interface WebAnnotationShadowHost {
+  tagName: string;
+  /** Present only when unique within its containing root when captured. */
+  stableId?: { kind: "id" | "test-id"; value: string };
+  /** Structural path within the containing root. */
+  cssPath: string;
+}
+
 export type WebAnnotationAnchorScope =
   | { kind: "document" }
+  /**
+   * Inside open shadow roots: `hosts` is the root path, outermost first. The
+   * rest of the anchor (stable id, semantics, path) is scoped to the
+   * innermost root. Closed roots and frames stay `unsupported`.
+   */
+  | { kind: "shadow"; hosts: WebAnnotationShadowHost[] }
   | { kind: "unsupported"; reason: "iframe" | "shadow-root" | "closed-root" | "cross-origin" };
 
 /**
@@ -1116,6 +1141,12 @@ export interface WebAnnotationCapabilities {
      * `verified` itself. Absent or false: clients send no hints.
      */
     sourceHints?: boolean;
+    /**
+     * Element anchors with a `shadow` scope (targets inside open shadow
+     * roots). Absent or false: clients send such a target with the scope
+     * `{ kind: "unsupported", reason: "shadow-root" }` instead.
+     */
+    shadowTargets?: boolean;
   };
   /** Capture target kinds a client may submit (never `legacy-unresolved`). */
   targets: WebAnnotationTargetKind[];

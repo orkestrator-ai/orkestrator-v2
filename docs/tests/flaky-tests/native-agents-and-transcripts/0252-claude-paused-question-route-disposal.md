@@ -107,3 +107,20 @@ timeout or skip was changed. Evidence is the aggregate compressed log
 `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.P117Rf/review-fixes-component-browser.log.gz`
 and the isolated owner's passing `.last-run.json` under
 `output/playwright/session-import-review-claude-owner/`.
+
+## To-do 1202 task 3 renderer review — 2026-11-02
+
+Branch `renderer-paths-optimization-845c78394eb7-r1` (head `19e1baf42`), which
+changes pane-layout persistence, native-session in-flight flags, the agent-info
+header and the native tab's transcript tail reads, not the Claude interaction
+cards or this fixture's route proxy. A three-worker rerun of the 18 owners that
+failed in the loaded nine-worker `test:browser` run
+(`bunx playwright test --config e2e/playwright.config.ts --workers=3 …`, 278
+passed, 43 skipped, 5 failed in 4.3 min) failed the mobile case at line 107
+with `apiRequestContext.fetch: Request context disposed` in the snapshot route
+callback. The desktop case passed in the same run. The complete unchanged
+owner then passed alone with
+`mise run test:logged -- --name branch-claude-interactions -- bunx playwright test --config e2e/playwright.config.ts --workers=1 e2e/ClaudeInteractions.spec.ts`
+(6 tests, 16.2 s). No assertion, timeout or skip changed. Evidence:
+`orkestrator-test-run.Jkk5jl/branch-browser-failed-specs.log.gz` below the
+host temporary directory.

@@ -39,7 +39,7 @@ governs, marked "Decided".
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
-14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; DK-10 left for a maintainer decision).
+14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 implemented 2026-11-02; Docker qualification pending; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
 
@@ -524,7 +524,7 @@ Tests changed: `tests/unit/monorepo-scripts.test.ts` (layer order, npm cache), `
 
 The re-pull row comes from a probe: a runtime line appended to all five `bridges/*/src/index.ts`, both Dockerfiles rebuilt on the same builder, and changed layer digests (`RootFS.Layers`) compared against each unprobed image. The vendored SDK layers kept their digests across the rebuild. CI builds with `cache-from`/`cache-to: type=gha,mode=max` (`publish-container.yml`), so they reuse layers the same way. `bash docker/tests/final-image-smoke.sh` passed on the after image.
 
-`mise run test:agent:docker` ran on the after image, in a disposable profile (`--fixture-environments local,container --no-agent-credentials --agent-platforms codex,grok,opencode --headless-electron`). Load average was about 46 because about ten builds were sharing the host. Result: 17 passed, 4 skipped, 3 failed, and the same three failed again when rerun alone. None of the three depends on what is inside the image:
+`mise run test:agent:docker` ran on the after image, in a disposable profile (`--fixture-environments local,container --no-agent-credentials --agent-platforms codex,grok,opencode --headless-electron`). Load average was about 46 because about ten builds were sharing the host. Result: 17 passed, 4 skipped, 3 failed, and the same three failed again when rerun alone. The causes were not all established; these failures remain qualification blockers:
 
 - `web-annotations-gateway.spec.ts:958`: the "Docker containers can't reach Orkestrator" dialog covered the page. The host's ufw drops traffic from Docker networks to the agent tools port.
 - `native-draft-attachments.spec.ts:378`: the test's restricted container started from the new image. After that, the page showed "Orkestrator couldn't connect" before the sidebar loaded.
@@ -535,6 +535,41 @@ The passing tests include container boot and restart with imported logins, rebui
 Rechecked after rebasing onto current `main` at `643ce87c4` on 2026-11-02: all four findings still applied before this change. Fresh linux/amd64 builds measured **6,411,820,583 → 5,452,072,222 bytes** (−959,748,361 bytes, −15%). `docker history --no-trunc` and container `du -sxh` reproduce the cache and mise savings above. Both builds and the final-image smoke passed; four focused unit test files passed. The Node drift check now enforces ≥24.22.1.
 
 The fresh `test:agent:docker` attempt could not qualify the image: disposable profile `dk1202-02340-final` failed startup with `ContainerLifecycleError:resource-exhausted` because Docker had no free address range for another environment network. The suite then reported 2 passed, 4 skipped and 18 failed against the unavailable profile (failure log `/tmp/orkestrator-test-run.2BLmVy/agent-docker-1202.log.gz`). These are infrastructure failures, not evidence of working UI paths. No shared networks, firewall settings or Docker configuration were changed. The profile was stopped and reset (0 containers, 2 volumes, 0 networks removed); no launcher remains. **A green `test:agent:docker` run remains required on a host with network capacity.** Full validation is deferred to pipeline preparation as requested. arm64 image smoke was not run on this amd64 host.
+
+
+Review repair on 2026-11-02, after `a88ed87f5`: rebuilt the reviewed
+Dockerfile with `mise run test:logged -- --name fix-docker-build -- mise run
+docker:build:dev --profile dk1202-fix-02340` (passed). The fresh amd64 image
+`orkestrator-v2:dev-243dd588f5d7` passed final-image smoke (all five bridges
+start and answer health) and an offline `node`-user check of `mise trust`,
+`mise install` and `mise exec -- bun --version` with a project pin of 1.4.4;
+the installed symlink resolves to the base binary. This directly exercises
+the split SDK/bundle runtime paths and Bun registration.
+
+A fresh credential-free disposable profile with `--fixture-environments
+local,container --agent-platforms codex,grok,opencode --headless-electron`
+again failed before readiness with `ContainerLifecycleError:resource-exhausted:
+Docker has no free address range for another environment network`.
+`ORKESTRATOR_AGENT_TEST_PROFILE=dk1202-fix-02340 mise run test:logged --
+--name fix-agent-docker -- mise run test:agent:docker` then reported
+2 passed, 4 skipped and 18 failed (12.1 seconds; failure artifact
+`/tmp/orkestrator-test-run.K1Paf0/fix-agent-docker.log.gz`). This is still
+an unmet acceptance criterion, not an excused pass or a diagnosis of the
+three earlier failures. No shared networks or firewall settings were changed.
+`dev:stop` confirmed the launcher was stopped; `dev:reset` removed only the
+profile's two volumes and disposable state (no containers or networks).
+
+The arm64 attempt (`mise run test:logged -- --name fix-arm64-build -- docker
+build --platform linux/arm64 -t orkestrator-v2:fix-02340-arm64 -f
+docker/Dockerfile .`) failed after 273.2 seconds at the existing
+`verify-playwright.cjs` build check (Dockerfile line 336). Chromium reported
+GPU process launch failures (`error_code=1002`), then QEMU reported target
+signal 5. Evidence: `/tmp/orkestrator-test-run.raVo6x/fix-arm64-build.log.gz`.
+No arm64 final image was produced and no arm64 final-image smoke ran. This
+is an open qualification failure, not a waived check; a native arm64 runner
+is needed to establish whether it reproduces without emulation. The browser
+check was preserved. The original preparation package and logs were not changed;
+its passing format, lint, typecheck and default-suite checks were not rerun.
 
 DK-10 is still open. The SDK's `claude-agent-sdk-linux-x64/claude` (0.3.314) and the CLI's `claude-code/bin/claude.exe` (2.1.314) are the same file today: SHA-256 `4487042b…5f84594`, 298 MB each. [`upgrade-agents.md`](../../development/upgrade-agents.md) says the SDK deliberately does not track the CLI, so they can diverge.
 
@@ -653,6 +688,16 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
 
 Made on 2026-11-01 while doing the first batch. Uncommitted at the time of
 writing, on the worktree branch `20261101-012617-580e11a7c62c`.
+
+### Task 14: preserve unrelated task records (review, 2026-11-02)
+
+Compared the complete document diff from the recorded review base
+`82598d869d6b79e44d6c6a1b0577cd261ab8b71f` to reviewed commit
+`a88ed87f5d7142222747ca00a213a41536ef2557`: only task 14's index line
+and section differ. Tasks 2, 3, 6, 7, 10, 11 and 15 already match that
+base. Preserve them; restoring older open statuses would undo records
+already present in the review base. Keep task 14 marked implemented with
+qualification pending until a green Docker run is recorded.
 
 ### Task 2: unreadable rows
 

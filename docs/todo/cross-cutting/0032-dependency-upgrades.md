@@ -15,7 +15,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 4. **hono 5**: move claude-bridge and codex-bridge once 5 is stable. Status: blocked (`next` is 5.0.0-rc.1).
 5. **`@dnd-kit/react` 1.0**: rewrite the drag-and-drop users once 1.0 ships. Status: blocked (latest is 0.5.1).
 6. **Accepted advisories**: `postcss-selector-parser` via `@tailwindcss/typography`, `undici` 8.10.2 via the Pi SDK. Status: blocked (on `@tailwindcss/typography` and the Pi SDK; both still latest).
-7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); 24.22.x done 2026-11-02 (24.22.2).
+7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); 24.22.2 implemented 2026-11-02; `test:agent:docker` qualification pending.
 
 ### 1. Electron 46
 
@@ -437,3 +437,7 @@ None. The update-manifest key question is decided below.
 ## Replaces
 
 - `docs/development/dependency-upgrade-schedule-2026-10-13.md`
+
+### Task 7: review qualification status (2026-11-02)
+
+The Node 24.22.2 pin is implemented; acceptance remains open until the required Docker qualification passes. Keep the task index explicit about that distinction instead of describing the upgrade as done.

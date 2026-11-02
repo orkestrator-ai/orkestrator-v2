@@ -7,6 +7,13 @@ let generations = 0;
 /**
  * One window, bounded asks, source-checked replies; teardown rejects every ask.
  *
+ * Construction has no side effect: the bridge listens only once `open()` is
+ * called, and the code that opens it must also close it. Callers create a
+ * bridge in an iframe's `load` handler and keep it in React state, where it can
+ * be replaced (two loads before a render) or dropped (an unmount) before it is
+ * ever committed. A listener added by the constructor would then never be
+ * removed, and would keep the bridge and the frame's `Window` alive.
+ *
  * The sandboxed frame's `Window` is cross-origin, so it lives in a true private
  * field: anything that enumerates this object (React's dev-mode prop diffing,
  * loggers, structured clones) must never touch it, or it throws a SecurityError.
@@ -20,6 +27,7 @@ export class DesignFrameBridge {
   /** Distinguishes recreated iframes: acknowledgments from older ones are ignored. */
   readonly generation = ++generations;
   closed = false;
+  private opened = false;
   private sequence = 0;
   private readonly pending = new Map<
     string,
@@ -35,7 +43,13 @@ export class DesignFrameBridge {
     private readonly onEscape?: () => void,
   ) {
     this.#target = target;
+  }
+  /** Starts listening for replies. Idempotent; a closed bridge stays closed. */
+  open(): this {
+    if (this.opened || this.closed) return this;
+    this.opened = true;
     window.addEventListener("message", this.receive);
+    return this;
   }
   private receive = (event: MessageEvent) => {
     if (event.source !== this.#target) return;
@@ -61,6 +75,7 @@ export class DesignFrameBridge {
   }
   ask<T>(operation: DesignOperation): Promise<T> {
     if (this.closed) return Promise.reject(new Error("Frame closed"));
+    if (!this.opened) return Promise.reject(new Error("Frame bridge not open"));
     if (this.pending.size >= 32) return Promise.reject(new Error("Frame runtime busy"));
     const requestId = String(++this.sequence);
     return new Promise((resolve, reject) => {

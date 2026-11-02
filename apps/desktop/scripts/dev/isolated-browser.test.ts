@@ -21,7 +21,7 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
 const args = process.argv.slice(2);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
-fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
+fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
 if (task === "dev:test") {
   if (mode === "startup-fail") process.exit(3);
   fs.writeFileSync(path.join(root, "launcher"), String(process.pid));
@@ -67,6 +67,9 @@ if (task === "dev:test") {
             pid: number;
             scheduler: string;
             workers: string;
+            containerApproval?: string;
+            claudeTerminal?: string;
+            grokLogin?: string;
             coordinator?: string;
             multiReview?: string;
             design?: string;
@@ -286,19 +289,41 @@ test("isolated browser overrides an inherited live revision-token opt-in", async
   expect((await f.events()).find((event) => event.task === "playwright")?.revisionTokens).toBe("0");
 });
 
-test("Docker qualification builds and smokes before starting the container fixture", async () => {
-  const f = await fixture();
-  // The fake commands exercise lifecycle ordering; Docker itself is covered by
-  // the opt-in real fixture run.
-  await writeFile(path.join(f.root, "docker"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  expect(await runIsolatedBrowser({ ...f, docker: true })).toBe(0);
-  const events = await f.events();
-  expect(events[0]?.task).toBe("docker:build:dev");
-  const start = events.find((event) => event.task === "dev:test")!;
-  expect(start.args).toContain("--fixture-environments");
-  expect(start.args).toContain("local,container");
-  const tests = events.find((event) => event.task === "playwright")!;
-  expect(tests.args).toContain("Docker fixture");
-  expect(events.slice(-2).map((event) => event.task)).toEqual(["dev:stop", "dev:reset"]);
-});
+test.each(["success", "test-fail", "cleanup-fail"])(
+  "Docker qualification preserves shared images on %s",
+  async (mode) => {
+    const f = await fixture(mode);
+    // The fake commands exercise lifecycle ordering; Docker itself is covered by
+    // the opt-in real fixture run.
+    await writeFile(
+      path.join(f.root, "docker"),
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$ORK_ISOLATED_TEST_ROOT/docker-calls"
+# An in-use shared image must never be removed by this profile.
+if [ "$1 $2" = "image rm" ]; then exit 9; fi
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    f.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL = "1";
+    f.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL = "1";
+    f.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN = "1";
+    await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    if (mode === "cleanup-fail")
+      await expect(runIsolatedBrowser({ ...f, docker: true })).rejects.toThrow("cleanup failed");
+    else
+      expect(await runIsolatedBrowser({ ...f, docker: true })).toBe(mode === "test-fail" ? 7 : 0);
+    const events = await f.events();
+    expect(events[0]?.task).toBe("docker:build:dev");
+    const start = events.find((event) => event.task === "dev:test")!;
+    expect(start.args).toContain("--fixture-environments");
+    expect(start.args).toContain("local,container");
+    const tests = events.find((event) => event.task === "playwright")!;
+    expect(tests.args).toContain("Docker fixture");
+    expect(tests.containerApproval).toBe("0");
+    expect(tests.claudeTerminal).toBe("0");
+    expect(tests.grokLogin).toBe("0");
+    expect(await Bun.file(path.join(f.root, "docker-calls")).exists()).toBe(false);
+    expect(events.slice(-2).map((event) => event.task)).toEqual(["dev:stop", "dev:reset"]);
+  },
+);

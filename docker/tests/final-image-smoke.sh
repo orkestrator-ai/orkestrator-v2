@@ -98,11 +98,11 @@ echo "ok   bounded log writer (node, detached exec session)"
 # with an empty home mount (the layout used by persisted provider homes).
 # Leave MISE_DATA_DIR unset so this tests mise's default system discovery.
 for home_mode in image mounted; do
-    home_args=()
+    run_args=(run --rm -i --network none --user node)
     if [ "$home_mode" = mounted ]; then
-        home_args=(--tmpfs /home/node:uid=1000,gid=1000,mode=700)
+        run_args+=(--tmpfs /home/node:uid=1000,gid=1000,mode=700)
     fi
-    docker run --rm -i --network none --user node "${home_args[@]}" \
+    docker "${run_args[@]}" \
         --entrypoint bash "$IMAGE" -s -- "$(field '.runtimes.bun')" <<'BUN_CHECK' \
         || fail "offline linked Bun checks failed ($home_mode home)"
 set -euo pipefail

@@ -160,6 +160,9 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     ORKESTRATOR_AGENT_TEST_REVIEW: "0",
     ORKESTRATOR_AGENT_TEST_DOCKER: options.docker ? "1" : "0",
     ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE: "0",
+    ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL: "0",
+    ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL: "0",
+    ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN: "0",
     ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW: "0",
     ORKESTRATOR_AGENT_TEST_LIVE_DESIGN: "0",
     ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION: "0",
@@ -202,13 +205,11 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
   let result = 1;
   let failure: unknown;
   let cleanupFailure: Error | undefined;
-  let imageBuilt = false;
   options.signal?.throwIfAborted();
   try {
     if (options.docker) {
       const built = await launchTask("docker:build:dev", [], 1_800_000, false, options.signal).done;
       if (built.code !== 0) throw new Error("Docker qualification image build failed");
-      imageBuilt = true;
       const smoke = await launch(
         "bash",
         ["docker/tests/final-image-smoke.sh", runtimeProfile.dockerImage],
@@ -298,15 +299,8 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     console.log(`Cleaning isolated browser profile ${profile}`);
     const stopped = await launchTask("dev:stop", [], cleanupTimeout).done;
     const reset = await launchTask("dev:reset", [], cleanupTimeout).done;
-    if (imageBuilt && stopped.code === 0 && reset.code === 0) {
-      const removed = await launch("docker", ["image", "rm", runtimeProfile.dockerImage], {
-        root,
-        env,
-        timeoutMs: cleanupTimeout,
-      }).done;
-      if (removed.code !== 0)
-        cleanupFailure = new Error("Docker qualification image cleanup failed");
-    }
+    // dockerImage belongs to the checkout, not this disposable profile.
+    // Leave it for the shared-image-aware profile prune workflow.
     if (stopped.code !== 0 || reset.code !== 0)
       cleanupFailure = new Error(
         `Isolated profile cleanup failed for ${profile}; inspect dev:status before retrying`,

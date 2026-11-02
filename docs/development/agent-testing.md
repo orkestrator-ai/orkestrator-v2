@@ -52,7 +52,8 @@ mise run test:logged -- --name agent-docker -- mise run test:agent:docker:isolat
 It builds the worktree-specific development image, runs the final-image smoke,
 starts a credential-free local/container fixture with Codex, Grok and OpenCode,
 and runs the same `Docker fixture` selection as `test:agent:docker`. It stops and
-resets the profile and removes the worktree's image tag afterwards. The scheduler
+resets the profile afterwards. The worktree's shared development image is kept
+for other profiles; the shared-image-aware prune workflow owns its removal. The scheduler
 records that it covers `test:agent:docker`; do not schedule the latter separately
 without a running profile. No provider turns are enabled. Linux Electron runs
 headless. On Linux hosts with exhausted automatic Docker pools, its scoped Docker

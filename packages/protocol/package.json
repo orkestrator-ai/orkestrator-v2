@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.35.3-beta",
+  "version": "2.35.4-beta",
   "private": true,
   "type": "module",
   "exports": {

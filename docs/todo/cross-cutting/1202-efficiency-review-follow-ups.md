@@ -40,7 +40,7 @@ governs, marked "Decided".
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open.
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open.
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
 
 ### 1. Baseline and before-and-after numbers
@@ -297,11 +297,30 @@ governs, marked "Decided".
 
 ### 15. Container data transfer
 
-**Problem.** Each environment clones from the remote again, copies its clone byte for byte inside one volume, and copies agent-home inputs in full on every start.
+**Problem.** Each environment clones from the remote again (DK-13) and copies agent-home inputs in full on every start (DK-14). Until 2026-11-02 it also copied its clone byte for byte inside one volume (DK-12), and a same-disk move of a worktree with submodules copied the whole worktree (DK-15).
 
 **Context.** Decided 2026-11-01: do this now, ahead of the measurement gate. Files: `docker/workspace-setup.sh` (DK-12, DK-13), `portable-inputs.ts` and the entrypoints (DK-14), `environment-move.ts` (DK-15). Container storage rules in `docs/architecture/container-lifecycle.md` apply: no removal outside lifecycle operations.
 
-**Investigation.** Not started. Unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
+Done 2026-11-02 against `main` at `38d55ee1`:
+
+- DK-12: `move_clone_into_workspace` in `docker/workspace-setup.sh` renames each top-level entry of the staged clone (`/workspace/.orkestrator/.clone-in-progress`) into `/workspace` instead of `cp -a -n` then `rm -rf`. Tests: `tests/unit/workspace-setup-preserve.test.ts` ("workspace setup clone move").
+- DK-15: when git refuses to move a worktree because it has submodules, `renameWorktree` in `environment-move.ts` renames the folder, runs `git worktree repair` and re-links the submodules. It copies only when the rename answers `EXDEV`. Tests: `environment-move.test.ts` ("same-disk move of a worktree git will not move"). `docs/development/disk-usage.md` describes the new behaviour.
+- DK-14 is left open on purpose: another build edits `portable-inputs.ts` at the same time. DK-13 (the mirror) is also still open.
+
+**Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move. Still unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
+
+Measurements, beelink (btrfs host, about ten builds running at once, so timings are noisy), three runs each:
+
+| Item | Setup | Before | After |
+| --- | --- | --- | --- |
+| DK-12 | Clone of this repository (206 MB, 8,478 files), Docker volume on btrfs, move step only | 400–602 ms; extra peak disk 0–31 MB, because `cp` reflinks on btrfs | 9–42 ms; no extra disk |
+| DK-12 | Same clone, tmpfs volume (no reflinks, like ext4 or Docker Desktop's VM disk) | 134–153 ms; extra peak disk 206 MB, a second whole clone | 8–21 ms; no extra disk |
+| DK-12 | Real helper in a container, then `git status` | n/a | 26 ms; clean status, `.orkestrator` intact |
+| DK-15 | Whole `move_environment`, worktree with nested submodules and 200 MB in 2,000 files, tmpfs | 128–141 ms; one `cp`; extra peak disk 196 MB | 87–128 ms; no `cp`; extra peak disk 1–8 MB (sampling noise) |
+| DK-15 | Same, on btrfs | 260–1,119 ms; one `cp` (reflinked) | 160–232 ms; no `cp` |
+| DK-15 | Same, 20,000 files of 10 KB, btrfs | 1,399–1,947 ms | 120–147 ms |
+
+The DK-12 numbers came from a throwaway script that runs the old and new steps on a scratch volume. The DK-15 numbers came from a temporary benchmark test that was not committed: it timed `moveEnvironmentTask` and sampled `statfs` every 5 ms, once with the old `environment-move.ts` and once with the new one.
 
 **Decisions.**
 
@@ -312,6 +331,26 @@ governs, marked "Decided".
   - **DK-13 first.**
     - Pros: the largest saving for big repositories.
     - Cons: a new mounted resource to create, refresh, bound and clean up before anything else lands.
+  - Taken 2026-11-02: DK-12 and DK-15 now; DK-14 next, once the other `portable-inputs.ts` build has merged, then DK-13.
+- **DK-12: how is the clone moved?** (decided 2026-11-02)
+  - **`mv -n` per top-level entry, skipping `.orkestrator` and `lost+found`, then a check that nothing was left behind (taken).**
+    - Pros: one rename per entry within the volume. The existing `.clone-copy-in-progress` marker keeps the step resumable. The check catches an entry `mv -n` skipped, which GNU coreutils 9.7 (the image's) does silently with exit status 0. Per-entry `mv` without `-t` also runs on macOS, where the unit test runs.
+    - Cons: one `mv` process per top-level entry (dozens, not thousands).
+  - **`mv -n -t /workspace` with `find ... {} +`, as the report suggested.**
+    - Pros: one process.
+    - Cons: GNU-only `-t`; on its own it does not notice a skipped entry.
+  - **Clone straight into `/workspace`.**
+    - Pros: no move at all.
+    - Cons: the clone would sit beside the storage marker with no staging folder, so an interrupted clone could not be told apart from user files.
+  - A repository's own `.orkestrator` folder is left in the staging folder and deleted with it. The old merge copied it, but the restore of `.orkestrator` straight afterwards replaced it anyway, so the end state is the same.
+- **DK-15: where does the rename go?** (decided 2026-11-02)
+  - **Keep `git worktree move` first and rename only when git refuses because of submodules; copy only on `EXDEV` (taken).**
+    - Pros: git still checks the ordinary case (locked worktrees, its own records). The submodule case gets the same journal as the copy: the record, with its submodules, is saved before the rename, so restart recovery adopts a destination whose source is gone and re-links it.
+    - Cons: two code paths that rename.
+  - **Replace `git worktree move` with `rename` plus `git worktree repair` for every move.**
+    - Pros: one path.
+    - Cons: drops git's own checks and rewrites a path that already works.
+  - When git reports a cross-device error the move goes straight to the copy, without trying a rename that would fail. A failed repair or re-link, or a rejected path commit, renames the folder back and repairs the source. `git worktree move` cannot undo the rename, because git refuses submodules in that direction too. If renaming back fails, the record stays and restart recovery adopts the destination.
 
 ### 16. CLI and logging
 

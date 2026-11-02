@@ -1,5 +1,6 @@
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode, useCallback, useState } from "react";
 import * as realSessionStore from "@/stores/sessionStore";
@@ -3264,9 +3265,7 @@ describe("PersistentTerminal", () => {
     terminal.hasSelection.mockImplementation(() => true);
     terminal.getSelection.mockImplementation(() => "selected text");
     mockWriteText.mockRejectedValueOnce(new Error("clipboard unavailable"));
-    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
-    const originalError = console.error;
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(
@@ -3289,20 +3288,27 @@ describe("PersistentTerminal", () => {
         false,
       );
       await waitFor(() =>
-        expect(consoleError).toHaveBeenCalledWith(
-          "[PersistentTerminal] Failed to copy selection:",
-          expect.objectContaining({ message: "clipboard unavailable" }),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "terminal",
+            event: "clipboard.copy-failed",
+            fields: expect.objectContaining({
+              source: "PersistentTerminal",
+              error: expect.objectContaining({ message: "clipboard unavailable" }),
+            }),
+          }),
         ),
       );
+      // The selection itself never reaches a log line.
+      expect(logs.lines.join("\n")).not.toContain("selected text");
     } finally {
-      console.error = originalError;
+      logs.restore();
     }
   });
 
   it("reports clipboard image errors without throwing", () => {
-    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
-    const originalError = console.error;
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
 
     try {
       render(
@@ -3321,12 +3327,19 @@ describe("PersistentTerminal", () => {
       );
 
       clipboardImagePasteOptions?.onError("image too large");
-      expect(consoleError).toHaveBeenCalledWith(
-        "[PersistentTerminal] Clipboard image error:",
-        "image too large",
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "terminal",
+          event: "clipboard.image-failed",
+          fields: expect.objectContaining({
+            source: "PersistentTerminal",
+            error: expect.objectContaining({ message: "image too large" }),
+          }),
+        }),
       );
     } finally {
-      console.error = originalError;
+      logs.restore();
     }
   });
 
@@ -3589,9 +3602,7 @@ describe("PersistentTerminal", () => {
     terminal.write.mockImplementationOnce(() => {
       throw new Error("parser unavailable");
     });
-    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
-    const originalError = console.error;
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
 
     try {
       const view = render(
@@ -3625,14 +3636,21 @@ describe("PersistentTerminal", () => {
       );
 
       await waitFor(() => {
-        expect(consoleError).toHaveBeenCalledWith(
-          "[PersistentTerminal] Error restoring buffer for tab:tab-1:",
-          expect.objectContaining({ message: "parser unavailable" }),
+        expect(logs.records()).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            area: "terminal",
+            event: "buffer.restore-failed",
+            fields: expect.objectContaining({
+              tabId: "tab-1",
+              error: expect.objectContaining({ message: "parser unavailable" }),
+            }),
+          }),
         );
         expect(terminal.refresh).toHaveBeenCalled();
       });
     } finally {
-      console.error = originalError;
+      logs.restore();
     }
   });
 
@@ -4297,9 +4315,7 @@ describe("PersistentTerminal", () => {
     serialize.mockImplementation(() => {
       throw new Error("serializer unavailable");
     });
-    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
-    const originalError = console.error;
-    console.error = consoleError as typeof console.error;
+    const logs = captureLogs();
 
     try {
       const view = render(
@@ -4320,13 +4336,19 @@ describe("PersistentTerminal", () => {
 
       view.unmount();
 
-      expect(consoleError).toHaveBeenCalledWith(
-        "[PersistentTerminal] Cleanup - failed to serialize buffer:",
-        expect.objectContaining({ message: "serializer unavailable" }),
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          area: "terminal",
+          event: "buffer.serialize-failed",
+          fields: expect.objectContaining({
+            error: expect.objectContaining({ message: "serializer unavailable" }),
+          }),
+        }),
       );
       expect(terminalInputDisposables[0]?.dispose).toHaveBeenCalled();
     } finally {
-      console.error = originalError;
+      logs.restore();
     }
   });
 

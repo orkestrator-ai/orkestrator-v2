@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import {
   encodeCanvasAsPngWithinSize,
   releaseCanvas,
@@ -7,11 +8,12 @@ import {
 } from "../../../apps/web/src/lib/canvas-utils";
 
 const originalCreateElement = document.createElement.bind(document);
-const originalConsoleError = console.error.bind(console);
+let logs: LogCapture | undefined;
 
 afterEach(() => {
   document.createElement = originalCreateElement;
-  console.error = originalConsoleError;
+  logs?.restore();
+  logs = undefined;
 });
 
 function canvas(width: number, height: number) {
@@ -76,7 +78,7 @@ describe("canvas utilities", () => {
   });
 
   test("keeps the source when the RGBA resize context is unavailable", () => {
-    console.error = mock(() => undefined);
+    logs = captureLogs();
     const target = {
       width: 0,
       height: 0,
@@ -88,6 +90,14 @@ describe("canvas utilities", () => {
     expect(resizeCanvasIfNeeded(source, 40_000)).toBe(source);
     expect([source.width, source.height]).toEqual([400, 200]);
     expect([target.width, target.height]).toEqual([0, 0]);
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "terminal",
+        event: "canvas.context-unavailable",
+        fields: { resize: "bytes" },
+      }),
+    );
   });
 
   test("resizes wide and tall canvases without creating a zero-sized edge", () => {
@@ -117,7 +127,7 @@ describe("canvas utilities", () => {
   });
 
   test("keeps the source when the dimension resize context is unavailable", () => {
-    console.error = mock(() => undefined);
+    logs = captureLogs();
     const target = {
       width: 0,
       height: 0,
@@ -129,6 +139,14 @@ describe("canvas utilities", () => {
     expect(resizeCanvasToMaxDimension(source, 2000)).toBe(source);
     expect([source.width, source.height]).toEqual([3000, 1000]);
     expect([target.width, target.height]).toEqual([0, 0]);
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        area: "terminal",
+        event: "canvas.context-unavailable",
+        fields: { resize: "dimension" },
+      }),
+    );
   });
 
   test("releases a canvas explicitly", () => {
@@ -198,7 +216,7 @@ describe("canvas utilities", () => {
   });
 
   test("releases both canvases when an encode-triggered resize has no context", () => {
-    console.error = mock(() => undefined);
+    logs = captureLogs();
     const source = encodedCanvas(1000, 500, pngDataUrl(12));
     const target = {
       width: 0,

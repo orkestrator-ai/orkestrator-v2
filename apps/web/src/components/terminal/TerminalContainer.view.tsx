@@ -81,7 +81,7 @@ import {
   PANE_LAYOUT_VERSION,
   type TabInfo,
 } from "@/types/paneLayout";
-import { rendererDebugLog } from "@/lib/debug-log";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { resolveWorkspaceRelativeFilePath } from "@/lib/workspace-file-path";
 import {
   fileTabChangeDiffTarget,
@@ -102,6 +102,10 @@ import {
   handoffSetupFocusToStartupAgent,
   seedDeferredNativePlatform,
 } from "./TerminalContainer.helpers";
+
+const log = createLogger("terminal");
+const setupLog = createLogger("terminal.setup");
+
 export function TerminalContainer({
   environmentId,
   containerId,
@@ -334,10 +338,7 @@ export function TerminalContainer({
         terminalStore.setSession(key, preserved);
       }
       if (!retireSetupTabMarker(tabId, environmentId)) return;
-      console.info("[setup-terminal] retired setup marker for a tab with no live PTY", {
-        environmentId,
-        tabId,
-      });
+      setupLog.info("tab.marker-retired", { environmentId, tabId });
     },
     [environmentId, retireSetupTabMarker, setupSessionKeyForTab],
   );
@@ -355,11 +356,7 @@ export function TerminalContainer({
         // re-dispatches rather than letting the ask disappear, which is what
         // left a completed tab bound to a session nothing ever re-checked.
         setupSessionRecheckPendingTabsRef.current.add(tabId);
-        console.info("[setup-terminal] setup session bind skipped: already in flight", {
-          environmentId,
-          tabId,
-          alreadyBound,
-        });
+        setupLog.debug("session.bind-skipped", () => ({ environmentId, tabId, alreadyBound }));
         return alreadyBound;
       }
       const requestToken = Symbol(tabId);
@@ -377,11 +374,11 @@ export function TerminalContainer({
       setupSessionBindSettledTabsRef.current.delete(tabId);
       let lookupSettled = false;
       try {
-        console.info("[setup-terminal] requesting backend setup session", {
+        setupLog.debug("session.requested", () => ({
           environmentId,
           tabId,
-          key: setupSessionKeyForTab(tabId),
-        });
+          sessionKey: setupSessionKeyForTab(tabId),
+        }));
         const setupSession = await backend.awaitEnvironmentSetupSession(environmentId);
         if (setupSessionBindLifecycleGenerationRef.current !== lifecycleGeneration) {
           return false;
@@ -422,7 +419,7 @@ export function TerminalContainer({
               retireDeadSetupTab(tabId);
             }
           }
-          console.info("[setup-terminal] no backend setup session available", {
+          setupLog.info("session.unavailable", {
             environmentId,
             tabId,
             hasReplayableTranscript,
@@ -432,10 +429,10 @@ export function TerminalContainer({
         const key = setupSessionKeyForTab(tabId);
         const terminalStore = useTerminalSessionStore.getState();
         const existing = terminalStore.sessions.get(key);
-        console.info("[setup-terminal] binding backend setup session", {
+        setupLog.info("session.bind-started", {
           environmentId,
           tabId,
-          key,
+          sessionKey: key,
           previousSessionId: existing?.sessionId ?? null,
           nextSessionId: setupSession.sessionId,
           setupSessionRunning: setupSession.running,
@@ -518,7 +515,11 @@ export function TerminalContainer({
         if (setupSessionBindLifecycleGenerationRef.current !== lifecycleGeneration) {
           return false;
         }
-        console.error("[TerminalContainer] Failed to bind backend setup session:", error);
+        log.error("setup-session.bind-failed", {
+          environmentId,
+          tabId,
+          error: formatLogError(error),
+        });
         lookupFailed = true;
         // A failed probe is not evidence that either transcript source is gone.
         // Retry without requiring a reconnect or remount, while retaining the
@@ -637,12 +638,12 @@ export function TerminalContainer({
     );
     if (setupTabsToBind.length === 0) return;
 
-    console.info("[setup-terminal] reconciling backend-managed setup tabs", {
+    setupLog.debug("reconcile.started", () => ({
       environmentId,
-      tabIds: setupTabsToBind.map((tab) => tab.id),
+      tabIds: setupTabsToBind.map((tab) => tab.id).join(","),
       setupPhase,
       tabCount: setupTabs.length,
-    });
+    }));
     for (const tab of setupTabsToBind) void bindBackendSetupSession(tab.id);
   }, [
     bindBackendSetupSession,
@@ -669,7 +670,9 @@ export function TerminalContainer({
       })
       .catch((error) => {
         if (!disposed) {
-          rendererDebugLog("[setup-terminal] failed to install reconnect listener", error);
+          setupLog.debug("reconnect-listener.install-failed", () => ({
+            error: formatLogError(error),
+          }));
         }
       });
     return () => {
@@ -707,10 +710,7 @@ export function TerminalContainer({
       });
 
       if (staleSetupTab) {
-        rendererDebugLog(
-          "[TerminalContainer] Removing stale setup placeholder tab:",
-          staleSetupTab.id,
-        );
+        log.debug("setup-tab.stale-removed", () => ({ environmentId, tabId: staleSetupTab.id }));
         removeTab(leaf.id, staleSetupTab.id, environmentId);
         return;
       }
@@ -862,10 +862,10 @@ export function TerminalContainer({
           if (paneStore.hydration.get(environmentId) !== "pending") return;
 
           if (multiReviewResult.status === "rejected") {
-            console.warn(
-              "[TerminalContainer] Failed to restore multi reviews:",
-              multiReviewResult.reason,
-            );
+            log.warn("multi-reviews.restore-failed", {
+              environmentId,
+              error: formatLogError(multiReviewResult.reason),
+            });
           }
           const latestEnvironment = useEnvironmentStore
             .getState()
@@ -879,7 +879,10 @@ export function TerminalContainer({
               : containerId;
 
           if (layoutResult.status === "rejected") {
-            console.warn("[TerminalContainer] Failed to restore pane layout:", layoutResult.reason);
+            log.warn("pane-layout.restore-failed", {
+              environmentId,
+              error: formatLogError(layoutResult.reason),
+            });
             // Register the environment so a later pane-layout announcement
             // can apply. finishHydration without a snapshot does not.
             // Skip when a local record already exists: rewriting it would
@@ -935,10 +938,10 @@ export function TerminalContainer({
             clearStoredPaneSelection(environmentId);
             if (restored) {
               void migratePaneLayoutBrowserHistory(environmentId, persisted).catch((error) => {
-                console.warn(
-                  "[TerminalContainer] Failed to migrate browser history privacy fields:",
-                  error,
-                );
+                log.warn("pane-layout.history-migrate-failed", {
+                  environmentId,
+                  error: formatLogError(error),
+                });
               });
             } else {
               // A stale-generation or malformed current-version snapshot
@@ -946,10 +949,10 @@ export function TerminalContainer({
               // the exact revision we inspected; a concurrent newer layout
               // wins the CAS and is preserved for the next reconciliation.
               void backend.deletePaneLayout(environmentId, persisted.revision).catch((error) => {
-                console.warn(
-                  "[TerminalContainer] Failed to remove an unusable pane layout snapshot:",
-                  error,
-                );
+                log.warn("pane-layout.snapshot-remove-failed", {
+                  environmentId,
+                  error: formatLogError(error),
+                });
               });
             }
           }
@@ -968,10 +971,10 @@ export function TerminalContainer({
                   }
                 })
                 .catch((error) => {
-                  console.warn(
-                    "[TerminalContainer] Failed to migrate legacy pane selection:",
-                    error,
-                  );
+                  log.warn("pane-layout.selection-migrate-failed", {
+                    environmentId,
+                    error: formatLogError(error),
+                  });
                 });
             }
           }
@@ -981,20 +984,17 @@ export function TerminalContainer({
     }
 
     if (seededTabs.length === 0) {
-      console.info("[setup-terminal] initial terminal layout decision", {
+      setupLog.debug("layout.initial-decided", () => ({
         environmentId,
         backendSetupRunning,
         setupPhase,
         hasDefaultSetupSession: hasBoundSetupSession("default"),
         isLocalEnvironment,
-        worktreePath: worktreePath ?? null,
+        hasWorktreePath: Boolean(worktreePath),
         containerId,
-      });
+      }));
       if (backendSetupRunning && !hasBoundSetupSession("default")) {
-        console.info("[setup-terminal] waiting for setup session before adding setup tab", {
-          environmentId,
-          tabId: "default",
-        });
+        setupLog.debug("session.awaited", () => ({ environmentId, tabId: "default" }));
         void bindBackendSetupSession("default");
         return;
       }
@@ -1034,7 +1034,7 @@ export function TerminalContainer({
       if (launchAgent) setHasAppliedClaudeOptions(true);
 
       if (backendSetupRunning) {
-        console.info("[setup-terminal] adding backend-managed setup tab", {
+        setupLog.info("tab.added", {
           environmentId,
           tabId: "default",
           hasDefaultSetupSession: hasBoundSetupSession("default"),
@@ -1112,11 +1112,7 @@ export function TerminalContainer({
       previousContainerIdRef.current !== null &&
       previousContainerIdRef.current !== containerId
     ) {
-      rendererDebugLog(
-        "[TerminalContainer] Container changed for environment:",
-        environmentId,
-        "resetting panes",
-      );
+      log.debug("panes.reset", () => ({ environmentId, reason: "container-changed" }));
       paneHydrationRequestsRef.current.delete(environmentId);
       reset(environmentId);
       setHasAppliedClaudeOptions(false);
@@ -1130,10 +1126,7 @@ export function TerminalContainer({
   // next start re-hydrates (`reset` clears this environment's hydration).
   useEffect(() => {
     if (!isContainerRunning && containerId) {
-      rendererDebugLog(
-        "[TerminalContainer] Container stopped, resetting panes for environment:",
-        environmentId,
-      );
+      log.debug("panes.reset", () => ({ environmentId, reason: "container-stopped" }));
       paneHydrationRequestsRef.current.delete(environmentId);
       reset(environmentId);
     }
@@ -1195,7 +1188,7 @@ export function TerminalContainer({
 
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
-        rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        log.debug("tabs.limit-reached", () => ({ environmentId, maxTabs: MAX_TABS }));
         showTabLimitReachedToast(MAX_TABS);
         return false;
       }
@@ -1211,12 +1204,7 @@ export function TerminalContainer({
         browserData: { url: initialUrl?.trim() ?? "" },
         displayTitle,
       };
-      rendererDebugLog(
-        "[TerminalContainer] Creating browser tab:",
-        newTabId,
-        "for environment:",
-        environmentId,
-      );
+      log.debug("tab.created", () => ({ tabId: newTabId, tabType: "browser", environmentId }));
       addTab(targetPaneId, newTab, environmentId);
       return true;
     },
@@ -1378,7 +1366,7 @@ export function TerminalContainer({
         const openTab = allTabs.find((tab) => tab.id === requestedTabId);
         if (openTab) {
           if (options?.activateExistingTab !== true) {
-            console.warn("[TerminalContainer] Refusing duplicate tab ID:", requestedTabId);
+            log.warn("tab.duplicate-refused", { environmentId, tabId: requestedTabId });
             return false;
           }
           const pane = usePaneLayoutStore.getState().findPaneWithTab(openTab.id, environmentId);
@@ -1390,7 +1378,7 @@ export function TerminalContainer({
       }
 
       if (allTabs.length >= MAX_TABS) {
-        rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        log.debug("tabs.limit-reached", () => ({ environmentId, maxTabs: MAX_TABS }));
         showTabLimitReachedToast(MAX_TABS);
         return false;
       }
@@ -1401,7 +1389,7 @@ export function TerminalContainer({
 
       if (type === "multi-review") {
         if (!options?.multiReviewId) {
-          console.warn("[TerminalContainer] Refusing multi-review tab without workflow ID");
+          log.warn("tab.multi-review-refused", { environmentId });
           return false;
         }
         const newTab: TabInfo = {
@@ -1433,12 +1421,11 @@ export function TerminalContainer({
           isLocal: isLocalEnvironment,
           displayTitle: options?.displayTitle,
         });
-        rendererDebugLog(
-          "[TerminalContainer] Creating unassigned agent-native tab:",
-          newTabId,
-          "for environment:",
+        log.debug("tab.created", () => ({
+          tabId: newTabId,
+          tabType: "agent-native",
           environmentId,
-        );
+        }));
         addTab(activePaneId, newTab, environmentId);
         return true;
       }
@@ -1486,16 +1473,13 @@ export function TerminalContainer({
           initialConversationMode: options?.initialConversationMode,
           initialFastMode: options?.initialFastMode,
         });
-        rendererDebugLog(
-          "[TerminalContainer] Creating opencode-native tab:",
-          newTabId,
-          "for environment:",
+        log.debug("tab.created", () => ({
+          tabId: newTabId,
+          tabType: "opencode-native",
           environmentId,
-          "isLocal:",
-          isLocalEnvironment,
-          "initialPrompt:",
-          !!options?.initialPrompt,
-        );
+          isLocal: isLocalEnvironment,
+          hasInitialPrompt: !!options?.initialPrompt,
+        }));
         seedDeferredNativePlatform(newTab, "opencode");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1530,18 +1514,13 @@ export function TerminalContainer({
           requireExistingResumeSession: options?.requireExistingResumeSession,
           deferPlatform: !prelockNativePlatform,
         });
-        rendererDebugLog(
-          "[TerminalContainer] Creating",
-          newTab.type,
-          "tab:",
-          newTabId,
-          "for environment:",
+        log.debug("tab.created", () => ({
+          tabId: newTabId,
+          tabType: newTab.type,
           environmentId,
-          "isLocal:",
-          isLocalEnvironment,
-          "initialPrompt:",
-          !!options?.initialPrompt,
-        );
+          isLocal: isLocalEnvironment,
+          hasInitialPrompt: !!options?.initialPrompt,
+        }));
         seedDeferredNativePlatform(newTab, "claude");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1565,16 +1544,13 @@ export function TerminalContainer({
           initialConversationMode: options?.initialConversationMode,
           initialFastMode: options?.initialFastMode,
         });
-        rendererDebugLog(
-          "[TerminalContainer] Creating codex-native tab:",
-          newTabId,
-          "for environment:",
+        log.debug("tab.created", () => ({
+          tabId: newTabId,
+          tabType: "codex-native",
           environmentId,
-          "isLocal:",
-          isLocalEnvironment,
-          "initialPrompt:",
-          !!options?.initialPrompt,
-        );
+          isLocal: isLocalEnvironment,
+          hasInitialPrompt: !!options?.initialPrompt,
+        }));
         seedDeferredNativePlatform(newTab, "codex");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1626,14 +1602,7 @@ export function TerminalContainer({
           (type === "claude" ? claude.fastMode : type === "codex" ? codex.fastMode : undefined),
       };
 
-      rendererDebugLog(
-        "[TerminalContainer] Creating new tab:",
-        newTabId,
-        "type:",
-        type,
-        "for environment:",
-        environmentId,
-      );
+      log.debug("tab.created", () => ({ tabId: newTabId, tabType: type, environmentId }));
       addTab(activePaneId, newTab, environmentId);
       return true;
     },
@@ -1736,18 +1705,13 @@ export function TerminalContainer({
         const pane = usePaneLayoutStore.getState().findPaneWithTab(existingTab.id, environmentId);
         if (pane) {
           usePaneLayoutStore.getState().setActiveTab(pane.id, existingTab.id, environmentId);
-          rendererDebugLog(
-            "[TerminalContainer] Activated existing tab:",
-            existingTab.id,
-            "in pane:",
-            pane.id,
-          );
+          log.debug("tab.activated", () => ({ tabId: existingTab.id, paneId: pane.id }));
         }
         return;
       }
 
       if (allTabs.length >= MAX_TABS) {
-        rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        log.debug("tabs.limit-reached", () => ({ environmentId, maxTabs: MAX_TABS }));
         showTabLimitReachedToast(MAX_TABS);
         return;
       }
@@ -1779,18 +1743,13 @@ export function TerminalContainer({
         },
       };
 
-      rendererDebugLog(
-        "[TerminalContainer] Creating file tab:",
-        newTabId,
-        "path:",
-        relativeFilePath,
-        "diff:",
-        changeDiff?.kind ?? false,
-        "isLocal:",
-        isLocalEnvironment,
-        "for environment:",
+      log.debug("tab.created", () => ({
+        tabId: newTabId,
+        tabType: "file",
+        diff: changeDiff?.kind ?? false,
+        isLocal: isLocalEnvironment,
         environmentId,
-      );
+      }));
       addTab(activePaneId, newTab, environmentId);
     },
     [
@@ -2096,14 +2055,11 @@ export function TerminalContainer({
       setDragOverPaneId(null);
 
       const { active, over } = event;
-      rendererDebugLog(
-        "[TerminalContainer] DragEnd - active:",
-        active.id,
-        "over:",
-        over?.id ?? "null",
-        "lastDragOverPaneId:",
+      log.debug("drag.ended", () => ({
+        activeId: active.id,
+        overId: over?.id ?? null,
         lastDragOverPaneId,
-      );
+      }));
       if (!over) return;
 
       const activeId = active.id as string;
@@ -2117,12 +2073,10 @@ export function TerminalContainer({
       });
 
       if (action.type === "split") {
-        rendererDebugLog(
-          "[TerminalContainer] Split at edge:",
-          action.edge,
-          "from pane:",
-          action.fromPaneId,
-        );
+        log.debug("tab.split-at-edge", () => ({
+          edge: action.edge,
+          fromPaneId: action.fromPaneId,
+        }));
         splitPaneAtEdge(
           action.targetPaneId,
           action.edge,
@@ -2131,20 +2085,13 @@ export function TerminalContainer({
           environmentId,
         );
       } else if (action.type === "reorder") {
-        rendererDebugLog(
-          "[TerminalContainer] Reordering tabs:",
-          action.fromIndex,
-          "->",
-          action.toIndex,
-        );
+        log.debug("tab.reordered", () => ({
+          fromIndex: action.fromIndex,
+          toIndex: action.toIndex,
+        }));
         reorderTabs(action.paneId, action.fromIndex, action.toIndex, environmentId);
       } else if (action.type === "move") {
-        rendererDebugLog(
-          "[TerminalContainer] Moving tab to pane:",
-          action.toPaneId,
-          "index:",
-          action.toIndex,
-        );
+        log.debug("tab.moved", () => ({ toPaneId: action.toPaneId, toIndex: action.toIndex }));
         moveTab(action.fromPaneId, action.toPaneId, action.tabId, action.toIndex, environmentId);
       }
     },
@@ -2181,11 +2128,11 @@ export function TerminalContainer({
 
   // Debug logging for local environment display issues (only in development)
   if (import.meta.env.DEV) {
-    rendererDebugLog("[TerminalContainer] Display state:", {
+    log.debug("display.state", () => ({
       environmentId,
       isLocalEnvironment,
       isLocalEnvironmentReady,
-      worktreePath,
+      hasWorktreePath: Boolean(worktreePath),
       isContainerRunning,
       isEnvironmentRunning,
       containerId,
@@ -2194,7 +2141,7 @@ export function TerminalContainer({
       showNoEnvironmentOverlay,
       showCreatingOverlay,
       showNotRunningOverlay,
-    });
+    }));
   }
 
   return (

@@ -14,16 +14,15 @@ export function ProjectNotesView({ projectId }: ProjectNotesViewProps) {
   const notes = useKanbanStore((s) => s.notes);
   const loadNotes = useKanbanStore((s) => s.loadNotes);
   const saveNotes = useKanbanStore((s) => s.saveNotes);
-  const notesLoading = useKanbanStore((s) => s.notesLoading);
+  const notesLoaded = useKanbanStore((s) => s.notesLoaded);
   const notesError = useKanbanStore((s) => s.notesError);
   const currentNotesProjectId = useKanbanStore((s) => s.currentNotesProjectId);
   const getProjectById = useProjectStore((s) => s.getProjectById);
 
   const project = getProjectById(projectId);
-  // A failed load leaves an empty editor that is not this project's content, so
-  // it must stay disabled until a retry succeeds. An enabled empty editor
-  // could save its first keystroke over the real backend notes.
-  const notesReady = currentNotesProjectId === projectId && !notesLoading && !notesError;
+  // A refresh must not restart durable-draft hydration or hide local edits.
+  // Initial loads and project switches still require a successful snapshot.
+  const notesReady = currentNotesProjectId === projectId && notesLoaded;
   const [draft, setDraft, , discardDurableDraft] = useDurableComposeDraft<string>({
     ownerType: "project",
     ownerId: projectId,

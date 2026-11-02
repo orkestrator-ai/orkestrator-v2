@@ -56,6 +56,7 @@ describe("ProjectNotesView", () => {
     useKanbanStore.setState({
       notes: "",
       notesLoading: false,
+      notesLoaded: false,
       notesError: null,
       currentNotesProjectId: null,
     });
@@ -184,14 +185,68 @@ describe("ProjectNotesView", () => {
       updatedAt: "2026-08-28T00:00:00.000Z",
       revision: 1,
     });
+    const refresh = deferred<{ content: string }>();
+    getProjectNotesMock.mockImplementationOnce(() => refresh.promise);
     render(<ProjectNotesView projectId="project-1" />);
     const restoredEditor = await screen.findByPlaceholderText(/Write project notes here/);
 
     await waitFor(() =>
       expect((restoredEditor as HTMLTextAreaElement).value).toBe("recovered after remount"),
     );
+    expect((restoredEditor as HTMLTextAreaElement).disabled).toBe(false);
+    await act(async () => refresh.resolve({ content: "refreshed notes" }));
+    expect((restoredEditor as HTMLTextAreaElement).value).toBe("recovered after remount");
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("keeps a live draft editable throughout a same-project resource refresh", async () => {
+    render(<ProjectNotesView projectId="project-1" />);
+    const editor = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(editor.value).toBe("saved notes"));
+    fireEvent.change(editor, { target: { value: "unsaved draft" } });
+    const refresh = deferred<{ content: string }>();
+    getProjectNotesMock.mockImplementationOnce(() => refresh.promise);
+    let loading!: Promise<void>;
+    act(() => {
+      loading = useKanbanStore.getState().loadNotes("project-1");
+    });
+    expect(editor.value).toBe("unsaved draft");
+    expect(editor.disabled).toBe(false);
+    fireEvent.change(editor, { target: { value: "edited during refresh" } });
+    await act(async () => {
+      refresh.resolve({ content: "remote notes" });
+      await loading;
+    });
+    expect(editor.value).toBe("edited during refresh");
+    expect(editor.disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(saveProjectNotesMock).toHaveBeenCalledWith("project-1", "edited during refresh"),
+    );
+  });
+
+  test("retains the live draft and editability when a refresh fails and retries", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      render(<ProjectNotesView projectId="project-1" />);
+      const editor = screen.getByRole("textbox") as HTMLTextAreaElement;
+      await waitFor(() => expect(editor.value).toBe("saved notes"));
+      fireEvent.change(editor, { target: { value: "unsaved during failure" } });
+      getProjectNotesMock.mockRejectedValueOnce(new Error("refresh failed"));
+      await act(async () => {
+        await useKanbanStore.getState().loadNotes("project-1");
+      });
+      expect(screen.getByRole("alert").textContent).toContain("refresh failed");
+      expect(editor.value).toBe("unsaved during failure");
+      expect(editor.disabled).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      expect(editor.value).toBe("unsaved during failure");
+      expect(editor.disabled).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   test("flushes the durable draft on unmount without saving project notes", async () => {

@@ -115,3 +115,51 @@ for (const presentation of ["bar", "grid"]) {
     }
   });
 }
+
+for (const width of [320, 390]) {
+  test(`project navigation grid fits two reachable columns at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/project-navigation?presentation=grid");
+    const tabs = page.getByRole("tablist", { name: "Project navigation" });
+    await expect(tabs).toBeVisible();
+    const geometry = await tabs.evaluate((element) => {
+      const container = element.getBoundingClientRect();
+      return {
+        columns: getComputedStyle(element).gridTemplateColumns.split(" ").length,
+        left: container.left,
+        right: container.right,
+        boxes: Array.from(element.querySelectorAll('[role="tab"]'), (tab) => {
+          const box = tab.getBoundingClientRect();
+          return { x: box.x, y: box.y, right: box.right, bottom: box.bottom };
+        }),
+      };
+    });
+    expect(geometry.columns).toBe(2);
+    expect(new Set(geometry.boxes.map((box) => box.x)).size).toBe(2);
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(width);
+    for (const box of geometry.boxes) {
+      expect(box.x).toBeGreaterThanOrEqual(geometry.left);
+      expect(box.right).toBeLessThanOrEqual(geometry.right);
+      expect(box.bottom).toBeLessThanOrEqual(844);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      width,
+    );
+    for (const label of [
+      "Coordinator",
+      "Kanban",
+      "GitHub",
+      "Linear",
+      "Features",
+      "Notes",
+      "Pull requests",
+    ]) {
+      const tab = tabs.getByRole("tab", { name: label, exact: true });
+      await tab.click();
+      await expect(tab).toHaveAttribute("aria-selected", "true");
+      await tab.focus();
+      await expect(tab).toBeFocused();
+    }
+  });
+}

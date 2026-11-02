@@ -7,6 +7,7 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -37,7 +38,9 @@ function IndicatorDot({ testId }: { testId: string }) {
  * `AppShell` hosts), because in the mobile drawer the sidebar unmounts when the
  * drawer closes for them. Global settings go through `requestGlobalSettings`,
  * so every opener shares one path. Repository and environment settings target
- * the selected project and environment, and stay in place but disabled while
+ * the active machine’s selected project and environment. Remote requests go
+ * to its workspace realm; local requests go to `AppDialogHost`. Buttons stay
+ * in place but disabled while
  * there is none, so the bar does not shift as the selection changes.
  *
  * The settings dot follows the connected host's updater: the snapshot behind
@@ -52,14 +55,37 @@ export function SidebarBottomBar() {
   const openAppDialog = useAppDialogStore((state) => state.open);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
-  const hasProject = useProjectStore((state) =>
+  const remote = useRemoteWorkspaceStore((state) => state.active);
+  const openRemote = useRemoteWorkspaceStore((state) => state.open);
+  const hasLocalProject = useProjectStore((state) =>
     selectedProjectId ? state.projects.some((project) => project.id === selectedProjectId) : false,
   );
-  const hasEnvironment = useEnvironmentStore((state) =>
+  const hasLocalEnvironment = useEnvironmentStore((state) =>
     selectedEnvironmentId
       ? state.environments.some((environment) => environment.id === selectedEnvironmentId)
       : false,
   );
+
+  const hasProject = remote ? !!remote.projectId : hasLocalProject;
+  const hasEnvironment = remote
+    ? !!remote.projectId && !!remote.environmentId
+    : hasLocalEnvironment;
+
+  function openSettings(dialog: "repository-settings" | "environment-settings") {
+    if (remote) {
+      if (remote.projectId && (dialog === "repository-settings" || remote.environmentId)) {
+        openRemote(remote.nodeId, {
+          projectId: remote.projectId,
+          ...(remote.environmentId ? { environmentId: remote.environmentId } : {}),
+          dialog,
+        });
+      }
+    } else if (dialog === "repository-settings" && hasLocalProject && selectedProjectId) {
+      openAppDialog({ kind: dialog, projectId: selectedProjectId });
+    } else if (dialog === "environment-settings" && hasLocalEnvironment && selectedEnvironmentId) {
+      openAppDialog({ kind: dialog, environmentId: selectedEnvironmentId });
+    }
+  }
 
   return (
     <div
@@ -90,11 +116,7 @@ export function SidebarBottomBar() {
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          onClick={() => {
-            if (selectedProjectId) {
-              openAppDialog({ kind: "repository-settings", projectId: selectedProjectId });
-            }
-          }}
+          onClick={() => openSettings("repository-settings")}
           disabled={!hasProject}
           title={hasProject ? REPOSITORY_SETTINGS_LABEL : "Select a project first"}
           aria-label={REPOSITORY_SETTINGS_LABEL}
@@ -105,11 +127,7 @@ export function SidebarBottomBar() {
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          onClick={() => {
-            if (selectedEnvironmentId) {
-              openAppDialog({ kind: "environment-settings", environmentId: selectedEnvironmentId });
-            }
-          }}
+          onClick={() => openSettings("environment-settings")}
           disabled={!hasEnvironment}
           title={hasEnvironment ? ENVIRONMENT_SETTINGS_LABEL : "Select an environment first"}
           aria-label={ENVIRONMENT_SETTINGS_LABEL}

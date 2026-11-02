@@ -6,6 +6,7 @@ import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/setti
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
@@ -15,6 +16,7 @@ const originalGateway = window.orkestratorGateway;
 const originalOrkestrator = window.orkestrator;
 const initialProjects = useProjectStore.getState();
 const initialEnvironments = useEnvironmentStore.getState();
+const initialRemote = useRemoteWorkspaceStore.getState();
 const initialUI = useUIStore.getState();
 
 function selectEnvironment() {
@@ -62,6 +64,7 @@ afterEach(() => {
   useProjectStore.setState(initialProjects, true);
   useEnvironmentStore.setState(initialEnvironments, true);
   useUIStore.setState(initialUI, true);
+  useRemoteWorkspaceStore.setState(initialRemote, true);
   window.orkestrator = originalOrkestrator;
   window.orkestratorGateway = originalGateway;
 });
@@ -114,6 +117,68 @@ describe("SidebarBottomBar", () => {
     expect(useAppDialogStore.getState().request).toEqual({
       kind: "environment-settings",
       environmentId: "env-1",
+    });
+  });
+
+  test("routes remote settings to the active realm with local selection cleared, then returns to the local host", async () => {
+    hostUpdate(false);
+    selectEnvironment();
+    useRemoteWorkspaceStore.getState().open("remote-node", {
+      projectId: "remote-project",
+      environmentId: "remote-env",
+    });
+    expect(useUIStore.getState().selectedProjectId).toBeNull();
+    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    await renderBar();
+
+    for (const [label, dialog] of [
+      ["Repository settings", "repository-settings"],
+      ["Environment settings", "environment-settings"],
+    ] as const) {
+      const button = screen.getByRole("button", { name: label });
+      expect(button.hasAttribute("disabled")).toBe(false);
+      const previousSeq = useRemoteWorkspaceStore.getState().requests["remote-node"]!.seq;
+      fireEvent.click(button);
+      const request = useRemoteWorkspaceStore.getState().requests["remote-node"]!;
+      expect(request.seq).toBeGreaterThan(previousSeq);
+      expect(request.request).toEqual({
+        type: "select",
+        projectId: "remote-project",
+        environmentId: "remote-env",
+        dialog,
+      });
+      expect(useAppDialogStore.getState().request).toBeNull();
+    }
+
+    act(() => {
+      useRemoteWorkspaceStore.getState().noteRealmSelection("remote-node", {
+        projectId: "remote-project-2",
+        environmentId: null,
+      });
+    });
+    expect(
+      screen.getByRole("button", { name: "Environment settings" }).hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
+    expect(useRemoteWorkspaceStore.getState().requests["remote-node"]!.request).toEqual({
+      type: "select",
+      projectId: "remote-project-2",
+      dialog: "repository-settings",
+    });
+
+    act(() => {
+      useRemoteWorkspaceStore.getState().showLocal();
+      selectEnvironment();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "environment-settings",
+      environmentId: "env-1",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "repository-settings",
+      projectId: "project-1",
     });
   });
 

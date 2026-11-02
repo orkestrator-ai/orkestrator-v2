@@ -11,7 +11,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 1. **iOS device or simulator run**: rotate a split with a terminal and a native agent pane across 768 px and open environment settings from the projects drawer, on real iOS WebKit. Status: open (needs a Mac with Xcode or an iPhone/iPad; this host is Linux).
 
-Code items 1 (toolbar settings through `AppDialogHost`) and 2 (focus trap in fullscreen settings), and the Chromium and Playwright WebKit runs, are done; the one WebKit failure moved to [0202](0202-webkit-title-tooltip-outside-tap.md).
+Code items 1 (settings through `AppDialogHost`, now opened by `SidebarBottomBar`) and 2 (focus trap in fullscreen settings), and the Chromium and Playwright WebKit runs, are done; the one WebKit failure moved to [0202](0202-webkit-title-tooltip-outside-tap.md).
 
 ### 1. iOS device or simulator run
 
@@ -176,16 +176,16 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
     still-mounted dialog, and then to `body` when the dialog unmounted.
   - The drawer backdrop no longer has its own click handler. Radix closes the
     drawer on a press outside it, and only while the drawer is the top layer.
-  - The ActionBar "Environment settings" button records the same request
-    (`openEnvironmentSettings` in `useActionBarController.ts`), so
+  - The SidebarBottomBar "Environment settings" button records the same request
+    for local selections (remote selections request the owning machine’s realm), so
     `AppDialogHost` is the only renderer of the dialog opened from the
-    drawer or the toolbar. `ServiceBrowserTab` still renders its own copy
+    drawer or the desktop sidebar. `ServiceBrowserTab` still renders its own copy
     for a preview tab's "configure mapping" recovery action; it is not in
     the drawer.
   - Covered by `AppDialogHost.test.tsx` (including a background rename of
     the requested environment and restart through the backend),
-    `ActionBar.test.tsx` (the toolbar button records the request and renders
-    no dialog of its own), `MobileAppShellLayout.test.tsx` (the
+    `SidebarBottomBar.test.tsx` (local buttons record host requests; remote
+    selections route to their realm even with local selection cleared), `MobileAppShellLayout.test.tsx` (the
     drawer gives way to a requested dialog; a click on the backdrop that a
     press inside the drawer began does not close it; focus returns to the
     trigger past the real settings layer's trap),
@@ -215,17 +215,15 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
 
 ### Code
 
-1. ~~**Open the ActionBar's environment settings through `AppDialogHost`.**~~
-   Done 2026-10-26. `useActionBarController` no longer holds
-   `envSettingsEnvironmentId`, the pinned environment or the effect that
-   dropped it. The button calls `openEnvironmentSettings`, which records
-   `{ kind: "environment-settings", environmentId }` in `useAppDialogStore`,
-   and `ActionBar.view.tsx` no longer renders the dialog. The ActionBar tests
-   that drove the mocked dialog (pinning across a selection change, a
-   background rename, deletion closing it, update and restart forwarding)
-   now check the recorded request. The dialog's own behaviour is covered in
-   `AppDialogHost.test.tsx`, which already covered deletion and updates and
-   gained a rename case and a restart case.
+1. ~~**Open environment settings through `AppDialogHost`.**~~
+   Done 2026-10-26; entry points updated 2026-11-02. `SidebarBottomBar`
+   records local repository and environment settings requests in
+   `useAppDialogStore`, and sends remote requests to the active machine's
+   realm. `ActionBar` has no settings controls or dialogs.
+   `SidebarBottomBar.test.tsx` covers routing and switching back to local;
+   `MobileAppShellLayout.test.tsx` covers drawer dismissal for both remote
+   settings buttons. `AppDialogHost.test.tsx` covers the dialog's pinning,
+   deletion, updates, background rename and restart forwarding.
 2. ~~**Trap focus in fullscreen settings.**~~ Done 2026-10-26.
    `FullscreenSettingsLayout` wraps its dialog in a Radix `FocusScope`
    (`@radix-ui/react-focus-scope` 1.3.1, already installed through the other
@@ -334,8 +332,8 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
   the row still owned (the row unmounts with the drawer and takes the dialog
   with it), or to keep the drawer mounted when closed with `forceMount` (a
   hidden drawer keeps every row and its subscriptions alive). A store request
-  plus `AppDialogHost` follows the ActionBar's state-outside-the-drawer
-  pattern and the existing `errorDialogStore`. The host sits in `AppShell`,
+  plus `AppDialogHost` keeps state outside the drawer, following the
+  existing `errorDialogStore` pattern. The host sits in `AppShell`,
   inside `DockerAvailabilityProvider`, which the settings dialog reads.
 - **The drawer closes itself.** It subscribes to `useAppDialogStore` and gives
   way to any request, so a row only records what it wants and never reaches
@@ -385,17 +383,17 @@ are done (2026-10-26), and the specs pass in Playwright's WebKit, which has no
 
 ## Assumptions and decisions
 
-- **One host for the toolbar's dialog (2026-10-26).** Options: (a) record a
-  `useAppDialogStore` request and let `AppDialogHost` render the dialog;
-  (b) keep the ActionBar's own copy and only share code with the host.
-  Chose (a), as the item asked. Pros: one renderer, one pin-by-id and
-  drop-on-delete path, and a toolbar request now also closes an open drawer.
-  Cons: the toolbar's dialog only appears where `AppShell` mounts
-  `AppDialogHost`. A bare `<ActionBar />` test checks the request; the
-  composed ActionBar/settings test and phone browser fixture render the real
-  host and verify section navigation and focus return after cached reopening.
-  The ActionBar's repository settings keep their own copy: the item did not
-  cover them, and they are not opened from the drawer.
+- **Task 1: shared settings host (updated 2026-11-02).** Chose requests
+  through `useAppDialogStore` for local repository and environment settings,
+  rendered by `AppDialogHost`. Both buttons now live in `SidebarBottomBar`;
+  `ActionBar` owns neither settings buttons nor a repository dialog. Remote
+  selections instead send the dialog request to the active machine's realm,
+  preserving its environment selection. This reuses the mobile drawer's
+  existing remote-request dismissal path. The alternative of toolbar-owned
+  dialogs duplicates lifecycle and focus handling. The shared host keeps
+  requests pinned by id and drops deleted targets; the owning realm must be
+  reachable for remote dialogs. Covered by `SidebarBottomBar.test.tsx`, the
+  host tests and browser settings flows.
 - **How to trap focus (2026-10-26).** Options: (a) Radix `FocusScope` around
   the existing dialog; (b) convert the layer to a Radix `Dialog`; (c) a
   hand-written Tab handler plus a `focusin` guard. Chose (a). Pros: it shares

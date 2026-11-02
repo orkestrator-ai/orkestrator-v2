@@ -36,7 +36,10 @@ test("production coordinator and leaf RPC share the raw/turn activity probe and 
       options: CoordinatorDelegationOptions;
     };
   };
-  const sessions = spyOn(internal.context.storage, "listNativeAgentSessions").mockResolvedValue([
+  const sessions = spyOn(
+    internal.context.storage,
+    "readNativeAgentSessionsSnapshot",
+  ).mockResolvedValue([
     { environmentId: "other", logicalSessionKey: "env-e:tab:one", agent: "claude" },
     { environmentId: "e", logicalSessionKey: "env-e:other", agent: "claude" },
     { environmentId: "e", logicalSessionKey: "env-e:tab:one", agent: "codex" },
@@ -117,7 +120,7 @@ test("production coordinator and leaf RPC share the raw/turn activity probe and 
 test("a queued native dispatch remains pending even when no activity service is available", async () => {
   const world = await MailWorld.create();
   worlds.push(world);
-  const sessions = spyOn(world.storage, "listNativeAgentSessions").mockResolvedValue([
+  const sessions = spyOn(world.storage, "readNativeAgentSessionsSnapshot").mockResolvedValue([
     {
       environmentId: "queued",
       logicalSessionKey: "env-queued:resolve",

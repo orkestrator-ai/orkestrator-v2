@@ -63,6 +63,8 @@ async function harness() {
   await storage.addEnvironment(environment);
   const { context } = memoryLifecycleContext([environment], join(dir, "data"));
   context.storage = storage;
+  const attention: string[] = [];
+  storage.addEnvironmentAttentionListener((event) => attention.push(event.reason));
   const emitted: string[] = [];
   context.emit = (_event, payload) => {
     emitted.push((payload as { state: string }).state);
@@ -93,6 +95,7 @@ async function harness() {
     read,
     markRead,
     emitted,
+    attention,
   };
 }
 
@@ -183,6 +186,54 @@ describe("Claude terminal poll after a failed turn", () => {
     expect((await h.read()).hasUnreadWork).toBe(false);
     h.stop();
   });
+
+  test("a missed success followed by failure sends only failure attention", async () => {
+    const h = await harness();
+    hook("working");
+    hook("waiting");
+    await h.start();
+    await h.markRead();
+    h.attention.length = 0;
+
+    hook("working");
+    hook("waiting");
+    hook("working");
+    hook("failed");
+    expect(readState().trim()).toBe("failed 6 2");
+    await h.tick();
+    expect(h.attention).toEqual(["agent_failed"]);
+    expect((await h.read()).unreadReason).toBe("agent_failed");
+    await h.markRead();
+    await h.tick();
+    expect((await h.read()).hasUnreadWork).toBe(false);
+    expect(h.attention).toEqual(["agent_failed"]);
+    h.stop();
+  });
+
+  for (const outcome of ["failed", "waiting"] as const) {
+    test(`recovers a missed ${outcome} turn from idle after an earlier failure`, async () => {
+      const h = await harness();
+      hook("working");
+      await h.start();
+      hook("failed");
+      await h.tick();
+      expect((await h.read()).agentActivityState).toBe("idle");
+      await h.markRead();
+      h.attention.length = 0;
+
+      hook("working");
+      hook(outcome);
+      await h.tick();
+      const reason = outcome === "failed" ? "agent_failed" : "agent_finished";
+      expect(h.attention).toEqual([reason]);
+      expect((await h.read()).unreadReason).toBe(reason);
+      await h.markRead();
+      await h.tick();
+      expect((await h.read()).hasUnreadWork).toBe(false);
+      expect(h.attention).toEqual([reason]);
+      h.stop();
+    });
+  }
 
   test("a failure already on disk at backend start rings from the persisted working source", async () => {
     const h = await harness();

@@ -624,24 +624,20 @@ export class ClaudeStatePollManager {
       // this must not emit: the renderer would adopt a state storage rejected.
       return;
     }
-    // Storage may have seen waiting both before and after a whole missed turn.
-    // Publish its durable completion token without inventing a working state.
-    if (
+    // Recover missed turn ends once, choosing attention from the latest snapshot.
+    // A successful turn followed by a failed one can advance both counters;
+    // recording success first would consume the unread edge and send the wrong toast.
+    const recoverSuccess =
       recoveredCompletion &&
-      !(poll.lastState === "working" && (state === "waiting" || state === "idle"))
-    ) {
-      await poll.context.storage.recordEnvironmentSessionCompletion(environment.id, occurredAt);
-      if (!this.isCurrent(containerId, poll)) return;
-    }
-    // The same for a failure whose working edge this poll never saw (both
-    // rings lost from waiting or idle): there is no source edge for storage to
-    // ring on. A cold start (`""`) cannot tell, and storage's persisted source
-    // already answers it.
-    if (failed && revisionChanged && poll.lastState !== "working" && poll.lastState !== "") {
+      !(poll.lastState === "working" && (state === "waiting" || state === "idle"));
+    // A cold start cannot infer a missed edge; storage's persisted source owns it.
+    const recoverFailure =
+      failed && revisionChanged && poll.lastState !== "working" && poll.lastState !== "";
+    if (recoverSuccess || recoverFailure) {
       await poll.context.storage.recordEnvironmentSessionCompletion(
         environment.id,
         occurredAt,
-        "agent_failed",
+        failed ? "agent_failed" : "agent_finished",
       );
       if (!this.isCurrent(containerId, poll)) return;
     }

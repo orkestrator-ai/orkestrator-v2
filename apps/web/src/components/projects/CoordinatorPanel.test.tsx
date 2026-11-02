@@ -15,6 +15,7 @@ import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
+import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
@@ -430,6 +431,27 @@ describe("CoordinatorPanel", () => {
     expect(renderAgentNativeTab.mock.calls.at(-1)?.[0]).toMatchObject({
       coordinatorProjectId: "project-1",
     });
+  });
+
+  test("publishes its focused conversation for the agent information button until unmounted", async () => {
+    const view = render(<CoordinatorPanel projectId="project-1" />);
+
+    await screen.findByTestId("native-agent");
+    await waitFor(() =>
+      expect(useActiveCoordinatorConversationStore.getState().active).toEqual({
+        projectId: "project-1",
+        tabId: "coordinator-tab",
+        data: {
+          platform: "codex",
+          environmentId: coordinatorRuntimeId("coordinator-1", "conversation-1"),
+          isLocal: true,
+          sessionId: undefined,
+        },
+      }),
+    );
+
+    view.unmount();
+    expect(useActiveCoordinatorConversationStore.getState().active).toBe(null);
   });
 
   test.each([true, false])(

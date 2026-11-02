@@ -33,6 +33,10 @@ import {
 import { isNodeEnvironmentReadyToMerge } from "@/lib/pr-merge-readiness";
 import { viewFromNodeSummary } from "@/components/federation/useMachineViews";
 import { AgentInfoButton } from "./AgentInfoButton";
+import {
+  coordinatorConversationTab,
+  useActiveCoordinatorConversationStore,
+} from "@/stores/activeCoordinatorConversationStore";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
 import { AgentMailPanel } from "@/components/agent-mail/AgentMailPanel";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
@@ -198,7 +202,17 @@ export function AppShell({ children }: AppShellProps) {
     remoteNames ? remoteNames.environmentName : activeEnvironmentName,
     import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim() || null,
   );
+  const projectBoardTab = useUIStore((state) => state.projectBoardTab);
+  const coordinatorConversation = useActiveCoordinatorConversationStore((state) => state.active);
   const activeTab = useMemo(() => {
+    // A shown coordinator page covers the project home's tabs; its focused
+    // conversation is the agent session the window describes.
+    const coordinatorTab = coordinatorConversationTab(
+      coordinatorConversation,
+      selectedProjectId,
+      projectBoardTab,
+    );
+    if (coordinatorTab) return coordinatorTab;
     if (!selectedEnvironmentId) return null;
     const environment = paneEnvironments.get(selectedEnvironmentId);
     if (!environment) return null;
@@ -206,7 +220,13 @@ export function AppShell({ children }: AppShellProps) {
     const activePane = leaves.find((leaf) => leaf.id === environment.activePaneId) ?? null;
     if (!activePane?.activeTabId) return null;
     return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
-  }, [paneEnvironments, selectedEnvironmentId]);
+  }, [
+    coordinatorConversation,
+    paneEnvironments,
+    projectBoardTab,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
 
   // App shortcuts work wherever focus is in this document (`app-shortcuts.ts`).
   useEffect(() => retainAppShortcutRouter(), []);

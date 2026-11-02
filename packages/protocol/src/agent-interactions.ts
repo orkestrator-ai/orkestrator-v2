@@ -353,7 +353,9 @@ export function mcpServerInteractionSource(
  */
 export function agentInteractionSourceScopeLabel(scope: string | undefined): string | undefined {
   if (!scope) return undefined;
-  return SOURCE_SCOPE_LABELS[scope] ?? "other configuration";
+  return Object.hasOwn(SOURCE_SCOPE_LABELS, scope)
+    ? SOURCE_SCOPE_LABELS[scope]
+    : "other configuration";
 }
 
 /** The one-line text form, for consumers that show a request as text only. */

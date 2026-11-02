@@ -88,6 +88,10 @@ describe("interaction source", () => {
     expect(agentInteractionSourceScopeLabel("project")).toBe("project settings");
     expect(agentInteractionSourceScopeLabel("sdk")).toBe("the agent host");
     expect(agentInteractionSourceScopeLabel("future_scope")).toBe("other configuration");
+    expect(agentInteractionSourceScopeLabel("constructor")).toBe("other configuration");
+    expect(
+      agentInteractionSourceLine({ kind: "mcp-server", name: "linear", scope: "constructor" }),
+    ).toBe("MCP server: linear (from other configuration)");
     expect(agentInteractionSourceScopeLabel(undefined)).toBeUndefined();
   });
 

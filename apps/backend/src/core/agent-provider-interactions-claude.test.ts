@@ -458,7 +458,7 @@ describe("Claude interaction adapter", () => {
         id: "long-name",
         kind: "permission",
         toolName: "mcp__x__y",
-        mcpServer: "x".repeat(300),
+        mcpServer: `${"x".repeat(256)}…`,
         requestedAt,
         expiresAt,
       },

@@ -408,6 +408,11 @@ describe("tool approvals under an ask policy", () => {
         {},
         context("req-p2", { mcpServer: { name: "odd", source: "Not A Token" } }),
       ),
+      call.options.canUseTool!(
+        "mcp__long__x",
+        {},
+        context("req-long", { mcpServer: { name: "x".repeat(300), source: "user" } }),
+      ),
       // A CLI that predates the field sends no provenance at all.
       call.options.canUseTool!("mcp__old__x", {}, context("req-p3")),
       call.options.canUseTool!(
@@ -416,8 +421,11 @@ describe("tool approvals under an ask policy", () => {
         context("req-p4", { mcpServer: { name: "", source: "user" } }),
       ),
     ];
-    await waitFor(() => getPendingInteractions(session.id).length === 4);
+    await waitFor(() => getPendingInteractions(session.id).length === 5);
     const pending = new Map(getPendingInteractions(session.id).map((entry) => [entry.id, entry]));
+    expect(pending.get("req-long")).toMatchObject({ mcpServer: `${"x".repeat(256)}…` });
+    expect(pending.get("req-long")).not.toHaveProperty("mcpServerSource");
+    expect(pending.get("req-long")).not.toHaveProperty("ruleEligible");
     expect(pending.get("req-p1")).toMatchObject({ mcpServer: "repo", mcpServerSource: "project" });
     expect(pending.get("req-p2")).toMatchObject({ mcpServer: "odd" });
     expect(pending.get("req-p2")).not.toHaveProperty("mcpServerSource");
@@ -426,7 +434,7 @@ describe("tool approvals under an ask policy", () => {
     expect(pending.get("req-p4")).not.toHaveProperty("mcpServer");
     expect(pending.get("req-p4")).not.toHaveProperty("mcpServerSource");
 
-    for (const id of ["req-p1", "req-p2", "req-p3", "req-p4"]) {
+    for (const id of ["req-p1", "req-p2", "req-p3", "req-p4", "req-long"]) {
       respondToInteraction(id, { action: "decline" });
     }
     await Promise.all(decisions);

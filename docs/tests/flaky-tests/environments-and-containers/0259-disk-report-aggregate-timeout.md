@@ -414,4 +414,6 @@ The unchanged owning file passed alone on this branch with
 (1.8 s). The same command with log name `main-disk-report` also passed in
 an independently installed detached `origin/main` worktree at `d7cdfaa8b`
 (1.8 s); that worktree was removed. This does not establish a cause for the
-aggregate timeout; the exact aggregate command is being rerun separately.
+aggregate timeout. The exact aggregate rerun passed the root group (214.1 s),
+including disk-report, but failed two other workspace owners; see cases 1314
+and 1653. Evidence: `/tmp/orkestrator-test-run.kQC3bQ/repaired-validation-test.log.gz`.

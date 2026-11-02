@@ -41,6 +41,7 @@ import {
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
 import { resolveClaudeBackgroundCommandLimitHours } from "@orkestrator/protocol/claude-background-commands";
 import { resolveSessionTitleGenerationPolicy } from "@orkestrator/protocol/session-title-generation";
+import { resolveTerminalLinkDefaultTarget } from "@orkestrator/protocol/terminal-link-target";
 import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
@@ -139,6 +140,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
       backgroundColor: appearance.backgroundColor,
     },
     terminalScrollback: global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
+    terminalLinkDefaultTarget: resolveTerminalLinkDefaultTarget(global.terminalLinkDefaultTarget),
     terminalHistoryEnabled: global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED,
     terminalHistoryRetentionMb:
       global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
@@ -228,6 +230,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalAppearance?.fontSize ?? 0,
     global.terminalAppearance?.backgroundColor ?? "",
     global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
+    resolveTerminalLinkDefaultTarget(global.terminalLinkDefaultTarget),
     global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED,
     global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
     global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
@@ -326,6 +329,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     typeof global.terminalScrollback === "number"
       ? global.terminalScrollback
       : DEFAULT_TERMINAL_SCROLLBACK,
+  );
+  const [terminalLinkDefaultTarget, setTerminalLinkDefaultTarget] = useState(() =>
+    resolveTerminalLinkDefaultTarget(global.terminalLinkDefaultTarget),
   );
   const [terminalHistoryRetentionMb, setTerminalHistoryRetentionMb] = useState(
     global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
@@ -444,6 +450,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setTerminalFontSize(appearance.fontSize);
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
+    setTerminalLinkDefaultTarget(
+      resolveTerminalLinkDefaultTarget(global.terminalLinkDefaultTarget),
+    );
     setTerminalHistoryEnabled(global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED);
     setTerminalHistoryRetentionMb(
       global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
@@ -632,6 +641,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         backgroundColor: terminalBackgroundColor,
       },
       terminalScrollback,
+      terminalLinkDefaultTarget,
       terminalHistoryEnabled,
       terminalHistoryRetentionMb,
       terminalHistoryGlobalRetentionMb,
@@ -670,6 +680,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalFontSize,
       terminalBackgroundColor,
       terminalScrollback,
+      terminalLinkDefaultTarget,
       terminalHistoryEnabled,
       terminalHistoryRetentionMb,
       terminalHistoryGlobalRetentionMb,
@@ -1070,6 +1081,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setTerminalBackgroundColor,
     terminalScrollback,
     setTerminalScrollback,
+    terminalLinkDefaultTarget,
+    setTerminalLinkDefaultTarget,
     terminalHistoryEnabled,
     setTerminalHistoryEnabled,
     terminalHistoryRetentionMb,

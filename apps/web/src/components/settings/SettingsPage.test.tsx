@@ -59,6 +59,7 @@ test("scope banners name the owner of each section in a leaf window", () => {
   for (const section of [
     "defaults",
     "terminal",
+    "previews",
     "claude",
     "codex",
     "cursor",

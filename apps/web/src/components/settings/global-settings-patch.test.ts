@@ -23,6 +23,21 @@ describe("globalConfigPatchFromCoreFields", () => {
     expect(changes.unset).toContain("claudeBackgroundCommandLimitHours");
   });
 
+  test("stores a preview-tab link default and unsets the external one", () => {
+    expect(
+      globalConfigPatchFromCoreFields(
+        { ...baseline, terminalLinkDefaultTarget: "browser-tab" },
+        baseline,
+      ),
+    ).toEqual({ patch: { terminalLinkDefaultTarget: "browser-tab" }, unset: [] });
+    expect(
+      globalConfigPatchFromCoreFields(baseline, {
+        ...baseline,
+        terminalLinkDefaultTarget: "browser-tab",
+      }).unset,
+    ).toContain("terminalLinkDefaultTarget");
+  });
+
   test("sends only the changed fields", () => {
     const changes = globalConfigPatchFromCoreFields(
       {

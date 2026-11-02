@@ -232,6 +232,7 @@
     "./tab-initial-prompt": "./src/tab-initial-prompt.ts",
     "./terminal-agent-launch": "./src/terminal-agent-launch.ts",
     "./terminal-history": "./src/terminal-history.ts",
+    "./terminal-link-target": "./src/terminal-link-target.ts",
     "./terminal-input-batcher": "./src/terminal-input-batcher.ts",
     "./terminal-input-contract-fixtures": "./src/terminal-input-contract-fixtures.ts",
     "./terminal-input-sequencer": "./src/terminal-input-sequencer.ts",

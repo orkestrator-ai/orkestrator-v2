@@ -37,6 +37,7 @@ import { HostPark, HostSlot } from "./HostSlot";
 import { AppDialogHost } from "./AppDialogHost";
 import { GlobalSettingsHost } from "./GlobalSettingsHost";
 import { BugReportSheet } from "@/components/bug-report/BugReportSheet";
+import { MachineCpuReadings } from "@/components/federation/MachineCpuReadings";
 import { RemoteWorkspaceRegion } from "@/components/federation/RemoteWorkspaceRegion";
 import {
   RealmAgentInfoTrigger,
@@ -347,6 +348,7 @@ export function AppShell({ children }: AppShellProps) {
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
+              <MachineCpuReadings />
               {/*
                 Another node's workspace reports its agent and machine, so
                 they show here as this node's do.

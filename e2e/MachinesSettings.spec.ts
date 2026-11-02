@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const name = "🖥️".repeat(32); // 64 code points, 96 UTF-16 code units.
 const unbreakableName = "W".repeat(64);
@@ -289,4 +289,86 @@ test("agent accounts fit their columns up to the settings pane and scroll locall
     });
     expect(await table.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
   }
+});
+
+test.describe("machine order", () => {
+  const FLEET = ["Studio", "Build box", "Laptop", "Rack", "Spare", "Attic"];
+
+  const machineNames = (page: Page) =>
+    page
+      .getByTestId("machine-row")
+      .evaluateAll((rows) => rows.map((row) => row.querySelector(".font-medium")?.textContent));
+
+  const accountNames = (page: Page) =>
+    page
+      .getByTestId("machine-agent-accounts-row")
+      .evaluateAll((rows) => rows.map((row) => row.textContent));
+
+  const readings = (page: Page) =>
+    page
+      .getByRole("group", { name: "CPU usage by machine" })
+      .getByRole("img")
+      .evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")));
+
+  async function drag(page: Page, handle: Locator, target: Locator) {
+    const start = (await handle.boundingBox())!;
+    const end = (await target.boundingBox())!;
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2 + 12, { steps: 3 });
+    await page.mouse.move(start.x + start.width / 2, end.y + end.height / 2, { steps: 12 });
+    await page.mouse.up();
+  }
+
+  test("a machine is dragged under the command node, and every list follows", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/machines-settings?fleet");
+    await expect.poll(() => machineNames(page)).toEqual(FLEET);
+    await expect
+      .poll(() => readings(page))
+      .toEqual([
+        "Studio CPU usage: 45%",
+        "Build box CPU usage: 12%",
+        "Laptop CPU usage: 3%",
+        "Rack CPU usage: 80%",
+        "Spare CPU usage: 27%",
+        "Attic CPU usage: unavailable",
+      ]);
+
+    // The command node has no grip, and nothing can land above it.
+    await expect(page.getByRole("button", { name: "Reorder Studio" })).toHaveCount(0);
+    const rows = page.getByTestId("machine-row");
+    await drag(page, page.getByRole("button", { name: "Reorder Rack" }), rows.first());
+    const moved = ["Studio", "Rack", "Build box", "Laptop", "Spare", "Attic"];
+    await expect.poll(() => machineNames(page)).toEqual(moved);
+    expect(await page.evaluate(() => localStorage.getItem("machines-fixture-machine-order"))).toBe(
+      "bk_self,bk_rack,bk_build,bk_laptop,bk_spare,bk_attic",
+    );
+
+    await expect
+      .poll(async () => (await readings(page)).map((label) => label?.split(" CPU")[0]))
+      .toEqual(moved);
+    await expect
+      .poll(async () =>
+        (await accountNames(page)).map((text) => moved.find((name) => text?.startsWith(name))),
+      )
+      .toEqual(moved);
+
+    // The keyboard reaches the same order.
+    const attic = page.getByRole("button", { name: "Reorder Attic" });
+    await attic.focus();
+    await page.keyboard.press("Space");
+    await expect(attic).toHaveAttribute("aria-pressed", "true");
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
+    await page.keyboard.press("ArrowUp");
+    await expect(page.locator('[id^="DndLiveRegion"]')).toContainText(
+      "over droppable area bk_spare",
+    );
+    await page.keyboard.press("Space");
+    await expect
+      .poll(() => machineNames(page))
+      .toEqual(["Studio", "Rack", "Build box", "Laptop", "Attic", "Spare"]);
+  });
 });

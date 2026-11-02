@@ -12,6 +12,7 @@ import type {
   ConnectionSummary,
 } from "@orkestrator/protocol/connections";
 import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-maintenance";
+import { inMachineOrder } from "@/lib/federation/sidebar-layout";
 
 /**
  * One list of machines from the two places that know about them:
@@ -197,6 +198,8 @@ export interface MachineListInput {
   workspaceNodeId: string | null;
   /** Shown as the command node's address when no saved connection names it (browser clients). */
   selfAddress?: string | null;
+  /** The order the command node keeps for its machines (`PortalLayout.machineOrder`). */
+  machineOrder?: readonly string[];
 }
 
 export function buildMachineList(input: MachineListInput): MachineEntry[] {
@@ -315,13 +318,22 @@ export function buildMachineList(input: MachineListInput): MachineEntry[] {
     });
   }
 
-  // The machine this window works on first, then the command node, then by name.
-  const rank = (entry: MachineEntry) => (entry.current ? 0 : entry.role === "self" ? 1 : 2);
-  return entries.sort(
-    (left, right) =>
-      rank(left) - rank(right) ||
-      left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
-  );
+  // The command node first, then the machines it controls in the order it keeps
+  // for them, then what only this device knows, by name. Which machine this
+  // window works on never moves anything.
+  return [
+    ...inMachineOrder(
+      entries.filter((entry) => entry.role !== "device"),
+      (entry) => entry.nodeId ?? entry.key,
+      input.machineOrder ?? [],
+      selfId,
+    ),
+    ...entries
+      .filter((entry) => entry.role === "device")
+      .sort((left, right) =>
+        left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+      ),
+  ];
 }
 
 /**

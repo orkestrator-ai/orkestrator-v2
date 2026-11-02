@@ -5,6 +5,7 @@ import type { ConnectionList } from "@orkestrator/protocol/connections";
 import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-maintenance";
 import { hostMaintenanceSnapshotFixture } from "@orkestrator/protocol/testing/host-maintenance-fixtures";
 import { BACKEND_PROFILE_CONFLICT_CODE } from "@orkestrator/protocol/backend-profile";
+import { emptyPortalLayout } from "@orkestrator/protocol/portal-layout";
 import { listen } from "@/lib/native/events";
 import { invoke } from "@/lib/native/backend";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
@@ -13,6 +14,7 @@ import {
   mockToastWarning,
   resetSonnerMocks,
 } from "../../../../../../tests/mocks/sonner";
+import { portalLayoutStore } from "@/lib/portal/portal-layout";
 import { portalStore } from "@/lib/portal/portal-store";
 import {
   onGlobalSettingsCloseRequest,
@@ -245,6 +247,126 @@ async function renderPage() {
 }
 
 describe("Machines settings", () => {
+  test("keeps the command node on top with no grip, and the others in the stored order", async () => {
+    install();
+    installDesktop();
+    portalLayoutStore.setState({
+      layout: {
+        ...emptyPortalLayout(),
+        revision: 5,
+        machineOrder: ["bk_zed", "bk_self", "bk_build"],
+      },
+      loaded: true,
+    });
+    try {
+      await renderPage();
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByTestId("machine-row")
+            .map((element) => element.querySelector(".font-medium")?.textContent),
+        ).toEqual(["Desk", "Zed", "Build box"]),
+      );
+      expect(within(row("Zed")).getByRole("button", { name: "Reorder Zed" })).toBeTruthy();
+      expect(
+        within(row("Build box")).getByRole("button", { name: "Reorder Build box" }),
+      ).toBeTruthy();
+      expectDomAbsent(screen.queryByRole("button", { name: "Reorder Desk" }));
+    } finally {
+      portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
+    }
+  });
+
+  test("a failed keyboard reorder reports the error and restores the stored order", async () => {
+    install();
+    installDesktop();
+    const stored = {
+      ...emptyPortalLayout(),
+      revision: 5,
+      machineOrder: ["bk_self", "bk_build", "bk_zed"],
+    };
+    const originalInvoke = invokeMock.getMockImplementation()!;
+    let rejectSave!: (reason: Error) => void;
+    invokeMock.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === "get_portal_layout") return Promise.resolve(stored);
+      if (command === "update_portal_layout")
+        return new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        });
+      return originalInvoke(command, args);
+    });
+    portalLayoutStore.setState({ layout: stored, loaded: true, error: null });
+    // Give the real keyboard sensor the row geometry a browser normally supplies.
+    spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const machineRow = this.closest('[data-testid="machine-row"]');
+      const index = machineRow
+        ? screen.getAllByTestId("machine-row").indexOf(machineRow as HTMLElement)
+        : 0;
+      return {
+        x: 0,
+        y: index * 60,
+        top: index * 60,
+        bottom: (index + 1) * 60,
+        left: 0,
+        right: 800,
+        width: 800,
+        height: 60,
+        toJSON: () => ({}),
+      };
+    });
+    try {
+      await renderPage();
+      const grip = screen.getByRole("button", { name: "Reorder Build box" });
+      grip.focus();
+      fireEvent.keyDown(grip, { code: "Space", key: " " });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      fireEvent.keyDown(document, { code: "ArrowDown", key: "ArrowDown" });
+      await act(async () => {});
+      fireEvent.keyDown(document, { code: "Space", key: " " });
+      await waitFor(() =>
+        expect(
+          invokeMock.mock.calls.filter(([name]) => name === "update_portal_layout"),
+        ).toHaveLength(1),
+      );
+      expect(portalLayoutStore.getState().layout.machineOrder).toEqual([
+        "bk_self",
+        "bk_zed",
+        "bk_build",
+      ]);
+      await act(async () => rejectSave(new Error("save unavailable")));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Could not save the machine order", {
+          description: "save unavailable",
+        }),
+      );
+      expect(portalLayoutStore.getState().layout.machineOrder).toEqual(stored.machineOrder);
+      expect(
+        screen
+          .getAllByTestId("machine-row")
+          .map((element) => element.querySelector(".font-medium")?.textContent),
+      ).toEqual(["Desk", "Build box", "Zed"]);
+    } finally {
+      portalLayoutStore.setState({ layout: emptyPortalLayout(), loaded: false, error: null });
+    }
+  });
+
+  test("a machine controlled by another offers no reordering", async () => {
+    install({
+      status: {
+        ...commandStatus,
+        mode: "leaf",
+        controllers: [{ displayName: "Boss" }] as never,
+      },
+    });
+    installDesktop();
+    await renderPage();
+    expectDomAbsent(screen.queryByRole("button", { name: /^Reorder / }));
+  });
+
   test("lists every machine once, the connected one first, with address, connection and last connection", async () => {
     install();
     installDesktop();

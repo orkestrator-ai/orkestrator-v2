@@ -30,16 +30,11 @@ export function PullRequestOpenerProvider({
   open,
   children,
 }: {
-  open: (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) => void;
+  /** Returning false declines, so the link falls back to the browser. */
+  open: (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) => boolean | void;
   children: ReactNode;
 }) {
-  const opener = useMemo<PullRequestOpener>(
-    () => (ref, view) => {
-      open(ref, view);
-      return true;
-    },
-    [open],
-  );
+  const opener = useMemo<PullRequestOpener>(() => (ref, view) => open(ref, view) !== false, [open]);
   return (
     <PullRequestOpenerContext.Provider value={opener}>{children}</PullRequestOpenerContext.Provider>
   );
@@ -83,16 +78,18 @@ export function openPullRequestInApp(
  * Opens a GitHub pull request URL in the app, or in the external browser when
  * it is not one the viewer can show (or nothing could host it). `external`
  * forces the browser, for explicit "Open on GitHub" actions and modifier clicks.
+ * Resolves true when the pull request opened in the app.
  */
-export function openPullRequestUrl(
+export async function openPullRequestUrl(
   url: string,
   options: { external?: boolean; opener?: PullRequestOpener } = {},
-): Promise<void> {
+): Promise<boolean> {
   const pullRequest = options.external ? null : parseGitHubPullRequestLink(url);
   if (pullRequest && (options.opener ?? openPullRequestInApp)(pullRequest, pullRequest.view)) {
-    return Promise.resolve();
+    return true;
   }
-  return openInBrowser(url);
+  await openInBrowser(url);
+  return false;
 }
 
 export function usePullRequestOpener(): PullRequestOpener {

@@ -97,6 +97,9 @@ call sites.
   default modifier click; adding Shift opens GitHub), the action bar's View
   PR, the pipeline's Pull request step, Multi Review's PR node, and links
   inside a pull request opened in the main area.
+- **Modal hosts.** The agent mail sheet and the Kanban ticket dialog cover
+  the PR pane, so a pull request that opens in the pane closes them (the
+  ticket dialog only when it is not being edited).
 - **Hosts with their own tabs.** Inside the files panel a linked pull request
   opens as another panel tab. The project's Pull requests page is a pull
   request browser of its own, so its list rows and links open as tabs of that

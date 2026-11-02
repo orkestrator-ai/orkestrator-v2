@@ -133,7 +133,14 @@ function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
 }
 
 /** Renders comment text with clickable URLs */
-export function CommentText({ text }: { text: string }) {
+export function CommentText({
+  text,
+  onOpenedInApp,
+}: {
+  text: string;
+  /** Called after a link opened in the app (the PR pane) rather than the browser. */
+  onOpenedInApp?: () => void;
+}) {
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
   if (parts.length === 1) return <>{text}</>;
   return (
@@ -146,9 +153,11 @@ export function CommentText({ text }: { text: string }) {
             onClick={(e) => {
               e.preventDefault();
               // A pull request opens in the right-hand PR pane; Cmd/Ctrl-click opens GitHub.
-              void openPullRequestUrl(part, { external: e.metaKey || e.ctrlKey }).catch(() =>
-                toast.error("Could not open the link"),
-              );
+              void openPullRequestUrl(part, { external: e.metaKey || e.ctrlKey })
+                .then((inApp) => {
+                  if (inApp) onOpenedInApp?.();
+                })
+                .catch(() => toast.error("Could not open the link"));
             }}
           >
             {part}
@@ -1226,7 +1235,12 @@ export function KanbanTaskDialog({
                       >
                         <div className="flex items-start justify-between gap-2">
                           <p className="whitespace-pre-wrap text-foreground flex-1">
-                            <CommentText text={comment.text} />
+                            {/* The PR pane sits behind this modal, so a pull
+                                request opened there closes it unless edits are open. */}
+                            <CommentText
+                              text={comment.text}
+                              onOpenedInApp={isEditing ? undefined : () => handleOpenChange(false)}
+                            />
                           </p>
                           <Button
                             variant="ghost"

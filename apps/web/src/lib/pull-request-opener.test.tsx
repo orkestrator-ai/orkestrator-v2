@@ -130,7 +130,7 @@ test("subtree providers route links to their host and acknowledge handling", () 
   const calls: unknown[] = [];
   const { result } = renderHook(usePullRequestOpener, {
     wrapper: ({ children }) => (
-      <PullRequestOpenerProvider open={(...args) => calls.push(args)}>
+      <PullRequestOpenerProvider open={(...args) => void calls.push(args)}>
         {children}
       </PullRequestOpenerProvider>
     ),
@@ -147,11 +147,22 @@ function withBrowser() {
   return { openExternal, restore: () => (window.orkestrator = original) };
 }
 
+test("a provider can decline, so the link falls back to the browser", () => {
+  const { result } = renderHook(usePullRequestOpener, {
+    wrapper: ({ children }) => (
+      <PullRequestOpenerProvider open={() => false}>{children}</PullRequestOpenerProvider>
+    ),
+  });
+  expect(result.current(ref)).toBe(false);
+});
+
 test("openPullRequestUrl opens GitHub pull request links in the pane", async () => {
   const browser = withBrowser();
   try {
     const opener = mock(() => true);
-    await openPullRequestUrl("https://github.com/acme/repo/pull/7/files", { opener });
+    expect(await openPullRequestUrl("https://github.com/acme/repo/pull/7/files", { opener })).toBe(
+      true,
+    );
     expect(opener).toHaveBeenCalledWith(
       { owner: "acme", repo: "repo", number: 7, view: "code" },
       "code",
@@ -170,7 +181,7 @@ test.each([
   const browser = withBrowser();
   try {
     const opener = mock(() => false);
-    await openPullRequestUrl(url, { external, opener });
+    expect(await openPullRequestUrl(url, { external, opener })).toBe(false);
     expect(opener).toHaveBeenCalledTimes(!external && isPr ? 1 : 0);
     expect(browser.openExternal).toHaveBeenCalledWith(url);
   } finally {

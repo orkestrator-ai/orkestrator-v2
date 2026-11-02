@@ -156,6 +156,8 @@ export type ShellToRealmMessage =
   | RealmSelectRequest
   /** The window's sidebar was shown or hidden (the realm's toolbar toggles it). */
   | { type: "sidebar"; open: boolean }
+  /** The window's files panel was shown or hidden: one state for every machine. */
+  | { type: "filesPanel"; open: boolean }
   /** How the window's sidebar groups machines' projects; see `realmCoordinatorDefers`. */
   | { type: "grouping"; grouping: RealmGrouping }
   /** The window's title bar opened or closed one of the realm's popovers. */
@@ -187,6 +189,8 @@ export type RealmToShellMessage =
     }
   /** Show or hide the window's sidebar. */
   | { type: "sidebar"; open: boolean }
+  /** The user showed or hid the files panel here; the window applies it everywhere. */
+  | { type: "filesPanel"; open: boolean }
   /** Open the window's settings: they belong to the command node. */
   | { type: "settings"; section: string }
   /**
@@ -302,6 +306,9 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
   if (message.type === "sidebar") {
     return typeof message.open === "boolean" ? { type: "sidebar", open: message.open } : null;
   }
+  if (message.type === "filesPanel") {
+    return typeof message.open === "boolean" ? { type: "filesPanel", open: message.open } : null;
+  }
   if (message.type === "grouping") {
     return isRealmGrouping(message.grouping)
       ? { type: "grouping", grouping: message.grouping }
@@ -369,6 +376,9 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
   }
   if (message.type === "sidebar") {
     return typeof message.open === "boolean" ? { type: "sidebar", open: message.open } : null;
+  }
+  if (message.type === "filesPanel") {
+    return typeof message.open === "boolean" ? { type: "filesPanel", open: message.open } : null;
   }
   if (message.type === "settings") {
     return typeof message.section === "string" && /^[a-z-]{1,40}$/.test(message.section)

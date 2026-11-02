@@ -18,7 +18,9 @@ import {
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { onAppShortcut } from "@/lib/app-shortcuts";
 import { frameEnvelope } from "@/lib/federation/workspace-realm";
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { portalStore } from "@/lib/portal/portal-store";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -80,6 +82,7 @@ afterEach(() => {
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   useUIStore.setState(INITIAL_UI, true);
   useMachineViewStore.setState(INITIAL_MACHINE, true);
+  useFilesPanelStore.setState({ isOpen: false });
   window.location.reload = originalReload;
   document.body.innerHTML = "";
 });
@@ -227,6 +230,88 @@ describe("desktop: another machine's workspace in the central region", () => {
     );
     expect(useUIStore.getState().sidebarOpen).toBe(!open);
     act(() => useUIStore.setState({ sidebarOpen: open }));
+  });
+
+  test("the files panel is one state across this window and every open realm", async () => {
+    const fake = install(true);
+    useFilesPanelStore.setState({ isOpen: true });
+    renderRegion(anchorElement());
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" }));
+    await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+
+    // Nothing is sent before the realm listens; on ready it learns the state.
+    expect(fake.workspaceViews.send).not.toHaveBeenCalled();
+    act(() =>
+      fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }),
+    );
+    expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", {
+      type: "filesPanel",
+      open: true,
+    });
+
+    // Toggled on this window's own node, the realm follows.
+    act(() => useFilesPanelStore.getState().closePanel());
+    expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-1", {
+      type: "filesPanel",
+      open: false,
+    });
+
+    // Toggled in the realm, this window takes it, also for its other realms.
+    act(() =>
+      fake.emitViewEvent({
+        viewId: "view-1",
+        type: "message",
+        message: { type: "filesPanel", open: true },
+      }),
+    );
+    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+    expect(fake.workspaceViews.send).toHaveBeenLastCalledWith("view-1", {
+      type: "filesPanel",
+      open: true,
+    });
+
+    // Going back to this window's own workspace keeps the state, and it stays open.
+    act(() => useRemoteWorkspaceStore.getState().showLocal());
+    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  });
+
+  test("the phone layout shares no files panel state with its realms", async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === MOBILE_SHELL_MEDIA_QUERY,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      const fake = install(true);
+      useFilesPanelStore.setState({ isOpen: false });
+      renderRegion(anchorElement());
+      act(() => useRemoteWorkspaceStore.getState().open("bk_a", { projectId: "project-1" }));
+      await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+      act(() =>
+        fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }),
+      );
+      // A realm's report must not open this window's full-screen sheet over the realm.
+      act(() =>
+        fake.emitViewEvent({
+          viewId: "view-1",
+          type: "message",
+          message: { type: "filesPanel", open: true },
+        }),
+      );
+      expect(useFilesPanelStore.getState().isOpen).toBe(false);
+      act(() => useFilesPanelStore.getState().openPanel());
+      expect(fake.workspaceViews.send).not.toHaveBeenCalledWith("view-1", {
+        type: "filesPanel",
+        open: true,
+      });
+      expect(fake.workspaceViews.send).not.toHaveBeenCalledWith("view-1", {
+        type: "filesPanel",
+        open: false,
+      });
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   test("⌘K forwarded from the realm opens the window's search", async () => {

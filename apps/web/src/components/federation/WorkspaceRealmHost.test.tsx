@@ -13,6 +13,7 @@ import type { MachineView } from "@/lib/federation/aggregate";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { useConfigStore } from "@/stores/configStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useRealmShellStore } from "@/stores/realmShellStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import type { Environment, Project } from "@/types";
@@ -254,6 +255,55 @@ test("panel messages leave sidebar and selection untouched; only sidebar message
   act(() => deliver({ type: "grouping", grouping: "project" }));
   expect(useRealmShellStore.getState().grouping).toBe("project");
   useRealmShellStore.setState({ grouping: null });
+});
+
+test("the files panel follows the window, and only a choice made here is reported back", async () => {
+  let deliver: (message: unknown) => void = () => undefined;
+  const post = mock((_message: unknown) => undefined);
+  window.orkestrator = {
+    ...originalNative,
+    workspaceRealm: {
+      post,
+      onMessage: (callback: (message: unknown) => void) => {
+        deliver = callback;
+        return () => {
+          deliver = () => undefined;
+        };
+      },
+    },
+  } as typeof window.orkestrator;
+  nativeInvoke.mockImplementation(async (command: string) => {
+    if (command === "get_projects") return [];
+    return undefined;
+  });
+  useProjectStore.setState({ projects: [], hasLoaded: true });
+  useFilesPanelStore.setState({ isOpen: false });
+  render(<WorkspaceRealmHost />);
+  await waitFor(() => expect(useProjectStore.getState().isLoading).toBe(false));
+  const reports = () =>
+    post.mock.calls
+      .map(([message]) => message as { type: string; open?: boolean })
+      .filter((message) => message.type === "filesPanel");
+
+  // Applying the window's state is not a choice: reporting it would echo forever.
+  act(() => deliver({ type: "filesPanel", open: true }));
+  expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  act(() => deliver({ type: "filesPanel", open: false }));
+  expect(useFilesPanelStore.getState().isOpen).toBe(false);
+  expect(reports()).toEqual([]);
+
+  // The toolbar's toggle and an opened pull request both reach the window.
+  act(() => useFilesPanelStore.getState().togglePanel());
+  expect(reports()).toEqual([{ type: "filesPanel", open: true }]);
+  act(() => useFilesPanelStore.getState().closePanel());
+  act(() =>
+    useFilesPanelStore.getState().openPullRequest("target", { owner: "o", repo: "r", number: 1 }),
+  );
+  expect(reports().slice(1)).toEqual([
+    { type: "filesPanel", open: false },
+    { type: "filesPanel", open: true },
+  ]);
+  useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
 });
 
 for (const fail of [false, true]) {

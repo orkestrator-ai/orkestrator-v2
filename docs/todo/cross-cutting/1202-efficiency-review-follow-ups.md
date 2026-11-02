@@ -36,7 +36,7 @@ governs, marked "Decided".
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: open (BG-3's messaging-disabled gate done).
-11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-4 done; GW-2 done in 0052).
+11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open.
@@ -225,21 +225,75 @@ governs, marked "Decided".
 
 ### 11. Gateway and preview proxy
 
-**Problem.** The preview proxy never reuses upstream connections and strips ETags, and several per-frame costs remain.
+**Problem.** Per-frame and per-request costs remain in the gateway (GW-5, GW-6, GW-10 to GW-12, GW-14 to GW-16). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9) are fixed.
 
-**Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14).
+**Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14). Done on 2026-11-02:
 
-**Investigation.** Not re-checked since the report: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), GW-8 (`preview-forward.ts` sets `keepAlive: false`), GW-9 to GW-12, GW-14 to GW-16.
+- GW-8: the private-origin proxy keeps idle upstream connections (`apps/backend/src/preview-upstream-pool.ts`). A connection is reused only by the access (attachment), endpoint generation and target it was opened for, after the access and target are re-checked. The pool is registered with the access service, so revocation, expiry and a new endpoint generation close it at once; a registry revocation also drops it. Bounds: 8 idle per access, 64 per backend, 2 s idle. A safe bodyless request whose reused connection was already closed is resent once on a fresh connection (`preview-forward.ts`); nothing else is retried. Counters `upstream.opened`, `upstream.reused`, `upstream.stale_retry` and the gauge `publication.upstream_idle` are in preview diagnostics.
+- GW-9: when the gateway proxy compresses a body, or the legacy browser-preview route rewrites one, it sends a weak ETag derived from the upstream tag, `W/"<upstream>|ork:<w|s>:<coding>[:<rewrite key>]"`, instead of none, and turns it back into the upstream's exact tag on `If-None-Match` (`apps/backend/src/gateway-proxy-etag.ts`). The application's 304 is answered with the client's tag. Reloads now revalidate, so GW-10's rewrite runs only on first loads and changed modules.
+- Tests: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`.
+
+**Investigation.** Re-checked on 2026-11-02 against `main` at `38d55ee14`. GW-8 held for the private origin only: `preview-http-proxy.ts` supplied no `reuse` hook although the forwarder and HTTP client supported one, while Electron's local ingress already pooled its tunnel connections and the legacy route already reused connections through Bun's HTTP client. GW-9 held for the legacy browser-preview route and the compressing loopback proxy; the private origin already passed ETags through, so its reloads already got 304s.
+
+Measured with `vite-page-load.spec.ts` (Chromium, the pinned Vite 7.3.6 fixture in an isolated copy plus a generated 150-module page, `/wide.html`; medians of 5 loads per run, 3 runs each). "Again" is a second load in the same tab, "cold" a load after clearing the HTTP cache.
+
+| Wide page (156 requests) | Before | After |
+| --- | --- | --- |
+| Private origin, upstream connections: first / again / cold | 155 / 155 / 155 | 7 / 1 / 1 |
+| Legacy route, bytes on a repeat load | 121 KB (no revalidation) | 0 (154 of 154 answered 304) |
+| Legacy route, 304s at the gateway on a repeat load | 0 | 154 |
+
+The fixture's own page (7 requests): private-origin connections 6 / 6 / 6 before, 3 / 1 / 1 after; legacy repeat-load bytes 43.5 KB before, 0 after. Page-load times were taken on beelink with about ten builds running (load average 30 to 55) and moved more with host load than with the change: wide-page private-origin first load 418 ms median before and 622 ms after, but in different load windows. An interleaved A/B on the same build (four alternating runs with reuse on and off, `ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1`, load average about 50) gave wide-page private-origin medians of 753 ms on / 744 ms off for a first load, 540 / 577 ms for a repeat load and 611 / 645 ms after clearing the cache, with 7 / 1 / 1 against 155 / 155 / 155 upstream connections: within noise. On loopback a TCP connect costs well under a millisecond, so the gain is in connections, sockets and, for TLS and relay targets, handshakes, not visible milliseconds. Raw lines are in `output/efficiency/preview-page-load/` of the build worktree (git-ignored).
+
+Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), GW-10 to GW-12, GW-14 to GW-16.
 
 **Decisions.**
 
-- **First step?**
+- **First step?** Decided 2026-11-01 and done 2026-11-02.
   - **GW-8 and GW-9 together, measured with a Vite fixture page load (recommended).**
     - Pros: the largest wins for preview users; GW-9 also removes most of GW-10's rewrite work.
     - Cons: the pool needs revocation on endpoint generation change and access revocation, which `test:preview:browser` must cover.
   - **GW-6 first.**
     - Pros: fixes a correctness-adjacent desync of quiet channels.
     - Cons: only users of the opt-in terminal WebSocket benefit.
+- **What keys the pool?** Done.
+  - **Access (attachment), endpoint generation and target (recommended).**
+    - Pros: a connection serves only the browser session that opened it; the access service's existing resource tracking closes it on revocation, expiry and generation change with no new revocation path.
+    - Cons: two browser sessions of one service do not share connections.
+  - **Service and endpoint generation.**
+    - Pros: more reuse across sessions.
+    - Cons: a revoked session's connection could serve another one, and revocation needs a separate per-service path.
+- **Idle bounds?** Done.
+  - **8 per access, 64 per backend, 2 s idle (recommended).**
+    - Pros: below the 5 s keep-alive timeout of Node's HTTP server (Vite's), so the application rarely closes a connection about to be reused; matches Electron's ingress pool and a browser's six connections per host.
+    - Cons: a pause of more than 2 s between navigations pays a new connect.
+  - **Longer idle (30 s or more).**
+    - Pros: reuse across slower navigation.
+    - Cons: more races with application keep-alive timeouts and more sockets held per idle tab.
+- **A reused connection the application had closed?** Done.
+  - **Resend once on a fresh connection, only for `GET`, `HEAD` and `OPTIONS` without a body, only when nothing was answered (recommended).**
+    - Pros: what browsers do (RFC 9112 §9.3.1); hides the keep-alive race from users; nothing to replay.
+    - Cons: a safe request reaches the application twice if it closed after reading the request; requests with a body never take an idle connection.
+  - **Never retry.**
+    - Pros: the forwarder keeps its "never retries" rule.
+    - Cons: an occasional 502 on a page load whenever the application's keep-alive timer fires.
+- **Derived tag format?** Done.
+  - **`W/"<upstream>|ork:<w|s>:<coding>[:<rewrite key>]"`, the key hashing route prefix, port and the rewriter's source (recommended).**
+    - Pros: rebuilds the upstream tag exactly, weak prefix included (Vite compares `If-None-Match` as a plain string); a tag never revalidates bytes rewritten for another route or by another build.
+    - Cons: an Orkestrator update that changes the rewriter costs one full reload per module.
+  - **The report's `W/"<upstream>|<encoding>|rw<prefix-hash>"`.**
+    - Pros: shorter.
+    - Cons: loses whether the upstream tag was weak, so Vite would never answer 304; a rewriter change would revalidate stale rewrites.
+- **Next step?** Open.
+  - **GW-6, the terminal WebSocket flush that ignores `bufferedAmount` (recommended).**
+    - Pros: correctness-adjacent; small.
+    - Cons: only users of the opt-in terminal WebSocket benefit.
+  - **GW-10, one combined rewrite regex with a no-match fast path.**
+    - Pros: cheaper first loads on the legacy route.
+    - Cons: GW-9 already removed the rewrite from repeat loads, and the legacy route is a fallback.
+  - **GW-11 and GW-12, per-node federation event names and one cursor frame per skipped range.**
+    - Pros: less replay-window pressure for federation users.
+    - Cons: federation only; touches replay invariants.
 
 ### 12. Local desktop transport
 

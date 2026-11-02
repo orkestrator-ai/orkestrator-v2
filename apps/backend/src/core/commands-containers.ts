@@ -132,6 +132,9 @@ import {
 } from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const dockerLog = createLogger("docker");
 
 export const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
 export const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
@@ -445,9 +448,9 @@ export async function createDockerContainer(
       })
     : null;
   if (stagedInputs && topology.rootless && !imageRelaysStagedInputs(stagingCapabilities)) {
-    console.warn(
-      `[portable-inputs] Docker is rootless and image ${identity.imageId?.slice(0, 19) ?? "unknown"} predates the staged-input relay; the container's node user cannot read its staged inputs until it is rebuilt on a current image`,
-    );
+    dockerLog.warn("portable-inputs.relay-missing", {
+      imageId: identity.imageId?.slice(0, 19) ?? null,
+    });
   }
   if (anthropicApiKey && stagedInputs) {
     const keyDir = path.join(stagedInputs.directory, "claude-config");
@@ -854,7 +857,7 @@ export async function startContainerOpenCodeServer(
   // the first request naming /workspace; absorb that here, not in a prompt's
   // status read.
   if (!(await warmOpenCodeInstance(hostPort, "/workspace", openCodeHealthHeaders(authToken)))) {
-    console.warn(`[opencode] /workspace did not finish loading in container ${containerId}`);
+    dockerLog.warn("opencode.warm-incomplete", { containerId });
   }
   return { hostPort, wasRunning: false, authToken };
 }

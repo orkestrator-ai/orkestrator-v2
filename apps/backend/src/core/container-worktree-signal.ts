@@ -7,6 +7,9 @@ import {
   type SignalHealthStatus,
 } from "./recurring-diagnostics.js";
 import type { WorktreeChangeHint, WorktreeWatcher } from "./worktree-watcher.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("diff-stats");
 
 /**
  * Container worktree change signal (`container-worktree-signal=1`).
@@ -159,7 +162,8 @@ export class ContainerWorktreeSignals {
       });
     this.cancelDelay =
       options.cancelDelay ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
-    this.onWarning = options.onWarning ?? ((message) => console.warn(`[diff-stats] ${message}`));
+    this.onWarning =
+      options.onWarning ?? ((message) => log.warn("signal.demoted", { detail: message }));
   }
 
   /** The `startContainerWatcher` of `DiffStatsService`. */

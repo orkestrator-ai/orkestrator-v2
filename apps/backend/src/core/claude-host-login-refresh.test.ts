@@ -117,7 +117,7 @@ describe("refreshHostClaudeLogin", () => {
         await keeper.refreshHostIfDue();
         await keeper.refreshHostIfDue();
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn.mock.calls).toEqual([["[claude-login-keeper] Host Claude refresh failed"]]);
+        expect(warn.mock.calls).toEqual([["[docker] login-keeper.refresh-failed"]]);
       } finally {
         warn.mockRestore();
       }

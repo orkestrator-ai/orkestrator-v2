@@ -73,6 +73,9 @@ import { stopEnvironmentReviewValidation } from "./review-validation-service.js"
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { settleStoppedRuntimeAgents } from "./stopped-runtime-agents.js";
 import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("docker");
 
 /**
  * Transactional runtime replacement that preserves the workspace and the
@@ -929,10 +932,10 @@ async function replaceRuntimePreservingStateUnfenced(
     await context.storage
       .clearBackendTerminalSessionIds?.(environment.id)
       .catch((error: unknown) => {
-        console.error(
-          "Could not clear terminal sessions after container replacement",
-          error instanceof Error ? error.name : "unknown",
-        );
+        log.error("replacement.clear-terminals-failed", {
+          environmentId: environment.id,
+          error: formatLogError(error, { message: false }),
+        });
       });
     context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(sourceContainerId);
     context.runtime.environments.forgetReplacementCancellation(operationId);

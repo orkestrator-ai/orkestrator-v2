@@ -406,6 +406,57 @@ describe("NativeAgentInteractionCard", () => {
     );
   });
 
+  test("names the MCP server that asked, and shows nothing extra without a source", () => {
+    const permission = (source?: AgentInteractionRequest["source"]): AgentInteractionRequest => ({
+      ...interaction(false),
+      provider: "claude",
+      kind: "permission",
+      presentation: {
+        title: "Allow mcp__linear__create_issue",
+        body: "Tool: mcp__linear__create_issue",
+        questions: [],
+        confirmLabel: "Approve",
+      },
+      ...(source ? { source } : {}),
+    });
+    const onResolve = async () => ({
+      result: "applied" as const,
+      interactionId: "interaction-1",
+      sessionId: "session-1",
+      revision: 2,
+    });
+    const view = render(
+      <NativeAgentInteractionCard
+        interaction={permission({
+          kind: "mcp-server",
+          name: "<b>linear</b>",
+          scope: "project",
+        })}
+        onResolve={onResolve}
+      />,
+    );
+    const line = screen.getByTestId("interaction-source");
+    // The configured name is untrusted text: shown verbatim, never as markup.
+    expect(line.textContent).toBe("Requested by MCP server <b>linear</b> · from project settings");
+    expect(line.querySelector("b")).toBeNull();
+    view.unmount();
+
+    render(
+      <NativeAgentInteractionCard
+        interaction={permission({ kind: "mcp-server", name: "linear", scope: "brand-new" })}
+        onResolve={onResolve}
+      />,
+    );
+    expect(screen.getByTestId("interaction-source").textContent).toBe(
+      "Requested by MCP server linear · from other configuration",
+    );
+    cleanup();
+
+    render(<NativeAgentInteractionCard interaction={permission()} onResolve={onResolve} />);
+    expect(screen.queryByTestId("interaction-source")).toBeNull();
+    expect(screen.getByText("Tool: mcp__linear__create_issue")).toBeTruthy();
+  });
+
   test("keeps Claude plan feedback and submits it with a revision request", async () => {
     const request: AgentInteractionRequest = {
       ...interaction(false),

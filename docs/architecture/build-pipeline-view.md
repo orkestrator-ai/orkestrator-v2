@@ -331,8 +331,9 @@ other step and `normalizeReviewPreparation` from the preparation step.
   reviewer's label as `focus`.
 - **Defaults.** `buildPipelineConfiguredDefaults` gives each reviewer row the
   saved focus of its Multi Review position (`multiReview.reviewerLenses`), so
-  the Build button, feature and ticket builds, the coordinator and the CLI's
-  `build launch` start from the same focus as the Multi Review button;
+  the Build button, the New Environment dialog's feature option, the coordinator
+  and the CLI's `build launch` start build pipelines with the same focus as the
+  Multi Review button;
   `build launch --reviewer … --focus N=TEXT` replaces it per row.
 - **Launcher.** Each reviewer card in `BuildLaunchDialog.tsx` (and the single
   Review card) has a Focus select (`ReviewLensField.tsx`): no focus, a saved

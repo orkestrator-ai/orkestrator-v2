@@ -998,7 +998,8 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     const nodeVersion = dockerfile.match(/^ARG NODE_VERSION=(\d+\.\d+\.\d+)$/m)?.[1];
 
     expect(nodeVersion).toBeDefined();
-    expect(Number(nodeVersion!.split(".")[0])).toBeGreaterThanOrEqual(22);
+    // Keep the security floor when updating the image runtime.
+    expect(semver.satisfies(nodeVersion!, ">=24.22.1")).toBe(true);
     expect(dockerfile).toContain(
       'npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"',
     );

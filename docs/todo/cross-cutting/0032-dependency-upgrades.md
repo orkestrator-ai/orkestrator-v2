@@ -138,7 +138,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 
 **Context.** The file defers Node 26 until its LTS settles (not before December 2026). The 24 bump went out with the image-size change in [1202](1202-efficiency-review-follow-ups.md) task 14, so users pull one new image for both. `ARG NODE_VERSION` in `docker/Dockerfile` is the only pin. The tarball is checked against the release's `SHASUMS256.txt` at build time, so no digest is hard-coded, and `docker/image-manifest.ts` checks that the installed `node --version` matches the pin.
 
-**Investigation.** Newly found: Node 24.22.1 (2026-10-20) is flagged as a **security** release in `nodejs.org/dist/index.json`; 24.22.0 was not. Node 26.12.1 (2026-10-21) is also a security release, and 26 is not LTS yet. The container's Node runs the npm-installed agent CLIs and users' projects, so the fix reaches real workloads. Checked again 2026-11-02: 24.22.2 (2026-10-28, not flagged as security) is the newest 24 release. It adds V8 backports and a stream fix on top of 24.22.1. Built and checked on linux/amd64: `node --version` is `v24.22.2` and npm is 11.19.1; `docker/tests/final-image-smoke.sh` and `mise run test:agent:docker` ran against the image (results in 1202 task 14).
+**Investigation.** Newly found: Node 24.22.1 (2026-10-20) is flagged as a **security** release in `nodejs.org/dist/index.json`; 24.22.0 was not. Node 26.12.1 (2026-10-21) is also a security release, and 26 is not LTS yet. The container's Node runs the npm-installed agent CLIs and users' projects, so the fix reaches real workloads. Checked again 2026-11-02: 24.22.2 (2026-10-28, not flagged as security) is the newest 24 release. It adds V8 backports and a stream fix on top of 24.22.1. Built and checked on linux/amd64: `node --version` is `v24.22.2` and npm is 11.19.1; `docker/tests/final-image-smoke.sh` and `mise run test:agent:docker` ran against the image (results in 1202 task 14). Fresh builds on `main` at `643ce87c4` reproduce the Node version and pass image smoke; the fresh Docker suite is blocked by exhausted Docker network address pools, so live qualification remains outstanding.
 
 **Decisions.**
 
@@ -150,7 +150,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
     - Pros: the release the advisory names.
     - Cons: misses the later fixes; a second bump would follow soon.
 - **When to take 24.22.1?** Decided 2026-11-02: in the 1202 task 14 image change, which was the next image change.
-  - **Now, as its own small image change with the checksum update and `docker/tests/final-image-smoke.sh` (recommended).**
+  - **Now, together with 1202 task 14 and `docker/tests/final-image-smoke.sh` (recommended).**
     - Pros: closes a security release in a runtime that runs agent CLIs; a patch bump on the same LTS line.
     - Cons: an image rebuild and smoke run on both architectures.
   - **Keep riding with Node 26 or the next image change.**
@@ -192,8 +192,8 @@ advisories. Everything left waits on an upstream release or a date.
   as a stand-in user app.
 - **Docker.** `NODE_VERSION=24.22.2` (2026-11-02), which includes the
   24.22.1 security release. The container's Node runs npm-installed agent
-  CLIs and users' projects, not Orkestrator code; the drift test only asserts
-  ≥22. Node 26 is item 9.
+  CLIs and users' projects, not Orkestrator code; the drift test now enforces
+  ≥24.22.1. Node 26 is item 9.
 - **Pre-release upstream (2026-10-25).** Electron `alpha` is 46.0.0-alpha.1
   (stable due 2027-01-05); electron-builder `next` is 27.0.0-alpha.12
   (`latest`/`v26` 26.18.0); electron-updater `next` is 7.0.0-alpha.11; hono

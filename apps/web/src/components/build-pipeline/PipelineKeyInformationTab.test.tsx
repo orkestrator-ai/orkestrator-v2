@@ -241,6 +241,23 @@ describe("PipelineKeyInformationTab", () => {
     expect(leaf.activeTabId).toBe("build");
   });
 
+  test("the section list scrolls the tab smoothly to a section and marks it current", () => {
+    const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 9 });
+    const scroller = tab.querySelector<HTMLElement>(".overflow-y-auto")!;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 4000 });
+    scroller.getBoundingClientRect = () => ({ top: 100 }) as DOMRect;
+    section(tab, "Tests").getBoundingClientRect = () => ({ top: 1600 }) as DOMRect;
+    const scrollTo = mock((_options: ScrollToOptions) => undefined);
+    scroller.scrollTo = scrollTo as unknown as HTMLElement["scrollTo"];
+    const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
+
+    fireEvent.click(within(nav).getByRole("button", { name: /^Tests/ }));
+
+    expect(scrollTo.mock.calls[0]![0]).toEqual({ top: 1500 - 12, behavior: "smooth" });
+    expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(/^Tests/);
+  });
+
   test("offers no Open pipeline when the build tab is closed", () => {
     const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 6 }, [briefTab]);
     expect(within(tab).queryByRole("button", { name: "Open pipeline" }) === null).toBe(true);

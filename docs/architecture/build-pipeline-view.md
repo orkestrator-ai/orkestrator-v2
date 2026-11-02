@@ -347,6 +347,15 @@ written:
 - **Review issues**: each round's issues, how each was handled, and its status.
 - **Verification**: each round's verdict and checks, with what failed.
 
+The panel lists the written sections' headings in a column on its left, or in
+a row above the brief when the panel is narrower than 32rem. The list sits
+outside the brief's scrolling column, so it stays put while the brief
+scrolls. Choosing a heading scrolls only that column (never the page under
+the panel) to the section, smoothly unless the user prefers reduced motion,
+and the heading of the section being read is marked current
+(`aria-current="location"`). The key information tab's "On this page" list
+uses the same behaviour (`key-information-section-nav.ts`).
+
 Stage agents keep it through two agent tools, `get_key_information` and
 `update_key_information` (`build-pipeline-key-information-tools.ts`). They are
 listed only to a credential whose environment a build pipeline owns, on the

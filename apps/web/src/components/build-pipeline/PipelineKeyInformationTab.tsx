@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { FileText, Hammer } from "lucide-react";
 import {
   hasKeyInformation,
@@ -11,6 +11,10 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { KeyInformationTabData } from "@/types/paneLayout";
 import { keyInformationUpdatedLine } from "./key-information-format";
+import {
+  useKeepActiveEntryInView,
+  useKeyInformationSectionNav,
+} from "./key-information-section-nav";
 import {
   countOpenIssues,
   countTests,
@@ -59,6 +63,7 @@ const TILE_TONE: Record<SummaryTile["tone"], string> = {
  */
 export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabData }) {
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [attempt, setAttempt] = useState(0);
   const [hydration, setHydration] = useState<{
     pipelineId: string;
@@ -157,8 +162,8 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
           </Button>
         ) : null}
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <KeyInformationDocument keyInformation={pipeline.keyInformation} />
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+        <KeyInformationDocument keyInformation={pipeline.keyInformation} scrollRef={scrollRef} />
       </div>
     </div>
   );
@@ -166,10 +171,11 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
 
 function KeyInformationDocument({
   keyInformation: info,
+  scrollRef,
 }: {
   keyInformation: BuildPipelineKeyInformation | undefined;
+  scrollRef: RefObject<HTMLDivElement | null>;
 }) {
-  const idPrefix = useId();
   if (!info || !hasKeyInformation(info)) {
     return (
       <div className="mx-auto flex max-w-md flex-col items-center gap-2 px-6 py-16 text-center">
@@ -182,8 +188,17 @@ function KeyInformationDocument({
       </div>
     );
   }
+  return <KeyInformationContents info={info} scrollRef={scrollRef} />;
+}
 
-  const sectionId = (key: string) => `${idPrefix}-${key}`;
+function KeyInformationContents({
+  info,
+  scrollRef,
+}: {
+  info: BuildPipelineKeyInformation;
+  scrollRef: RefObject<HTMLDivElement | null>;
+}) {
+  const navRef = useRef<HTMLUListElement>(null);
   const tests = countTests(info.tests);
   const openIssues = countOpenIssues(info);
   const latestVerification = info.verifications.reduce<
@@ -322,9 +337,11 @@ function KeyInformationDocument({
     });
   }
 
-  const jumpTo = (key: string) => {
-    document.getElementById(sectionId(key))?.scrollIntoView?.({ block: "start" });
-  };
+  const { activeKey, jumpTo, sectionId } = useKeyInformationSectionNav(
+    scrollRef,
+    sections.map((section) => section.key),
+  );
+  useKeepActiveEntryInView(navRef, activeKey);
 
   // Context and Solution read side by side once the pane is wide enough for
   // two comfortable measures; everything else is one section per row.
@@ -341,12 +358,21 @@ function KeyInformationDocument({
         <div className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
           On this page
         </div>
-        <ul className="flex flex-col gap-0.5 border-l border-border/60">
+        <ul
+          ref={navRef}
+          className="flex max-h-[calc(100vh-12rem)] flex-col gap-0.5 overflow-y-auto border-l border-border/60"
+        >
           {sections.map((section) => (
             <li key={section.key}>
               <button
                 type="button"
-                className="-ml-px flex w-full items-baseline gap-2 border-l border-transparent py-1 pl-3 text-left text-xs text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                aria-current={section.key === activeKey ? "location" : undefined}
+                className={cn(
+                  "-ml-px flex w-full items-baseline gap-2 border-l py-1 pl-3 text-left text-xs transition-colors",
+                  section.key === activeKey
+                    ? "border-foreground font-medium text-foreground"
+                    : "border-transparent text-muted-foreground hover:border-foreground/40 hover:text-foreground",
+                )}
                 onClick={() => jumpTo(section.key)}
               >
                 <span className="min-w-0 flex-1 truncate">{section.navTitle ?? section.title}</span>

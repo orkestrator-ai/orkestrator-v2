@@ -108,3 +108,29 @@ for (const state of ["loading", "error", "missing"] as const) {
     }
   });
 }
+
+test("the panel's section headings stay put and scroll the brief to a section", async ({
+  page,
+}) => {
+  await page.goto("/key-information-tab");
+  await page
+    .getByTestId("build-pipeline-header")
+    .getByRole("button", { name: "Key information" })
+    .click();
+  const panel = page.getByRole("dialog", { name: "Key information" });
+  const nav = panel.getByRole("navigation", { name: "Key information sections" });
+  await expect(nav).toBeVisible();
+  const before = await nav.boundingBox();
+
+  const verification = nav.getByRole("button", { name: "Verification" });
+  await verification.click();
+
+  const region = panel.getByRole("region", { name: "Verification" });
+  await expect(region).toBeInViewport();
+  await expect(verification).toHaveAttribute("aria-current", "location");
+  await expect.poll(async () => (await nav.boundingBox())?.y).toBe(before?.y);
+  // The list did not scroll away with the brief; a phone's row of headings
+  // slides sideways to keep the current one showing.
+  await expect(nav).toBeInViewport();
+  await expect(verification).toBeInViewport();
+});

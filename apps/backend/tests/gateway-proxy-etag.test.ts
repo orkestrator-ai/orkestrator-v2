@@ -56,6 +56,30 @@ describe("derived proxy validators", () => {
     expect(plain["if-none-match"]).toBeUndefined();
   });
 
+  test("commas and backslashes inside strong and weak tags round-trip intact", () => {
+    const upstream = ['"a,b"', 'W/"c,d"', '"back\\,slash"'];
+    for (const tag of upstream) {
+      const derived = derivedProxyEtag(tag, "gzip", key)!;
+      const headers: IncomingHttpHeaders = { "if-none-match": derived };
+      const mapped = mapIfNoneMatchForUpstream(headers, key);
+      expect(headers["if-none-match"]).toBe(tag);
+      const response = { etag: tag };
+      restoreDerivedEtag(response, mapped);
+      expect(response.etag).toBe(derived);
+    }
+    const headers: IncomingHttpHeaders = {
+      "if-none-match": [
+        ...upstream.map((tag) => derivedProxyEtag(tag, "gzip", key)),
+        '"plain,tag"',
+        'W/"weak,plain"',
+      ].join(", "),
+    };
+    mapIfNoneMatchForUpstream(headers, key);
+    expect(headers["if-none-match"]).toBe(
+      [...upstream, '"plain,tag"', 'W/"weak,plain"'].join(", "),
+    );
+  });
+
   test("an upstream 304 answers with the tag the client holds", () => {
     const headers: IncomingHttpHeaders = { "if-none-match": `W/"a|ork:w:gzip:${key}"` };
     const mapped = mapIfNoneMatchForUpstream(headers, key);
@@ -96,7 +120,7 @@ describe("gateway proxy revalidation", () => {
 
   test("a rewritten, compressed preview script revalidates to 304", async () => {
     // Vite's own tag, which it compares as a plain string.
-    const app = await application('W/"1a2b-vite"');
+    const app = await application('W/"1a2b,vite"');
     const { info } = await startGateway({ compression: "body" });
     const prefix = `/__orkestrator/browser/loopback/${app.port}`;
     const url = new URL(`${prefix}/src/main.js`, info.url).toString();
@@ -111,31 +135,31 @@ describe("gateway proxy revalidation", () => {
     expect(first.headers["content-encoding"]).toBe("gzip");
     expect(decodeResponseBody(first)).toContain(`import "${prefix}/src/dependency.js"`);
     const etag = String(first.headers.etag);
-    expect(etag).toMatch(/^W\/"1a2b-vite\|ork:w:gzip:[0-9a-f]{16}"$/);
+    expect(etag).toMatch(/^W\/"1a2b,vite\|ork:w:gzip:[0-9a-f]{16}"$/);
 
     const again = await requestUrl(url, { headers: { ...headers, "if-none-match": etag } });
     expect(again.status).toBe(304);
     expect(again.headers.etag).toBe(etag);
     expect(again.rawBody.byteLength).toBe(0);
     // The application saw its own tag, exactly.
-    expect(app.seen).toEqual([undefined, 'W/"1a2b-vite"']);
+    expect(app.seen).toEqual([undefined, 'W/"1a2b,vite"']);
   });
 
   test("a compressed loopback proxy body revalidates to 304", async () => {
-    const app = await application('"strong-1"');
+    const app = await application('"strong,1"');
     const { info } = await startGateway({ compression: "body" });
     const url = `${info.url}__orkestrator/proxy/loopback/${app.port}/bundle.js`;
     const headers = { authorization: `Bearer ${info.token}`, "accept-encoding": "br" };
 
     const first = await requestUrl(url, { headers });
     expect(first.headers["content-encoding"]).toBe("br");
-    expect(first.headers.etag).toBe('W/"strong-1|ork:s:br"');
+    expect(first.headers.etag).toBe('W/"strong,1|ork:s:br"');
     const again = await requestUrl(url, {
       headers: { ...headers, "if-none-match": String(first.headers.etag) },
     });
     expect(again.status).toBe(304);
-    expect(again.headers.etag).toBe('W/"strong-1|ork:s:br"');
-    expect(app.seen).toEqual([undefined, '"strong-1"']);
+    expect(again.headers.etag).toBe('W/"strong,1|ork:s:br"');
+    expect(app.seen).toEqual([undefined, '"strong,1"']);
   });
 
   test("a tag minted for another preview port is not sent upstream", async () => {

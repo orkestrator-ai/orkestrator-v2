@@ -857,7 +857,7 @@ describe("forwardPreviewRequest with idle connection reuse", () => {
   let ingress: Server;
   let ingressPort: number;
   /** "keep" answers every request; "close" ends each connection after answering. */
-  let mode: "keep" | "close" | "stall-second";
+  let mode: "keep" | "close" | "stall-second" | "handoff";
   let accepted: number;
   let idle: Socket[];
   const calls = { connect: 0, takeIdle: 0, reuse: 0, staleRetry: 0 };
@@ -877,7 +877,11 @@ describe("forwardPreviewRequest with idle connection reuse", () => {
       socket.on("data", (chunk: Buffer) => {
         for (const _request of chunk.toString("latin1").matchAll(REQUEST_LINE)) {
           answered += 1;
-          if (mode === "stall-second" && answered > 1) return;
+          if ((mode === "stall-second" || mode === "handoff") && answered > 1) return;
+          if (mode === "handoff") {
+            socket.write("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\no");
+            return;
+          }
           socket.write("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok");
           // Like a keep-alive timeout firing just as the response completes.
           if (mode === "close") socket.end();
@@ -949,6 +953,74 @@ describe("forwardPreviewRequest with idle connection reuse", () => {
       request.end(body);
     });
   }
+
+  test("cancelling a backpressured response cannot destroy its handed-off socket", async () => {
+    mode = "handoff";
+    const transport = new Socket();
+    const request = new IncomingMessage(transport);
+    request.method = "GET";
+    request.url = "/";
+    request.rawHeaders = ["Host", "preview.test"];
+    const response = new ServerResponse(request);
+    // Hold the downstream after the first body chunk, even though the complete
+    // upstream response has already been framed and its socket returned.
+    const blocked = Promise.withResolvers<void>();
+    response.write = (() => {
+      blocked.resolve();
+      return false;
+    }) as typeof response.write;
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+    const first = forwardPreviewRequest(
+      request,
+      response,
+      policyFor(upstreamPort, "http://preview.test"),
+      DEFAULT_PREVIEW_FORWARD_LIMITS,
+      {
+        connect: async () => {
+          const socket = connect(upstreamPort, "127.0.0.1");
+          sockets.add(socket);
+          await new Promise((resolve) => socket.once("connect", resolve));
+          return socket;
+        },
+        reuse: (socket) => {
+          idle.push(socket as Socket);
+        },
+      },
+    );
+    await blocked.promise;
+    const peer = Array.from(sockets).find((socket) => socket.localPort === upstreamPort)!;
+    peer.write("k");
+    for (let attempt = 0; attempt < 100 && idle.length === 0; attempt += 1) await Bun.sleep(5);
+    expect(idle).toHaveLength(1);
+    const handedOff = idle[0]!;
+    const secondHeaders = Promise.withResolvers<void>();
+    const second = new Promise<string>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port: ingressPort, agent: false }, (res) => {
+        secondHeaders.resolve();
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => resolve(body));
+        res.on("error", reject);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    // The application holds B after headers and one byte, so a destroyed
+    // socket would truncate a response that is no longer eligible for retry.
+    for (let attempt = 0; attempt < 100 && calls.takeIdle === 0; attempt += 1) await Bun.sleep(5);
+    peer.write("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\no");
+    await secondHeaders.promise;
+    request.emit("aborted");
+    response.emit("close");
+    expect((await first).outcome).toBe("client-aborted");
+    expect(handedOff.destroyed).toBe(false);
+    peer.write("k");
+    expect(await second).toBe("ok");
+    expect(accepted).toBe(1);
+    transport.destroy();
+  });
 
   test("sequential safe requests share one upstream connection", async () => {
     for (let index = 0; index < 3; index += 1) expect((await send("GET")).body).toBe("ok");

@@ -212,7 +212,6 @@ export async function forwardPreviewRequest(
   const controller = new AbortController();
   let finished = false;
   let upstream: Duplex | null = null;
-  let reused = false;
   let idle: ReturnType<typeof setTimeout> | null = null;
   const abort = () => {
     if (finished) return;
@@ -272,7 +271,9 @@ export async function forwardPreviewRequest(
         signal: controller.signal,
         keepAlive: Boolean(hooks.reuse),
         onReusable: (socket) => {
-          reused = true;
+          // The pool may hand this socket to another exchange immediately.
+          // Cancellation of this downstream response no longer owns it.
+          if (upstream === socket) upstream = null;
           hooks.reuse?.(socket);
         },
       });
@@ -373,7 +374,7 @@ export async function forwardPreviewRequest(
     finished = true;
     if (idle) clearTimeout(idle);
     request.off("aborted", abort);
-    if (!reused) upstream?.destroy();
+    upstream?.destroy();
     release?.();
   }
 }

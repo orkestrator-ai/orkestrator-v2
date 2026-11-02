@@ -1,5 +1,5 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
@@ -321,6 +321,27 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     harness.runtime.access.revokeServices([serviceId], "operator-revoked");
     await until(() => fixture.openSockets() === 0);
     expect(harness.runtime.metrics.snapshot().gauges["publication.upstream_idle"]).toBe(0);
+  });
+
+  test("registry revocation alone closes idle upstream connections", async () => {
+    const { cookie, host } = await signIn();
+    expect((await request(host, "/health", { headers: { cookie } })).status).toBe(200);
+    expect(fixture.openSockets()).toBe(1);
+    expect(harness.runtime.metrics.snapshot().gauges["publication.upstream_idle"]).toBe(1);
+    // Disable the independent access-revocation path. Only the proxy's direct
+    // registry subscription can now remove the idle socket from its pool.
+    const revoke = spyOn(harness.runtime.access, "revokeServices").mockImplementation(() => 0);
+    try {
+      const definition = harness.runtime.registry.getDefinition(serviceId)!;
+      await harness.runtime.registry.update(serviceId, definition.definitionRevision, {
+        enabled: false,
+      });
+      expect(revoke).toHaveBeenCalled();
+      await until(() => fixture.openSockets() === 0);
+      expect(harness.runtime.metrics.snapshot().gauges["publication.upstream_idle"]).toBe(0);
+    } finally {
+      revoke.mockRestore();
+    }
   });
 
   test("a new endpoint generation closes idle upstream connections", async () => {

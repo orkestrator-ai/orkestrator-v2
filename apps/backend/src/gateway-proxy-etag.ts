@@ -84,11 +84,19 @@ export function mapIfNoneMatchForUpstream(
   const derived = new Map<string, string>();
   const value = headerValueToString(headers["if-none-match"]);
   if (!value) return { derived };
-  const tags = value
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-  if (tags.length > MAX_IF_NONE_MATCH_TAGS) return { derived };
+  const tags: string[] = [];
+  let quoted = false;
+  let start = 0;
+  for (let index = 0; index <= value.length; index += 1) {
+    // An entity-tag has no quoted-pair escaping: backslash is an opaque byte.
+    if (value[index] === '"') quoted = !quoted;
+    if (index === value.length || (value[index] === "," && !quoted)) {
+      const tag = value.slice(start, index).trim();
+      if (tag) tags.push(tag);
+      if (tags.length > MAX_IF_NONE_MATCH_TAGS) return { derived };
+      start = index + 1;
+    }
+  }
   const forwarded: string[] = [];
   for (const tag of tags) {
     const upstream = upstreamTagFor(tag, rewriteKey);

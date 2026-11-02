@@ -420,7 +420,7 @@ Closed roots expose no `shadowRoot`, so their host is still the target with a
 
 Before, selecting a host with an open root gave `unsupported` (`shadow-root`).
 Now its content is reachable on its own, so the host is anchored like any
-element in its root and gets a live pin. Kept the old `unsupported` marking
+element in its root and gets a live pin. Keeping the old `unsupported` marking
 was considered: it would leave whole-component notes without a pin for no
 remaining reason. The existing test that asserted the old marking was changed
 to say so.

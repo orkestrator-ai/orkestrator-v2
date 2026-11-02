@@ -484,7 +484,7 @@ export function createEventsRouter(
             data: JSON.stringify({ timestamp: new Date().toISOString() }),
           }).catch((error) => {
             if (!c.req.raw.signal.aborted) {
-              log.debug("sse.keepalive-failed", { error: formatLogError(error, { stack: false }) });
+              log.warn("sse.keepalive-failed", { error: formatLogError(error, { stack: false }) });
               closeConnection("keepalive failed");
             }
           });

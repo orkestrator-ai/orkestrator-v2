@@ -86,6 +86,9 @@ import {
   readWorktreeStatus,
 } from "./build-pipeline-code-rewind.js";
 import { probeReviewWorktree } from "./review-worktree-probe.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 /** Stage IDs of this form ask to prepare the review package again from the named session. */
 const PACKAGE_STAGE_PREFIX = "review-package:";
@@ -243,14 +246,17 @@ export class BuildPipelineLifecycle {
           shouldContinue: () => !this.ctx.stopped,
         });
         if (report.migrated || report.deferred || report.orphaned) {
-          console.info(
-            `[build-pipeline] Transcript migration: ${report.migrated} migrated, ${report.deferred} deferred, ${report.orphaned} orphaned, ${report.remaining} remaining`,
-          );
+          log.info("transcripts.migrated", {
+            migrated: report.migrated,
+            deferred: report.deferred,
+            orphaned: report.orphaned,
+            remaining: report.remaining,
+          });
         }
         if (this.ctx.stopped) return;
         await this.ctx.storage.sweepBuildPipelineTranscripts();
       } catch (error) {
-        console.warn("[build-pipeline] Transcript maintenance failed:", errorMessage(error));
+        log.warn("transcripts.maintenance-failed", { error: formatLogError(error) });
       }
     })();
   }
@@ -275,10 +281,10 @@ export class BuildPipelineLifecycle {
           delete pipeline.pendingResultConsumptions;
           await this.ctx.save(pipeline, record.revision);
         } catch (error) {
-          console.warn(
-            `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
-            errorMessage(error),
-          );
+          log.warn("result.consume-deferred", {
+            pipelineId: pipeline.id,
+            error: formatLogError(error),
+          });
         }
       }
       if (
@@ -293,10 +299,7 @@ export class BuildPipelineLifecycle {
         try {
           await this.ctx.save(pipeline, record.revision);
         } catch (error) {
-          console.warn(
-            `[build-pipeline] Skipped restoring pipeline ${pipeline.id}:`,
-            errorMessage(error),
-          );
+          log.warn("restore.skipped", { pipelineId: pipeline.id, error: formatLogError(error) });
           continue;
         }
       }

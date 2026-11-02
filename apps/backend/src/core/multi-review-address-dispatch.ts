@@ -15,6 +15,9 @@ import {
 } from "./native-agent-service.js";
 import { addressPrompt } from "./build-pipeline-prompts.js";
 import { MULTI_REVIEW_INTERACTIVE_FIX } from "./multi-review-steps.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("review");
 
 export class MissingMultiReviewAddressSessionError extends Error {
   constructor() {
@@ -265,10 +268,7 @@ export async function dispatchMultiReviewAddressPrompt(
   } catch (error) {
     presentationError =
       "The fix request was delivered, but its tab could not be opened. Close another tab if needed, then use Open fix session.";
-    console.warn(
-      "[multi-review] Fix tab publication failed:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("fix-tab.publish-failed", { error: formatLogError(error) });
   }
   return {
     fixSession: preparedSession ?? session!,

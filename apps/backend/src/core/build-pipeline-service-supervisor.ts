@@ -139,6 +139,9 @@ import {
   readsReviewPackage,
 } from "./build-pipeline-prompt-dispatch.js";
 import { WorkspaceBusyError } from "./workspace-writers.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 /**
  * Shown in the build header while the pipeline waits for a person. Says what
@@ -329,7 +332,7 @@ export class BuildPipelineSupervisor {
     if (this.workspaceWaits.get(pipelineId) === error.reason) return;
     if (this.workspaceWaits.size >= MAX_WORKSPACE_WAITS_NOTED) this.workspaceWaits.clear();
     this.workspaceWaits.set(pipelineId, error.reason);
-    console.info(`[build-pipeline] ${pipelineId}: ${error.message}`);
+    log.info("workspace.waiting", { pipelineId, reason: error.reason });
   }
 
   async advance(pipelineId: string, namingPrompt?: string): Promise<void> {
@@ -348,7 +351,7 @@ export class BuildPipelineSupervisor {
             this.pendingRewindFailures.clear();
           }
           this.pendingRewindFailures.set(pipeline.id, reason);
-          console.warn(`[build-pipeline] Pending code rewind for ${pipeline.id}:`, reason);
+          log.warn("rewind.pending", { pipelineId: pipeline.id, reason });
         }
       }
       return;
@@ -361,10 +364,10 @@ export class BuildPipelineSupervisor {
         delete pipeline.pendingResultConsumptions;
         await this.ctx.save(pipeline, record.revision);
       } catch (error) {
-        console.warn(
-          `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
-          errorMessage(error),
-        );
+        log.warn("result.consume-deferred", {
+          pipelineId: pipeline.id,
+          error: formatLogError(error),
+        });
       }
       return;
     }
@@ -472,10 +475,7 @@ export class BuildPipelineSupervisor {
         delete pipeline.kanbanReactivationRetryAt;
       } catch (error) {
         pipeline.kanbanReactivationRetryAt = new Date(Date.now() + 30_000).toISOString();
-        console.warn(
-          `[build-pipeline] Kanban status for restarted ${pipeline.id}:`,
-          errorMessage(error),
-        );
+        log.warn("kanban.status-failed", { pipelineId: pipeline.id, error: formatLogError(error) });
       }
       await this.ctx.save(pipeline, pipeline.backendRevision);
       record.revision = pipeline.backendRevision;

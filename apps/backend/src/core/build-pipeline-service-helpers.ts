@@ -55,6 +55,9 @@ import {
   MERGE_RESOLUTION_VALIDATION_INSTRUCTION,
   REVIEW_PREPARATION_OUTPUT_CONTRACT,
 } from "./build-pipeline-prompts.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 /**
  * How many times the worktree probe is attempted before its result is treated
@@ -649,10 +652,7 @@ export async function attachBeforeDispatch(
   try {
     await provider.prepareDispatch?.(sessionId, options);
   } catch (error) {
-    console.warn(
-      "[build-pipeline] Attaching the agent before dispatch failed:",
-      errorMessage(error),
-    );
+    log.warn("dispatch.prepare-failed", { error: formatLogError(error) });
   }
 }
 
@@ -771,12 +771,12 @@ export function logInteractionOutcome(
 ): void {
   // Deliberately metadata-only. Never add title/body/options, provider values,
   // URLs, commands, paths, answers, session IDs or workflow IDs here.
-  console.info("[build-pipeline] interaction resolved", {
+  log.info("interaction.resolved", () => ({
     provider: pending.provider,
     kind: pending.kind,
     phase: pending.phase,
     outcome,
     latencyMs: Math.max(0, resolvedAt - pending.requestedAt),
     count,
-  });
+  }));
 }

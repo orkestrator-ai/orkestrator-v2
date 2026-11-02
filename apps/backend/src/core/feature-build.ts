@@ -32,6 +32,9 @@ import { assertValidPromptImages } from "./prompt-attachments.js";
 import { generateEnvironmentNameWithCodexExec } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import type { FeatureBuildTasks } from "./feature-build-tasks.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("feature");
 
 export interface FeatureBuildContext {
   storage: StorageService;
@@ -141,10 +144,7 @@ async function refineFeatureTitle(
     // feature. Log only a discriminator: the model body may echo the
     // user-supplied description, but the error class still tells spawn /
     // timeout / parse failures apart.
-    console.warn(
-      "[FeatureBuild] Automatic naming failed; using a local fallback",
-      namingErrorDiscriminator(error),
-    );
+    log.warn("naming.fallback", { kind: namingErrorDiscriminator(error) });
   }
 }
 

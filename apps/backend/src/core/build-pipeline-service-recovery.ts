@@ -54,6 +54,9 @@ import {
 } from "./build-pipeline-prompts.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 /**
  * The stage-supervisor operations recovery calls back into: completing a stage
@@ -500,7 +503,7 @@ export class BuildPipelineRecovery {
         })),
       });
     } catch {
-      console.warn("[BuildPipeline] Could not record acceptance criteria results on the ticket");
+      log.warn("criteria.record-failed");
     }
   }
 

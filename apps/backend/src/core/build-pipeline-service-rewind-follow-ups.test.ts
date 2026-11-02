@@ -675,9 +675,9 @@ describe("rewinding the code to a step", () => {
           await expect(service.pause(started.id)).rejects.toThrow(waiting);
           for (let pass = 0; pass < 3; pass += 1) await service.advanceNow(started.id);
           const logged = () =>
-            warn.mock.calls.filter((call) => String(call[0]).includes("Pending code rewind"));
+            warn.mock.calls.filter((call) => String(call[0]).includes("rewind.pending"));
           expect(logged()).toHaveLength(1);
-          expect(String(logged()[0]![1])).toStartWith(waiting);
+          expect(String(logged()[0]![0])).toContain(waiting);
           expect(provider.created.length).toBe(created);
           expect(controls.currentHead).toBe(C3);
 

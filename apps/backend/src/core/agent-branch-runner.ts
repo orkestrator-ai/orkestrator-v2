@@ -66,7 +66,7 @@ import {
   agentBranchNowIso,
   type AgentBranchHost,
   type AgentBranchRecord,
-  AGENT_BRANCH_LOG_PREFIX,
+  AGENT_BRANCH_LOG_OWNER,
 } from "./agent-branch-types.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import {
@@ -94,6 +94,9 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
 } from "./workflow-result-missing.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("agent-branch");
 
 /**
  * Attach the provider's agent process before a prompt is written.
@@ -106,15 +109,12 @@ export async function attachAgentBeforeDispatch(
   provider: BuildPipelineProvider,
   providerSessionId: string,
   options?: ProviderPrepareDispatchOptions,
-  logPrefix: string = AGENT_BRANCH_LOG_PREFIX,
+  logOwner: string = AGENT_BRANCH_LOG_OWNER,
 ): Promise<void> {
   try {
     await provider.prepareDispatch?.(providerSessionId, options);
   } catch (error) {
-    console.warn(
-      `${logPrefix} Attaching the agent before dispatch failed:`,
-      agentBranchErrorMessage(error),
-    );
+    log.warn("dispatch.prepare-failed", { owner: logOwner, error: formatLogError(error) });
   }
 }
 
@@ -194,7 +194,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     this.commits = new AgentBranchCommitQueue(
       () => host.save(),
       record,
-      host.logPrefix ?? AGENT_BRANCH_LOG_PREFIX,
+      host.logOwner ?? AGENT_BRANCH_LOG_OWNER,
     );
     this.context = { host, commits: this.commits, record };
     this.observer = new AgentBranchObserver(this.context);
@@ -535,7 +535,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         provider,
         providerSessionId,
         turnAgentMcp ? { agentMcp: turnAgentMcp, ...resultTurn.prepare } : undefined,
-        host.logPrefix,
+        host.logOwner,
       );
       // Other branches may be committing concurrently; this branch's own
       // journal is what matters. Its `dispatching` write is durable once this
@@ -869,9 +869,10 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         // consumes the result, and this pass must stop.
         if (this.isFatal(error)) throw error;
         host.stageResultConsumption?.(requestId);
-        console.warn(
-          `${host.logPrefix ?? AGENT_BRANCH_LOG_PREFIX} Deferred result consumption: ${agentBranchErrorMessage(error)}`,
-        );
+        log.warn("result.consume-deferred", {
+          owner: host.logOwner ?? AGENT_BRANCH_LOG_OWNER,
+          error: formatLogError(error),
+        });
       }
     }
     return "continue";

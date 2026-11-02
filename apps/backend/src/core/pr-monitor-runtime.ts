@@ -1,3 +1,4 @@
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { randomUUID } from "node:crypto";
 import {
   PR_MONITOR_CHANGED_EVENT,
@@ -25,6 +26,9 @@ import {
   prViewerRepository,
 } from "./pr-viewer-permission.js";
 import { PrRequiredChecksCache } from "./pr-required-checks.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("pull-request");
 
 /** What a node summary relays about an environment's PR monitor (todo 0796). */
 export interface RelayedPrMonitorHealth {
@@ -210,9 +214,7 @@ export class PrMonitorRuntime {
     }
     if (this.warnedMissingMergeCleanup) return;
     this.warnedMissingMergeCleanup = true;
-    console.warn(
-      "[pr-monitor] Merged PR observed, but this runtime has no merge cleanup scheduler; skipping cleanup",
-    );
+    log.warn("cleanup-scheduler.missing");
   }
 
   /**
@@ -412,7 +414,11 @@ export class PrMonitorRuntime {
         },
       },
       onWarning: (message, error) => {
-        console.warn(`[pr-monitor] ${message}:`, error instanceof Error ? error.message : error);
+        log.warn("monitor.warning", {
+          detail: message,
+          ...classifyCommandFailure(error, { tools: ["docker", "gh"] }),
+          error: formatLogError(error),
+        });
       },
     });
     return { service, admission };

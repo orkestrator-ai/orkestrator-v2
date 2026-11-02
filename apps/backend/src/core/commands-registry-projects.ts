@@ -87,6 +87,9 @@ import {
   seedHostModelCatalogIfMissing,
 } from "./host-model-catalog-seed.js";
 import { listGitHubCloneAccounts, listGitHubCloneRepositories } from "./github-clone-browser.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("model-catalog");
 
 /**
  * Total extra time a first-use catalogue read may spend starting a bridge and
@@ -604,10 +607,7 @@ export function registerProjectCommands(
           } catch (error) {
             // Keep startup non-fatal and return every last-known-good catalogue.
             // The next application launch can retry a transient provider error.
-            console.warn(
-              "[ElectronBackend] Failed to seed the host Pi model catalogue:",
-              error instanceof Error ? error.message : "unknown error",
-            );
+            log.warn("seed.pi-failed", { error: formatLogError(error) });
           }
         }
       }
@@ -822,17 +822,14 @@ export function registerProjectCommands(
           // inherit: without this the user sees an empty picker and nothing
           // anywhere records why.
           if (ready && ready.status !== "ready") {
-            console.warn(
-              `[ElectronBackend] The first-use ${ensureAgent} catalogue bridge did not become ready (${
-                typeof ready.status === "string" ? ready.status : "unknown"
-              }): ${typeof ready.error?.message === "string" ? ready.error.message : "no detail"}`,
-            );
+            log.warn("bridge.not-ready", {
+              agent: ensureAgent,
+              status: typeof ready.status === "string" ? ready.status : "unknown",
+              error: formatLogError(ready.error, { stack: false }),
+            });
           }
         } catch (error) {
-          console.warn(
-            `[ElectronBackend] The first-use ${ensureAgent} catalogue bridge failed to start:`,
-            error instanceof Error ? error.message : "unknown error",
-          );
+          log.warn("bridge.start-failed", { agent: ensureAgent, error: formatLogError(error) });
         }
       }
     }
@@ -911,10 +908,7 @@ export function registerProjectCommands(
       try {
         await storage.cacheAgentModelCatalog(agent, models);
       } catch (error) {
-        console.warn(
-          `[ElectronBackend] Failed to persist the ${agent} model catalogue:`,
-          error instanceof Error ? error.message : "unknown error",
-        );
+        log.warn("persist.failed", { agent, error: formatLogError(error) });
       }
     }
     const cataloguedOpenCodeModels =

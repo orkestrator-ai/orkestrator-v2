@@ -52,11 +52,14 @@ import {
   stopLocalServer,
   deleteEnvironmentTask,
   getLocalServerStatus,
-  conciseError,
   cleanupErrorMessage,
   toClientEnvironment,
 } from "./commands-helpers.js";
 import type { MergeEnvironmentPrResult } from "./commands-helpers.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
+
+const log = createLogger("pull-request");
 
 export function registerPullRequestCommands(
   register: CommandRegistrar,
@@ -298,10 +301,11 @@ export function registerPullRequestCommands(
               mergedStatePersisted = false;
               // GitHub is already authoritative. A storage outage must not strand
               // a cleanup the user explicitly requested.
-              console.warn(
-                `[backend] Failed to persist merged PR state for ${id}:`,
-                conciseError(error),
-              );
+              log.warn("merged-state.persist-failed", {
+                environmentId: id,
+                ...classifyCommandFailure(error, { tools: ["gh"] }),
+                error: formatLogError(error),
+              });
             }
 
             if (!cleanupRequested) {
@@ -420,7 +424,11 @@ export function registerPullRequestCommands(
     if (enabled) {
       // Advisory: the durable flag stands even if the monitor cannot check now.
       await context.runtime.prMonitor.requestRefresh(id, context).catch((error) => {
-        console.warn(`[pr-auto-merge] Could not refresh the PR of ${id}:`, conciseError(error));
+        log.warn("refresh.failed", {
+          environmentId: id,
+          ...classifyCommandFailure(error, { tools: ["gh"] }),
+          error: formatLogError(error),
+        });
       });
       // Only the post-request monitor reading authorizes the first action.
     }
@@ -442,10 +450,7 @@ export function registerPullRequestCommands(
       // back. Completion reconciliation retries hydration before requesting a
       // check.
       await context.runtime.prMonitor.sync(context).catch((error) => {
-        console.warn(
-          `[pr-monitor] Failed to track armed environment ${id}:`,
-          error instanceof Error ? error.message : error,
-        );
+        log.warn("arm.track-failed", { environmentId: id, error: formatLogError(error) });
       });
     }
     return armedAt;

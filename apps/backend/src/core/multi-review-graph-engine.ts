@@ -48,6 +48,9 @@ import {
 } from "./multi-review-graph-template.js";
 import { projectMultiReviewGraphRun } from "./multi-review-graph-projection.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("review");
 
 /** Prefix of every graph run a Multi Review launches; the rest is the workflow id. */
 export const MULTI_REVIEW_GRAPH_RUN_PREFIX = "multi-review-";
@@ -262,7 +265,7 @@ export async function advanceMultiReviewGraph(
         error instanceof Error ? error.message : "The graph run did not start"
       ).slice(0, 4_096);
       workflow.graphRun = { runId, settled: true };
-      console.warn(`[multi-review] Graph run ${runId} did not start for workflow ${workflow.id}`);
+      log.warn("graph-run.not-started", { runId, workflowId: workflow.id });
       await host.save(workflow, token);
       await host.release(workflow, token);
       return;

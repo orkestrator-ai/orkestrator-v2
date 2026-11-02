@@ -71,6 +71,9 @@ import {
   featurePlanningObligation,
   type FeaturePlanningObligation,
 } from "./feature-planning-scheduling.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("feature");
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -269,7 +272,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     this.supervisor?.stop();
     this.supervisor = null;
     await this.adoptLegacyConversations().catch((error) => {
-      console.warn("[feature-planning] Failed to adopt legacy conversations:", message(error));
+      log.warn("planning.legacy-adopt-failed", { error: formatLogError(error) });
     });
     if (this.options.autoAdvance === false) return;
     if (this.keyed) {
@@ -1445,7 +1448,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     if (!definite) {
       // Transient: the next tick retries. Nothing is written, so a bridge that
       // is briefly unreachable does not consume the user's exchange.
-      console.warn(`[feature-planning] ${featureId} retrying after:`, message(error));
+      log.warn("planning.tick-retrying", { featureId, error: formatLogError(error) });
       return;
     }
     this.idleSince.delete(featureId);

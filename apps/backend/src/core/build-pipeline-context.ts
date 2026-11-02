@@ -73,6 +73,9 @@ import {
   type EnvironmentGit,
 } from "./workspace-code-rewind.js";
 import type { WorkspaceWriters } from "./workspace-writers.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 /** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
 export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
@@ -343,10 +346,10 @@ export class BuildPipelineContext {
         // pass retries cleanup without turning an applied domain transition
         // into a workflow failure.
         this.stageWorkflowResultConsumption(pipeline, session, resultKey);
-        console.warn(
-          `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
-          errorMessage(error),
-        );
+        log.warn("result.consume-deferred", {
+          pipelineId: pipeline.id,
+          error: formatLogError(error),
+        });
       }
     }
   }

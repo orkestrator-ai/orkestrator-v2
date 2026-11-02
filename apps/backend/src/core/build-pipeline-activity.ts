@@ -17,6 +17,9 @@ import { isBuildPipeline, isWorkingBuildPipeline } from "@orkestrator/protocol/b
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
 
 /** Pipelines save several times per step; observe each at most this often. */
 const BUILD_PIPELINE_ACTIVITY_DEBOUNCE_MS = 500;
@@ -149,10 +152,7 @@ export class BuildPipelineActivity {
   }
 
   private warn(error: unknown): void {
-    console.warn(
-      "[build-pipeline] Could not reconcile sidebar activity:",
-      error instanceof Error ? error.message : error,
-    );
+    log.warn("sidebar.reconcile-failed", { error: formatLogError(error) });
   }
 
   private onResourceChange(change: ResourceChange): void {
@@ -163,10 +163,10 @@ export class BuildPipelineActivity {
       this.timers.setTimeout(() => {
         this.changeTimers.delete(change.id);
         void this.observe(change.id).catch((error: unknown) => {
-          console.warn(
-            `[build-pipeline] Could not update the sidebar for pipeline ${change.id}:`,
-            error instanceof Error ? error.message : error,
-          );
+          log.warn("sidebar.update-failed", {
+            pipelineId: change.id,
+            error: formatLogError(error),
+          });
         });
       }, this.debounceMs),
     );

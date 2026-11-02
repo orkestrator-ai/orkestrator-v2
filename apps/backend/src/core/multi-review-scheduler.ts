@@ -27,6 +27,9 @@
  * (0048-recurring-work-qualification.md).
  */
 import { type RecurringTimerFactory, systemRecurringTimers } from "./recurring-scheduler.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("review");
 
 export interface WorkflowDueSchedulerOptions {
   /** Runs one supervision pass. Must not reject for workflow-level faults. */
@@ -177,10 +180,7 @@ export class WorkflowDueScheduler {
         }
       }
     } catch (error) {
-      console.warn(
-        "[multi-review] Reconciliation scan failed:",
-        error instanceof Error ? error.message : String(error),
-      );
+      log.warn("reconcile.scan-failed", { error: formatLogError(error) });
     } finally {
       this.reconcileAt = this.now() + this.options.reconcileIntervalMs;
     }

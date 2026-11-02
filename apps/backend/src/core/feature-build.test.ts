@@ -171,10 +171,7 @@ describe("createFeatureBuild", () => {
         expect((await storage.kanban.getKanbanTasks("project-1"))[0]!.title).toBe(
           "Add account export controls",
         );
-        expect(warn).toHaveBeenCalledWith(
-          "[FeatureBuild] Automatic naming failed; using a local fallback",
-          "Error",
-        );
+        expect(warn).toHaveBeenCalledWith("[feature] naming.fallback kind=Error");
         expect(
           warn.mock.calls.every((args) => args.every((arg) => !String(arg).includes("offline"))),
         ).toBe(true);
@@ -412,10 +409,7 @@ exit 2
         expect(supervisor.started).toHaveLength(1);
         expect(supervisor.started[0]!.taskId).toBe(created.taskId);
         expect(supervisor.started[0]!.taskTitle).toBe("Add account export controls");
-        expect(warn).toHaveBeenCalledWith(
-          "[FeatureBuild] Automatic naming failed; using a local fallback",
-          "Error",
-        );
+        expect(warn).toHaveBeenCalledWith("[feature] naming.fallback kind=Error");
       } finally {
         await runtime.featureBuilds.titleRefinementsSettled();
         if (originalPath === undefined) delete process.env.PATH;

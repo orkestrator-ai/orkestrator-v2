@@ -501,8 +501,18 @@ those contexts. WebKit engine coverage does **not** qualify shipping Safari or
 iOS. The suite covers sibling reads/frames, visible links, hostile workers,
 same-service iframe returns through a synthetic external identity provider,
 `srcset`, source maps, SPA deep links and history, IndexedDB,
-BroadcastChannel, Cache and worker isolation, frame and popup handling, and
-an IPv6-only (`::1`) service.
+BroadcastChannel, Cache and worker isolation, frame and popup handling,
+an IPv6-only (`::1`) service, upstream connection reuse and its closing on
+revocation and endpoint generation change, and legacy-route ETag revalidation
+(`upstream-pool.spec.ts`).
+
+With the Vite variable set, `vite-page-load.spec.ts` (Chromium only) also
+prints one `[preview-page-load]` line: medians of page-load time, requests,
+304s, bytes and upstream connections through the private origin and the
+legacy route. `ORKESTRATOR_TEST_PREVIEW_VITE_PAGE` picks the page,
+`ORKESTRATOR_TEST_PREVIEW_LOAD_SAMPLES` the samples, and
+`ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1` turns connection reuse off for an A/B
+comparison.
 
 Live Tailscale Serve header preservation is a separate opt-in transport check:
 

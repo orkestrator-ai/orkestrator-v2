@@ -37,6 +37,8 @@ export interface PreviewFixture {
   releaseStalled(): void;
   /** Open upstream sockets, for leak assertions. */
   openSockets(): number;
+  /** Connections accepted since start, for connection-reuse assertions. */
+  connections(): number;
   close(): Promise<void>;
 }
 
@@ -222,6 +224,7 @@ export function startPreviewFixture(options: PreviewFixtureOptions = {}): Promis
   const requests: PreviewFixtureRequest[] = [];
   const stalled = new Set<() => void>();
   const sockets = new Set<Socket>();
+  let accepted = 0;
   const binary = Buffer.alloc(1024 * 1024);
   for (let index = 0; index < binary.length; index++) binary[index] = (index * 31 + 7) & 0xff;
   const binaryHash = createHash("sha256").update(binary).digest("hex");
@@ -462,6 +465,17 @@ export function startPreviewFixture(options: PreviewFixtureOptions = {}): Promis
         location: "https://external.invalid/callback",
         "x-service-marker": marker,
       });
+    if (path === "/conditional/app.js") {
+      // A revalidatable script large enough to be compressed, with an absolute
+      // path the legacy preview route rewrites: its ETag must survive both.
+      const etag = `W/"js-${marker}"`;
+      if (request.headers["if-none-match"] === etag) {
+        response.writeHead(304, { etag, "x-service-marker": marker });
+        return response.end();
+      }
+      const body = `const lazy = () => import("/assets/app.js");\n${`// ${marker} padding to compress\n`.repeat(128)}document.body.dataset.conditional=${JSON.stringify(marker)};\n`;
+      return send(response, 200, "text/javascript", body, { etag, "x-service-marker": marker });
+    }
     if (path === "/conditional") {
       if (request.headers["if-none-match"] === `"v1"`) {
         response.writeHead(304, { etag: `"v1"`, "x-service-marker": marker });
@@ -620,6 +634,7 @@ navigator.serviceWorker.register(script, { scope: "/" }).then(
     });
   });
   server.on("connection", (socket) => {
+    accepted += 1;
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
   });
@@ -642,6 +657,7 @@ navigator.serviceWorker.register(script, { scope: "/" }).then(
           }
         },
         openSockets: () => sockets.size,
+        connections: () => accepted,
         close: () =>
           new Promise<void>((done) => {
             for (const release of Array.from(stalled)) {

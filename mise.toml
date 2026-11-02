@@ -297,6 +297,10 @@ run = "bun apps/desktop/scripts/test-agent-goals-live.ts"
 description = "Run agent tests in Electron"
 run = "bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts"
 
+[tasks."test:agent:electron:packaged"]
+description = "Run the Electron design spec against the packaged Linux app (build it with package:linux:unpacked)"
+run = "bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts"
+
 [tasks."test:ios"]
 description = "Run the iOS unit tests"
 run = "bun scripts/test-ios.ts"
@@ -432,11 +436,17 @@ run = [
 [tasks."package:linux"]
 description = "Build and install an unpacked Linux application"
 run = [
+  "mise run package:linux:unpacked",
+  "bun scripts/install-packaged-app-linux.ts",
+]
+
+[tasks."package:linux:unpacked"]
+description = "Build the unpacked Linux application under release/ without installing it"
+run = [
   "bun install --frozen-lockfile",
   "mise run download:bun",
   "mise run build:all",
   "bunx electron-builder --linux --dir",
-  "bun scripts/install-packaged-app-linux.ts",
 ]
 
 [tasks."package:release"]

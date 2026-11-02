@@ -1,5 +1,6 @@
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   installBackend,
@@ -31,6 +32,19 @@ afterEach(() => {
 });
 
 test("a pull request linked from a main-area pull request opens in the right-hand PR pane", async () => {
+  const layout = usePaneLayoutStore.getState();
+  layout.initialize(null, "env");
+  const owner = usePaneLayoutStore.getState().environments.get("env")!;
+  layout.addTab(
+    owner.activePaneId,
+    {
+      id: "pr-tab",
+      type: "pull-request",
+      displayTitle: "PR",
+      pullRequestData: { ref: prRef, view: "summary" },
+    },
+    "env",
+  );
   render(
     <TooltipProvider>
       <PullRequestPaneTab
@@ -50,6 +64,41 @@ test("a pull request linked from a main-area pull request opens in the right-han
   expect(panel.pullRequestTabs.env?.map((tab) => tab.ref)).toEqual([
     { owner: "acme", repo: "api", number: 7 },
   ]);
+  expect(usePaneLayoutStore.getState().findPaneWithTab("pr-tab", "env")?.activeTabId).toBe(
+    "pr-tab",
+  );
   // The main-area pull request is still the one shown.
   expect(screen.getByRole("heading", { name: "feat: add usage history tab" })).toBeTruthy();
+});
+
+test("an inaccessible recognized PR falls back to its original URL only once", async () => {
+  const { openPullRequestUrl } = await import("@/lib/pull-request-opener");
+  const { FilesPanelPullRequests } =
+    await import("@/components/files-panel/FilesPanelPullRequests");
+  const calls: string[] = [];
+  installBackend({
+    get_github_pull_request: () => {
+      throw new Error("Repository access denied");
+    },
+    open_in_browser: (args) => {
+      calls.push(String(args.url));
+    },
+  });
+  const url = "https://github.com/acme/private/pull/9/files";
+  await openPullRequestUrl(url);
+  const { rerender } = render(
+    <TooltipProvider>
+      <FilesPanelPullRequests targetId="env" />
+    </TooltipProvider>,
+  );
+  await waitFor(() => expect(calls).toEqual([url]));
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(screen.getByText("Repository access denied")).toBeTruthy());
+  rerender(
+    <TooltipProvider>
+      <FilesPanelPullRequests targetId="env" />
+    </TooltipProvider>,
+  );
+  expect(calls).toEqual([url]);
+  expect(useUIStore.getState().selectedEnvironmentId).toBe("env");
 });

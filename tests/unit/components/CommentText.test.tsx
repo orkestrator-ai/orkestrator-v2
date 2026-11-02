@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { CommentText } from "@/components/kanban/KanbanTaskDialog";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -91,32 +91,9 @@ describe("CommentText", () => {
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
   });
 
-  test("reports an in-app open so the ticket dialog can step aside for the pane", async () => {
-    const onOpenedInApp = mock(() => undefined);
-    render(
-      <CommentText
-        text="PR https://github.com/org/repo/pull/42 and docs https://example.com"
-        onOpenedInApp={onOpenedInApp}
-      />,
-    );
-    const [pullRequest, docs] = screen.getAllByRole("button");
-    fireEvent.click(docs!);
-    await waitFor(() => expect(mockOpenInBrowser).toHaveBeenCalledWith("https://example.com"));
-    expect(onOpenedInApp).not.toHaveBeenCalled();
-    fireEvent.click(pullRequest!);
-    await waitFor(() => expect(onOpenedInApp).toHaveBeenCalledTimes(1));
-  });
-
   test("Cmd-click keeps a pull request link on GitHub", () => {
-    const onOpenedInApp = mock(() => undefined);
-    render(
-      <CommentText
-        text="PR raised: https://github.com/org/repo/pull/42"
-        onOpenedInApp={onOpenedInApp}
-      />,
-    );
+    render(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
     fireEvent.click(screen.getByRole("button"), { metaKey: true });
-    expect(onOpenedInApp).not.toHaveBeenCalled();
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/org/repo/pull/42");
     expect(useFilesPanelStore.getState().isOpen).toBe(false);
   });

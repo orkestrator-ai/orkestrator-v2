@@ -138,14 +138,7 @@ function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
 }
 
 /** Renders comment text with clickable URLs */
-export function CommentText({
-  text,
-  onOpenedInApp,
-}: {
-  text: string;
-  /** Called after a link opened in the app (the PR pane) rather than the browser. */
-  onOpenedInApp?: () => void;
-}) {
+export function CommentText({ text }: { text: string }) {
   const opener = usePullRequestOpener();
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
   if (parts.length === 1) return <>{text}</>;
@@ -159,11 +152,9 @@ export function CommentText({
             onClick={(e) => {
               e.preventDefault();
               // A pull request opens in the right-hand PR pane; Cmd/Ctrl-click opens GitHub.
-              void openPullRequestUrl(part, { external: e.metaKey || e.ctrlKey, opener })
-                .then((inApp) => {
-                  if (inApp) onOpenedInApp?.();
-                })
-                .catch(() => toast.error("Could not open the link"));
+              void openPullRequestUrl(part, { external: e.metaKey || e.ctrlKey, opener }).catch(
+                () => toast.error("Could not open the link"),
+              );
             }}
           >
             {part}

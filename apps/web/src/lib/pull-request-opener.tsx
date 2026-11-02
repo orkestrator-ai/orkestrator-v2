@@ -4,6 +4,7 @@ import {
   type GitHubPullRequestRef,
   type GitHubPullRequestViewTab,
 } from "@orkestrator/protocol/github-pull-requests";
+import { armPullRequestFallback } from "./pull-request-load-fallback";
 import { openInBrowser } from "@/lib/backend";
 import { projectRootFilesTargetId, useFilesPanelStore } from "@/stores/filesPanelStore";
 import { useProjectStore } from "@/stores/projectStore";
@@ -23,8 +24,7 @@ const PullRequestOpenerContext = createContext<PullRequestOpener | null>(null);
 
 /**
  * Routes pull requests opened inside a subtree (a pull request view, a list)
- * to the host showing it, so a link in a sidebar PR opens beside it and one
- * on the project's Pull requests page opens as another tab of that page.
+ * to the right-hand pane, with modal hosts able to close after opening.
  */
 export function PullRequestOpenerProvider({
   open,
@@ -34,7 +34,14 @@ export function PullRequestOpenerProvider({
   open: (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) => boolean | void;
   children: ReactNode;
 }) {
-  const opener = useMemo<PullRequestOpener>(() => (ref, view) => open(ref, view) !== false, [open]);
+  const opener = useMemo<PullRequestOpener>(
+    () => (ref, view) => {
+      if (open(ref, view) === false) return false;
+      armPullRequestFallback(ref);
+      return true;
+    },
+    [open],
+  );
   return (
     <PullRequestOpenerContext.Provider value={opener}>{children}</PullRequestOpenerContext.Provider>
   );
@@ -70,6 +77,7 @@ export function openPullRequestInApp(
   if (useRemoteWorkspaceStore.getState().active) return false;
   const targetId = currentFilesPanelTargetId();
   if (!targetId) return false;
+  armPullRequestFallback(ref);
   useFilesPanelStore.getState().openPullRequest(targetId, ref, view);
   return true;
 }
@@ -86,6 +94,7 @@ export async function openPullRequestUrl(
 ): Promise<boolean> {
   const pullRequest = options.external ? null : parseGitHubPullRequestLink(url);
   if (pullRequest && (options.opener ?? openPullRequestInApp)(pullRequest, pullRequest.view)) {
+    armPullRequestFallback(pullRequest, url);
     return true;
   }
   await openInBrowser(url);

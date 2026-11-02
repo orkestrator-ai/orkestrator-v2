@@ -440,6 +440,43 @@ describe("KanbanTaskDialog", () => {
     }
   });
 
+  test("ticket comment opens the pane and dismisses the full dialog", async () => {
+    const ui = useUIStore.getState();
+    const panel = useFilesPanelStore.getState();
+    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
+    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    function Ticket() {
+      const [open, setOpen] = useState(true);
+      return (
+        <KanbanTaskDialog
+          task={makeTask({
+            comments: [
+              {
+                id: "pr",
+                text: "https://github.com/o/r/pull/42",
+                createdAt: "2026-01-01T00:00:00Z",
+              },
+            ],
+          })}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      );
+    }
+    try {
+      render(<Ticket />);
+      fireEvent.click(screen.getByRole("button", { name: "https://github.com/o/r/pull/42" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
+      expect(openInBrowserMock).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      useUIStore.setState(ui);
+      useFilesPanelStore.setState(panel);
+    }
+  });
+
   test("editing comment PR links open externally and preserve the unsaved draft", async () => {
     const ui = useUIStore.getState();
     const panel = useFilesPanelStore.getState();

@@ -103,9 +103,8 @@ call sites.
   and comments share that policy. While editing, PR links open in the external
   browser so unsaved changes remain available in the dialog.
 - **Hosts with their own tabs.** Inside the files panel a linked pull request
-  opens as another panel tab. The project's Pull requests page is a pull
-  request browser of its own, so its list rows and links open as tabs of that
-  page.
+  opens as another panel tab. The project's Pull requests page also routes list rows and nested links to
+  the right-hand pane, preserving its selected main-area tab.
 - **Another project.** The PR pane shows any GitHub pull request by
   owner/repo/number, so a pull request from another project opens in the
   current view's pane; the selection does not follow it.
@@ -113,7 +112,9 @@ call sites.
   is cleared and the workspace has its own panel, so links inside it open in
   that workspace's pane, and the window's own links fall back to the browser.
 - **Fallback.** A URL that is not a `github.com` pull request, or a view with
-  nothing selected to host the pane, opens in the browser as before.
+  nothing selected to host the pane, opens in the browser as before. An initial
+  detail-load failure also opens the original link externally once; subsequent
+  retries and polling failures do not repeatedly open the browser.
   Cmd/Ctrl-click and every "Open on GitHub" action always open the browser.
 
 ## Environments

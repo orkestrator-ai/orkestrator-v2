@@ -1,10 +1,5 @@
-import { useCallback } from "react";
 import { GitPullRequest, X } from "lucide-react";
-import type {
-  GitHubPullRequestRef,
-  GitHubPullRequestViewTab,
-} from "@orkestrator/protocol/github-pull-requests";
-import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
+import { PullRequestOpenerProvider, openPullRequestInApp } from "@/lib/pull-request-opener";
 import { cn } from "@/lib/utils";
 import {
   selectProjectPullRequestTabs,
@@ -23,20 +18,13 @@ export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
   const { tabs, activeKey } = useProjectPullRequestsStore(
     useShallow((state) => selectProjectPullRequestTabs(state, projectId)),
   );
-  const openPullRequest = useProjectPullRequestsStore((state) => state.openPullRequest);
   const closePullRequest = useProjectPullRequestsStore((state) => state.closePullRequest);
   const setActive = useProjectPullRequestsStore((state) => state.setActive);
   const updateTab = useProjectPullRequestsStore((state) => state.updateTab);
   const active = activeKey ? tabs.find((tab) => tab.key === activeKey) : undefined;
 
-  const open = useCallback(
-    (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) =>
-      openPullRequest(projectId, ref, view),
-    [openPullRequest, projectId],
-  );
-
   return (
-    <PullRequestOpenerProvider open={open}>
+    <PullRequestOpenerProvider open={openPullRequestInApp}>
       <div className="flex h-full min-h-0 flex-col">
         <div
           role="tablist"
@@ -113,7 +101,7 @@ export function ProjectPullRequestsView({ projectId }: { projectId: string }) {
             className="min-h-0 flex-1"
             projectId={projectId}
             layout="page"
-            onOpenPullRequest={(ref) => open(ref)}
+            onOpenPullRequest={(ref) => openPullRequestInApp(ref)}
           />
         )}
       </div>

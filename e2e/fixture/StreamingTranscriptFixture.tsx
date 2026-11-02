@@ -1,3 +1,4 @@
+import { PrPaneTranscriptFrame } from "./PrPaneTranscriptFrame";
 import { useLayoutEffect, useMemo, useState } from "react";
 import type { StateSnapshot } from "react-virtuoso";
 import { VirtualizedMessageList } from "../../apps/web/src/components/chat/VirtualizedMessageList";
@@ -45,7 +46,7 @@ const toolHeavyMessage: Message = {
 
 function textMessage(index: number): Message {
   const role = index % 2 === 0 ? "user" : "assistant";
-  const content = `History message ${index}: a representative transcript row for virtualization.`;
+  const content = `History message ${index}: a representative transcript row for virtualization.${new URLSearchParams(window.location.search).has("prPane") ? ` [Review PR ${index}](https://github.com/acme/widget/pull/42)` : ""}`;
   return {
     id: `history-${index}`,
     role,
@@ -239,7 +240,7 @@ export function StreamingTranscriptFixture() {
     scrollToIndex(historicToolIndex, { rowKey: toolHeavyMessage.id, offset: 0 });
   };
 
-  return (
+  const content = (
     <main>
       <button
         type="button"
@@ -364,9 +365,10 @@ export function StreamingTranscriptFixture() {
           )}
           scrollProps={{ ...scrollProps, restoreStateFrom }}
           virtuosoRef={virtuosoRef}
-          find={{ isActive: true, getSearchText: getNativeMessageSearchText }}
+          find={{ isActive: !query.has("prPane"), getSearchText: getNativeMessageSearchText }}
         />
       </div>
     </main>
   );
+  return query.has("prPane") ? <PrPaneTranscriptFrame>{content}</PrPaneTranscriptFrame> : content;
 }

@@ -8,6 +8,7 @@
  */
 import {
   WEB_ANNOTATION_LIMITS,
+  WEB_ANNOTATION_MAX_SHADOW_DEPTH,
   WEB_ANNOTATION_PROVENANCES,
   WEB_ANNOTATION_REQUEST_STATES,
   webAnnotationUtf8Bytes,
@@ -27,6 +28,7 @@ import {
   type WebAnnotationRect,
   type WebAnnotationRedactionSummary,
   type WebAnnotationRequestState,
+  type WebAnnotationShadowHost,
   type WebAnnotationSourceHint,
   type WebAnnotationTarget,
   type WebAnnotationTargetKind,
@@ -118,20 +120,47 @@ function isAncestor(value: unknown): value is WebAnnotationAncestorDescriptor {
   );
 }
 
+function isStableId(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (isRecord(value) &&
+      (value.kind === "id" || value.kind === "test-id") &&
+      isBoundedString(value.value, 200) &&
+      value.value.length > 0)
+  );
+}
+
+function isShadowHost(value: unknown): value is WebAnnotationShadowHost {
+  return (
+    isRecord(value) &&
+    isBoundedString(value.tagName, 64) &&
+    value.tagName.length > 0 &&
+    isStableId(value.stableId) &&
+    isBoundedString(value.cssPath, 4_000) &&
+    value.cssPath.length > 0
+  );
+}
+
+function isAnchorScope(scope: unknown): boolean {
+  if (!isRecord(scope)) return false;
+  if (scope.kind === "document") return true;
+  if (scope.kind === "shadow") {
+    return (
+      Array.isArray(scope.hosts) &&
+      scope.hosts.length > 0 &&
+      scope.hosts.length <= WEB_ANNOTATION_MAX_SHADOW_DEPTH &&
+      scope.hosts.every(isShadowHost)
+    );
+  }
+  return (
+    scope.kind === "unsupported" &&
+    ["iframe", "shadow-root", "closed-root", "cross-origin"].includes(String(scope.reason))
+  );
+}
+
 export function isWebAnnotationAnchor(value: unknown): value is WebAnnotationAnchor {
   if (!isRecord(value)) return false;
-  const stableId = value.stableId;
-  if (
-    stableId !== undefined &&
-    !(
-      isRecord(stableId) &&
-      (stableId.kind === "id" || stableId.kind === "test-id") &&
-      isBoundedString(stableId.value, 200) &&
-      stableId.value.length > 0
-    )
-  ) {
-    return false;
-  }
+  if (!isStableId(value.stableId)) return false;
   const semantic = value.semantic;
   if (
     !isRecord(semantic) ||
@@ -142,14 +171,8 @@ export function isWebAnnotationAnchor(value: unknown): value is WebAnnotationAnc
   ) {
     return false;
   }
-  const scope = value.scope;
-  const scopeOk =
-    isRecord(scope) &&
-    (scope.kind === "document" ||
-      (scope.kind === "unsupported" &&
-        ["iframe", "shadow-root", "closed-root", "cross-origin"].includes(String(scope.reason))));
   return (
-    scopeOk &&
+    isAnchorScope(value.scope) &&
     (value.text === null || isTextQuote(value.text)) &&
     Array.isArray(value.ancestors) &&
     value.ancestors.length <= 12 &&

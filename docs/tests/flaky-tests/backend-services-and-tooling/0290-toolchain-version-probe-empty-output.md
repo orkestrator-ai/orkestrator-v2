@@ -51,3 +51,14 @@ Final aggregate counts: toolchain 90 passed and one failed across 91 tests in tw
 - **Owner rerun:** `mise run test:logged -- --name review-toolchain-owner -- bun test --cwd packages/toolchain ./src/manager.test.ts --parallel=1 --only-failures` passed unchanged in 2.5 s.
 - **Evidence:** inner `orkestrator-test-run.S3DyLI/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`, outer `orkestrator-test-run.OHbyVm/review-fix-suite.log` under the host temporary directory (compressed on finalization).
 - No toolchain implementation, assertion, timeout or skip changed; the aggregate remains failed.
+
+### Pipeline bell repair validation — 2026-11-02
+
+At `2617fd20d`, `mise run test:logged -- --name repair-full -- mise run test`
+failed `pinned desktop toolchain cache > probes installed executables and rejects unexpected versions`
+with `codex reported an unexpected version: no output` (129.67 ms).
+Workspace group reserved six worker slots; toolchain used two file workers.
+Evidence: host temporary `orkestrator-test-run.Db1a7X/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed on aggregate finalization). Unchanged owner passed alone in 8.3 s:
+`mise run test:logged -- --name repair-toolchain-owner -- bun test --cwd packages/toolchain ./src/manager.test.ts --parallel=1 --only-failures`.
+Cause and target-branch independence remain unproven.

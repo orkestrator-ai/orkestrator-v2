@@ -84,6 +84,30 @@ export interface UsageSessionRecord {
   days: Record<string, UsageDayBucket>;
   /** Oldest first; bounded by {@link MAX_RECORDED_TURN_IDS}. */
   turnIds: string[];
+  /**
+   * What the environment and its project were called, stamped onto the row
+   * when the environment is deleted (see {@link UsageEnvironmentLabel}). A
+   * live environment is named from its own record instead, so these are only
+   * read once it is gone.
+   */
+  environmentName?: string;
+  projectName?: string;
+}
+
+/** The names a deleted environment's usage keeps showing under. */
+export interface UsageEnvironmentLabel {
+  environmentName?: string;
+  projectName?: string;
+}
+
+/** Longest name kept; a label is a display string, not a document. */
+export const MAX_USAGE_LABEL_LENGTH = 200;
+
+/** A trimmed, bounded display name, or undefined when there is none. */
+export function usageLabelName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, MAX_USAGE_LABEL_LENGTH) : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -123,6 +147,8 @@ export function parseUsageSessionRecord(value: unknown): UsageSessionRecord | nu
   }
   const firstSeenAt = typeof value.firstSeenAt === "string" ? value.firstSeenAt : "";
   const lastSeenAt = typeof value.lastSeenAt === "string" ? value.lastSeenAt : firstSeenAt;
+  const environmentName = usageLabelName(value.environmentName);
+  const projectName = usageLabelName(value.projectName);
   return {
     version: USAGE_SESSION_RECORD_VERSION,
     environmentId: value.environmentId,
@@ -133,7 +159,28 @@ export function parseUsageSessionRecord(value: unknown): UsageSessionRecord | nu
     turnIds: Array.isArray(value.turnIds)
       ? value.turnIds.filter((id): id is string => typeof id === "string" && id.length > 0)
       : [],
+    ...(environmentName ? { environmentName } : {}),
+    ...(projectName ? { projectName } : {}),
   };
+}
+
+/**
+ * Stamps a label onto a record. Returns false when it already carried exactly
+ * that label, so a caller can skip the write. A name the label omits is left
+ * as it was rather than erased.
+ */
+export function applyLabelToRecord(
+  record: UsageSessionRecord,
+  label: UsageEnvironmentLabel,
+): boolean {
+  const environmentName = usageLabelName(label.environmentName) ?? record.environmentName;
+  const projectName = usageLabelName(label.projectName) ?? record.projectName;
+  if (environmentName === record.environmentName && projectName === record.projectName) {
+    return false;
+  }
+  if (environmentName) record.environmentName = environmentName;
+  if (projectName) record.projectName = projectName;
+  return true;
 }
 
 export function emptyUsageSessionRecord(

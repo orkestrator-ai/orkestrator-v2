@@ -4,6 +4,12 @@
  * The protocol rule decides "ready to merge" from PR signals and a freshness
  * flag; these functions supply both for this machine's environments and for
  * another machine's rows, so every surface asks the same question the same way.
+ *
+ * `requireChecks` is this machine's auto-merge "Require checks to pass"
+ * setting ({@link shimmerRequiresChecks}), so the green name means exactly
+ * what auto-merge would act on. Off, a failing or pending check GitHub does
+ * not require leaves the name green; the merge surfaces show the checks.
+ * Checks GitHub requires always block, because it reports them as `blocked`.
  */
 import {
   evaluatePrMergeReadiness,
@@ -16,6 +22,11 @@ import type { HydrationStatus } from "@/lib/bounded-hydration";
 import type { MachineView } from "@/lib/federation/aggregate";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import type { Environment } from "@/types";
+
+/** Auto-merge's own default: checks are required unless turned off. */
+export function shimmerRequiresChecks(global: { autoMergeRequireChecks?: boolean }): boolean {
+  return global.autoMergeRequireChecks !== false;
+}
 
 export type ReadyToMergeEnvironment = Pick<
   Environment,
@@ -43,6 +54,7 @@ export function localEnvironmentPrMergeState(
   environment: ReadyToMergeEnvironment,
   monitor: PrMonitorEnvironmentState | null,
   syncStatus: HydrationStatus,
+  requireChecks: boolean,
 ): PrMergeState | null {
   return toPrMergeState(
     evaluatePrMergeReadiness({
@@ -51,6 +63,7 @@ export function localEnvironmentPrMergeState(
       mergeability: environment.prMergeability,
       checkSummary: monitor?.checkSummary ?? null,
       viewerCanMerge: monitor?.viewerCanMerge ?? null,
+      requireChecks,
       fresh: syncStatus === "current" && isPrReadingConfirmedByMonitor(environment, monitor),
     }),
   );
@@ -60,8 +73,9 @@ export function isLocalEnvironmentReadyToMerge(
   environment: ReadyToMergeEnvironment,
   monitor: PrMonitorEnvironmentState | null,
   syncStatus: HydrationStatus,
+  requireChecks: boolean,
 ): boolean {
-  return localEnvironmentPrMergeState(environment, monitor, syncStatus) === "ready";
+  return localEnvironmentPrMergeState(environment, monitor, syncStatus, requireChecks) === "ready";
 }
 
 /**
@@ -69,11 +83,13 @@ export function isLocalEnvironmentReadyToMerge(
  * machine is connected, its summaries are current, and the machine's own
  * monitor vouches for the reading (`prMonitorConfirmed`, decided there by the
  * same rule as this machine's rows). A node that predates the field never
- * vouches, so its rows stay plain.
+ * vouches, so its rows stay plain. `requireChecks` is this machine's setting,
+ * not the other machine's: its summaries do not relay that setting.
  */
 export function nodeEnvironmentPrMergeState(
   environment: FederatedEnvironment,
   machine: Pick<MachineView, "transport" | "freshness">,
+  requireChecks: boolean,
 ): PrMergeState | null {
   const fresh =
     machine.transport === "connected" &&
@@ -88,6 +104,7 @@ export function nodeEnvironmentPrMergeState(
       mergeability: environment.prMergeability,
       checkSummary: environment.prCheckSummary ?? null,
       viewerCanMerge: environment.prViewerCanMerge ?? null,
+      requireChecks,
       fresh,
     }),
   );
@@ -96,6 +113,7 @@ export function nodeEnvironmentPrMergeState(
 export function isNodeEnvironmentReadyToMerge(
   environment: FederatedEnvironment,
   machine: Pick<MachineView, "transport" | "freshness">,
+  requireChecks: boolean,
 ): boolean {
-  return nodeEnvironmentPrMergeState(environment, machine) === "ready";
+  return nodeEnvironmentPrMergeState(environment, machine, requireChecks) === "ready";
 }

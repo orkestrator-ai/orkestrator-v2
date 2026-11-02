@@ -221,25 +221,35 @@ export class DraftsRepository {
       } else if (!(await this.repos.projects.getProject(ownerId))) {
         throw new Error(`Compose draft project not found: ${ownerId}`);
       }
-      const drafts = await this.repos.prompts.loadComposeDrafts();
-      const previous = drafts[draftKey];
-      if (previous && (previous.ownerType !== ownerType || previous.ownerId !== ownerId)) {
-        throw new Error("Compose draft belongs to another owner");
-      }
-      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
-        throw new Error("Compose draft revision conflict");
-      }
-      const saved: PersistedComposeDraft = {
+      // One row, read and written in one transaction (ST-10): typing saves a
+      // draft every few hundred milliseconds, and the other drafts are never
+      // decoded or rewritten. The lease above still orders the save against
+      // the owner checks and the deletion sweeps below.
+      const saved = this.context.updateSensitiveStoreRow(
+        this.files.composeDraftsFile(),
         draftKey,
-        ownerType,
-        ownerId,
-        value,
-        ...(previous?.sourcePromptQueue ? { sourcePromptQueue: previous.sourcePromptQueue } : {}),
-        updatedAt: nowIso(),
-        revision: (previous?.revision ?? 0) + 1,
-      };
-      drafts[draftKey] = saved;
-      await this.context.saveSensitiveJson(this.files.composeDraftsFile(), drafts);
+        (stored) => {
+          const previous = isPersistedComposeDraft(stored, draftKey) ? stored : undefined;
+          if (previous && (previous.ownerType !== ownerType || previous.ownerId !== ownerId)) {
+            throw new Error("Compose draft belongs to another owner");
+          }
+          if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
+            throw new Error("Compose draft revision conflict");
+          }
+          const next: PersistedComposeDraft = {
+            draftKey,
+            ownerType,
+            ownerId,
+            value,
+            ...(previous?.sourcePromptQueue
+              ? { sourcePromptQueue: previous.sourcePromptQueue }
+              : {}),
+            updatedAt: nowIso(),
+            revision: (previous?.revision ?? 0) + 1,
+          };
+          return { result: next, value: next };
+        },
+      );
       this.context.changes.announce("compose-draft", ownerId);
       return saved;
     });
@@ -251,20 +261,18 @@ export class DraftsRepository {
       throw new Error("Compose draft expected revision must be a non-negative integer");
     }
     await this.repos.prompts.enqueueComposeDraftMutation(async () => {
-      const stored = await this.context.loadJson<unknown>(
+      const previous = this.context.updateSensitiveStoreRow(
         this.files.composeDraftsFile(),
-        () => ({}),
+        draftKey,
+        (stored) => {
+          const draft = isPersistedComposeDraft(stored, draftKey) ? stored : undefined;
+          if (draft && expectedRevision !== undefined && draft.revision !== expectedRevision) {
+            throw new Error("Compose draft revision conflict");
+          }
+          // An unreadable record under the key is removed too.
+          return { result: draft, delete: true as const };
+        },
       );
-      const drafts = this.repos.prompts.validComposeDrafts(stored);
-      const previous = drafts[draftKey];
-      if (previous && expectedRevision !== undefined && previous.revision !== expectedRevision) {
-        throw new Error("Compose draft revision conflict");
-      }
-      const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
-      if (hasStoredKey) {
-        delete drafts[draftKey];
-        await this.context.saveSensitiveJson(this.files.composeDraftsFile(), drafts);
-      }
       if (previous) {
         this.context.changes.announce("compose-draft", previous.ownerId);
       }
@@ -283,15 +291,8 @@ export class DraftsRepository {
       throw new Error("Compose draft environment ID must not be blank");
     }
     await this.repos.prompts.enqueueComposeDraftMutation(async () => {
-      const drafts = await this.repos.prompts.loadComposeDrafts();
-      const keys = Object.values(drafts)
-        .filter((draft) => draft.ownerType === "environment" && draft.ownerId === environmentId)
-        .map((draft) => draft.draftKey);
-      for (const key of keys) delete drafts[key];
-      if (keys.length > 0) {
-        await this.context.saveSensitiveJson(this.files.composeDraftsFile(), drafts);
-        this.context.changes.announce("compose-draft", environmentId);
-      }
+      const removed = await this.deleteComposeDraftsOwnedBy("environment", environmentId);
+      if (removed > 0) this.context.changes.announce("compose-draft", environmentId);
       await this.context.scrubSensitiveJsonBackups(
         this.files.composeDraftsFile(),
         (storedKey, draft) =>
@@ -306,15 +307,8 @@ export class DraftsRepository {
       throw new Error("Compose draft project ID must not be blank");
     }
     await this.repos.prompts.enqueueComposeDraftMutation(async () => {
-      const drafts = await this.repos.prompts.loadComposeDrafts();
-      const keys = Object.values(drafts)
-        .filter((draft) => draft.ownerType === "project" && draft.ownerId === projectId)
-        .map((draft) => draft.draftKey);
-      for (const key of keys) delete drafts[key];
-      if (keys.length > 0) {
-        await this.context.saveSensitiveJson(this.files.composeDraftsFile(), drafts);
-        this.context.changes.announce("compose-draft", projectId);
-      }
+      const removed = await this.deleteComposeDraftsOwnedBy("project", projectId);
+      if (removed > 0) this.context.changes.announce("compose-draft", projectId);
       await this.context.scrubSensitiveJsonBackups(
         this.files.composeDraftsFile(),
         (storedKey, draft) =>
@@ -322,6 +316,43 @@ export class DraftsRepository {
           (draft.ownerType !== "project" || draft.ownerId !== projectId),
       );
     });
+  }
+
+  /**
+   * Removes one owner's drafts in one synchronous read-modify-write. The other
+   * drafts' rows are left as stored (including records this build cannot
+   * read), so this never rewrites them, and nothing is written when the owner
+   * has no draft (an unreadable store stays as it is). Runs under the compose
+   * draft lease.
+   */
+  private async deleteComposeDraftsOwnedBy(
+    ownerType: "environment" | "project",
+    ownerId: string,
+  ): Promise<number> {
+    const owned = Object.values(await this.repos.prompts.loadComposeDrafts()).some(
+      (draft) => draft.ownerType === ownerType && draft.ownerId === ownerId,
+    );
+    if (!owned) return 0;
+    return this.context.updateStore<Record<string, unknown>, number>(
+      this.files.composeDraftsFile(),
+      () => ({}),
+      (drafts) => {
+        if (!isRecord(drafts)) return 0;
+        let removed = 0;
+        for (const [key, draft] of Object.entries(drafts)) {
+          if (
+            isPersistedComposeDraft(draft, key) &&
+            draft.ownerType === ownerType &&
+            draft.ownerId === ownerId
+          ) {
+            delete drafts[key];
+            removed += 1;
+          }
+        }
+        return removed;
+      },
+      { sensitive: true },
+    );
   }
 
   private enqueueFileDraftMutation<T>(operation: () => Promise<T>): Promise<T> {

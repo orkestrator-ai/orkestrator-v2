@@ -387,6 +387,11 @@ export class StorageService {
     return this.repos.projects.loadEnvironments();
   }
 
+  /** Read-only, frozen environments shared per store revision; see `ProjectsRepository`. */
+  readEnvironmentsSnapshot(): Promise<Environment[]> {
+    return this.repos.projects.readEnvironmentsSnapshot();
+  }
+
   getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
     return this.repos.projects.getEnvironmentsByProject(projectId);
   }
@@ -945,6 +950,11 @@ export class StorageService {
 
   listNativeAgentSessions(): Promise<PersistedNativeAgentSession[]> {
     return this.repos.nativeAgentSessions.listNativeAgentSessions();
+  }
+
+  /** Read-only, frozen sessions shared per store revision; see `NativeAgentSessionsRepository`. */
+  readNativeAgentSessionsSnapshot(): Promise<PersistedNativeAgentSession[]> {
+    return this.repos.nativeAgentSessions.readNativeAgentSessionsSnapshot();
   }
 
   getOrCreateNativeAgentSession(

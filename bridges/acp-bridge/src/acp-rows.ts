@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
+import { TranscriptRowSizes } from "@orkestrator/protocol/node/transcript-budget";
 import {
   MAX_EVICTED_TOOL_CALL_IDS,
   MAX_MODEL_ID_BYTES,
@@ -176,11 +177,37 @@ export function notePartMutation(state: SessionState, part: BridgeMessagePart): 
 }
 
 function noteRevisedRow(state: SessionState, index: number): void {
+  rowSizes.get(state)?.invalidate(state.messages[index]!.id);
   const absoluteIndex = state.droppedMessages + index;
   if (state.mutatedMessageFloor === undefined || absoluteIndex < state.mutatedMessageFloor) {
     state.mutatedMessageFloor = absoluteIndex;
   }
   (state.revisedRows ??= new RecentlyRevisedRows()).note(state.messages[index]!.id);
+}
+
+/**
+ * Each session's remembered row sizes, for `boundTranscript`.
+ *
+ * Only the trailing row and rows noted through `noteRevisedRow` since the last
+ * bound are measured again, so every in-place change to an older row must
+ * reach `noteMessageMutation` or `notePartMutation` — which it must already,
+ * for `revisedMessages` — or call {@link forgetRowSize}. Held off the state
+ * object, so a restored session starts with none.
+ */
+const rowSizes = new WeakMap<SessionState, TranscriptRowSizes>();
+
+export function transcriptRowSizes(state: SessionState): TranscriptRowSizes {
+  let sizes = rowSizes.get(state);
+  if (!sizes) {
+    sizes = new TranscriptRowSizes();
+    rowSizes.set(state, sizes);
+  }
+  return sizes;
+}
+
+/** Measure `message` again at the next bound, without noting it for readers. */
+export function forgetRowSize(state: SessionState, message: BridgeMessage): void {
+  rowSizes.get(state)?.invalidate(message.id);
 }
 
 /**

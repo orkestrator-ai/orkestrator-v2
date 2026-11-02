@@ -422,7 +422,7 @@ describe("searchProjectsAndEnvironments across machines", () => {
         environments: [main, feature, docsEnv],
         defaultBranches,
       }),
-      ...machines.map(machineSearchSource),
+      ...machines.map((machine) => machineSearchSource(machine, true)),
     ];
   }
 
@@ -606,7 +606,7 @@ describe("searchProjectsAndEnvironments across machines", () => {
       ],
       state,
     );
-    const results = search("feature", { sources: [machineSearchSource(leaf)] });
+    const results = search("feature", { sources: [machineSearchSource(leaf, true)] });
     expect(results.environments).toHaveLength(1);
     expect(results.environments[0]?.environment.readyToMerge).toBeUndefined();
   });
@@ -673,7 +673,7 @@ describe("searchProjectsAndEnvironments across machines", () => {
           results.environments.map((hit) => [hit.environment.id, hit.score, hit.isPrimary]),
         ];
       });
-    expect(matches(machineSearchSource(leaf))).toEqual(matches(localSource));
+    expect(matches(machineSearchSource(leaf, true))).toEqual(matches(localSource));
     // Hosts, schemes and the rest of a path never match.
     const local = matches(localSource);
     for (const query of ["github", "someone", "worktrees"]) {
@@ -692,7 +692,7 @@ describe("searchProjectsAndEnvironments across machines", () => {
     for (const field of ["pathName", "defaultBranch"] as const) {
       expect(older.projects[0]![field]).toBeUndefined();
     }
-    const source = machineSearchSource(older);
+    const source = machineSearchSource(older, true);
     const results = searchProjectsAndEnvironments({
       query: "legacy-repo",
       filter: "all",

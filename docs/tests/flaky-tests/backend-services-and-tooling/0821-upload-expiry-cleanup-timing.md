@@ -53,3 +53,26 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+
+
+## Task 1202 background-work review repair — 2026-11-02
+
+The exact default-suite retry used `ORKESTRATOR_TEST_ALLOW_CONCURRENT=1
+mise run test:logged -- --name address-default-suite-concurrent -- mise run test`
+with workspace/root/bridge/protocol grants of 6/1/2/1. The ordinary retry was
+cancelled while queued behind another worktree; the documented concurrency
+option admitted all groups. Original preparation artifacts were preserved.
+Aggregate evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.WXZCOJ/`
+(group logs; compressed on failure), outer log in `orkestrator-test-run.Vufyx3`.
+
+The temporary-upload assertion recurred at line 424 (106.27 ms).
+`mise run test:logged -- --name address-upload-rerun -- bun test --cwd apps/backend ./src/core/nodes/node-files.test.ts --parallel=1 --only-failures`
+passed the complete unchanged owner (1.5 s). A detached `origin/main` at
+`38d55ee146c5bc29bdfb338c4f93f9de5f0cd787`, with its own frozen install, passed
+50 repeats of the failing test (`address-main-upload`, 2.4 s). These passes
+establish intermittence, not failure independence; the cause remains unproven.
+
+Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
+13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
+3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
+The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.

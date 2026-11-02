@@ -558,6 +558,9 @@ export async function createCommandFixtures() {
           environments.filter((environment) => environment.projectId === projectId),
         ),
         loadEnvironments: mock(async () => environments),
+        readEnvironmentsSnapshot: mock(async () =>
+          structuredClone(environments).map((environment) => Object.freeze(environment)),
+        ),
         addEnvironment: mock(async (environment: Environment) => {
           environment.order =
             Math.max(

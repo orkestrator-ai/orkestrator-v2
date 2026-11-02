@@ -115,7 +115,7 @@ test("cached siblings and new providers adopt the replacement while its turn is 
       await NativeAgentLaunchActivityReconciler.prototype.hasObservedLiveWork.call(
         {
           providerRegistry: { cached: () => undefined },
-          storage: { listNativeAgentSessions: async () => [] },
+          storage: { readNativeAgentSessionsSnapshot: async () => [] },
         } as never,
         "handoff-env",
         "claude",

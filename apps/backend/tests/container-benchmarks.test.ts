@@ -11,6 +11,7 @@
  * resource it labelled. Results go to output/benchmarks/<run>.json and a table
  * on stdout; nothing here records commands, paths or file contents.
  */
+import { benchmarkTeardown, cleanupBenchmarkResources } from "./container-benchmark-teardown";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -140,17 +141,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!ENABLED) return;
-  const ids = (await docker(["ps", "-aq", "--filter", `label=orkestrator-owner=${owner}`]))
-    .split("\n")
-    .filter(Boolean);
-  if (ids.length > 0) await docker(["rm", "-f", ...ids]).catch(() => undefined);
-  for (const kind of ["volume", "network"] as const) {
-    const names = (await docker([kind, "ls", "-q", "--filter", `label=orkestrator-owner=${owner}`]))
-      .split("\n")
-      .filter(Boolean);
-    if (names.length > 0) await docker([kind, "rm", ...names]).catch(() => undefined);
-  }
-  if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
+  await benchmarkTeardown(
+    async () => {
+      if (Object.keys(results).length > 0) await writeReport();
+    },
+    () => cleanupBenchmarkResources(docker, owner, dataDir),
+  );
 }, 600_000);
 
 function benchContext(environments: Environment[]) {
@@ -504,7 +500,96 @@ describe("container baselines", () => {
       };
       service.shutdown();
       expect(service.followerCount()).toBe(0);
-      await writeReport();
+    },
+    TIMEOUT,
+  );
+});
+
+/**
+ * Opens a login shell the way the setup terminal and terminal tabs do
+ * (`docker exec -it … zsh -l`): interactive, on a terminal, ignoring SIGTERM.
+ * Waits until it is running.
+ */
+async function openInteractiveShell(containerId: string): Promise<void> {
+  await docker(["exec", "-d", "-it", containerId, "zsh", "-lc", "zsh -l"]);
+  const deadline = performance.now() + 15_000;
+  while (performance.now() < deadline) {
+    const shells = await docker(["exec", containerId, "pgrep", "-c", "-x", "zsh"]).catch(() => "0");
+    if (Number(shells) > 0) return;
+    await Bun.sleep(100);
+  }
+  throw new Error("interactive shell did not start");
+}
+
+describe("stop_environment", () => {
+  bench(
+    "stop_environment through the backend, idle and with a terminal open",
+    async () => {
+      const { stopEnvironmentOnce } = await import("../src/core/commands-environment");
+      const id = `env-${RUN}-stop`;
+      const runtime = await freshRuntime(id, "restricted");
+      const { containerId, fixture } = runtime;
+      const ids: CallIdentities = {
+        runtime: [containerId],
+        gateway: [(await egressGatewayOf(containerId)) ?? ""].filter(Boolean),
+      };
+      const report: Record<string, unknown> = {};
+      for (const [label, terminal, cycles] of [
+        ["idle", false, 3],
+        ["terminalOpen", true, 5],
+      ] as const) {
+        const total: number[] = [];
+        const outsideOperation: number[] = [];
+        const phases: Record<string, number[]> = {};
+        const calls: Record<string, number[]> = {};
+        for (let index = 0; index < cycles; index += 1) {
+          const environment = await fixture.context.storage.getEnvironment(id);
+          if (environment?.status !== "running") {
+            await bootRuntime(containerId);
+            await fixture.context.storage.updateEnvironment(id, { status: "running" });
+          }
+          if (terminal) await openInteractiveShell(containerId);
+          // Each Docker call's duration is the gap to the next one: the stop
+          // path makes them one at a time. A repeated `<target> <verb>` is
+          // numbered in call order, so the drain's exec stays apart.
+          const starts: Array<{ at: number; key: string }> = [];
+          const seen: Record<string, number> = {};
+          const stopObserving = observeCommandInvocations("docker", (args) => {
+            const call = Object.keys(attributeCalls([{ step: "stop", args }], ids))[0]!;
+            seen[call] = (seen[call] ?? 0) + 1;
+            starts.push({ at: performance.now(), key: `${call} #${seen[call]}` });
+          });
+          const stop = await timed(() =>
+            stopEnvironmentOnce(id, fixture.context, () => undefined),
+          ).finally(stopObserving);
+          const ended = performance.now();
+          total.push(stop.ms);
+          starts.forEach((call, at) => {
+            (calls[call.key] ??= []).push((starts[at + 1]?.at ?? ended) - call.at);
+          });
+          const record = parseContainerLifecycle(
+            (await fixture.context.storage.getEnvironment(id))?.containerLifecycle,
+          );
+          const outcome = record.supported ? record.record.outcomes.at(-1) : undefined;
+          expect(outcome?.kind).toBe("stop");
+          expect(outcome?.status).toBe("succeeded");
+          outsideOperation.push(stop.ms - (outcome?.durationMs ?? 0));
+          for (const entry of outcome?.phases ?? []) (phases[entry.phase] ??= []).push(entry.ms);
+        }
+        report[label] = {
+          total: summarize(total),
+          // Before the operation is admitted and after it commits: ownership,
+          // review and exec workers, agent settlement.
+          outsideOperation: summarize(outsideOperation),
+          phases: Object.fromEntries(
+            Object.entries(phases).map(([phase, samples]) => [phase, summarize(samples)]),
+          ),
+          dockerCallMs: Object.fromEntries(
+            Object.entries(calls).map(([key, samples]) => [key, summarize(samples)]),
+          ),
+        };
+      }
+      results.stopEnvironment = report;
     },
     TIMEOUT,
   );

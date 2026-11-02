@@ -12,8 +12,13 @@ import {
   normalizeOpenCodeInlineError,
   normalizeOpenCodeInteractiveMessage,
   normalizeOpenCodeTranscriptMessages,
+  normalizeOpenCodeTranscriptTail,
   OPEN_CODE_TOOL_SCHEMA_REJECTION_HINT,
 } from "./opencode-messages.js";
+import {
+  HUMAN_PROMPT_OBSERVATION_ROWS,
+  humanPromptObservation,
+} from "@orkestrator/protocol/human-prompts";
 
 function message(parts: unknown[]): unknown {
   return {
@@ -409,5 +414,74 @@ describe("transcript artifact tool calls", () => {
     expect(contract.tool).toBe("publish_artifact");
     expect(contract.toolState).not.toBe("success");
     expect(part.toolError).toContain(RECORDED_ARTIFACT_ERROR_CODE);
+  });
+});
+
+describe("normalizeOpenCodeTranscriptTail", () => {
+  /** Plain, failed (two rows), malformed (no row) and id-less messages, interleaved. */
+  function history(count: number): unknown[] {
+    return Array.from({ length: count }, (_, index) => {
+      if (index % 7 === 3) return null;
+      const info: Record<string, unknown> = {
+        ...(index % 11 === 5 ? {} : { id: `msg-${index}` }),
+        role: "assistant",
+        time: { created: index },
+      };
+      if (index % 5 === 1) info.error = { name: "UnknownError", data: { message: "boom" } };
+      return {
+        info,
+        parts: [
+          {
+            id: `part-${index}`,
+            type: "tool",
+            tool: "bash",
+            state: {
+              status: index % 3 === 0 ? "running" : "completed",
+              input: { command: `echo ${index}` },
+              output: `line ${index}`,
+            },
+          },
+        ],
+      };
+    });
+  }
+
+  test("returns exactly the newest rows of the whole normalisation", () => {
+    for (const count of [0, 1, 20, 63, 64, 65, 150]) {
+      const messages = history(count);
+      const full = normalizeOpenCodeTranscriptMessages(messages, () => {});
+      if (count === 150) {
+        expect(full.some((row) => String(row.id).startsWith("error-opencode"))).toBe(true);
+        expect(full.some((row) => row.id === "opencode-message-5")).toBe(true);
+      }
+      for (const rows of [1, 10, HUMAN_PROMPT_OBSERVATION_ROWS, 500]) {
+        expect(normalizeOpenCodeTranscriptTail(messages, () => {}, rows)).toEqual(
+          full.slice(-rows),
+        );
+      }
+      expect(
+        humanPromptObservation(
+          normalizeOpenCodeTranscriptTail(messages, () => {}, HUMAN_PROMPT_OBSERVATION_ROWS),
+        ),
+      ).toEqual(humanPromptObservation(full));
+    }
+  });
+
+  test("normalises only the messages the newest rows come from", () => {
+    const messages = history(150);
+    const seen: unknown[] = [];
+    const tracked = messages.map((message) =>
+      message && typeof message === "object"
+        ? new Proxy(message as Record<string, unknown>, {
+            get(target, key, receiver) {
+              if (key === "info" && !seen.includes(target)) seen.push(target);
+              return Reflect.get(target, key, receiver);
+            },
+          })
+        : message,
+    );
+    normalizeOpenCodeTranscriptTail(tracked, () => {}, HUMAN_PROMPT_OBSERVATION_ROWS);
+    expect(seen.length).toBeLessThanOrEqual(HUMAN_PROMPT_OBSERVATION_ROWS);
+    expect(seen.length).toBeGreaterThan(0);
   });
 });

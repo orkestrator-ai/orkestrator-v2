@@ -16,6 +16,7 @@ import type { EnvironmentInputStatus } from "@orkestrator/protocol/container-rec
 import {
   pruneInputRevisions,
   readInputsManifest,
+  SHARED_SKILLS_INPUT,
   scrubStagedProvider,
   stagedInputRelayPaths,
 } from "./portable-inputs.js";
@@ -181,7 +182,11 @@ export async function environmentInputStatus(
     providers: manifest.providers,
     missingProviders: [...selected].filter((provider) => !staged.has(provider)),
     disabledProviders: [...staged].filter(
-      (provider) => provider !== "git" && !selected.has(provider) && !revoked.includes(provider),
+      (provider) =>
+        provider !== "git" &&
+        provider !== SHARED_SKILLS_INPUT &&
+        !selected.has(provider) &&
+        !revoked.includes(provider),
     ),
     revokedProviders: [...revoked],
     ...(unreadableOnRootless ? { unreadableOnRootless } : {}),

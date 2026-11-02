@@ -39,7 +39,7 @@ export const AGENT_ACTIVE_MOVE_ERROR =
 export interface MoveEnvironmentOptions {
   /** Called once the environment's processes are stopped, before any file moves. */
   invalidateDiscovery?: (environmentId: string) => void;
-  /** Tests: skip `git worktree move` and take the copy path used across disks. */
+  /** Tests: skip `git worktree move` and the rename, taking the copy path used across disks. */
   forceCopy?: boolean;
   /** Tests: where each provider's folder-keyed session state lives. */
   sessionHomes?: SessionRelocationHomes;
@@ -225,6 +225,7 @@ async function moveEnvironmentOnce(
   });
 
   let moved = false;
+  let movedByRename = false;
   let committed = false;
   let commitAttempted = false;
   try {
@@ -242,14 +243,27 @@ async function moveEnvironmentOnce(
     recheckDestination();
 
     const viaGit = options.forceCopy
-      ? { moved: false as const }
+      ? ({ moved: false, crossDevice: true } as const)
       : await tryGitWorktreeMove(projectPath, from, to);
-    if (viaGit.moved) {
+    // Submodule checkouts keep their git dirs in the repository; a rename or
+    // copy re-links each one to its new folder.
+    const submodules = viaGit.moved ? [] : await listLinkedSubmodules(from);
+    const viaRename =
+      viaGit.moved || viaGit.crossDevice
+        ? { renamed: false }
+        : await renameWorktree(environment.id, storage, projectPath, from, to, submodules, {
+            record,
+            recheckDestination,
+            onRecord: (next) => (record = next),
+            onRenamed: () => {
+              moved = true;
+              movedByRename = true;
+            },
+          });
+    if (viaGit.moved || viaRename.renamed) {
       moved = true;
+      movedByRename = viaRename.renamed;
     } else {
-      // Submodule checkouts keep their git dirs in the repository; the copy
-      // re-links each one to its new folder.
-      const submodules = await listLinkedSubmodules(from);
       const staging = path.join(
         destinationRoot,
         `.${path.basename(to)}.orkestrator-move-${randomBytes(4).toString("hex")}`,
@@ -330,9 +344,14 @@ async function moveEnvironmentOnce(
         rolledBack = false;
       }
     } else if (moved && !record.removeSource && rollbackAllowed) {
-      rolledBack = await runCommand("git", ["-C", projectPath, "worktree", "move", to, from], {
-        timeoutMs: GIT_TIMEOUT_MS,
-      }).then(
+      // git refuses to move a worktree with submodules, so a rename is undone by hand.
+      rolledBack = await (
+        movedByRename
+          ? restoreRenamedWorktree(projectPath, to, from, record.submodules)
+          : runCommand("git", ["-C", projectPath, "worktree", "move", to, from], {
+              timeoutMs: GIT_TIMEOUT_MS,
+            })
+      ).then(
         () => true,
         () => false,
       );
@@ -393,7 +412,7 @@ async function tryGitWorktreeMove(
   projectPath: string,
   from: string,
   to: string,
-): Promise<{ moved: boolean }> {
+): Promise<{ moved: true } | { moved: false; crossDevice: boolean }> {
   try {
     await runCommand("git", ["-C", projectPath, "worktree", "move", from, to], {
       timeoutMs: GIT_TIMEOUT_MS,
@@ -401,15 +420,71 @@ async function tryGitWorktreeMove(
     return { moved: true };
   } catch (error) {
     const message = errorMessage(error);
-    // Git only renames, and never a worktree with submodules; both need a copy.
+    // Git only renames, so another disk needs a copy. It never moves a
+    // worktree with submodules at all; that is still a rename on one disk.
+    const crossDevice = /cross-device|EXDEV/i.test(message);
     if (
-      /cross-device|EXDEV|containing submodules/i.test(message) &&
+      (crossDevice || /containing submodules/i.test(message)) &&
       (await pathExists(from)) &&
       !(await pathExists(to))
     )
-      return { moved: false };
+      return { moved: false, crossDevice };
     throw new Error(`git could not move the worktree: ${message}`);
   }
+}
+
+/**
+ * Renames a worktree git refused to move (it has submodules), then repairs
+ * the repository's record of it and re-links its submodules. Answers
+ * `renamed: false` only when the destination is on another disk, leaving the
+ * source untouched for the copy. Any other failure renames the folder back
+ * before it is reported.
+ */
+async function renameWorktree(
+  environmentId: string,
+  storage: StorageService,
+  projectPath: string,
+  from: string,
+  to: string,
+  submodules: WorktreeMoveSubmodule[],
+  journal: {
+    record: WorktreeMoveRecord;
+    recheckDestination: () => void;
+    onRecord: (record: WorktreeMoveRecord) => void;
+    onRenamed: () => void;
+  },
+): Promise<{ renamed: boolean }> {
+  // Published before the rename: recovery adopts a destination whose source
+  // is gone, and needs the submodules to re-link it.
+  const record = { ...journal.record, ...(submodules.length ? { submodules } : {}) };
+  journal.onRecord(record);
+  await storage.updateEnvironment(environmentId, { worktreeMove: record });
+  journal.recheckDestination();
+  if (await pathExists(to)) throw new Error(`The destination already contains ${to}`);
+  try {
+    await fs.rename(from, to);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EXDEV") return { renamed: false };
+    throw error;
+  }
+  // Tell the caller before repair: even a failed repair needs full rollback,
+  // and a failed rollback must retain the journal regardless of path existence.
+  journal.onRenamed();
+  await repairWorktree(projectPath, to);
+  await relinkSubmodules(to, submodules);
+  return { renamed: true };
+}
+
+/** Undoes `renameWorktree`: the folder goes back and git and submodules follow it. */
+async function restoreRenamedWorktree(
+  projectPath: string,
+  to: string,
+  from: string,
+  submodules: readonly WorktreeMoveSubmodule[] | undefined,
+): Promise<void> {
+  await fs.rename(to, from);
+  await repairWorktree(projectPath, from);
+  await relinkSubmodules(from, submodules);
 }
 
 /**
@@ -658,7 +733,7 @@ export async function recoverInterruptedEnvironmentMove(
   // A copy may have been repaired just before the backend stopped.
   if (fromExists) {
     await repairWorktree(projectPath, record.from);
-    await relinkSubmodules(record.from, record.submodules).catch(() => undefined);
+    await relinkSubmodules(record.from, record.submodules);
   }
   await storage.updateEnvironment(environment.id, {
     worktreeMove: null,

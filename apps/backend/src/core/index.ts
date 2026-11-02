@@ -682,8 +682,8 @@ export class OrkestratorBackend {
       prompts: humanPrompts,
       workingSessions: async () => {
         const [sessions, environments] = await Promise.all([
-          storage.listNativeAgentSessions(),
-          storage.loadEnvironments(),
+          storage.readNativeAgentSessionsSnapshot(),
+          storage.readEnvironmentsSnapshot(),
         ]);
         const local = new Set(
           environments
@@ -707,6 +707,12 @@ export class OrkestratorBackend {
             local: local.has(session.environmentId),
           }));
       },
+      contentRevision: (session) =>
+        this.nativeAgents.humanPromptContentRevision(
+          session.environmentId,
+          session.agent as BuildPipelineAgent,
+          session.logicalSessionKey,
+        ),
       projection: (session) =>
         this.nativeAgents.humanPromptOutputIfRunning(
           session.environmentId,
@@ -1690,7 +1696,7 @@ export class OrkestratorBackend {
     messageLimit: number,
   ): Promise<{ messages?: unknown; interactions?: unknown } | null | undefined> {
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
-    const session = (await this.context.storage.listNativeAgentSessions()).find(
+    const session = (await this.context.storage.readNativeAgentSessionsSnapshot()).find(
       (candidate) =>
         candidate.environmentId === environmentId &&
         candidate.logicalSessionKey === logicalSessionKey,

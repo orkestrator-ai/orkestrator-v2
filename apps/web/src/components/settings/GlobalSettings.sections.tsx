@@ -860,7 +860,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <SettingsRow
             label="Require checks to pass"
             htmlFor="auto-merge-require-checks"
-            description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass."
+            description="When on, auto-merge waits until every check on the pull request has passed. When off, it merges as soon as GitHub allows it, even while checks GitHub does not require are failing or still running. Checks required by branch protection always have to pass. An environment's name shimmers green by the same rule."
           >
             <Switch
               id="auto-merge-require-checks"

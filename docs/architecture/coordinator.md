@@ -1784,6 +1784,53 @@ followed PR; the 60-second sweep finds everything else, writing all its
 bookkeeping in one store write. *Finished work only* ends watches without a
 notice.
 
+### Watched pull requests
+
+A coordinator also hears, for awareness only, when a pull request it has
+merely *shown* changes state (`apps/backend/src/core/coordinator-pr-watches.ts`).
+This covers pull requests nobody asked it to follow: one the user pasted, one
+a worker mentioned, one it linked in its own reply.
+
+**What joins the watch.** A link to a pull request of the project's own
+GitHub repository rendered anywhere in the coordinator panel (its transcript
+and its mail tiles), or opened from there. `MarkdownLink` reports it through
+`useCoordinatorPullRequestLink` (`apps/web/src/lib/coordinator-pull-request-watch.tsx`,
+under `CoordinatorPullRequestWatchProvider` in `CoordinatorPanel`), which calls
+`watch_coordinator_pull_request { projectId, owner, repo, number, source }`.
+A window reports a rendered link once per 15 minutes; an opened one every
+time. The backend answers `watched: false` for another repository, a project
+with no GitHub repository or no coordinator, and a pull request that settled
+in the last week. The store (`coordinator-watched-pull-requests`, one row per
+project) keeps at most 100, the least recently seen leaving first, and goes
+with the project.
+
+**Polling.** The `coordinator-repair` sweep (every 60 s) reads at most 15 due
+pull requests per pass, each at most every 2 minutes, never-read first, through
+the GitHub REST client and its conditional cache
+(`getGitHubPullRequestStatus`: the pull request, its head commit's checks and
+its reviews; an unchanged pull request costs only 304s). It needs the Settings
+GitHub credential; without one nothing is read. A rate limit ends the pass.
+
+**What is news.** A reading is its state (open, draft, merged, closed), check
+rollup (passing, failing, running, none), merge conflicts and review decision
+(approved, changes requested, none). The first reading is the baseline and
+sends nothing; an unknown mergeability keeps the last known conflict state.
+Every later change sends one notice naming what changed. A merge, close or a
+404 (`pr-gone`) is reported once and ends the watch; a pull request already
+settled at its first reading ends silently. *Finished work only* (`off`)
+records changes without notices, and with no main conversation open the change
+is recorded without a notice, as for other status notices.
+
+**Message.** A workflow notice (resource `watched-pull-request`, id
+`owner/repo#number`, label the title, states `pr-updated`, `pr-checks-failed`,
+`pr-conflicts`, `pr-changes-requested`, `pr-merged`, `pr-closed`, `pr-gone`),
+subject `PR #12 updated: <title>`, and a body that says no action is expected
+unless it affects tracked work. It is budgeted per pull request
+(`statusBudgetKey`) and coalesced like other status notices. The transcript
+draws it as one quiet line (`PullRequestUpdateNotice`): `PR #12 updated ·
+<title> · <what changed>`, the number opening the pull request in the app,
+instead of a mail tile.
+
 ## Launch defaults
 
 Coordinator-launched work runs the user's saved defaults unless the user asks

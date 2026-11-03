@@ -184,6 +184,20 @@ describe("agent mail protocol", () => {
     ).toBe("external");
   });
 
+  test("knows the watched pull request notice", () => {
+    expect(
+      normalizeAgentMailNotice({
+        resource: { kind: "watched-pull-request", id: "acme/app#12", label: "Add the watch" },
+        state: "pr-checks-failed",
+        tone: "failure",
+      }),
+    ).toEqual({
+      resource: { kind: "watched-pull-request", id: "acme/app#12", label: "Add the watch" },
+      state: "pr-checks-failed",
+      tone: "failure",
+    });
+  });
+
   test("normalizes notices to bounded, known values", () => {
     expect(
       normalizeAgentMailNotice({

@@ -873,6 +873,61 @@ export async function getGitHubPullRequest(
   });
 }
 
+/** The few facts a watched pull request is compared on; see `coordinator-pr-watches.ts`. */
+export type GitHubPullRequestStatus = {
+  title: string;
+  htmlUrl: string;
+  state: GitHubPullRequestState;
+  isDraft: boolean;
+  checksState: GitHubPullRequestChecksState;
+  mergeability: GitHubPullRequestMergeability;
+  /** A change request outranks an approval; dismissed and commented reviews decide nothing. */
+  reviewDecision: "approved" | "changes-requested" | "none";
+};
+
+/**
+ * A pull request's state, checks, mergeability and review decision, without
+ * the comments, viewer identity or repository the detail view needs. Every
+ * read goes through the conditional cache, so an unchanged pull request costs
+ * only 304s, which GitHub does not count against the rate limit.
+ */
+export async function getGitHubPullRequestStatus(
+  token: string,
+  ref: GitHubPullRequestRef,
+  options: GitHubPullRequestRequestOptions = {},
+): Promise<GitHubPullRequestStatus> {
+  assertPullRequestRef(ref);
+  const client = pullRequestClient(token, options);
+  const pull = await loadPullRequestRecord(client, ref);
+  const state = pullRequestState(pull);
+  const isDraft = pull.draft === true;
+  // A settled pull request's checks and reviews no longer matter.
+  const [checks, reviews] =
+    state === "open"
+      ? await Promise.all([
+          loadChecks(client, ref, pullHeadSha(pull)),
+          getList(client, `${pullPath(ref)}/reviews`, "load pull request reviews", MAX_REVIEWS),
+        ])
+      : [[], { values: [] as unknown[] }];
+  const reviewers = buildReviewers(ref, pull, reviews.values);
+  return {
+    title: stringValue(pull.title),
+    htmlUrl: stringValue(
+      pull.html_url,
+      `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}`,
+    ),
+    state,
+    isDraft,
+    checksState: rollUpChecks(checks),
+    mergeability: mergeabilityFromApi(pull, state, isDraft),
+    reviewDecision: reviewers.some((reviewer) => reviewer.state === "changes-requested")
+      ? "changes-requested"
+      : reviewers.some((reviewer) => reviewer.state === "approved")
+        ? "approved"
+        : "none",
+  };
+}
+
 export function buildPullRequestDetail(
   ref: GitHubPullRequestRef,
   pull: Record<string, unknown>,

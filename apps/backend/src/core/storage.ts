@@ -8,6 +8,7 @@ export type { GraphEffectsStorage } from "./storage-graph-effects.js";
 export type { GraphDescribeStorage } from "./storage-graph-describe.js";
 export type { ClientStateStorage } from "./storage-client-state.js";
 export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
+export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -36,6 +37,7 @@ import type { GraphEffectsStorage } from "./storage-graph-effects.js";
 import type { GraphDescribeStorage } from "./storage-graph-describe.js";
 import type { ClientStateStorage } from "./storage-client-state.js";
 import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
+import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
@@ -161,6 +163,7 @@ export class StorageService {
   readonly graphDescribe: GraphDescribeStorage;
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
+  readonly watchedPullRequests: WatchedPullRequestsStorage;
 
   constructor(dataDir: string, options: { snapshots?: boolean } = {}) {
     this.context = new StorageContext(dataDir, { snapshots: options.snapshots });
@@ -179,6 +182,7 @@ export class StorageService {
     this.graphDescribe = this.repos.graphDescribe;
     this.clientState = this.repos.clientState;
     this.setupApprovals = this.repos.setupApprovals;
+    this.watchedPullRequests = this.repos.watchedPullRequests;
   }
 
   async init(): Promise<void> {

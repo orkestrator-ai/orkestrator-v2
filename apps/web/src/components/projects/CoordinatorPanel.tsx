@@ -78,6 +78,7 @@ import {
   useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
 import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
+import { CoordinatorPullRequestWatchProvider } from "@/lib/coordinator-pull-request-watch";
 
 /** How long a message waits on the pre-send fetch before it is sent without merging. */
 const UPSTREAM_CHECK_TIMEOUT_MS = 5_000;
@@ -886,365 +887,376 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const coordinatorError = error && error !== gitError ? error : null;
 
   return (
-    <div
-      id="project-panel-coordinator"
-      role="tabpanel"
-      data-agent-scope=""
-      className="flex h-full min-h-0 flex-col bg-background"
-    >
-      <div className="shrink-0 border-b border-border/70 bg-chrome px-3 py-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <CoordinatorIsolationBadge
-            projectPath={snapshot.projectPath}
-            contextRevision={snapshot.workspace.repositoryContextRevision}
-            advisoryPlatform={advisoryPlatform}
-          />
-          {awaitingWorkers.length > 0 ? (
-            <span
-              className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
-              data-awaiting-workers={awaitingWorkers.length}
-              data-workers-need-person={workersNeedingPerson || undefined}
-              title={`Coordinator is idle. It will be woken once each of these workers finishes.\n${awaitingWorkers
-                .map((worker) =>
-                  worker.needsPerson
-                    ? `${worker.label}: waiting for you (an approval or a question in its tab)`
-                    : worker.label,
-                )
-                .join("\n")}`}
-            >
-              <Hourglass className="size-3" />
-              Waiting on {awaitingWorkers.length}{" "}
-              {awaitingWorkers.length === 1 ? "worker" : "workers"}
-              {workersNeedingPerson > 0 ? (
-                <span className="flex items-center gap-1 text-amber-300">
-                  <AlertCircle className="size-3" aria-hidden="true" />
-                  {workersNeedingPerson} {workersNeedingPerson === 1 ? "needs" : "need"} you
-                </span>
-              ) : null}
-            </span>
-          ) : null}
-          <div className="min-w-3 flex-1" />
-          <Select
-            value={git?.branch ? `refs/heads/${git.branch}` : undefined}
-            onValueChange={(value) => {
-              if (!discardableDirty) {
-                void runGit("switch", value);
-                return;
-              }
-              setOperation("switch");
-              setError(null);
-              void backend
-                .prepareProjectGitBranchSwitch(projectId, value)
-                .then(setPendingSwitch)
-                .catch((cause) => {
-                  setError(
-                    cause instanceof Error ? cause.message : "Could not prepare branch switch",
-                  );
-                  void backend
-                    .getProjectGitStatus(projectId)
-                    .then(setGit)
-                    .catch(() => undefined);
-                })
-                .finally(() => setOperation(null));
-            }}
-            disabled={branchSwitchDisabled}
-          >
-            <SelectTrigger
-              size="sm"
-              className="max-w-56"
-              title={
-                (switchBlocked ? blocked : null) ??
-                (dirty
-                  ? "Switch branch and choose whether to discard local changes"
-                  : "Switch branch")
-              }
-            >
-              <GitBranch className="size-3.5" />
-              <SelectValue placeholder={git?.detached ? "Detached HEAD" : "Choose branch"} />
-            </SelectTrigger>
-            <SelectContent align="end">
-              {git?.branches.map((branch) => (
-                <SelectItem
-                  key={branch.ref}
-                  value={branch.ref}
-                  disabled={Boolean(branch.occupiedWorktreePath)}
-                >
-                  {branch.name}
-                  {branch.occupiedWorktreePath ? " (in another worktree)" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span
-            className={cn(
-              "text-xs text-muted-foreground",
-              git?.remoteState === "fresh" && !git.lastError && "text-emerald-300",
-            )}
-          >
-            {git?.remoteState === "fresh" && !git.lastError ? (
-              <CheckCircle2 className="mr-1 inline size-3.5" />
+    <CoordinatorPullRequestWatchProvider projectId={projectId}>
+      <div
+        id="project-panel-coordinator"
+        role="tabpanel"
+        data-agent-scope=""
+        className="flex h-full min-h-0 flex-col bg-background"
+      >
+        <div className="shrink-0 border-b border-border/70 bg-chrome px-3 py-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <CoordinatorIsolationBadge
+              projectPath={snapshot.projectPath}
+              contextRevision={snapshot.workspace.repositoryContextRevision}
+              advisoryPlatform={advisoryPlatform}
+            />
+            {awaitingWorkers.length > 0 ? (
+              <span
+                className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
+                data-awaiting-workers={awaitingWorkers.length}
+                data-workers-need-person={workersNeedingPerson || undefined}
+                title={`Coordinator is idle. It will be woken once each of these workers finishes.\n${awaitingWorkers
+                  .map((worker) =>
+                    worker.needsPerson
+                      ? `${worker.label}: waiting for you (an approval or a question in its tab)`
+                      : worker.label,
+                  )
+                  .join("\n")}`}
+              >
+                <Hourglass className="size-3" />
+                Waiting on {awaitingWorkers.length}{" "}
+                {awaitingWorkers.length === 1 ? "worker" : "workers"}
+                {workersNeedingPerson > 0 ? (
+                  <span className="flex items-center gap-1 text-amber-300">
+                    <AlertCircle className="size-3" aria-hidden="true" />
+                    {workersNeedingPerson} {workersNeedingPerson === 1 ? "needs" : "need"} you
+                  </span>
+                ) : null}
+              </span>
             ) : null}
-            {gitSummary(git)}
-          </span>
-          {canSync ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={syncDisabled}
-              onClick={() => void runGit("sync")}
+            <div className="min-w-3 flex-1" />
+            <Select
+              value={git?.branch ? `refs/heads/${git.branch}` : undefined}
+              onValueChange={(value) => {
+                if (!discardableDirty) {
+                  void runGit("switch", value);
+                  return;
+                }
+                setOperation("switch");
+                setError(null);
+                void backend
+                  .prepareProjectGitBranchSwitch(projectId, value)
+                  .then(setPendingSwitch)
+                  .catch((cause) => {
+                    setError(
+                      cause instanceof Error ? cause.message : "Could not prepare branch switch",
+                    );
+                    void backend
+                      .getProjectGitStatus(projectId)
+                      .then(setGit)
+                      .catch(() => undefined);
+                  })
+                  .finally(() => setOperation(null));
+              }}
+              disabled={branchSwitchDisabled}
             >
-              <RotateCcw className="size-3.5" />
-              Sync
-            </Button>
-          ) : null}
-          <Button
-            size="icon"
-            variant="ghost"
-            aria-label="Refresh repository status"
-            title="Fetch and refresh"
-            disabled={operation !== null}
-            onClick={() => void runGit("fetch")}
-          >
-            <RefreshCw className={cn("size-4", operation === "fetch" && "animate-spin")} />
-          </Button>
-          {/* While paused, the banner below the header offers Resume. */}
-          {paused ? null : (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={operation !== null}
-              onClick={() => setPaused(true)}
-            >
-              <Pause className="size-3.5" />
-              Pause
-            </Button>
-          )}
-        </div>
-        {dirty ? (
-          <p className="mt-1 text-xs text-amber-300">
-            The checkout has {git?.trackedChanges} tracked and {git?.untrackedChanges} untracked
-            changes. Sync is blocked
-            {discardableDirty ? "; switching branches will ask before discarding them." : "."}
-          </p>
-        ) : null}
-        {blocked && switchBlocked ? <p className="mt-1 text-xs text-amber-300">{blocked}</p> : null}
-        {gitError ? <CoordinatorErrorDetails label="Repository error" message={gitError} /> : null}
-        {coordinatorError ? (
-          <CoordinatorErrorDetails label="Coordinator error" message={coordinatorError} />
-        ) : null}
-        {!snapshot.controlMcp.enabled || !snapshot.controlMcp.running ? (
-          <p className="mt-1 text-xs text-amber-300">
-            Orchestration controls are unavailable because Control MCP is{" "}
-            {snapshot.controlMcp.enabled ? "not running" : "disabled"}
-            {snapshot.controlMcp.error ? `: ${snapshot.controlMcp.error}` : "."}
-          </p>
-        ) : null}
-      </div>
-
-      {snapshot.workspace.lifecycleState === "error" ? (
-        <CoordinatorBanner
-          tone="error"
-          action={
-            <Button size="sm" variant="outline" onClick={() => void load()}>
-              <RotateCcw className="size-3.5" />
-              Retry
-            </Button>
-          }
-        >
-          <span className="font-medium">Coordinator startup failed.</span>{" "}
-          <span className="text-red-200/80">
-            {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
-          </span>
-        </CoordinatorBanner>
-      ) : null}
-      {paused ? (
-        <CoordinatorBanner
-          tone="info"
-          icon={<Pause className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-          action={
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={operation !== null}
-              onClick={() => setPaused(false)}
-            >
-              <Play className="size-3.5" />
-              Resume
-            </Button>
-          }
-        >
-          Coordination is paused. Messages will wait until you resume.
-        </CoordinatorBanner>
-      ) : null}
-
-      <HumanPromptBanner
-        prompts={workerPrompts}
-        label={(entry) =>
-          environments.find((item) => item.id === entry.environmentId)?.name ?? entry.environmentId
-        }
-      />
-
-      <div className="relative min-h-0 flex-1">
-        {layout ? (
-          <CoordinatorPaneTree
-            layout={layout}
-            onLayoutChange={changeLayout}
-            onFocusPane={(paneId) =>
-              changeLayout((current) => focusCoordinatorPane(current, paneId))
-            }
-            conversationLabel={(id) => conversationById.get(id)?.title ?? "Conversation"}
-            renderTab={(id, pane, paneFocused) => {
-              const item = conversationById.get(id);
-              if (!item) return null;
-              return (
-                <SortableCoordinatorTab
-                  key={id}
-                  conversationId={id}
-                  paneId={pane.id}
-                  isActive={pane.activeConversationId === id}
-                  isFocused={paneFocused}
-                  onClick={(event) => {
-                    // Selecting is the whole action; the pane's own focus
-                    // handler would only repeat it with the previous tab.
-                    event.stopPropagation();
-                    updateLayout((current) => focusCoordinatorPane(current, pane.id, id));
-                    selectConversation(id);
-                  }}
-                  closeLabel={
-                    item.role === "main"
-                      ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
-                      : `Close ${item.title}`
-                  }
-                  onClose={() => {
-                    if (item.role === "main") {
-                      setPendingMainClose({ id: item.id, title: item.title });
-                      return;
-                    }
-                    closeConversation(item.id);
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="flex max-w-44 items-center gap-1.5"
-                    // The badge is part of what identifies the tab, so it belongs in
-                    // the accessible name rather than being read as loose text after it.
-                    aria-label={
-                      item.agent
-                        ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
-                        : `${item.title}, no agent chosen yet`
-                    }
+              <SelectTrigger
+                size="sm"
+                className="max-w-56"
+                title={
+                  (switchBlocked ? blocked : null) ??
+                  (dirty
+                    ? "Switch branch and choose whether to discard local changes"
+                    : "Switch branch")
+                }
+              >
+                <GitBranch className="size-3.5" />
+                <SelectValue placeholder={git?.detached ? "Detached HEAD" : "Choose branch"} />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {git?.branches.map((branch) => (
+                  <SelectItem
+                    key={branch.ref}
+                    value={branch.ref}
+                    disabled={Boolean(branch.occupiedWorktreePath)}
                   >
-                    {/* Which agent a conversation belongs to is fixed at its first
+                    {branch.name}
+                    {branch.occupiedWorktreePath ? " (in another worktree)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span
+              className={cn(
+                "text-xs text-muted-foreground",
+                git?.remoteState === "fresh" && !git.lastError && "text-emerald-300",
+              )}
+            >
+              {git?.remoteState === "fresh" && !git.lastError ? (
+                <CheckCircle2 className="mr-1 inline size-3.5" />
+              ) : null}
+              {gitSummary(git)}
+            </span>
+            {canSync ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={syncDisabled}
+                onClick={() => void runGit("sync")}
+              >
+                <RotateCcw className="size-3.5" />
+                Sync
+              </Button>
+            ) : null}
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Refresh repository status"
+              title="Fetch and refresh"
+              disabled={operation !== null}
+              onClick={() => void runGit("fetch")}
+            >
+              <RefreshCw className={cn("size-4", operation === "fetch" && "animate-spin")} />
+            </Button>
+            {/* While paused, the banner below the header offers Resume. */}
+            {paused ? null : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={operation !== null}
+                onClick={() => setPaused(true)}
+              >
+                <Pause className="size-3.5" />
+                Pause
+              </Button>
+            )}
+          </div>
+          {dirty ? (
+            <p className="mt-1 text-xs text-amber-300">
+              The checkout has {git?.trackedChanges} tracked and {git?.untrackedChanges} untracked
+              changes. Sync is blocked
+              {discardableDirty ? "; switching branches will ask before discarding them." : "."}
+            </p>
+          ) : null}
+          {blocked && switchBlocked ? (
+            <p className="mt-1 text-xs text-amber-300">{blocked}</p>
+          ) : null}
+          {gitError ? (
+            <CoordinatorErrorDetails label="Repository error" message={gitError} />
+          ) : null}
+          {coordinatorError ? (
+            <CoordinatorErrorDetails label="Coordinator error" message={coordinatorError} />
+          ) : null}
+          {!snapshot.controlMcp.enabled || !snapshot.controlMcp.running ? (
+            <p className="mt-1 text-xs text-amber-300">
+              Orchestration controls are unavailable because Control MCP is{" "}
+              {snapshot.controlMcp.enabled ? "not running" : "disabled"}
+              {snapshot.controlMcp.error ? `: ${snapshot.controlMcp.error}` : "."}
+            </p>
+          ) : null}
+        </div>
+
+        {snapshot.workspace.lifecycleState === "error" ? (
+          <CoordinatorBanner
+            tone="error"
+            action={
+              <Button size="sm" variant="outline" onClick={() => void load()}>
+                <RotateCcw className="size-3.5" />
+                Retry
+              </Button>
+            }
+          >
+            <span className="font-medium">Coordinator startup failed.</span>{" "}
+            <span className="text-red-200/80">
+              {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
+            </span>
+          </CoordinatorBanner>
+        ) : null}
+        {paused ? (
+          <CoordinatorBanner
+            tone="info"
+            icon={<Pause className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+            action={
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={operation !== null}
+                onClick={() => setPaused(false)}
+              >
+                <Play className="size-3.5" />
+                Resume
+              </Button>
+            }
+          >
+            Coordination is paused. Messages will wait until you resume.
+          </CoordinatorBanner>
+        ) : null}
+
+        <HumanPromptBanner
+          prompts={workerPrompts}
+          label={(entry) =>
+            environments.find((item) => item.id === entry.environmentId)?.name ??
+            entry.environmentId
+          }
+        />
+
+        <div className="relative min-h-0 flex-1">
+          {layout ? (
+            <CoordinatorPaneTree
+              layout={layout}
+              onLayoutChange={changeLayout}
+              onFocusPane={(paneId) =>
+                changeLayout((current) => focusCoordinatorPane(current, paneId))
+              }
+              conversationLabel={(id) => conversationById.get(id)?.title ?? "Conversation"}
+              renderTab={(id, pane, paneFocused) => {
+                const item = conversationById.get(id);
+                if (!item) return null;
+                return (
+                  <SortableCoordinatorTab
+                    key={id}
+                    conversationId={id}
+                    paneId={pane.id}
+                    isActive={pane.activeConversationId === id}
+                    isFocused={paneFocused}
+                    onClick={(event) => {
+                      // Selecting is the whole action; the pane's own focus
+                      // handler would only repeat it with the previous tab.
+                      event.stopPropagation();
+                      updateLayout((current) => focusCoordinatorPane(current, pane.id, id));
+                      selectConversation(id);
+                    }}
+                    closeLabel={
+                      item.role === "main"
+                        ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
+                        : `Close ${item.title}`
+                    }
+                    onClose={() => {
+                      if (item.role === "main") {
+                        setPendingMainClose({ id: item.id, title: item.title });
+                        return;
+                      }
+                      closeConversation(item.id);
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="flex max-w-44 items-center gap-1.5"
+                      // The badge is part of what identifies the tab, so it belongs in
+                      // the accessible name rather than being read as loose text after it.
+                      aria-label={
+                        item.agent
+                          ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
+                          : `${item.title}, no agent chosen yet`
+                      }
+                    >
+                      {/* Which agent a conversation belongs to is fixed at its first
                         prompt and cannot be changed afterwards, so the tab strip is
                         where that has to be legible: the brand mark once assigned,
                         and an explicit prompt while it is not. */}
-                    {item.agent ? (
-                      <AgentPlatformIcon platform={item.agent} accent className={TAB_ICON_CLASS} />
-                    ) : (
-                      <MessagesSquare className={cn(TAB_ICON_CLASS, "text-muted-foreground")} />
-                    )}
-                    <span className="truncate">{item.title}</span>
-                    {item.agent ? null : (
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
-                        Choose agent
-                      </span>
-                    )}
-                  </button>
-                </SortableCoordinatorTab>
-              );
-            }}
-            renderStripActions={(pane) => (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="ml-1 shrink-0"
-                disabled={operation !== null}
-                onClick={(event) => {
-                  // The new conversation joins the focused group, so focus
-                  // this one without selecting the tab it is about to replace.
-                  event.stopPropagation();
-                  updateLayout((current) => focusCoordinatorPane(current, pane.id));
-                  createConversation();
+                      {item.agent ? (
+                        <AgentPlatformIcon
+                          platform={item.agent}
+                          accent
+                          className={TAB_ICON_CLASS}
+                        />
+                      ) : (
+                        <MessagesSquare className={cn(TAB_ICON_CLASS, "text-muted-foreground")} />
+                      )}
+                      <span className="truncate">{item.title}</span>
+                      {item.agent ? null : (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          Choose agent
+                        </span>
+                      )}
+                    </button>
+                  </SortableCoordinatorTab>
+                );
+              }}
+              renderStripActions={(pane) => (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-1 shrink-0"
+                  disabled={operation !== null}
+                  onClick={(event) => {
+                    // The new conversation joins the focused group, so focus
+                    // this one without selecting the tab it is about to replace.
+                    event.stopPropagation();
+                    updateLayout((current) => focusCoordinatorPane(current, pane.id));
+                    createConversation();
+                  }}
+                >
+                  <Plus className="size-3.5" />
+                  {newConversationLabel}
+                </Button>
+              )}
+              renderContent={(pane, paneFocused) =>
+                renderConversation(pane.activeConversationId, paneFocused)
+              }
+            />
+          ) : null}
+        </div>
+        <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
+          Code changes, commands, builds and fixes run in build pipelines or prompt environments.
+        </div>
+        <AlertDialog
+          open={pendingSwitch !== null}
+          onOpenChange={(open) => {
+            if (!open) setPendingSwitch(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Discard changes and switch branch?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Switching to {pendingSwitchBranch?.name ?? "the selected branch"} will permanently
+                discard {pendingSwitch?.trackedChanges ?? 0} tracked changes and{" "}
+                {pendingSwitch?.untrackedFiles ?? 0} untracked files from this checkout, including
+                files inside untracked directories. Ignored files are kept.
+                {pendingSwitch?.nestedRepositories.length
+                  ? ` This will also permanently delete nested repositories: ${pendingSwitch.nestedRepositories.join(", ")}.`
+                  : ""}
+                {pendingSwitch?.dirtySubmodules.length
+                  ? ` This will also reset dirty submodules: ${pendingSwitch.dirtySubmodules.join(", ")}.`
+                  : ""}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep changes</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => {
+                  const confirmation = pendingSwitch;
+                  setPendingSwitch(null);
+                  if (confirmation) void runGit("switch", confirmation.ref, confirmation);
                 }}
               >
-                <Plus className="size-3.5" />
-                {newConversationLabel}
-              </Button>
-            )}
-            renderContent={(pane, paneFocused) =>
-              renderConversation(pane.activeConversationId, paneFocused)
-            }
-          />
-        ) : null}
+                Discard and switch
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <AlertDialog
+          open={pendingMainClose !== null}
+          onOpenChange={(open) => {
+            if (!open) setPendingMainClose(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Close the main conversation?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {pendingMainClose?.title ?? "The main conversation"} will close. The next message to
+                the coordinator starts a new main conversation with the default agent.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep open</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  const target = pendingMainClose;
+                  setPendingMainClose(null);
+                  if (target) closeConversation(target.id);
+                }}
+              >
+                Close conversation
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
-      <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
-        Code changes, commands, builds and fixes run in build pipelines or prompt environments.
-      </div>
-      <AlertDialog
-        open={pendingSwitch !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingSwitch(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard changes and switch branch?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Switching to {pendingSwitchBranch?.name ?? "the selected branch"} will permanently
-              discard {pendingSwitch?.trackedChanges ?? 0} tracked changes and{" "}
-              {pendingSwitch?.untrackedFiles ?? 0} untracked files from this checkout, including
-              files inside untracked directories. Ignored files are kept.
-              {pendingSwitch?.nestedRepositories.length
-                ? ` This will also permanently delete nested repositories: ${pendingSwitch.nestedRepositories.join(", ")}.`
-                : ""}
-              {pendingSwitch?.dirtySubmodules.length
-                ? ` This will also reset dirty submodules: ${pendingSwitch.dirtySubmodules.join(", ")}.`
-                : ""}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep changes</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                const confirmation = pendingSwitch;
-                setPendingSwitch(null);
-                if (confirmation) void runGit("switch", confirmation.ref, confirmation);
-              }}
-            >
-              Discard and switch
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <AlertDialog
-        open={pendingMainClose !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingMainClose(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Close the main conversation?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingMainClose?.title ?? "The main conversation"} will close. The next message to
-              the coordinator starts a new main conversation with the default agent.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep open</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const target = pendingMainClose;
-                setPendingMainClose(null);
-                if (target) closeConversation(target.id);
-              }}
-            >
-              Close conversation
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+    </CoordinatorPullRequestWatchProvider>
   );
 }

@@ -36,6 +36,7 @@ import {
 } from "./coordinator-status-wakes.js";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
+import { CoordinatorPullRequestWatches } from "./coordinator-pr-watches.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");
@@ -165,6 +166,8 @@ export class CoordinatorService {
   private delegationWakeDelivery: Promise<void> | null = null;
   /** Status wakes for work this coordinator started; see `coordinator-status-wakes.ts`. */
   readonly statusWakes: CoordinatorStatusWakes;
+  /** Pull requests its conversations showed; see `coordinator-pr-watches.ts`. */
+  readonly pullRequestWatches: CoordinatorPullRequestWatches;
   /** Reads of work on other nodes; absent until the node services exist. */
   private remote: CoordinatorRemoteAccess | null = null;
   /**
@@ -201,6 +204,10 @@ export class CoordinatorService {
     this.statusWakes = new CoordinatorStatusWakes(storage, {
       ...options,
       ...(workerActivity ? { workerActivity } : {}),
+    });
+    this.pullRequestWatches = new CoordinatorPullRequestWatches({
+      storage,
+      ...(options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {}),
     });
     // Mail to "coordinator", or to a conversation that has since closed, finds
     // the current main through here, which starts one if there is none.
@@ -813,6 +820,14 @@ export class CoordinatorService {
    */
   reconcileWorkflowNotifications(): Promise<void> {
     return this.statusWakes.reconcile();
+  }
+
+  /**
+   * Read the pull requests coordinators have shown that are due and tell the
+   * main coordinator what changed. See `coordinator-pr-watches.ts`.
+   */
+  sweepWatchedPullRequests(): Promise<void> {
+    return this.pullRequestWatches.sweep();
   }
 
   /** Observe workflow saves so status wakes arrive within seconds. */

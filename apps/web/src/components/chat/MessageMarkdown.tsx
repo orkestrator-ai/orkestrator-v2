@@ -31,6 +31,7 @@ import {
 } from "@/lib/terminal-links";
 import { PreviewLinkSourceContext } from "./link-source-context";
 import { usePullRequestOpener } from "@/lib/pull-request-opener";
+import { useCoordinatorPullRequestLink } from "@/lib/coordinator-pull-request-watch";
 import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
 import {
   blockMarkdownPlugins,
@@ -176,6 +177,8 @@ export function MarkdownLink({
   const createFileTab = useOptionalTerminalContext()?.createFileTab;
   const openPullRequest = usePullRequestOpener();
   const linkSource = useContext(PreviewLinkSourceContext);
+  // Inside a coordinator, a pull request link on screen is watched for status changes.
+  const notePullRequestOpened = useCoordinatorPullRequestLink(href);
   // The explicit gesture opens a preview tab. On remote desktop connections,
   // plain clicks use the service transport, or a preview tab for unresolved ports.
   const previewable = Boolean(linkSource && href && isLoopbackUrl(href));
@@ -222,6 +225,7 @@ export function MarkdownLink({
       }
 
       // Pull request links open in the app; Cmd/Ctrl-click opens GitHub.
+      notePullRequestOpened();
       const pullRequest = event.metaKey || event.ctrlKey ? null : parseGitHubPullRequestLink(href);
       if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) {
         armPullRequestFallback(pullRequest, href);
@@ -241,7 +245,7 @@ export function MarkdownLink({
         log.error("message.link-open-failed", { error: formatLogError(error) });
       });
     },
-    [createFileTab, href, linkSource, onClick, openPullRequest, previewable],
+    [createFileTab, href, linkSource, notePullRequestOpened, onClick, openPullRequest, previewable],
   );
 
   return (

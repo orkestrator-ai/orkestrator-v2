@@ -2332,7 +2332,10 @@ export class OrkestratorBackend {
             // A delegation closed by an edge whose wake never reached the mail
             // store — a crash, a storage fault — is finished here. The wake is
             // idempotent on `wokenAt`, so a delivered one is not repeated.
-            .then(() => this.coordinators.reconcileWorkerDelegations()),
+            .then(() => this.coordinators.reconcileWorkerDelegations())
+            // Pull requests coordinators showed: a few due reads per pass,
+            // through GitHub's conditional cache.
+            .then(() => this.coordinators.sweepWatchedPullRequests()),
         )
         .then(() => activityLog.recovered("job.failed", `${this.logScope}:coordinator-workflows`))
         .catch((error) => {

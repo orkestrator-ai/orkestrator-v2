@@ -7,7 +7,8 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
-import { asNonBlankString } from "./commands-helpers.js";
+import { asNonBlankString, assertOnlyKeys } from "./commands-helpers.js";
+import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -130,6 +131,25 @@ export function registerCoordinatorCommands(
   register("get_project_coordinator", async ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.get(asNonBlankString(projectId, "projectId"));
+  });
+  // A coordinator conversation rendered or opened a pull request link: watch
+  // it for status changes while it is open (`coordinator-pr-watches.ts`).
+  // Pull requests of other repositories are answered `watched: false`.
+  register("watch_coordinator_pull_request", async (args, context) => {
+    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+    assertOnlyKeys(args, ["projectId", "owner", "repo", "number", "source"], "arguments");
+    const ref = { owner: args.owner, repo: args.repo, number: args.number };
+    if (!isGitHubPullRequestRef(ref)) {
+      throw new Error("Expected owner, repo and number to identify a GitHub pull request");
+    }
+    if (args.source !== "rendered" && args.source !== "opened") {
+      throw new Error("Expected source to be rendered or opened");
+    }
+    return context.coordinators.pullRequestWatches.watch(
+      asNonBlankString(args.projectId, "projectId"),
+      { owner: ref.owner, repo: ref.repo, number: ref.number },
+      args.source,
+    );
   });
   // Conditional read for the coordinator panel: `{ projectId, knownGeneration,
   // knownRevision }` answers `unchanged` without a body while the snapshot the

@@ -111,6 +111,33 @@ describe("coordinator command registry", () => {
     ]);
   });
 
+  test("watch_coordinator_pull_request watches the project's own pull requests once it has a coordinator", async () => {
+    const project = await storage.addProject(
+      createProject("https://github.com/acme/app.git", checkout),
+    );
+    const run = commands.get("watch_coordinator_pull_request")!;
+    const args = {
+      projectId: project.id,
+      owner: "acme",
+      repo: "app",
+      number: 12,
+      source: "rendered",
+    };
+    expect(await run(args, context)).toEqual({ watched: false, reason: "no-coordinator" });
+    await coordinator.ensure(project.id);
+    expect(await run(args, context)).toEqual({ watched: true, added: true });
+    expect(await run({ ...args, repo: "other" }, context)).toEqual({
+      watched: false,
+      reason: "other-repository",
+    });
+    await expect(run({ ...args, source: "typed" }, context)).rejects.toThrow("Expected source");
+    await expect(run({ ...args, owner: ".." }, context)).rejects.toThrow("Expected owner");
+    await expect(run({ ...args, extra: true }, context)).rejects.toThrow("Unexpected arguments");
+    expect(
+      storage.watchedPullRequests.listWatchedPullRequests(project.id).map((entry) => entry.key),
+    ).toEqual(["acme/app#12"]);
+  });
+
   test("removes a project even when the coordinator store schema is unsupported", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
     await fs.writeFile(

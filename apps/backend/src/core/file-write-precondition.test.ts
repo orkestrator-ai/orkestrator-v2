@@ -27,9 +27,22 @@ async function worktree(): Promise<string> {
   return root;
 }
 
+// `write_local_file` writes only a registered environment's worktree, so every
+// temporary root is registered as a local environment.
+const environmentFor = (id: string) => {
+  const index = Number(id.slice("env-".length));
+  return { id, environmentType: "local", worktreePath: roots[index] };
+};
 const context = {
-  storage: { loadEnvironments: async () => [] },
-  runtime: { environments: { fence: { beginWorktreeMutation: () => () => undefined } } },
+  storage: {
+    loadEnvironments: async () => roots.map((_, index) => environmentFor(`env-${index}`)),
+    getEnvironment: async (id: string) => environmentFor(id),
+  },
+  runtime: {
+    environments: {
+      fence: { beginWorktreeMutation: () => () => undefined, beginMutation: () => () => undefined },
+    },
+  },
 } as unknown as CommandContext;
 
 const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
@@ -112,6 +125,18 @@ describe("write_local_file with a precondition", () => {
       ),
     ).rejects.toThrow("sha256");
     await expect(fs.access(path.join(root, "a.txt"))).rejects.toThrow();
+  });
+
+  test("a directory no environment is registered at is refused", async () => {
+    const unregistered = await fs.mkdtemp(path.join(tmpdir(), "ork-file-precondition-other-"));
+    try {
+      await expect(
+        write({ worktreePath: unregistered, filePath: "a.txt", base64Data: b64("x") }, context),
+      ).rejects.toThrow("not the worktree of a registered local environment");
+      await expect(fs.access(path.join(unregistered, "a.txt"))).rejects.toThrow();
+    } finally {
+      await fs.rm(unregistered, { recursive: true, force: true });
+    }
   });
 });
 

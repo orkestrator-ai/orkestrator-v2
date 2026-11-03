@@ -332,6 +332,51 @@ describe("scripts/test-all.ts", () => {
     }
   });
 
+  test("the CI matrix dispatches all-tier shards on four-core hosts and propagates failures", async () => {
+    const workflow = Bun.YAML.parse(
+      await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"),
+    ) as {
+      jobs: { "test-shard": { strategy: { matrix: { include: { groups: string }[] } } } };
+    };
+    const expectedNames = [
+      ["backend"],
+      ["workspace (web, desktop, web-public, cli, protocol, toolchain)"],
+      [ROOT, BRIDGES, PROTOCOL],
+    ];
+    const shards = workflow.jobs["test-shard"].strategy.matrix.include;
+    expect(shards).toHaveLength(expectedNames.length);
+
+    for (const [index, shard] of shards.entries()) {
+      const names = expectedNames[index]!;
+      // Fail each constituent in turn: a successful sibling must never mask it.
+      for (const failedGroup of [undefined, ...names]) {
+        const { dependencies, invocations } = createDependencies({
+          cores: 4,
+          environment: { [TEST_GROUPS_ENV]: shard.groups, [TEST_TIER_ENV]: "all" },
+          statusByName: failedGroup ? { [failedGroup]: 1 } : undefined,
+        });
+        expect(await runAllTests(dependencies)).toBe(failedGroup ? 1 : 0);
+        expect(invocations.map((entry) => entry.name)).toEqual(names);
+        for (const invocation of invocations) {
+          expect(invocation.env[TEST_TIER_ENV]).toBe("all");
+          if (invocation.name === "backend") {
+            expect(invocation.env[BACKEND_WORKERS_ENV]).toBe("2");
+            expect(invocation.args).toContain("--filter=@orkestrator/backend");
+          } else if (invocation.name === names[0] && index === 1) {
+            expect(invocation.env[WORKSPACE_WORKERS_ENV]).toBe("1");
+            expect(invocation.args).not.toContain("--filter=@orkestrator/backend");
+          } else if (invocation.name === ROOT) {
+            expect(invocation.args).toContain("--parallel=1");
+            expect(invocation.args).not.toContain("--path-ignore-patterns");
+          } else if (invocation.name === BRIDGES) {
+            expect(invocation.env[WORKSPACE_WORKERS_ENV]).toBe("1");
+            expect(invocation.args).toContain("--concurrency=2");
+          }
+        }
+      }
+    }
+  });
+
   test("a selection with no group in the tier is incomplete, not a pass", async () => {
     const { dependencies, invocations, logs } = createDependencies({
       environment: { [TEST_GROUPS_ENV]: "codex-protocol", [TEST_TIER_ENV]: "slow" },

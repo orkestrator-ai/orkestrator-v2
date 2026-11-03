@@ -144,7 +144,8 @@ new.
     from there. Fixtures and fakes live in `src/testing/`
     (`@orkestrator/protocol/testing/*`), and only tests may import them.
   - Backend domain folders under `apps/backend/src/core/` (`design/`,
-    `nodes/`, `change-tracking/`, `transcript-artifacts/`, `scheduled-jobs/`)
+    `nodes/`, `change-tracking/`, `transcript-artifacts/`, `scheduled-jobs/`,
+    `mcp-management/`, `public-api/`)
     are reached only through their `index.ts`, which re-exports by name (never
     `export *`). A new domain folder starts with an `index.ts` and a pattern in
     both the `apps/backend/src/**` and the `tests/unit/**` overrides. Where

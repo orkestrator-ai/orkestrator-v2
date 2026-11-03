@@ -14,7 +14,7 @@ import {
   withCoordinatorReceipt,
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
-import { commandArguments } from "./public-api/actions-session-commands.js";
+import { commandArguments } from "./public-api/index.js";
 import {
   optionalText,
   requireProjectWorker,

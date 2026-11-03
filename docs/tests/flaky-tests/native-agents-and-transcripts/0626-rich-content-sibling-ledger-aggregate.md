@@ -109,3 +109,23 @@ passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
 wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
 commit; the other owners listed here were unchanged. This green aggregate
 does not establish a root cause for the still-open intermittent cases.
+
+## Domain-boundary review repair — 2026-11-03
+
+`mise run test:logged -- --name default-suite-fix-rerun -- mise run test`
+at `f4904db41` repeated the sibling-ledger mismatch at line 187 on Linux
+(156.49 ms). Web totals: 11,516 passed, 10 skipped, one failed across 767
+files; workspace reserved six slots, root one, bridges two and protocol one.
+The complete unchanged owner passed alone (exit 0, 1.9 seconds):
+
+```sh
+NODE_ENV=test mise run test:logged -- --name revocation-isolated-test-env -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures
+```
+
+An initial owner rerun without explicit `NODE_ENV=test` loaded production React
+and failed all 11 tests because `React.act` was undefined. Its diagnostics are
+in `/tmp/orkestrator-test-run.GsCwi6/revocation-isolated-fix.log.gz`.
+Aggregate evidence is in `/tmp/orkestrator-test-run.1hUmLu/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed on completion), with the outer result under
+`/tmp/orkestrator-test-run.d2pMF8/`. The cause of the sibling-ledger flake
+remains unknown. No rich-content implementation or assertions changed.

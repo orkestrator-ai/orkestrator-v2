@@ -15,12 +15,17 @@
  *
  * The store is the vendor's truth for assertions: one entry per agent, with
  * every turn it actually ran. A duplicated or lost prompt shows up there, not
- * just in the bridge's own transcript.
+ * just in the bridge's own transcript. Each turn's `prompt` is the user's text
+ * with the bridge's `<orkestrator-system-instructions>` frame stripped, so a
+ * spec compares what the user typed; `sent` keeps the exact text the SDK was
+ * given, frame included, and is what history replay returns, as the real
+ * vendor's conversation would.
  *
  * Prompts:
  * - containing `HOLD`: the run stays open until it is cancelled, then ends
  *   `cancelled`. Lets a spec close a tab in the middle of a turn.
- * - anything else: answered `Answer to: <prompt>` and finished.
+ * - anything else: answered `Answer to: <prompt>` (the stripped prompt) and
+ *   finished.
  *
  * Cold start: while the file `FAKE_CURSOR_CREATE_GATE` exists, `Agent.create`
  * does not return, standing in for an SDK agent that takes its time to start.
@@ -35,6 +40,7 @@
  * `CURSOR_API_KEY` is set here, so the bridge reads as signed in.
  */
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 
 process.env.CURSOR_API_KEY = "fake-engine-no-provider-requests";
 // Turns the workspace snapshot probe off: there is nothing to measure.
@@ -53,7 +59,10 @@ const { start } = await import("../server.js");
 type TurnStatus = "running" | "finished" | "cancelled";
 interface StoredTurn {
   runId: string;
+  /** The user's text: what the SDK was sent, without the system-instructions frame. */
   prompt: string;
+  /** Exactly what the SDK was sent. */
+  sent: string;
   reply?: string;
   status: TurnStatus;
   createdAt: number;
@@ -102,7 +111,7 @@ function conversationOf(turn: StoredTurn) {
     {
       type: "conversationTurn",
       turn: {
-        userMessage: { text: turn.prompt },
+        userMessage: { text: turn.sent },
         steps: turn.reply ? [{ type: "assistantMessage", message: { text: turn.reply } }] : [],
       },
     },
@@ -133,11 +142,13 @@ function agentHandle(agentId: string) {
       message: { text?: string },
       options: { onDelta?: (args: { update: unknown }) => void } = {},
     ) {
-      const prompt = message.text ?? "";
+      const sent = message.text ?? "";
+      const prompt = stripSystemInstructions(sent);
       record("send", agentId);
       const turn: StoredTurn = {
         runId: nextId("run"),
         prompt,
+        sent,
         status: "running",
         createdAt: Date.now(),
       };

@@ -9,7 +9,7 @@ Analysed 2026-11-02 against `main` at `d7cdfaa8b`.
 1. **Preview upstream pool idle-expiry case fails deterministically**: `PreviewUpstreamPool > idle connections expire, and one the application closes is never handed out`. Status: open.
 2. **Log Detail settings case fails in both viewports**: `e2e/GlobalSettings.spec.ts:3` `Log Detail offers only areas controlled by live policy`. Status: open.
 3. **Merged project list drag cases fail**: `e2e/MergedProjectList.spec.ts:168` `project/repository project and group drags ignore expanded environment rows`. Status: open.
-4. **Four Cursor close-retention cases fail on desktop**: `e2e/CloseRetention.spec.ts:328`, `:422`, `:693`, `:801`. Status: open.
+4. **Four Cursor close-retention cases fail on desktop**: `e2e/CloseRetention.spec.ts:328`, `:422`, `:693`, `:801`. Status: done (2026-11-03, through 2921 task 3).
 
 ### 1. Preview upstream pool idle-expiry case fails deterministically
 
@@ -82,6 +82,8 @@ Analysed 2026-11-02 against `main` at `d7cdfaa8b`.
   - **Update the expected texts to include the suffix.**
     - Pros: quick.
     - Cons: would encode instructions text in user-visible transcript expectations, which may be the bug.
+
+**Outcome (2026-11-03).** Done in [2921](2921-component-browser-failures-on-main.md) task 3. The suffix belongs in the provider prompt: the bridge sends it to the SDK and strips it from the user's stored text, and the stored-text paths were not at fault. The fake Cursor engine recorded the framed prompt as the user's text; it now strips the frame and keeps the sent text separately, and one spec assertion checks the frame is still sent. `:693` had a second cause, unrelated to the suffix: the backend's 30 s runtime-health cache. Its deadline now covers that cache. See 2921's Assumptions and decisions.
 
 ## Related
 

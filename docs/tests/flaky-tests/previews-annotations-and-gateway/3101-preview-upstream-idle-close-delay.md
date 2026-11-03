@@ -1,7 +1,7 @@
 # Preview upstream idle socket close is delayed in aggregate validation
 
 - **ID:** 3101
-- **Status:** resolved (2026-11-03; not a flake)
+- **Status:** resolved
 - **Observed:** 2026-11-03
 - **Test:** `PreviewUpstreamPool > idle connections expire, and one the application closes is never handed out`
 - **File:** `apps/backend/src/preview-upstream-pool.test.ts`

@@ -96,7 +96,17 @@ export function NativeAgentQuestionCard({
 
   const freeTextRef = useRef<HTMLTextAreaElement | HTMLInputElement | null>(null);
   const wantsFreeTextFocus = useRef(false);
+  const questionPanelRef = useRef<HTMLDivElement>(null);
+  const wantsQuestionFocus = useRef(false);
   useEffect(() => {
+    if (wantsQuestionFocus.current) {
+      wantsQuestionFocus.current = false;
+      const panel = questionPanelRef.current;
+      const target = panel?.querySelector<HTMLElement>(
+        "textarea:not(:disabled), input:not(:disabled), button:not(:disabled)",
+      );
+      (target ?? panel)?.focus();
+    }
     if (!wantsFreeTextFocus.current) return;
     wantsFreeTextFocus.current = false;
     freeTextRef.current?.focus();
@@ -194,6 +204,7 @@ export function NativeAgentQuestionCard({
   const advance = () => {
     if (disabled) return;
     if (!isLast) {
+      wantsQuestionFocus.current = true;
       setStoredIndex(index + 1);
     } else if (canSubmit) {
       void resolve("answer");
@@ -301,6 +312,8 @@ export function NativeAgentQuestionCard({
       ) : null}
 
       <div
+        ref={questionPanelRef}
+        tabIndex={-1}
         id={`question-panel-${interaction.id}-${question.id}`}
         role={count > 1 ? "tabpanel" : undefined}
         aria-labelledby={count > 1 ? `question-tab-${interaction.id}-${question.id}` : undefined}

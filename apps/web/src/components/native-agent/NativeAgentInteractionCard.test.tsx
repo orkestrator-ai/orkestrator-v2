@@ -175,6 +175,58 @@ describe("NativeAgentInteractionCard", () => {
     });
   });
 
+  test.each(["text", "password"])("MCP %s input submits with the shortcut", async (type) => {
+    const request: AgentInteractionRequest = {
+      ...interaction(false),
+      kind: "mcp-form",
+      presentation: {
+        title: "MCP input requested",
+        questions: [
+          {
+            ...interaction(false).presentation.questions[0]!,
+            id: "mcp-form-content",
+            description: JSON.stringify({
+              type: "object",
+              required: ["value"],
+              properties: {
+                value: {
+                  type: "string",
+                  title: "Value",
+                  ...(type === "password" ? { format: "password" } : {}),
+                },
+              },
+            }),
+          },
+        ],
+      },
+    };
+    const onResolve = mock(async (_resolution: AgentInteractionResolution) => ({
+      result: "applied" as const,
+      interactionId: request.id,
+      sessionId: request.sessionId,
+      revision: 2,
+    }));
+    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+    const field = screen.getByLabelText("Value") as HTMLInputElement;
+    expect(field.tagName).toBe("INPUT");
+    expect(field.type).toBe(type);
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+    expect(onResolve).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: "fixture-answer" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onResolve).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: "Enter", [type === "text" ? "metaKey" : "ctrlKey"]: true });
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]?.[0]).toMatchObject({
+      action: "answer",
+      answer: {
+        answers: [
+          { questionId: "mcp-form-content", freeText: JSON.stringify({ value: "fixture-answer" }) },
+        ],
+      },
+    });
+  });
+
   test("preserves non-secret drafts across unmount and exposes safe approval actions", async () => {
     const request: AgentInteractionRequest = {
       ...interaction(false),

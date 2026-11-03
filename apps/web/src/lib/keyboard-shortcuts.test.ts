@@ -257,6 +257,31 @@ describe("isSubmitShortcut", () => {
     expect(isSubmitShortcut(keydown({ key: "Enter", ctrlKey: true }))).toBe(true);
   });
 
+  test("rejects native and React IME confirmation events", () => {
+    const event = keydown({ key: "Enter", metaKey: true, isComposing: false, keyCode: 229 });
+    expect(isSubmitShortcut(event)).toBe(false);
+    expect(
+      isSubmitShortcut({
+        key: "Enter",
+        metaKey: true,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        nativeEvent: { isComposing: false, keyCode: 229 },
+      }),
+    ).toBe(false);
+    expect(
+      isSubmitShortcut({
+        key: "Enter",
+        metaKey: false,
+        ctrlKey: true,
+        altKey: false,
+        shiftKey: false,
+        nativeEvent: { isComposing: true },
+      }),
+    ).toBe(false);
+  });
+
   test("ignores plain, Shift and Alt Enter, other keys and IME composition", () => {
     expect(isSubmitShortcut(keydown({ key: "Enter" }))).toBe(false);
     expect(isSubmitShortcut(keydown({ key: "Enter", metaKey: true, shiftKey: true }))).toBe(false);

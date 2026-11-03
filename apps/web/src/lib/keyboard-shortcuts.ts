@@ -568,10 +568,16 @@ export function isSubmitShortcut(event: {
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
-  nativeEvent?: { isComposing?: boolean };
+  nativeEvent?: { isComposing?: boolean; keyCode?: number };
+  keyCode?: number;
   isComposing?: boolean;
 }): boolean {
   if (event.key !== "Enter" || event.altKey || event.shiftKey) return false;
   if (!(event.metaKey || event.ctrlKey)) return false;
-  return !(event.isComposing || event.nativeEvent?.isComposing);
+  return !(
+    event.isComposing ||
+    event.nativeEvent?.isComposing ||
+    event.keyCode === 229 ||
+    event.nativeEvent?.keyCode === 229
+  );
 }

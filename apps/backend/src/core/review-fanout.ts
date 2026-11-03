@@ -436,6 +436,7 @@ export interface ReviewFanoutHost {
   /** Adds/removes a durable owner-side outbox marker around consumption. */
   stageResultConsumption?(requestId: string): void;
   finishResultConsumption?(requestId: string): void;
+  beforeResult?(reviewer: ReviewerRecord): Promise<boolean>;
   closeResult?(requestId: string): Promise<void>;
   /**
    * Persists the host's own record.
@@ -776,6 +777,7 @@ function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecor
     ...(host.closeResult
       ? { closeResult: (requestId: string) => host.closeResult!(requestId) }
       : {}),
+    beforeResult: (reviewer) => host.beforeResult?.(reviewer) ?? Promise.resolve(false),
     save: () => host.save(),
     assertFence: () => host.assertFence(),
     branchPrompt: async (reviewer, index, count) => {

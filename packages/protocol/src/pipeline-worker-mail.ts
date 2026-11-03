@@ -161,7 +161,17 @@ export function pipelineWorkers(
     const reviewer = reviewers.get(session.sessionKey);
     let status: PipelineWorkerStatus;
     if (isSupersededPipelineSession(session) || session.skipped) status = "cancelled";
-    else if (reviewer && !terminal) {
+    else if (
+      terminal &&
+      pipeline.phase === "failed" &&
+      (reviewer
+        ? ["pending", "running"].includes(reviewer.record.status)
+        : session.sessionKey === consolidationKey ||
+          session === current ||
+          session.status === "running")
+    ) {
+      status = cancelledPipeline(pipeline) ? "cancelled" : "failed";
+    } else if (reviewer) {
       status = reviewerStatus(reviewer.record, session.status === "running");
     } else if (!terminal && (session.sessionKey === consolidationKey || session === current)) {
       status = session.status === "running" ? "running" : "idle";
@@ -203,7 +213,12 @@ export function pipelineWorkers(
       label: `Reviewer ${slot}`,
       agent: record.agent as BuildPipelineAgent,
       ...(record.model && !record.modelUnpinned ? { model: record.model } : {}),
-      status: terminal ? "cancelled" : reviewerStatus(record, record.status === "running"),
+      status:
+        terminal && ["pending", "running"].includes(record.status)
+          ? cancelledPipeline(pipeline)
+            ? "cancelled"
+            : "failed"
+          : reviewerStatus(record, record.status === "running"),
     });
   }
   return workers;

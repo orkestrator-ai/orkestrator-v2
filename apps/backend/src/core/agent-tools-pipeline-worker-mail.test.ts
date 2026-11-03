@@ -76,7 +76,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  async function attempt(owned: boolean) {
+  async function attempt(owned: boolean, provider: "codex" | "opencode" = "codex") {
     const resultKey = crypto.randomUUID();
     const address = stageSession("address", { key: "address", label: "Address Session" });
     await storage.saveBuildPipeline(
@@ -97,11 +97,12 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
       kind: "fix-result",
       environmentId: "e1",
       projectId: "p1",
-      provider: "codex",
+      provider,
     });
     return {
+      resultKey,
       worker: pipelineWorkerTabId(address.sessionKey),
-      connection: server.workflowResultConnection("e1", "p1", "host", resultKey, "codex"),
+      connection: server.workflowResultConnection("e1", "p1", "host", resultKey, provider),
     };
   }
 
@@ -147,6 +148,44 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
       },
     });
     expect(impersonated.result?.isError).toBe(true);
+  });
+
+  test("OpenCode broker authenticates mail per call and refuses impersonation", async () => {
+    const { worker, connection, resultKey } = await attempt(true, "opencode");
+    const auth = { resultKey, capability: connection.workflowResultCapability };
+    const call = (name: string, args: Record<string, unknown>) =>
+      rpc(connection.url, connection.token, "tools/call", {
+        name,
+        arguments: { ...auth, ...args },
+      });
+    const listed = await call("list_mailboxes", {});
+    expect(listed.result?.structuredContent?.identity).toMatchObject({ tabId: worker });
+    const sent = await call("send_message", {
+      requestId: "broker-send",
+      toEnvironmentId: "e2",
+      toTabId: "agent",
+      body: "hello",
+    });
+    expect(sent.result?.isError).not.toBe(true);
+    const inbound = await storage.sendAgentMail(
+      { kind: "tab", environmentId: "e2", projectId: "p1", tabId: "agent" },
+      { requestId: "inbound", toEnvironmentId: "e1", toTabId: worker, body: "question" },
+    );
+    expect((await call("read_message", { messageId: inbound.id })).result?.isError).not.toBe(true);
+    expect(
+      (
+        await call("reply_message", {
+          messageId: inbound.id,
+          requestId: "broker-reply",
+          body: "answer",
+        })
+      ).result?.isError,
+    ).not.toBe(true);
+    expect((await call("ack_message", { messageId: inbound.id })).result?.isError).not.toBe(true);
+    expect((await call("list_mailboxes", { tabId: "another-worker" })).result?.isError).toBe(true);
+    expect((await call("list_mailboxes", { resultKey: "different-key" })).result?.isError).toBe(
+      true,
+    );
   });
 
   test("an attempt no pipeline worker owns gets no mail tools", async () => {

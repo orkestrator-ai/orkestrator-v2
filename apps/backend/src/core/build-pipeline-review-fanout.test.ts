@@ -1961,3 +1961,58 @@ test("pipeline fan-out evicts an unreachable generation and completes on reconne
     expect(running.reviewFanout).toBeDefined();
   });
 });
+
+test("reviewers and consolidation consume their own queued mail before accepting results", async () => {
+  await withPipeline(async ({ service, read, providers }) => {
+    const queue = new Map<string, string>();
+    const settled: string[] = [];
+    service.setWorkerMailbox({
+      claim: async (_env, tab) => {
+        const text = queue.get(tab);
+        queue.delete(tab);
+        return text ? { text, messageIds: [tab] } : null;
+      },
+      settle: async (_env, tab, _ids, outcome) => {
+        if (outcome === "accepted") settled.push(tab);
+      },
+    });
+    const provider = providers.get("claude")!;
+    provider.runningModels.add("opus");
+    provider.runningModels.add("sonnet");
+    provider.runningConsolidation = true;
+    const started = await service.start(startInput(fourReviewers().slice(0, 2)));
+    provider.runningModels.clear();
+    let state = await advanceUntil(service, read, started.id, "reviewing");
+    provider.runningModels.add("opus");
+    provider.runningModels.add("sonnet");
+    for (
+      let i = 0;
+      i < 15 && !state.reviewFanout?.reviewers.every((r) => r.providerSessionId);
+      i++
+    ) {
+      await service.advanceNow(started.id);
+      state = await read(started.id);
+    }
+    const reviewers = state.reviewFanout!.reviewers;
+    for (const reviewer of reviewers)
+      queue.set("pipeline-worker:" + reviewer.sessionKey, "mail-" + reviewer.id);
+    provider.runningModels.clear();
+    for (let i = 0; i < 20 && !state.reviewFanout?.consolidation; i++) {
+      await service.advanceNow(started.id);
+      state = await read(started.id);
+    }
+    for (const reviewer of reviewers) {
+      const sends = [...providers.values()]
+        .flatMap((p) => p.sent)
+        .filter((s) => s.sessionId === reviewer.providerSessionId);
+      expect(sends.some((s) => s.prompt.includes("mail-" + reviewer.id))).toBe(true);
+      expect(new Set(sends.map((s) => s.requestId)).size).toBeGreaterThan(1);
+    }
+    const consolidation = state.reviewFanout!.consolidation!;
+    queue.set("pipeline-worker:" + consolidation.sessionKey, "consolidation-mail");
+    provider.runningConsolidation = false;
+    for (let i = 0; i < 15 && !settled.includes("pipeline-worker:" + consolidation.sessionKey); i++)
+      await service.advanceNow(started.id);
+    expect(settled).toHaveLength(3);
+  });
+});

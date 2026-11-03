@@ -1370,17 +1370,21 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   turn through the pipeline (`BuildPipelineWorkerMail.steer`, under the
   pipeline lock) and reports `steered`; an agent that cannot steer reports
   `unsupported, queued`; a worker between turns reports `queued until idle`.
-  A reviewer of a multi-reviewer pass and a build whose validation runs
-  against a fixed snapshot take no follow-up turn: they read mail with their
-  mail tools, take a steer, or have it expire when they end.
+  Fan-out reviewers and consolidation claim their own queued mail before
+  accepting a result. Each mail turn rotates the result key and preserves the
+  structured-result contract. Mail during fixed-snapshot validation cancels
+  and archives that validation run before writable work resumes; preparation
+  and validation must then certify the new state.
 - **Identity.** A worker sends, replies, acks and checks its inbox as its own
   mailbox. A tool-mode stage turn's workflow-result capability carries the
   mail tools of the worker the backend's record says owns that attempt
   (`pipeline-worker-identity.ts`); any other turn gets a credential scoped to
   the worker's mailbox (`resolveWorkerToolConnection`). An environment-wide
   credential cannot claim a worker's mailbox, and no worker can use
-  another's. OpenCode keeps its environment-wide registration, so an OpenCode
-  worker can be messaged and steered but does not send as itself.
+  another's. OpenCode's persistent workflow-result broker authenticates each
+  mail call using the current resultKey and signed capability, then resolves
+  the worker from backend records. OpenCode turns without a workflow-result
+  capability still cannot act as their worker mailbox.
 - **Trust.** Unchanged: the same senders reach a worker as any other worker
   in the project, with the same routes, budgets and untrusted peer-mail
   framing. The carrier adds that the recipient is a build pipeline step: a

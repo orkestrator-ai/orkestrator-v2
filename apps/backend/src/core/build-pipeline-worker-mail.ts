@@ -1,3 +1,5 @@
+import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
+import { archiveValidationRun } from "./build-pipeline-validation-history.js";
 /**
  * The pipeline's side of agent mail to its workers
  * (docs/architecture/coordinator.md, "Pipeline worker mailboxes").
@@ -225,9 +227,9 @@ export class BuildPipelineWorkerMail implements PipelineWorkerMailPort {
  * session as one turn, the way a queued user message is: journaled as the
  * pending prompt attempt (with its id on the session, for restart
  * reconciliation) before it is sent, so it is delivered at most once.
- * Returns whether a turn was started. A worker in a fan-out review, or a
- * build whose validation runs against a fixed snapshot, gets none: its
- * queued mail expires when it ends, and the sender is told.
+ * Returns whether a turn was started. Fan-out workers use their own
+ * completion hooks. A writable follow-up invalidates fixed-snapshot
+ * validation before it starts.
  */
 export async function dispatchWorkerMailTurn(
   ctx: BuildPipelineContext,
@@ -238,7 +240,7 @@ export async function dispatchWorkerMailTurn(
   const mailbox = ctx.workerMailbox;
   const phase = resumablePhase(pipeline.phase);
   if (!mailbox || !phase || pipeline.reviewFanout) return false;
-  if (pipeline.validationRun && !pipeline.reviewPackage) return false;
+
   const tabId = pipelineWorkerTabId(session.sessionKey);
   const requestId = randomUUID();
   const claim = await mailbox
@@ -251,9 +253,24 @@ export async function dispatchWorkerMailTurn(
       return null;
     });
   if (!claim) return false;
+  const previousRequestId = session.structuredRequestId;
   try {
+    if (pipeline.validationRun && !pipeline.reviewPackage) {
+      const run = await ctx.invoke<ReviewValidationRun>("cancel_review_validation", {
+        environmentId: pipeline.environmentId,
+        run: pipeline.validationRun,
+      });
+      archiveValidationRun(pipeline, run);
+    }
     if (phase === "building" || phase === "fixing") discardPreparationResult(session);
     const startedAt = new Date().toISOString();
+    if (previousRequestId) {
+      session.structuredRequestId = requestId;
+      session.structuredResultStatus = "pending";
+      if (session.resultTransport === "tool-v1") session.resultSubmission = "preparing";
+      if (phase === "reviewing") pipeline.structuredReviewRequestId = requestId;
+    }
+    delete session.structuredWaitStartedAt;
     pipeline.pendingPromptAttempt = {
       dispatchVersion: 1,
       id: requestId,
@@ -261,9 +278,12 @@ export async function dispatchWorkerMailTurn(
       requestId,
       phase,
       prompt: claim.text,
+      structuredReview: previousRequestId !== undefined,
+      resultTransport: session.resultTransport,
       useTaskImages: false,
       startedAt,
     };
+    pipeline.activePromptContext = { ...pipeline.pendingPromptAttempt, kind: "prompt-dispatch" };
     session.mailDeliveries = [...(session.mailDeliveries ?? []), requestId].slice(
       -MAX_PIPELINE_SESSION_MAIL_DELIVERIES,
     );
@@ -286,6 +306,8 @@ export async function dispatchWorkerMailTurn(
   await mailbox
     .settle(pipeline.environmentId, tabId, claim.messageIds, "accepted")
     .catch(() => undefined);
+  if (session.resultTransport === "tool-v1" && previousRequestId)
+    await ctx.options.workflowResults?.close(previousRequestId, "superseded");
   await dispatchPending();
   return true;
 }

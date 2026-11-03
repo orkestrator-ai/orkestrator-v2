@@ -6,7 +6,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { COORDINATOR_MAIL_ADDRESS } from "@orkestrator/protocol/coordinator";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
-import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import {
+  BUILD_CANCELLED_ERROR,
+  type BuildPipeline,
+  type PipelineSession,
+} from "@orkestrator/protocol/build-pipeline";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import { assertCallerMailbox } from "./agent-tools-messaging.js";
 import {
@@ -177,6 +181,91 @@ describe("pipeline worker mailboxes", () => {
     const inbox = await h.world.storage.listAgentMailboxes({ environmentId: h.environmentId });
     expect(inbox.mailboxes.every((mailbox) => mailbox.pendingInjectCount === 0)).toBe(true);
   });
+
+  test("cancelled fan-out workers expire each queued inbox", async () => {
+    const h = await harness();
+    const { reviewers, pipeline } = reviewPanel(h);
+    await h.save(pipeline);
+    const main = await h.world.main();
+    const sent = [];
+    for (const session of reviewers)
+      sent.push(await h.world.delegate(main, worker(h.environmentId, session), "queued"));
+    pipeline.phase = "failed";
+    pipeline.error = BUILD_CANCELLED_ERROR;
+    await h.save(pipeline);
+    for (const message of sent) {
+      const expired = await h.world.storage.getAgentMailMessage(
+        h.environmentId,
+        message.toTabId,
+        message.id,
+      );
+      expect(expired.placement).toBe("expired");
+      expect(expired.placementReason).toBe("worker-cancelled");
+    }
+  });
+
+  test("environment-only sends refuse even after multiple worker delegations", async () => {
+    const h = await harness();
+    const { reviewers, pipeline } = reviewPanel(h);
+    await h.save(pipeline);
+    const main = await h.world.main();
+    for (const session of reviewers.slice(0, 2)) {
+      await h.world.delegate(main, worker(h.environmentId, session), "explicit");
+      await expect(
+        h.world.delegate(main, { environmentId: h.environmentId, tabId: "" }, "implicit"),
+      ).rejects.toThrow(/runs a build pipeline/);
+    }
+  });
+
+  test("a journaled claim survives restart without returning to the queue", async () => {
+    const h = await harness();
+    const { build, pipeline } = await runningBuild(h);
+    const main = await h.world.main();
+    const sent = await h.world.delegate(main, worker(h.environmentId, build), "journaled");
+    await h.world.mail.claimPipelineWorkerMail(h.environmentId, sent.toTabId, "owned-request");
+    build.mailDeliveries = ["owned-request"];
+    await h.save(pipeline);
+    await h.world.restart();
+    const recovered = await h.world.storage.getAgentMailMessage(
+      h.environmentId,
+      sent.toTabId,
+      sent.id,
+    );
+    expect(recovered.placement).toBe("injected");
+    expect(
+      await h.world.mail.claimPipelineWorkerMail(h.environmentId, sent.toTabId, "again"),
+    ).toBeNull();
+  });
+
+  test.each(["address", "verify"] as const)(
+    "mail renews the %s result authority",
+    async (phase) => {
+      const h = await harness();
+      const session = {
+        ...stageSession(phase, { key: phase }),
+        structuredRequestId: "old-result",
+        resultTransport: "tool-v1" as const,
+        structuredResultStatus: "accepted" as const,
+      };
+      await h.save(
+        pipelineSnapshot(h.environmentId, h.world.projectId, [session], {
+          phase: phase === "verify" ? "verifying" : "addressing",
+        }),
+      );
+      const main = await h.world.main();
+      await h.world.delegate(main, worker(h.environmentId, session), "Correct the verdict");
+      const turn = await endWorkerTurn(h.world.storage, h.ctx(), session);
+      expect(turn.started).toBe(true);
+      const renewed = turn.pipeline.sessions[0]!;
+      expect(renewed.structuredRequestId).not.toBe("old-result");
+      expect(renewed.structuredResultStatus).toBe("pending");
+      expect(turn.pipeline.pendingPromptAttempt).toMatchObject({
+        structuredReview: true,
+        resultTransport: "tool-v1",
+        requestId: renewed.structuredRequestId,
+      });
+    },
+  );
 
   test("mail for a running worker waits for its turn to end, then is its next turn", async () => {
     const h = await harness();
@@ -380,6 +469,44 @@ describe("pipeline worker mailboxes", () => {
     const back = await h.world.storage.getAgentMailMessage(h.environmentId, sent.toTabId, sent.id);
     expect(back.placement).toBe("pending-inject");
   });
+
+  test.each(["dispatched", "absent", "unknown"] as const)(
+    "interrupted steer reconciles %s without resending",
+    async (outcome) => {
+      const h = await harness();
+      const { build } = await runningBuild(h);
+      const main = await h.world.main();
+      const sent = await h.world.delegate(main, worker(h.environmentId, build), "steered");
+      const inbox = await h.world.storage.getAgentMailMailbox(h.environmentId, sent.toTabId);
+      await h.world.storage.beginAgentMailInject(
+        inbox.descriptor.mailboxId,
+        sent.id,
+        inbox.descriptor.incarnationId,
+        undefined,
+        { steerRequestId: "steer-recovery" },
+      );
+      await h.world.storage.recordAgentMailInjectRequest(
+        inbox.descriptor.mailboxId,
+        [sent.id],
+        "steer-recovery",
+      );
+      h.provider.recoveredSteer = outcome;
+      await h.world.restart();
+      const recovered = await h.world.storage.getAgentMailMessage(
+        h.environmentId,
+        sent.toTabId,
+        sent.id,
+      );
+      expect(recovered.placement).toBe(
+        outcome === "dispatched"
+          ? "injected"
+          : outcome === "absent"
+            ? "pending-inject"
+            : "inject_failed",
+      );
+      expect(h.provider.steers).toHaveLength(0);
+    },
+  );
 
   test("a command node's coordinator reaches one worker on this leaf, steered", async () => {
     const h = await harness();

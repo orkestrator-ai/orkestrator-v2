@@ -85,6 +85,7 @@ export function pipelineSnapshot(
 /** A scripted provider: records steers and answers as the test sets it up. */
 export class ScriptedSteerProvider {
   steerable = true;
+  recoveredSteer: "dispatched" | "absent" | "unknown" = "unknown";
   activeRun: "running" | "idle" = "running";
   nextOutcome: NativeAgentSessionActionOutcome["outcome"] = "applied";
   readonly steers: Array<{ sessionId: string; text: string; requestId: string }> = [];
@@ -94,7 +95,7 @@ export class ScriptedSteerProvider {
       steerSupported: async () => this.steerable,
       activeSteerRun: async () =>
         this.activeRun === "running" ? { state: "running", runId: "run-1" } : { state: "idle" },
-      steerStatus: async () => "unknown",
+      steerStatus: async () => this.recoveredSteer,
       performSessionAction: async (
         sessionId: string,
         action: { kind: string; text: string; requestId: string },

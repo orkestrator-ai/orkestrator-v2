@@ -174,6 +174,7 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   consumeResult?(requestId: string): Promise<void>;
   stageResultConsumption?(requestId: string): void;
   finishResultConsumption?(requestId: string): void;
+  beforeResult?(branch: B): Promise<boolean>;
   closeResult?(requestId: string): Promise<void>;
   /** Persists the owner's record. The runner serializes every call. */
   save(): Promise<void>;

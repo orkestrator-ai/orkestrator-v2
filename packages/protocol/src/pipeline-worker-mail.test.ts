@@ -237,3 +237,28 @@ describe("carrier framing for a pipeline worker", () => {
     expect(carrier).toContain("You are a build pipeline step");
   });
 });
+
+test.each(["cancelled", "failed"] as const)(
+  "all incomplete mirrored siblings inherit %s",
+  (outcome) => {
+    const sessions = ["r1", "r2", "c"].map((key) => session("review", key, { status: "running" }));
+    const workers = pipelineWorkers(
+      pipeline(sessions, {
+        phase: "failed",
+        error: outcome === "cancelled" ? BUILD_CANCELLED_ERROR : "failure",
+        reviewFanout: {
+          reviewers: sessions.slice(0, 2).map((s, i) => ({
+            id: String(i),
+            agent: "claude",
+            model: "opus",
+            status: "running",
+            sessionKey: s.sessionKey,
+            providerSessionId: s.sdkSessionId,
+          })),
+          consolidation: { sessionKey: sessions[2]!.sessionKey },
+        } as BuildPipeline["reviewFanout"],
+      }),
+    );
+    expect(workers.map((worker) => worker.status)).toEqual([outcome, outcome, outcome]);
+  },
+);

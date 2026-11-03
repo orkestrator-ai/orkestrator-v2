@@ -218,6 +218,7 @@ export class BuildPipelineSupervisor {
   reviewFanout(): BuildPipelineReviewFanout {
     if (!this.reviewFanoutRunner) {
       this.reviewFanoutRunner = new BuildPipelineReviewFanout({
+        workerMailbox: () => this.ctx.workerMailbox,
         provider: (pipeline, agent) => this.agents.provider(pipeline, agent),
         providerUnavailable: (pipeline, agent, provider) =>
           this.agents.evictUnreachableProvider(pipeline, agent, provider),
@@ -622,6 +623,11 @@ export class BuildPipelineSupervisor {
         delete pipeline.reviewRetryRequested;
         await this.startReviewPackagePreparation(pipeline);
         return;
+      }
+      const worker = sessionForCurrentPhase(pipeline);
+      if (worker) {
+        const provider = await this.agents.provider(pipeline, sessionAgent(pipeline, worker));
+        if (await this.dispatchWorkerMail(pipeline, provider, worker)) return;
       }
       await this.advanceValidation(pipeline);
       return;

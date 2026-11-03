@@ -653,6 +653,26 @@ async function createAgentToolServer(
       { environmentId: scope.environmentId, projectId: scope.projectId },
       provisionalFindings,
     );
+    registerAgentMessagingTools(server, storage, pipelineScope, consumeRateLimit, async (input) => {
+      const grant =
+        typeof input.capability === "string"
+          ? await workflowResults.authenticateCapability(input.capability)
+          : null;
+      if (
+        !grant ||
+        grant.environmentId !== scope.environmentId ||
+        grant.projectId !== scope.projectId ||
+        grant.workflowResultKey !== input.resultKey
+      )
+        throw new Error("Worker mail capability denied");
+      const tabId = await pipelineWorkerTabForResultKey(
+        storage,
+        pipelineScope,
+        grant.workflowResultKey,
+      );
+      if (!tabId) throw new Error("Worker mail identity unavailable");
+      return { ...pipelineScope, tabId };
+    });
     // Graph activations on OpenCode: the broker's tool list is fixed, so the
     // activation tools are always listed and authorized per call.
     graphTools?.registerBroker(

@@ -275,16 +275,6 @@ export class AgentMailboxDirectory {
    */
   async recipientTab(sender: AgentMailSender, input: AgentMailSendInput): Promise<string> {
     await this.ensureAgentMailDirectoryFresh([input.toEnvironmentId]);
-    if (sender.kind === "coordinator") {
-      const delegated = (await this.repos.coordinators.listOpenCoordinatorDelegations()).find(
-        (association) =>
-          association.coordinatorId === sender.coordinatorId &&
-          !association.nodeId &&
-          association.resourceId === input.toEnvironmentId &&
-          association.delegation,
-      );
-      if (delegated) return delegated.delegation!.workerTabId;
-    }
     // A pipeline environment runs one worker per stage session, several at
     // once during review. Which one is running changes under the sender, so
     // nothing picks one for it: the sender names a worker.
@@ -302,6 +292,16 @@ export class AgentMailboxDirectory {
             : ", once one has started (none has yet)"
         }${others.length > 0 ? `. Other agent tabs: ${others.join(", ")}` : ""}.`,
       );
+    }
+    if (sender.kind === "coordinator") {
+      const delegated = (await this.repos.coordinators.listOpenCoordinatorDelegations()).find(
+        (association) =>
+          association.coordinatorId === sender.coordinatorId &&
+          !association.nodeId &&
+          association.resourceId === input.toEnvironmentId &&
+          association.delegation,
+      );
+      if (delegated) return delegated.delegation!.workerTabId;
     }
     const tabs = await this.listAgentMailPullTabIds(input.toEnvironmentId);
     if (tabs.length === 1) return tabs[0]!;

@@ -136,13 +136,24 @@ export function registerAgentMessagingTools(
   storage: StorageService,
   scope: AgentMessagingToolScope,
   consumeRateLimit: (kind: AgentMessagingRateLimitKind) => void,
+  resolveScope?: (input: {
+    resultKey?: unknown;
+    capability?: unknown;
+  }) => Promise<AgentMessagingToolScope>,
 ): void {
+  const baseScope = scope;
   server.registerTool(
     "list_mailboxes",
     {
       title: "List agent mailboxes",
       description: mailToolDescription(scope, "Discover and cache addressable tabs."),
       inputSchema: z.object({
+        ...(resolveScope
+          ? {
+              resultKey: z.string().min(1),
+              capability: z.string().min(1),
+            }
+          : {}),
         tabId: z.string().trim().min(1).max(256).optional(),
         q: z.string().trim().max(200).optional(),
         offset: z.number().int().min(0).default(0),
@@ -155,7 +166,8 @@ export function registerAgentMessagingTools(
         openWorldHint: false,
       },
     },
-    async ({ tabId, q, offset, limit }) => {
+    async ({ resultKey, capability, tabId, q, offset, limit }) => {
+      const scope = resolveScope ? await resolveScope({ resultKey, capability }) : baseScope;
       consumeRateLimit("read");
       const config = await storage.loadConfig();
       try {
@@ -192,6 +204,12 @@ export function registerAgentMessagingTools(
         "Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to \"coordinator\" and omit toTabId: it reaches the coordinator that most recently launched, delegated to or messaged this environment, on this machine or on a command node; the result names which. To answer a specific message use reply_message, which always goes back to that message's sender. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab's mailbox, so this cannot reach the session that launched you.",
       ),
       inputSchema: z.object({
+        ...(resolveScope
+          ? {
+              resultKey: z.string().min(1),
+              capability: z.string().min(1),
+            }
+          : {}),
         requestId: z.string().trim().min(1).max(256),
         fromTabId: z.string().trim().min(1).max(256).optional(),
         toEnvironmentId: z.string().trim().min(1).max(256),
@@ -213,7 +231,8 @@ export function registerAgentMessagingTools(
         openWorldHint: false,
       },
     },
-    async ({ fromTabId, ...input }) => {
+    async ({ resultKey, capability, fromTabId, ...input }) => {
+      const scope = resolveScope ? await resolveScope({ resultKey, capability }) : baseScope;
       consumeRateLimit("send");
       try {
         const { identity } = await assertCallerMailbox(storage, scope, fromTabId);
@@ -283,6 +302,12 @@ export function registerAgentMessagingTools(
       title: "Check agent inbox",
       description: mailToolDescription(scope, "List metadata without bodies or acknowledgement."),
       inputSchema: z.object({
+        ...(resolveScope
+          ? {
+              resultKey: z.string().min(1),
+              capability: z.string().min(1),
+            }
+          : {}),
         tabId: z.string().trim().min(1).max(256).optional(),
         unreadOnly: z.boolean().default(true),
         offset: z.number().int().min(0).default(0),
@@ -295,7 +320,8 @@ export function registerAgentMessagingTools(
         openWorldHint: false,
       },
     },
-    async ({ tabId, unreadOnly, offset, limit }) => {
+    async ({ resultKey, capability, tabId, unreadOnly, offset, limit }) => {
+      const scope = resolveScope ? await resolveScope({ resultKey, capability }) : baseScope;
       consumeRateLimit("read");
       try {
         const { mailbox, identity } = await assertCallerMailbox(storage, scope, tabId);
@@ -318,6 +344,12 @@ export function registerAgentMessagingTools(
       title: "Read an agent message",
       description: mailToolDescription(scope, "Read one message body without acknowledging it."),
       inputSchema: z.object({
+        ...(resolveScope
+          ? {
+              resultKey: z.string().min(1),
+              capability: z.string().min(1),
+            }
+          : {}),
         tabId: z.string().trim().min(1).max(256).optional(),
         messageId: z.string().trim().min(1).max(256),
       }),
@@ -328,7 +360,8 @@ export function registerAgentMessagingTools(
         openWorldHint: false,
       },
     },
-    async ({ tabId, messageId }) => {
+    async ({ resultKey, capability, tabId, messageId }) => {
+      const scope = resolveScope ? await resolveScope({ resultKey, capability }) : baseScope;
       consumeRateLimit("read");
       try {
         const { mailbox, identity } = await assertCallerMailbox(storage, scope, tabId);
@@ -362,6 +395,12 @@ export function registerAgentMessagingTools(
         "Explicitly acknowledge one received message separately from the human seen receipt.",
       ),
       inputSchema: z.object({
+        ...(resolveScope
+          ? {
+              resultKey: z.string().min(1),
+              capability: z.string().min(1),
+            }
+          : {}),
         tabId: z.string().trim().min(1).max(256).optional(),
         messageId: z.string().trim().min(1).max(256),
       }),
@@ -372,7 +411,8 @@ export function registerAgentMessagingTools(
         openWorldHint: false,
       },
     },
-    async ({ tabId, messageId }) => {
+    async ({ resultKey, capability, tabId, messageId }) => {
+      const scope = resolveScope ? await resolveScope({ resultKey, capability }) : baseScope;
       consumeRateLimit("read");
       try {
         const { mailbox, identity } = await assertCallerMailbox(storage, scope, tabId);
@@ -404,6 +444,12 @@ export function registerAgentMessagingTools(
         "Reply to one inbound message; the backend derives the sender and destination.",
       ),
       inputSchema: z.object({
+        ...(resolveScope
+          ? {
+              resultKey: z.string().min(1),
+              capability: z.string().min(1),
+            }
+          : {}),
         requestId: z.string().trim().min(1).max(256),
         fromTabId: z.string().trim().min(1).max(256).optional(),
         messageId: z.string().trim().min(1).max(256),
@@ -423,7 +469,8 @@ export function registerAgentMessagingTools(
         openWorldHint: false,
       },
     },
-    async ({ fromTabId, messageId, requestId, body, subject }) => {
+    async ({ resultKey, capability, fromTabId, messageId, requestId, body, subject }) => {
+      const scope = resolveScope ? await resolveScope({ resultKey, capability }) : baseScope;
       consumeRateLimit("send");
       try {
         const { identity } = await assertCallerMailbox(storage, scope, fromTabId);
@@ -479,6 +526,12 @@ export function registerAgentMessagingTools(
         "Read placement and both receipt states for one message sent by this tab.",
       ),
       inputSchema: z.object({
+        ...(resolveScope
+          ? {
+              resultKey: z.string().min(1),
+              capability: z.string().min(1),
+            }
+          : {}),
         fromTabId: z.string().trim().min(1).max(256).optional(),
         messageId: z.string().trim().min(1).max(256),
       }),
@@ -489,7 +542,8 @@ export function registerAgentMessagingTools(
         openWorldHint: false,
       },
     },
-    async ({ fromTabId, messageId }) => {
+    async ({ resultKey, capability, fromTabId, messageId }) => {
+      const scope = resolveScope ? await resolveScope({ resultKey, capability }) : baseScope;
       consumeRateLimit("read");
       try {
         const { mailbox, identity } = await assertCallerMailbox(storage, scope, fromTabId);

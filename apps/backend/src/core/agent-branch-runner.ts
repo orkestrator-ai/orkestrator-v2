@@ -742,6 +742,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     if ((status === "error" && !restartInterrupted && !usageLimitResend) || status === "missing") {
       return failSession();
     }
+    if (status === "idle" && settling && (await host.beforeResult?.(branch))) return "continue";
     if (branch.resultTransport === "tool-v1") {
       branch.resultSubmission = await host.projectResult?.(requestId);
     }

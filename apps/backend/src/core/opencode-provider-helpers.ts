@@ -378,6 +378,7 @@ function openCodeWorkflowResultTurnToolNames(
     selectedTool,
     WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
     "get_workflow_result_status",
+    ...AGENT_MAIL_TOOL_NAMES,
     ...(selectedTool === workflowResultToolName("review-report") ? [REPORT_FINDING_TOOL_NAME] : []),
     ...GRAPH_ACTIVATION_EXTRA_TOOLS.filter((tool) => extraTools.includes(tool)),
   ];
@@ -401,6 +402,7 @@ export function openCodeWorkflowResultTurnTools(
       openCodeWorkflowResultToolId("get_workflow_result_status"),
       openCodeWorkflowResultToolId(REPORT_FINDING_TOOL_NAME),
       ...GRAPH_ACTIVATION_EXTRA_TOOLS.map(openCodeWorkflowResultToolId),
+      ...AGENT_MAIL_TOOL_NAMES.map(openCodeWorkflowResultToolId),
     ].map((tool) => [tool, false]),
   );
   if (selectedTool) {

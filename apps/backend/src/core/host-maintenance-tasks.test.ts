@@ -408,6 +408,7 @@ test.each([false, true])(
     const install = mock(async () => {
       throw new Error("must not change desktop activation");
     });
+    let ensureOptions: { fullVerification?: boolean } | undefined;
     const task = startToolchainRepair(
       { ...context(), toolchainBinDir: inUse },
       {
@@ -416,13 +417,16 @@ test.each([false, true])(
           tools: artifacts.map((artifact) => artifact.name),
           source: "explicit",
         }),
-        ensure: async () => ({
-          rootDir: dataDir,
-          binDir: selected,
-          executables: {} as Awaited<
-            ReturnType<typeof import("@orkestrator/toolchain/manager").ensurePinnedToolchains>
-          >["executables"],
-        }),
+        ensure: async (options) => {
+          ensureOptions = options;
+          return {
+            rootDir: dataDir,
+            binDir: selected,
+            executables: {} as Awaited<
+              ReturnType<typeof import("@orkestrator/toolchain/manager").ensurePinnedToolchains>
+            >["executables"],
+          };
+        },
         install,
       },
     );
@@ -437,6 +441,8 @@ test.each([false, true])(
       },
     });
     expect(install).not.toHaveBeenCalled();
+    // A repair hashes every file rather than trusting verified stamps.
+    expect(ensureOptions?.fullVerification).toBe(true);
   },
 );
 

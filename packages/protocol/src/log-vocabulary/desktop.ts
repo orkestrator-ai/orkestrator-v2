@@ -90,6 +90,8 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
     events: {
       "bootstrap-progress.show-failed": "The toolchain progress window could not be shown.",
       "prepare.failed": "Preparing the pinned agent tools failed.",
+      "prepare.ready":
+        "The pinned agent tools were verified and activated; durationMs is how long startup waited.",
     },
   },
   "artifact-host": {

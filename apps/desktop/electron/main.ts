@@ -1413,6 +1413,9 @@ async function startApplication(): Promise<void> {
   if (remoteRelaunch) {
     updaterLog.info("remote.relaunched", { version: remoteRelaunch.version });
   }
+  // Startup blocks on this step, so its duration is the toolchain's share of
+  // launch-to-ready (to-do 1202 task 13 compares it before and after stamps).
+  const toolchainStartedAt = performance.now();
   const toolchainBinDir = await preparePinnedToolchains({
     dataDir,
     ensure: ensurePinnedToolchains,
@@ -1433,6 +1436,9 @@ async function startApplication(): Promise<void> {
     ...(remoteRelaunch ? { unattendedRetries: { attempts: 10, delayMs: 30_000 } } : {}),
   });
   if (!toolchainBinDir) return;
+  toolchainLog.info("prepare.ready", {
+    durationMs: Math.round(performance.now() - toolchainStartedAt),
+  });
   // Raise Files and Folders prompts before restored pipelines or agents can
   // walk the home directory. Show an in-app explanation first so the system
   // dialogs have context; skip the walk for agent-test and remote-only launches.

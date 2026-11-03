@@ -31,17 +31,36 @@ import {
   type ToolchainName,
 } from "./manifest.js";
 import { TOOLCHAIN_DIRECTORY, toolchainRootDir } from "./layout.js";
+import {
+  DEFAULT_DOWNLOAD_TIMINGS,
+  downloadArchive,
+  prunePartialDownloads,
+  type DownloadTimings,
+  type FetchLike,
+} from "./download.js";
+import {
+  probeExecutable,
+  repairInvalidMacSignature,
+  verifyMacCodeSignature,
+} from "./executable-checks.js";
+import {
+  FULL_CHECK_INTERVAL_MS,
+  RACY_STAMP_WINDOW_MS,
+  directFileDigests,
+  openFileStampStore,
+  sha256File,
+  type FileDigests,
+  type FileStampStore,
+} from "./file-stamps.js";
 
 const INSTALL_LOCK = ".install.lock";
 const LEASE_DIRECTORY = ".leases";
 const LOCK_STALE_AFTER_MS = 10 * 60 * 1_000;
 const LOCK_WAIT_TIMEOUT_MS = 12 * 60 * 1_000;
 const LOCK_POLL_MS = 250;
-const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1_000;
 const PROCESS_TIMEOUT_MS = 15_000;
 const RETAIN_SUPERSEDED_MS = 14 * 24 * 60 * 60 * 1_000;
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 type ProcessKillLike = (pid: number, signal: 0) => true;
 
 export type ToolchainProgress = {
@@ -59,19 +78,35 @@ type ToolchainManagerTimings = {
   lockStaleAfterMs: number;
   lockWaitTimeoutMs: number;
   lockPollMs: number;
-  downloadTimeoutMs: number;
+  downloadIdleTimeoutMs: number;
+  downloadAttempts: number;
+  downloadRetryDelayMs: number;
   processTimeoutMs: number;
   retainSupersededMs: number;
+  fullCheckIntervalMs: number;
+  racyStampWindowMs: number;
 };
 
 const DEFAULT_TIMINGS: ToolchainManagerTimings = {
   lockStaleAfterMs: LOCK_STALE_AFTER_MS,
   lockWaitTimeoutMs: LOCK_WAIT_TIMEOUT_MS,
   lockPollMs: LOCK_POLL_MS,
-  downloadTimeoutMs: DOWNLOAD_TIMEOUT_MS,
+  downloadIdleTimeoutMs: DEFAULT_DOWNLOAD_TIMINGS.idleTimeoutMs,
+  downloadAttempts: DEFAULT_DOWNLOAD_TIMINGS.attempts,
+  downloadRetryDelayMs: DEFAULT_DOWNLOAD_TIMINGS.retryDelayMs,
   processTimeoutMs: PROCESS_TIMEOUT_MS,
   retainSupersededMs: RETAIN_SUPERSEDED_MS,
+  fullCheckIntervalMs: FULL_CHECK_INTERVAL_MS,
+  racyStampWindowMs: RACY_STAMP_WINDOW_MS,
 };
+
+function downloadTimings(timings: ToolchainManagerTimings): DownloadTimings {
+  return {
+    idleTimeoutMs: timings.downloadIdleTimeoutMs,
+    attempts: timings.downloadAttempts,
+    retryDelayMs: timings.downloadRetryDelayMs,
+  };
+}
 
 export type EnsurePinnedToolchainsOptions = {
   dataDir: string;
@@ -80,6 +115,12 @@ export type EnsurePinnedToolchainsOptions = {
   artifacts?: readonly ToolchainArtifact[];
   fetchImpl?: FetchLike;
   onProgress?: (progress: ToolchainProgress) => void;
+  /**
+   * Hash every installed file even when its verified stamp still matches, as
+   * an explicit repair should. Launches leave this off: stamps are trusted
+   * between the periodic full checks.
+   */
+  fullVerification?: boolean;
   allowInsecureDownloadsForTests?: boolean;
   skipExecutableProbeForTests?: boolean;
   timingsForTests?: Partial<ToolchainManagerTimings>;
@@ -157,12 +198,6 @@ function artifactArchiveBytes(artifact: ToolchainArtifact): number {
     (total, companion) => total + companion.archive.size,
     artifact.archive.size,
   );
-}
-
-async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(filePath)) hash.update(chunk as Buffer);
-  return hash.digest("hex");
 }
 
 type InstalledExecutableState = {
@@ -344,14 +379,18 @@ function pinnedInstalledState(artifact: ToolchainArtifact): InstalledExecutableS
   return { size, sha256 };
 }
 
-async function isValidFile(filePath: string, expected: InstalledExecutableState): Promise<boolean> {
+async function isValidFile(
+  filePath: string,
+  expected: InstalledExecutableState,
+  digests: FileDigests,
+): Promise<boolean> {
   try {
     const file = await lstat(filePath);
     return (
       file.isFile() &&
       !file.isSymbolicLink() &&
       file.size === expected.size &&
-      (await sha256File(filePath)) === expected.sha256
+      (await digests.sha256(filePath)) === expected.sha256
     );
   } catch {
     return false;
@@ -361,25 +400,33 @@ async function isValidFile(filePath: string, expected: InstalledExecutableState)
 async function isValidUpstreamExecutable(
   rootDir: string,
   artifact: ToolchainArtifact,
+  digests: FileDigests,
 ): Promise<boolean> {
-  return isValidFile(upstreamExecutablePath(rootDir, artifact), {
-    size: artifact.executable.size,
-    sha256: artifact.executable.sha256,
-  });
+  return isValidFile(
+    upstreamExecutablePath(rootDir, artifact),
+    { size: artifact.executable.size, sha256: artifact.executable.sha256 },
+    digests,
+  );
 }
 
-async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): Promise<boolean> {
+async function isValidExecutable(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+  digests: FileDigests,
+): Promise<boolean> {
   if (artifact.executable.repairInvalidMacSignature) {
     // Locally ad-hoc-signed bytes are not reproducible and therefore cannot be
     // pinned in the manifest. The cache is reusable only through the separately
     // retained, manifest-pinned upstream executable. The runnable copy is
-    // regenerated from it under the install lock on every startup.
-    if (!(await isValidUpstreamExecutable(rootDir, artifact))) return false;
+    // regenerated from it under the install lock unless its stamp shows it
+    // unchanged since it was last produced (`refreshRepairableArtifact`).
+    if (!(await isValidUpstreamExecutable(rootDir, artifact, digests))) return false;
     for (const bundled of artifact.archive.bundleFiles ?? []) {
       if (
         !(await isValidFile(
           path.join(artifactDirectory(rootDir, artifact), ...bundled.path.split("/")),
           bundled,
+          digests,
         ))
       ) {
         return false;
@@ -387,7 +434,7 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
     }
     return (
       !artifact.archive.bundleIntegrity ||
-      hasValidBundleIntegrity(artifactDirectory(rootDir, artifact), artifact)
+      hasValidBundleIntegrity(artifactDirectory(rootDir, artifact), artifact, digests)
     );
   }
   const executablePath = artifactExecutablePath(rootDir, artifact);
@@ -395,13 +442,14 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
     const expected = pinnedInstalledState(artifact);
     const file = await lstat(executablePath);
     if (!file.isFile() || file.isSymbolicLink() || file.size !== expected.size) return false;
-    if ((await sha256File(executablePath)) !== expected.sha256) return false;
+    if ((await digests.sha256(executablePath)) !== expected.sha256) return false;
     if ((file.mode & 0o777) !== 0o500) await chmod(executablePath, 0o500);
     for (const bundled of artifact.archive.bundleFiles ?? []) {
       if (
         !(await isValidFile(
           path.join(artifactDirectory(rootDir, artifact), ...bundled.path.split("/")),
           bundled,
+          digests,
         ))
       ) {
         return false;
@@ -409,7 +457,7 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
     }
     if (
       artifact.archive.bundleIntegrity &&
-      !(await hasValidBundleIntegrity(artifactDirectory(rootDir, artifact), artifact))
+      !(await hasValidBundleIntegrity(artifactDirectory(rootDir, artifact), artifact, digests))
     ) {
       return false;
     }
@@ -429,6 +477,7 @@ type BundleTreeEntry = {
 async function bundleTreeEntries(
   directory: string,
   artifact: ToolchainArtifact,
+  digests: FileDigests,
 ): Promise<BundleTreeEntry[]> {
   const entries: BundleTreeEntry[] = [];
   const excludedExecutablePaths = new Set<string>([artifact.executable.fileName]);
@@ -451,7 +500,7 @@ async function bundleTreeEntries(
           path: relativePath,
           size: info.size,
           executable: (info.mode & 0o111) !== 0,
-          sha256: await sha256File(filePath),
+          sha256: await digests.sha256(filePath),
         });
       } else {
         throw new Error(`Bundle contains unsupported entry: ${relativePath}`);
@@ -486,10 +535,11 @@ function bundleTreeDigest(entries: readonly BundleTreeEntry[]): {
 async function hasValidBundleIntegrity(
   directory: string,
   artifact: ToolchainArtifact,
+  digests: FileDigests,
 ): Promise<boolean> {
   const expected = artifact.archive.bundleIntegrity;
   if (!expected) return true;
-  const actual = bundleTreeDigest(await bundleTreeEntries(directory, artifact));
+  const actual = bundleTreeDigest(await bundleTreeEntries(directory, artifact, digests));
   return (
     actual.fileCount === expected.fileCount &&
     actual.totalSize === expected.totalSize &&
@@ -501,13 +551,14 @@ async function isValidCompanion(
   rootDir: string,
   artifact: ToolchainArtifact,
   companion: ToolchainCompanion,
+  digests: FileDigests,
 ): Promise<boolean> {
   const filePath = companionPath(rootDir, artifact, companion);
   try {
     const file = await lstat(filePath);
     if (!file.isFile() || file.isSymbolicLink() || file.size !== companion.executable.size)
       return false;
-    if ((await sha256File(filePath)) !== companion.executable.sha256) return false;
+    if ((await digests.sha256(filePath)) !== companion.executable.sha256) return false;
     if ((file.mode & 0o777) !== 0o500) await chmod(filePath, 0o500);
     return true;
   } catch {
@@ -518,10 +569,11 @@ async function isValidCompanion(
 async function missingCompanions(
   rootDir: string,
   artifact: ToolchainArtifact,
+  digests: FileDigests,
 ): Promise<ToolchainCompanion[]> {
   const companions = artifactCompanions(artifact);
   const validity = await Promise.all(
-    companions.map((companion) => isValidCompanion(rootDir, artifact, companion)),
+    companions.map((companion) => isValidCompanion(rootDir, artifact, companion, digests)),
   );
   return companions.filter((_, index) => !validity[index]);
 }
@@ -546,14 +598,19 @@ type InstallationStatus =
 async function installationStatus(
   rootDir: string,
   artifact: ToolchainArtifact,
+  digests: FileDigests,
 ): Promise<InstallationStatus> {
-  if (!(await isValidExecutable(rootDir, artifact))) return { state: "missing" };
-  const companions = await missingCompanions(rootDir, artifact);
+  if (!(await isValidExecutable(rootDir, artifact, digests))) return { state: "missing" };
+  const companions = await missingCompanions(rootDir, artifact, digests);
   return companions.length === 0 ? { state: "valid" } : { state: "companions-missing", companions };
 }
 
-async function isValidInstallation(rootDir: string, artifact: ToolchainArtifact): Promise<boolean> {
-  return (await installationStatus(rootDir, artifact)).state === "valid";
+async function isValidInstallation(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+  digests: FileDigests,
+): Promise<boolean> {
+  return (await installationStatus(rootDir, artifact, digests)).state === "valid";
 }
 
 type InstallLockOwner = {
@@ -694,86 +751,6 @@ async function acquireInstallLock(
     await delay(timings.lockPollMs);
   }
   throw new Error("Timed out waiting for the Orkestrator toolchain installation lock");
-}
-
-function assertDownloadLocation(
-  label: string,
-  archive: ToolchainArchive,
-  response: Response,
-  allowInsecureDownloadsForTests: boolean,
-): void {
-  const requested = new URL(archive.url);
-  const resolved = new URL(response.url || archive.url);
-  if (
-    !allowInsecureDownloadsForTests &&
-    (requested.protocol !== "https:" || resolved.protocol !== "https:")
-  ) {
-    throw new Error(`${label} download did not use HTTPS`);
-  }
-  if (!archive.allowedHosts.includes(requested.hostname)) {
-    throw new Error(`${label} download host is not allowlisted: ${requested.hostname}`);
-  }
-  if (!archive.allowedHosts.includes(resolved.hostname)) {
-    throw new Error(`${label} redirected to an untrusted host: ${resolved.hostname}`);
-  }
-}
-
-async function downloadArchive(
-  label: string,
-  archive: ToolchainArchive,
-  archivePath: string,
-  fetchImpl: FetchLike,
-  onBytes: (received: number) => void,
-  allowInsecureDownloadsForTests: boolean,
-  timeoutMs: number,
-): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  let handle: Awaited<ReturnType<typeof open>> | null = null;
-  try {
-    const response = await fetchImpl(archive.url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: { "user-agent": "OrkestratorV2 toolchain installer" },
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`${label} download failed with HTTP ${response.status}`);
-    }
-    assertDownloadLocation(label, archive, response, allowInsecureDownloadsForTests);
-
-    const contentLength = response.headers.get("content-length");
-    if (contentLength !== null && Number(contentLength) !== archive.size) {
-      throw new Error(`${label} archive size header did not match the pinned manifest`);
-    }
-
-    handle = await open(archivePath, "wx", 0o600);
-    const reader = response.body.getReader();
-    const hash = createHash("sha256");
-    let received = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.byteLength;
-      if (received > archive.size) {
-        throw new Error(`${label} archive exceeded its pinned size`);
-      }
-      hash.update(value);
-      await handle.writeFile(value);
-      onBytes(received);
-    }
-    await handle.close();
-    handle = null;
-
-    if (received !== archive.size) {
-      throw new Error(`${label} archive was truncated`);
-    }
-    if (hash.digest("hex") !== archive.sha256) {
-      throw new Error(`${label} archive checksum did not match the pinned manifest`);
-    }
-  } finally {
-    clearTimeout(timeout);
-    await handle?.close().catch(() => undefined);
-  }
 }
 
 async function extractTarGzipEntry(
@@ -995,153 +972,6 @@ async function extractZipEntry(
   });
 }
 
-async function probeExecutable(
-  executablePath: string,
-  artifact: ToolchainArtifact,
-  timeoutMs: number,
-  spawnProcess: typeof spawn,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawnProcess(executablePath, ["--version"], {
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const chunks: Buffer[] = [];
-    child.stdout.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`${artifact.name} version check timed out`));
-    }, timeoutMs);
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(
-        new Error(
-          `${artifact.name} could not execute from the Orkestrator toolchain cache: ${error.message}`,
-        ),
-      );
-    });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timeout);
-      const output = Buffer.concat(chunks).toString("utf8");
-      if (code !== 0) {
-        reject(
-          new Error(
-            `${artifact.name} version check failed (code ${code ?? "unknown"}, signal ${signal ?? "none"})`,
-          ),
-        );
-      } else if (!output.includes(artifact.version)) {
-        reject(
-          new Error(
-            `${artifact.name} reported an unexpected version: ${output.trim() || "no output"}`,
-          ),
-        );
-      } else {
-        resolve();
-      }
-    });
-  });
-}
-
-async function verifyMacCodeSignature(
-  executablePath: string,
-  label: string,
-  timeoutMs: number,
-  spawnProcess: typeof spawn,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawnProcess(
-      "/usr/bin/codesign",
-      ["--verify", "--strict", "--verbose=2", executablePath],
-      {
-        stdio: ["ignore", "ignore", "pipe"],
-      },
-    );
-    const errors: Buffer[] = [];
-    child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`${label} code-signature check timed out`));
-    }, timeoutMs);
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timeout);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const detail = Buffer.concat(errors).toString("utf8").trim();
-      reject(
-        new Error(
-          `${label} has an invalid macOS code signature (code ${code ?? "unknown"}, signal ${signal ?? "none"})${detail ? `: ${detail}` : ""}`,
-        ),
-      );
-    });
-  });
-}
-
-async function runCodesign(
-  args: string[],
-  failureMessage: string,
-  timeoutMs: number,
-  spawnProcess: typeof spawn,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawnProcess("/usr/bin/codesign", args, { stdio: ["ignore", "ignore", "pipe"] });
-    const errors: Buffer[] = [];
-    child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`${failureMessage} timed out`));
-    }, timeoutMs);
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("exit", (code, signal) => {
-      clearTimeout(timeout);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const detail = Buffer.concat(errors).toString("utf8").trim();
-      reject(
-        new Error(
-          `${failureMessage} (code ${code ?? "unknown"}, signal ${signal ?? "none"})${detail ? `: ${detail}` : ""}`,
-        ),
-      );
-    });
-  });
-}
-
-async function repairInvalidMacSignature(
-  executablePath: string,
-  artifact: ToolchainArtifact,
-  timeoutMs: number,
-  spawnProcess: typeof spawn,
-): Promise<void> {
-  await runCodesign(
-    ["--remove-signature", executablePath],
-    `${artifact.name} invalid signature could not be removed`,
-    timeoutMs,
-    spawnProcess,
-  ).catch((error: unknown) => {
-    // codesign exits non-zero when no removable signature exists. The following
-    // forced signature is still authoritative, so only retain unexpected I/O errors.
-    if (error instanceof Error && /code [1-9]/.test(error.message)) return;
-    throw error;
-  });
-  await runCodesign(
-    ["--sign", "-", "--force", executablePath],
-    `${artifact.name} could not be ad-hoc signed after source verification`,
-    timeoutMs,
-    spawnProcess,
-  );
-}
-
 async function prepareRepairableExecutable(
   sourcePath: string,
   executablePath: string,
@@ -1174,25 +1004,46 @@ async function prepareRepairableExecutable(
   }
 }
 
+/**
+ * Recreate a locally re-signed executable from its manifest-pinned upstream
+ * copy, unless the copy produced last time is provably untouched: its stamp
+ * still matches, it was made from this exact pinned source, and it is a plain
+ * read-only file. A full check always recreates it.
+ */
 async function refreshRepairableArtifact(
   rootDir: string,
   artifact: ToolchainArtifact,
+  digests: FileStampStore,
   skipExecutableProbeForTests: boolean,
   processTimeoutMs: number,
   spawnProcess: typeof spawn,
 ): Promise<void> {
   const sourcePath = upstreamExecutablePath(rootDir, artifact);
-  if (!(await isValidUpstreamExecutable(rootDir, artifact))) {
+  if (!(await isValidUpstreamExecutable(rootDir, artifact, digests))) {
     throw new Error(`${artifact.name} trusted upstream executable failed verification`);
+  }
+  const executablePath = artifactExecutablePath(rootDir, artifact);
+  if (digests.derivedFrom(executablePath) === artifact.executable.sha256) {
+    const current = await lstat(executablePath).catch(() => null);
+    if (
+      current?.isFile() &&
+      !current.isSymbolicLink() &&
+      (current.mode & 0o777) === 0o500 &&
+      (await digests.isUnchanged(executablePath))
+    ) {
+      digests.retainDerived(executablePath);
+      return;
+    }
   }
   await prepareRepairableExecutable(
     sourcePath,
-    artifactExecutablePath(rootDir, artifact),
+    executablePath,
     artifact,
     skipExecutableProbeForTests,
     processTimeoutMs,
     spawnProcess,
   );
+  await digests.recordDerived(executablePath, artifact.executable.sha256);
 }
 
 /**
@@ -1224,15 +1075,17 @@ async function stageCompanions(
     );
     const companionFilePath = path.join(stagingDirectory, companion.fileName);
     const precedingBytes = downloadedBytes;
-    await downloadArchive(
-      companion.fileName,
-      companion.archive,
-      companionArchivePath,
+    await downloadArchive({
+      label: companion.fileName,
+      archive: companion.archive,
+      archivePath: companionArchivePath,
+      // Staging directories sit directly under the toolchain root.
+      rootDir: path.dirname(stagingDirectory),
       fetchImpl,
-      (received) => onBytes(precedingBytes + received),
+      onBytes: (received) => onBytes(precedingBytes + received),
       allowInsecureDownloadsForTests,
-      timings.downloadTimeoutMs,
-    );
+      timings: downloadTimings(timings),
+    });
     downloadedBytes += companion.archive.size;
     if (companion.archive.format === "zip") {
       await extractZipEntry(
@@ -1344,15 +1197,16 @@ async function installArtifact(
     ? path.join(stagingDirectory, `.upstream-${artifact.executable.fileName}`)
     : executablePath;
   try {
-    await downloadArchive(
-      artifact.name,
-      artifact.archive,
+    await downloadArchive({
+      label: artifact.name,
+      archive: artifact.archive,
       archivePath,
+      rootDir,
       fetchImpl,
       onBytes,
       allowInsecureDownloadsForTests,
-      timings.downloadTimeoutMs,
-    );
+      timings: downloadTimings(timings),
+    });
     if (artifact.archive.bundleRoot) {
       await extractTarGzipBundle(archivePath, stagingDirectory, artifact.name, artifact.archive);
       const bundledExecutable = path.join(
@@ -1391,7 +1245,7 @@ async function installArtifact(
     if (artifact.archive.format !== "raw") await rm(archivePath, { force: true });
     if (
       artifact.archive.bundleIntegrity &&
-      !(await hasValidBundleIntegrity(stagingDirectory, artifact))
+      !(await hasValidBundleIntegrity(stagingDirectory, artifact, directFileDigests))
     ) {
       throw new Error(`${artifact.name} extracted bundle did not match the pinned manifest`);
     }
@@ -1821,8 +1675,23 @@ export async function ensurePinnedToolchains(
     // in another app window cannot remove a version between its validation and
     // activation.
     await cleanStagingDirectories(rootDir);
+    await prunePartialDownloads(
+      rootDir,
+      artifacts.flatMap((artifact) => [
+        artifact.archive,
+        ...artifactCompanions(artifact).map((companion) => companion.archive),
+      ]),
+    );
+    // Files whose verified stamp still matches are not read again, here or in
+    // the final verification below; see file-stamps.ts for what a stamp
+    // covers and when every file is hashed regardless.
+    const digests = await openFileStampStore(rootDir, {
+      forceFullCheck: options.fullVerification === true,
+      fullCheckIntervalMs: timings.fullCheckIntervalMs,
+      racyWindowMs: timings.racyStampWindowMs,
+    });
     const statuses = await Promise.all(
-      artifacts.map((artifact) => installationStatus(rootDir, artifact)),
+      artifacts.map((artifact) => installationStatus(rootDir, artifact, digests)),
     );
     artifacts.forEach((artifact, index) =>
       toolFractions.set(artifact.name, statuses[index]!.state === "valid" ? 1 : 0),
@@ -1920,8 +1789,9 @@ export async function ensurePinnedToolchains(
     );
     if (failedInstallation) throw failedInstallation.reason;
 
-    // Never trust a mutable digest next to a locally re-signed executable.
-    // Recreate those runnable bytes from the manifest-pinned pristine copy.
+    // Locally re-signed executables have no pinned digest. Recreate them from
+    // the manifest-pinned pristine copy unless their stamp proves the copy
+    // made last time untouched; a full check always recreates them.
     await Promise.all(
       artifacts
         .filter((artifact) => artifact.executable.repairInvalidMacSignature)
@@ -1929,6 +1799,7 @@ export async function ensurePinnedToolchains(
           refreshRepairableArtifact(
             rootDir,
             artifact,
+            digests,
             options.skipExecutableProbeForTests ?? false,
             timings.processTimeoutMs,
             spawnProcess,
@@ -1939,7 +1810,7 @@ export async function ensurePinnedToolchains(
     await options.beforeFinalVerificationForTests?.();
     const finalValidity = await Promise.all(
       artifacts.map(async (artifact) => {
-        if (!(await isValidInstallation(rootDir, artifact))) return false;
+        if (!(await isValidInstallation(rootDir, artifact, digests))) return false;
         const executable = await lstat(artifactExecutablePath(rootDir, artifact)).catch(() => null);
         return executable?.isFile() === true && !executable.isSymbolicLink();
       }),
@@ -1947,6 +1818,7 @@ export async function ensurePinnedToolchains(
     if (finalValidity.some((valid) => !valid)) {
       throw new Error("One or more pinned Orkestrator tools failed final verification");
     }
+    await digests.save(artifacts.map((artifact) => artifactDirectory(rootDir, artifact)));
     const result = await activateExecutables(rootDir, artifacts);
     await Promise.all(artifacts.map((artifact) => touchArtifactDirectory(rootDir, artifact)));
     if (!options.skipVersionLeaseForTests) {

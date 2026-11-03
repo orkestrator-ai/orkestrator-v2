@@ -966,7 +966,7 @@ describe("pinned desktop toolchain cache", () => {
     artifact?: ToolchainArtifact;
     fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
     message: string;
-    timingsForTests?: { downloadTimeoutMs: number };
+    timingsForTests?: { downloadIdleTimeoutMs: number };
   }> = [
     {
       name: "HTTP failure",
@@ -1020,13 +1020,13 @@ describe("pinned desktop toolchain cache", () => {
       message: "archive exceeded its pinned size",
     },
     {
-      name: "timeout",
+      name: "stalled",
       fetchImpl: async (_input, init) =>
         await new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")));
         }),
-      message: "aborted by timeout",
-      timingsForTests: { downloadTimeoutMs: 10 },
+      message: "download stalled",
+      timingsForTests: { downloadIdleTimeoutMs: 10 },
     },
   ];
 
@@ -1200,7 +1200,10 @@ describe("pinned desktop toolchain cache", () => {
           skipExecutableProbeForTests: true,
         }),
       ).rejects.toEqual(new Error(failure.message));
-      expect(await readdir(path.join(dataDir, "toolchains"))).toEqual([]);
+      // The verified archive moved out of the (now empty) resumable-download
+      // directory into staging, so nothing of it survives either.
+      expect(await readdir(path.join(dataDir, "toolchains"))).toEqual([".downloads"]);
+      expect(await readdir(path.join(dataDir, "toolchains", ".downloads"))).toEqual([]);
     });
   }
 
@@ -1245,7 +1248,10 @@ describe("pinned desktop toolchain cache", () => {
         }),
       ).rejects.toEqual(new Error(failure.message));
       // Failed extraction must remove staging files and never activate a tool.
-      expect(await readdir(path.join(dataDir, "toolchains"))).toEqual([]);
+      // The verified archive moved out of the (now empty) resumable-download
+      // directory into staging, so nothing of it survives either.
+      expect(await readdir(path.join(dataDir, "toolchains"))).toEqual([".downloads"]);
+      expect(await readdir(path.join(dataDir, "toolchains", ".downloads"))).toEqual([]);
     });
   }
 
@@ -1559,6 +1565,8 @@ describe("pinned desktop toolchain cache", () => {
           dataDir,
           artifacts: [repairable],
           fetchImpl,
+          // An untouched re-signed copy is reused; a full check re-creates it.
+          fullVerification: true,
           spawnForTests: createSpawn(failure.outcomes),
           timingsForTests: { processTimeoutMs: failure.timeout ?? 1_000 },
         }),

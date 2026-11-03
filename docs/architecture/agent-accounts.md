@@ -559,7 +559,8 @@ provider the environment has revoked is never handed a login.
 - **Every start.** Before `docker start`, `refreshStagedAgentAccountLogins`
   rewrites the login files in the container's current staged revision, so the
   entrypoint imports the active account. The staged `.claude.json` is a
-  single-file bind mount and is rewritten in place to keep its inode. After
+  single-file bind mount and is rewritten in place to keep its inode, through
+  the same allowlist staging uses (`claudeContainerConfig`). After
   start, `syncContainerAgentAccountsOnStart` pipes Claude's credential in for
   the active account and writes the marker.
 - **Bridge start.** Each container records the login it holds in

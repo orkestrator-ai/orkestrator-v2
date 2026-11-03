@@ -41,6 +41,7 @@ import {
   type McpValidationResult,
 } from "@orkestrator/protocol/mcp-management";
 
+import { containerSafeClaudeDefaults } from "../claude-container-config.js";
 import {
   advanceReloadRuntimes,
   planRuntimes,
@@ -1100,7 +1101,11 @@ export class McpManagementService {
       throw mcpFailure("unknown-source", {
         message: "The backend user has no matching configuration file to refresh from.",
       });
-    return (await loadCatalog(this.store, [host])).sources[0]!;
+    const loaded = (await loadCatalog(this.store, [host])).sources[0]!;
+    // Only the servers staging would hand a container (security report M8).
+    return host.provider === "claude"
+      ? containerSafeClaudeDefaults(loaded, [this.homes.home])
+      : loaded;
   }
 
   /** What refreshing one container source from the backend user's file would change. */

@@ -24,7 +24,8 @@ test.skipIf(!enabled)(
       "claude-config/settings.json": '{"enabledPlugins":{"review@fixture":true}}',
       "claude-config/.credentials.json":
         '{"claudeAiOauth":{"accessToken":"fixture","refreshToken":""}}',
-      "claude-config.json": '{"hasCompletedOnboarding":true,"relayFixture":true}',
+      "claude-config.json":
+        '{"hasCompletedOnboarding":true,"oauthAccount":{"emailAddress":"relay@fixture.invalid"},"relayFixture":true}',
       "codex-home/auth.json": '{"OPENAI_API_KEY":"fixture-not-a-key"}',
       "codex-home/rules/fixture.rules": "relayed rule",
       "opencode-config/opencode.json": '{"model":"fixture/model"}',
@@ -122,11 +123,12 @@ test.skipIf(!enabled)(
           ]),
         ).enabledPlugins,
       ).toEqual({ "review@fixture": true });
-      expect(
-        JSON.parse(
-          await docker(["exec", "--user", "node", container, "cat", "/home/node/.claude.json"]),
-        ).relayFixture,
-      ).toBe(true);
+      // Only the allowlisted keys of the staged file reach the container's copy.
+      const claudeJson = JSON.parse(
+        await docker(["exec", "--user", "node", container, "cat", "/home/node/.claude.json"]),
+      );
+      expect(claudeJson.oauthAccount).toEqual({ emailAddress: "relay@fixture.invalid" });
+      expect(claudeJson.relayFixture).toBeUndefined();
       expect(
         JSON.parse(
           await docker([

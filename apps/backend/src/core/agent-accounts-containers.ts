@@ -42,6 +42,7 @@ import {
   enqueueContainerBridgeOperation,
 } from "./container-bridge-operations.js";
 import { agentAccountHome, prepareAgentAccountHome } from "./agent-accounts-homes.js";
+import { claudeContainerConfig } from "./claude-container-config.js";
 import {
   readAddedClaudeCredentials,
   resolveActiveAgentAccount,
@@ -298,6 +299,8 @@ async function dropImportedCodexLoginAfterHostSignOut(
 function hostStagingSources(context: CommandContext): {
   claudeConfigDir: string | undefined;
   claudeJson: string;
+  /** The home directories staging reads from, for `claudeContainerConfig`. */
+  homes: string[];
   codexHome: string | undefined;
   grokAuth: string;
   opencodeAuth: string | undefined;
@@ -312,6 +315,7 @@ function hostStagingSources(context: CommandContext): {
   return {
     claudeConfigDir: roots.agentTest ? roots.claudeConfigDir : path.join(roots.home, ".claude"),
     claudeJson: path.join(hostHome, ".claude.json"),
+    homes: [roots.home, hostHome],
     codexHome: roots.agentTest ? roots.codexHome : path.join(roots.home, ".codex"),
     grokAuth: path.join(grokStagingHome(roots), "auth.json"),
     opencodeAuth: roots.agentTest
@@ -381,10 +385,14 @@ async function refreshStagedLogin(
   );
   // `.claude.json` is bind-mounted as a single file under whatever name the
   // source had, so it is found by listing and rewritten in place.
-  const claudeJson = await readLoginFile(
+  const hostJson = await readLoginFile(
     active.home ? path.join(active.home, ".claude.json") : host.claudeJson,
   );
-  if (claudeJson === undefined) return;
+  if (hostJson === undefined) return;
+  // The same allowlist staging applies (security report M8). An unparseable
+  // file empties the mount rather than leaving the previous account's.
+  const claudeJson =
+    claudeContainerConfig(hostJson, { hostHomes: host.homes }) ?? JSON.stringify({});
   const stageDirectory = path.join(
     portableInputRevisionDirectory(dataDir, environment.id, revision),
     "files",

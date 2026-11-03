@@ -487,6 +487,47 @@ describe("refreshStagedAgentAccountLogins", () => {
     ).toContain("claude-host");
   });
 
+  test("a refreshed staged .claude.json carries only the container allowlist", async () => {
+    const revision = await stage();
+    const hostHome = path.join(root, "host-home");
+    await write(
+      path.join(hostHome, ".claude.json"),
+      JSON.stringify({
+        oauthAccount: { emailAddress: "host@example.com" },
+        hasCompletedOnboarding: true,
+        primaryApiKey: "SENTINEL-API-KEY",
+        projects: { [path.join(hostHome, "secret-project")]: { allowedTools: [] } },
+        mcpServers: {
+          remote: { type: "http", url: "https://mcp.example.com/mcp" },
+          orkestrator: {
+            type: "http",
+            url: "http://127.0.0.1:34122/mcp",
+            headers: { Authorization: "Bearer SENTINEL-OPERATOR" },
+          },
+          local: { command: path.join(hostHome, "bin", "server") },
+        },
+      }),
+    );
+    const { runners } = fakeRunners(revision);
+
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+    const text = await fs.readFile(staged(revision, "files/claude.json/.claude.json"), "utf8");
+    expect(JSON.parse(text)).toEqual({
+      oauthAccount: { emailAddress: "host@example.com" },
+      hasCompletedOnboarding: true,
+      mcpServers: { remote: { type: "http", url: "https://mcp.example.com/mcp" } },
+    });
+    expect(text).not.toContain("SENTINEL");
+    expect(text).not.toContain(hostHome);
+
+    // An unparseable host file empties the mount rather than keeping the last copy.
+    await write(path.join(hostHome, ".claude.json"), "{not json");
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+    expect(await fs.readFile(staged(revision, "files/claude.json/.claude.json"), "utf8")).toBe(
+      "{}",
+    );
+  });
+
   test("revokes a previously staged login when Claude container credentials are disabled", async () => {
     await addAccounts({ claude: CLAUDE_ID });
     const revision = await stage();
@@ -1396,7 +1437,7 @@ if (command === "inspect") {
   if (failure === "ambiguous-start") process.exit(17);
 } else if (command === "exec") {
   if (readFileSync(running, "utf8") !== "true") process.exit(18);
-  if (args[0] === "--user") {
+  if (args.includes("--user")) {
     if (failure === "project-access") process.exit(19);
   } else {
     const text = args.at(-1);

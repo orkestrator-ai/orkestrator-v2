@@ -705,6 +705,37 @@ test("Claude refresh needs no staged copy update", async () => {
   });
 });
 
+test("Claude refresh inherits only the servers staging would hand a container", async () => {
+  fixture.containerFiles.set(CLAUDE, '{"theme":"dark","mcpServers":{}}');
+  fixture.write(
+    "home/.claude.json",
+    JSON.stringify({
+      mcpServers: {
+        fresh: { command: "fresh" },
+        orkestrator: {
+          type: "http",
+          url: "https://100.64.0.1:34122/mcp",
+          headers: { Authorization: `Bearer ${SENTINEL}` },
+        },
+        hostService: { type: "http", url: "http://127.0.0.1:9000/mcp" },
+        hostBinary: { command: path.join(fixture.home, "bin", "mcp") },
+      },
+    }),
+  );
+  const { targetId } = await snapshotOf("claude");
+  const preview = await fixture.service.previewDefaultsRefresh({
+    request: { targetId, sourceId: "claude:user" },
+  });
+  expect(preview.added).toEqual(["fresh"]);
+  await fixture.service.refreshDefaults({
+    request: { targetId, sourceId: "claude:user", previewToken: preview.previewToken },
+  });
+  const written = fixture.containerFiles.get(CLAUDE)!;
+  expect(JSON.parse(written).mcpServers).toEqual({ fresh: { command: "fresh" } });
+  expect(written).not.toContain(SENTINEL);
+  expect(written).not.toContain(fixture.home);
+});
+
 test("reset after a retained-output restart restores the recorded empty baseline", async () => {
   fixture.containerFiles.delete(CODEX);
   await addCodex("mine");

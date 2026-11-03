@@ -121,6 +121,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     useHostGitHubCredentials: global.useHostGitHubCredentials ?? true,
     sshAgentSocketPath: global.sshAgentSocketPath ?? "",
     autoMergeRequireChecks: global.autoMergeRequireChecks ?? true,
+    autoSteer: global.autoSteer ?? false,
     defaultProjectsDirectory: global.defaultProjectsDirectory ?? "",
     useHostClaudeCredentials: global.useHostClaudeCredentials ?? true,
     preferredEditor: global.preferredEditor ?? "vscode",
@@ -219,6 +220,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.useHostGitHubCredentials ?? true,
     global.sshAgentSocketPath ?? "",
     global.autoMergeRequireChecks ?? true,
+    global.autoSteer ?? false,
     global.defaultProjectsDirectory ?? "",
     global.useHostClaudeCredentials ?? true,
     global.allowedDomains ?? [],
@@ -280,6 +282,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [autoMergeRequireChecks, setAutoMergeRequireChecks] = useState(
     global.autoMergeRequireChecks ?? true,
   );
+  const [autoSteer, setAutoSteer] = useState(global.autoSteer ?? false);
   const [defaultProjectsDirectory, setDefaultProjectsDirectory] = useState(
     global.defaultProjectsDirectory ?? "",
   );
@@ -431,6 +434,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
     setAutoMergeRequireChecks(global.autoMergeRequireChecks ?? true);
+    setAutoSteer(global.autoSteer ?? false);
     setDefaultProjectsDirectory(global.defaultProjectsDirectory ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
@@ -631,6 +635,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       useHostGitHubCredentials,
       sshAgentSocketPath: sshAgentSocketPathForSave(sshAgentSocketPath) ?? "",
       autoMergeRequireChecks,
+      autoSteer,
       defaultProjectsDirectory: defaultProjectsDirectory.trim(),
       useHostClaudeCredentials,
       preferredEditor,
@@ -673,6 +678,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       useHostGitHubCredentials,
       sshAgentSocketPath,
       autoMergeRequireChecks,
+      autoSteer,
       defaultProjectsDirectory,
       useHostClaudeCredentials,
       preferredEditor,
@@ -1050,6 +1056,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     sshAgentSocketPathValidationError,
     autoMergeRequireChecks,
     setAutoMergeRequireChecks,
+    autoSteer,
+    setAutoSteer,
     defaultProjectsDirectory,
     setDefaultProjectsDirectory,
     defaultProjectsDirectoryValidationError,

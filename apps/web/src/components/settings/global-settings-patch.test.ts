@@ -58,6 +58,19 @@ describe("globalConfigPatchFromCoreFields", () => {
     });
   });
 
+  test("auto-steer is stored when turned on and removed when turned back off", () => {
+    expect(baseline.autoSteer).toBe(false);
+    const on = { ...baseline, autoSteer: true };
+    expect(globalConfigPatchFromCoreFields(on, baseline)).toEqual({
+      patch: { autoSteer: true },
+      unset: [],
+    });
+    expect(globalConfigPatchFromCoreFields(baseline, on)).toEqual({
+      patch: {},
+      unset: ["autoSteer"],
+    });
+  });
+
   test("a field returned to its default is removed rather than stored", () => {
     const edited = {
       ...baseline,

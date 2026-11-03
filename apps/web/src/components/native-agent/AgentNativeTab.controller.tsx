@@ -170,6 +170,7 @@ import {
   webAnnotationQueueItemFrozenError,
 } from "@/lib/prompt-queue-errors";
 import { queuedPromptControlRestore } from "./queued-prompt-controls";
+import { autoSteerNotice, shouldAutoSteer } from "./auto-steer";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import {
@@ -1538,6 +1539,10 @@ export function SharedNativeAgentController({
     recoverableDispatch && recoverableDispatch.status === "reconciling"
       ? recoverableDispatch
       : undefined;
+  // Auto-steer needs what a queued prompt's Steer button needs.
+  const steerAvailable =
+    isRunning && !recoverableDispatch && projection?.capabilities?.actions?.steer === true;
+  const autoSteerEnabled = config.global.autoSteer === true;
   const sendLocked =
     queueEditPending ||
     !projection ||
@@ -2280,9 +2285,23 @@ export function SharedNativeAgentController({
       let keepTranscriptConfirmation = false;
       // The provider will never run this id: a resend has to mint a new one.
       let requestIdRetired = false;
+      // Auto-steer queues the message under an id it knows, then steers it out
+      // of the queue: anything short of a delivered steer leaves it queued.
+      const autoSteerId =
+        canQueue &&
+        shouldAutoSteer({
+          enabled: autoSteerEnabled,
+          steerAvailable,
+          command: rawCommand,
+          preparedPrompt,
+          attachmentCount: submittedAttachments.length,
+          pendingHandoff: Boolean(handoff.pendingHistory),
+        })
+          ? crypto.randomUUID()
+          : undefined;
       try {
         if (canQueue) {
-          await enqueue(prompt, options);
+          await enqueue(prompt, autoSteerId ? { ...options, requestId: autoSteerId } : options);
           setOptimisticPrompt(null);
           clearDraft(sessionKey);
           consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
@@ -2296,6 +2315,19 @@ export function SharedNativeAgentController({
             toast.info(
               `${commandSubmission.command.name} is queued and runs when ${label} is idle`,
             );
+          }
+          if (autoSteerId) {
+            try {
+              const notice = autoSteerNotice(await steerQueued(autoSteerId), label);
+              if (notice?.tone === "success") toast.success(notice.message);
+              else if (notice) toast.info(notice.message);
+            } catch (error) {
+              toast.error(
+                `Could not steer the running turn: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            }
           }
           return true;
         }
@@ -2374,6 +2406,7 @@ export function SharedNativeAgentController({
     },
     [
       adapter.capabilities.attachments,
+      autoSteerEnabled,
       beforeSend,
       clearDraft,
       composer?.fastModeEnabled,
@@ -2421,6 +2454,8 @@ export function SharedNativeAgentController({
       serializeForLLM,
       sessionKey,
       sessionStateAuthoritative,
+      steerAvailable,
+      steerQueued,
       tabId,
       updateDraft,
       visibleAuthoritativeMessageIds,
@@ -4129,12 +4164,21 @@ export function SharedNativeAgentController({
                 : draftCommandSendTitle
                   ? draftCommandSendTitle
                   : canQueue
-                    ? // A coordinator turn is short by design — it delegates and
-                      // ends — so "queue" understates what happens: the message
-                      // runs as the next turn, usually within seconds.
-                      isReadOnlyCoordinator
-                      ? "Send after this turn"
-                      : "Add to queue"
+                    ? shouldAutoSteer({
+                        enabled: autoSteerEnabled,
+                        steerAvailable,
+                        command: false,
+                        preparedPrompt: false,
+                        attachmentCount: draft.attachments.length,
+                        pendingHandoff: Boolean(handoff.pendingHistory),
+                      })
+                      ? `Steer the current ${label} turn`
+                      : // A coordinator turn is short by design — it delegates and
+                        // ends — so "queue" understates what happens: the message
+                        // runs as the next turn, usually within seconds.
+                        isReadOnlyCoordinator
+                        ? "Send after this turn"
+                        : "Add to queue"
                     : "Send"
           }
           onSend={() => sendFromComposer(draft.text)}

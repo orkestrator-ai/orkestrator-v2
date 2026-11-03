@@ -35,6 +35,7 @@ export interface CoreFieldsSnapshot {
   useHostGitHubCredentials: boolean;
   sshAgentSocketPath: string;
   autoMergeRequireChecks: boolean;
+  autoSteer: boolean;
   defaultProjectsDirectory: string;
   useHostClaudeCredentials: boolean;
   preferredEditor: PreferredEditor;
@@ -108,6 +109,7 @@ const ABSENT_WHEN: {
   [K in keyof CoreFieldsSnapshot & keyof GlobalConfig]?: (value: CoreFieldsSnapshot[K]) => boolean;
 } = {
   sshAgentSocketPath: (value) => value === "",
+  autoSteer: (value) => value === false,
   defaultProjectsDirectory: (value) => value === "",
   claudeBackgroundCommandLimitHours: (value) =>
     value === DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,

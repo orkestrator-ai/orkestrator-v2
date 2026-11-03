@@ -30,7 +30,7 @@ function idleCodex() {
     contentRevision: "process-1:1.4:0",
     transcriptToken: "source-1",
     reply: `Finished ${TRANSCRIPT_MARKER}`,
-    commands: [{ name: "review", description: "Review the change" }],
+    commands: [{ name: "review", description: "Review the change", source: "builtin" as const }],
     runtime: "ready",
     activity: "idle" as ProviderActivityObservation["state"],
   };
@@ -87,12 +87,14 @@ async function readRound(service: NativeAgentService, tokens: Record<string, str
     liveWindow,
     ...(tokens.transcript ? { knownToken: tokens.transcript } : {}),
   });
+  if (!("token" in transcript)) throw new Error("Expected an existing idle session");
   tokens.transcript = transcript.token;
   const sessionState = await service.getSessionStateUpdate({
     ...IDENTITY,
     viewVersion: 1,
     ...(tokens.state ? { knownToken: tokens.state } : {}),
   });
+  if (!("token" in sessionState)) throw new Error("Expected an existing idle session");
   tokens.state = sessionState.token;
   const discovery = await service.getDiscoveryUpdate({
     ...IDENTITY,
@@ -100,6 +102,7 @@ async function readRound(service: NativeAgentService, tokens: Record<string, str
     sections: [...NATIVE_AGENT_DISCOVERY_SECTIONS],
     ...(tokens.discovery ? { knownToken: tokens.discovery } : {}),
   });
+  if (!("token" in discovery)) throw new Error("Expected an existing idle session");
   tokens.discovery = discovery.token;
 }
 

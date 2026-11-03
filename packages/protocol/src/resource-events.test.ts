@@ -21,6 +21,11 @@ function change(overrides: Partial<ResourceChange> = {}): unknown {
   return { resource: "environment", id: "env-1", revision: 1, ...overrides };
 }
 
+// The wire boundary must preserve future tags without claiming they are known.
+type Assert<T extends true> = T;
+type WireCauseIsString = Assert<string extends NonNullable<ResourceChange["cause"]> ? true : false>;
+const wireCauseIsString: WireCauseIsString = true;
+
 describe("isResourceKind", () => {
   test("accepts every declared kind", () => {
     for (const kind of RESOURCE_KINDS) {
@@ -72,7 +77,9 @@ describe("isResourceChange", () => {
   test("accepts a native session cause, a newer backend's included, and rejects a malformed one", () => {
     const native = { resource: "native-agent-session" as const, id: "env-1" };
     expect(isResourceChange(change({ ...native, cause: "discovery-renewal" }))).toBe(true);
-    expect(isResourceChange({ ...(change(native) as object), cause: "a-later-cause" })).toBe(true);
+    const future = change({ ...native, cause: "a-later-cause" });
+    expect(wireCauseIsString).toBe(true);
+    expect(isResourceChange(future)).toBe(true);
     for (const cause of ["", 7, "x".repeat(65)]) {
       expect(isResourceChange({ ...(change(native) as object), cause })).toBe(false);
     }

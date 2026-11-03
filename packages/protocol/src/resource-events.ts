@@ -8,8 +8,6 @@
  * a client never has to trust a partial snapshot delivered out of band.
  */
 
-import type { NativeSessionInvalidationCause } from "./native-agent-observation.js";
-
 /** Persistent resources the backend owns and broadcasts changes for. */
 export const RESOURCE_KINDS = [
   "project",
@@ -226,7 +224,7 @@ export interface ResourceChange {
    * re-reads the same way whatever it says, and a newer backend may send one
    * this client does not know.
    */
-  cause?: NativeSessionInvalidationCause;
+  cause?: string;
   /**
    * Monotonic per-backend sequence number. Strictly increasing across every
    * resource kind, so a client can order changes and detect that it missed a

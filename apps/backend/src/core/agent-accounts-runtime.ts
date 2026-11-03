@@ -116,6 +116,12 @@ export class AgentAccountsRuntime {
    * Lost on restart, when every running container is simply pushed once more.
    */
   private readonly pushedClaudeLogins = new Map<string, string>();
+  /**
+   * Account directories a usage renewal is running `claude` in, keyed
+   * `<platform>:<id>`. Removal refuses them: the CLI would recreate a directory
+   * deleted under it.
+   */
+  private readonly renewingLogins = new Set<string>();
 
   constructor(options: AgentAccountsRuntimeOptions = {}) {
     this.options = options;
@@ -201,6 +207,19 @@ export class AgentAccountsRuntime {
 
   forgetPushedClaudeLogin(containerId: string): void {
     this.pushedClaudeLogins.delete(containerId);
+  }
+
+  /** Mark a login renewal as running. Call under `withMutation`, after checking the account exists. */
+  beginLoginRenewal(key: string): void {
+    this.renewingLogins.add(key);
+  }
+
+  endLoginRenewal(key: string): void {
+    this.renewingLogins.delete(key);
+  }
+
+  isRenewingLogin(key: string): boolean {
+    return this.renewingLogins.has(key);
   }
 
   /** True the first time a coordinator home's Keychain login is to be removed. */

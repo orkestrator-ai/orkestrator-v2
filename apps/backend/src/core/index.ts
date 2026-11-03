@@ -61,6 +61,7 @@ import {
   autoSwitchSettings,
   listAgentAccounts,
   readAgentAccountUsage,
+  renewAgentAccountLogin,
 } from "./agent-accounts.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import {
@@ -874,6 +875,10 @@ export class OrkestratorBackend {
           force,
           reader: (readContext, readPlatform, readOptions) =>
             readContext.runtime.accounts.readPlanUsage(readContext, readPlatform, readOptions),
+        }),
+      renewLogin: (platform, accountId) =>
+        renewAgentAccountLogin(context, platform, accountId, {
+          refresh: (account) => refreshHostClaudeLogin(context, account),
         }),
       switchAccount: (platform, accountId, automatic) =>
         applyAutomaticAccountSwitch(context, platform, accountId, automatic),

@@ -6,8 +6,8 @@ Analysed 2026-11-03 against `main` at `7b48c23fb`.
 
 ### Tasks
 
-1. **Reattach once per refused attachment**: a connection refused for an attachment that has already been replaced retries on the new one instead of starting another reattach. Status: open.
-2. **Regression test with concurrent requests**: the desktop end-to-end suite revokes access and sends two requests at once through the ingress. Status: open (depends on 1).
+1. **Reattach once per refused attachment**: a connection refused for an attachment that has already been replaced retries on the new one instead of starting another reattach. Status: done (2026-11-03).
+2. **Regression test with concurrent requests**: the desktop end-to-end suite revokes access and sends two requests at once through the ingress. Status: done (2026-11-03).
 
 ### 1. Reattach once per refused attachment
 
@@ -47,6 +47,68 @@ Analysed 2026-11-03 against `main` at `7b48c23fb`.
   - **A unit test with a fake tunnel.**
     - Pros: deterministic ordering.
     - Cons: would not exercise the real refusal path.
+
+## Assumptions and decisions
+
+### Task 1: which refusals reattach
+
+`PreviewTransportManager.connect` now keeps the attachment each open used and
+passes it to `replacementFor`. A refusal reattaches only if that attachment is
+still current. Otherwise it retries on the current one, with no backend call, no
+`desktop.reconnect` and no `reconnecting` state. This is the recommended option;
+the alternatives are compared under task 1 above.
+
+While an attach is in flight, a refused connection joins it even if the current
+attachment differs from the one it used, because that attachment is about to be
+released.
+
+### Task 1: renewals follow the same rule
+
+The ticket's criterion is one reattach per revocation, and `renew` could break
+it. A renewal still pending when another path replaced its attachment is refused
+with `not-found` once that attachment is released, and `renew` then started
+another attach, which released the replacement. `renew` now returns without
+reattaching in that case. Without this, the connection fix would leave one route
+to the same failure.
+
+### Task 1: one retry stays the limit
+
+A connection still gets one retry. If the attachment it retries on is revoked as
+well (a second revocation inside that window), the request fails with the refusal
+rather than looping. This matches the behaviour before the fix, and bounds the
+work one request can cause.
+
+### Task 1: pooled connections
+
+The investigation left open whether reusing a pooled connection across a
+revocation fails on its own. With the fix, the test that first pools a keep-alive
+connection and then sends two `GET`s immediately after the revocation passes, so
+this did not show a separate failure. It covers only `GET`s; requests with a body
+on a pooled connection were not tested.
+
+### Task 2: tests added
+
+All in `apps/desktop/tests/preview-transport-manager.test.ts`, on the real
+harness except the last. Each failed before the fix.
+
+- Two concurrent requests after a revocation, with and without a pooled
+  connection: both answer 200, two `create_preview_attachment`, one
+  `release_preview_attachment`, one `desktop.reconnect{access-expired}`.
+- The same after a generation change, with `authenticateTunnel` refusing the first
+  attachment as `generation-changed`: a real generation bump also revokes, which
+  reports `access-expired`.
+- A refusal that arrives after the replacement: the gateway holds the second
+  tunnel upgrade until the first request has recovered, so the order is fixed
+  rather than timing-dependent.
+- A renewal refused after its attachment was replaced, in the fake-backend
+  lifecycle suite.
+
+### Keeping this file
+
+The index marks this file finished, and it stays in place until a later sweep
+retires it, as with the other finished rows and retirement commits such as #1442.
+The durable behaviour is in
+[browser-previews.md](../../architecture/browser-previews.md#connections-through-the-tunnel).
 
 ## Related
 

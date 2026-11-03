@@ -478,8 +478,20 @@ sequenceDiagram
   G-->>I: OPEN_OK, then bounded binary frames both ways
 ```
 
+### Connections through the tunnel
+
 Each upstream TCP connection is one outer WebSocket. Idle connections are
 pooled per service; nothing is replayed after a reconnect.
+
+A connection refused with `access-expired` or `generation-changed` is retried
+once, before any application bytes are sent. One revocation causes one reattach,
+however many connections it refused:
+`PreviewTransportManager` reattaches only if the attachment the connection was
+refused on is still current. If that attachment has been replaced, the
+connection retries on the current one with no backend call; if an attach is in
+flight, it joins that attach. A reattach releases the attachment it replaces, so
+a second one would refuse the connections opening on the first. A renewal refused
+after its attachment was replaced follows the same rule.
 
 ### Resource ownership
 

@@ -229,7 +229,7 @@ their backend, where they appear in `get_preview_diagnostics`. HMR delivery
 is measured by `scripts/preview-latency-baseline.ts`, not the product.
 Thresholds remain blocked on task 1's two-machine baseline. Adding the
 counters exposed a reattach race, filed as
-[3270](3270-desktop-tunnel-double-reattach.md).
+[3270](3270-desktop-tunnel-double-reattach.md) and fixed on 2026-11-03.
 
 **Decisions.**
 
@@ -1914,9 +1914,9 @@ Recorded 2026-11-03 for task 6's metric additions, on branch
   by the category that forced it, with `desktop.reconnect_failed{category}`
   when the reattach fails. Pros: matches backend work (one
   `create_preview_attachment` each); connections that join an attach in
-  flight do not inflate it. Cons: the race in
-  [3270](3270-desktop-tunnel-double-reattach.md) can still start two
-  reattaches for one revocation, and both are counted.
+  flight do not inflate it. Since
+  [3270](3270-desktop-tunnel-double-reattach.md) (2026-11-03), one revocation
+  starts one reattach, so it counts once.
 - **D17. Where connect and first byte are measured (task 6).** Connect is
   `openPreviewTunnel` from the WebSocket connect to `OPEN_OK`
   (`PreviewTunnelStream.openMs`), for new upstream connections only (pooled

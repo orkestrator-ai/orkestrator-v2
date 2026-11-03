@@ -172,3 +172,133 @@ test("forced colours replace the tab's spinner with a static outline", async ({ 
   });
   expect(style).toEqual({ width: "2px", line: "solid", radius: "6px", spinner: "none" });
 });
+
+for (const palette of ["dark", "simulated-light"] as const) {
+  for (const selected of [true, false]) {
+    test(`working outline inherits a contrasting text color: ${palette}, selected=${selected}`, async ({
+      page,
+    }) => {
+      await page.goto("/coordinator-activity");
+      // Sample settled colors, never a transient frame between selection states.
+      await page.addStyleTag({ content: "*, *::before { transition: none !important; }" });
+      // There is no shipped light theme. Exercise the same currentColor contract
+      // with explicit light surface/text tokens rather than claiming theme support.
+      if (palette === "simulated-light") {
+        await page.addStyleTag({
+          content: `:root {
+          --color-background: #ffffff;
+          --color-chrome: #ffffff;
+          --color-foreground: #18181b;
+          --color-muted-foreground: #52525b;
+          --color-elevated: #f4f4f5;
+        }`,
+        });
+      }
+      const tab = coordinatorTab(page);
+      if (!selected) await page.getByRole("tab", { name: "Kanban", exact: true }).click();
+      await expect(tab).toHaveAttribute("aria-selected", String(selected));
+      // Move away so hover text colors cannot conceal a dim unselected state.
+      await page.mouse.move(0, 0);
+      const ring = tab.getByTestId("coordinator-working-outline-ring");
+      await expect(ring).toHaveClass(/environment-working-spinner-text-colored/);
+      await expect
+        .poll(() =>
+          tab.evaluate((element) => {
+            const ring = element.querySelector("[data-testid='coordinator-working-outline-ring']")!;
+            const text = getComputedStyle(element).color;
+            const style = getComputedStyle(ring);
+            return (
+              style.color === text &&
+              getComputedStyle(ring, "::before").backgroundImage.includes(text)
+            );
+          }),
+        )
+        .toBe(true);
+      const contrast = () =>
+        tab.evaluate((element) => {
+          const ring = element.querySelector("[data-testid='coordinator-working-outline-ring']")!;
+          // Canvas resolves both rgb and oklch computed colors into sRGB bytes.
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 1;
+          const ctx = canvas.getContext("2d")!;
+          const luminance = (color: string) => {
+            ctx.clearRect(0, 0, 1, 1);
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, 1, 1);
+            const values = Array.from(ctx.getImageData(0, 0, 1, 1).data)
+              .slice(0, 3)
+              .map((v) => {
+                const n = v / 255;
+                return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+              });
+            return values[0]! * 0.2126 + values[1]! * 0.7152 + values[2]! * 0.0722;
+          };
+          let surface: Element | null = element;
+          while (surface && getComputedStyle(surface).backgroundColor === "rgba(0, 0, 0, 0)")
+            surface = surface.parentElement;
+          const head = luminance(getComputedStyle(ring).color);
+          const background = luminance(getComputedStyle(surface!).backgroundColor);
+          return (Math.max(head, background) + 0.05) / (Math.min(head, background) + 0.05);
+        });
+      // The opaque head is the activity cue; the intentional transparent tail fades.
+      await expect.poll(contrast).toBeGreaterThanOrEqual(3);
+      expect(await spinning(ring)).toBe(true);
+    });
+  }
+}
+
+for (const presentation of ["bar", "grid"] as const) {
+  test(`working outline stays inside the ${presentation} tab at narrow width`, async ({ page }) => {
+    // Keep room for the fixture's fixed 288px sidebar plus a whole tab.
+    await page.setViewportSize({ width: 640, height: 844 });
+    await page.goto(`/coordinator-activity?presentation=${presentation}`);
+    const tab = coordinatorTab(page);
+    const list = page.getByRole("tablist", { name: "Project navigation" });
+    const outline = tab.getByTestId("coordinator-working-outline");
+    await expect(outline).toBeVisible();
+    if (presentation === "bar") {
+      // The fixture sidebar deliberately leaves a narrow scrolling navigation bar.
+      expect(await list.evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
+      await list.evaluate((e) => {
+        e.scrollLeft = e.scrollWidth;
+      });
+      expect(await list.evaluate((e) => e.scrollLeft)).toBeGreaterThan(0);
+      // Coordinator is the first tab. Put its inset outline exactly at the
+      // clipping boundary while leaving the tablist horizontally scrolled.
+      await list.evaluate((e) => {
+        e.scrollLeft = 1;
+      });
+      expect(await list.evaluate((e) => e.scrollLeft)).toBe(1);
+    }
+    const geometry = await tab.evaluate((element) => {
+      const outline = element.querySelector("[data-testid='coordinator-working-outline']")!;
+      const ring = outline.firstElementChild!;
+      const tab = element.getBoundingClientRect();
+      const box = outline.getBoundingClientRect();
+      const list = element.parentElement!.getBoundingClientRect();
+      return {
+        inset: [
+          box.left - tab.left,
+          box.top - tab.top,
+          tab.right - box.right,
+          tab.bottom - box.bottom,
+        ],
+        visible:
+          box.left >= list.left &&
+          box.right <= list.right &&
+          box.top >= list.top &&
+          box.bottom <= list.bottom,
+        tabRadius: getComputedStyle(element).borderRadius,
+        ringRadius: getComputedStyle(ring, "::before").borderRadius,
+      };
+    });
+    expect(geometry.inset).toEqual([1, 1, 1, 1]);
+    expect(geometry.visible).toBe(true);
+    expect(geometry.tabRadius).toBe(presentation === "grid" ? "8px" : "6px");
+    expect(geometry.ringRadius).toBe(geometry.tabRadius);
+    const dimensions = await list.evaluate((e) => [e.scrollWidth, e.scrollHeight]);
+    await page.getByRole("button", { name: "Coordinator idle" }).click();
+    await expect(outline).toHaveCount(0);
+    expect(await list.evaluate((e) => [e.scrollWidth, e.scrollHeight])).toEqual(dimensions);
+  });
+}

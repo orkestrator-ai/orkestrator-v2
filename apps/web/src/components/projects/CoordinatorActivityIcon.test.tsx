@@ -34,6 +34,7 @@ describe("CoordinatorWorkingOutline", () => {
     expect(outline.className).toContain("rounded-[inherit]");
     expect(ring.className).toContain("rounded-[inherit]");
     expect(ring.className).not.toContain("rounded-[5px]");
+    expect(ring.className.split(" ")).toContain("environment-working-spinner-text-colored");
   });
 
   test("replaces the spinner with a static outline in forced colours", () => {

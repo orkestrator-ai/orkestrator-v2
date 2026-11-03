@@ -312,6 +312,96 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     });
   });
 
+  test("ingress timing and reconnects are reported to the backend's preview metrics", async () => {
+    type Metrics = {
+      counters: Record<string, number>;
+      histograms: Record<string, { count: number; max: number }>;
+    };
+    const diagnostics = async () =>
+      (
+        (await createCommandRegistry().get("get_preview_diagnostics")!({}, {
+          storage: harness.storage,
+          previews: harness.runtime,
+        } as unknown as CommandContext)) as { metrics: Metrics }
+      ).metrics;
+    const descriptor = await manager.acquire(target(), "tab-1");
+    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+    const revoke = async () => {
+      harness.runtime.access.revokeServices([serviceId], "operator-revoked");
+      // Let the revocation close the pooled connections before the next request.
+      await Bun.sleep(20);
+    };
+    expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+    await revoke();
+    expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+    await revoke();
+    failAttach = previewFailure("capacity-exceeded");
+    expect((await get(`${descriptor.origin}/health`, headers)).status).not.toBe(200);
+    failAttach = null;
+    expect((await get(`${descriptor.origin}/assets/app.css`, headers)).status).toBe(200);
+
+    // Nothing is reported until the batch is flushed (here, by disposal).
+    expect(invoked).not.toContain("record_preview_client_metrics");
+    expect((await diagnostics()).histograms["desktop.connect_ms"]).toBeUndefined();
+    await manager.disposeAll();
+    expect(invoked.filter((command) => command === "record_preview_client_metrics")).toHaveLength(
+      1,
+    );
+
+    const metrics = await diagnostics();
+    expect(metrics.histograms["desktop.connect_ms"]!.count).toBeGreaterThanOrEqual(2);
+    expect(metrics.histograms["desktop.first_byte_ms"]!.count).toBe(3);
+    expect(metrics.counters["desktop.reconnect{access-expired}"]).toBe(3);
+    expect(metrics.counters["desktop.reconnect_failed{capacity-exceeded}"]).toBe(1);
+    // Content-free: no ingress origin, path, service or attachment identity.
+    const serialized = JSON.stringify(metrics);
+    for (const secret of [descriptor.origin, "/health", "app.css", serviceId, backendInstanceId])
+      expect(serialized).not.toContain(secret);
+  });
+
+  test("buffered ingress metrics are reported on a timer while the window stays open", async () => {
+    const reports: unknown[] = [];
+    const session = new FakeSession();
+    const timed = new PreviewTransportManager({
+      invoke: async <T>(command: string, args: Record<string, unknown>) => {
+        if (command === "record_preview_client_metrics") {
+          reports.push(args.report);
+          throw new Error("an older backend does not know this command");
+        }
+        return (await createCommandRegistry().get(command)!(args, {
+          storage: harness.storage,
+          previews: harness.runtime,
+        } as unknown as CommandContext)) as T;
+      },
+      tunnelUrl: () => `ws://127.0.0.1:${gatewayPort}/__orkestrator/preview/tunnel`,
+      isRemote: () => false,
+      partitionFor: () => "persist:metrics-timer",
+      sessionFor: () => session,
+      clientKey: "metrics-timer",
+      metricsReportMs: 20,
+    });
+    try {
+      const descriptor = await timed.acquire(target(), "tab-timer");
+      expect(reports).toEqual([]);
+      const headers = await session.headersFor(descriptor.url);
+      expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+      const deadline = Date.now() + 2_000;
+      while (reports.length === 0 && Date.now() < deadline) await Bun.sleep(10);
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toMatchObject({
+        histograms: {
+          "desktop.connect_ms": [expect.any(Number)],
+          "desktop.first_byte_ms": [expect.any(Number)],
+        },
+      });
+      // A rejected report is dropped, not retried or kept growing.
+      await timed.disposeAll();
+      expect(reports).toHaveLength(1);
+    } finally {
+      await timed.disposeAll();
+    }
+  });
+
   test("an unmapped or stopped service fails acquire with a stable category", async () => {
     await harness.storage.updateEnvironment("local", { status: "stopped" });
     await harness.runtime.registry.settle();
@@ -422,6 +512,7 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
   function setup(
     options: {
       attach?: () => Promise<PreviewAttachmentDescriptor>;
+      renew?: () => Promise<unknown>;
       onListen?: () => void;
       lookupHost?: (hostname: string) => Promise<string[]>;
     } = {},
@@ -435,6 +526,9 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
         invoked.push({ command, args });
         if (command === "create_preview_attachment") {
           return (await (options.attach?.() ?? attachment())) as T;
+        }
+        if (command === "renew_preview_attachment" && options.renew) {
+          return (await options.renew()) as T;
         }
         return undefined as T;
       },
@@ -496,6 +590,36 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
     expect(invoked[1]!.args).toEqual({ attachmentId: "att_1" });
     expect(sessions.size).toBe(0);
     expect(manager.stats().services).toBe(0);
+  });
+
+  test("a renewal refused for a moved generation counts one reconnect", async () => {
+    let refuse = true;
+    const { manager, invoked } = setup({
+      renew: async () => {
+        if (!refuse) return undefined;
+        refuse = false;
+        throw previewFailure("generation-changed");
+      },
+    });
+    const descriptor = await manager.acquire(target, "tab-1");
+    const deadline = Date.now() + 2_000;
+    while (
+      invoked.filter((entry) => entry.command === "create_preview_attachment").length < 2 &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(5);
+    await Bun.sleep(20);
+    expect(manager.transportState(descriptor.serviceKey)).toEqual({
+      mode: "desktop-tunnel",
+      state: "ready",
+    });
+    await manager.disposeAll();
+    const reports = invoked.filter((entry) => entry.command === "record_preview_client_metrics");
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.args.report).toEqual({
+      counters: [{ name: "desktop.reconnect", category: "generation-changed", count: 1 }],
+      histograms: {},
+    });
   });
 
   test("disposal while binding closes the listener and never starts renewal", async () => {

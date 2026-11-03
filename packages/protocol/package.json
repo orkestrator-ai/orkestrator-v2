@@ -187,6 +187,7 @@
     "./pr-merge-readiness": "./src/pr-merge-readiness.ts",
     "./pr-monitor": "./src/pr-monitor.ts",
     "./preview-access": "./src/preview-access.ts",
+    "./preview-client-metrics": "./src/preview-client-metrics.ts",
     "./testing/preview-contract-fixtures": "./src/testing/preview-contract-fixtures.ts",
     "./node/preview-forward": "./src/node/preview-forward.ts",
     "./preview-header-policy": "./src/preview-header-policy.ts",

@@ -1,7 +1,7 @@
 # Preview upstream idle socket close is delayed in aggregate validation
 
 - **ID:** 3101
-- **Status:** open
+- **Status:** resolved (2026-11-03; not a flake)
 - **Observed:** 2026-11-03
 - **Test:** `PreviewUpstreamPool > idle connections expire, and one the application closes is never handed out`
 - **File:** `apps/backend/src/preview-upstream-pool.test.ts`
@@ -90,3 +90,33 @@ mise run test:logged -- --name r4-main-preview-round3 -- bun test --cwd apps/bac
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.PyIOGK/r4-main-preview-round3.log.gz`.
 This confirms a target-branch failure, not a diagnostics regression. No
 unrelated implementation, timeout, assertion or skip changed.
+
+## Resolution — 2026-11-03
+
+Root cause: a test bug, not host contention and not the pool. The case's
+`socket()` helper resolved on the client's `connect` event and the test then
+ended `accepted.at(-1)` to simulate the application closing the pooled
+connection. On macOS under Bun 1.4.4 the client's `connect` usually fires
+before the server's connection callback, so `accepted.at(-1)` was the peer of
+the earlier `expiring` client, already closed. Ending it never reached the
+pooled client, which the pool correctly kept idle for its 60 s limit, so
+`closed(client)` saw `destroyed=false`. The "chatty" step had the same
+wrong-peer lookup. This explains why it failed every time on detached `main`
+and why the earlier "passed alone" observation was the exception.
+
+Fix: [2920](../../../todo/previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md).
+`socket()` now waits for the server-side socket whose `remotePort` equals the
+client's `localPort` and returns `{ client, peer }`; the case ends and writes
+to its own peer. No timeout, poll budget, assertion or skip changed, and the
+pool implementation is untouched.
+
+Verification on arktech-mini (macOS, loaded host), base `7b48c23fb`:
+
+- Before the fix: `--rerun-each=5` failed five of five (30 passed, 5 failed),
+  line 85 via 199.
+- After: `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-upstream-pool.test.ts --rerun-each=100`
+  passed 700 of 700, with and without `--parallel=1`.
+- After: twenty separate processes of the same command (no rerun flag)
+  through `test:logged`, 20 of 20 passed.
+- After: `bun test --cwd=apps/backend ./src/preview-upstream-pool.test.ts --rerun-each=20`
+  (the workspace's own invocation shape) passed.

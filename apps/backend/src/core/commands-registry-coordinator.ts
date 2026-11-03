@@ -12,6 +12,11 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_ACTIVITY_COMMAND,
+  coordinatorActivityByProject,
+  type CoordinatorActivitySnapshot,
+} from "@orkestrator/protocol/coordinator-activity";
 import { randomUUID } from "node:crypto";
 import { isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
@@ -136,6 +141,26 @@ export function registerCoordinatorCommands(
     const id = asNonBlankString(args.projectId, "projectId");
     return coordinatorViews.read(id, args, () => coordinators.get(id));
   });
+  // Every project's coordinator activity, for the spinner on its icon. Reads
+  // only the activity observer's retained answers: no provider read, bridge
+  // start, attach or liveness touch, so the sidebar can re-read it freely.
+  register(
+    COORDINATOR_ACTIVITY_COMMAND,
+    async (_args, context): Promise<CoordinatorActivitySnapshot> => {
+      const nativeAgents = context.nativeAgents;
+      if (!nativeAgents) return { projects: {} };
+      const workspaces = await context.storage.coordinators.listCoordinatorWorkspaces();
+      return {
+        projects: coordinatorActivityByProject(workspaces, (workspace, session) =>
+          nativeAgents.sessionActivitySnapshot(
+            coordinatorRuntimeId(workspace.id, session.conversationId),
+            session.agent,
+            session.logicalSessionKey,
+          ),
+        ),
+      };
+    },
+  );
   register(
     "create_coordinator_conversation",
     async ({ projectId, title, closeUnused }, context) => {
@@ -184,6 +209,10 @@ export function registerCoordinatorCommands(
     const runtimeId = coordinatorRuntimeId(current.workspace.id, item.id);
     const releaseOwner = context.userCommands?.beginOwnerClose?.(runtimeId);
     try {
+      // Retire queued prompts before anything stops the turn. A drain already
+      // in progress dispatches as soon as it reads the stopped turn as idle,
+      // and only a queue that is gone by then refuses it the reservation.
+      await context.storage.deletePromptQueuesByEnvironment(runtimeId);
       await context.userCommands?.terminateForEnvironment(runtimeId);
       context.humanPrompts?.clearEnvironment(runtimeId);
       // An unassigned conversation never reached a provider: there is no session
@@ -222,6 +251,7 @@ export function registerCoordinatorCommands(
         }
       }
       const snapshot = await context.coordinators.closeConversation(id, conversation);
+      // Again, for anything queued while the close was stopping the session.
       await context.storage.deletePromptQueuesByEnvironment(runtimeId);
       await context.storage.synchronizeAgentMailboxes();
       // A side agent's schedules end with it; the main's move to the next main.
@@ -471,6 +501,7 @@ export function registerCoordinatorCommands(
         // was successfully started. A failed start must not promise a wake.
         coordinatorDelegationOpened = Boolean(
           await context.storage.coordinators.openCoordinatorDelegation(
+            context.runtime.coordinatorRequests.workerTabs,
             receipt.association.id,
             STARTUP_AGENT_TAB_ID,
           ),

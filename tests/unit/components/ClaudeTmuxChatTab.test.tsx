@@ -66,6 +66,9 @@ const VIRTUOSO_WINDOW_SIZE = 25;
 
 let lastVirtuosoProps: Record<string, any> | null = null;
 
+/** Renders of the Virtuoso stub, a direct child that re-renders with the tab root. */
+const virtuosoRendered = mock(() => {});
+
 let dateNowSpy: ReturnType<typeof spyOn> | undefined;
 
 const virtuosoScrollToIndexMock = mock(() => {});
@@ -444,6 +447,7 @@ mock.module("@/components/chat/FileMentionMenu", () => ({
 mock.module("react-virtuoso", () => ({
   ...realReactVirtuosoSnapshot,
   Virtuoso: forwardRef<any, any>((props, ref) => {
+    virtuosoRendered();
     useEffect(() => {
       lastVirtuosoProps = props;
     }, [props]);
@@ -1118,6 +1122,44 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
+  });
+
+  test("ticks the elapsed text without re-rendering the tab root while busy", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const busyStartedAt = 1_000_000;
+    let now = busyStartedAt + 65_000;
+    dateNowSpy = spyOn(Date, "now").mockImplementation(() => now);
+    useClaudeTmuxStore.getState().setBusy(stateKey, true, busyStartedAt);
+    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    expect((await screen.findByRole("status")).textContent).toBe("Claude is thinking...");
+    expect(screen.getByText("1m 5s")).toBeTruthy();
+    // Let mount-time hydration and subscriptions settle before counting.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    // Real one-second ticks over a controlled clock: the tick re-reads
+    // `Date.now`, so each shown value is exact.
+    const before = virtuosoRendered.mock.calls.length;
+    for (const expected of ["1m 6s", "1m 7s"]) {
+      now += 1000;
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1050));
+      });
+      expect(screen.getByText(expected)).toBeTruthy();
+    }
+    expect(virtuosoRendered.mock.calls.length - before).toBe(0);
   });
 
   test("hides the thinking status when the backend reports the session stopped", async () => {

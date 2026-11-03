@@ -2,6 +2,7 @@ import { publicInteractionKinds } from "./public.js";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1960,6 +1961,98 @@ describe("compaction", () => {
     state.compacting = true;
     const response = await call(`/session/${state.id}/compact`, { method: "POST" });
     expect(response.status).toBe(409);
+  });
+  function compactingSession(state: ReturnType<typeof seedSession>): unknown[][] {
+    const calls: unknown[][] = [];
+    state.session = {
+      compact: async (...args: unknown[]) => {
+        calls.push(args);
+      },
+    } as unknown as AgentSession;
+    return calls;
+  }
+
+  test("holds the claim while the compact body is still arriving", async () => {
+    const state = seedSession();
+    const calls = compactingSession(state);
+    const request = httpRequest(`${origin}/session/${state.id}/compact`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    });
+    const response = new Promise<number | undefined>((resolve, reject) => {
+      request.on("response", (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode));
+      });
+      request.on("error", reject);
+    });
+    request.write('{"instructions":');
+    try {
+      const deadline = Date.now() + 2_000;
+      while (!state.compacting && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(state.compacting).toBe(true);
+      expect(state.dispatching).toBe(true);
+      expect(calls).toEqual([]);
+      const prompt = await postPrompt(state, { prompt: "hello", requestId: "during-body" });
+      expect(prompt.status).toBe(409);
+      const compact = await call(`/session/${state.id}/compact`, { method: "POST" });
+      expect(compact.status).toBe(409);
+    } finally {
+      request.end('"keep the plan"}');
+      expect(await response).toBe(200);
+    }
+    expect(calls).toEqual([["keep the plan"]]);
+    expect(state.compacting).toBe(false);
+    expect(state.dispatching).toBe(false);
+  });
+
+  test("a plain compaction sends Pi no instructions, as older backends expect", async () => {
+    const state = seedSession();
+    const calls = compactingSession(state);
+    const response = await call(`/session/${state.id}/compact`, { method: "POST" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ compacted: true });
+    expect(calls).toEqual([[undefined]]);
+    expect(state.compacting).toBe(false);
+    expect(state.dispatching).toBe(false);
+  });
+
+  test("passes instructions to Pi's compact and confirms them", async () => {
+    const state = seedSession();
+    const calls = compactingSession(state);
+    const response = await call(`/session/${state.id}/compact`, {
+      method: "POST",
+      body: JSON.stringify({ instructions: "  keep the failing test names  " }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ compacted: true, instructions: "applied" });
+    expect(calls).toEqual([["keep the failing test names"]]);
+  });
+
+  test("refuses malformed instructions without compacting or keeping the claim", async () => {
+    const state = seedSession();
+    const calls = compactingSession(state);
+    for (const body of [
+      JSON.stringify({ instructions: 42 }),
+      JSON.stringify({ instructions: "x".repeat(16_001) }),
+      JSON.stringify(["keep the plan"]),
+      JSON.stringify("keep the plan"),
+      "42",
+      "true",
+      "false",
+      "{not json",
+    ]) {
+      const response = await call(`/session/${state.id}/compact`, { method: "POST", body });
+      expect(response.status).toBe(400);
+      expect(calls).toEqual([]);
+      expect(state.compacting).toBe(false);
+      expect(state.dispatching).toBe(false);
+    }
+    expect(calls).toEqual([]);
+    expect(state.compacting).toBe(false);
+    expect(state.dispatching).toBe(false);
   });
 });
 

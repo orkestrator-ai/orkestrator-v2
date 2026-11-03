@@ -12,6 +12,10 @@ export const AGENT_ACCOUNTS_LOG_AREAS = defineLogAreas({
       "last-usage.save-failed":
         "The last plan usage reading could not be saved; the next save retries.",
       "login-cleanup.failed": "A temporary login could not be cleaned up.",
+      "login-renewal.failed":
+        "Renewing an idle account's sign-in to read its usage failed; it is retried after a backoff.",
+      "login-renewal.not-extended":
+        "Claude Code ran to renew an idle account's sign-in, but its token is still lapsed.",
       "login-refresh.deferred":
         "Containers were not told to refresh their login now; they reconcile from its durable generation.",
     },

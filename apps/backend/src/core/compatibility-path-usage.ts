@@ -57,6 +57,16 @@ export const COMPATIBILITY_PATH_IDS = [
    * coordinator and the leaf does not advertise `node-coordinator-mail`.
    */
   "node-coordinator-mail.older-node",
+  /**
+   * A command node's coordinator used ticket tools or a build with a `nodeId`
+   * on a leaf that does not advertise `ticket-sync`.
+   */
+  "ticket-sync.older-node",
+  /**
+   * `/compact` sent instructions and the bridge compacted without confirming
+   * them: it predates compaction instructions and ignored the body.
+   */
+  "compact.instructions-ignored",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

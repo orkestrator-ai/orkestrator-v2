@@ -1,4 +1,5 @@
 import { AgentInfoPermissionRules } from "./AgentInfoPermissionRules";
+import { useAccountPlanUsage } from "./useAccountPlanUsage";
 import {
   useCallback,
   useEffect,
@@ -736,6 +737,27 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
     neutralProjection.environmentId === accountEnvironmentId
       ? sessionAccount.account.account
       : undefined;
+  /*
+   * Claude's projection carries its quota windows as an independent
+   * authoritative snapshot, including an empty one. Every other provider
+   * reports through the usage snapshot, falling back to the projection's
+   * windows when it has none.
+   */
+  const sessionRateLimits =
+    activeSession?.provider === "claude"
+      ? neutralRateLimits
+      : (usage?.rateLimits ?? neutralRateLimits);
+  const sessionReportsPlan =
+    (sessionRateLimits?.length ?? 0) > 0 ||
+    (usage?.account ?? []).some((window) => !window.window.startsWith("daily:"));
+  // A coordinator's CLI runs on a bare access token and reports no plan
+  // limits, so its panel reads them for the account it runs on instead.
+  const planWindows = useAccountPlanUsage({
+    enabled: open && isCoordinatorSession && !sessionReportsPlan,
+    platform: accountAgent,
+    accountId: usageAccount?.id,
+    refreshKey: `${neutralProjection?.generation}:${neutralProjection?.turn.phase}`,
+  });
 
   const openForkTab = async (
     sessionId: string,
@@ -1013,17 +1035,8 @@ export function AgentInfoButton({ activeTab, mobile = false, remote }: AgentInfo
                 <UsagePanel
                   usage={usage}
                   modelId={modelId}
-                  /*
-                   * Claude's projection carries its quota windows as an
-                   * independent authoritative snapshot, including an empty one.
-                   * Every other provider reports through the usage snapshot,
-                   * falling back to the projection's windows when it has none.
-                   */
-                  rateLimits={
-                    activeSession.provider === "claude"
-                      ? neutralRateLimits
-                      : (usage?.rateLimits ?? neutralRateLimits)
-                  }
+                  rateLimits={sessionRateLimits}
+                  planWindows={planWindows}
                   accountLabel={usageAccount?.label}
                   accountEmail={usageAccount?.identity.email}
                 />

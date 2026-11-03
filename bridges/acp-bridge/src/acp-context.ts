@@ -42,7 +42,11 @@ import { formatAcpRpcError } from "./acp-errors.js";
 import { assertAcpSignedIn } from "./acp-credentials.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
-import { AcpClientMethods, UnsupportedClientMethodError } from "./acp-client-methods.js";
+import {
+  AcpClientMethods,
+  ClientMethodRefusedError,
+  UnsupportedClientMethodError,
+} from "./acp-client-methods.js";
 import {
   loadAcpProviderConfig,
   providerArgv,
@@ -52,7 +56,11 @@ import {
 } from "./acp-provider-config.js";
 import { createReadOnlyProfile } from "./acp-readonly-profile.js";
 import { grokQuestionTimeoutAtLaunch, type GrokQuestionTimeout } from "./acp-question-timeout.js";
-import { effectiveExecutionPolicy } from "./acp-policy.js";
+import {
+  acpClientMethodGrant,
+  effectiveExecutionPolicy,
+  type AcpClientMethodGrant,
+} from "./acp-policy.js";
 import {
   GrokMcpConfigWatcher,
   grokMcpConfigFiles,
@@ -682,6 +690,10 @@ export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
 export const authToken =
   process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
+// The token authenticates callers of this bridge; nothing this process spawns
+// needs it. Captured once above and removed so the ACP agent child, and the
+// terminals it runs, cannot inherit the credential through process.env (H4).
+delete process.env.ACP_BRIDGE_TOKEN;
 export const executable = providerConfig.executable;
 export const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 export const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
@@ -1073,7 +1085,9 @@ export class AcpProcess {
    * `acp-question-timeout.ts`). Undefined for another provider.
    */
   readonly questionTimeout?: GrokQuestionTimeout;
-  readonly clientMethods = new AcpClientMethods(workingDirectory);
+  readonly clientMethods: AcpClientMethods;
+  /** The client methods this child's policy permits: advertised and served alike. */
+  readonly clientMethodGrant: AcpClientMethodGrant;
   #diagnostics?: BridgeRunDiagnostics;
   #nextId = 1;
   #pending = new Map<
@@ -1122,6 +1136,8 @@ export class AcpProcess {
     // (catalog probe, session list, replay) still runs under the process
     // authority, so a coordinator bridge never starts Grok with its web tools.
     const policy = spawnOptions.policy ?? effectiveExecutionPolicy(undefined);
+    this.clientMethodGrant = acpClientMethodGrant(policy);
+    this.clientMethods = new AcpClientMethods(workingDirectory, undefined, this.clientMethodGrant);
     // Only a session whose policy turns project resources on trusts the
     // checkout; a probe, a coordinator or a read-only turn keeps Grok's gate.
     const trustProject = policy?.projectResources === true;
@@ -1197,8 +1213,8 @@ export class AcpProcess {
     const initializeRequest: InitializeRequest = {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
-        terminal: true,
+        fs: { readTextFile: true, writeTextFile: this.clientMethodGrant.writeTextFile },
+        terminal: this.clientMethodGrant.terminal,
         session: { configOptions: { boolean: {} }, notices: {} },
         _meta: { parameterizedModelPicker: true },
       },
@@ -1433,7 +1449,13 @@ export class AcpProcess {
               jsonrpc: "2.0",
               id: message.id,
               error: {
-                code: error instanceof UnsupportedClientMethodError ? -32601 : -32602,
+                // A refused method was never advertised to this child, so it
+                // answers as one the client does not offer.
+                code:
+                  error instanceof UnsupportedClientMethodError ||
+                  error instanceof ClientMethodRefusedError
+                    ? -32601
+                    : -32602,
                 message: error instanceof Error ? error.message : "ACP client request failed",
               },
             }),

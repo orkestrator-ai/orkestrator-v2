@@ -20,6 +20,7 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { cleanupSessionHarnesses, setup } from "./public-api/test-provider.js";
 import { createEnvironment, createProject } from "./storage.js";
 import { storageInternals } from "./storage-test-support.js";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 const servers: ControlMcpServer[] = [];
 afterEach(async () => {
@@ -264,7 +265,11 @@ describe("ownership", () => {
       requestId: "delegation:someone-else",
       createdAt: new Date().toISOString(),
     });
-    await harness.storage.coordinators.openCoordinatorDelegation(association.id, persons);
+    await harness.storage.coordinators.openCoordinatorDelegation(
+      new WorkerTabCloseAdmission(),
+      association.id,
+      persons,
+    );
     expect((await call("set_worker_goal", setArgs(persons))).isError).toBe(true);
   });
 

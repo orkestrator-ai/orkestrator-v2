@@ -139,6 +139,11 @@ works across the nodes that node controls:
   prompts and messages open delegations that wake this conversation once,
   and build pipelines and Multi Reviews there send status wakes. See
   [command-nodes.md](command-nodes.md#one-tool-family-every-node).
+- Tickets are shared: the project's board syncs to every node with a copy,
+  under the same ids. `create_ticket` (with or without `nodeId`) and then
+  `start_build_pipeline` with a `nodeId` builds a ticket on that node by its
+  id, with no relay through that node's coordinator. See
+  [Tickets on other machines](#tickets-on-other-machines).
 - A node without a copy needs one first: `request_project_on_node` asks the
   user, who settles the location and files in the copy dialog.
 - `request_environment_deletion` only asks: the user confirms in a dialog
@@ -288,6 +293,34 @@ Grouped by repository it leads to the command node's coordinator for that
 repository instead, when the command node has one
 ([command-nodes.md](command-nodes.md#leaf-mode)).
 
+### Tickets on other machines
+
+The project's Kanban board is the command node's, and every leaf with a copy
+of the repository holds a synced copy of it under the same ticket ids
+([tickets.md](tickets.md#sync-across-machines)). The ticket tools take an
+optional `nodeId` (`coordinator-node-tickets.ts`):
+
+| Tool with `nodeId` | Leaf that syncs tickets | Older leaf (no `ticket-sync`) |
+| --- | --- | --- |
+| `create_ticket` | Created on this board, then handed to the leaf now; while it is disconnected, `sync.state` is `offline` and it gets the ticket on reconnect. | Created on the leaf only; `sync.state` is `update-required`. |
+| `list_tickets`, `get_ticket` | The leaf's board: this board's copies (`syncedFromCommandNode`) and tickets made only there. Disconnected: this board, with a note. | The leaf's board. Disconnected: refused. |
+| `update_ticket`, `add_ticket_comment` | A ticket of this board is changed here and synced; a ticket made only on the leaf is changed there. | Changed on the leaf. Disconnected: refused. |
+
+`start_build_pipeline` with a `nodeId` and a ticket of this board syncs the
+leaf first (refusing if that does not finish) and starts the build there
+under the same id; the ticket then shows where its build runs (`runsOn` in
+ticket reads, a machine chip on the board). An older leaf cannot build a
+ticket of this board: the refusal says to update it or to create a ticket
+there. Ticket summaries carry `runsOn` for work on another machine.
+
+**Offline.** Ticket changes for a disconnected leaf wait on this board and
+reach it in order on reconnect. Launches, builds, Multi Reviews and the other
+environment and workflow tools on a disconnected node are refused with a
+message saying they are not queued: run hours later, a launch would start
+from a stale base commit, and an outcome lost to a disconnect could not be
+resolved without risking running it twice. Retry when the node reconnects
+(`list_nodes`), or use another machine.
+
 ## One main coordinator, and side agents
 
 A project has exactly one **main** coordinator conversation
@@ -362,6 +395,26 @@ dropping closed conversations and placing new ones. Focusing a group selects its
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere
 brings that conversation to the front of its group. Only each group's front
 conversation is mounted.
+
+## Activity indicator
+
+While a coordinator works, its icons carry the same spinner an environment
+row's marker draws: the **Coordinator** tab in the project navigation, and the
+leading icon of the project's sidebar heading (the coordinator's own icon when
+the project has none, shown only while it is active). A conversation waiting
+on the user pulses yellow instead; working outranks waiting across a project's
+open conversations, main and side agents alike.
+
+The state comes from the backend's activity observer, the same observation
+mail delivery and the environment markers read
+(`list_coordinator_activity`, `@orkestrator/protocol/coordinator-activity`).
+It reads retained observations only, so it never starts, attaches, hydrates
+or touches a session. The renderer projection
+(`apps/web/src/stores/coordinatorActivityStore.ts`) re-reads it on a
+coordinator session's activity transition, a coordinator session record
+change (a dispatch), a coordinator workspace change, and the transport's
+resync and safety checks, which also recover a missed hint. Other machines'
+coordinators are not shown yet.
 
 ## Project home
 
@@ -2347,7 +2400,8 @@ guarantee, not by one end-to-end scenario replayed per platform:
   coordinator, the operator profile or a public action
   (`graph-describe-coordinator.test.ts`)
 - single-turn mail batching: `agent-mail-service.test.ts`
-- tool contract and poll guard: `control-mcp-server.test.ts`
+- tool contract and poll guard: `control-mcp-server-reads.test.ts` and
+  `control-mcp-server-messaging.test.ts`
 - the answer relay: questions only, the proposal checked and stored, stale and
   malformed answers never sent, end to end on this node
   (`worker-question-relay.test.ts`) and on a connected node
@@ -2357,7 +2411,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - project-home messages: a reason required, held outside the 3-hour window,
   approve, decline, replay, the window opened only by sent mail, and ordinary
   workers unchanged (`coordinator-worker-mail.test.ts`); the tool result
-  shapes (`control-mcp-server.test.ts`); the dialog
+  shapes (`control-mcp-server-messaging.test.ts`); the dialog
   (`node-action-requests.test.tsx`)
 - no-waiting-tools boundary, tier table, hosted network tools removed on
   every platform, and search without fetch when research is on:
@@ -2422,7 +2476,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `coordinator-surface-actions.test.ts`; the patch and the untouched
   checkout against real Git repositories: `root-changes.test.ts`; the
   approval dialog: `node-action-requests.test.tsx` (web); scope forwarding
-  and side agents: `control-mcp-server.test.ts`
+  and side agents: `control-mcp-server-coordinator-workflows.test.ts`
 - `get_worker_changes` bounds, paging, path filters, uncommitted marks and
   diff rendering over fake `changes_*` answers:
   `coordinator-worker-changes.test.ts`; `fork_worker`'s base, association,

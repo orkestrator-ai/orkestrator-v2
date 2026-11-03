@@ -19,6 +19,7 @@ import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator-service.js";
 import type { CoordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
 import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import type { CoordinatorStatusWakeOptions } from "./coordinator-status-wakes.js";
 import { runCommand } from "./shell.js";
 import type { AgentMailSender } from "./storage-agent-mail-store.js";
@@ -76,6 +77,8 @@ export class MailWorld {
 
   /** Environments the drain asked to start because coordinator mail was waiting. */
   readonly startRequests: string[] = [];
+  /** The command node's coordinator flights, as its `BackendRuntime` would hold them. */
+  readonly coordinatorRequests = new CoordinatorRequestFlights();
 
   private constructor(
     readonly root: string,
@@ -361,7 +364,11 @@ export class MailWorld {
         baseCommit: BASE_COMMIT,
         createdAt: new Date().toISOString(),
       });
-      await this.storage.coordinators.openCoordinatorDelegation(association.id, "startup-agent");
+      await this.storage.coordinators.openCoordinatorDelegation(
+        this.coordinatorRequests.workerTabs,
+        association.id,
+        "startup-agent",
+      );
       // The launch prompt starts its first turn.
       this.busy.add(`${actor.environmentId}\0${actor.logicalSessionKey}`);
     }
@@ -433,6 +440,7 @@ export class MailWorld {
         storage: this.storage,
         coordinators: this.coordinator,
         drainAgentMail: () => this.mail.drainInjects(),
+        runtime: { coordinatorRequests: this.coordinatorRequests },
       } as CommandContext,
     )) as AgentMailMessage & Partial<CoordinatorDeliverNowResult>;
   }

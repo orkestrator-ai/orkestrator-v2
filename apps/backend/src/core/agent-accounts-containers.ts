@@ -1,7 +1,7 @@
 import { prepareEgressGatewayForStart } from "./egress-gateway.js";
 import { startDockerContainer } from "./container-start.js";
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
@@ -42,6 +42,7 @@ import {
   enqueueContainerBridgeOperation,
 } from "./container-bridge-operations.js";
 import { agentAccountHome, prepareAgentAccountHome } from "./agent-accounts-homes.js";
+import { claudeContainerConfig } from "./claude-container-config.js";
 import {
   readAddedClaudeCredentials,
   resolveActiveAgentAccount,
@@ -140,6 +141,34 @@ async function readLoginFile(file: string): Promise<string | undefined> {
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.size > MAX_LOGIN_FILE_BYTES) return undefined;
     return await fs.readFile(file, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Match filtered staging: resolve dotfile links, then safely read a bounded regular file. */
+async function readClaudeConfigFile(file: string): Promise<string | undefined> {
+  try {
+    const source = await fs.realpath(file);
+    const before = await fs.lstat(source);
+    if (!before.isFile() || before.size > INPUT_LIMITS.fileBytes) return undefined;
+    const handle = await fs.open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.ino !== before.ino || opened.dev !== before.dev) {
+        return undefined;
+      }
+      const buffer = Buffer.alloc(INPUT_LIMITS.fileBytes + 1);
+      let total = 0;
+      while (total < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+        if (!bytesRead) break;
+        total += bytesRead;
+      }
+      return total > INPUT_LIMITS.fileBytes ? undefined : buffer.toString("utf8", 0, total);
+    } finally {
+      await handle.close();
+    }
   } catch {
     return undefined;
   }
@@ -298,6 +327,8 @@ async function dropImportedCodexLoginAfterHostSignOut(
 function hostStagingSources(context: CommandContext): {
   claudeConfigDir: string | undefined;
   claudeJson: string;
+  /** The home directories staging reads from, for `claudeContainerConfig`. */
+  homes: string[];
   codexHome: string | undefined;
   grokAuth: string;
   opencodeAuth: string | undefined;
@@ -312,6 +343,7 @@ function hostStagingSources(context: CommandContext): {
   return {
     claudeConfigDir: roots.agentTest ? roots.claudeConfigDir : path.join(roots.home, ".claude"),
     claudeJson: path.join(hostHome, ".claude.json"),
+    homes: [roots.home, hostHome],
     codexHome: roots.agentTest ? roots.codexHome : path.join(roots.home, ".codex"),
     grokAuth: path.join(grokStagingHome(roots), "auth.json"),
     opencodeAuth: roots.agentTest
@@ -381,10 +413,16 @@ async function refreshStagedLogin(
   );
   // `.claude.json` is bind-mounted as a single file under whatever name the
   // source had, so it is found by listing and rewritten in place.
-  const claudeJson = await readLoginFile(
+  const hostJson = await readClaudeConfigFile(
     active.home ? path.join(active.home, ".claude.json") : host.claudeJson,
   );
-  if (claudeJson === undefined) return;
+
+  // The same allowlist staging applies (security report M8). An unparseable
+  // file empties the mount rather than leaving the previous account's.
+  const claudeJson =
+    (hostJson === undefined
+      ? undefined
+      : claudeContainerConfig(hostJson, { hostHomes: host.homes })) ?? JSON.stringify({});
   const stageDirectory = path.join(
     portableInputRevisionDirectory(dataDir, environment.id, revision),
     "files",
@@ -416,6 +454,31 @@ export async function refreshStagedAgentAccountLogins(
   try {
     const revision = await runners.label(containerId, DOCKER_LABEL_INPUTS_REVISION);
     if (!revision) return;
+    // Migrate raw pre-allowlist revisions even if provider/account checks below
+    // skip refresh. Rewrite the existing inode: Docker may already bind it.
+    const stageDirectory = path.join(
+      portableInputRevisionDirectory(context.storage.getDataDir(), environment.id, revision),
+      "files",
+      "claude.json",
+    );
+    const names = await fs.readdir(stageDirectory).catch(() => [] as string[]);
+    for (const name of names) {
+      const previous = await readLoginFile(path.join(stageDirectory, name));
+      const safe =
+        previous === undefined
+          ? undefined
+          : claudeContainerConfig(previous, {
+              hostHomes: hostStagingSources(context).homes,
+            });
+      await replaceStagedInputFile(
+        context.storage.getDataDir(),
+        environment.id,
+        revision,
+        `files/claude.json/${name}`,
+        safe ?? "{}",
+        { inPlace: true },
+      );
+    }
     const { global } = await context.storage.loadConfig();
     for (const platform of AGENT_ACCOUNT_PLATFORMS) {
       if (

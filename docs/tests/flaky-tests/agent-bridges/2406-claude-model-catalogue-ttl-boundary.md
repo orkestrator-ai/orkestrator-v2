@@ -1,7 +1,7 @@
 # Claude model catalogue cache expires before its boundary assertion
 
 - **ID:** 2406
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-01
 - **Test:** `the model catalogue without a running CLI > the answer expires, as a backstop for a change nothing reported`
 - **File:** `bridges/claude-bridge/src/services/claude-model-catalog.test.ts:284`
@@ -41,3 +41,40 @@ No catalogue implementation or assertion was changed by H3.
 worktree's aggregate run, so the workspace group took 1,019 s against about
 245 s for the previous run that day) repeated this failure (6.27 ms). The unchanged
 owner then passed alone: `bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/claude-model-catalog.test.ts --parallel=1`.
+
+## Resolution, 2026-11-03
+
+**Root cause.** The test read `Date.now()` *after* the first answer was
+cached, so the entry's expiry (`cache time + TTL`) fell before the test's
+"one millisecond before expiry" reading (`now + TTL - 1`) whenever two or more
+milliseconds passed between caching and that read. Instrumented passing runs
+had a margin of 1–2 ms; a loaded aggregate run easily exceeds it.
+
+**Fix.** The test now reads the clock before the first answer is cached, so
+the expiry is at or after `now + TTL` and the near-expiry read is always
+inside it (branch `relay-credit-crash-fdb19f68d328-r1`). No assertion,
+timeout or catalogue implementation changed.
+
+**Evidence.**
+
+- Old ordering with a 3 ms `Bun.sleep` injected after the first answer: fails
+  (expected one probe, received two), deterministically.
+- New ordering with 3 ms sleeps injected before and after the first answer:
+  passes.
+- 100 separate processes of
+  `bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/claude-model-catalog.test.ts --parallel=1 --test-name-pattern 'the answer expires'`:
+  0 failures. The whole owning file passes.
+- The earlier "498/500 targeted repetitions" figure was an artifact:
+  `--rerun-each` does not run this suite's `afterEach` reset between
+  repetitions, so each repetition inherited the previous one's cache entry
+  and probe count. It fails 198/200 with or without the fix and is not a
+  valid reproduction for this test.
+
+**Independent verification on `oversized-test-file-45a00165c5f3-r1`.**
+The same clock-order fix was developed independently on this branch. A
+temporary (uncommitted) 5 ms `Bun.sleep` between the first read and the clock
+read made the old ordering fail with expected one probe / received two and
+the new ordering pass. The complete owning file passed alone with
+`mise run test:logged -- --name claude-catalog-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/claude-model-catalog.test.ts --parallel=1`
+(exit 0), with `--parallel=2` (23 pass, 0 fail), and in 30 back-to-back runs
+(0 failures).

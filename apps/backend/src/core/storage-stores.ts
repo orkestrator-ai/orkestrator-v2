@@ -75,6 +75,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "agent-mail": { kind: "envelope", collections: ["mailboxes", "idempotency", "counterparts"] },
   coordinators: { kind: "envelope", collections: ["workspaces"] },
   kanban: { kind: "array", owner: ownerField("projectId") },
+  "kanban-sync": { kind: "document" },
   "project-notes": { kind: "array", key: "projectId" },
   "feature-plans": { kind: "array", owner: ownerField("projectId") },
   "linear-auth": { kind: "document" },

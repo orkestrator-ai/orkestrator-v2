@@ -1,16 +1,20 @@
 import type { AgentsMdPrResult } from "./agents-md-pr.js";
 import { KeyedSingleFlight } from "./keyed-single-flight.js";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 /**
  * Coordinator requests in flight in one backend: receipt attempts per
  * coordinator and request id (`withCoordinatorReceipt`), and AGENTS.md pull
- * request runs per request key (`openAgentsMdPullRequest`). Owned by
+ * request runs per request key (`openAgentsMdPullRequest`), and the worker tab
+ * close admission (`workerTabs`). Owned by
  * `BackendRuntime` as `coordinatorRequests` and reached through
  * `context.runtime` at call time.
  */
 export class CoordinatorRequestFlights {
   private readonly receipts = new Map<string, Promise<Record<string, unknown>>>();
   private readonly agentsMdPullRequests = new KeyedSingleFlight<AgentsMdPrResult>();
+  /** Fences a worker tab close against a delegation to that tab being persisted. */
+  readonly workerTabs = new WorkerTabCloseAdmission();
 
   /** The receipt attempt in flight for `key`, if any. */
   receiptAttempt(key: string): Promise<Record<string, unknown>> | undefined {

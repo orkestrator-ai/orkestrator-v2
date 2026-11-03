@@ -58,8 +58,12 @@ Electron main assigns the capture id and binds the runtime to the web contents,
 document generation and a per-install nonce. Page scripts run in an isolated
 world where available. On selection main hides tooltips and pins, masks
 detectable sensitive fields (in the page and again in the screenshot pixels),
-captures, and probes again. If sensitive fields are present but the pixels
-cannot be masked, the image is dropped (`imageExcluded`) and only text
+captures, and probes again. Sensitive fields are found in the document and in
+every open shadow root down to `WEB_ANNOTATION_MAX_SHADOW_DEPTH` roots, by one
+walk bounded at 100,000 visits or 100 ms. If sensitive fields are present but
+the pixels cannot be masked, or the walk could not finish (budget, deeper
+nesting, more than 32 fields on screen), the image is dropped
+(`imageExcluded`; a responsive-set width fails as `unsupported`) and only text
 evidence is spooled. A navigation, removed target or layout change is
 retried once; otherwise the capture is spooled as `stale` with a reason. A
 navigation-stale capture has no image, and its page identity is the page the
@@ -347,7 +351,12 @@ for up to `visiblePins` (50) open notes on the current page. Unmatched and
 off-page notes are listed in the panel with their state. A `MutationObserver`
 re-resolves after DOM replacement (hot reload, re-render) on a coalesced
 schedule. A document observer never sees inside a shadow root, so each open
-root a pass resolves into (at most 64) is observed as well. The schedule is
+root a pass resolves into (at most 64) is observed as well. A host that exists
+before its custom element is defined has no root yet, and attaching one fires
+no mutation, so the layer schedules one pass when that tag is defined
+(`customElements.whenDefined`). The preview's isolated world has no
+`customElements`, so there the hosts the resolver reported are checked for
+`:defined` every 500 ms, at most 120 times per layer. The schedule is
 at most one trailing pass per 750 ms, a pause after 120 passes until the host
 re-sends pins, no work while the document is hidden, and a shared
 budget of 60,000 node visits or 120 ms per pass. Pins are redrawn (not
@@ -641,9 +650,10 @@ What has actually been exercised on a real stack (details and dates in
   otherwise the card offers **Answer in chat**.
 - iframes, closed shadow roots and text selections inside shadow roots are
   unsupported; use Region. Element targets inside open shadow roots are
-  supported. Sensitive-field masks are found only in the document, not inside
-  shadow roots, and a pin whose host attaches its shadow root only after pins
-  were shown resolves on the next DOM change or re-send. A page too large to
+  supported. Sensitive fields inside closed shadow roots are not masked: page
+  script cannot see them. A pin whose host is already defined but attaches its
+  shadow root later on its own resolves on the next DOM change or re-send. A
+  page too large to
   search in time is labelled as such rather than as a missing target.
 - Pixel differences are not implemented and are never advertised. A thread
   summary for a different session is a deterministic excerpt of recent

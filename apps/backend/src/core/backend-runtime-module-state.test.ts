@@ -366,4 +366,29 @@ describe("two BackendRuntimes in one process (todo 1070)", () => {
       research.stop();
     }
   });
+
+  test("worker tab close admission is per backend", () => {
+    const first = createRuntime().coordinatorRequests.workerTabs;
+    const second = createRuntime().coordinatorRequests.workerTabs;
+
+    // A close in one backend fences only its own delegations to that tab.
+    const closing = first.beginClose("environment-1", "agent", "bk_leaf");
+    expect(() => first.beginDelegation("environment-1", "agent", "bk_leaf")).toThrow(
+      "being closed",
+    );
+    expect(() => first.beginDelegation("environment-1", undefined, "bk_leaf")).toThrow(
+      "being closed",
+    );
+    const delegating = second.beginDelegation("environment-1", "agent", "bk_leaf");
+    second.beginDelegation("environment-1", undefined, "bk_leaf")();
+
+    // A delegation being admitted in one backend holds only its own closes.
+    expect(() => second.beginClose("environment-1", "agent", "bk_leaf")).toThrow(
+      "work being admitted",
+    );
+    closing();
+    first.beginClose("environment-1", "agent", "bk_leaf")();
+    delegating();
+    second.beginClose("environment-1", "agent", "bk_leaf")();
+  });
 });

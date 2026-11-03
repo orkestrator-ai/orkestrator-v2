@@ -317,6 +317,7 @@ describe("POST /session/:id/fork", () => {
         })
       ).status,
     ).toBe(202);
+    await waitFor(bridge.session, (session) => session.status === "running");
     expect((await bridge.fork()).status).toBe(409);
     expect(await bridge.forkRequests()).toEqual([]);
     expect((await bridge.session()).status).toBe("running");

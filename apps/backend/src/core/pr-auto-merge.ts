@@ -36,6 +36,15 @@ const log = createLogger("pull-request");
  * clears only when GitHub stops reporting conflicts, so an armed token means
  * a Resolve (manual or automatic) already owns this episode. A Resolve that
  * finishes with conflicts still present is not relaunched; the user decides.
+ * A reading that is still checking mergeability waits, and the monitor's next
+ * announced reading decides again, so turning auto-merge on mid-check still
+ * launches Resolve once GitHub reports the conflict.
+ *
+ * There is one Resolve tab per environment. A later conflict episode sends
+ * the prompt again to the open Resolve tab (manual or automatic) through the
+ * job tab reuse path (`native-agent-job-tab-reuse.ts`): a settled tab runs it
+ * now, a busy one queues it until its current work ends. A new tab opens only
+ * when no Resolve tab is open or the open one cannot take a prompt.
  */
 
 /**
@@ -241,6 +250,9 @@ export class PrAutoMergeController {
   private async run(environmentId: string): Promise<void> {
     const environment = await this.options.storage.getEnvironment(environmentId);
     if (this.closed || !environment) return;
+    // A conflict-free reading ends the Resolve episode, and with it the hold or
+    // backoff of its launch, so the next conflict is acted on at once.
+    if (environment.hasMergeConflicts === false) this.clearRetry(environmentId, "resolve");
     const decision = decideAutoMerge(
       environment,
       this.options.monitorState(environmentId),
@@ -349,6 +361,8 @@ export class PrAutoMergeController {
         title: PR_AUTO_MERGE_RESOLVE_TAB_TITLE,
         conversationMode: "build",
         completionAction: "refresh-pr-after-agent-completion",
+        // A later episode reuses the open Resolve tab instead of adding one.
+        tabReuse: "any-agent",
         activateTab: false,
         ...(action.model ? { modelId: action.model } : {}),
         ...(action.reasoningEffort ? { reasoningId: action.reasoningEffort } : {}),
@@ -387,9 +401,9 @@ export class PrAutoMergeController {
     this.retries.set(environmentId, state);
   }
 
-  private clearRetry(environmentId: string): void {
+  private clearRetry(environmentId: string, kind?: "merge" | "resolve"): void {
     const retry = this.retries.get(environmentId);
-    if (!retry) return;
+    if (!retry || (kind && !retry.key.startsWith(`${kind}\0`))) return;
     this.cancel(retry.timer);
     this.retries.delete(environmentId);
   }

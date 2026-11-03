@@ -99,7 +99,7 @@ await writePinnedBundleLicenses(
 // repository checkout: exactly what docker/artifact-preview-worker/build.sh
 // stages (Dockerfile, npm manifest and lockfile, Node worker bundle,
 // hash-verified pinned bundles, licenses), plus the seccomp profile the
-// supervisor passes to `docker run`, and the published-image digest pin.
+// supervisor passes to `docker run`.
 const workerDocker = path.join(packageRoot, "../../docker/artifact-preview-worker");
 const workerContext = path.join(artifactRuntime, "worker-context");
 const staged = Bun.spawnSync(
@@ -120,21 +120,3 @@ await cp(
   path.join(workerDocker, "seccomp_profile.json"),
   path.join(workerContext, "seccomp_profile.json"),
 );
-await cp(
-  path.join(workerDocker, "published-image.json"),
-  path.join(artifactRuntime, "published-image.json"),
-);
-// The pin is used only for the context it was published from (see
-// preview-worker-context-digest.ts); say so when this build's context differs,
-// because packaged installs of it will build the worker locally instead.
-const { workerContextDigest } = await import(
-  path.join(packageRoot, "src/core/transcript-artifacts/preview-worker-context-digest.ts")
-);
-const contextDigest = await workerContextDigest(workerContext);
-const publishedPin = (await Bun.file(path.join(workerDocker, "published-image.json")).json()) as {
-  contextDigest?: unknown;
-};
-if (publishedPin.contextDigest !== contextDigest)
-  console.log(
-    `Preview worker: no published image for build context ${contextDigest}; installs build it locally`,
-  );

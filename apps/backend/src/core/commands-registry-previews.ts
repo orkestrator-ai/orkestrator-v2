@@ -2,6 +2,7 @@ import {
   PREVIEW_SESSION_CODE_TTL_MS,
   PREVIEW_SESSION_PATH,
 } from "@orkestrator/protocol/preview-access";
+import { parsePreviewClientMetricsReport } from "@orkestrator/protocol/preview-client-metrics";
 import { previewFailure } from "@orkestrator/protocol/preview-services";
 
 import type { CommandContext } from "./commands-context.js";
@@ -166,6 +167,18 @@ export function registerPreviewCommands(register: CommandRegistrar): void {
   register("get_preview_diagnostics", async (_args, context) =>
     (await previews(context)).diagnostics(),
   );
+
+  /**
+   * A client's own preview measurements (desktop ingress timing, reconnects),
+   * folded into the diagnostics above. Fixed names and numbers only; anything
+   * else rejects the whole report.
+   */
+  register("record_preview_client_metrics", async (args, context) => {
+    const report = parsePreviewClientMetricsReport(args.report);
+    if (!report) throw previewFailure("invalid-request", { message: "Invalid metrics report." });
+    (await previews(context)).metrics.merge(report);
+    return { recorded: true };
+  });
 
   register("get_preview_settings", async (_args, context) => {
     const runtime = await previews(context);

@@ -9,6 +9,8 @@
  *
  * Invoked by `app-server-http.test.ts`; not part of the shipped bundle.
  */
+// Must precede ../index.js, which removes the token from process.env.
+import { capturedCodexBridgeToken } from "./captured-bridge-token.js";
 import { app } from "../index.js";
 import { resolveHttpHarnessReadyProbeConfig } from "./http-flag-harness-config.js";
 
@@ -20,7 +22,7 @@ interface StepResult {
 
 async function main(): Promise<void> {
   const results: StepResult[] = [];
-  const bridgeToken = process.env.CODEX_BRIDGE_TOKEN;
+  const bridgeToken = capturedCodexBridgeToken;
   if (!bridgeToken) {
     throw new Error("CODEX_BRIDGE_TOKEN is required by the HTTP harness");
   }

@@ -66,6 +66,11 @@ export interface ContainerInspection {
 /** Docker's container API, CLI, and managed-bridge ports, plus well-known daemon ports. */
 const ALWAYS_RESERVED = new Set([2375, 2376]);
 
+/** Docker daemon ports, refused whatever the backend has reserved. */
+export function isAlwaysReservedPort(port: number): boolean {
+  return ALWAYS_RESERVED.has(port);
+}
+
 /**
  * Agent servers inside owned containers. They are published for the backend's
  * own use and reachable through the relay, but are never preview targets.
@@ -446,7 +451,7 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
   ): Promise<PreviewResolution> {
     const port = definition.applicationPort;
     const reserved = await this.options.reservedPorts();
-    if (ALWAYS_RESERVED.has(port) || reserved.has(port)) {
+    if (isAlwaysReservedPort(port) || reserved.has(port)) {
       return {
         ok: false,
         error: previewError("forbidden", {

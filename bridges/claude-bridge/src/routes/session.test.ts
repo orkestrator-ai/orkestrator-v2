@@ -3859,6 +3859,52 @@ describe("persisted session routes", () => {
       expect(mockSendPrompt).toHaveBeenCalledWith("s-1", "/compact");
     });
 
+    test("passes instructions to the CLI's /compact and confirms them", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/compact", {
+        instructions: "  keep the failing test names\nand the plan  ",
+      });
+      expect(res.status).toBe(202);
+      expect(await jsonBody(res)).toEqual({ status: "processing", instructions: "applied" });
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        "s-1",
+        "/compact keep the failing test names\nand the plan",
+      );
+    });
+
+    test("treats blank instructions as a plain compaction", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/compact", { instructions: "   " });
+      expect(res.status).toBe(202);
+      expect(await jsonBody(res)).toEqual({ status: "processing" });
+      expect(mockSendPrompt).toHaveBeenCalledWith("s-1", "/compact");
+    });
+
+    test("refuses malformed or oversized instructions before compacting", async () => {
+      for (const body of [
+        { instructions: 42 },
+        ["/compact"],
+        { instructions: "x".repeat(16_001) },
+      ]) {
+        const res = await jsonRequest("POST", "/session/s-1/compact", body);
+        expect(res.status).toBe(400);
+      }
+      const notJson = await app.request("/session/s-1/compact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{not json",
+      });
+      expect(notJson.status).toBe(400);
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("refuses an oversized compact body with 413 before dispatch", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/compact", {
+        instructions: "x".repeat(16_000 * 6 + 1_025),
+      });
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: "Compact request is too large" });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
     test("contains a background compaction rejection after accepting the request", async () => {
       const logged = mock(() => {});
       const originalError = console.error;

@@ -1,12 +1,10 @@
 /**
  * Content digest of a staged preview worker build context (what
- * docker/artifact-preview-worker/stage-context.ts writes). The published
- * image pin records the digest of the context its image was built from, and
- * the image carries it as a label, so a backend pulls a published image only
- * when it was built from exactly the context this backend ships. Any change
- * to the worker bundle, the pinned renderer bundles, the Dockerfile or the
- * npm lockfile changes the digest, and a stale pin is ignored (the worker is
- * built locally instead).
+ * docker/artifact-preview-worker/stage-context.ts writes). Locally built
+ * images carry the digest as a label. At startup the backend compares that
+ * label against the context it ships to detect an outdated worker. Any
+ * change to the worker bundle, the pinned renderer bundles, the Dockerfile
+ * or the npm lockfile changes the digest.
  *
  * The digest is SHA-256 over every regular file, ordered by its relative
  * POSIX path, each framed as `<path>\0<byte length>\0<bytes>`. The seccomp

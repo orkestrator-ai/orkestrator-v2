@@ -5,14 +5,14 @@ below was taken at `9b3f53a2`, before the 2026-10-23 code changes.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Task 4 rechecked 2026-11-03 against `main` at `7b48c23f`: nothing between those commits changed the idle observation path, so its problem still held.
 
 ### Tasks
 
 1. **Bridge restart while backed off**: Claude and Codex; the next turn must be seen within the 3 s completion budget. Status: open.
 2. **Claude background-task output**: the background case still fails its fresh tool-result assertion. Status: open (likely a spec expectation, see below).
 3. **Codex live async question and background shell**: neither has been exercised live. Status: open.
-4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: open.
+4. **Codex short idle gaps**: 27 reads a minute against Claude's 12; find what still invalidates an idle Codex view. Status: partly done (every invalidation is tagged and counted; a fake idle Codex minute emits none; the live per-cause count is still owed).
 5. **Remaining Claude and Codex cases at the new cadence**: approval, sub-agents, reconnect, hidden and no-renderer. Status: open.
 6. **OpenCode hint rerun (code item 5)**: confirm idle OpenCode falls to 12 reads a minute, or attribute the remaining hints. Status: partly done (two hint sources fixed in code).
 7. **Grok and Pi rerun**: both were skipped as signed out on 2026-10-21. Status: blocked (on current host logins).
@@ -136,6 +136,57 @@ the other outstanding scenarios listed above. Evidence lives in
   - **Bisect by disabling one source at a time in a profile.**
     - Pros: no permanent code.
     - Cons: several live runs; slow.
+
+**Done (2026-11-03): tagging and counting.** Every session invalidation the
+backend emits carries a `cause` from `NATIVE_SESSION_INVALIDATION_CAUSES`
+(`packages/protocol/src/native-agent-observation.ts`). There are 25 causes in
+three groups. Projection-layer causes: `projection-read`,
+`projection-unreachable`, `projection-title`, `projection-withdrawn`,
+`hydration`, `discovery-deadline`, `discovery-renewal`,
+`model-catalog-refresh`, `model-catalog-load`, `command-catalog`,
+`permission-rule` and `transcript-artifact`. Persisted-record causes:
+`record-created`, `record-policy`, `record-goal`, `record-controls`,
+`record-title`, `record-notice`, `record-invalidated`, `record-removed` and
+`record-dispatch`. Activity-channel causes: `transition`, `content-revision`,
+`session-content` and `runtime-stopped`.
+`announceNativeAgentSessionProjection`, `announceNativeAgentRecord` and
+`NativeAgentObservationInvalidation` require the cause, so an untagged site
+fails the typecheck. A `native-agent-session` change that still reaches
+`StorageChanges.announce` without one is counted as a dropped label.
+`NativeSessionInvalidationMetrics` (`apps/backend/src/core/native-session-invalidation-metrics.ts`)
+counts emitted invalidations by cause and by platform (`environment` for one
+that named no session). Its snapshot is `sessionInvalidations` in
+`get_recurring_work_diagnostics` and the `recurringWork` block of the gateway's `/__orkestrator/metrics`. The live spec's idle
+(`detach`) case now records `idleInvalidations` and an `idle invalidations by
+cause` note for its window.
+
+**Fake idle Codex count (2026-11-03).**
+`native-agent-service-idle-invalidations.test.ts` drives a fake Codex session
+through the real `NativeAgentService`. The fake has a stable content
+revision, transcript token, command catalogue, runtime health and model
+catalogue. The test runs a simulated minute: a sweep every 2 s, a quiet read
+round (transcript, session state, all four discovery sections) every 15 s,
+and one more round after any invalidation.
+
+| Window | Invalidations by cause | View reads |
+| --- | --- | --- |
+| Opening the tab (warm-up) | `record-created` 1, `record-title` 1, `model-catalog-load` 1, `command-catalog` 1, `discovery-renewal` 4, `transition` 1 | 2 rounds |
+| Idle minute, nothing moves | none | 4 scheduled, 0 caused by an invalidation |
+| Idle minute, two revision bumps and one runtime value change | `content-revision` 2, `discovery-renewal` 1 | 3 caused by an invalidation |
+
+So the backend's own paths add no reads to a stable idle Codex view, and
+discovery expiry with unchanged values announces nothing. The live surplus
+(27 a minute, with gaps of 0.25 to 12 s) must come from something that moves
+on a real bridge: its content revision (`process`, `contentEpoch`,
+`messageRevision`, async-question count), a discovery value, or a renderer-side
+read that no backend invalidation causes. The fake cannot tell these apart.
+The next live idle run will: the per-cause counts name the source, and a
+total far below the read count points at the renderer instead.
+
+**Still owed.** One live idle run on a disposable profile (Claude and Codex,
+`ORKESTRATOR_AGENT_TEST_IDLE_CASES=detach`), with its `idle invalidations by
+cause` notes recorded here. It was not run in this change because it needs
+billed provider turns.
 
 ### 5. Remaining Claude and Codex cases at the new cadence
 
@@ -829,8 +880,41 @@ would miss a running turn. Pros: the view returns to 500 ms immediately; one
 announcement per resume. Cons: one more announcement kind riding the content
 channel. Applied by the Fix session (`690377e2`) and verified here.
 
+**D12. Task 4: how the cause travels.** Options: (a) a `reason` field on
+the resource change; (b) a `cause` field on both the resource change and the
+activity announcement; (c) count in the backend only and send nothing to
+clients. Chosen: (b). Why: the activity announcement already uses `reason`
+for `"content"`, so one new name, `cause`, covers both channels without
+changing what `reason` means. Pros: a client, relay or log can attribute an
+invalidation without the backend's counters; one vocabulary for both
+channels. Cons: a few bytes per frame, and clients must tolerate causes they
+do not know (they do: an unknown cause is dropped, not the frame). (c) was
+rejected because the ticket asks for every emitted invalidation to carry the
+tag, and a counter alone leaves clients, relays and browser traces unable to
+see it.
+
+**D13. Task 4: the granularity of record causes.** Options: one
+`session-record` cause for every persisted session write, or one per write
+family. Chosen: one per family (`record-created`, `record-dispatch` and so
+on). Why: a write that repeats on an idle session is exactly the kind of
+source the attribution has to name. Pros: the count says which write.
+Cons: nine causes where one would do for most readers.
+
+**D14. Task 4: where the idle count comes from.** Options: a live run
+(needs billed turns), a fake session through the real service, or a replay
+of a recorded Codex stream through the bridge. Chosen: a fake session through
+the real service. Why: the stage forbids billed turns, and the backend's own
+announcement paths are what the tags attribute. Pros: deterministic, and it
+pins that a stable idle Codex view gets no backend invalidations. Cons: it
+cannot reproduce a real bridge's revision movement, so the live surplus is
+still unattributed (see task 4, "Still owed").
+
 **Assumptions.**
 
+- Task 4 assumes the renderer re-reads once per backend invalidation it
+  receives. The fake count models that one-to-one; a round joined into an
+  in-flight read would make the live read count lower than the
+  invalidation count, never higher.
 - Both bridges serialize `sessionId` first in every frame
   (`serializeEventData`, `serializeSseEventData`); the observer reads only a
   bounded prefix and hints the whole group for anything else.

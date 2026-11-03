@@ -64,8 +64,13 @@ function parseColonLocation(reference: string): LocalFileLinkTarget | null {
  * column 4. A line range fragment is accepted too, with navigation targeting
  * the range's first line. The location is deliberately removed before the
  * path reaches the backend so it can never become part of an `lstat` target.
+ *
+ * A destination containing a C0 control character or DEL is never a path:
+ * URL parsing strips tab and newline anywhere in a URL, so `java\tscript:`
+ * would otherwise slip past the scheme checks below and reach an `href` raw.
  */
 export function parseLocalFileLinkTarget(destination: string): LocalFileLinkTarget | null {
+  if (/[\u0000-\u001f\u007f]/.test(destination)) return null;
   const trimmed = destination.trim();
   if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) return null;
 

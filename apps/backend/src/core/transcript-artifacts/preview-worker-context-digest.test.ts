@@ -1,5 +1,5 @@
 /**
- * The build-context digest a published preview worker image is bound to:
+ * The build-context digest a prepared preview worker image is labelled with:
  * stable for the same bytes, sensitive to any file or path change, blind to
  * the seccomp profile only, and independent of where staging runs.
  */
@@ -78,13 +78,6 @@ describe("worker context digest", () => {
     await expect(workerContextDigest(dir)).rejects.toThrow("unexpected entry");
   });
 
-  test("the publish script labels images with the label preparation checks", async () => {
-    const root = path.resolve(import.meta.dir, "../../../../..");
-    expect(
-      await Bun.file(path.join(root, "docker/artifact-preview-worker/publish.sh")).text(),
-    ).toContain(`--label "${WORKER_CONTEXT_LABEL}=$context_digest"`);
-  });
-
   test("staging gives the same context from any working directory", async () => {
     const root = path.resolve(import.meta.dir, "../../../../..");
     const script = path.join(root, "docker/artifact-preview-worker/stage-context.ts");
@@ -106,28 +99,23 @@ describe("worker context digest", () => {
       digests.push(await workerContextDigest(target));
     }
     expect(new Set(digests).size).toBe(1);
-    // Exercise staging and published-context comparison as one preparation flow,
-    // using the same real script release builds and CI run.
-    const reference = `ghcr.io/example/worker@sha256:${"a".repeat(64)}`;
+    // Exercise staging and labelling as one preparation flow, using the same
+    // real script release builds and CI run.
+    const id = `sha256:${"b".repeat(64)}`;
     const calls: string[][] = [];
     const prepared = await prepareWorkerImage({
       docker: "docker",
       tag: "worker:local",
       dataDir: scratch,
-      published: {
-        reference,
-        repository: "ghcr.io/example/worker",
-        digest: `sha256:${"a".repeat(64)}`,
-        contextDigest: digests[0]!,
-      },
       buildContext: { context: null, stageScript: script },
       runDocker: async (_docker, args) => {
         calls.push(args);
-        return { code: 0, stdout: args[0] === "image" ? digests[0]! : "", stderr: "" };
+        return { code: 0, stdout: args[0] === "image" ? id : "", stderr: "" };
       },
     });
-    expect(prepared).toEqual({ ok: true, method: "pull", reference, pinned: true });
-    expect(calls.map((args) => args[0])).toEqual(["version", "pull", "image"]);
+    expect(prepared).toEqual({ ok: true, method: "build", reference: id, pinned: true });
+    expect(calls.map((args) => args[0])).toEqual(["version", "build", "image"]);
+    expect(calls[1]).toContain(`${WORKER_CONTEXT_LABEL}=${digests[0]}`);
   }, 60_000);
 });
 

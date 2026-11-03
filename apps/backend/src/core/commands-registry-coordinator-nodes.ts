@@ -1,4 +1,6 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
+import { offlineLaunchMessage } from "@orkestrator/protocol/ticket-sync";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -25,7 +27,7 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 
-import { beginWorkerTabDelegation } from "./worker-tab-close-admission.js";
+import { prepareRemoteBuildTicket } from "./coordinator-node-tickets.js";
 import {
   nodeCoordinatorMailbox,
   sendToNodeCoordinator,
@@ -106,7 +108,7 @@ export async function coordinatorNodeTarget(
   const node = summaries.nodes[0];
   if (!node) throw new Error(`No connected node has ID ${nodeId}. Call list_nodes.`);
   if (!node.available) {
-    throw new Error(`${node.view.displayName} is not connected; changes to it are disabled.`);
+    throw new Error(offlineLaunchMessage(node.view.displayName));
   }
   const hint = repositoryHint((await context.storage.getProject(projectId))?.gitUrl);
   const project = hint ? node.projects.find((entry) => entry.repositoryHint === hint) : undefined;
@@ -238,6 +240,7 @@ async function openNodeDelegation(
     throw new Error("Coordinator request id was reused with a different delegation target");
   }
   const opened = await context.storage.coordinators.openCoordinatorDelegation(
+    context.runtime.coordinatorRequests.workerTabs,
     association.id,
     tabId,
   );
@@ -412,6 +415,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         if (!startError) {
           coordinatorDelegationOpened = Boolean(
             await context.storage.coordinators.openCoordinatorDelegation(
+              context.runtime.coordinatorRequests.workerTabs,
               receipt.association.id,
               STARTUP_AGENT_TAB_ID,
             ),
@@ -464,7 +468,11 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       );
       const worker = asNonBlankString(environmentId, "environmentId");
       const workerTab = asNonBlankString(tabId, "tabId");
-      const release = beginWorkerTabDelegation(worker, workerTab, target.nodeId);
+      const release = context.runtime.coordinatorRequests.workerTabs.beginDelegation(
+        worker,
+        workerTab,
+        target.nodeId,
+      );
       try {
         await target.environment(worker);
         await recordOrigin(context, caller, target, worker);
@@ -554,7 +562,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           args.deliverNow === true && target.supports(BACKEND_CAPABILITIES.nodeMailSteer);
         const recipient = await target.environment(toEnvironmentId);
         const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
-        const release = beginWorkerTabDelegation(
+        const release = context.runtime.coordinatorRequests.workerTabs.beginDelegation(
           toEnvironmentId,
           requestedTab || undefined,
           target.nodeId,
@@ -688,6 +696,14 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       if (typeof input.existingEnvironmentId === "string") {
         await target.environment(input.existingEnvironmentId);
       }
+      // A ticket of this board is handed to the node first, so the node builds
+      // it under the same id (docs/architecture/tickets.md, "Sync across machines").
+      const boardTicket = await prepareRemoteBuildTicket(
+        context,
+        caller.projectId,
+        target,
+        input.taskId,
+      );
       const payloadHash = actionHash({ nodeId: target.nodeId, input });
       return once(`${caller.coordinatorId}\0${stableRequestId}`, async () => {
         const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
@@ -746,6 +762,24 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           receipt.association.id,
           workflow.id,
         );
+        if (boardTicket) {
+          // Shown at once; the node then reports the build's own progress.
+          await context.storage.kanban
+            .recordTicketRemoteWork(String(input.taskId).trim(), {
+              nodeId: target.nodeId,
+              nodeName: target.nodeName,
+              buildPipelineId: workflow.id,
+              updatedAt: new Date().toISOString(),
+            })
+            .catch(() => {
+              createLogger("nodes").warn("ticket-sync.work-record-failed", {
+                ticketId: String(input.taskId).trim(),
+                pipelineId: String(workflow.id),
+              });
+              workflow.warning =
+                "The build started, but its work location could not be saved on the ticket.";
+            });
+        }
         return workflow;
       });
     },

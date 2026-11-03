@@ -14,11 +14,15 @@ import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { openPullRequestUrl } from "@/lib/pull-request-opener";
-import type { PrState } from "@/types";
+import type { Environment, PrState } from "@/types";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { HydrationStatus } from "@/lib/bounded-hydration";
 
 const log = createLogger("web.github");
+
+function findEnvironment(environments: readonly Environment[], environmentId: string) {
+  return environments.find((environment) => environment.id === environmentId);
+}
 
 interface UsePullRequestOptions {
   environmentId: string | null;
@@ -55,13 +59,22 @@ interface UsePullRequestReturn {
 export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePullRequestReturn {
   const [error, setError] = useState<string | null>(null);
 
-  const { getEnvironmentById, setEnvironmentPR } = useEnvironmentStore();
+  const setEnvironmentPR = useEnvironmentStore((state) => state.setEnvironmentPR);
 
-  // Get PR state from environment store
-  const environment = environmentId ? getEnvironmentById(environmentId) : null;
-  const prUrl = environment?.prUrl ?? null;
-  const prState = environment?.prState ?? null;
-  const hasMergeConflicts = environment?.hasMergeConflicts ?? null;
+  // PR fields of this environment only: primitive selectors, so a change to
+  // another environment (or to an unrelated field of this one) does not
+  // re-render the action bar and pipeline views that use this hook.
+  const prUrl = useEnvironmentStore((state) =>
+    environmentId ? (findEnvironment(state.environments, environmentId)?.prUrl ?? null) : null,
+  );
+  const prState = useEnvironmentStore((state) =>
+    environmentId ? (findEnvironment(state.environments, environmentId)?.prState ?? null) : null,
+  );
+  const hasMergeConflicts = useEnvironmentStore((state) =>
+    environmentId
+      ? (findEnvironment(state.environments, environmentId)?.hasMergeConflicts ?? null)
+      : null,
+  );
 
   // Detection status mirrored from the backend monitor
   const monitorState = usePrMonitorStore((state) =>

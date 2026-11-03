@@ -17,6 +17,10 @@ export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
 export const authToken =
   process.env.PI_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
+// The token authenticates callers of this bridge; nothing this process spawns
+// needs it. Captured once above and removed so Pi's tools, MCP servers and
+// extensions cannot inherit the credential through process.env (H4).
+delete process.env.PI_BRIDGE_TOKEN;
 
 /**
  * Where durable bridge state lives, or null when this bridge is stateless.

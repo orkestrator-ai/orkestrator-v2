@@ -360,6 +360,7 @@ export async function syncStoredEnvironmentStatus(
   context: Pick<CommandContext, "storage" | "runtime">,
   knownContainerStates?: Map<string, EnvironmentStatus> | null,
   strictKnownContainerStates = false,
+  throwInspectErrors = false,
 ): Promise<Environment> {
   if (environment.environmentType === "local") {
     return environment;
@@ -434,6 +435,7 @@ export async function syncStoredEnvironmentStatus(
     if (isMissingDockerObjectError(error)) {
       return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
     }
+    if (throwInspectErrors) throw error;
     log.warn("status.docker-error", {
       environmentId: environment.id,
       ...classifyCommandFailure(error, { tools: ["docker"] }),
@@ -1780,7 +1782,10 @@ export async function stopEnvironmentOnce(
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   // Draining execs into the container, so ownership is proven first.
-  if (environment.containerId) await assertDockerContainerOwned(environment.containerId, context);
+  if (environment.containerId) {
+    await assertDockerContainerOwned(environment.containerId, context);
+    shutdownClaudeStatePolling(context, environment.containerId);
+  }
   await stopEnvironmentReviewValidation(environmentId, context);
   await stopEnvironmentExecWorkers(environmentId, context);
   // Discovery runs inside the environment, so its cached result stops being

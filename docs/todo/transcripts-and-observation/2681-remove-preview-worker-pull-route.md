@@ -6,10 +6,10 @@ Analysed 2026-11-02 against `main` at `16b3f9e8`.
 
 ### Tasks
 
-1. **Remove the pull route from preparation and startup**: `transcript_artifact_prepare_worker` and runtime startup stop reading `published-image.json` and only ever build the shipped context. Status: open.
-2. **Decide the `method` field of the preparation status**: what happens to `"pull"` in `ArtifactWorkerPreparationStatus.method`. Status: open (depends on 1).
-3. **Remove the pin file and its tooling**: `published-image.json`, `write-pin.ts`, `publish.sh`, the backend build's pin copy and notice, and their tests. Status: open (depends on 1).
-4. **Update the docs**: the runtime guide, the release guide and 0053's remaining pin-related verification item. Status: open (depends on 1 and 3).
+1. **Remove the pull route from preparation and startup**: `transcript_artifact_prepare_worker` and runtime startup stop reading `published-image.json` and only ever build the shipped context. Status: done (2026-11-03).
+2. **Decide the `method` field of the preparation status**: what happens to `"pull"` in `ArtifactWorkerPreparationStatus.method`. Status: done (2026-11-03): kept with a comment.
+3. **Remove the pin file and its tooling**: `published-image.json`, `write-pin.ts`, `publish.sh`, the backend build's pin copy and notice, and their tests. Status: done (2026-11-03).
+4. **Update the docs**: the runtime guide, the release guide and 0053's remaining pin-related verification item. Status: done (2026-11-03).
 5. **Remove the leftovers on GitHub**: the `preview-worker-pin/cfbafc5d238e4eb3232bf` branch and, if nothing else uses it, the `artifact-preview-worker` GHCR package. Status: open (needs the user's approval; outward-facing).
 
 ### 1. Remove the pull route from preparation and startup
@@ -102,11 +102,33 @@ Analysed 2026-11-02 against `main` at `16b3f9e8`.
     - Pros: no action needed.
     - Cons: an orphaned branch and public image with no owner.
 
+## Assumptions and decisions
+
+### Task 1: removed the pull route, kept the build route and the label check
+
+Took the recommended option. `preview-worker-prepare.ts` lost `PublishedWorkerImage`, `resolvePublishedPinFile`, `readPublishedWorkerImage`, `publishedMatchesContext`, `publishedMatchesBuildContext`, `PublishedSkipReason` and the pull branch; `WorkerPrepareOptions` no longer takes `published`. `runtime.ts` no longer reads a pin at startup, has no published-image preference and no `publishedSkipped` log line, and loses the `publishedPinFile` test option. Kept: the context digest, the `orkestrator.artifact-preview-worker.context` label on every build, the startup comparison that reports an outdated worker, and the host-local `image-pin.json`. The startup outdated check now applies whenever `ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE` is unset, which is the same condition as before minus the "no published image selected" clause that can no longer be false.
+
+### Task 1: pruned rather than deleted the runtime tests
+
+`runtime-prepare.test.ts` kept every build and outdated-worker case. Pull-only cases were removed (pull fallbacks, startup preference, published label rejection, published-pin-alone, pulling a replacement, the pin parser). Two were converted instead of dropped, because they covered behaviour that is not pull-specific: an explicit `process` setting is prepared but not switched, and a source checkout stages, builds, removes the staged context and reuses the build after a restart. The fake Docker CLI lost its pull branch and its `label`/`publishedPresent` parameters. In `preview-worker-context-digest.test.ts` the `publish.sh` label assertion went, and the staging flow now asserts that preparation builds with the staged context's label instead of pulling.
+
+### Task 2: kept `"pull"` in the protocol union
+
+Took the recommended option: `ArtifactWorkerPreparationStatus.method` stays `"build" | "pull" | null`, with a comment that current backends only send `"build"` and that `"pull"` stays for older backends inside the support window. The backend's own `WorkerPrepareResult` narrowed to `"build"`.
+
+### Task 3: deleted the pin file, its writer, the publish script and the build step
+
+Took the recommended option: `published-image.json`, `write-pin.ts`, `publish.sh` and `preview-worker-pin-writer.test.ts` are deleted, and `apps/backend/scripts/build.ts` no longer copies the pin or prints the "no published image" notice. `turbo.json`'s `docker/artifact-preview-worker/**` input stays, because the build still stages the worker context from there. `stage-context.ts`'s comment no longer names `publish.sh`. The opt-in cross-host staging test and CI's `worker-context-parity` job were left alone: they check staging determinism, which the outdated-worker check and the parity job still rely on, and the job is a GitHub workflow this task does not touch.
+
+### Task 4: rewrote the docs as one build route
+
+Took the recommended option: the runtime guide's "Preparing the worker on demand" now describes only the build, the "Publishing" paragraph is gone (its one still-true sentence, that nothing pushes or logs in, moved into the preparation paragraph), and the outdated-worker paragraph no longer mentions a published image. The release guide's pin paragraph was replaced by one sentence saying the preview worker needs no release step because installs build it. 0053's Needs verification item about cross-host digest stability was removed with its now-empty section, and its done checklist item no longer says preparation pulls.
+
 ## Current state
 
 - The `publish-preview-worker` workflow and its step test (`preview-worker-publish.test.ts`) were removed on 2026-11-02, with the workflow assertions in `tests/unit/ci-workflows.test.ts` and `preview-worker-context-digest.test.ts`.
-- `published-image.json` holds `null`; every install builds the worker from its shipped context.
-- The pull route, pin file, `write-pin.ts` and `publish.sh` are still in the tree.
+- Tasks 1 to 4 done on 2026-11-03: preparation and startup have one route, building the shipped (or staged) context; the pin file, `write-pin.ts` and `publish.sh` are gone.
+- Task 5 is open: the `preview-worker-pin/cfbafc5d238e4eb3232bf` branch and the GHCR package still exist and need the user's approval to delete.
 
 ## Constraints and rationale
 

@@ -90,6 +90,7 @@ async function setup() {
     coordinators: world.coordinator,
     nodes: { status: async () => ({ nodeId: "bk_cmd", mode: "command" }) },
     nodePortal: { summaries, invokeOnNode: remote },
+    runtime: { coordinatorRequests: world.coordinatorRequests },
   } as unknown as CommandContext;
   const commands = new Map<string, CommandHandler>();
   registerCoordinatorNodeCommands((name, handler) => commands.set(name, handler));

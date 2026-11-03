@@ -133,7 +133,10 @@ describe.each(LEGACY_ROWS.map((row) => [row.title, row] as const))(
     test("a title-only save leaves the stored text byte for byte", async () => {
       await withLegacyRows(async ({ stored, update }) => {
         await update({ taskId: row.id, title: `${row.title} (renamed)` });
-        expect(stored(row.id)).toEqual({ ...row, title: `${row.title} (renamed)` });
+        // The row also gains its sync stamp (storage-kanban-sync.ts); the text does not move.
+        const { sync, ...text } = stored(row.id)!;
+        expect(text).toEqual({ ...row, title: `${row.title} (renamed)` });
+        expect(sync).toMatchObject({ revs: { title: expect.any(Number) } });
       });
     });
 

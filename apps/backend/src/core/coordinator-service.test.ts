@@ -30,6 +30,7 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 // This slow-tier file drives real repositories, submodules and remotes. Its
 // Git-heavy cases take about 2 s on an idle host and crossed Bun's 5 s default
@@ -2178,6 +2179,7 @@ describe("project coordinator", () => {
         createdAt: new Date().toISOString(),
       });
       await storage.coordinators.openCoordinatorDelegation(
+        new WorkerTabCloseAdmission(),
         association.id,
         "startup-agent",
         options.requestedAt,
@@ -2208,7 +2210,11 @@ describe("project coordinator", () => {
         requestId,
         createdAt: new Date().toISOString(),
       });
-      await storage.coordinators.openCoordinatorDelegation(association.id, workerTabId);
+      await storage.coordinators.openCoordinatorDelegation(
+        new WorkerTabCloseAdmission(),
+        association.id,
+        workerTabId,
+      );
       return association.id;
     }
 
@@ -2720,7 +2726,11 @@ describe("project coordinator", () => {
         createdAt: new Date().toISOString(),
       });
       await expect(
-        storage.coordinators.openCoordinatorDelegation(conflicting.id, "startup-agent"),
+        storage.coordinators.openCoordinatorDelegation(
+          new WorkerTabCloseAdmission(),
+          conflicting.id,
+          "startup-agent",
+        ),
       ).rejects.toThrow("already has an outstanding");
       expect(
         (await storage.coordinators.listOpenCoordinatorDelegations()).map((item) => item.id),

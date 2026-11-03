@@ -67,6 +67,7 @@ describe("geometry at multiple zoom levels, device scales, and scroll offsets", 
         scroll: { x: 0, y: 0 },
         devicePixelRatio: 3,
         sensitive: [{ x: 500.25, y: 400.25, width: 99.5, height: 39.5 }],
+        sensitiveComplete: true,
       };
       await start(harness.manager, "region");
       contents.selection = regionSelection(viewport, { x: 0, y: 0 }, 3);
@@ -116,6 +117,7 @@ describe("geometry at multiple zoom levels, device scales, and scroll offsets", 
         scroll,
         devicePixelRatio: dpr,
         sensitive: [{ x: 500, y: 400, width: 100, height: 40 }],
+        sensitiveComplete: true,
       };
       await start(harness.manager, "region");
       contents.selection = regionSelection(viewport, scroll, dpr);

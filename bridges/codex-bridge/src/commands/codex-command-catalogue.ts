@@ -166,6 +166,8 @@ export interface CodexCommandCatalogueOptions {
   skillRefreshDebounceMs?: number;
   /** See `SkillInventoryDeps.coldSettleMs`. */
   skillColdSettleMs?: number;
+  /** See `SkillInventoryDeps.setSettleTimer`. */
+  skillSettleTimer?: SkillInventoryDeps["setSettleTimer"];
 }
 
 export class CodexCommandCatalogue {
@@ -198,6 +200,7 @@ export class CodexCommandCatalogue {
       ...(options.skillColdSettleMs !== undefined
         ? { coldSettleMs: options.skillColdSettleMs }
         : {}),
+      ...(options.skillSettleTimer ? { setSettleTimer: options.skillSettleTimer } : {}),
       onRefreshed: (read) => {
         this.skillsDigest = commandBindingRevision([
           String(read.fresh),

@@ -740,13 +740,15 @@ function installBrowserPreviewCaptureRuntime(
     } else if (regionRect) {
       rect = { ...regionRect };
     }
+    const sensitive = kit.sensitiveScan();
     return {
       captureId: config.captureId,
       nonce: config.nonce,
       connected,
       rect,
       ...viewportState(),
-      sensitive: kit.sensitiveRects(),
+      sensitive: sensitive.rects,
+      sensitiveComplete: sensitive.complete,
     };
   };
   const waitForPaint = (): Promise<void> =>

@@ -74,7 +74,8 @@ export function publicActionHandlers(): PublicActionHandler[] {
  * withdrawn by removing that handler or input, never by flipping this alone:
  * `project.remove` `cascade`, `project.init`, `attachments` on
  * `session.prompt`/`session.start`, `session.commands`/`session.command`
- * (with `literal` on prompts), and `enqueue`.
+ * (with `literal` on prompts), `enqueue`, and `knownToken` on
+ * `session.transcript`.
  */
 export function publicFeatures(): PublicCapabilities["features"] {
   return {
@@ -86,6 +87,7 @@ export function publicFeatures(): PublicCapabilities["features"] {
     selectedSlashCommands: true,
     enqueue: true,
     nodeRouting: true,
+    transcriptKnownToken: true,
   };
 }
 

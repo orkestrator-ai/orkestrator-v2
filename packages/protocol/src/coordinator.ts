@@ -650,11 +650,24 @@ export const COORDINATOR_PR_STATUS_WAKE =
 export const COORDINATOR_WORKFLOW_STATUS_WAKE =
   "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, its automatic PR session started, opened or failed (after which the pull request's own changes wake you: conflicts, failing checks, ready to merge, merged or closed), a build paused on an error, a stall, and any workflow completing, failing or being cancelled. With auto-fix and auto-PR the review advances on its own, and you hear the outcome rather than each step. Updates that land together arrive in one wake. Do not poll its status.";
 
+/**
+ * What moved the checkout's HEAD: a fast-forward to its upstream
+ * (`syncProjectGit`, the pre-message and pre-mail checks, a merge follow), a
+ * branch switch from the toolbar, or anything observed afterwards that
+ * Orkestrator did not do itself (a Git command in a terminal).
+ */
+export type CoordinatorRepositoryContextSource = "upstream" | "switch" | "external";
+
 export interface CoordinatorRepositoryContextEvent {
   revision: number;
   branch: string | null;
   headCommit: string | null;
   occurredAt: string;
+  /** Where HEAD was before this change. Absent on events from older releases. */
+  previousBranch?: string | null;
+  previousHeadCommit?: string | null;
+  /** Absent on events from older releases. */
+  source?: CoordinatorRepositoryContextSource;
 }
 
 export interface CoordinatorWorkspace {
@@ -847,7 +860,17 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
             (item.revision as number) > 0 &&
             (item.branch === null || typeof item.branch === "string") &&
             (item.headCommit === null || typeof item.headCommit === "string") &&
-            typeof item.occurredAt === "string"
+            typeof item.occurredAt === "string" &&
+            (item.previousBranch === undefined ||
+              item.previousBranch === null ||
+              typeof item.previousBranch === "string") &&
+            (item.previousHeadCommit === undefined ||
+              item.previousHeadCommit === null ||
+              typeof item.previousHeadCommit === "string") &&
+            (item.source === undefined ||
+              item.source === "upstream" ||
+              item.source === "switch" ||
+              item.source === "external")
           );
         }))) &&
     typeof workspace.createdAt === "string" &&

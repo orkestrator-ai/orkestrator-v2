@@ -240,6 +240,7 @@ export async function withService(
     projectedMessageCacheLimits?: NativeAgentServiceOptions["projectedMessageCacheLimits"];
     directHistoryPageCacheLimits?: NativeAgentServiceOptions["directHistoryPageCacheLimits"];
     artifactLedger?: NativeAgentServiceOptions["artifactLedger"];
+    beforeMailInject?: NativeAgentServiceOptions["beforeMailInject"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -298,6 +299,7 @@ export async function withService(
       ? { directHistoryPageCacheLimits: setup.directHistoryPageCacheLimits }
       : {}),
     ...(setup.artifactLedger ? { artifactLedger: setup.artifactLedger } : {}),
+    ...(setup.beforeMailInject ? { beforeMailInject: setup.beforeMailInject } : {}),
   });
   try {
     await run({ storage, service });

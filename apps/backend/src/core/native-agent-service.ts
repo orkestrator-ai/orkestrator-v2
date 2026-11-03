@@ -98,7 +98,10 @@ import {
   stripCoordinatorContext,
   coordinatorConversationIdFromRuntimeId,
   agentSessionOwnerKey,
+  type CoordinatorConversation,
+  type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
+import { pendingCheckoutUpdate, renderCheckoutUpdate } from "./coordinator-checkout-update.js";
 import {
   insertUserCommandContext,
   leadingUserCommandContext,
@@ -1127,6 +1130,27 @@ export class NativeAgentService {
     return trusted;
   }
 
+  /**
+   * The checkout-update notice for a coordinator conversation's first turn
+   * after the checkout moved (`coordinator-checkout-update.ts`), or "".
+   * Reading the commits is best-effort: without them the notice still says
+   * the checkout moved.
+   */
+  private async coordinatorCheckoutUpdate(
+    workspace: CoordinatorWorkspace,
+    conversation: CoordinatorConversation,
+  ): Promise<string> {
+    const update = pendingCheckoutUpdate(workspace, conversation);
+    if (!update) return "";
+    const changes =
+      update.fromCommit && update.toCommit && this.options.coordinatorCheckoutChanges
+        ? await this.options
+            .coordinatorCheckoutChanges(workspace.projectId, update.fromCommit, update.toCommit)
+            .catch(() => null)
+        : null;
+    return renderCheckoutUpdate(update, workspace.repositoryStatus?.upstream, changes);
+  }
+
   /** Resolve coordinator authority from persisted ownership, never caller metadata. */
   private async trustedSessionInput<T extends EnsureNativeAgentSessionInput>(input: T): Promise<T> {
     const bugReport = await resolveBugReportRuntime(this.storage, input.environmentId);
@@ -1266,6 +1290,10 @@ export class NativeAgentService {
         `Launch base: every launch_environment call must include baseBranch and baseCommit. By default start workers from the latest commit of the base branch ${baseBranch}: call get_launch_options and pass coordinatorBase.baseBranch and coordinatorBase.baseCommit unchanged. ` +
         `Use checkoutBase, the branch and commit of this checkout shown below, only when the user asks to build on the current checkout. If coordinatorBase is unavailable, report that instead of guessing values.\n`;
       const side = coordinator.conversation.role === "side";
+      const checkoutUpdate = await this.coordinatorCheckoutUpdate(
+        workspace,
+        coordinator.conversation,
+      );
       const nodeLine = (await this.options.coordinatorNodeContext?.().catch(() => null)) ?? "";
       const delegation = side
         ? `Side agent: you are ${coordinator.conversation.title}, a side agent of this project's coordinator. You can read the project and Orkestrator state, including a worker's changes with get_worker_changes, but you cannot launch environments or jobs. Exchange mail only with the main coordinator: send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}". Workers and other agents cannot reach you.\n`
@@ -1303,6 +1331,7 @@ export class NativeAgentService {
           `Repository context revision: ${workspace.repositoryContextRevision}\n` +
           `Branch: ${status?.branch ?? "unknown"}\n` +
           `Commit: ${status?.headCommit ?? "unknown"}\n` +
+          checkoutUpdate +
           `${COORDINATOR_CONTEXT_CLOSE_TAG}\n\n${input.prompt}`,
       } as T;
     }
@@ -3061,6 +3090,8 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
   ): Promise<MailInjectDispatchOutcome> {
     let heldReason: "parked" | "queue" | "draft" | "busy" | undefined;
+    // Outside the session fence: a slow fetch must not hold a typed prompt.
+    await this.options.beforeMailInject?.(input.environmentId).catch(() => undefined);
     try {
       const result = await this.dispatchPromptInternal(
         { ...input, allowProviderCommands: false },

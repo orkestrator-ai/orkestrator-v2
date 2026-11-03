@@ -15,9 +15,10 @@
  * The checkout never changes under a running coordinator or project-home
  * turn. A merge observed while one runs is retried every
  * `retryIntervalMs` until the turn ends, for at most `retryWindowMs`; after
- * that the next coordinator message merges it instead. Repeated merges of one
- * project coalesce into one attempt (plus one rerun when a merge lands during
- * an attempt), and one PR is followed once per backend process.
+ * that the next coordinator message, typed or mailed, merges it instead.
+ * Repeated merges of one project coalesce into one attempt (plus one rerun
+ * when a merge lands during an attempt), and one PR is followed once per
+ * backend process.
  *
  * This is background work owned by the backend; no client needs to be open.
  */
@@ -47,7 +48,9 @@ export type ProjectCheckoutFollowOutcome =
   /** No status could be read. */
   | "no-status"
   /** The fast-forward itself failed. */
-  | "failed";
+  | "failed"
+  /** The caller stopped waiting (`proceed` answered false); nothing changed. */
+  | "abandoned";
 
 /** `ProjectGitService` refusals that mean "not now", not "cannot". */
 const BUSY_MESSAGES = [
@@ -60,16 +63,32 @@ function isBusyRefusal(error: unknown): boolean {
   return error instanceof Error && BUSY_MESSAGES.includes(error.message);
 }
 
+export interface FastForwardProjectCheckoutOptions {
+  /**
+   * Bypass the fetch cooldown. Defaults to true: a merge just moved the
+   * remote. Mail to the coordinator passes false and settles for a fetch at
+   * most once per cooldown.
+   */
+  forceFetch?: boolean;
+  /**
+   * Asked once the fetch returns, before anything changes. A caller that
+   * stopped waiting answers false, so a late fetch never starts a
+   * fast-forward the caller has already gone on without.
+   */
+  proceed?: () => boolean;
+}
+
 /**
- * One attempt: fetch (bypassing the cooldown, since the remote just moved)
- * and fast-forward if Git can do it cleanly.
+ * One attempt: fetch (by default bypassing the cooldown, since the remote just
+ * moved) and fast-forward if Git can do it cleanly.
  */
 export async function fastForwardProjectCheckout(
   git: ProjectCheckoutGit,
   projectId: string,
+  options: FastForwardProjectCheckoutOptions = {},
 ): Promise<ProjectCheckoutFollowOutcome> {
   if (await git.isCheckoutBusy(projectId)) return "busy";
-  const status = await git.fetch(projectId, true).catch(() => null);
+  const status = await git.fetch(projectId, options.forceFetch ?? true).catch(() => null);
   if (!status || status.remoteState === "stale" || status.lastError?.operation === "fetch")
     return "no-status";
   const decision = decideUpstreamMergeOffer(status);
@@ -78,6 +97,7 @@ export async function fastForwardProjectCheckout(
       ? decision.reason
       : "not-behind";
   }
+  if (options.proceed && !options.proceed()) return "abandoned";
   try {
     await (git.syncAfterMerge?.(projectId) ?? git.sync(projectId));
     return "fast-forwarded";

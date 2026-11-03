@@ -33,7 +33,11 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "checkout.merge-followed":
         "After an environment's PR merged, the project checkout was fast-forwarded, or `outcome` says why not.",
       "checkout.merge-follow-failed":
-        "After an environment's PR merged, fast-forwarding the project checkout failed.",
+        "Fast-forwarding the project checkout failed, after an environment's PR merged or before mail woke the main coordinator.",
+      "checkout.mail-follow":
+        "Before mail woke the main coordinator, the project checkout was fast-forwarded, or `outcome` says why not (`timed-out`, `failed`).",
+      "checkout.mail-follow-failed":
+        "Before mail woke the main coordinator, checking whether to fast-forward the project checkout failed; the mail was delivered anyway.",
     },
   },
 });

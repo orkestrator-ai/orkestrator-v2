@@ -1009,6 +1009,11 @@ describe("project coordinator", () => {
     const snapshot = await coordinator.get(project.id);
     expect(changed.branch).toBe("external");
     expect(snapshot!.workspace.repositoryContextRevision).toBeGreaterThan(0);
+    expect(snapshot!.workspace.repositoryContextEvents?.at(-1)).toMatchObject({
+      source: "external",
+      previousBranch: "occupied",
+      branch: "external",
+    });
   });
 
   test("operation markers in a newline-containing Git directory block linked-worktree switches", async () => {
@@ -1396,6 +1401,24 @@ describe("project coordinator", () => {
       upstreamCommit: publishedTip,
     });
     expect(await fs.readFile(path.join(checkout, "remote.txt"), "utf8")).toBe("remote\n");
+    // The fast-forward is recorded as coming from upstream, with where HEAD
+    // was, so the coordinator's next turn can be told what came in.
+    const synced = await storage.coordinators.getCoordinatorWorkspace(project.id);
+    expect(synced?.repositoryContextEvents?.at(-1)).toMatchObject({
+      revision: synced!.repositoryContextRevision,
+      source: "upstream",
+      previousBranch: "main",
+      previousHeadCommit: baseline.headCommit,
+      branch: "main",
+      headCommit: publishedTip,
+    });
+    expect(await git.checkoutChanges(project.id, baseline.headCommit!, publishedTip)).toEqual({
+      totalCommits: 1,
+      commits: [{ sha: expect.any(String), subject: "remote" }],
+      totalFiles: 1,
+      files: ["remote.txt"],
+    });
+    expect(await git.checkoutChanges(project.id, "--output=x", publishedTip)).toBeNull();
 
     await runCommand("git", ["switch", "-c", "feature"], { cwd: publisher });
     await fs.writeFile(path.join(publisher, "feature.txt"), "feature\n");
@@ -1414,6 +1437,11 @@ describe("project coordinator", () => {
     expect(await git.switchBranch(project.id, "refs/remotes/origin/feature")).toMatchObject({
       branch: "feature",
     });
+    expect(
+      (await storage.coordinators.getCoordinatorWorkspace(project.id))?.repositoryContextEvents?.at(
+        -1,
+      ),
+    ).toMatchObject({ source: "switch", previousBranch: "main", branch: "feature" });
 
     await runCommand("git", ["switch", "main"], { cwd: checkout });
     await fs.writeFile(path.join(checkout, "local.txt"), "local\n");

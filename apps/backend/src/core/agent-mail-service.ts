@@ -546,6 +546,27 @@ export class AgentMailService {
       // Held status notices are listed so they can join a batch below.
       includeCoalescing: true,
     });
+    // The pending snapshot is bounded to 100 entries. Independent environments
+    // may dispatch concurrently: a coordinator's network fetch must not hold
+    // worker mail. Keep each environment serial to preserve batching and claims.
+    const groups = new Map<string, typeof pending>();
+    for (const entry of pending) {
+      const key = entry.mailbox.environmentId;
+      const group = groups.get(key) ?? [];
+      group.push(entry);
+      groups.set(key, group);
+    }
+    const results = await Promise.allSettled(
+      Array.from(groups.values(), (entries) => this.drainEnvironmentInjects(entries, settings)),
+    );
+    // Observe every owned dispatch before finishing the pass, including failures.
+    for (const result of results) if (result.status === "rejected") throw result.reason;
+  }
+
+  private async drainEnvironmentInjects(
+    pending: Awaited<ReturnType<StorageService["listPendingAgentMailInjects"]>>,
+    settings: ReturnType<typeof normalizeAgentMessagingSettings>,
+  ): Promise<void> {
     // One journal read per ambiguous dispatch per pass, shared by its batch.
     const verified = new Map<string, "dispatched" | "not-dispatched" | "unknown">();
     for (const {

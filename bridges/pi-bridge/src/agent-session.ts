@@ -15,6 +15,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
+import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
 import { realpath, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type {
@@ -113,6 +114,15 @@ export class SessionClosingError extends Error {
 
   constructor() {
     super("This Pi session is closing; retry once the close completes");
+  }
+}
+
+/** A policy change a turn in flight stops from applying. The route answers 409. */
+export class SessionBusyError extends Error {
+  override readonly name = "SessionBusyError";
+
+  constructor() {
+    super("The Pi session is already running");
   }
 }
 
@@ -348,7 +358,9 @@ export async function createSession(
     if (existing && isSessionClosed(existing)) throw new SessionClosingError();
     if (existing) {
       const resolved = resolvePiExecutionPolicy(policy);
-      if (policy || resolved.id === "coordinator-read-only") existing.policy = resolved;
+      if (policy || resolved.id === "coordinator-read-only") {
+        await applyRequestedPolicy(existing, resolved);
+      }
       if (resolved.id === "coordinator-read-only" && existing.readOnly !== true) {
         await setSessionReadOnly(existing, true);
       }
@@ -362,6 +374,7 @@ export async function createSession(
   const work = (async () => {
     const resolved = resolvePiExecutionPolicy(policy);
     const state = newSessionState(clientSessionKey, resolved);
+    state.policyPending = !policy;
     // The only session whose whole prompt history this journal has seen: it
     // has no Pi session file yet, so nothing could have prompted it elsewhere.
     // Resume and fork adopt an existing file and keep the default, false.
@@ -947,6 +960,40 @@ export function coordinatorProcessPolicy(): import("@orkestrator/protocol/native
   };
 }
 
+/** What a request's policy is compared against: nothing until the session has a live one. */
+export function liveExecutionPolicy(
+  state: Pick<SessionState, "policy" | "policyPending">,
+): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy | undefined {
+  return state.policyPending ? undefined : state.policy;
+}
+
+/**
+ * Apply a resolved policy from a request to a session that already exists.
+ *
+ * Narrow-only (H4): the agent this bridge runs can read the bridge token, so a
+ * request may only keep a live policy or make it stricter. A real change has to
+ * detach, because Pi fixes tool registrations and project resources when it
+ * builds the session.
+ */
+async function applyRequestedPolicy(
+  state: SessionState,
+  policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): Promise<void> {
+  assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
+  if (JSON.stringify(state.policy) !== JSON.stringify(policy)) {
+    if (state.status === "running" || state.dispatching) throw new SessionBusyError();
+    // An explicit attach may be constructing a session concurrently. Let it
+    // publish, then dispose it, as `setSessionReadOnly` does.
+    await state.attaching?.catch(() => undefined);
+    await detachSession(state);
+    if (isSessionClosed(state)) throw new SessionClosingError();
+    // The detach yields. Another request may have narrowed the policy meanwhile.
+    assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
+    state.policy = policy;
+  }
+  state.policyPending = false;
+}
+
 export function resolvePiExecutionPolicy(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
@@ -1295,14 +1342,7 @@ export async function resumeSession(
       (await realpath(ownedFile).catch(() => undefined)) === resolved;
     if (sameFile) {
       if (isSessionClosed(existing)) throw new SessionClosingError();
-      if (policy && JSON.stringify(existing.policy) !== JSON.stringify(policy)) {
-        if (existing.status === "running" || existing.dispatching) {
-          throw new Error("The Pi session is already running");
-        }
-        await detachSession(existing);
-        if (isSessionClosed(existing)) throw new SessionClosingError();
-        existing.policy = resolvePiExecutionPolicy(policy);
-      }
+      if (policy) await applyRequestedPolicy(existing, resolvePiExecutionPolicy(policy));
       applyComposerPatch(existing, patch);
       existing.lastAccessed = Date.now();
       return existing;
@@ -1324,6 +1364,7 @@ export async function resumeSession(
 
   const work = (async () => {
     const state = newSessionState(undefined, resolvePiExecutionPolicy(policy));
+    state.policyPending = !policy;
     state.sessionFile = resolved;
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposerForSession(

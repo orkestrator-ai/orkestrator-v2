@@ -4,6 +4,7 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
 import { watchClientDisconnect } from "./acp-client-disconnect.js";
@@ -42,6 +43,11 @@ export const server = createServer((request, response) => {
       // is also a 401; the backend shows the former's message as written.
       if (error instanceof CredentialError) {
         json(response, 401, { error: error.message, kind: "authentication-required" });
+        return;
+      }
+      if (error instanceof PolicyWideningRefusedError) {
+        log.warn("session.policy-widening-refused", { widened: error.widened.join(",") });
+        json(response, 403, error.refusal());
         return;
       }
       const status = error instanceof HttpError ? error.status : 500;

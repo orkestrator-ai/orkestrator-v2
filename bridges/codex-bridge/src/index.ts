@@ -1,3 +1,4 @@
+import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import {
   applyBridgeLogPolicy,
@@ -188,6 +189,10 @@ export const app = new Hono();
  * preserving diagnostic frames without inspecting attached error data.
  */
 app.onError((error, c) => {
+  if (error instanceof PolicyWideningRefusedError) {
+    log.warn("session.policy-widening-refused", { widened: error.widened.join(",") });
+    return c.json(error.refusal(), 403);
+  }
   if ("getResponse" in error) {
     const response = (error as { getResponse(): Response }).getResponse();
     return c.newResponse(response.body, response);
@@ -1307,6 +1312,7 @@ app.post("/session/:id/config", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const outcome = await appServerRuntime.updateConfig(sessionId, body);
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (outcome === "invalid-policy") return c.json({ error: "Invalid execution policy" }, 400);
   if (outcome === "running") {
     return c.json({ error: "Cannot update settings while session is running" }, 409);
   }
@@ -1443,6 +1449,7 @@ app.get("/session/:id/structured-output", (c) => {
 app.post("/session/:id/prompt", async (c) => {
   const sessionId = c.req.param("id");
   const body = await c.req.json().catch(() => ({}));
+  appServerRuntime.assertPromptPolicyNotWidened(sessionId, body.policy);
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
   const outputSchema = body.outputSchema;

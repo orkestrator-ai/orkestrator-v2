@@ -1254,7 +1254,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       },
       this.fetchImpl,
     );
-    assertOk(response, "Codex session resume");
+    // With its detail, as for the other bridges: a 403 says a wider policy was refused.
+    await assertOkWithErrorDetail(response, "Codex session resume");
     const payload = asRecord(await boundedJson(response, "Codex session resume"));
     const resumedId = nonEmptyString(payload?.sessionId);
     if (!resumedId)

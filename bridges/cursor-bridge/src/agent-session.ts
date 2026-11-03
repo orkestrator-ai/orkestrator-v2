@@ -12,9 +12,14 @@ import {
   nativeAgentDeniedCapabilities,
   nativeAgentPolicyDeniesWebSearch,
 } from "@orkestrator/protocol/native-agent";
-import { cursorAppliedPolicy, resolveCursorExecutionPolicy } from "./execution-policy.js";
+import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
+import {
+  cursorAppliedPolicy,
+  liveExecutionPolicy,
+  resolveCursorExecutionPolicy,
+} from "./execution-policy.js";
 
-export { cursorAppliedPolicy, resolveCursorExecutionPolicy };
+export { cursorAppliedPolicy, liveExecutionPolicy, resolveCursorExecutionPolicy };
 import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -121,7 +126,7 @@ export async function createSession(
           "This Cursor session is closing; retry once the close completes",
         );
       }
-      if (policy) existing.policy = resolveCursorExecutionPolicy(policy);
+      if (policy) await applyRequestedPolicy(existing, resolveCursorExecutionPolicy(policy));
       // The boundary of a session that already exists is moved by the caller
       // of this function, which owns the HTTP status a conflicting move
       // deserves. `readOnly` here only seeds a session being created.
@@ -133,6 +138,7 @@ export async function createSession(
 
   const work = (async () => {
     const state = newSessionState(clientSessionKey, resolveCursorExecutionPolicy(policy));
+    state.policyPending = !policy;
     // The only session whose journal starts complete: it has no agent id, so
     // its first attach creates a new SDK agent that nothing but this journal
     // has ever sent to. Resume and restore never set this here.
@@ -984,6 +990,34 @@ function resumePolicyKey(
   });
 }
 
+/**
+ * Apply a resolved policy from a request to a session that already exists.
+ *
+ * Narrow-only (H4): the agent this bridge runs can read the bridge token, so a
+ * request may only keep a live policy or make it stricter. A real change has to
+ * detach, because the SDK takes the policy's options when an agent attaches.
+ */
+async function applyRequestedPolicy(
+  state: SessionState,
+  policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): Promise<void> {
+  assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
+  if (JSON.stringify(state.policy) !== JSON.stringify(policy)) {
+    if (state.status === "running" || state.dispatching || state.rewinding) {
+      throw new SessionConflictError("Session is already running");
+    }
+    // An explicit attach may be building an agent concurrently. Let it publish,
+    // then dispose it, so the next attach is the one that takes this policy.
+    await state.attaching?.catch(() => undefined);
+    await detachAgent(state);
+    assertSessionOpen(state);
+    // The detach yields. Another request may have narrowed the policy meanwhile.
+    assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
+    state.policy = policy;
+  }
+  state.policyPending = false;
+}
+
 function resumeComposerConflicts(state: SessionState, patch: ComposerPatch | undefined): boolean {
   if (!patch) return false;
   if (patch.modelId && patch.modelId !== state.composer.selectedModelId) return true;
@@ -1015,14 +1049,12 @@ export async function resumeSession(
     );
   }
   if (existing) {
-    if (
-      resumePolicyKey(existing.policy) !== requestedPolicyKey ||
-      resumeComposerConflicts(existing, patch)
-    ) {
+    if (resumeComposerConflicts(existing, patch)) {
       throw new SessionConflictError(
-        "Cursor session is already adopted under a different execution policy",
+        "Cursor session is already adopted with different composer controls",
       );
     }
+    if (policy) await applyRequestedPolicy(existing, resolveCursorExecutionPolicy(policy));
     if (agentMcp) existing.agentMcp = agentMcp;
     return existing;
   }
@@ -1046,6 +1078,7 @@ export async function resumeSession(
     // recovers or the next prompt starts.
     if (hasTombstoneForAgent(agentId)) await finishTombstonesForAgent(agentId);
     const state = newSessionState(undefined, resolveCursorExecutionPolicy(policy));
+    state.policyPending = !policy;
     state.agentId = agentId;
     state.agentMcp = agentMcp;
     applyComposerPatch(state, patch);

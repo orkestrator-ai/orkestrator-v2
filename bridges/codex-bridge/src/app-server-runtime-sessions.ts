@@ -10,7 +10,15 @@ import {
 } from "./app-server-runtime-base.js";
 import { inheritCommandChanges } from "./sessions/command-changes.js";
 import { inheritTypedPrompts } from "./sessions/typed-prompts.js";
-import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
+import {
+  isNativeAgentExecutionPolicy,
+  type NativeAgentReadiness,
+} from "@orkestrator/protocol/native-agent";
+import {
+  assertExecutionPolicyNotWidened,
+  executionPolicyWidenings,
+  PolicyWideningRefusedError,
+} from "@orkestrator/protocol/execution-policy-narrowing";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { openAssistantRow } from "./app-server-runtime-rows.js";
@@ -22,6 +30,7 @@ import {
 
 import type { EngineThread, EngineUsageSnapshot } from "./engine/types.js";
 import {
+  liveCodexPolicy,
   phaseToExternalStatus,
   type BridgeSession,
   CODEX_RESTARTED_MID_TURN_MESSAGE,
@@ -137,7 +146,19 @@ export class CodexRuntimeSessions {
     // catalog cached from before those changes.
     invalidateTranscriptCatalogCache();
 
-    const config = this.lifecycle.toEngineConfig(body);
+    // Narrow-only (H4). A resume adds a session to the thread rather than
+    // changing one, but a turn on it runs the same thread, so it cannot be wider
+    // than any live session already there. No policy in the request inherits
+    // one: running with none would put the thread on the host default.
+    const livePolicies = this.ctx.registry
+      .boundSessionsForThread(threadId)
+      .flatMap((bound) => liveCodexPolicy(bound) ?? []);
+    const config = this.lifecycle.toEngineConfig(
+      isNativeAgentExecutionPolicy(body.policy) ? body : { ...body, policy: livePolicies[0] },
+    );
+    for (const live of livePolicies) {
+      if (config.policy) assertExecutionPolicyNotWidened(live, config.policy);
+    }
     const sessionId = createSessionId();
     const session = this.ctx.registry.createSession({
       id: sessionId,
@@ -1165,20 +1186,42 @@ export class CodexRuntimeSessions {
   async updateConfig(
     sessionId: string,
     body: Record<string, unknown>,
-  ): Promise<"updated" | "not-found" | "running" | "unavailable" | "memory-only"> {
+  ): Promise<
+    "updated" | "not-found" | "running" | "unavailable" | "memory-only" | "invalid-policy"
+  > {
     const session = this.ctx.registry.getSession(sessionId);
     if (!session) return "not-found";
+    // An unusable policy must not read as no policy: `toEngineConfig` would then
+    // put the session on the host default.
+    const policyRequested = body.policy !== undefined;
+    if (policyRequested && !isNativeAgentExecutionPolicy(body.policy)) return "invalid-policy";
+    const policyAtStart = session.config.policy;
+    const nextConfig = this.lifecycle.toEngineConfig({
+      ...body,
+      ...(policyRequested ? {} : { policy: policyAtStart }),
+    });
+    // Narrow-only (H4): the agent this bridge runs can read the bridge token.
+    // Check before applying settings, and again after the engine work yields.
+    if (policyRequested && nextConfig.policy) {
+      assertExecutionPolicyNotWidened(liveCodexPolicy(session), nextConfig.policy);
+    }
     await this.ctx.callbacks.touchSession(sessionId);
     const context = this.ctx.registry.getThreadForSession(sessionId);
     if (context && phaseToExternalStatus(context.phase) === "running") return "running";
 
-    const nextConfig = this.lifecycle.toEngineConfig({
-      ...body,
-      ...(body.policy ? {} : { policy: session.config.policy }),
-    });
     const requestedModelChanged = session.config.model !== nextConfig.model;
     let attached: ThreadContext | undefined;
     let previousConfirmedModel: string | undefined;
+    const restoreEngineConfig = async (): Promise<void> => {
+      if (attached) {
+        await this.ctx.options.engine
+          .configureThread(attached.engineHandle, session.config)
+          .catch(() => undefined);
+      }
+      if (attached && requestedModelChanged) {
+        attached.modelId = previousConfirmedModel;
+      }
+    };
     try {
       // ensureAttached fast-returns a healthy current-generation context, but
       // re-resumes one invalidated by a failed generation recovery. Never update
@@ -1202,14 +1245,7 @@ export class CodexRuntimeSessions {
         }
       }
     } catch (error) {
-      if (attached) {
-        await this.ctx.options.engine
-          .configureThread(attached.engineHandle, session.config)
-          .catch(() => undefined);
-      }
-      if (attached && requestedModelChanged) {
-        attached.modelId = previousConfirmedModel;
-      }
+      await restoreEngineConfig();
       // A transient resume, an in-flight restart or an open circuit are all
       // retryable. Reported as an outcome rather than thrown so the route answers
       // 503 instead of leaking a stack trace as a 500.
@@ -1220,13 +1256,39 @@ export class CodexRuntimeSessions {
       return "unavailable";
     }
 
+    // The engine work yields. Another request may have narrowed the policy
+    // meanwhile; revalidate and commit together without another await. A request
+    // with no policy carries the old one, so it retries against the new one.
+    if (policyRequested && nextConfig.policy) {
+      const widened = executionPolicyWidenings(liveCodexPolicy(session), nextConfig.policy);
+      if (widened.length > 0) {
+        await restoreEngineConfig();
+        throw new PolicyWideningRefusedError(widened);
+      }
+    } else if (session.config.policy !== policyAtStart) {
+      await restoreEngineConfig();
+      return "running";
+    }
+
     if (session.config.policy?.projectResources !== nextConfig.policy?.projectResources) {
       this.ctx.commandCatalogue.markPolicyChanged();
     }
     session.config = nextConfig;
+    if (policyRequested) session.policyPending = false;
     session.configurationRevision += 1;
     this.ctx.registry.touch(sessionId);
     return (await this.persistSessionVerified(session)) ? "updated" : "memory-only";
+  }
+
+  /**
+   * A prompt never changes a session's policy. One naming a wider policy is
+   * refused rather than run under less than its caller asked for (H4).
+   */
+  assertPromptPolicyNotWidened(sessionId: string, requested: unknown): void {
+    const session = this.ctx.registry.getSession(sessionId);
+    if (!session || !isNativeAgentExecutionPolicy(requested)) return;
+    const next = this.lifecycle.toEngineConfig({ policy: requested }).policy;
+    if (next) assertExecutionPolicyNotWidened(liveCodexPolicy(session), next);
   }
 
   async getMessages(sessionId: string): Promise<NormalizedMessage[] | null> {

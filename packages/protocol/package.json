@@ -65,6 +65,7 @@
     "./codex-model-catalog": "./src/codex-model-catalog.ts",
     "./app-config-defaults": "./src/app-config-defaults.ts",
     "./environment-readiness": "./src/environment-readiness.ts",
+    "./execution-policy-narrowing": "./src/execution-policy-narrowing.ts",
     "./environment-activity-order": "./src/environment-activity-order.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
     "./pipeline-worker-mail": "./src/pipeline-worker-mail.ts",

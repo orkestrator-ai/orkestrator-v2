@@ -139,6 +139,7 @@ export class CodexRuntimeLifecycle {
               policy: codexCoordinatorPolicy(),
             }
           : persisted.config,
+        policyPending: true,
         title: persisted.title,
         titleSource: persisted.titleSource,
         lastAcceptedRequestId: persisted.lastAcceptedRequestId,

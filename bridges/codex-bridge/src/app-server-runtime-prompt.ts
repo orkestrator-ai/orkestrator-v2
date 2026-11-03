@@ -133,6 +133,8 @@ export class CodexRuntimePrompt {
     if (!input.requestId?.trim()) {
       return { ok: false, status: 400, error: "requestId is required" };
     }
+    // This turn runs under the policy held now, which makes it live.
+    session.policyPending = false;
     if (input.agentMcp) {
       const scoped = this.lifecycle.toEngineConfig({
         mode: session.config.mode,

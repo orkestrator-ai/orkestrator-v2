@@ -32,6 +32,7 @@ import type {
   StopBackgroundTaskResult,
 } from "../types/index.js";
 import { isSdkResultMessage } from "../types/index.js";
+import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
@@ -82,7 +83,13 @@ export async function createOrRecoverSession(
   if (stableId) {
     const existing = sessions.get(stableId) ?? (await ensurePersistedSession(stableId));
     if (existing) {
-      existing.executionPolicy = policy;
+      // Narrow-only (H4): the same rule as `/config`. A session loaded from disk
+      // has no policy yet and takes this one. No policy in the request leaves a
+      // live one alone: clearing it would put the session on the host default.
+      if (policy) {
+        assertExecutionPolicyNotWidened(existing.executionPolicy, policy);
+        existing.executionPolicy = policy;
+      }
       return existing;
     }
     journal = await stableIdDispatchJournal(stableId);

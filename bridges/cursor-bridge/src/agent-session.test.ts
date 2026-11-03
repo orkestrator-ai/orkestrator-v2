@@ -14,6 +14,7 @@ import { noteRowRevised, revisedRowIds } from "./transcript.js";
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Agent, type LocalAgentStore } from "@cursor/sdk";
+import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -1599,10 +1600,12 @@ describe("resumeSession", () => {
     networkAccess: "restricted",
   } as const;
 
-  test("rejects a later resume of the same agent under a tighter policy", async () => {
+  test("refuses a later resume of the same agent under another policy id", async () => {
     const first = await resumeSession("agent-policy-share", undefined, permissivePolicy);
+    // Stricter on every other axis, but the id is not ordered: it selects
+    // provider behaviour as a whole, so any change counts as a widening.
     await expect(resumeSession("agent-policy-share", undefined, denyPolicy)).rejects.toBeInstanceOf(
-      SessionConflictError,
+      PolicyWideningRefusedError,
     );
     expect(sessions.get(first.id)?.policy).toMatchObject(permissivePolicy);
     expect(

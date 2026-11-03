@@ -324,6 +324,8 @@ export function SharedNativeAgentController({
   coordinatorWorkspacePath,
   hiddenByLayout = false,
   beforeSend,
+  composerPlaceholder,
+  connectionEnabled = true,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
   // A bug report's session runs in its own scratch directory, like a
@@ -547,7 +549,8 @@ export function SharedNativeAgentController({
     defaultFastMode: configuredFastMode,
     defaultParameterValues: configuredParameterValues,
     isActive,
-    enabled: !setupPending && !draft.submissionPending && !awaitingResumeChoice,
+    enabled:
+      connectionEnabled && !setupPending && !draft.submissionPending && !awaitingResumeChoice,
   });
   const isDispatching = runtimeIsDispatching || draft.submissionPending === true;
   const noticeSessionIdentity = `${platform}\u0000${data.environmentId}\u0000${projection?.sessionId ?? data.sessionId ?? sessionKey}`;
@@ -3842,7 +3845,7 @@ export function SharedNativeAgentController({
           }}
           inputComboboxAria={commandComposer.inputComboboxAria}
           keyboardMenuOpen={fileMentionMenuOpen || commandComposer.menuOpen}
-          placeholder={`Message ${label}`}
+          placeholder={composerPlaceholder ?? `Message ${label}`}
           disabled={
             queueEditPending || isSubmitting || preparingSend || draft.submissionPending === true
           }

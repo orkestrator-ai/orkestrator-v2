@@ -72,6 +72,8 @@ const AGENT_MCP_PATH = "/mcp";
 export const CLAUDE_STATE_SIGNAL_PATH = "/claude-state-signal";
 /** Container worktree doorbell (`orkestrator-worktree-signal`); carries no paths or content. */
 export const WORKTREE_SIGNAL_PATH = "/worktree-signal";
+/** claude-tmux hook doorbell (`orkestrator-state-signal hook`); carries no hook content. */
+export const TMUX_HOOK_SIGNAL_PATH = "/tmux-hook-signal";
 /**
  * What a worktree ring asks for, from its `X-Orkestrator-Signal` header. Every
  * reason makes the receiver do at least a full rescan; none can make it trust
@@ -1092,6 +1094,14 @@ export class AgentToolsServer {
     return this.issueSignal(WORKTREE_SIGNAL_PATH, onSignal);
   }
 
+  /**
+   * The same kind of credential for a container's claude-tmux hook script.
+   * It rings only `/tmux-hook-signal`; no other doorbell credential rings it.
+   */
+  issueTmuxHookSignal(onSignal: () => void): StateSignalCredential | null {
+    return this.issueSignal(TMUX_HOOK_SIGNAL_PATH, () => onSignal());
+  }
+
   private issueSignal(
     path: string,
     ring: (reason: WorktreeSignalReason) => void,
@@ -1342,7 +1352,11 @@ export class AgentToolsServer {
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-tools.invalid");
-    if (url.pathname === CLAUDE_STATE_SIGNAL_PATH || url.pathname === WORKTREE_SIGNAL_PATH) {
+    if (
+      url.pathname === CLAUDE_STATE_SIGNAL_PATH ||
+      url.pathname === WORKTREE_SIGNAL_PATH ||
+      url.pathname === TMUX_HOOK_SIGNAL_PATH
+    ) {
       this.handleStateSignal(request, response, url.pathname);
       return;
     }

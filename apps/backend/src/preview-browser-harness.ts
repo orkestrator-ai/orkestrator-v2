@@ -172,6 +172,77 @@ if (viteDir) {
   services.vite = await register("vite", viteRelay.port);
 }
 
+/**
+ * The Next.js app-router fixture (`test-fixtures/preview-next`), registered on
+ * its own port with no relay in front: Next.js builds absolute URLs from its
+ * listening port, so a relay would change what the application sends back.
+ * `next dev` runs under Node in its own process group, which shutdown stops.
+ */
+let next: ChildProcess | null = null;
+let nextExited: Promise<void> = Promise.resolve();
+const nextDir = process.env.ORKESTRATOR_TEST_PREVIEW_HARNESS_NEXT_DIR;
+if (nextDir) {
+  const nextPort = await freePort();
+  const env: Record<string, string | undefined> = { ...process.env, NEXT_TELEMETRY_DISABLED: "1" };
+  // `next dev` sets development itself; the harness runs with NODE_ENV=test.
+  delete env.NODE_ENV;
+  next = spawn(
+    Bun.which("node") ?? "node",
+    [
+      join(nextDir, "node_modules/next/dist/bin/next"),
+      "dev",
+      "--hostname",
+      "127.0.0.1",
+      "--port",
+      String(nextPort),
+    ],
+    // Its output stays off stdout, which carries this harness's JSON lines.
+    { cwd: nextDir, stdio: ["ignore", "ignore", "inherit"], env, detached: true },
+  );
+  const child = next;
+  nextExited = new Promise((resolve) => child.once("exit", () => resolve()));
+  // Backstop for a harness that exits without its shutdown path, startup failures included.
+  process.once("exit", () => {
+    try {
+      if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  });
+  // The first request compiles the page, which can take a while on a busy host.
+  let up = false;
+  for (let attempt = 0; attempt < 360 && !up && child.exitCode === null; attempt += 1) {
+    up = await fetch(`http://127.0.0.1:${nextPort}/`, { signal: AbortSignal.timeout(60_000) }).then(
+      async (response) => {
+        await response.arrayBuffer();
+        return response.ok;
+      },
+      () => false,
+    );
+    if (!up) await Bun.sleep(500);
+  }
+  if (!up) throw new Error("the Next.js fixture did not answer on its port");
+  services.next = await register("next", nextPort);
+}
+
+/** Stop `next dev` and every process it started, and wait until they are gone. */
+async function stopNext(): Promise<void> {
+  const pid = next?.pid;
+  if (!next || pid === undefined) return;
+  const signalGroup = (signal: NodeJS.Signals | 0): boolean => {
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!signalGroup("SIGTERM")) return;
+  await Promise.race([nextExited, Bun.sleep(5_000)]);
+  // Workers can outlive the CLI briefly; the next run reuses the same `.next`.
+  for (let attempt = 0; attempt < 50 && signalGroup(0); attempt += 1) await Bun.sleep(100);
+  signalGroup("SIGKILL");
+}
 /** Loopback ports for the legacy `/__orkestrator/browser/loopback/<port>/` route. */
 const loopbackPorts: Record<string, number> = {
   app: fixture.port,
@@ -323,6 +394,7 @@ async function shutdown(): Promise<void> {
   closing = true;
   vite?.kill("SIGTERM");
   await viteRelay?.close();
+  await stopNext();
   redirector.closeAllConnections();
   await new Promise<void>((resolve) => redirector.close(() => resolve()));
   recorder.closeAllConnections();

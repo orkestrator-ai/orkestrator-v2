@@ -17,6 +17,7 @@ import {
   TMUX_IDLE_AFTER_QUIET_TICKS,
   TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS,
   TMUX_IDLE_POLL_INTERVAL_MS,
+  TMUX_SIGNALLED_IDLE_INTERVAL_MS,
   PERMISSION_MODE_POLL_MS,
   PERMISSION_MODE_SWITCH_TIMEOUT_MS,
   POLL_INTERVAL_MS,
@@ -35,6 +36,7 @@ import {
   parseTmuxSelectionPrompt,
   parseTmuxSessionNames,
   path,
+  randomBytes,
   randomUUID,
   runtimeRootPrefixForContext,
   selectReapableTmuxSessions,
@@ -52,6 +54,7 @@ import {
   boundedInfoEventMessage,
   drainPending,
   drainTimeouts,
+  encodeCwd,
   ensureSessionDirs,
   findTranscriptPath,
   listPendingBlocking,
@@ -184,6 +187,15 @@ export class TmuxSession {
    */
   private accountHomeOwner: TerminalRuntime | null = null;
   private readonly pollTick: (intervalMs: number) => Promise<void>;
+  /** Ends the poll loop's current wait; set only while it waits. */
+  private wakeLoop: (() => void) | undefined;
+  /** A wake that arrived while the loop was not waiting. */
+  private wakeRequested = false;
+  /** The next read checks liveness whatever the cadence (the container stopped). */
+  private livenessDueNow = false;
+  private lastSnapshotStartedAt = Number.NEGATIVE_INFINITY;
+  /** Fallback-discovery candidates whose head proved them another session's. */
+  private readonly rejectedTranscripts = new Map<string, number>();
   /** The latest `has-session` answer and when it arrived; see {@link recentLiveness}. */
   private lastLiveness: { alive: boolean; at: number } | undefined;
   private readonly now: () => number;
@@ -249,7 +261,13 @@ export class TmuxSession {
     return true;
   }
 
-  async discoverTranscriptPath(): Promise<string | undefined> {
+  /**
+   * `exactChecked`: the caller's snapshot already looked for the expected
+   * file, so only the fallback search of fresh transcripts runs.
+   */
+  async discoverTranscriptPath(
+    options: { exactChecked?: boolean } = {},
+  ): Promise<string | undefined> {
     if (this.transcriptPath) return this.transcriptPath;
     const found = await findTranscriptPath(
       this.backend,
@@ -257,6 +275,7 @@ export class TmuxSession {
       this.workspace,
       this.sessionId,
       this.startedAtUnix,
+      { skipExact: options.exactChecked === true, rejected: this.rejectedTranscripts },
     );
     if (found) this.transcriptPath = found;
     return found;
@@ -602,6 +621,55 @@ export class TmuxSession {
     });
   }
 
+  /**
+   * Ends the poll loop's current wait early: a hook doorbell rang, input wants
+   * a pane read, or the container just stopped (`liveness`). The loop still
+   * keeps its minimum gap between reads, so this can never poll faster than
+   * the fast cadence.
+   */
+  wakePollLoop(options: { liveness?: boolean } = {}): void {
+    if (options.liveness) this.livenessDueNow = true;
+    const wake = this.wakeLoop;
+    if (wake) wake();
+    else this.wakeRequested = true;
+  }
+
+  /** Waits for the tick or a wake, then keeps the minimum gap after a wake. */
+  private async nextPollTick(
+    intervalMs: number,
+    minimumWakeMs = POLL_INTERVAL_MS,
+  ): Promise<"timer" | "wake"> {
+    let reason: "timer" | "wake" = "wake";
+    if (this.wakeRequested) {
+      this.wakeRequested = false;
+    } else {
+      reason = await new Promise<"timer" | "wake">((resolve) => {
+        let settled = false;
+        const finish = (why: "timer" | "wake") => {
+          if (settled) return;
+          settled = true;
+          this.wakeLoop = undefined;
+          resolve(why);
+        };
+        this.wakeLoop = () => finish("wake");
+        this.pollTick(intervalMs).then(
+          () => finish("timer"),
+          () => finish("timer"),
+        );
+      });
+    }
+    if (reason === "wake" && !this.stopRequested) {
+      const since = Date.now() - this.lastSnapshotStartedAt;
+      if (since >= 0 && since < minimumWakeMs) await this.pollTick(minimumWakeMs - since);
+    }
+    return reason;
+  }
+
+  /** The transcript Claude writes for this session id; bound as soon as it exists. */
+  expectedTranscriptPath(): string {
+    return `${this.claudeHome}/projects/${encodeCwd(this.workspace)}/${this.sessionId}.jsonl`;
+  }
+
   private spawnPollLoop(context: CommandContext): void {
     if (this.pollLoopRunning) return;
     this.pollLoopRunning = true;
@@ -613,21 +681,86 @@ export class TmuxSession {
     let quietTicks = 0;
     let nextDiscoveryAt = 0;
     let discoveryInterval = TMUX_DISCOVERY_MIN_INTERVAL_MS;
+    // The hook doorbell of this tab's container (`tmux-hook-signal.ts`).
+    const containerId = this.backend.kind === "container" ? this.backend.containerId : undefined;
+    const doorbell = containerId
+      ? context.runtime?.tmux?.hookSignals?.attach(containerId, context, () => this.wakePollLoop())
+      : undefined;
+    let knownHookFiles = new Set<string>();
+    /** Rings counted when a safety read found a hook file no ring had announced. */
+    let unannouncedAtRings: number | undefined;
 
     void (async () => {
       try {
         while (!this.stopRequested) {
           const idle = !this.busy && quietTicks >= TMUX_IDLE_AFTER_QUIET_TICKS;
-          await this.pollTick(idle ? TMUX_IDLE_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
+          // With a working doorbell an idle tab reads only when a hook rings,
+          // and otherwise on the slow safety read below.
+          const signalled = idle && doorbell?.confirmed() === true;
+          const ringsBeforeWait = doorbell?.rings() ?? 0;
+          const woke = await this.nextPollTick(
+            signalled
+              ? TMUX_SIGNALLED_IDLE_INTERVAL_MS
+              : idle
+                ? TMUX_IDLE_POLL_INTERVAL_MS
+                : POLL_INTERVAL_MS,
+            idle ? TMUX_IDLE_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
+          );
           if (this.stopRequested) break;
           tick += 1;
           quietTicks += 1;
 
-          // Discovered before the snapshot so the same round trip can carry the
-          // transcript size.
+          // Liveness and the pane ride in the same round trip as the hook
+          // listing: in a container each was its own `docker exec`.
+          const livenessEvery = idle
+            ? TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS
+            : LIVENESS_CHECK_EVERY_TICKS;
+          const livenessDue = signalled || this.livenessDueNow || tick % livenessEvery === 0;
+          this.livenessDueNow = false;
+          const observationDue =
+            !this.observationInFlight && (signalled || Date.now() >= this.nextObservationAt);
+          const forceEmit = observationDue && this.forceNextObservation;
+          if (observationDue) {
+            this.nextObservationAt =
+              Date.now() +
+              (this.busy ? TMUX_BUSY_OBSERVATION_INTERVAL_MS : TMUX_OBSERVATION_INTERVAL_MS);
+            this.forceNextObservation = false;
+          }
+          const nonce = observationDue ? randomBytes(12).toString("hex") : undefined;
+
+          let snapshot: TmuxPollSnapshot | undefined;
+          this.lastSnapshotStartedAt = Date.now();
+          try {
+            snapshot = await this.backend.pollSnapshot(this.sessionHookPaths, tail?.filePath, {
+              ...(tail ? {} : { candidatePath: this.expectedTranscriptPath() }),
+              tmux: {
+                command: this.tmuxCommand,
+                session: this.tmuxSession,
+                liveness: livenessDue,
+                pane: observationDue,
+              },
+              ...(nonce ? { nonce } : {}),
+            });
+            log.recovered("poll.snapshot-failed", this.pollLogScope);
+          } catch (error) {
+            this.warnPollFailed("poll.snapshot-failed", error);
+          }
+
+          if (snapshot && !tail && typeof snapshot.candidateSize === "number") {
+            this.transcriptPath ??= this.expectedTranscriptPath();
+            tail = new TranscriptTail(this.transcriptPath);
+            if (this.transcriptPath === this.expectedTranscriptPath()) {
+              snapshot.transcriptSize = snapshot.candidateSize;
+            }
+          }
+
+          // The fallback search for a transcript Claude did not name after this
+          // session id, on its backoff. The expected file is in every snapshot,
+          // so a tab it binds never searches. A transcript found here is
+          // tailed from the next tick.
           if (!tail && Date.now() >= nextDiscoveryAt) {
             try {
-              const transcriptPath = await this.discoverTranscriptPath();
+              const transcriptPath = await this.discoverTranscriptPath({ exactChecked: true });
               if (transcriptPath) tail = new TranscriptTail(transcriptPath);
               log.recovered("poll.discovery-failed", this.pollLogScope);
             } catch (error) {
@@ -637,16 +770,21 @@ export class TmuxSession {
             discoveryInterval = Math.min(discoveryInterval * 2, TMUX_DISCOVERY_MAX_INTERVAL_MS);
           }
 
-          let snapshot: TmuxPollSnapshot | undefined;
-          try {
-            snapshot = await this.backend.pollSnapshot(this.sessionHookPaths, tail?.filePath);
-            log.recovered("poll.snapshot-failed", this.pollLogScope);
-          } catch (error) {
-            this.warnPollFailed("poll.snapshot-failed", error);
-          }
-
           if (snapshot) {
-            if (snapshot.pending.length > 0 || snapshot.timeouts.length > 0) {
+            const names = [...snapshot.pending, ...snapshot.timeouts];
+            const fresh = names.some((name) => !knownHookFiles.has(name));
+            knownHookFiles = new Set(names);
+            if (doorbell) {
+              // Judged a read later, so a ring still in flight is not a miss.
+              if (unannouncedAtRings !== undefined && doorbell.rings() === unannouncedAtRings) {
+                doorbell.missed();
+              }
+              unannouncedAtRings =
+                fresh && signalled && woke === "timer" && doorbell.rings() === ringsBeforeWait
+                  ? doorbell.rings()
+                  : undefined;
+            }
+            if (names.length > 0) {
               quietTicks = 0;
               nextDiscoveryAt = 0;
               discoveryInterval = TMUX_DISCOVERY_MIN_INTERVAL_MS;
@@ -708,39 +846,21 @@ export class TmuxSession {
             }
           }
 
-          if (Date.now() >= this.nextObservationAt && !this.observationInFlight) {
-            this.nextObservationAt =
-              Date.now() +
-              (this.busy ? TMUX_BUSY_OBSERVATION_INTERVAL_MS : TMUX_OBSERVATION_INTERVAL_MS);
-            const forceEmit = this.forceNextObservation;
-            this.forceNextObservation = false;
-            const observation = this.refreshObservation(context, forceEmit)
-              .catch((error) => {
-                if (forceEmit) {
-                  this.forceNextObservation = true;
-                  this.nextObservationAt = 0;
-                }
-                // Pane contents are sensitive. Report only the error class.
-                log.warn("pane.observe-failed", {
-                  error: formatLogError(error, { message: false }),
-                });
-              })
-              .finally(() => {
-                if (this.observationInFlight === observation) {
-                  this.observationInFlight = undefined;
-                }
-              });
-            this.observationInFlight = observation;
+          if (observationDue) {
+            // A snapshot that did not carry the pane (it failed) costs the
+            // separate capture it always did.
+            this.startObservation(context, forceEmit, snapshot?.pane);
           }
 
-          // Liveness is a whole extra process spawn (a `docker exec` in
-          // container mode) and a session that ends stays ended, so it is
-          // checked on a slower cadence than the hook and transcript reads.
-          const livenessEvery = idle
-            ? TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS
-            : LIVENESS_CHECK_EVERY_TICKS;
-          if (tick % livenessEvery !== 0) continue;
-          if (!(await this.tmuxAlive().catch(() => false))) {
+          if (!livenessDue) continue;
+          let alive: boolean;
+          if (snapshot?.alive !== undefined) {
+            alive = snapshot.alive;
+            this.lastLiveness = { alive, at: this.now() };
+          } else {
+            alive = await this.tmuxAlive().catch(() => false);
+          }
+          if (!alive) {
             let removed = false;
             const sessions = context.runtime.tmux.sessions;
             await sessions.installLock(this.environmentId).runExclusive(async () => {
@@ -777,12 +897,50 @@ export class TmuxSession {
         }
       } finally {
         this.pollLoopRunning = false;
+        this.wakeLoop = undefined;
+        doorbell?.release();
       }
     })();
   }
 
-  private async refreshObservation(context: CommandContext, forceEmit = false): Promise<void> {
-    const pane = await this.capturePane();
+  /**
+   * One pane observation, off the loop. `pane` is a capture the snapshot
+   * already took (null when it failed); undefined captures here.
+   */
+  private startObservation(
+    context: CommandContext,
+    forceEmit: boolean,
+    pane?: string | null,
+  ): void {
+    const observation = (
+      pane === null
+        ? Promise.reject(new Error("tmux capture-pane failed"))
+        : this.refreshObservation(context, forceEmit, pane)
+    )
+      .catch((error) => {
+        if (forceEmit) {
+          this.forceNextObservation = true;
+          this.nextObservationAt = 0;
+        }
+        // Pane contents are sensitive. Report only the error class.
+        log.warn("pane.observe-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      })
+      .finally(() => {
+        if (this.observationInFlight === observation) {
+          this.observationInFlight = undefined;
+        }
+      });
+    this.observationInFlight = observation;
+  }
+
+  private async refreshObservation(
+    context: CommandContext,
+    forceEmit = false,
+    captured?: string,
+  ): Promise<void> {
+    const pane = captured ?? (await this.capturePane());
     const next = {
       ...parseTmuxAgentObservation(pane, this.observation.revision + 1, new Date().toISOString()),
       generation: this.observationGeneration,
@@ -992,6 +1150,7 @@ export class TmuxSession {
     await this.sendKeys(keys);
     this.forceNextObservation = true;
     this.nextObservationAt = 0;
+    this.wakePollLoop();
   }
 
   private async sendLiteralUnlocked(text: string): Promise<void> {
@@ -1083,6 +1242,7 @@ export class TmuxSession {
       await this.sendKeysUnlocked(keys);
       this.forceNextObservation = true;
       this.nextObservationAt = 0;
+      this.wakePollLoop();
     });
   }
 
@@ -1403,6 +1563,7 @@ export class TmuxSession {
     if (!stopped) return false;
     this.accountHomeOwner?.forgetAccountHome(this.accountHomeKey());
     this.stopRequested = true;
+    this.wakePollLoop();
     await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
     return true;
   }
@@ -1561,6 +1722,22 @@ export class TmuxSessionManager {
     return Array.from(this.sessions.values()).filter(
       (session) => session.environmentId === environmentId,
     );
+  }
+
+  /**
+   * The container stopped, died or was removed (`docker events`): every tab
+   * in it checks liveness on its next read, now, instead of at its cadence. A
+   * dead tab then retires through the loop's own stopped path.
+   */
+  containerEnded(containerId: string): number {
+    let woken = 0;
+    for (const session of this.sessions.values()) {
+      const id = session.backend.containerId;
+      if (!id || !(id.startsWith(containerId) || containerId.startsWith(id))) continue;
+      session.wakePollLoop({ liveness: true });
+      woken += 1;
+    }
+    return woken;
   }
 
   findByTmuxName(environmentId: string, name: string): TmuxSession | undefined {

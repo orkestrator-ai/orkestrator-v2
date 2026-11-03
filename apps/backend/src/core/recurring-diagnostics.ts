@@ -31,7 +31,8 @@ export type FetchPolicyName = "container-git-fetch";
 export type FetchPolicyStatus = Omit<ContainerGitFetchStatus, "generation">;
 
 /** Finite names for container change-signal diagnostics sources. */
-export type SignalSourceName = "claude-state-signal" | "container-worktree-signal";
+export type SignalSourceName =
+  "claude-state-signal" | "container-worktree-signal" | "tmux-hook-signal";
 
 /**
  * Where one container's change signal stands.

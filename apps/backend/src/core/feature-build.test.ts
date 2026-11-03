@@ -890,7 +890,7 @@ exit 2
           { ...input, title: "   ", description: "   " },
           { storage, runtime, buildPipelines: supervisor.service },
         ),
-      ).rejects.toThrow("Invalid feature build request");
+      ).rejects.toThrow("Invalid pipeline environment request");
       expect(await storage.kanban.getKanbanTasks("project-1")).toHaveLength(0);
     });
   });

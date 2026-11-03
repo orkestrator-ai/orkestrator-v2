@@ -65,7 +65,7 @@ export interface KanbanTask {
   images: KanbanImage[];
   createdAt: string;
   order: number;
-  /** Linked build environment ID */
+  /** Linked pipeline environment ID */
   environmentId?: string;
   /** Active build pipeline ID */
   buildPipelineId?: string;

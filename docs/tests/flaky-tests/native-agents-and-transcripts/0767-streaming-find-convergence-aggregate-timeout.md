@@ -189,3 +189,32 @@ deadline or implementation changed. Exact commands and evidence are recorded in
   passed, exit 0, in 51.1 s.
 - **Evidence:** `/tmp/orkestrator-test-run.kXXcAm/browser.log.gz`.
   No transcript implementation, assertion, deadline or skip changed. Cause remains unconfirmed.
+
+
+## PR pane review — 2026-11-02
+
+Preparation browser validation reported desktop `unresolved` instead of `converged`. The complete unchanged StreamingTranscript and VirtuosoFollow owners passed with one worker on detached `origin/main` d7cdfaa8b (`baseline-scroll-owners`, 51.5 s). The exact two desktop cases also passed three repeats each with two workers (`baseline-scroll`, 7.6 s). No cause established. Preparation evidence remains in `.orkestrator/review-artifacts/review-validation-d66c3b2c-a4b1-42da-b180-8fa7b6582c7b/` (validation-04.stdout.txt and validation-05.stderr.txt). Browser preparation reported 1146 passed, 10 failed, 117 skipped, 3 flaky. Default-suite preparation reported two failed owners; aggregate worker grants were not retained in the package. No assertion, timeout, skip or implementation was changed in these owners.
+
+## PR pane fix round 2 — 2026-11-02
+
+Reproduced on detached `origin/main` `d7cdfaa8b` (fresh worktree, own
+`bun install --frozen-lockfile`), host load average about 21:
+
+- `ORKESTRATOR_E2E_PORT=14874 bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts:361 e2e/VirtuosoFollow.spec.ts --project=desktop-chromium --workers=8 --repeat-each=12`:
+  4 of 12 repeats of this case failed with `unresolved` instead of
+  `converged` at `StreamingTranscript.spec.ts:371` (32 passed, 22.5 s).
+- The same owners plus `TranscriptPaging.spec.ts`, `--workers=10 --repeat-each=6`:
+  1 failed (this case), 203 passed (2.4 min).
+
+On the PR pane branch (`eb1ec4499`) the complete unchanged
+StreamingTranscript and VirtuosoFollow owners passed with one worker
+(`branch-scroll-owners`, 52.3 s). The failure is therefore present on
+`main` under parallel load and is not caused by that branch. No assertion,
+timeout, skip or implementation changed.
+
+### Environment terminology preparation (2026-11-02)
+
+- **Run:** `mise run test:browser` during preparation of `rename-environment-kinds-fbee095fc40a-r1` (wording-only branch; no transcript source or spec change). The aggregate reported 9 failed, 3 flaky and 1,147 passed in 11.1 min.
+- **Failure:** mobile `scrollbar departure after find stays put when streaming reapplies highlights` failed its first attempt (`toBe`) and passed on retry. It failed again on mobile in a five-owner subset run (GlobalSettings, MergedProjectList, CloseRetention, StreamingTranscript, ToolGroupFold) on the branch, and passed in the same subset on detached `origin/main` `fd679c0e2`.
+- **Isolated rerun:** `ORKESTRATOR_E2E_PORT=1488 mise run test:logged -- --name ek-branch-stream-4 -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts:361 e2e/ToolGroupFold.spec.ts:442 --retries=0` passed, exit 0, in 4.3 s, as did three earlier runs of the same command.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KtcBbJ/browser.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z0tt7k/`. Cause remains unconfirmed.

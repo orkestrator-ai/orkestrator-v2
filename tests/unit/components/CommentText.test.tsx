@@ -1,51 +1,27 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { CommentText } from "@/components/kanban/KanbanTaskDialog";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useUIStore } from "@/stores/uiStore";
 
-// Mock backend's openInBrowser
+// `openInBrowser` reaches the browser through the desktop shell; stand in for it.
 const mockOpenInBrowser = mock((_url: string) => Promise.resolve());
-
-mock.module("@/lib/backend", () => ({
-  openInBrowser: mockOpenInBrowser,
-  getKanbanImageData: mock(() => Promise.resolve("")),
-  detectPr: mock(() => Promise.resolve(null)),
-  detectPrLocal: mock(() => Promise.resolve(null)),
-}));
-
-// We need to extract CommentText for testing.
-// Since it's not exported, we test it via the KanbanTaskDialog's rendering.
-// Instead, let's test the logic directly by recreating the component function.
-// This approach tests the actual rendering logic.
-
-function CommentText({ text }: { text: string }) {
-  const parts = text.split(/(https?:\/\/[^\s]+)/g);
-  if (parts.length === 1) return <>{text}</>;
-  return (
-    <>
-      {parts.map((part, i) =>
-        i % 2 === 1 ? (
-          <button
-            key={i}
-            className="text-blue-400 hover:underline cursor-pointer inline"
-            onClick={(e) => {
-              e.preventDefault();
-              void mockOpenInBrowser(part);
-            }}
-            data-testid={`url-link-${i}`}
-          >
-            {part}
-          </button>
-        ) : (
-          <span key={i}>{part}</span>
-        ),
-      )}
-    </>
-  );
-}
+const originalOrkestrator = window.orkestrator;
 
 describe("CommentText", () => {
   beforeEach(() => {
     cleanup();
     mockOpenInBrowser.mockClear();
+    window.orkestrator = {
+      ...originalOrkestrator,
+      shell: { ...originalOrkestrator?.shell, openExternal: mockOpenInBrowser },
+    } as never;
+    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+  });
+
+  afterEach(() => {
+    window.orkestrator = originalOrkestrator;
   });
 
   test("renders plain text without links", () => {
@@ -100,6 +76,26 @@ describe("CommentText", () => {
     const button = screen.getByRole("button");
     fireEvent.click(button);
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://example.com");
+  });
+
+  test("opens a pull request link in the right-hand PR pane, leaving the view alone", () => {
+    render(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
+    fireEvent.click(screen.getByRole("button"));
+    expect(mockOpenInBrowser).not.toHaveBeenCalled();
+    const panel = useFilesPanelStore.getState();
+    expect(panel.isOpen).toBe(true);
+    expect(panel.activeTab).toBe("pull-request:org/repo#42");
+    expect(panel.pullRequestTabs["env-1"]?.map((tab) => tab.ref)).toEqual([
+      { owner: "org", repo: "repo", number: 42 },
+    ]);
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+  });
+
+  test("Cmd-click keeps a pull request link on GitHub", () => {
+    render(<CommentText text="PR raised: https://github.com/org/repo/pull/42" />);
+    fireEvent.click(screen.getByRole("button"), { metaKey: true });
+    expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/org/repo/pull/42");
+    expect(useFilesPanelStore.getState().isOpen).toBe(false);
   });
 
   test("handles http (non-https) URLs", () => {

@@ -68,6 +68,22 @@ const BUILD_INTENTS: Array<{
 ];
 
 /**
+ * Which kind of environment each choice creates. The dialog keeps the
+ * "feature" wording users think in; everywhere else the result is called a
+ * pipeline environment or a prompt environment.
+ */
+const BUILD_INTENT_GUIDANCE: Record<BuildIntent, { kind: string; detail: string }> = {
+  feature: {
+    kind: "pipeline environment",
+    detail: "build, review, fix, verify, PR and conflict resolution run automatically.",
+  },
+  prompt: {
+    kind: "prompt environment",
+    detail: "the agent runs one prompt; start review and the PR by hand or from a coordinator.",
+  },
+};
+
+/**
  * The single-selection steps, in the order the pipeline runs them.
  *
  * Review is absent because it is a list rather than one decision.
@@ -167,22 +183,29 @@ export function FeatureBuildFields({
   onDeliveryPolicyChange,
 }: FeatureBuildFieldsProps) {
   const selectedIntent = BUILD_INTENTS.find((option) => option.value === intent)!;
+  const guidance = BUILD_INTENT_GUIDANCE[intent];
 
   return (
     <div className="border-b border-divider">
-      <div className="px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6">
-        <Label className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0">
+      <div className="px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-start sm:gap-4 sm:px-6">
+        <Label className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0 sm:pt-1.5">
           Build
         </Label>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
-          <SegmentedSelector
-            value={intent}
-            options={BUILD_INTENTS}
-            onValueChange={onIntentChange}
-            disabled={disabled}
-            ariaLabel="Build intent"
-          />
-          <p className="text-xs text-muted-foreground">{selectedIntent.description}</p>
+        <div className="min-w-0 space-y-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+            <SegmentedSelector
+              value={intent}
+              options={BUILD_INTENTS}
+              onValueChange={onIntentChange}
+              disabled={disabled}
+              ariaLabel="Build intent"
+            />
+            <p className="text-xs text-muted-foreground">{selectedIntent.description}</p>
+          </div>
+          <p className="text-xs text-muted-foreground" data-testid="build-intent-guidance">
+            Creates a <span className="font-medium text-foreground">{guidance.kind}</span>:{" "}
+            {guidance.detail}
+          </p>
         </div>
       </div>
 
@@ -355,7 +378,7 @@ function FeatureBuildModelPickers({
   ));
 
   return (
-    <div role="group" aria-label="Feature build model customization" className="space-y-3">
+    <div role="group" aria-label="Pipeline model customization" className="space-y-3">
       {stepRows.slice(0, 2)}
 
       <div className="space-y-2 rounded-lg border border-border/70 bg-zinc-950/20 p-3">

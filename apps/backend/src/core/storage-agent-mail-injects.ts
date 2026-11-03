@@ -3,6 +3,7 @@ import {
   AGENT_MAIL_MAX_PENDING_INJECTS,
   AgentMailError,
   agentMailCapabilities,
+  agentMailReleaseRefusal,
   agentMailboxId,
   isAgentMailBudgetHeld,
   normalizeAgentMessagingSettings,
@@ -379,16 +380,24 @@ export class AgentMailInjects {
         throw new AgentMailError("message-not-found", "Message not found in this mailbox");
       const resumesLoopBudget = isAgentMailBudgetHeld(message);
       const wakesPending = message.placement === "pending-inject";
+      if (message.placement === "stored" && !message.ackedAt && !message.discardedAt) {
+        // A person asked for this message, so a refusal says why rather than
+        // returning the message unchanged as if something had happened.
+        const refusal =
+          agentMailReleaseRefusal(message, {
+            mutedInbound: mailbox.mutedInbound,
+            canInject: agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked)
+              .canInject,
+          }) ??
+          (exceedsThreadHops(message)
+            ? "This thread has reached its reply limit."
+            : message.injectDepth !== 0 && !routedMessageWakes(message, mailbox, settings)
+              ? "This is an agent's reply to delivered mail; delivering it could start a reply loop."
+              : null);
+        if (refusal) throw new AgentMailError("policy-denied", refusal);
+      }
       const wakesStored =
-        message.placement === "stored" &&
-        !message.ackedAt &&
-        !message.discardedAt &&
-        !mailbox.mutedInbound &&
-        (message.injectDepth === 0 || routedMessageWakes(message, mailbox, settings)) &&
-        !exceedsThreadHops(message) &&
-        message.trust !== "cross-project" &&
-        message.trust !== "external" &&
-        agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canInject;
+        message.placement === "stored" && !message.ackedAt && !message.discardedAt;
       if (
         message.placement !== "inject_failed" &&
         !resumesLoopBudget &&

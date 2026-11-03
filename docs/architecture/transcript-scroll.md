@@ -109,6 +109,16 @@ A hidden pane (zero width) keeps its last width, so showing it at another
 width counts as a reflow. Persisted pixel snapshots from another layout are
 not restored (see Activation and persistence).
 
+Growing the keep-mounted overscan (a row takes focus or a selection) is held
+the same way (`holdPlaceAcrossOverscan`). It mounts rows Virtuoso has only
+estimated (320 px); when rows above the viewport measure shorter, Virtuoso does
+not always compensate, and the rows on screen jumped with no scroll event (464
+px in the long fixture when a link was focused, which moved a clicked PR link
+off screen before the PR pane even opened). The hold restores the settled
+reading anchor. A follower is not held, and neither is a pointer held on the
+scroller itself (a scrollbar drag); a pointer held on content (the click that
+focused a link) is.
+
 ## Semantic anchors and history
 
 A place is `{ rowKey, index, partId, offsetPx, inner? }`: a display row by

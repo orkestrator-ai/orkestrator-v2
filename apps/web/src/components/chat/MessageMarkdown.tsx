@@ -1,3 +1,4 @@
+import { armPullRequestFallback } from "@/lib/pull-request-load-fallback";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   Children,
@@ -222,7 +223,10 @@ export function MarkdownLink({
 
       // Pull request links open in the app; Cmd/Ctrl-click opens GitHub.
       const pullRequest = event.metaKey || event.ctrlKey ? null : parseGitHubPullRequestLink(href);
-      if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) return;
+      if (pullRequest && openPullRequest(pullRequest, pullRequest.view)) {
+        armPullRequestFallback(pullRequest, href);
+        return;
+      }
 
       const opened =
         previewable && linkSource

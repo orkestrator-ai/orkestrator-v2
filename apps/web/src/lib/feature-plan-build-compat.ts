@@ -48,7 +48,7 @@ export async function legacyStartFeaturePlanBuild(
   try {
     const taskDetails = formatFeatureStoriesForBuild(feature);
     const taskId = await addTask(deps.projectId, taskDetails.title, taskDetails.description);
-    if (!taskId) throw new Error("Failed to create Kanban task for feature build");
+    if (!taskId) throw new Error("Failed to create the Kanban task for the build pipeline");
     unreservedTaskId = taskId;
 
     const task = useKanbanStore.getState().tasks.find((candidate) => candidate.id === taskId);
@@ -61,7 +61,7 @@ export async function legacyStartFeaturePlanBuild(
     if (!reservation) {
       await deleteTask(taskId);
       unreservedTaskId = null;
-      throw new Error("Failed to reserve the feature build");
+      throw new Error("Failed to reserve the build pipeline for this feature");
     }
     if (!reservation.claimed) {
       await deleteTask(taskId);
@@ -94,7 +94,7 @@ export async function legacyStartFeaturePlanBuild(
       buildPipelineId: pipeline.id,
       ...(pipeline.environmentId ? { codexEnvironmentId: pipeline.environmentId } : {}),
     });
-    if (!updated) throw new Error("Failed to persist the feature build state");
+    if (!updated) throw new Error("Failed to save the build pipeline state for this feature");
   } catch (error) {
     if (unreservedTaskId) await deleteTask(unreservedTaskId);
     if (ownsBuildReservation) {

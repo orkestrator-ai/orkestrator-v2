@@ -110,6 +110,27 @@ export async function declineUpstreamMerge(
   });
 }
 
+/**
+ * Whether the project merges upstream commits without asking on this
+ * machine, or null when the backend does not keep that setting.
+ */
+export async function getUpstreamAutoMerge(projectId: string): Promise<boolean | null> {
+  const capabilities = await clientStateCapabilities();
+  if (!capabilities.coordinatorUpstreamAutoMerge) return null;
+  return (await backend.getCoordinatorUpstreamAutoMerge(projectId))?.enabled ?? null;
+}
+
+/** Turns "always merge" on or off; resolves to the setting now in force. */
+export async function setUpstreamAutoMerge(projectId: string, enabled: boolean): Promise<boolean> {
+  const capabilities = await clientStateCapabilities();
+  if (!capabilities.coordinatorUpstreamAutoMerge) {
+    throw new Error("This backend cannot remember to always merge upstream commits");
+  }
+  const result = await backend.setCoordinatorUpstreamAutoMerge(projectId, enabled);
+  if (!result) throw new Error("Could not save the upstream merge setting");
+  return result.enabled;
+}
+
 export function resetUpstreamCheckForTests(): void {
   migration = null;
 }

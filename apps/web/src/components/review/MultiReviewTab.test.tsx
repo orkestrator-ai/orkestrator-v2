@@ -1,3 +1,4 @@
+import * as backend from "@/lib/backend";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -19,6 +20,8 @@ import {
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useUIStore } from "@/stores/uiStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
@@ -420,7 +423,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(pullRequestDetail(null, "main")).toBe("into main");
   });
 
-  test("shows the opened pull request as the PR node", () => {
+  test("shows the opened pull request as the PR node", async () => {
     const workflow: MultiReviewWorkflow = {
       ...readyWorkflow(),
       phase: "interactive",
@@ -454,13 +457,46 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       expect(pr.getAttribute("data-flow-state")).toBe("complete");
       expect(within(pr).getByText(`#42 · into ${workflow.targetBranch}`)).toBeTruthy();
       fireEvent.click(pr);
-      expect(screen.getByRole("button", { name: "View pull request" })).toBeTruthy();
+      // It opens in the right-hand PR pane; the review stays the main view.
+      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: "env-1" });
+      useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+      fireEvent.click(screen.getByRole("button", { name: "View pull request" }));
+      await waitFor(() =>
+        expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.[0]?.ref).toEqual({
+          owner: "o",
+          repo: "r",
+          number: 42,
+        }),
+      );
+      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      const external = spyOn(backend, "openInBrowser").mockResolvedValue(undefined);
+      try {
+        for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+          useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+          fireEvent.click(screen.getByRole("button", { name: "View pull request" }), modifier);
+          await waitFor(() =>
+            expect(external).toHaveBeenCalledWith("https://github.com/o/r/pull/42"),
+          );
+          expect(useFilesPanelStore.getState().isOpen).toBe(false);
+          external.mockClear();
+        }
+        fireEvent.contextMenu(pr);
+        fireEvent.click(screen.getByRole("menuitem", { name: "Open on GitHub" }));
+        await waitFor(() =>
+          expect(external).toHaveBeenCalledWith("https://github.com/o/r/pull/42"),
+        );
+        expect(useFilesPanelStore.getState().isOpen).toBe(false);
+      } finally {
+        external.mockRestore();
+      }
       // The PR tab is not in this layout, so there is no session to show.
       expect(
         (screen.getByRole("button", { name: "Open PR session" }) as HTMLButtonElement).disabled,
       ).toBe(true);
     } finally {
       useEnvironmentStore.setState({ environments });
+      useUIStore.setState({ selectedEnvironmentId: null });
+      useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
     }
   });
 

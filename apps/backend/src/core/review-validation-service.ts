@@ -15,7 +15,7 @@ import {
   createEnvironmentCommandRunner,
   ensureReviewPackageIsGitExcluded,
 } from "./commands-review.js";
-import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
+import { quoteShell, resolveBunBinary, validateGitRefName } from "./commands-agent-support.js";
 import { runCommand } from "./shell.js";
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./review-validation-worker.js";
 import type { ReviewPreparationResult } from "./review-prompts.js";
@@ -308,6 +308,10 @@ async function controlReviewValidationOnce(
     );
   const root = environment.environmentType === "local" ? environment.worktreePath : "/workspace";
   if (!root) throw new Error("Review validation workspace is unavailable");
+  // The worker reads the change against this ref to decide which on-demand
+  // suites apply. Without it every command runs as planned.
+  const targetRef =
+    action === "start" ? await validationTargetRef(environment, context) : undefined;
   // Compact transport only: neither command output nor file contents return here.
   const payload = Buffer.from(
     JSON.stringify({
@@ -315,6 +319,7 @@ async function controlReviewValidationOnce(
       run: { ...newReviewValidationRun(value.id, value.plan), startedAt: value.startedAt },
       action,
       ...(resultId === undefined ? {} : { resultId }),
+      ...(targetRef === undefined ? {} : { targetRef }),
     }),
   ).toString("base64");
   const args = ["-e", REVIEW_VALIDATION_CONTROL, payload, REVIEW_VALIDATION_WORKER];
@@ -355,6 +360,19 @@ async function controlReviewValidationOnce(
       ? {}
       : { discoveryDurationMs: value.discoveryDurationMs }),
   };
+}
+
+/** `origin/<target branch>` for the environment's project, or undefined when unusable. */
+async function validationTargetRef(
+  environment: { projectId: string },
+  context: CommandContext,
+): Promise<string | undefined> {
+  try {
+    const repository = await context.storage.getRepositoryConfig(environment.projectId);
+    return `origin/${validateGitRefName(repository.prBaseBranch || "main", "target branch")}`;
+  } catch {
+    return undefined;
+  }
 }
 
 export function validationPreparation(

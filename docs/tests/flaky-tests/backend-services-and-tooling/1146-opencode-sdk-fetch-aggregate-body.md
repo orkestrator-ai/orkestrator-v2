@@ -66,3 +66,20 @@ bun test --cwd apps/backend ./src/core/opencode-sdk-fetch.test.ts --parallel=1 -
 ```
 
 The cause remains unconfirmed. No assertion, skip or implementation changed.
+
+## Coordinator environment-choice review, 2026-11-03
+
+Preparation at `d2efad0d6` ran `mise run test` and failed the sibling test
+`openCodeSdkFetch > the provider's default SDK client charges its requests`
+at line 54 (expected [], received undefined, 9.91 ms). Original evidence:
+`.orkestrator/review-artifacts/review-validation-b82eab29-3f18-42ce-8dd3-4d2e4a59a7a0/validation-04.stdout.txt`.
+The workspace and bridge groups failed; root and protocol groups passed.
+Preparation used the package scripts' configured parallel worker counts.
+
+The complete owner passed alone through
+`mise run test:logged -- --name opencode-fetch-owner -- bun test --cwd apps/backend ./src/core/opencode-sdk-fetch.test.ts --parallel=1 --only-failures`
+(exit 0, 0.3 s). A detached `origin/main` at `eda57e938`, with its own frozen
+install, also passed this owner in 20 repeats in a three-owner run (680 pass,
+20 fail, all failures in PreviewUpstreamPool). The exact aggregate failure
+has not been reproduced on main by these focused runs. The cause remains
+unproven; no OpenCode implementation, test assertion or timeout changed.

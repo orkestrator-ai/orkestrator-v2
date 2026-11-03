@@ -1025,13 +1025,15 @@ export function BuildLaunchDialog({
           >
             <fieldset disabled={busy} className="min-w-0 border-0 px-5 py-5 sm:px-6">
               <div className="mb-3">
-                <h3 className="text-sm font-semibold text-zinc-200">Environment</h3>
-                <p className="text-xs text-zinc-500">Every stage runs in this workspace.</p>
+                <h3 className="text-sm font-semibold text-zinc-200">Where it runs</h3>
+                <p className="text-xs text-zinc-500">
+                  Every stage runs in one pipeline environment, in a container or locally.
+                </p>
               </div>
               <div
                 className="grid gap-2 sm:grid-cols-2"
                 role="radiogroup"
-                aria-label="Build environment"
+                aria-label="Where it runs"
               >
                 {ENVIRONMENT_OPTIONS.map((option) => {
                   const selected = environmentType === option.value;

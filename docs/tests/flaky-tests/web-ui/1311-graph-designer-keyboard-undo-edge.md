@@ -22,3 +22,15 @@
   `orkestrator-test-run.ukaJle/isolated-browser-final.log.gz` under the host
   temporary directory and
   `output/agent-testing/qa-browser-733773a3-88d/browser/artifacts/`.
+
+- **Recurrence (2026-11-03):** The environment-terminology branch
+  (`rename-environment-kinds-fbee095fc40a-r1` at `804d5c74e`) failed the
+  same edge-count assertion (expected 1, received 2) in
+  `mise run test:agent:browser:isolated` during review preparation
+  (`output/agent-testing/qa-browser-95759210-821/`, 44 passed, 3 failed,
+  94 skipped). The unchanged spec then passed with `--workers=1
+  --retries=0` against a fresh disposable `dev:test --fixture` profile, both
+  on that branch and on a detached `origin/main` at `b0dcf1660`, run
+  together with `graph-designer.spec.ts` and `graph-run-view.spec.ts`
+  (4 passed, 2 failed, 1 skipped on each; the two failures are tracked in
+  to-do 2922, task 4). The branch changes no graph code.

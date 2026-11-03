@@ -353,9 +353,9 @@ export function MultiReviewDefaultsEditor({
           title="Multi Review defaults"
           headingId="multi-review-defaults-heading"
         >
-          Choose how many independent reviewers a Multi Review click, feature build, or ticket build
-          starts, the model each one uses and its focus. Reviewer 1 and Reviewer 2 are shared with
-          the Defaults page.
+          Choose how many independent reviewers a Multi Review click or a build pipeline starts, the
+          model each one uses and its focus. Reviewer 1 and Reviewer 2 are shared with the Defaults
+          page.
         </SettingsSectionHeader>
         <div
           className="flex w-fit items-center rounded-lg border border-zinc-800 bg-zinc-950/60 p-1"

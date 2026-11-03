@@ -284,3 +284,23 @@ test("a late rejection after switching projects does not surface a stale Home er
   expect(result.current.error).toBeNull();
   expect(mockToastError).not.toHaveBeenCalled();
 });
+
+
+test("a PR opened before home creation stays visible after activation", async () => {
+  const { useFilesPanelStore, projectRootFilesTargetId } = await import("@/stores/filesPanelStore");
+  const { openPullRequestInApp, currentFilesPanelTargetId } = await import("@/lib/pull-request-opener");
+  const ref = { owner: "acme", repo: "widget", number: 42 };
+  let resolve!: (value: Environment) => void;
+  ensureHome.mockImplementationOnce(() => new Promise<Environment>((done) => { resolve = done; }));
+  useFilesPanelStore.setState({ pullRequestTabs: {} });
+  renderHook(() => useProjectHomeActivation());
+  act(() => useUIStore.getState().selectProject("project-1"));
+  act(() => { expect(openPullRequestInApp(ref)).toBe(true); });
+  expect(currentFilesPanelTargetId()).toBe(projectRootFilesTargetId("project-1"));
+  await act(async () => resolve(home));
+  expect(currentFilesPanelTargetId()).toBe(home.id);
+  expect(useFilesPanelStore.getState().pullRequestTabs[home.id]?.[0]?.ref).toEqual(ref);
+  expect(useFilesPanelStore.getState().activeTab).toBe("pull-request:acme/widget#42");
+  act(() => { expect(openPullRequestInApp({ ...ref, number: 43 })).toBe(true); });
+  expect(useFilesPanelStore.getState().pullRequestTabs[home.id]).toHaveLength(2);
+});

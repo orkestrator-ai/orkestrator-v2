@@ -870,6 +870,19 @@ the renderer applies the same protocol rule to its own fetch and browser copy of
 the declines; otherwise that copy is imported once (never replacing a newer
 answer) and deleted.
 
+The question also offers **Always merge**: it merges now and saves a
+per-project setting in this machine's backend
+(`set_coordinator_upstream_auto_merge`, store
+`coordinator-upstream-auto-merge`). While it is on, the check answers
+`{ offer: true, automatic: true }`, past any stored decline, and the panel
+fast-forwards before the message without showing the question. Every other
+condition still applies: nothing is merged under a running turn or into a
+blocked checkout, and a failed fast-forward keeps the draft. The fast-forward
+toggle in the toolbar (`get/set_coordinator_upstream_auto_merge`) shows the
+setting and turns it off or on. Both are shown only when the backend advertises
+`coordinatorUpstreamAutoMerge`; a client that predates `automatic` shows the
+question, the safe reading.
+
 A chip in the same toolbar shows **Waiting on N workers** when the selected
 conversation has open delegations. It is a projection from the snapshot, not
 from anything this page observed, so it is correct after a reload. A worker
@@ -985,6 +998,29 @@ approves a `request_root_changes` request (see
 can start only from a commit published to a remote branch; unpublished commits
 remain available to local workers.
 
+Workers come in two kinds. A **prompt environment** runs one prompt
+(`launch_environment`, or "With a prompt" in the New Environment dialog); its
+review and PR are started by hand or by the coordinator. A **pipeline
+environment** is one a build pipeline created and runs in
+(`start_build_pipeline`, a ticket's Build button, or "A feature" in the New
+Environment dialog); the pipeline runs build, review, fix, verify, PR and
+conflict resolution itself.
+
+The main coordinator chooses between them by `COORDINATOR_ENVIRONMENT_CHOICE_RULE`
+(`packages/protocol/src/coordinator.ts`), carried in its context, in the
+Control MCP instructions, and in short form in the `launch_environment` and
+`start_build_pipeline` descriptions. It applies to every project:
+
+- A pipeline environment is the default. The coordinator starts one with
+  `start_build_pipeline` whenever the whole spec is known: a ticket, or what is
+  being built has been settled with the user.
+- A prompt environment is for investigation, or for interactive work that may
+  stop, raise many questions or need back-and-forth with the user.
+- With a prompt environment the coordinator owns the rest of the lifecycle.
+  When it judges the work ready it launches Multi Review, then sees it through
+  the fix, the PR and conflict resolution, as below. Investigation with no code
+  change ends with the worker's report.
+
 A worker never raises a pull request; a **PR tab** does, after review. In a
 prompt environment the flow is build → review or Multi Review → fix → PR →
 resolve conflicts:
@@ -996,7 +1032,9 @@ resolve conflicts:
   its fix finished. Pass `nodeId` for a worker on a connected node; that node
   validates its project and worker and uses its own PR base branch and agent
   defaults. Retries reuse the same PR job on that node.
-- A build pipeline, feature builds included, has its own PR step;
+- A pipeline environment (one a build pipeline runs, whether started by
+  `start_build_pipeline`, a ticket's Build button or a feature from the New
+  Environment dialog) has its own PR step;
   `create_pr` refuses its own worker while the pipeline can still raise the PR.
   Forks and workers left by a removed, failed, cancelled or completed pipeline
   can use `create_pr`.

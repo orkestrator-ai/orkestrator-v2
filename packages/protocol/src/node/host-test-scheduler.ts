@@ -444,6 +444,12 @@ export function testSchedulingPolicy(config: unknown) {
     memoryMiB?: number;
     covers?: string[];
     noProgressTimeoutMs?: number;
+    /**
+     * Automated review validation runs this suite only when the change
+     * touches a path matching one of `when` (`*` within a segment, `**`
+     * across segments). Otherwise it runs `instead`, or nothing.
+     */
+    onDemand?: { when: string[]; instead?: string };
   };
   const profiles: Record<string, Profile> = Object.create(null);
   if (!config || typeof config !== "object" || Array.isArray(config))
@@ -491,7 +497,22 @@ export function testSchedulingPolicy(config: unknown) {
         (profile.noProgressTimeoutMs !== undefined &&
           (!Number.isSafeInteger(profile.noProgressTimeoutMs) ||
             profile.noProgressTimeoutMs < 1000 ||
-            profile.noProgressTimeoutMs > 7200000))
+            profile.noProgressTimeoutMs > 7200000)) ||
+        (profile.onDemand !== undefined &&
+          (!profile.onDemand ||
+            typeof profile.onDemand !== "object" ||
+            Array.isArray(profile.onDemand) ||
+            !Array.isArray(profile.onDemand.when) ||
+            profile.onDemand.when.length > 32 ||
+            !profile.onDemand.when.every(
+              (pattern) =>
+                typeof pattern === "string" && pattern.length > 0 && pattern.length <= 1024,
+            ) ||
+            (profile.onDemand.instead !== undefined &&
+              (typeof profile.onDemand.instead !== "string" ||
+                profile.onDemand.instead.length === 0 ||
+                profile.onDemand.instead.length > 1024 ||
+                profile.onDemand.instead === command))))
       )
         throw new Error("Invalid test command profile");
       profiles[command] = profile;

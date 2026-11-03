@@ -13,7 +13,11 @@ import {
   type BuildPipeline,
   type PipelineValidationSummary,
 } from "@orkestrator/protocol/build-pipeline";
-import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
+import {
+  isReviewPackageReference,
+  type ReviewValidationRun,
+} from "@orkestrator/protocol/review-workflow";
+import type { ValidationFailureSummary } from "@orkestrator/protocol/validation-failure-triage";
 
 function bounded(text: string): string {
   return text.length <= MAX_PIPELINE_VALIDATION_SUMMARY_TEXT_LENGTH
@@ -31,6 +35,7 @@ export function summarizeValidationRun(
   run: ReviewValidationRun,
   iteration: number,
   skipped: boolean,
+  failures?: ValidationFailureSummary,
 ): PipelineValidationSummary | undefined {
   const startedAt = isoDate(run.startedAt);
   if (!startedAt) return undefined;
@@ -57,7 +62,23 @@ export function summarizeValidationRun(
       exitCode: result.exitCode,
       durationMs: Math.max(0, Math.round(result.durationMs)),
     })),
+    ...(failures ? { failures } : {}),
   };
+}
+
+/**
+ * The failure summary of the package sealed from `run`. A pipeline's package
+ * reference is named after the run that produced it, so a package from any
+ * other run says nothing about this one.
+ */
+function sealedFailureSummary(
+  pipeline: Pick<BuildPipeline, "reviewPackage">,
+  run: ReviewValidationRun,
+): ValidationFailureSummary | undefined {
+  const reviewPackage = pipeline.reviewPackage;
+  return isReviewPackageReference(reviewPackage) && reviewPackage.id === run.id
+    ? reviewPackage.failureSummary
+    : undefined;
 }
 
 /**
@@ -67,7 +88,7 @@ export function summarizeValidationRun(
 export function archiveValidationRun(
   pipeline: Pick<
     BuildPipeline,
-    "validationRun" | "validationHistory" | "iteration" | "skippedValidationRunId"
+    "validationRun" | "validationHistory" | "iteration" | "skippedValidationRunId" | "reviewPackage"
   >,
   run: ReviewValidationRun | undefined = pipeline.validationRun,
 ): void {
@@ -77,6 +98,7 @@ export function archiveValidationRun(
     run,
     pipeline.iteration,
     pipeline.skippedValidationRunId === run.id,
+    sealedFailureSummary(pipeline, run),
   );
   if (!summary) return;
   const history = (pipeline.validationHistory ?? []).filter((entry) => entry.runId !== run.id);

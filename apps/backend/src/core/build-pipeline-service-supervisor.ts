@@ -601,7 +601,7 @@ export class BuildPipelineSupervisor {
         delete pipeline.structuredReviewRequestId;
         delete pipeline.verificationResult;
         delete pipeline.verificationFeedback;
-        await this.startVerifiedReviewOrPrepare(pipeline);
+        await this.startReviewPackagePreparation(pipeline);
         return;
       }
       if (!pipeline.reviewFanout) {
@@ -915,7 +915,7 @@ export class BuildPipelineSupervisor {
       delete pipeline.verificationResult;
       delete pipeline.verificationFeedback;
       delete pipeline.delivery;
-      await this.startVerifiedReviewOrPrepare(pipeline);
+      await this.startReviewPackagePreparation(pipeline);
       return;
     }
 

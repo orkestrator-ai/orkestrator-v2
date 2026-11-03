@@ -13,20 +13,45 @@
       "workers": 2,
       "memoryMiB": 4096,
       "noProgressTimeoutMs": 600000,
-      "covers": ["mise run test:agent:docker"]
+      "covers": ["mise run test:agent:docker"],
+      "onDemand": {
+        "when": [
+          "docker/**",
+          "apps/backend/src/core/container-*",
+          "apps/backend/src/core/commands-container*",
+          "apps/backend/src/core/egress-gateway*",
+          "e2e/agent-testing/**",
+          "apps/desktop/scripts/dev-test*",
+          "apps/desktop/scripts/test-agent-browser-isolated.ts"
+        ]
+      }
     },
     "mise run test:agent:browser:isolated": {
       "resources": ["workspace:*"],
       "workers": 2,
       "memoryMiB": 3072,
       "noProgressTimeoutMs": 300000,
-      "covers": ["mise run test:agent:design:isolated"]
+      "covers": ["mise run test:agent:design:isolated"],
+      "onDemand": {
+        "when": [
+          "e2e/agent-testing/**",
+          "apps/desktop/scripts/dev-test*",
+          "apps/desktop/scripts/test-agent-browser-isolated.ts"
+        ]
+      }
     },
     "mise run test:agent:design:isolated": {
       "resources": ["workspace:*"],
       "workers": 2,
       "memoryMiB": 3072,
-      "noProgressTimeoutMs": 300000
+      "noProgressTimeoutMs": 300000,
+      "onDemand": {
+        "when": [
+          "e2e/agent-testing/**",
+          "apps/desktop/scripts/dev-test*",
+          "apps/desktop/scripts/test-agent-browser-isolated.ts"
+        ]
+      }
     },
     "mise run test:changed": {
       "resources": ["workspace:build-outputs"]
@@ -36,11 +61,18 @@
       "covers": ["mise run test:changed"]
     },
     "mise run test:slow": {
-      "resources": ["workspace:build-outputs"]
+      "resources": ["workspace:build-outputs"],
+      "onDemand": {
+        "when": ["scripts/test-tiers.ts", "scripts/test-all.ts"]
+      }
     },
     "mise run test:full": {
       "resources": ["workspace:build-outputs"],
-      "covers": ["mise run test", "mise run test:slow", "mise run test:changed"]
+      "covers": ["mise run test", "mise run test:slow", "mise run test:changed"],
+      "onDemand": {
+        "when": ["scripts/test-tiers.ts", "scripts/test-all.ts"],
+        "instead": "mise run test"
+      }
     },
     "mise run test:all": {
       "resources": ["workspace:build-outputs"],
@@ -49,7 +81,11 @@
         "mise run test",
         "mise run test:slow",
         "mise run test:changed"
-      ]
+      ],
+      "onDemand": {
+        "when": ["scripts/test-tiers.ts", "scripts/test-all.ts", "apps/ios/**"],
+        "instead": "mise run test"
+      }
     },
     "mise run format:check": {
       "resources": [],

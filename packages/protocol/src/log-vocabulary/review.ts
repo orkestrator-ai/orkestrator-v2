@@ -19,6 +19,8 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
       "fix-usage.read-failed": "Reading a fix session's token usage failed.",
       "result.consume-deferred":
         "Consuming a workflow result failed; it stays staged and is retried.",
+      "failure-triage.failed":
+        "Classifying a review package's failing tests failed; the package is sealed without the triage and says so.",
     },
   },
   "pull-request": {

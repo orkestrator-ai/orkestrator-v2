@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import {
   extractTailscaleServeUrl,
+  getTailscaleServeTarget,
   getTailscaleServeTargetPort,
+  serveOwnershipRecord,
   startStandaloneTailscaleServe,
   TailscaleServeConflictError,
   TailscaleServeManager,
@@ -13,6 +15,7 @@ import {
 
 import { startGatewayServices } from "./startup-services.js";
 import { createStandaloneServeOwnershipStore } from "./standalone-serve-ownership.js";
+import type { ManagedWebClientOwnership } from "./managed-web-client.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -100,6 +103,20 @@ function createFakeTailscale(initial: Record<number, Record<string, string>> = {
   };
 }
 
+function memoryOwnershipStore(initial: ManagedWebClientOwnership | null = null) {
+  let ownership = initial;
+  return {
+    load: async () => ownership,
+    save: async (next: ManagedWebClientOwnership) => {
+      ownership = next;
+    },
+    clear: async () => {
+      ownership = null;
+    },
+    current: () => ownership,
+  };
+}
+
 describe("Tailscale Serve helpers", () => {
   test("extracts and normalizes an advertised HTTPS origin", () => {
     expect(
@@ -122,9 +139,34 @@ describe("Tailscale Serve helpers", () => {
     expect(getTailscaleServeTargetPort("http://127.0.0.1:65535/")).toBe(65535);
   });
 
+  test("reads an IPv6 loopback listener as a [::1] target", () => {
+    expect(getTailscaleServeTarget("http://[::1]:34121/")).toEqual({ host: "::1", port: 34121 });
+    expect(getTailscaleServeTarget("http://127.0.0.1:34121/")).toEqual({
+      host: "127.0.0.1",
+      port: 34121,
+    });
+    expect(getTailscaleServeTargetPort("http://[::1]:34121/")).toBe(34121);
+  });
+
+  test("records targetHost only for an IPv6 loopback target", () => {
+    expect(serveOwnershipRecord({ host: "127.0.0.1", port: 34121 }, 443)).toEqual({
+      version: 1,
+      targetPort: 34121,
+      httpsPort: 443,
+    });
+    expect(serveOwnershipRecord({ host: "::1", port: 34121 }, 443)).toEqual({
+      version: 1,
+      targetPort: 34121,
+      httpsPort: 443,
+      targetHost: "::1",
+    });
+  });
+
   test("rejects listener URLs that Tailscale Serve cannot target safely", () => {
     expect(() => getTailscaleServeTargetPort("http://localhost:34121/")).toThrow("127.0.0.1");
-    expect(() => getTailscaleServeTargetPort("http://[::1]:34121/")).toThrow("127.0.0.1");
+    expect(() => getTailscaleServeTargetPort("http://0.0.0.0:34121/")).toThrow("[::1]");
+    expect(() => getTailscaleServeTargetPort("http://[::]:34121/")).toThrow("[::1]");
+    expect(() => getTailscaleServeTargetPort("http://100.64.0.1:34121/")).toThrow("127.0.0.1");
     expect(() => getTailscaleServeTargetPort("https://127.0.0.1:34121/")).toThrow("127.0.0.1");
     expect(() => getTailscaleServeTargetPort("not a URL")).toThrow();
     expect(() => getTailscaleServeTargetPort("http://127.0.0.1:0/")).toThrow("Invalid");
@@ -839,6 +881,85 @@ describe("standalone Tailscale Serve start", () => {
       "--https=8443",
       "http://127.0.0.1:41234",
     ]);
+  });
+
+  test("proxies an IPv6 loopback listener to [::1] and records it", async () => {
+    const tailscale = createFakeTailscale({ 443: { "/api": "http://127.0.0.1:9000" } });
+    const manager = new TailscaleServeManager("tailscale", tailscale.run);
+    const ownershipStore = memoryOwnershipStore();
+
+    await expect(
+      startStandaloneTailscaleServe(manager, "http://[::1]:34121/", 443, ownershipStore),
+    ).resolves.toBe("https://workstation.example.ts.net/");
+    expect(tailscale.calls).toContainEqual([
+      "serve",
+      "--bg",
+      "--yes",
+      "--https=443",
+      "http://[::1]:34121",
+    ]);
+    expect(ownershipStore.current()).toEqual({
+      version: 1,
+      targetPort: 34121,
+      httpsPort: 443,
+      targetHost: "::1",
+    });
+
+    // Shutdown recognises its own [::1] root and removes only that mount.
+    await manager.stop();
+    expect(tailscale.handlerPaths(443)).toEqual(["/api"]);
+  });
+
+  test("adopts an [::1] root but not a 127.0.0.1 root for an IPv6 listener", async () => {
+    const adoptable = createFakeTailscale({ 443: { "/": "http://[::1]:34121" } });
+    await expect(
+      startStandaloneTailscaleServe(
+        new TailscaleServeManager("tailscale", adoptable.run),
+        "http://[::1]:34121/",
+        443,
+      ),
+    ).resolves.toBe("https://workstation.example.ts.net/");
+    expect(adoptable.calls).toEqual([["serve", "status", "--json"]]);
+
+    // Same port, other address family: it does not reach this listener.
+    const otherFamily = createFakeTailscale({ 443: { "/": "http://127.0.0.1:34121" } });
+    await expect(
+      startStandaloneTailscaleServe(
+        new TailscaleServeManager("tailscale", otherFamily.run),
+        "http://[::1]:34121/",
+        443,
+      ),
+    ).rejects.toBeInstanceOf(TailscaleServeConflictError);
+  });
+
+  test("replaces a previously owned [::1] root after a switch back to 127.0.0.1", async () => {
+    const tailscale = createFakeTailscale({ 443: { "/": "http://[::1]:34121" } });
+    const manager = new TailscaleServeManager("tailscale", tailscale.run);
+    const ownershipStore = memoryOwnershipStore({
+      version: 1,
+      targetPort: 34121,
+      httpsPort: 443,
+      targetHost: "::1",
+    });
+
+    await expect(
+      startStandaloneTailscaleServe(manager, "http://127.0.0.1:34121/", 443, ownershipStore),
+    ).resolves.toBe("https://workstation.example.ts.net/");
+    expect(tailscale.calls).toContainEqual([
+      "serve",
+      "--yes",
+      "--https=443",
+      "--set-path=/",
+      "off",
+    ]);
+    expect(tailscale.calls.at(-1)).toEqual([
+      "serve",
+      "--bg",
+      "--yes",
+      "--https=443",
+      "http://127.0.0.1:34121",
+    ]);
+    expect(ownershipStore.current()).toEqual({ version: 1, targetPort: 34121, httpsPort: 443 });
   });
 
   test("still refuses a root handler proxying to another port", async () => {

@@ -90,7 +90,9 @@ export function useProjectHomeActivation() {
     );
     if (!selectedEnvironmentId && known) {
       reconciled.current = null;
-      useFilesPanelStore.getState().movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), known.id);
+      useFilesPanelStore
+        .getState()
+        .movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), known.id);
       useUIStore.getState().selectEnvironment(known.id);
       return;
     }
@@ -109,7 +111,9 @@ export function useProjectHomeActivation() {
         setFailure(null);
         if (!ui.selectedEnvironmentId || ui.selectedEnvironmentId === selectedHomeId) {
           if (!ui.selectedEnvironmentId) {
-            useFilesPanelStore.getState().movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), home.id);
+            useFilesPanelStore
+              .getState()
+              .movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), home.id);
           }
           ui.selectEnvironment(home.id);
         }

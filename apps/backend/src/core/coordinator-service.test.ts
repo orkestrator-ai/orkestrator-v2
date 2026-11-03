@@ -1620,6 +1620,9 @@ describe("project coordinator", () => {
   });
 
   test("preserves pending reservations and old idempotency receipts at store capacity", async () => {
+    // Inside the replay window, so cleanup may not clear any of them and the
+    // store is genuinely full.
+    const seededAt = Date.now() - 60_000;
     const associations = Array.from({ length: 2_001 }, (_, index) => ({
       id: `association-${index}`,
       coordinatorId: "coordinator-capacity",
@@ -1629,7 +1632,7 @@ describe("project coordinator", () => {
       requestId: `request-${index}`,
       payloadHash: `hash-${index}`,
       pending: index === 0,
-      createdAt: new Date(index).toISOString(),
+      createdAt: new Date(seededAt + index).toISOString(),
     }));
     seedStore(storage.getDataDir(), "coordinators.json", {
       version: 1,

@@ -5317,7 +5317,7 @@ describe("build pipeline commands", () => {
         expect(sendMessage).toHaveBeenCalledWith("pipeline-1", "also update the README");
         expect(retryReview).toHaveBeenCalledWith("pipeline-1");
         expect(retryStage).toHaveBeenCalledWith("pipeline-1");
-        expect(restartStep).toHaveBeenCalledWith("pipeline-1", "review-session");
+        expect(restartStep).toHaveBeenCalledWith("pipeline-1", "review-session", undefined);
         expect(restartCurrentStep).toHaveBeenCalledWith("pipeline-1");
         expect(retryInteractionFailure).toHaveBeenCalledWith("pipeline-1");
       },

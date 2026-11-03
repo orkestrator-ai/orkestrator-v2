@@ -1276,7 +1276,9 @@ describe("FeaturePlanningService", () => {
   });
 
   test("uses dispatch time for reply timeout and resets attempt time on retry", async () => {
-    const context = await harness({ serviceOptions: { replyDeadlineMs: 50 } });
+    // Long enough that real time between dispatch and the first advance never
+    // reaches it on a loaded runner; the expiry case backdates dispatchedAt.
+    const context = await harness({ serviceOptions: { replyDeadlineMs: 60_000 } });
     try {
       await context.start({ kind: "feature", userMessage: "Let me export reports" });
       const running = (await context.record())!;

@@ -27,6 +27,8 @@ export type Scenario = {
   busy: boolean;
   /** The container's hook doorbell is confirmed. */
   doorbell: boolean;
+  /** Rings produced by a busy sibling sharing this container. */
+  siblingRings?: boolean;
 };
 
 export const SCENARIOS: readonly Scenario[] = [
@@ -39,6 +41,13 @@ export const SCENARIOS: readonly Scenario[] = [
     doorbell: false,
   },
   { name: "idle unbound tab, doorbell confirmed", bound: false, busy: false, doorbell: true },
+  {
+    name: "idle sibling of a busy ringing tab",
+    bound: true,
+    busy: false,
+    doorbell: true,
+    siblingRings: true,
+  },
   { name: "busy tab (turn running)", bound: true, busy: true, doorbell: false },
 ];
 
@@ -154,8 +163,10 @@ export async function measureTmuxExecs(
     return { status: out.status, stdout: Buffer.from(out.stdout), stderr: "" };
   };
   let attached = false;
+  let rings = 0;
+  let ringListener: (() => void) | undefined;
   const doorbell = {
-    rings: () => 0,
+    rings: () => rings,
     confirmed: () => scenario.doorbell,
     missed: () => undefined,
     release: () => undefined,
@@ -168,7 +179,8 @@ export async function measureTmuxExecs(
         sessions: { installLock: () => ({ runExclusive: async () => undefined }) },
         persistEnvironmentActivity: async () => undefined,
         hookSignals: {
-          attach: () => {
+          attach: (_id: string, _context: unknown, onRing: () => void) => {
+            ringListener = onRing;
             attached = true;
             return doorbell;
           },
@@ -197,6 +209,12 @@ export async function measureTmuxExecs(
     (session as unknown as { spawnPollLoop(context: unknown): void }).spawnPollLoop(context);
     await settle();
     const end = now + seconds * 1_000;
+    const siblingRing = () => {
+      rings++;
+      ringListener?.();
+      timers.push({ due: now + 250, resolve: siblingRing });
+    };
+    if (scenario.siblingRings) timers.push({ due: now + 250, resolve: siblingRing });
     while (now < end) {
       timers.sort((left, right) => left.due - right.due);
       const next = timers.shift();

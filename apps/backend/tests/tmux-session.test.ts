@@ -510,7 +510,7 @@ describe("newestJsonlInDir container backend", () => {
     return { backend, readPaths };
   }
 
-  test("reads each sibling once: a rejected head is remembered by mtime, then for good", async () => {
+  test("rechecks a rejected sibling when mtime changes, including a full head", async () => {
     const dir = "/home/node/.claude/projects/p";
     let findStdout = `1700000003 ${dir}/other.jsonl\0`;
     const files: Record<string, string> = {
@@ -521,6 +521,9 @@ describe("newestJsonlInDir container backend", () => {
       kind: "container",
       async exec() {
         return { stdout: findStdout, stderr: "", status: 0 };
+      },
+      async readTail() {
+        return "";
       },
       async readHead(filePath: string, maxBytes: number) {
         readPaths.push(filePath);
@@ -543,10 +546,10 @@ describe("newestJsonlInDir container backend", () => {
     files[`${dir}/other.jsonl`] = "x".repeat(TRANSCRIPT_HEAD_BYTES);
     await newestJsonlInDir(backend, dir, 1700000000, "mine", rejected);
     expect(readPaths).toHaveLength(2);
-    // A full head can never change: rejected for good, whatever the mtime.
+    // A resumed transcript may append its owner after the head; check the suffix again.
     findStdout = `1700000099 ${dir}/other.jsonl\0`;
     await newestJsonlInDir(backend, dir, 1700000000, "mine", rejected);
-    expect(readPaths).toHaveLength(2);
+    expect(readPaths).toHaveLength(3);
   });
 
   test("an opening record cut by the head bound still proves ownership", () => {

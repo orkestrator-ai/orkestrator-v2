@@ -82,3 +82,24 @@ test("transcript discovery backs off at 2/4/8/10 seconds, resets on a hook, then
     for (const spy of [clock, discover, snapshot, remove, observation, alive]) spy.mockRestore();
   }
 });
+
+test("resume/fork ownership appended beyond 64 KiB is discovered from a bounded suffix", async () => {
+  const { promises: fs } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { newestJsonlInDir } = await import("./tmux-hooks.js");
+  const dir = await fs.mkdtemp(join(tmpdir(), "transcript-owner-"));
+  try {
+    const file = join(dir, "fork.jsonl");
+    await fs.writeFile(
+      file,
+      JSON.stringify({ message: "x".repeat(70000) }) +
+        "\n" +
+        JSON.stringify({ sessionId: "resumed-owner", type: "assistant" }) +
+        "\n",
+    );
+    expect(await newestJsonlInDir(TmuxBackend.local(dir), dir, 0, "resumed-owner")).toBe(file);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

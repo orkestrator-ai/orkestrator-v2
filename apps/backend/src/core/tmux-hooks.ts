@@ -976,18 +976,16 @@ export function newestJsonlFindCommand(dirPath: string, minMtimeUnix: number): s
  */
 /** How many rejected discovery candidates one session remembers. */
 export const TRANSCRIPT_REJECTED_MEMO_LIMIT = 256;
-/** Memo value for a candidate whose whole head was read: it can never change. */
-const REJECTED_FOR_GOOD = Number.POSITIVE_INFINITY;
 
 /**
  * Finds the fresh (`mtime >= minMtimeUnix`) `.jsonl` in `dirPath` whose content is owned by
  * `sessionId`. Only resolves when exactly one file claims the session, so a newly started tab
  * never binds to another tab's transcript. Returns undefined when zero or multiple files match.
  *
- * Ownership is read from a bounded head ({@link TRANSCRIPT_HEAD_BYTES}): Claude
- * writes the owning session id on the opening records. `rejected` remembers
- * candidates that proved to be another session's (by mtime while the head can
- * still grow, for good once it is full), so a sibling transcript is read once
+ * Ownership is read from a bounded head and, when needed, a bounded suffix
+ * ({@link TRANSCRIPT_HEAD_BYTES} each). Resumes and forks can append ownership
+ * after the opening records. `rejected` remembers candidates by mtime,
+ * so unchanged sibling transcripts are read once
  * rather than on every search.
  */
 export async function newestJsonlInDir(
@@ -1019,16 +1017,23 @@ export async function newestJsonlInDir(
   const matches: Array<{ path: string; mtime: number }> = [];
   for (const candidate of candidates) {
     const memo = rejected?.get(candidate.path);
-    if (memo !== undefined && (memo === REJECTED_FOR_GOOD || memo === candidate.mtime)) continue;
+    if (memo !== undefined && memo === candidate.mtime) continue;
     const head = await backend.readHead(candidate.path, TRANSCRIPT_HEAD_BYTES);
-    if (head !== undefined && transcriptHeadClaimsSession(head, sessionId)) {
+    const suffix =
+      head !== undefined &&
+      Buffer.byteLength(head) >= TRANSCRIPT_HEAD_BYTES &&
+      !transcriptHeadClaimsSession(head, sessionId)
+        ? await backend.readTail(candidate.path, TRANSCRIPT_HEAD_BYTES)
+        : undefined;
+    if (
+      head !== undefined &&
+      (transcriptHeadClaimsSession(head, sessionId) ||
+        (suffix !== undefined && transcriptHeadClaimsSession(suffix, sessionId)))
+    ) {
       matches.push(candidate);
     } else if (head !== undefined && rejected) {
       rejected.delete(candidate.path);
-      rejected.set(
-        candidate.path,
-        Buffer.byteLength(head) >= TRANSCRIPT_HEAD_BYTES ? REJECTED_FOR_GOOD : candidate.mtime,
-      );
+      rejected.set(candidate.path, candidate.mtime);
       while (rejected.size > TRANSCRIPT_REJECTED_MEMO_LIMIT) {
         const oldest = rejected.keys().next().value;
         if (oldest === undefined) break;

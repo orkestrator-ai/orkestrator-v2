@@ -171,6 +171,33 @@ export class TmuxBackend {
     return out.status === 0 ? out.stdout : undefined;
   }
 
+  /** Bounded suffix for resumed/forked transcripts whose owner is beyond the head. */
+  async readTail(filePath: string, maxBytes: number): Promise<string | undefined> {
+    if (this.kind === "container") {
+      const out = await this.exec(["tail", "-c", String(maxBytes), filePath]);
+      return out.status === 0 ? out.stdout : undefined;
+    }
+    try {
+      const handle = await fs.open(filePath, "r");
+      try {
+        const size = (await handle.stat()).size;
+        const buffer = Buffer.alloc(Math.min(size, maxBytes));
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          buffer.length,
+          Math.max(0, size - maxBytes),
+        );
+        return buffer.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
   async writeFile(filePath: string, content: string): Promise<void> {
     if (this.kind === "local") {
       await fs.mkdir(path.dirname(filePath), { recursive: true });

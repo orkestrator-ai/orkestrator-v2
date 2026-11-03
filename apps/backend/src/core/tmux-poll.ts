@@ -258,8 +258,10 @@ export class ClaudeStatePollManager {
     if (existing) {
       // Adopt the newest backend context after a supervisor reconciliation.
       existing.context = context;
+      const lost = !demand && existing.demand;
       const gained = demand && !existing.demand;
       existing.demand = demand;
+      if (lost) this.reschedule(containerId, existing, CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
       if (gained) {
         // A terminal or tab just opened: back to the fast read until the next
         // observation decides the cadence, and read now.
@@ -447,8 +449,8 @@ export class ClaudeStatePollManager {
     const running = new Set<string>();
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.containerId) continue;
-      if (context.runtime?.environments?.hasLifecycleWork(environment.id)) continue;
       running.add(environment.containerId);
+      if (context.runtime?.environments?.hasLifecycleWork(environment.id)) continue;
       this.start(
         environment.containerId,
         context,
@@ -497,6 +499,11 @@ export class ClaudeStatePollManager {
   shutdownMatching(containerId: string): void {
     if (!containerId) return;
     this.retired.add(containerId);
+    while (this.retired.size > 1024) {
+      const oldest = this.retired.values().next().value;
+      if (oldest === undefined) break;
+      this.retired.delete(oldest);
+    }
     for (const id of Array.from(this.polls.keys())) {
       if (id.startsWith(containerId) || containerId.startsWith(id)) this.shutdown(id);
     }

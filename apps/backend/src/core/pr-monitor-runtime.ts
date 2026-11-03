@@ -77,6 +77,31 @@ export class PrMonitorRuntime {
   private emit: BackendEmit | undefined;
   private storage: StorageService | undefined;
   private context: CommandContext | undefined;
+  private readonly endedContainers = new Map<string, string>();
+
+  /** An end event fences recurring work even if Docker inspect is unavailable. */
+  containerEnded(environmentId: string, containerId: string): void {
+    this.endedContainers.set(environmentId, containerId);
+    this.invalidatePendingSync();
+    this.service.pause(environmentId);
+  }
+
+  containerStarted(containerId: string): void {
+    for (const [id, ended] of Array.from(this.endedContainers)) {
+      if (ended.startsWith(containerId) || containerId.startsWith(ended)) {
+        this.endedContainers.delete(id);
+      }
+    }
+  }
+
+  private applyContainerEvents<
+    T extends { id: string; containerId?: string | null; status: string },
+  >(environments: T[]): T[] {
+    return environments.map((env) =>
+      this.endedContainers.get(env.id) === env.containerId ? { ...env, status: "stopped" } : env,
+    );
+  }
+
   private syncGeneration = 0;
   private syncQueue: Promise<void> = Promise.resolve();
   private warnedMissingMergeCleanup = false;
@@ -119,7 +144,11 @@ export class PrMonitorRuntime {
       .catch(() => undefined)
       .then(async () => {
         if (this.closedService) return;
-        const environments = await context.storage.loadEnvironments();
+        const stored = await context.storage.loadEnvironments();
+        for (const id of Array.from(this.endedContainers.keys())) {
+          if (!stored.some((env) => env.id === id)) this.endedContainers.delete(id);
+        }
+        const environments = this.applyContainerEvents(stored);
         // A stop, delete, shutdown, or newer reconciliation may have happened
         // while storage was loading; applying this older snapshot would recreate
         // a poller the later lifecycle action deliberately removed.
@@ -165,7 +194,10 @@ export class PrMonitorRuntime {
     // A turn in the project home may have switched the checkout's branch (a PR
     // session branches off the base before pushing); follow it first.
     const environment = await refreshProjectHomeBranch(stored, context.storage, readCheckoutBranch);
-    const target = await projectHomePrTarget(environment, context.storage);
+    const target = await projectHomePrTarget(
+      this.applyContainerEvents([environment])[0]!,
+      context.storage,
+    );
     if (!this.closedService) this.service.wakeForCompletion(target);
   }
 
@@ -436,7 +468,9 @@ export class PrMonitorRuntime {
         readTarget: async (environmentId) => {
           const storage = this.requireStorage();
           const environment = await storage.getEnvironment(environmentId);
-          return environment ? projectHomePrTarget(environment, storage) : null;
+          return environment
+            ? projectHomePrTarget(this.applyContainerEvents([environment])[0]!, storage)
+            : null;
         },
         resumeTerminalEffects: (environmentId, observation) =>
           this.resumeTerminalEffects(environmentId, observation),

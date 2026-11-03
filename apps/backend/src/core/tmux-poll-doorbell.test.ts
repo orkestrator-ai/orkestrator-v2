@@ -5,7 +5,7 @@ import type { TmuxHookDoorbell } from "./tmux-hook-signal.js";
 import { TMUX_HOOK_DOORBELL_COMMAND, hookScript, workspaceHookPaths } from "./tmux-hooks.js";
 import { TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
 import {
-  POLL_INTERVAL_MS,
+  TMUX_IDLE_POLL_INTERVAL_MS,
   TMUX_IDLE_AFTER_QUIET_TICKS,
   TMUX_SIGNALLED_IDLE_INTERVAL_MS,
   type PollSnapshotExtras,
@@ -185,7 +185,7 @@ describe("tmux poll loop with a hook doorbell", () => {
     const reads = h.snapshots.length;
     await h.ring();
     // Woken, then held for the rest of the minimum gap.
-    expect(h.waits.at(-1)?.intervalMs).toBe(POLL_INTERVAL_MS);
+    expect(h.waits.at(-1)?.intervalMs).toBe(TMUX_IDLE_POLL_INTERVAL_MS);
     await h.elapse();
     expect(h.snapshots).toHaveLength(reads + 1);
 

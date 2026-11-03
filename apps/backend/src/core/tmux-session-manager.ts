@@ -635,7 +635,10 @@ export class TmuxSession {
   }
 
   /** Waits for the tick or a wake, then keeps the minimum gap after a wake. */
-  private async nextPollTick(intervalMs: number): Promise<"timer" | "wake"> {
+  private async nextPollTick(
+    intervalMs: number,
+    minimumWakeMs = POLL_INTERVAL_MS,
+  ): Promise<"timer" | "wake"> {
     let reason: "timer" | "wake" = "wake";
     if (this.wakeRequested) {
       this.wakeRequested = false;
@@ -657,7 +660,7 @@ export class TmuxSession {
     }
     if (reason === "wake" && !this.stopRequested) {
       const since = Date.now() - this.lastSnapshotStartedAt;
-      if (since >= 0 && since < POLL_INTERVAL_MS) await this.pollTick(POLL_INTERVAL_MS - since);
+      if (since >= 0 && since < minimumWakeMs) await this.pollTick(minimumWakeMs - since);
     }
     return reason;
   }
@@ -701,6 +704,7 @@ export class TmuxSession {
               : idle
                 ? TMUX_IDLE_POLL_INTERVAL_MS
                 : POLL_INTERVAL_MS,
+            idle ? TMUX_IDLE_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
           );
           if (this.stopRequested) break;
           tick += 1;

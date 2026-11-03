@@ -12,6 +12,7 @@ function harness(hooks = new TmuxHookSignalManager()) {
   const time = new ManualTime();
   let reads = 0;
   let lifecycle = false;
+  let tabs = 0;
   const terminals = new TerminalRuntime();
   const environment = { id: "env", containerId: "abcdef123456", status: "running" } as Environment;
   const polls = new ClaudeStatePollManager({
@@ -25,18 +26,31 @@ function harness(hooks = new TmuxHookSignalManager()) {
   });
   const context = {
     storage: {
+      getEnvironment: async () => environment,
       loadEnvironments: async () => [environment],
       readEnvironmentsSnapshot: async () => [environment],
     },
     runtime: {
       terminals,
-      environments: { hasLifecycleWork: () => lifecycle },
-      diffStats: { sync: async () => undefined },
-      prMonitor: { sync: async () => undefined },
+      environments: {
+        hasLifecycleWork: () => lifecycle,
+        enqueueLifecycleOperation: async (_id: string, _tasks: unknown, run: () => Promise<void>) =>
+          run(),
+      },
+      diffStats: {
+        containerEnded: () => undefined,
+        containerStarted: () => undefined,
+        sync: async () => undefined,
+      },
+      prMonitor: {
+        containerEnded: () => undefined,
+        containerStarted: () => undefined,
+        sync: async () => undefined,
+      },
       tmux: {
         claudeStatePolls: polls,
         hookSignals: hooks,
-        sessions: { sessionsInEnvironment: () => 0, containerEnded: () => undefined },
+        sessions: { sessionsInEnvironment: () => tabs, containerEnded: () => undefined },
       },
     },
   } as unknown as CommandContext;
@@ -48,6 +62,9 @@ function harness(hooks = new TmuxHookSignalManager()) {
     context,
     environment,
     reads: () => reads,
+    setTabs: (count: number) => {
+      tabs = count;
+    },
     setLifecycle: (value: boolean) => {
       lifecycle = value;
     },
@@ -67,7 +84,7 @@ test("a real terminal registration restores fast reads without another reconcile
       cols: 80,
       rows: 24,
     });
-    h.terminals.registerProcess("shell", {} as PtyProcess);
+    h.terminals.registerProcess("shell", { kill: () => undefined } as unknown as PtyProcess);
     await h.time.advance(1_000);
     expect(h.reads()).toBe(2);
     await h.time.advance(2_000);
@@ -166,4 +183,46 @@ test("reconciliation cannot re-admit a stopped poll while lifecycle work owns th
   } finally {
     h.polls.shutdownAll();
   }
+});
+
+test("unrelated lifecycle work retains a live poll and closing demand restores safety cadence", async () => {
+  const h = harness();
+  try {
+    h.terminals.rememberSession("shell", {
+      kind: "container",
+      containerId: h.environment.containerId!,
+      cols: 80,
+      rows: 24,
+    });
+    h.terminals.registerProcess("shell", { kill: () => undefined } as unknown as PtyProcess);
+    await h.polls.reconcile(h.context);
+    await flushMicrotasks();
+    h.setLifecycle(true);
+    await h.polls.reconcile(h.context);
+    expect(h.polls.status().containers).toBe(1);
+    await h.time.advance(2000);
+    expect(h.reads()).toBeGreaterThan(1);
+    h.setTabs(1);
+    h.terminals.explicitlyCloseSession("shell");
+    await h.time.advance(2000);
+    const withTab = h.reads();
+    await h.time.advance(1000);
+    expect(h.reads()).toBeGreaterThan(withTab);
+    h.setTabs(0);
+    await h.time.advance(1000);
+    const reads = h.reads();
+    await h.time.advance(28000);
+    expect(h.reads()).toBe(reads);
+    await h.time.advance(2000);
+    expect(h.reads()).toBe(reads + 1);
+  } finally {
+    h.polls.shutdownAll();
+  }
+});
+
+test("unknown end-event retirement IDs are bounded", () => {
+  const h = harness();
+  for (let i = 0; i < 10000; i++) h.polls.shutdownMatching(i.toString(16).padStart(64, "0"));
+  expect(h.polls["retired"].size).toBeLessThanOrEqual(1024);
+  h.polls.shutdownAll();
 });

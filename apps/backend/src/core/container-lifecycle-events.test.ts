@@ -1,12 +1,19 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
 import { ContainerLifecycleReactor, containerIdsMatch } from "./container-lifecycle-events.js";
+import { EnvironmentOperations } from "./environment-operations.js";
 import type { Environment } from "./models.js";
 
 const FULL = "f".repeat(64);
 const SHORT = FULL.slice(0, 12);
 
-function harness(options: { lifecycleWork?: boolean; status?: Environment["status"] } = {}) {
+function harness(
+  options: {
+    lifecycleWork?: boolean;
+    status?: Environment["status"];
+    operations?: EnvironmentOperations;
+  } = {},
+) {
   const environment = {
     id: "env-1",
     environmentType: "containerized",
@@ -16,15 +23,28 @@ function harness(options: { lifecycleWork?: boolean; status?: Environment["statu
   const calls: string[] = [];
   const context = {
     storage: {
+      getEnvironment: async () => environment,
       loadEnvironments: async () => [
         { id: "local", environmentType: "local", containerId: null },
         environment,
       ],
     },
     runtime: {
-      environments: { hasLifecycleWork: () => options.lifecycleWork === true },
-      diffStats: { sync: async () => void calls.push("diff-sync") },
-      prMonitor: { sync: async () => void calls.push("pr-sync") },
+      environments: options.operations ?? {
+        hasLifecycleWork: () => options.lifecycleWork === true,
+        enqueueLifecycleOperation: async (_id: string, _tasks: unknown, run: () => Promise<void>) =>
+          run(),
+      },
+      diffStats: {
+        containerEnded: () => undefined,
+        containerStarted: () => undefined,
+        sync: async () => void calls.push("diff-sync"),
+      },
+      prMonitor: {
+        containerEnded: () => undefined,
+        containerStarted: () => undefined,
+        sync: async () => void calls.push("pr-sync"),
+      },
       tmux: {
         claudeStatePolls: {
           startedMatching: () => undefined,
@@ -43,7 +63,7 @@ function harness(options: { lifecycleWork?: boolean; status?: Environment["statu
   const reactor = new ContainerLifecycleReactor(() => context, {
     syncStatus: syncStatus as never,
   });
-  return { reactor, calls, syncStatus };
+  return { reactor, calls, syncStatus, context, environment };
 }
 
 describe("container lifecycle events", () => {
@@ -77,7 +97,8 @@ describe("container lifecycle events", () => {
     h.reactor.handle(FULL, "stop");
     await h.reactor.idle();
     expect(h.syncStatus).not.toHaveBeenCalled();
-    expect(h.calls.some((call) => call.endsWith("-sync"))).toBe(false);
+    expect(h.calls).toContain("diff-sync");
+    expect(h.calls).toContain("pr-sync");
   });
 
   test("a burst of events for one container reconciles at most twice", async () => {
@@ -102,4 +123,103 @@ describe("container lifecycle events", () => {
     expect(containerIdsMatch(FULL, "")).toBe(false);
     expect(containerIdsMatch("abc", "abd")).toBe(false);
   });
+});
+
+test("failed inspect keeps diff/PR fenced, retries once, and a rejected diff sync cannot skip PR", async () => {
+  const h = harness();
+  let diffActive = true;
+  let prActive = true;
+  h.context.runtime.diffStats.containerEnded = () => {
+    diffActive = false;
+  };
+  h.context.runtime.prMonitor.containerEnded = () => {
+    prActive = false;
+  };
+  h.context.runtime.diffStats.sync = async () => {
+    throw new Error("diff failure");
+  };
+  h.syncStatus.mockImplementation(async () => {
+    throw new Error("inspect unavailable");
+  });
+  h.reactor.handle(FULL, "die");
+  await h.reactor.idle();
+  expect(h.syncStatus).toHaveBeenCalledTimes(2);
+  expect(diffActive).toBe(false);
+  expect(prActive).toBe(false);
+  expect(h.calls).toContain("pr-sync");
+  expect(h.calls).toContain("state-poll-reconcile");
+});
+
+test("a queued replacement cannot be overwritten by a delayed observation of the old container", async () => {
+  const { EnvironmentOperations } = await import("./environment-operations.js");
+  const { EnvironmentLifecycleTaskTracker } = await import("./environment-lifecycle-tasks.js");
+  const h = harness({ operations: new EnvironmentOperations() });
+  h.context.environmentLifecycleTasks = new EnvironmentLifecycleTaskTracker();
+  let release!: () => void;
+  let entered!: () => void;
+  const inspecting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  h.syncStatus.mockImplementation(async (env) => {
+    entered();
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h.environment.status = "stopped";
+    h.environment.containerId = null;
+    return env;
+  });
+  h.reactor.handle(FULL, "die");
+  await inspecting;
+  const replacement = h.context.runtime.environments.enqueueLifecycleOperation(
+    h.environment.id,
+    h.context.environmentLifecycleTasks,
+    async () => {
+      h.environment.containerId = "replacement-B";
+      h.environment.status = "running";
+    },
+  );
+  release();
+  await replacement;
+  await h.reactor.idle();
+  expect(h.environment.containerId).toBe("replacement-B");
+  expect(h.environment.status).toBe("running");
+});
+
+test("real diff and PR managers cannot re-admit an ended container from stale stored running status", async () => {
+  const { BackendRuntime } = await import("./backend-runtime.js");
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const environment = {
+    id: "env",
+    projectId: "project",
+    environmentType: "containerized",
+    containerId: SHORT,
+    status: "running",
+    branch: "feature",
+  } as Environment;
+  const context = {
+    runtime,
+    storage: { loadEnvironments: async () => [environment], loadConfig: async () => ({}) },
+    emit: () => undefined,
+  } as unknown as CommandContext;
+  const track = spyOn(runtime.diffStats.service, "track").mockImplementation(() => undefined);
+  const prSync = spyOn(runtime.prMonitor.service, "sync").mockImplementation(() => undefined);
+  try {
+    runtime.diffStats.containerEnded(environment.id, SHORT);
+    runtime.prMonitor.containerEnded(environment.id, SHORT);
+    await runtime.diffStats.sync(context);
+    await runtime.prMonitor.sync(context);
+    expect(track).not.toHaveBeenCalled();
+    expect(prSync.mock.calls.at(-1)?.[0][0]?.ready).toBe(false);
+    runtime.diffStats.containerStarted(FULL);
+    runtime.prMonitor.containerStarted(FULL);
+    await runtime.diffStats.sync(context);
+    await runtime.prMonitor.sync(context);
+    expect(track).toHaveBeenCalled();
+    expect(prSync.mock.calls.at(-1)?.[0][0]?.ready).toBe(true);
+  } finally {
+    runtime.shutdown();
+    track.mockRestore();
+    prSync.mockRestore();
+  }
 });

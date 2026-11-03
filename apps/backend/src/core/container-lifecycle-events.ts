@@ -29,6 +29,7 @@ const log = createLogger("docker");
  */
 export class ContainerLifecycleReactor {
   private readonly running = new Map<string, Promise<void>>();
+  private readonly ended = new Set<string>();
   private readonly again = new Set<string>();
 
   private readonly syncStatus: typeof syncStoredEnvironmentStatus;
@@ -44,8 +45,17 @@ export class ContainerLifecycleReactor {
   handle(containerId: string, action: ContainerLifecycleAction): void {
     const context = this.context();
     if (!context) return;
-    if (action !== "start") retireContainerLoops(context, containerId);
-    else context.runtime.tmux.claudeStatePolls.startedMatching(containerId);
+    if (action !== "start") {
+      this.ended.add(containerId);
+      retireContainerLoops(context, containerId);
+    } else {
+      for (const id of Array.from(this.ended)) {
+        if (containerIdsMatch(id, containerId)) this.ended.delete(id);
+      }
+      context.runtime.tmux.claudeStatePolls.startedMatching(containerId);
+      context.runtime.diffStats.containerStarted(containerId);
+      context.runtime.prMonitor.containerStarted(containerId);
+    }
     this.schedule(containerId);
   }
 
@@ -71,12 +81,47 @@ export class ContainerLifecycleReactor {
     if (!context) return;
     try {
       const environment = findByContainerId(await context.storage.loadEnvironments(), containerId);
-      if (!environment) return;
-      if (context.runtime.environments.hasLifecycleWork(environment.id)) return;
-      await this.syncStatus(environment, context);
-      await context.runtime.diffStats.sync(context);
-      await context.runtime.prMonitor.sync(context);
-      await context.runtime.tmux.claudeStatePolls.reconcile(context);
+      if (!environment) {
+        this.ended.delete(containerId);
+        context.runtime.tmux.claudeStatePolls.startedMatching(containerId);
+        return;
+      }
+      if (this.ended.has(containerId)) {
+        context.runtime.diffStats.containerEnded(environment.id, environment.containerId!);
+        context.runtime.prMonitor.containerEnded(environment.id, environment.containerId!);
+      }
+      if (!context.runtime.environments.hasLifecycleWork(environment.id)) {
+        await context.runtime.environments.enqueueLifecycleOperation(
+          environment.id,
+          context.environmentLifecycleTasks,
+          async () => {
+            // Read again inside the same queue as start/replacement/delete.
+            const current = await context.storage.getEnvironment(environment.id);
+            if (!current?.containerId || !containerIdsMatch(current.containerId, containerId))
+              return;
+            // One immediate retry bounds recovery work when inspect throws.
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              try {
+                await this.syncStatus(current, context, undefined, false, true);
+                break;
+              } catch (error) {
+                if (attempt === 1)
+                  log.warn("lifecycle-event.reconcile-failed", { error: formatLogError(error) });
+              }
+            }
+          },
+        );
+      }
+      // Independent managers must all reconcile even when one rejects.
+      const results = await Promise.allSettled([
+        context.runtime.diffStats.sync(context),
+        context.runtime.prMonitor.sync(context),
+        context.runtime.tmux.claudeStatePolls.reconcile(context),
+      ]);
+      for (const result of results) {
+        if (result.status === "rejected")
+          log.warn("lifecycle-event.reconcile-failed", { error: formatLogError(result.reason) });
+      }
     } catch (error) {
       log.warn("lifecycle-event.reconcile-failed", { error: formatLogError(error) });
     }

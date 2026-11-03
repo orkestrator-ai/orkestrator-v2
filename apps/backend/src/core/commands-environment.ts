@@ -360,6 +360,7 @@ export async function syncStoredEnvironmentStatus(
   context: Pick<CommandContext, "storage" | "runtime">,
   knownContainerStates?: Map<string, EnvironmentStatus> | null,
   strictKnownContainerStates = false,
+  throwInspectErrors = false,
 ): Promise<Environment> {
   if (environment.environmentType === "local") {
     return environment;
@@ -434,6 +435,7 @@ export async function syncStoredEnvironmentStatus(
     if (isMissingDockerObjectError(error)) {
       return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
     }
+    if (throwInspectErrors) throw error;
     log.warn("status.docker-error", {
       environmentId: environment.id,
       ...classifyCommandFailure(error, { tools: ["docker"] }),

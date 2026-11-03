@@ -48,6 +48,11 @@ describe("tmux poll exec budget", () => {
     expect(counts.discovery).toBeLessThanOrEqual(Math.ceil(seconds / 10) + 4 + 2);
   });
 
+  test("an idle sibling stays below the old idle budget while a busy tab rings four times a second", async () => {
+    const counts = (await run("idle sibling of a busy ringing tab"))!;
+    expect(counts.total).toBeLessThanOrEqual(seconds + 8);
+  });
+
   test("a busy tab costs one exec per fast tick", async () => {
     const counts = (await run("busy tab"))!;
     expect(counts.total).toBeLessThanOrEqual(seconds * 4 + 2);

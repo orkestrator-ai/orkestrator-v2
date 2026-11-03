@@ -379,8 +379,18 @@ describe("NativeAgentService command intent", () => {
           prompt: "/compact keep the plan",
           requestId: "c-old",
         }),
+      ).resolves.toMatchObject({ outcome: "accepted", instructionsIgnored: true });
+      // Replaying the id must not repeat a compaction whose instructions were ignored.
+      await expect(
+        service.dispatchIntent({
+          ...base,
+          agent: "pi",
+          prompt: "/compact keep the plan",
+          requestId: "c-old",
+        }),
       ).resolves.toMatchObject({ outcome: "accepted" });
       expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+      expect(stub.send).not.toHaveBeenCalled();
     });
   });
 

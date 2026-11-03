@@ -936,7 +936,7 @@ async function handleCompact(
   try {
     // Read under the claim: the body arrives after the busy check, and a
     // prompt must not slip into the gap. Older backends send no body.
-    const parsed = parseCompactInstructionsBody(await readJson(request));
+    const parsed = parseCompactInstructionsBody(await readJsonValue(request));
     if (!parsed.ok) throw new HttpError(400, parsed.error);
     instructions = parsed.instructions;
     const session = await ensureSession(state);
@@ -1792,6 +1792,12 @@ function readBoundedString(value: unknown, limit: number, field: string): string
 }
 
 async function readJson(request: IncomingMessage): Promise<JsonObject> {
+  const parsed = await readJsonValue(request);
+  return isObject(parsed) ? parsed : {};
+}
+
+/** Preserve body shape for routes that validate their complete JSON payload. */
+async function readJsonValue(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of request) {
@@ -1804,8 +1810,7 @@ async function readJson(request: IncomingMessage): Promise<JsonObject> {
   }
   if (total === 0) return {};
   try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    return isObject(parsed) ? parsed : {};
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   } catch {
     throw new HttpError(400, "Request body must be JSON");
   }

@@ -3896,6 +3896,15 @@ describe("persisted session routes", () => {
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
+    test("refuses an oversized compact body with 413 before dispatch", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/compact", {
+        instructions: "x".repeat(16_000 * 6 + 1_025),
+      });
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: "Compact request is too large" });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
     test("contains a background compaction rejection after accepting the request", async () => {
       const logged = mock(() => {});
       const originalError = console.error;

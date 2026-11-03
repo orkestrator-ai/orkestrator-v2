@@ -833,7 +833,12 @@ export interface NativeAgentRetiredDispatch {
  * lost. Callers must reconcile `unknown`; they must never retry it blindly.
  */
 export type NativeAgentDispatchOutcome =
-  | { outcome: "accepted"; requestId: string }
+  | {
+      outcome: "accepted";
+      requestId: string;
+      /** Compaction ran, but an older bridge ignored its summary instructions. */
+      instructionsIgnored?: boolean;
+    }
   | {
       outcome: "rejected";
       error: string;

@@ -189,7 +189,10 @@ The backend merges runtime actions into the provider list
   (bounded by `COMPACT_INSTRUCTIONS_MAX_LENGTH`), and a bridge that used them
   answers `instructions: "applied"`. A bridge that predates them compacts
   plainly; the backend reports that as `instructionsIgnored` on an applied
-  outcome (see the
+  outcome. Prompt dispatch also returns `instructionsIgnored: true` on its
+  accepted response when it observes that acknowledgement. A same-id replay
+  remains accepted without running compaction again; this advisory flag is not
+  persisted and is absent on replay (see the
   [compatibility register](version-compatibility.md#register)).
 - `/goal` is **reserved** on platforms with `actions.goal`: the backend's goal
   loop replaces a provider's own `/goal`, so two loops can never stack on one

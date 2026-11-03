@@ -1981,9 +1981,16 @@ export class NativeAgentService {
       input.logicalSessionKey,
     );
     try {
-      await this.dispatchPromptInternal(input, undefined, true);
+      let instructionsIgnored = false;
+      await this.dispatchPromptInternal(input, undefined, true, false, false, () => {
+        instructionsIgnored = true;
+      });
       void this.projections.refreshProjection(input, true).catch(() => undefined);
-      return { outcome: "accepted", requestId: input.requestId };
+      return {
+        outcome: "accepted",
+        requestId: input.requestId,
+        ...(instructionsIgnored ? { instructionsIgnored: true } : {}),
+      };
     } catch (error) {
       if (error instanceof PendingNativeAgentDispatchError) {
         // The only thing refusing this prompt is an older dispatch nobody has
@@ -3293,11 +3300,19 @@ export class NativeAgentService {
     persistAmbiguousDispatch = false,
     mailInject = false,
     recovery = false,
+    onInstructionsIgnored?: () => void,
   ): Promise<PersistedNativeAgentSession> {
     const releaseAgentWork = this.environmentFence.beginAgentWork(input.environmentId);
     try {
       return await this.promptQueues.withSessionMutationFence(input, () =>
-        this.dispatchAdmittedPrompt(input, prepare, persistAmbiguousDispatch, mailInject, recovery),
+        this.dispatchAdmittedPrompt(
+          input,
+          prepare,
+          persistAmbiguousDispatch,
+          mailInject,
+          recovery,
+          onInstructionsIgnored,
+        ),
       );
     } finally {
       releaseAgentWork();
@@ -3315,6 +3330,7 @@ export class NativeAgentService {
     persistAmbiguousDispatch: boolean,
     mailInject: boolean,
     recovery = false,
+    onInstructionsIgnored?: () => void,
   ): Promise<PersistedNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     const coordinatorContextRevision =
@@ -3419,7 +3435,13 @@ export class NativeAgentService {
           session.key,
           input.requestId,
           async (durable) => {
-            await this.performCommandSessionAction(input, durable, provider, commandPlan);
+            const outcome = await this.performCommandSessionAction(
+              input,
+              durable,
+              provider,
+              commandPlan,
+            );
+            if (outcome.instructionsIgnored) onInstructionsIgnored?.();
           },
         );
         return result.session;
@@ -3880,7 +3902,7 @@ export class NativeAgentService {
     session: PersistedNativeAgentSession,
     provider: NativeAgentRuntimeProvider,
     plan: Extract<CommandDispatchPlan, { kind: "session-action" }>,
-  ): Promise<void> {
+  ): Promise<{ instructionsIgnored?: boolean }> {
     const label = AGENT_PLATFORM_LABELS[input.agent] ?? input.agent;
     if (!nativeCapabilities(input.agent).actions?.compact || !provider.performSessionAction) {
       throw new PromptRejectedError(`${label} does not support /compact here.`);
@@ -3914,6 +3936,7 @@ export class NativeAgentService {
           : `${label} did not confirm the compaction. Check the transcript before retrying.`,
       );
     }
+    return outcome;
   }
 
   async shutdown(): Promise<void> {

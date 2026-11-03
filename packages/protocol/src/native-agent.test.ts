@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms";
 import {
+  parseCompactInstructionsBody,
+  COMPACT_INSTRUCTIONS_MAX_LENGTH,
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   DEFAULT_REASONING_ID,
   FALLBACK_EXECUTION_PROFILE_IDS,
@@ -1461,6 +1463,49 @@ describe("normalizeNativeAgentTurnActivity", () => {
     expect(normalizeNativeAgentTurnActivity({ compacting: true, thinkingTokens: 2_000 })).toEqual({
       compacting: true,
       thinkingTokens: 2_000,
+    });
+  });
+});
+
+describe("parseCompactInstructionsBody", () => {
+  test("accepts absent, null, missing and blank instructions as plain compaction", () => {
+    for (const body of [
+      undefined,
+      null,
+      {},
+      { other: true },
+      { instructions: undefined },
+      { instructions: " \n\t " },
+    ]) {
+      expect(parseCompactInstructionsBody(body)).toEqual({ ok: true });
+    }
+  });
+  test("rejects non-object bodies and non-string instructions", () => {
+    for (const body of [[], ["keep"], "keep", 42, true, false]) {
+      expect(parseCompactInstructionsBody(body)).toEqual({
+        ok: false,
+        error: "Compact request body must be an object",
+      });
+    }
+    for (const instructions of [null, 42, true, [], {}]) {
+      expect(parseCompactInstructionsBody({ instructions })).toEqual({
+        ok: false,
+        error: "instructions must be a string",
+      });
+    }
+  });
+  test("trims instructions, tolerates extra keys and enforces the trimmed UTF-16 limit", () => {
+    expect(parseCompactInstructionsBody({ instructions: "  keep\nthe plan  ", other: 42 })).toEqual(
+      { ok: true, instructions: "keep\nthe plan" },
+    );
+    const instructions = "x".repeat(COMPACT_INSTRUCTIONS_MAX_LENGTH);
+    expect(parseCompactInstructionsBody({ instructions: ` ${instructions} ` })).toEqual({
+      ok: true,
+      instructions,
+    });
+    expect(parseCompactInstructionsBody({ instructions: instructions + "x" })).toEqual({
+      ok: false,
+      error: "instructions must be at most 16000 characters",
     });
   });
 });

@@ -270,7 +270,7 @@ describe("playwright output", () => {
     ]);
   });
 
-  test("an open flake-registry row makes the test unrelated", () => {
+  test("an open flake-registry row is context, not proof of a flake", () => {
     const root = fixture({
       "e2e/Settings.spec.ts": "",
       "e2e/ToolGroup.spec.ts": "",
@@ -283,7 +283,7 @@ describe("playwright output", () => {
     });
     const triage = classify(root, { output });
     expect(failures(triage)[0]).toMatchObject({
-      verdict: "unrelated",
+      verdict: "undetermined",
       reasons: ["known-flaky", "not-import-traceable"],
     });
   });
@@ -337,7 +337,9 @@ describe("the target branch's CI", () => {
         "for last; do :; done",
         'case "$last" in',
         `  */commits/${mergeBase}/check-runs*) printf '%s' '{"check_runs":[{"id":7,"name":"test","status":"completed","conclusion":"failure","app":{"slug":"github-actions"}}]}' ;;`,
-        `  */actions/jobs/7/logs) cat "${path.join(root, "ci.log")}" ;;`,
+        `  */actions/runs[?]*) printf '%s' '{"workflow_runs":[{"id":19}]}' ;;`,
+        `  */actions/runs/19/jobs*) printf '%s' '{"jobs":[{"id":83,"check_run_url":"https://api.github.com/repos/acme/acme/check-runs/7"}]}' ;;`,
+        `  */actions/jobs/83/logs) cat "${path.join(root, "ci.log")}" ;;`,
         "  *) exit 1 ;;",
         "esac",
       ].join("\n"),
@@ -397,5 +399,79 @@ describe("the target branch's CI", () => {
     expect(triage.limitations).toEqual([
       "The target branch's CI result for bbbbbbbbbbbb could not be read",
     ]);
+  });
+});
+
+describe("conservative dependency attribution", () => {
+  for (const changedPath of ["apps/backend/src/pool.test.ts", "apps/backend/src/pool.ts"]) {
+    test(`registry membership cannot excuse ${changedPath}`, () => {
+      const root = fixture({
+        ...MODULES,
+        "docs/tests/flaky-tests/backend/0000-index.md":
+          "| Status | Test | File |\n| --- | --- | --- |\n| open | `idle connections expire` | apps/backend/src/pool.test.ts |",
+      });
+      const result = classify(root, { output: bunAggregate(root), changedFiles: [changedPath] });
+      expect(failures(result).find((f) => f.name === "idle connections expire")).toMatchObject({
+        verdict: "related",
+        reasons: expect.arrayContaining(["known-flaky"]),
+      });
+    });
+  }
+  for (const source of [
+    'const moduleName = "./runtime"; import(moduleName);',
+    'const moduleName = "./runtime"; require(moduleName);',
+    'import { spawnSync as launch } from "node:child_process"; launch("bun", ["runtime.ts"]);',
+    'Bun.spawn(["bun", "runtime.ts"]);',
+  ]) {
+    test(`runtime boundary stays blocking: ${source}`, () => {
+      const root = fixture({
+        "src/a.test.ts":
+          'import "./loader"; test("runtime works", () => {}); test("migration loads", () => {});',
+        "src/loader.ts": source,
+        "src/runtime.ts": "export {};",
+      });
+      const result = classify(root, {
+        output: "src/a.test.ts:\n(fail) runtime works\n 1 fail",
+        changedFiles: ["src/runtime.ts"],
+      });
+      expect(failures(result)[0]!.verdict).not.toBe("unrelated");
+    });
+  }
+  test("production runtime file reads contribute dependency evidence", () => {
+    const root = fixture({
+      "src/a.test.ts":
+        'import "./loader"; test("runtime works", () => {}); test("migration loads", () => {});',
+      "src/loader.ts":
+        'import { readFileSync } from "node:fs"; readFileSync("migrations/initial.sql");',
+      "migrations/initial.sql": "SELECT 1;",
+    });
+    const result = classify(root, {
+      output: "src/a.test.ts:\n(fail) migration loads\n 1 fail",
+      changedFiles: ["migrations/initial.sql"],
+    });
+    expect(failures(result)[0]!.verdict).toBe("related");
+    const unknown = classify(root, {
+      output: "src/a.test.ts:\n(fail) migration loads\n 1 fail",
+      changedFiles: ["migrations/other.sql"],
+    });
+    expect(failures(unknown)[0]!.verdict).toBe("undetermined");
+  });
+  test("missing artifacts retain incomplete commands beside unrelated failures", () => {
+    const root = fixture(MODULES);
+    writeFileSync(path.join(root, "out.txt"), bunAggregate(root));
+    const result = classify(root, {
+      commands: [
+        { command: "test", cwd: ".", status: "failed", stdoutPath: "out.txt", stderrPath: null },
+        {
+          command: "never started",
+          cwd: ".",
+          status: "incomplete",
+          stdoutPath: null,
+          stderrPath: null,
+        },
+      ],
+    });
+    expect(result.commands[0]!.failures.every((f) => f.verdict === "unrelated")).toBe(true);
+    expect(result.commands[1]).toMatchObject({ failures: [], unattributed: true });
   });
 });

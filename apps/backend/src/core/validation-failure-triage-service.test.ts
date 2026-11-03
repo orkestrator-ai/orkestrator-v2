@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   summarizeValidationFailureTriage,
   validationFailureId,
@@ -10,13 +10,18 @@ import {
   classifierPayload,
   MAX_TRIAGE_PAYLOAD_BASE64_BYTES,
   sharedFailureSummaries,
+  triageValidationFailures,
 } from "./validation-failure-triage-service.js";
 import type { ValidationFailureClassifierInput } from "./validation-failure-classifier.js";
+
+import * as shell from "./shell.js";
 
 const BASE = "c".repeat(40);
 const e2eKey = validationFailureKey("playwright", "e2e/a.spec.ts", "opens the pane");
 
-function triage(verdict: "related" | "undetermined" = "undetermined"): ValidationFailureTriage {
+function triage(
+  verdict: "related" | "unrelated" | "undetermined" = "undetermined",
+): ValidationFailureTriage {
   return {
     version: 1,
     mergeBase: BASE,
@@ -68,9 +73,9 @@ describe("classifierPayload", () => {
 });
 
 describe("failures shared on the same merge-base", () => {
-  const otherSummary = summarizeValidationFailureTriage(triage());
+  const otherSummary = summarizeValidationFailureTriage(triage("unrelated"));
 
-  test("another pipeline's unrelated or undetermined failure makes it unrelated here", () => {
+  test("another pipeline's independently unrelated failure supplies evidence", () => {
     const result = applySharedBaseEvidence(triage(), [otherSummary]);
     expect(result.commands[0]!.failures[0]).toMatchObject({
       verdict: "unrelated",
@@ -110,3 +115,138 @@ describe("failures shared on the same merge-base", () => {
     expect(summaries[0]!.ids).toEqual([validationFailureId(e2eKey)]);
   });
 });
+
+test("shared-base evidence neither launders uncertainty nor overrides related evidence", () => {
+  const uncertain = summarizeValidationFailureTriage(triage());
+  expect(applySharedBaseEvidence(triage(), [uncertain])).toEqual(triage());
+  const base = summarizeValidationFailureTriage(triage("unrelated"));
+  expect(applySharedBaseEvidence(triage("related"), [base])).toEqual(triage("related"));
+  const flipped = summarizeValidationFailureTriage(applySharedBaseEvidence(triage(), [base]));
+  expect(flipped.baseIds).toEqual([]);
+  expect(applySharedBaseEvidence(triage(), [flipped])).toEqual(triage());
+  const { baseIds: _legacy, ...legacy } = base;
+  expect(applySharedBaseEvidence(triage(), [legacy])).toEqual(triage());
+});
+
+for (const environmentType of ["local", "container"] as const) {
+  test(`triage resolves merge-base and execution root for ${environmentType}`, async () => {
+    let input: ValidationFailureClassifierInput | undefined;
+    const outcome = await triageValidationFailures({
+      environment: {
+        id: "env",
+        projectId: "project",
+        environmentType,
+        worktreePath: "/test-worktree",
+        containerId: "test-container",
+      } as never,
+      runner: async (command, args) => {
+        expect(command).toBe("git");
+        expect(args).toEqual(["merge-base", "HEAD", "origin/develop"]);
+        return BASE;
+      },
+      context: {
+        storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
+      } as never,
+      targetRef: "origin/develop",
+      changedFiles: [],
+      commands: [
+        { command: "test", cwd: ".", status: "incomplete", stdoutPath: null, stderrPath: null },
+      ],
+      execute: async (_script, payload) => {
+        input = JSON.parse(Buffer.from(payload, "base64").toString());
+        return JSON.stringify(triage());
+      },
+    });
+    expect(input).toMatchObject({
+      root: environmentType === "local" ? "/test-worktree" : "/workspace",
+      mergeBase: BASE,
+    });
+    expect(outcome.triage).toEqual(triage());
+  });
+}
+for (const failure of ["merge-base", "invalid", "exec"] as const) {
+  test(`triage records ${failure} failure conservatively`, async () => {
+    const outcome = await triageValidationFailures({
+      environment: {
+        id: "env",
+        projectId: "project",
+        environmentType: "container",
+        containerId: "test-container",
+      } as never,
+      runner: async () => {
+        if (failure === "merge-base") throw new Error("git unavailable");
+        return BASE;
+      },
+      context: {
+        storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
+      } as never,
+      targetRef: "origin/main",
+      changedFiles: [],
+      commands: [
+        { command: "test", cwd: ".", status: "incomplete", stdoutPath: null, stderrPath: null },
+      ],
+      execute: async (_script, payload) => {
+        if (failure === "exec") throw new Error("exec failed");
+        if (failure === "invalid") return "{}";
+        expect(JSON.parse(Buffer.from(payload, "base64").toString()).mergeBase).toBeNull();
+        return JSON.stringify({ ...triage(), mergeBase: null });
+      },
+    });
+    if (failure === "merge-base") expect(outcome.triage!.mergeBase).toBeNull();
+    else
+      expect(outcome.limitation).toContain(
+        failure === "invalid" ? "invalid result" : "could not run",
+      );
+  });
+}
+
+for (const environmentType of ["local", "container"] as const) {
+  test(`executes classifier through the ${environmentType} transport`, async () => {
+    const spy = spyOn(shell, "runCommand").mockResolvedValue({
+      stdout: JSON.stringify(triage()),
+      stderr: "",
+    });
+    try {
+      const outcome = await triageValidationFailures({
+        environment: {
+          id: "env",
+          projectId: "project",
+          environmentType,
+          worktreePath: "/workspace-fixture",
+          containerId: "owned-container",
+        } as never,
+        runner: async () => BASE,
+        context: {
+          appRoot: "/missing-app",
+          resourceRoot: "/missing-resources",
+          storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
+        } as never,
+        targetRef: "origin/main",
+        changedFiles: [],
+        commands: [
+          { command: "test", cwd: ".", status: "incomplete", stdoutPath: null, stderrPath: null },
+        ],
+      });
+      expect(outcome.triage).toEqual(triage());
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [binary, args, options] = spy.mock.calls[0]!;
+      if (environmentType === "container") {
+        expect(binary).toBe("docker");
+        expect(args!.slice(0, 6)).toEqual([
+          "exec",
+          "--workdir",
+          "/",
+          "owned-container",
+          "bash",
+          "-lc",
+        ]);
+      } else {
+        expect(args![0]).toBe("-e");
+        expect(options!.cwd).toBe("/");
+      }
+      expect(options!.timeoutMs).toBe(90000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+}

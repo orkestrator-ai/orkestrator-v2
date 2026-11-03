@@ -1149,7 +1149,7 @@ export async function generateReviewPackage(
     targetRef: baseName,
     changedFiles: changedFiles.map((file) => file.path),
     commands: hydratedValidation.flatMap((entry) =>
-      (entry.status === "failed" || entry.status === "incomplete") && entry.stdoutPath
+      entry.status === "failed" || entry.status === "incomplete"
         ? [
             {
               command: entry.command,

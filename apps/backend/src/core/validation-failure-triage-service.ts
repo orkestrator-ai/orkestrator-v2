@@ -129,7 +129,7 @@ export function applySharedBaseEvidence(
     commands: triage.commands.map((command) => ({
       ...command,
       failures: command.failures.map((failure) =>
-        failure.verdict === "unrelated" || !shared.has(validationFailureId(failure.key))
+        failure.verdict !== "undetermined" || !shared.has(validationFailureId(failure.key))
           ? failure
           : {
               ...failure,

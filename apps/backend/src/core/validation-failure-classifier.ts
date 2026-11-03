@@ -550,6 +550,15 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       result.incomplete = true;
       return result;
     }
+    // A static scan cannot prove what crosses a runtime or process boundary.
+    if (
+      /\b(?:import|require)\s*\(\s*(?![\s"'])/.test(text) ||
+      /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(|\bBun\s*\.\s*(?:spawn|spawnSync)\b|child_process/.test(
+        text,
+      )
+    ) {
+      result.incomplete = true;
+    }
     const loader = /\.[cm]?ts$/.test(relative) ? "ts" : "tsx";
     let transpiler = transpilers.get(loader);
     if (!transpiler) {
@@ -565,6 +574,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
     }
     const directory = path.join(root, path.posix.dirname(relative));
     for (const { path: specifier } of imports) {
+      if (/^(?:execa|cross-spawn|shelljs)(?:\/|$)/.test(specifier)) result.incomplete = true;
       if (/^(?:bun|node):/.test(specifier) || builtins.has(specifier)) continue;
       let resolved: string;
       try {
@@ -670,14 +680,12 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       });
     }
   }
-  const HELPER_FILE =
-    /(?:\.(?:test|spec)\.|test-support|testing|fixtures?|helpers?|setup|mocks?|support)/i;
 
   const referenceCache = new Map<string, string | null>();
   function referenceIn(file: string): string | null {
     if (referenceCache.has(file)) return referenceCache.get(file)!;
     let found: string | null = null;
-    const text = cachedRepositoryText(file);
+    const text = textCache.get(file) ?? readRepositoryText(file);
     if (text) {
       for (const [literal, token] of pathTokens) {
         if (text.includes(literal) && token.pattern.test(text)) {
@@ -692,7 +700,6 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
   function referencedChange(files: string[]): string | null {
     for (const file of files) {
       if (outOfTime()) return null;
-      if (!HELPER_FILE.test(file) && !TEST_FILE.test(file)) continue;
       const found = referenceIn(file);
       if (found) return found;
     }
@@ -802,10 +809,47 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       )
       .slice(0, 6);
     const keys = new Set<string>();
+    // Check runs and Actions jobs have distinct IDs. Resolve the job through
+    // its check_run_url instead of treating the check ID as a job ID.
+    const jobs: any[] = [];
+    if (failed.length > 0 && !outOfTime()) {
+      try {
+        const workflows = childProcess.spawnSync(
+          gh,
+          ["api", `repos/${repository}/actions/runs?head_sha=${input.mergeBase}&per_page=100`],
+          { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: 10_000 },
+        );
+        if (workflows.status !== 0) throw new Error("workflow lookup failed");
+        for (const workflow of (JSON.parse(workflows.stdout).workflow_runs ?? []).slice(0, 6)) {
+          if (outOfTime()) break;
+          if (!Number.isSafeInteger(workflow.id)) continue;
+          const listedJobs = childProcess.spawnSync(
+            gh,
+            ["api", `repos/${repository}/actions/runs/${workflow.id}/jobs?per_page=100`],
+            { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: 10_000 },
+          );
+          if (listedJobs.status !== 0) continue;
+          jobs.push(...(JSON.parse(listedJobs.stdout).jobs ?? []));
+        }
+      } catch {
+        note(`Actions jobs on ${commit} could not be resolved`);
+      }
+    }
     for (const run of failed) {
       if (outOfTime()) {
         note(`Reading CI logs for ${commit} ran out of time`);
         break;
+      }
+      const job = jobs.find(
+        (job) =>
+          Number.isSafeInteger(job.id) &&
+          job.check_run_url === `https://api.github.com/repos/${repository}/check-runs/${run.id}`,
+      );
+      if (!job) {
+        note(
+          `The Actions job for CI check ${run.name ?? run.id} on ${commit} could not be resolved`,
+        );
+        continue;
       }
       // Logs can be large; the failing tests and summaries are at the end.
       // Current gh refuses output with terminal escapes unless allowed; an
@@ -816,7 +860,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
           "-c",
           '{ "$0" api --allow-escape-sequences "$1" 2>/dev/null || "$0" api "$1"; } | tail -c 16777216',
           gh,
-          `repos/${repository}/actions/jobs/${run.id}/logs`,
+          `repos/${repository}/actions/jobs/${job.id}/logs`,
         ],
         { cwd: root, encoding: "utf8", maxBuffer: 20 * 1024 * 1024, timeout: 30_000 },
       );
@@ -861,7 +905,10 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
         } else if (input.changedFilesTruncated || globalChanges.length > 0) {
           reasons.push("global-change");
           changedPath ??= globalChanges[0];
-        } else if (closure.incomplete) {
+        } else if (
+          closure.incomplete ||
+          input.changedFiles.some((file) => !CODE_FILE.test(file) && !/^docs\/.*\.md$/.test(file))
+        ) {
           reasons.push("dependency-graph-incomplete");
         } else {
           reasons.push("no-changed-dependency");
@@ -869,8 +916,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       }
     }
     let verdict: string;
-    if (reasons.includes("passed-on-retry") || reasons.includes("known-flaky"))
-      verdict = "unrelated";
+    if (reasons.includes("passed-on-retry")) verdict = "unrelated";
     else if (
       reasons.includes("test-file-changed") ||
       reasons.includes("imports-changed-file") ||

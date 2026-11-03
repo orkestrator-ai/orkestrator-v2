@@ -123,6 +123,8 @@ export interface ValidationFailureSummary {
   ids: string[];
   /** The subset of {@link ids} whose verdict was `related`. */
   relatedIds: string[];
+  /** Independently unrelated failures; excludes shared-base derived verdicts. Absent on legacy summaries. */
+  baseIds?: string[];
   related: number;
   unrelated: number;
   undetermined: number;
@@ -273,6 +275,7 @@ export function isValidationFailureSummary(value: unknown): value is ValidationF
       "mergeBase",
       "ids",
       "relatedIds",
+      "baseIds",
       "related",
       "unrelated",
       "undetermined",
@@ -282,6 +285,12 @@ export function isValidationFailureSummary(value: unknown): value is ValidationF
     isCommitOrNull(value.mergeBase) &&
     isFailureIdList(value.ids) &&
     isFailureIdList(value.relatedIds) &&
+    (value.baseIds === undefined ||
+      (isFailureIdList(value.baseIds) &&
+        value.baseIds.every(
+          (id) =>
+            (value.ids as string[]).includes(id) && !(value.relatedIds as string[]).includes(id),
+        ))) &&
     isCount(value.related) &&
     isCount(value.unrelated) &&
     isCount(value.undetermined) &&
@@ -308,6 +317,21 @@ export function summarizeValidationFailureTriage(
     mergeBase: triage.mergeBase,
     ids: ids.slice(0, MAX_VALIDATION_FAILURE_SUMMARY_IDS),
     relatedIds: relatedIds.slice(0, MAX_VALIDATION_FAILURE_SUMMARY_IDS),
+    baseIds: [
+      ...new Set(
+        failures
+          .filter(
+            (failure) =>
+              failure.verdict === "unrelated" && !failure.reasons.includes("failed-on-same-base"),
+          )
+          .map((failure) => validationFailureId(failure.key)),
+      ),
+    ]
+      .sort()
+      .filter(
+        (id) =>
+          ids.slice(0, MAX_VALIDATION_FAILURE_SUMMARY_IDS).includes(id) && !relatedIds.includes(id),
+      ),
     related: failures.filter((failure) => failure.verdict === "related").length,
     unrelated: failures.filter((failure) => failure.verdict === "unrelated").length,
     undetermined: failures.filter((failure) => failure.verdict === "undetermined").length,
@@ -322,7 +346,7 @@ export function summarizeValidationFailureTriage(
 
 /**
  * Failures another pipeline on `mergeBase` recorded without having caused
- * them: every id its summaries list that was not `related` to its own change.
+ * them independently. Legacy summaries lack provenance and supply no evidence.
  */
 export function failuresSharedOnBase(
   mergeBase: string,
@@ -331,8 +355,7 @@ export function failuresSharedOnBase(
   const shared = new Set<string>();
   for (const summary of summaries) {
     if (summary.mergeBase !== mergeBase) continue;
-    const related = new Set(summary.relatedIds);
-    for (const id of summary.ids) if (!related.has(id)) shared.add(id);
+    for (const id of summary.baseIds ?? []) shared.add(id);
   }
   return shared;
 }

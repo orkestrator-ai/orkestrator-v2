@@ -85,3 +85,21 @@ describe("validation failure triage", () => {
     });
   });
 });
+
+test("summary provenance excludes shared, uncertain, and conflicting failures", () => {
+  const source = structuredClone(triage);
+  const shared = { ...failure("shared", "unrelated"), reasons: ["failed-on-same-base" as const] };
+  source.commands[0]!.failures.push(
+    shared,
+    failure("uncertain", "undetermined"),
+    failure("adds", "unrelated"),
+  );
+  const summary = summarizeValidationFailureTriage(source);
+  expect(summary.baseIds).toEqual([validationFailureId(failure("subtracts", "unrelated").key)]);
+  expect(isValidationFailureSummary(summary)).toBe(true);
+  expect(
+    isValidationFailureSummary({ ...summary, baseIds: [validationFailureId(shared.key)] }),
+  ).toBe(true);
+  expect(isValidationFailureSummary({ ...summary, baseIds: summary.relatedIds })).toBe(false);
+  expect(isValidationFailureSummary({ ...summary, baseIds: ["f".repeat(16)] })).toBe(false);
+});

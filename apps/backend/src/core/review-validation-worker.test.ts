@@ -1893,6 +1893,51 @@ describe("repository-declared on-demand suites", () => {
     expect(await output(root, browser!)).toBe("browser");
   }, 20000);
 
+  test("failed diff lookup keeps all planned suites", async () => {
+    const { root, run: validation } = await onDemandFixture();
+    const final = await run(root, validation, "origin/nonexistent");
+    expect(final.results.map((result) => result.status)).toEqual(["passed", "passed", "passed"]);
+    expect(await output(root, final.results[0]!)).toBe("full");
+  }, 20000);
+
+  for (const succeeds of [true, false]) {
+    test(`replacement coverage and dependents preserve ${succeeds ? "success" : "failure"}`, async () => {
+      const replacement = succeeds ? "printf replacement" : "exit 1";
+      const context = await fixture([
+        command("full", "printf full"),
+        command("duplicate", replacement),
+        command("covered", "printf covered"),
+        command("after", "printf after", { dependsOn: ["covered"] }),
+        command("skipped", "printf optional"),
+        command("after-skipped", "printf unsafe", { dependsOn: ["skipped"] }),
+      ]);
+      context.git("update-ref", "refs/remotes/origin/main", "HEAD");
+      await writeFile(
+        path.join(context.root, ".orkestrator-test-scheduler.json"),
+        JSON.stringify({
+          version: 1,
+          cooperativeCommands: [],
+          commandProfiles: {
+            "printf full": { onDemand: { when: ["docker/**"], instead: replacement } },
+            [replacement]: { covers: ["printf covered"] },
+            "printf optional": { onDemand: { when: ["docker/**"] } },
+          },
+        }),
+      );
+      context.git("add", ".");
+      context.git("commit", "-m", "policy");
+      context.run.plan.headRef = context.git("rev-parse", "HEAD");
+      const final = await run(context.root, context.run, "origin/main");
+      expect(final.results.map((result) => result.status)).toEqual(
+        succeeds
+          ? ["passed", "skipped", "skipped", "passed", "skipped", "skipped"]
+          : ["failed", "incomplete", "incomplete", "skipped", "skipped", "skipped"],
+      );
+      expect(final.results[0]!.limitation).toContain("in its place");
+      expect(final.results[5]!.limitation).toBe("A prerequisite did not pass");
+    }, 20000);
+  }
+
   test("without a target ref every command runs as planned", async () => {
     const { root, run: validation } = await onDemandFixture();
     const final = await run(root, validation);

@@ -121,6 +121,8 @@ describe("containerSafeMcpServer", () => {
       "http://localhost:3000/mcp",
       "http://LOCALHOST/mcp",
       "http://api.localhost/mcp",
+      "http://localhost.:34122/mcp",
+      "https://api.localhost./mcp",
       "http://127.0.0.1:34122/mcp",
       "http://127.1/mcp",
       "http://0x7f.0.0.1/mcp",
@@ -140,6 +142,7 @@ describe("containerSafeMcpServer", () => {
 
   test("keeps remote servers on routable hosts, typed or not", () => {
     expect(safe({ type: "http", url: "https://mcp.example.com/mcp" })).toBe(true);
+    expect(safe({ type: "http", url: "https://mcp.example.com./mcp" })).toBe(true);
     expect(safe({ type: "sse", url: "http://10.0.0.5:8000/sse" })).toBe(true);
     expect(safe({ type: "ws", url: "wss://mcp.example.com/ws" })).toBe(true);
     expect(safe({ url: "https://mcp.example.com/mcp" })).toBe(true);

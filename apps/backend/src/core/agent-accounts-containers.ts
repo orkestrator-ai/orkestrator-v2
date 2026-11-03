@@ -388,11 +388,13 @@ async function refreshStagedLogin(
   const hostJson = await readLoginFile(
     active.home ? path.join(active.home, ".claude.json") : host.claudeJson,
   );
-  if (hostJson === undefined) return;
+
   // The same allowlist staging applies (security report M8). An unparseable
   // file empties the mount rather than leaving the previous account's.
   const claudeJson =
-    claudeContainerConfig(hostJson, { hostHomes: host.homes }) ?? JSON.stringify({});
+    (hostJson === undefined
+      ? undefined
+      : claudeContainerConfig(hostJson, { hostHomes: host.homes })) ?? JSON.stringify({});
   const stageDirectory = path.join(
     portableInputRevisionDirectory(dataDir, environment.id, revision),
     "files",
@@ -424,6 +426,31 @@ export async function refreshStagedAgentAccountLogins(
   try {
     const revision = await runners.label(containerId, DOCKER_LABEL_INPUTS_REVISION);
     if (!revision) return;
+    // Migrate raw pre-allowlist revisions even if provider/account checks below
+    // skip refresh. Rewrite the existing inode: Docker may already bind it.
+    const stageDirectory = path.join(
+      portableInputRevisionDirectory(context.storage.getDataDir(), environment.id, revision),
+      "files",
+      "claude.json",
+    );
+    const names = await fs.readdir(stageDirectory).catch(() => [] as string[]);
+    for (const name of names) {
+      const previous = await readLoginFile(path.join(stageDirectory, name));
+      const safe =
+        previous === undefined
+          ? undefined
+          : claudeContainerConfig(previous, {
+              hostHomes: hostStagingSources(context).homes,
+            });
+      await replaceStagedInputFile(
+        context.storage.getDataDir(),
+        environment.id,
+        revision,
+        `files/claude.json/${name}`,
+        safe ?? "{}",
+        { inPlace: true },
+      );
+    }
     const { global } = await context.storage.loadConfig();
     for (const platform of AGENT_ACCOUNT_PLATFORMS) {
       if (

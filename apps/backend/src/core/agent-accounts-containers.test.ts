@@ -487,6 +487,62 @@ describe("refreshStagedAgentAccountLogins", () => {
     ).toContain("claude-host");
   });
 
+  test.each(["missing", "symlink", "oversized", "directory"])(
+    "clears a legacy raw mount in place with a %s host source, including switch-back",
+    async (source) => {
+      const revision = await stage();
+      const mount = staged(revision, "files/claude.json/.claude.json");
+      const raw = JSON.stringify({
+        primaryApiKey: "SENTINEL",
+        projects: { secret: {} },
+        mcpServers: {
+          orkestrator: {
+            type: "http",
+            url: "http://localhost/mcp",
+            headers: { Authorization: "SENTINEL" },
+          },
+        },
+      });
+      await write(mount, raw);
+      const inode = (await fs.stat(mount)).ino;
+      const host = path.join(root, "host-home", ".claude.json");
+      await fs.unlink(host);
+      if (source === "symlink") {
+        await write(`${host}.target`, raw);
+        await fs.symlink(`${host}.target`, host);
+      } else if (source === "oversized") {
+        await write(host, JSON.stringify({ padding: "x".repeat(1024 * 1024) }));
+      } else if (source === "directory") {
+        await fs.mkdir(host);
+      }
+      const { runners } = fakeRunners(revision);
+      await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+      expect(await fs.readFile(mount, "utf8")).toBe("{}");
+      expect((await fs.stat(mount)).ino).toBe(inode);
+      await addAccounts({ claude: CLAUDE_ID });
+      await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+      expect(await fs.readFile(mount, "utf8")).toContain("second@example.com");
+      await addAccounts({});
+      await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+      expect(await fs.readFile(mount, "utf8")).toBe("{}");
+      expect((await fs.stat(mount)).ino).toBe(inode);
+    },
+  );
+
+  test("sanitizes legacy mounts even when provider credentials are not allowed", async () => {
+    const revision = await stage();
+    const mount = staged(revision, "files/claude.json/.claude.json");
+    await write(mount, '{"primaryApiKey":"SENTINEL","hasCompletedOnboarding":true}');
+    (context.credentialSources as Set<string>).delete("claude");
+    await refreshStagedAgentAccountLogins(
+      context,
+      environment,
+      "container-1",
+      fakeRunners(revision).runners,
+    );
+    expect(JSON.parse(await fs.readFile(mount, "utf8"))).toEqual({ hasCompletedOnboarding: true });
+  });
+
   test("a refreshed staged .claude.json carries only the container allowlist", async () => {
     const revision = await stage();
     const hostHome = path.join(root, "host-home");

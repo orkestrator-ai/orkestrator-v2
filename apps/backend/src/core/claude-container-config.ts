@@ -161,7 +161,10 @@ function remoteUrlIsSafe(value: unknown): boolean {
 
 /** `URL` has already normalised IPv4 forms (`127.1`, `0x7f.0.0.1`) and IPv6 compression. */
 function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const host = hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "");
   return (
     host === "localhost" ||
     host.endsWith(".localhost") ||

@@ -35,6 +35,8 @@ test.skipIf(!enabled)(
       "grok-config/fixture.json": '{"relayed":true}',
       "pi-config/agent/settings.json": '{"defaultProvider":"fixture"}',
       "pi-config/agent/prompts/review.md": "relayed prompt",
+      "agents-skills/fixture/SKILL.md":
+        "---\nname: fixture\ndescription: Test skill\n---\nFixture skill\n",
       "cursor-config/mcp.json": '{"mcpServers":{}}',
       "tmp/gitconfig": "[user]\n\tname = Relay Fixture\n",
       "project-env/.env": "RELAY_FIXTURE=1\n",
@@ -51,6 +53,7 @@ test.skipIf(!enabled)(
       "grok-config",
       "pi-config",
       "cursor-config",
+      "agents-skills",
       "tmp/gitconfig",
       "project-env",
       "opencode-project-json",
@@ -102,6 +105,7 @@ test.skipIf(!enabled)(
         "grok-config/fixture.json": "/home/node/.config/grok/fixture.json",
         "pi-config/agent/settings.json": "/home/node/.pi/agent/settings.json",
         "pi-config/agent/prompts/review.md": "/home/node/.pi/agent/prompts/review.md",
+        "agents-skills/fixture/SKILL.md": "/home/node/.agents/skills/fixture/SKILL.md",
         "cursor-config/mcp.json": "/home/node/.cursor/mcp.json",
         "project-env/.env": "/workspace/.env",
         "opencode-project-json": "/workspace/opencode.json",
@@ -129,6 +133,13 @@ test.skipIf(!enabled)(
       );
       expect(claudeJson.oauthAccount).toEqual({ emailAddress: "relay@fixture.invalid" });
       expect(claudeJson.relayFixture).toBeUndefined();
+      // Start the real CLI and load the imported config without a provider
+      // request. The container has no network and only fake credentials.
+      expect(await docker(["exec", "--user", "node", container, "claude", "--version"])).toContain(
+        "Claude Code",
+      );
+      await docker(["exec", "--user", "node", container, "claude", "mcp", "list"]);
+
       expect(
         JSON.parse(
           await docker([

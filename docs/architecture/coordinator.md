@@ -844,46 +844,55 @@ HEAD change, the repository-context revision increments and is supplied before
 the next turn so the agent does not assume its old analysis still describes the
 checkout.
 
-### Merging upstream commits before a message
+### Keeping the checkout on its upstream
 
-Before each message to the main coordinator, its first prompt included, the
-panel asks the backend whether to offer a merge
-(`check_coordinator_upstream_merge`, waited on for at most five seconds). The
-backend answers without fetching while the checkout cannot change, and otherwise
-runs the cooldown-bound fetch and applies the rule in
-`@orkestrator/protocol/coordinator-upstream-merge`. The panel then asks *"There
-are N upstream commits … Do you wish to merge them?"* when the checkout can merge
-them: an upstream is configured, `behind > 0`, and nothing blocks a fast-forward
-(no local commits, no uncommitted changes, no unfinished repository operation). **Enter** (the
-focused default) fast-forwards with `syncProjectGit`, then sends; a failed
-fast-forward keeps the draft and shows the error. **Escape** or **Don't merge**
-sends without merging.
+The coordinator reads the project's own checkout, so the backend keeps it on
+its upstream whenever Git can fast-forward it cleanly. Nobody is asked. The
+rule lives in `@orkestrator/protocol/coordinator-upstream-merge`
+(`decideUpstreamMergeOffer`): an upstream is configured, `behind > 0`, and
+nothing blocks a fast-forward (no local commits, no uncommitted changes, no
+unfinished repository operation). Nothing is ever merged under a running
+coordinator or project-home turn, because the backend refuses to change the
+checkout then. It happens at two moments.
 
-A decline is remembered per project against the upstream tip it was given for
-(`ProjectGitStatus.upstreamCommit`), in the backend
-(`decline_coordinator_upstream_merge`), so every client honours it. The question
-returns as soon as the tip changes, and survives a reload. It is not asked for
-side agents, for `!` commands, while any of the coordinator's conversations or
-the project home is running a turn (the backend refuses to change the checkout
-then), or when the checkout is behind but blocked; the toolbar already says why
-that checkout cannot sync. A status from a backend that predates `upstreamCommit`
-cannot match a decline, so it always asks. Against a backend without the check,
-the renderer applies the same protocol rule to its own fetch and browser copy of
-the declines; otherwise that copy is imported once (never replacing a newer
-answer) and deleted.
+**Before each message to the main coordinator**, its first prompt included,
+the panel asks the backend (`check_coordinator_upstream_merge`, waited on for
+at most five seconds). The backend answers without fetching while the
+checkout cannot change, and otherwise runs the cooldown-bound fetch and
+answers a mergeable checkout `{ offer: true, automatic: true }`. The panel
+then fast-forwards with `syncProjectGit` and sends. A fast-forward that fails
+anyway (the remote moved, the network dropped) is reported in the toolbar's
+error and the message is still sent, since there is no question left from
+which to choose to skip it. Side agents and `!` commands do not merge, and
+neither does a blocked checkout; the toolbar already says why that one cannot
+sync. Against a backend without the check, the renderer applies the same
+protocol rule to its own fetch. Any offer, including one without `automatic`
+from an older backend that would have asked, is merged.
 
-The question also offers **Always merge**: it merges now and saves a
-per-project setting in this machine's backend
-(`set_coordinator_upstream_auto_merge`, store
-`coordinator-upstream-auto-merge`). While it is on, the check answers
-`{ offer: true, automatic: true }`, past any stored decline, and the panel
-fast-forwards before the message without showing the question. Every other
-condition still applies: nothing is merged under a running turn or into a
-blocked checkout, and a failed fast-forward keeps the draft. The fast-forward
-toggle in the toolbar (`get/set_coordinator_upstream_auto_merge`) shows the
-setting and turns it off or on. Both are shown only when the backend advertises
-`coordinatorUpstreamAutoMerge`; a client that predates `automatic` shows the
-question, the safe reading.
+**When an environment's pull request merges**, the backend fetches (past the
+cooldown) and fast-forwards the project's checkout
+(`project-checkout-merge-follow.ts`, owned by the PR monitor runtime). Every
+merge path reaches it: the merge button and every other backend merge command
+(`runStoredEnvironmentMerge`, once GitHub confirms the merge), auto-merge, and
+a merge made on GitHub that the PR monitor observes
+(`resumeTerminalEffects`). Only projects with a coordinator or a project home
+are touched, since nothing else reads that checkout, and the project home's
+own PR is not followed (its checkout is the PR's branch, not the base it
+merged into). A merge observed while a turn holds the checkout is retried
+every 30 seconds for up to 30 minutes; after that the next coordinator message
+merges it instead. Merges of one project coalesce, and each PR is followed
+once per backend process. The work belongs to the backend: no client has to
+be open.
+
+Earlier releases asked *"Merge N upstream commits?"*, remembered declines
+(`decline_coordinator_upstream_merge`, store `coordinator-upstream-declines`)
+and offered an **Always merge** setting
+(`get/set_coordinator_upstream_auto_merge`, store
+`coordinator-upstream-auto-merge`). The backend still answers those commands
+for older clients, but neither a decline nor the setting changes the check,
+and `coordinatorUpstreamAutoMerge` is no longer advertised, so a client that
+knows it hides its toggle. A browser's own copy of the declines is deleted on
+the first check.
 
 A chip in the same toolbar shows **Waiting on N workers** when the selected
 conversation has open delegations. It is a projection from the snapshot, not

@@ -26,15 +26,16 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  * - `get_coordinator_pane_layout {projectId}` → the stored record, or null.
  * - `save_coordinator_pane_layout {projectId, layout, expectedRevision}` →
  *   `saved` with the record, or `conflict` with the stored one.
- * - `check_coordinator_upstream_merge {projectId}` → whether to ask "merge
- *   upstream first?" before a message to the main coordinator. Refreshes the
- *   checkout status (subject to the fetch cooldown) unless a turn is running.
+ * - `check_coordinator_upstream_merge {projectId}` → whether to fast-forward
+ *   the checkout before a message to the main coordinator. Refreshes the
+ *   checkout status (subject to the fetch cooldown) unless a turn is running,
+ *   and answers every mergeable checkout `automatic`: it is always merged.
  * - `decline_coordinator_upstream_merge {projectId, upstream, upstreamCommit,
- *   onlyIfAbsent?}` → the decline now in force.
- * - `get_coordinator_upstream_auto_merge {projectId}`,
- *   `set_coordinator_upstream_auto_merge {projectId, enabled}` → `{enabled}`:
- *   whether this machine merges the project's upstream commits before a
- *   coordinator message without asking. The check then answers `automatic`.
+ *   onlyIfAbsent?}`, `get_coordinator_upstream_auto_merge {projectId}` and
+ *   `set_coordinator_upstream_auto_merge {projectId, enabled}`: retired, kept
+ *   for clients that still ask. Neither a decline nor the setting changes the
+ *   check any more, and the capability is no longer advertised, so a client
+ *   that knows it hides its "always merge" toggle.
  * - `list_notice_dismissals`, `dismiss_notices {sessions}`,
  *   `reconcile_notice_dismissals {sessionIdentity, activeOccurrenceIds}` →
  *   the dismissal snapshot.
@@ -43,7 +44,8 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 const CAPABILITIES: ClientStateCapabilities = {
   coordinatorPaneLayouts: true,
   coordinatorUpstreamMerge: true,
-  coordinatorUpstreamAutoMerge: true,
+  // Retired: every mergeable checkout is merged, so there is no setting to show.
+  coordinatorUpstreamAutoMerge: false,
   noticeDismissals: true,
   environmentAttention: true,
 };
@@ -92,12 +94,7 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
       if (await projectGit.isCheckoutBusy(id)) {
         return { offer: false, reason: "turn-running", status: null };
       }
-      const status = await projectGit.fetch(id).catch(() => null);
-      return decideUpstreamMergeOffer(
-        status,
-        context.storage.clientState.getCoordinatorUpstreamDecline(id),
-        { autoMerge: context.storage.clientState.getCoordinatorUpstreamAutoMerge(id) },
-      );
+      return decideUpstreamMergeOffer(await projectGit.fetch(id).catch(() => null));
     },
   );
   register(

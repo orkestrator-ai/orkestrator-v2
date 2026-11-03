@@ -60,12 +60,12 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
  * - `coordinator-pane-layouts`: one row per project, the coordinator page's tab
  *   groups, saved by revision compare-and-swap; announces
  *   `coordinator-pane-layout` with the project id.
- * - `coordinator-upstream-declines`: one row per project, the upstream tip the
- *   user chose not to merge before messaging the coordinator. Read by the
- *   backend's own "ask first?" decision, so it is not announced.
- * - `coordinator-upstream-auto-merge`: one row per project that the user set to
- *   always merge upstream commits without being asked. Kept by this machine's
- *   backend only; read by the same decision, and not announced.
+ * - `coordinator-upstream-declines`: one row per project, the upstream tip an
+ *   older client's user chose not to merge before messaging the coordinator.
+ *   Retired: still written for those clients, but no decision reads it now
+ *   that every mergeable checkout is merged. Not announced.
+ * - `coordinator-upstream-auto-merge`: one row per project an older client set
+ *   to always merge upstream commits. Retired in the same way; not announced.
  * - `notice-dismissals`: one document, notices dismissed per session identity,
  *   bounded in both dimensions; announces `notice-dismissal`.
  *

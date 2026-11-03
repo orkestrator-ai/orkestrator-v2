@@ -1479,6 +1479,11 @@ async function runStoredEnvironmentMergeOnce<T>(
     // see it. A still-pending merge changed nothing yet.
     if (result.outcome !== "pending")
       context.runtime.diffStats.invalidateRemoteFreshness(environment);
+    // The base branch moved: bring the project's checkout (what its
+    // coordinator reads) up to date with it, whenever Git can do so cleanly.
+    if (result.outcome === "merged") {
+      context.runtime.prMonitor.followMergeIntoProjectCheckout(environment, context);
+    }
     // The callback runs before the merge guard is released. A confirmed
     // merge-and-cleanup can therefore transition directly into the deletion
     // tombstone without a user delete racing through the middle.

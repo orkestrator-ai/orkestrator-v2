@@ -1,5 +1,5 @@
 import { LOG_FORMAT_ENV, LOG_LEVEL_ENV } from "@orkestrator/protocol/node/logger-environment";
-import { redactBridgeOutput } from "./bridge-output-redaction.js";
+import { redactBridgeLogLine } from "./bridge-output-redaction.js";
 
 /**
  * Bounds for diagnostic output read from containers.
@@ -21,16 +21,14 @@ export function boundedTailCommand(file: string): string {
  * and says so when anything was dropped.
  *
  * Every container log tail the backend returns or puts in an error passes
- * through here, so this is also where it is scrubbed with `redactBridgeOutput`,
- * the same pass a local bridge's stdio gets. The text is cut to the byte cap
- * before redaction, because the redaction rules are not linear on one long
- * run of URL-scheme characters, and again after it, because a replacement can
- * be longer than what it replaced. A token a cut has split has lost its
- * prefix and is not caught.
+ * through here. Recognized JSON log records are decoded and their strings
+ * scrubbed, as in the local relay; other lines get raw-text redaction.
+ * Byte cuts before and after redaction bound input and replacement growth.
+ * A token a cut has split has lost its prefix and is not caught.
  */
 export function boundDiagnosticTail(text: string): string {
   const source = keepLastBytes(text);
-  const redacted = keepLastBytes(redactBridgeOutput(source.text));
+  const redacted = keepLastBytes(source.text.split("\n").map(redactBridgeLogLine).join("\n"));
   let bounded = redacted.text;
   let truncated = source.cut || redacted.cut;
   const lines = bounded.split("\n");

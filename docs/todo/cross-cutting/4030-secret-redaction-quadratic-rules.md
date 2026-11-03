@@ -6,9 +6,9 @@ Analysed 2026-11-03 against `main` at `b88623136`.
 
 ### Tasks
 
-1. **Make the URL-userinfo rule linear**: stop the scheme rule in `redactSecrets` retrying from every character of a long run. Status: open.
-2. **Make the `key=value` rule linear**: stop the credential-assignment rule backtracking over long `word-word-word` runs. Status: open.
-3. **Pin the cost with a test**: a 64 KiB pathological line redacts in bounded time. Status: open (depends on 1 and 2).
+1. **Make the URL-userinfo rule linear**: stop the scheme rule in `redactSecrets` retrying from every character of a long run. Status: done.
+2. **Make the `key=value` rule linear**: stop the credential-assignment rule backtracking over long `word-word-word` runs. Status: done.
+3. **Pin the cost with a test**: a 64 KiB pathological line redacts in bounded time. Status: done.
 
 ### 1. Make the URL-userinfo rule linear
 
@@ -98,6 +98,27 @@ rule, fixed on its own, took 1.3 ms or less on them; the whole
   - **No test; review only.**
     - Pros: no flake risk.
     - Cons: the regression is invisible until a bridge stalls the backend.
+
+## Current state
+
+Resolved in the I7 review fixes on 2026-11-03. Both rules now start only at
+the beginning of their character runs. Protocol and container-tail tests cover
+64 KiB runs of scheme characters and hyphen-separated identifiers with a
+250 ms ceiling; credential and replacement-growth assertions remain covered.
+
+## Assumptions and decisions
+
+### Tasks 1 and 2: anchor the existing rules
+
+Chose the lookbehind options recommended above. They prevent repeated scans of
+the same run while retaining provider-prefixed assignments and custom URL
+schemes. Fixing the shared rules also protects local bridge diagnostics.
+
+### Task 3: exercise both the shared redactor and container entry point
+
+Chose a generous timing ceiling over a worker migration, which would require
+changing synchronous callers. Tests cover unchanged output as well as elapsed
+time, alongside existing credential fixtures.
 
 ## Related
 

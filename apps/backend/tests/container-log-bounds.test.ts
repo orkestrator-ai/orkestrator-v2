@@ -85,6 +85,41 @@ describe("diagnostic tail bounds", () => {
     expect(boundDiagnosticTail(`${plain.join("\n")}\n`)).toBe(`${plain.join("\n")}\n`);
   });
 
+  test.each(["x".repeat(64 * 1024), "a-".repeat(32 * 1024)])(
+    "redacts a maximum-size identifier run without an event-loop stall %#",
+    (text) => {
+      const start = performance.now();
+      const result = boundDiagnosticTail(text);
+      const elapsed = performance.now() - start;
+      expect(result).toBe(text);
+      // Previously 1–2 seconds; generous headroom over the linear pass.
+      expect(elapsed).toBeLessThan(250);
+    },
+  );
+
+  test("redacts decoded credentials in JSON records mixed with raw and malformed lines", () => {
+    const record = JSON.stringify({
+      orklog: 1,
+      ts: "2026-11-03T10:00:00Z",
+      level: "warn",
+      area: "updater",
+      event: "check.failed",
+      fields: {
+        message: 'password: "hunter2abc"',
+        detail: '{"client_secret": "nestedCanary123"}',
+        error: { name: "Error", message: 'client_secret: "errorCanary123"' },
+      },
+    });
+    const malformed = "not JSON password=rawCanary123";
+    const result = boundDiagnosticTail([record, malformed, "plain line", ""].join("\n"));
+    for (const secret of ["hunter2abc", "nestedCanary123", "errorCanary123", "rawCanary123"]) {
+      expect(result).not.toContain(secret);
+    }
+    const lines = result.split("\n");
+    expect(JSON.parse(lines[0]!).fields.message).toBe("password: [redacted]");
+    expect(lines.slice(1)).toEqual(["not JSON password=[redacted]", "plain line", ""]);
+  });
+
   test("a redacted tail keeps the byte and line caps", () => {
     const line = `token rotated ${classicPat} ok`;
     const text = Array.from({ length: 5_000 }, () => line).join("\n");

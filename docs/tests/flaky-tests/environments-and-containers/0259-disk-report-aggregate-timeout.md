@@ -481,3 +481,14 @@ This confirms another isolated pass but does not reproduce the timeout on the
 target branch or establish an environmental cause. The recorded aggregate
 failure remains unresolved; it is not excused as environmental. No unrelated
 implementation, timeout, assertion or skip changed.
+
+## CLI descriptor review — 2026-11-03
+
+- **Test:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
+- **Original command:** `mise run test` at `2e81b373d006fa917fec5ed04a254e10c76a6703`.
+- **Worker configuration:** workspace reserved six slots, root one, bridges two; backend used four workers.
+- **Failure:** The report status was null instead of 0 at line 131; timeout at 5112.60 ms, with an error between tests.
+- **Suite counts:** backend 13,567 pass, 100 skip, four fail across 916 files; root 3,480 pass, two fail, one error across 173 files.
+- **Original evidence:** `.orkestrator/review-artifacts/review-validation-bca4dff9-573c-45e5-bc25-4af3941061cd/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name descriptor-triage-disk -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` → failed, exit 1, 6.6 s; 18 pass, one fail, one error; timeout at 5092.70 ms.
+- **Disposition:** The unchanged owner also failed alone. This occurrence is unresolved and is not newly classified as flaky or environmental. Failure evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.hz0Qdn/descriptor-triage-disk.log.gz`. No assertion, timeout, skip or implementation in this area was changed.

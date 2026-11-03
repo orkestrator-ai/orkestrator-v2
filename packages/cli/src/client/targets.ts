@@ -173,9 +173,13 @@ export async function readDescriptor(
     if (code === "ELOOP" || code === "EMLINK") {
       throw refuseDescriptor(file, "it is a symbolic link, not a regular file");
     }
+    if (code !== "ENOENT") {
+      throw refuseDescriptor(file, `it could not be opened (${code ?? "unknown error"})`);
+    }
     throw new CliError(
       "connection-failed",
       `No running backend published ${path.basename(file)} at the selected location`,
+      { details: { descriptor: "missing" } },
     );
   }
   let text: string;
@@ -192,20 +196,14 @@ export async function readDescriptor(
     text = await handle.readFile("utf8");
   } catch (error) {
     if (error instanceof CliError) throw error;
-    throw new CliError(
-      "connection-failed",
-      `No running backend published ${path.basename(file)} at the selected location`,
-    );
+    throw refuseDescriptor(file, "its metadata or contents could not be read");
   } finally {
     await handle.close();
   }
   try {
     return parseBackendInstanceDescriptor(JSON.parse(text));
-  } catch (error) {
-    throw new CliError(
-      "connection-failed",
-      `The backend instance descriptor is invalid: ${error instanceof Error ? error.message : "parse failed"}`,
-    );
+  } catch {
+    throw refuseDescriptor(file, "its contents are invalid");
   }
 }
 
@@ -359,8 +357,8 @@ export async function resolveProfile(
     // A missing descriptor means a backend that predates it; a refused one
     // must stop here rather than fall back to the manifest's endpoint.
     const descriptor = await readDescriptor(descriptorFile).catch((error: unknown) => {
-      if (isDescriptorRefusal(error)) throw error;
-      return null;
+      if (error instanceof CliError && error.details?.descriptor === "missing") return null;
+      throw error;
     });
     if (descriptor) {
       if (descriptor.pid !== backendPid) {

@@ -388,3 +388,14 @@ mise run test:logged -- --name browser-profiles-rerun -- bun test --cwd apps/bac
 
 This establishes intermittent behavior, not a root-cause fix. No assertion,
 timeout, skip, or unrelated implementation changed.
+
+## CLI descriptor review — 2026-11-03
+
+- **Test:** `design service startup > removes the recorded profile of a backend that was killed`
+- **Original command:** `mise run test` at `2e81b373d006fa917fec5ed04a254e10c76a6703`.
+- **Worker configuration:** workspace reserved six slots, root one, bridges two; backend used four workers.
+- **Failure:** A JSON ledger entry remained at line 505 after profile removal (341.52 ms).
+- **Suite counts:** backend 13,567 pass, 100 skip, four fail across 916 files; root 3,480 pass, two fail, one error across 173 files.
+- **Original evidence:** `.orkestrator/review-artifacts/review-validation-bca4dff9-573c-45e5-bc25-4af3941061cd/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name descriptor-triage-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` → passed, exit 0, 1.7 s.
+- **Disposition:** The unchanged complete owner passed alone. This confirms intermittent behavior, not a root-cause fix. No assertion, timeout, skip or implementation in this area was changed.

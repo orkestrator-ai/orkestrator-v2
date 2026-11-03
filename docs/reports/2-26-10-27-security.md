@@ -93,18 +93,18 @@ The material risks are concentrated in four themes:
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
-| M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
+| M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Fixed (see §4) |
 | M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Fixed (see §4) |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
 | M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Fixed (see §4) |
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
 | M7 | Medium | Electron | OS sandbox disabled for every window that loads the preload | Reported |
-| M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Reported |
+| M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Fixed; running containers require stop/start (see §4) |
 | M9 | Medium | Container | Legacy images still mount whole host agent homes | Reported |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
 | M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Reported |
-| M13 | Medium | Bridges | Codex worker shells inherit `*_TOKEN` env; ACP advertises write/terminal to read-only sessions | Potential |
+| M13 | Medium | Bridges | Codex worker shells inherit `*_TOKEN` env; ACP advertises write/terminal to read-only sessions | Fixed |
 | L1–L18 | Low | Various | See §5 | Mixed |
 | I1–I7 | Info | Various | See §6 | — |
 
@@ -320,8 +320,46 @@ isolated preview transport by default and retire the legacy route.
 
 ### M2. The legacy loopback route reaches any host loopback port, with credentialed CORS for `Origin: null`
 
-**Status:** Verified code / Potential (depends on whether browsers send the
-`Strict` cookie from opaque-origin frames)
+**Status:** Fixed (2026-11-03). All three parts of the fix below are in:
+
+- The gateway proxies `browser/loopback/<port>/` only to a port that is the
+  verified binding of an enabled preview service of the requesting
+  environment: a loopback publication of that environment's own container, or
+  a backend-host or worktree listener the resolver accepted for it
+  (`PreviewRuntime.legacyLoopbackPortAccess`,
+  `PreviewServiceRegistry.isHostLoopbackTargetOf`). The requesting environment
+  is the `x-orkestrator-preview-environment` header, which Electron main sets
+  on the preview requests it authenticates, from the environment the renderer
+  attached the view for; it drops any copy a page sent, and the gateway strips
+  it before proxying. Docker's daemon ports and the reserved set (gateway,
+  control MCP, agent tools, local bridge ports) are refused first, even when a
+  service is bound there. Another environment's service, an unregistered port
+  and a request naming no environment all answer 403 before a connection is
+  made. A gateway without a preview registry refuses every port.
+- `Origin: null` gets `access-control-allow-origin: *` and never
+  `access-control-allow-credentials`, on preflights, proxied responses and the
+  Referer redirect.
+- In Electron's dedicated preview session a request is authorized only inside
+  the gateway namespace of the URL the app last asked that view to load
+  (`previewViewUrl` in `remote-gateway-request-auth.ts`), main-frame
+  navigations included. A view without a known URL authorizes nothing. A view
+  attached for another environment is a fresh view.
+
+Covered by `apps/backend/tests/gateway-preview.test.ts` (own, other-environment,
+unscoped, unknown, disabled and reserved ports through a real gateway and
+registry), `apps/backend/src/core/preview-legacy-loopback-access.test.ts`
+(container publications per environment), `apps/backend/tests/gateway-proxy.test.ts`
+(no credentialed CORS), `apps/desktop/tests/remote-gateway-request-auth.test.ts`
+(view port scope, environment header), `browser-preview-manager.test.ts`,
+`browser-preview-startup.test.ts` and `main-ipc.test.ts`.
+
+What remains: a desktop app older than this fix names no environment, so its
+legacy previews are refused with a message asking for an update. A user who
+previewed an arbitrary backend-host port through a legacy URL tab must now
+register it as a service of that environment. The authenticated `proxy/loopback/<port>/` route used by the main
+renderer (ACP bridges, the local entry port) still reaches any port; it is not
+reachable with credentials from a preview. Dynamic browser testing remains as
+listed in §8. The original finding follows.
 
 **Where**
 - `apps/backend/src/gateway-handlers.ts:395-419`: only checks the port is between 1 and 65535.
@@ -473,7 +511,39 @@ bootstrap windows only use `ipcRenderer.on`/`send` and can switch now.
 
 ### M8. Host `~/.claude.json` is staged unfiltered and stays readable in the container
 
-**Status:** Reported
+**Status:** Fixed (2026-11-03). Staging passes the file through an allowlist
+(`apps/backend/src/core/claude-container-config.ts`, `claudeContainerConfig`):
+only `oauthAccount`, the onboarding flags and container-safe user
+`mcpServers` are written to the staged copy, so the read-only
+`/claude-config.json` (and its relay copy) holds nothing else. A server is
+dropped when it is named `orkestrator` (the Control MCP setup's name), its URL
+is loopback, or any string in it names a path in the host home. The
+active-account refresh before every start rewrites the staged file through the
+same filter, the entrypoint keeps only the same top-level keys when it writes
+`~/.claude.json`, and MCP management's defaults preview, refresh and reset
+inherit only the same servers. Legacy images that bind the raw host file
+directly (`commands-containers.ts`, no staged inputs) are not covered; they
+belong to M9. Servers kept on purpose still carry the keys the user put in
+their headers or environment, because delivering them is the point.
+
+**Upgrade requirement:** Stop and start containers that were already running
+when this fix was installed, using Orkestrator's environment controls. Merely
+upgrading or restarting the backend, or opening an already-running container,
+does not sanitize it. The stopped-container start path filters the staged file
+in place and the entrypoint rebuilds the relay and imported copies. Until that
+stop/start, those running containers can still expose the old raw content.
+This does not revoke any secrets previously read; rotate exposed API keys or
+Control MCP tokens as needed. Legacy direct mounts still require the M9 fix.
+
+Live qualification (`apps/backend/tests/claude-config-filter-docker.test.ts`,
+run by `mise run test:agent:docker:isolated` against the image it builds, so
+review of any image change runs it, and in the container live qualification
+workflow) stages a fake host file
+from a throwaway HOME, boots the image with no network and fake credentials,
+and checks that no `node`-readable copy holds anything outside the allowlist
+and that interactive Claude starts in `/workspace` with no first-run, trust or
+auto-mode prompt. It passed on 2026-11-03 against an image built from this
+change.
 
 **Where:** `apps/backend/src/core/portable-inputs.ts:259-268` (no filter for the
 `claude.json` stage). `docker/entrypoint.sh:904-909` strips `projects` only from
@@ -548,7 +618,23 @@ exfiltration risk prominently.
 
 ### M13. Bridge policy gaps for non-coordinator sessions
 
-**Status:** Potential
+**Status:** Fixed (2026-11-03). Every Codex session's commands now exclude the
+bridge-control credentials (`CODEX_SESSION_SHELL_EXCLUDE` in `codex-config.ts`:
+`CODEX_BRIDGE_TOKEN`, `*_BRIDGE_TOKEN`, `ORKESTRATOR_AGENT_MCP_TOKEN`/`_URL`,
+`CODEX_API_KEY`); a thread that withholds GitHub repeats the list, and a
+coordinator keeps its wider `core` list. Ordinary sessions do not exclude the
+whole `*_TOKEN`/`*_KEY`/`*_SECRET` families, because their commands use the
+managed `GH_TOKEN` and the project's own variables. Proven against the pinned
+app-server without credits (`live-github-credential.test.ts`). The ACP bridge
+advertises `fs.writeTextFile` and `terminal` only when the child's policy
+permits them, and refuses `fs/write_text_file` and `terminal/*` with `-32601`
+otherwise (`acpClientMethodGrant` in `acp-policy.ts`): file denials withhold
+writes, `shell`/`shell.mutate` denials withhold terminals, `approvals: "deny"`
+(every read-only turn and coordinator) withholds both. The Grok child and its
+terminals are also spawned without the bridge token and agent MCP credential.
+The Codex app-server process itself still holds them, so a command that reads
+its parent's `/proc/<pid>/environ` finds them; moving them out of the agent's
+uid is H4.
 
 - **Codex.** The `shell_environment_policy` exclusions (including `*_TOKEN`) are only applied for coordinators (`bridges/codex-bridge/src/codex-config.ts:447, 570-582`). Worker shells may inherit secrets from the bridge environment, including the bridge token (H4).
 - **ACP (Grok).** Always advertises `writeTextFile` and `terminal` (`bridges/acp-bridge/src/acp-context.ts:1141`) and serves them without a policy check (`:1366`). Read-only depends on the provider's own tool profile.
@@ -562,18 +648,18 @@ write and terminal calls when the policy denies them.
 | --- | --- | --- | --- | --- |
 | L1 | `.env` seeding and `filesToCopy` write through symlinks in a fresh local worktree | `commands-environment.ts:2214-2221`, `commands-project-files.ts:80-82` | A branch-committed `.env` symlink to a non-existent path makes the backend copy the user's real `.env` there. `filesToCopy` can overwrite existing host files. Use `writeConfinedFile(..., {exclusive:true})` or `O_NOFOLLOW\|O_EXCL`. | Fixed: seeding checks with `lstat`, and `filesToCopy` refuses a destination with a link at or above it (`unlinkedDestination`) |
 | L2 | Bridge and agent-MCP tokens passed in `docker exec` argv | `commands-containers.ts:921-947`, `commands-registry-servers.ts:407-699` | Visible to local users via `ps`/`/proc` while the CLI runs. Use stdin, as `syncContainerCursorApiKey` already does. | Reported |
-| L3 | Only the `runAsNode` Electron fuse is set | `package.json:52-54` | `--inspect` works in packaged builds, which lets a local process inherit the app's macOS TCC grants. Disable `enableNodeCliInspectArguments` and `enableNodeOptionsEnvironmentVariable`, and enable asar integrity and `onlyLoadAppFromAsar`. | Verified |
-| L4 | `ELECTRON_DEV=1` is honoured in packaged builds | `apps/desktop/electron/main.ts:177` | With `VITE_DEV_SERVER_URL`, a packaged app can load a remote page as the trusted renderer. Gate on `!app.isPackaged`. | Verified |
+| L3 | Only the `runAsNode` Electron fuse is set | `package.json:52-54` | `--inspect` works in packaged builds, which lets a local process inherit the app's macOS TCC grants. Disable `enableNodeCliInspectArguments` and `enableNodeOptionsEnvironmentVariable`, and enable asar integrity and `onlyLoadAppFromAsar`. | Fixed (2026-11-03): `build.electronFuses` turns off `runAsNode`, `enableNodeOptionsEnvironmentVariable` and `enableNodeCliInspectArguments`, and turns on `enableEmbeddedAsarIntegrityValidation` and `onlyLoadAppFromAsar`; the release configs inherit them. Checked on a local ad-hoc `--mac --dir` build: `@electron/fuses read` shows those values, Info.plist carries `ElectronAsarIntegrity`, `--inspect=0` opens no inspector (stock Electron does), a tampered `app.asar` header aborts with "Integrity check failed", and an `app/` folder in place of `app.asar` is not loaded. Asar integrity has no effect on Linux (Electron supports it on macOS and Windows). Only `package:linux:unpacked:test`, the Playwright packaged spec's own uninstalled build, turns the inspect fuse back on. Repeatable check: `mise run test:package:security` builds the unsigned shipping `--dir` package, reads its fuse wire (`scripts/verify-packaged-security.ts`, report in `output/package-security/`) and runs `packaged-security-electron.spec.ts`. |
+| L4 | `ELECTRON_DEV=1` is honoured in packaged builds | `apps/desktop/electron/main.ts:177` | With `VITE_DEV_SERVER_URL`, a packaged app can load a remote page as the trusted renderer. Gate on `!app.isPackaged`. | Fixed (2026-11-03): `desktopDevMode` (`apps/desktop/electron/dev-mode.ts`) enables development mode, and returns the dev-server URL, only when `!app.isPackaged`; a packaged app logs `desktop dev-mode.ignored-packaged`. Checked on a local ad-hoc build: with `ELECTRON_DEV=1` and `VITE_DEV_SERVER_URL` pointed at a recording server, the packaged app loaded `Resources/web/index.html` and made no request to it, while the unpacked dev bundle still loaded the dev server. `mise run test:package:security` repeats the packaged half (`packaged-security-electron.spec.ts`). |
 | L5 | Renderer and realm sessions keep Electron's default permission handler, which grants every request | `browser-preview-startup.ts`, `artifact-host-session.ts` only | Default-deny on renderer partitions. | Reported |
 | L6 | Unsigned release and update paths | `electron-builder.release.linux.config.ts`, `auto-update.ts:147-148`, `apps/web-public/public/install.sh`, `scripts/publish-cli.ts`, `host-standalone-updater.ts` | Linux AppImage auto-updates trust only the release's sha512. `install.sh` runs `bunx orkestrator` with no version pin. npm publishes from a workstation without provenance. The standalone updater runs `bun install` with no lockfile. Add detached signatures, pin versions, publish from CI with provenance. | Reported |
-| L7 | Project `gitUrl` reaches `git ls-remote`/`fetch` without `--`; `add_project` skips URL validation | `commands-environment-fork.ts:127, 141`, `commands-agent-support.ts:275`, `commands-registry-projects.ts:421` | Argument injection if a stored URL starts with `-`. Clone already uses `--`. | Reported |
+| L7 | Project `gitUrl` reaches `git ls-remote`/`fetch` without `--`; `add_project` skips URL validation | `commands-environment-fork.ts:127, 141`, `commands-agent-support.ts:275`, `commands-registry-projects.ts:421` | Argument injection if a stored URL starts with `-`. Clone already uses `--`. | Fixed: the fork publish check (`ls-remote`, `fetch`) and the remote branch lookup pass the URL after `--`, and `addExistingProject` (behind `add_project`, `start_project_clone` and the public `project.add`) refuses a URL starting with `-` (`git-url-option-injection.test.ts`) |
 | L8 | `read_local_file`/`write_local_file` accept any client-supplied root | `commands-registry-terminal.ts:896, 938-960` | Relative paths are confined, but the root is not tied to a registered environment. Resolve the root as `read_file_base64` does. | Fixed (2026-11-03): both commands accept only the worktree of a registered local environment (`requireRegisteredLocalRoot`) and do their I/O under that environment's stored root; any other directory is refused before reading or writing |
-| L9 | Host-side git scans of local worktrees inherit worktree config | `commands-files.ts:977`, `1268-1295` | Use the hardened `-c` set from `change-tracking/capture.ts`. | Potential |
+| L9 | Host-side git scans of local worktrees inherit worktree config | `commands-files.ts:977`, `1268-1295` | Use the hardened `-c` set from `change-tracking/capture.ts`. | Fixed: diff-stats scans (`getLocalGitStatusDetailed`) pass `HARDENED_GIT_CONFIG` (`core.fsmonitor=false`, `core.hooksPath=/dev/null`, in `git-fsmonitor.ts`), which capture's `SAFE_GIT_CONFIG` now extends; the `core.fsmonitor=true` write at `1268-1295` was already removed (`commands-files-local-scan.test.ts`) |
 | L10 | No Host-header allowlist (DNS rebinding) and no login throttling | `gateway-auth.ts:263, 737-776` | Brute force is infeasible against the default 256-bit token, but a weak user-chosen token (min 16 chars) is at risk. | Reported |
-| L11 | `--tailscale-serve` / `--desktop-web-client` disable the Tailscale-only bind guard | `apps/backend/src/main.ts:127-128` | `--tailscale-serve --host 0.0.0.0` serves plain HTTP on the LAN. Relax the guard only for loopback binds. | Reported |
+| L11 | `--tailscale-serve` / `--desktop-web-client` disable the Tailscale-only bind guard | `apps/backend/src/main.ts:127-128` | `--tailscale-serve --host 0.0.0.0` serves plain HTTP on the LAN. Relax the guard only for loopback binds. | Fixed (2026-11-03): the two mode flags no longer turn the bind guard off. Without `--allow-non-tailscale-bind` they relax it for a loopback bind only (`gateway-bind-policy.ts`), so `--host 127.0.0.1` or `--host ::1` starts and `0.0.0.0` or a LAN address is refused at startup with `Refusing to bind gateway to non-Tailscale address`. Tailscale Serve now proxies to whichever loopback address the listener bound (`http://[::1]:<port>` for `::1`). A Tailscale or allowed LAN host is still refused, because Serve can only front loopback. `--allow-non-tailscale-bind` is unchanged, and the desktop, which passes it, is unaffected. |
 | L12 | CLI trusts the instance descriptor (owner/mode unchecked; `EPERM` counted as alive) | `packages/cli/src/client/targets.ts:120-184` | A local co-tenant on a stale port could receive the bearer token. | Partially fixed (2026-11-03): `readDescriptor` checks the opened file (`O_NOFOLLOW`) and refuses one owned by another user or with any group/other permission bits, naming the file and the reason; a refused profile descriptor no longer falls back to the manifest endpoint. `processIsAlive` no longer counts `EPERM` as alive. This closes the cross-user PID case; reuse by another process of the same user remains undetected because the descriptor is not bound to the original process start time or port listener. Tests: `packages/cli/tests/client-descriptor-trust.test.ts` |
 | L13 | A `javascript:` href hidden by a tab or control character passes the markdown URL transform | `apps/web/.../markdown-plugins.ts:112-117`, `file-url.ts:74, 83` | Not exploitable today, because `MarkdownLink` calls `preventDefault()`. Strip control characters, or check `new URL().protocol`. | Reported |
-| L14 | Malformed relay credit frame can crash the backend | `preview-relay-supervisor.ts:389` | Relay is off by default. Validate frame lengths and catch errors in `onData`. | Reported |
+| L14 | Malformed relay credit frame can crash the backend | `preview-relay-supervisor.ts:389` | Relay is off by default. Validate frame lengths and catch errors in `onData`. | Fixed (2026-11-03): every fixed-size inbound frame must have its exact payload length (credit 4 bytes; opened, eof and close 0), and the `onData` frame loop is wrapped in try/catch; both paths shut the relay down with category `internal` instead of throwing out of the stdout listener. Tests: "a 0-byte / 2-byte / 5-byte credit frame shuts the relay down instead of throwing", "a 4-byte credit frame grants credit to its channel" and "an exception while handling a frame shuts the relay down, not the backend" in `apps/backend/src/preview-relay-supervisor.test.ts` |
 | L15 | Agent-tools MCP server binds `0.0.0.0` on the host | `apps/backend/src/core/agent-tools.ts:642` | Token-protected, but reachable from the LAN or tailnet. Bind to the Docker bridge or loopback addresses. | Verified |
 | L16 | Control MCP and scheduling soft spots | `control-mcp-confirm.ts`, `control-mcp-credentials.ts:330-345`, `scheduled-jobs/executor.ts:681-689`, `read-only-policy.ts:537` | **Confirmation:** the agent can complete it itself (HMAC-bound, but a speed bump, not human approval). **Operator token:** readable by the coordinator; add `denyRead` for the data directory. **Self-reminders:** presented as authenticated `system` notices. **Cursor/Pi:** accept some policy fields from the request body. | Reported |
 | L17 | Provider secrets stored in plaintext in SQLite (0600) | `storage-config.ts:786-824` | Consider `safeStorage`/libsecret. Remote-connection tokens already use `safeStorage`. | Reported |
@@ -606,6 +692,14 @@ write and terminal calls when the policy denies them.
   (`get_claude_server_log`, `commands-registry-servers.ts:296-300`) are
   returned without `redactBridgeOutput`. Give internal tokens a prefix
   (e.g. `okb_`) and redact those tails.
+  **Status:** Fixed in part (2026-11-03). Tail redaction is done:
+  `boundDiagnosticTail` (`apps/backend/src/core/container-log-bounds.ts`)
+  now runs `redactBridgeOutput`, so every container log tail is scrubbed. That
+  covers the five `get_*_server_log` commands and the bridge startup-failure
+  error in `commands-containers.ts`. The byte and line caps are unchanged. A
+  token that the source's `tail -c` cut through has lost its prefix and is not
+  caught. Still open: the `okb_` prefix for internal tokens. Without it,
+  redaction cannot recognise a bridge, gateway or MCP token by its shape.
 
 ## 7. Controls reviewed that look correct
 
@@ -689,6 +783,6 @@ write and terminal calls when the policy denies them.
 4. **M3.** Redact the `update_agent_messaging_settings` response and add the all-commands canary test.
 5. **H4 + M13.** Move bridge-control credentials out of the agent's uid, and make policy changes narrow-only.
 6. **M4, M5, L1.** Harden the coordinator git allowlist, gate `setupLocal` on approval, and use confined writers for seeding.
-7. **M6, M7, L3, L4.** CSP on the renderer and gateway HTML, CommonJS preloads with `sandbox: true`, Electron fuses, and the packaged-build dev flag.
+7. **M6, M7, L3, L4.** CSP on the renderer and gateway HTML, CommonJS preloads with `sandbox: true`, Electron fuses, and the packaged-build dev flag. L3 and L4 are fixed (see §5).
 8. **H5, M8, M9.** Narrow the credentials handed to containers.
 9. Dependency updates (L18) and the remaining Low and Info items.

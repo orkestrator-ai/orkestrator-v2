@@ -52,6 +52,12 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   // The outbox belongs to the command node it is for; decisions to the user.
   "collect_node_outbox",
   "ack_node_outbox",
+  // Kanban sync runs over the link between a command node and its leaf only.
+  "apply_ticket_sync",
+  "get_ticket_sync_cursor",
+  "collect_ticket_sync_outbox",
+  "ack_ticket_sync_outbox",
+  "sync_node_tickets",
   "create_node_action_request",
   "list_node_action_requests",
   "resolve_node_action_request",
@@ -71,6 +77,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   // A leaf coordinator's mail to its command node's coordinator is its own.
   "send_coordinator_command_node_mail",
   "start_coordinator_node_build_pipeline",
+  "coordinator_node_ticket",
   "launch_coordinator_node_multi_review",
   "coordinator_node_multi_review_surface",
   "start_coordinator_node_multi_review",

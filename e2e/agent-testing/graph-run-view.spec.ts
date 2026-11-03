@@ -1,4 +1,5 @@
-import { ensureProjectExpanded } from "./sidebar-project";
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
+import { ensureProjectExpanded, sidebarEnvironmentRow } from "./sidebar-project";
 import { expect, test, type Page } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
@@ -30,6 +31,7 @@ import { outlivingProcessEnv } from "../../tests/private-tmpdir";
  */
 
 test.use({ actionTimeout: 15_000 });
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 function devJson(command: string, profile: string) {
   return JSON.parse(
@@ -414,14 +416,9 @@ async function pendingWaits(invoke: Invoke, environmentId: string): Promise<Pend
   return invoke<PendingWait[]>("graph_run_pending", { environmentId });
 }
 
-/** An environment's sidebar row (the row's button is named after the environment). */
-function sidebarRow(page: Page, environmentName: string) {
-  return page.getByRole("button", { name: new RegExp(`^${environmentName}(\\s|$)`) }).first();
-}
-
 /** The row's leading marker: `data-state` is `waiting`, `working`, `idle` or `inactive`. */
 function sidebarMarker(page: Page, environmentName: string) {
-  return sidebarRow(page, environmentName).getByTestId("environment-status-marker");
+  return sidebarEnvironmentRow(page, environmentName).getByTestId("environment-status-marker");
 }
 
 /** Answers the run view's waiting human node with Approve and a note. */
@@ -486,13 +483,13 @@ test("a human approval waits while its environment is away and is answered later
     expect(pending.map((wait) => [wait.kind, wait.nodeId, wait.form, wait.title])).toEqual([
       ["human", "first-check", "approve", "First check"],
     ]);
-    // The sidebar shows the away environment waiting for a person, with the
-    // unread attention the wait recorded.
+    // The sidebar shows the away environment waiting for a person. The first
+    // wait usually opens before the switch lands, while the environment is
+    // still on screen, so its unread badge is cleared as seen; the second
+    // wait below opens while it is away and is the one that lights the bell.
     await expect(sidebarMarker(page, env.name)).toHaveAttribute("data-state", "waiting", {
       timeout: 30_000,
     });
-    await expect(sidebarRow(page, env.name).getByLabel("New completed activity")).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath("04-human-waiting-away.png") });
 
     // Answer the first wait through the command path while still away.
     const first = pending[0]!;
@@ -516,6 +513,15 @@ test("a human approval waits while its environment is away and is answered later
         timeout: 60_000,
       })
       .toEqual(["second-check"]);
+    // The second wait opened while away: the sidebar shows it waiting, with
+    // the unread attention it recorded.
+    await expect(sidebarMarker(page, env.name)).toHaveAttribute("data-state", "waiting", {
+      timeout: 30_000,
+    });
+    await expect(
+      sidebarEnvironmentRow(page, env.name).getByLabel("New completed activity"),
+    ).toBeVisible({ timeout: 30_000 });
+    await page.screenshot({ path: testInfo.outputPath("04-human-waiting-away.png") });
     const afterFirst = await readRun();
     expect(afterFirst.status).toBe("waiting");
     const firstActivation = afterFirst.activations.find((entry) => entry.nodeId === "first-check")!;

@@ -5,8 +5,18 @@ import {
   type ReviewValidationResult,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
+import { RuntimeClockContext, useRuntimeClockNow } from "@/lib/review/runtime-clock";
 import { knownValidationOutput, mergeValidationOutput } from "./validation-output-merge";
 import { Copy, Loader2, RefreshCw, Square, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
@@ -325,7 +335,11 @@ export function ReviewValidationStatus({
 }: {
   environmentId: string;
   run: ReviewValidationRun;
-  /** Parent-owned live clock, so every running row advances on the same tick. */
+  /**
+   * Parent-owned live time, so every running row advances on the same tick.
+   * Without it the surrounding `RuntimeClockContext` is read, so the owner
+   * need not re-render each second.
+   */
   now?: number;
   loadOutput?: typeof getReviewValidationOutput;
   /**
@@ -337,9 +351,11 @@ export function ReviewValidationStatus({
   onStop?: () => void;
   stopping?: boolean;
 }) {
-  // Without a parent clock, times are measured from when this mounted.
+  // Without a parent time or clock, times are measured from when this mounted.
   const [mountedAt] = useState(Date.now);
-  const now = liveNow ?? mountedAt;
+  const clock = useContext(RuntimeClockContext);
+  const clockNow = useRuntimeClockNow(clock, liveNow === undefined, mountedAt);
+  const now = liveNow ?? clockNow;
   const validationElapsedMs = reviewValidationElapsedMs(run, now);
   const notes = run.plan.limitations;
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);

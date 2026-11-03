@@ -22,6 +22,7 @@ import {
 } from "@/stores/buildPipelineStore";
 import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
+import { TicketSyncStrip, useTicketSyncStatus } from "./TicketSyncStrip";
 import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
 import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
@@ -210,6 +211,8 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     () => tasks.filter((t) => t.projectId === projectId),
     [tasks, projectId],
   );
+  // Any change to the board can move another machine's sync state (behind, in sync).
+  const ticketSync = useTicketSyncStatus(projectId, projectTasks);
 
   const tasksByColumn = useMemo(() => {
     const grouped: Record<KanbanStatus, KanbanTask[]> = {
@@ -296,6 +299,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
           value="kanban"
           className="m-0 min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
         >
+          <TicketSyncStrip status={ticketSync} />
           {/* Columns */}
           <div className="flex-1 snap-x snap-mandatory overflow-x-auto p-3 sm:p-6">
             <DndContext

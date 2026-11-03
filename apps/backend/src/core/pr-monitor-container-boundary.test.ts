@@ -57,7 +57,7 @@ test("container detection wraps and quotes permission commands with their own ti
       "bash",
       "-lc",
       withContainerRuntimeCredential(
-        `gh pr view '${PR}' --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName`,
+        `gh pr view '${PR}' --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,autoMergeRequest,baseRefName`,
       ),
     ],
     expect.objectContaining({ timeoutMs: PR_DETECTION_TIMEOUT_MS }),
@@ -139,5 +139,25 @@ for (const [message, invalidated] of [
     } finally {
       runtime.shutdown();
     }
+  });
+}
+
+for (const autoMergeRequest of [null, { enabledAt: "2026-11-03T00:00:00Z" }]) {
+  test(`container activity parsing with auto-merge ${autoMergeRequest ? "enabled" : "disabled"}`, async () => {
+    spyOn(shell, "runCommand").mockResolvedValue(
+      result(
+        JSON.stringify({
+          url: PR,
+          state: "OPEN",
+          mergeable: "MERGEABLE",
+          updatedAt: "2026-11-03T01:00:00Z",
+          autoMergeRequest,
+        }),
+      ),
+    );
+    expect(await detectEnvironmentPullRequest(target)).toMatchObject({
+      updatedAt: "2026-11-03T01:00:00Z",
+      autoMergeRequested: autoMergeRequest !== null,
+    });
   });
 }

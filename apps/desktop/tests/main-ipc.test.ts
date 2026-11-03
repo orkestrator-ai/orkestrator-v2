@@ -503,6 +503,40 @@ describe("main IPC registration", () => {
     ).rejects.toThrow("finite browser preview bounds");
   });
 
+  test("passes a legacy preview's environment and drops a malformed one (M2)", async () => {
+    const harness = createHarness();
+    const bounds = { x: 0, y: 0, width: 10, height: 10 };
+    await harness.invoke("orkestrator:browser-preview:attach", {
+      tabId: "browser-1",
+      url: "http://localhost:3000/",
+      environmentId: "env-1",
+      bounds,
+      visible: true,
+    });
+    expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
+      tabId: "browser-1",
+      url: "http://localhost:3000/",
+      environmentId: "env-1",
+      bounds,
+      visible: true,
+    });
+    for (const environmentId of ["", "env 1", "a,b", "x".repeat(201), 42, null]) {
+      await harness.invoke("orkestrator:browser-preview:attach", {
+        tabId: "browser-1",
+        url: "http://localhost:3000/",
+        environmentId,
+        bounds,
+        visible: true,
+      });
+      expect(harness.browserPreviews.attach).toHaveBeenLastCalledWith({
+        tabId: "browser-1",
+        url: "http://localhost:3000/",
+        bounds,
+        visible: true,
+      });
+    }
+  });
+
   test("validates browser preview IPC boundary values", async () => {
     const harness = createHarness();
     const bounds = { x: -1.4, y: 0, width: 0, height: Number.MAX_VALUE };

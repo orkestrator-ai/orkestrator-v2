@@ -1,19 +1,25 @@
 import path from "node:path";
+import { PACKAGED_TEST_OUTPUT_DIRECTORY } from "../../electron-builder.packaged-test.config";
 import { HEADLESS_ELECTRON_SWITCHES } from "./electron-launch-switches";
 
 /** Overrides the packaged executable the packaged Electron specs launch. */
 export const PACKAGED_APP_EXECUTABLE_ENV = "ORKESTRATOR_PACKAGED_APP_EXECUTABLE";
 
 /**
- * The executable `mise run package:linux:unpacked` leaves under `release/`
- * (electron-builder's `--dir` output, `linux.executableName`), unless
- * `ORKESTRATOR_PACKAGED_APP_EXECUTABLE` names another one.
+ * The executable `mise run package:linux:unpacked:test` leaves under
+ * `release/packaged-test/` (electron-builder's `--dir` output,
+ * `linux.executableName`), unless `ORKESTRATOR_PACKAGED_APP_EXECUTABLE` names
+ * another one.
+ *
+ * Not `release/linux-unpacked/`: that build has the Node inspect fuse off, as
+ * shipped, and Playwright's `_electron.launch` cannot start it
+ * (`electron-builder.packaged-test.config.ts`).
  */
 export function packagedAppExecutable(repositoryRoot: string, env: NodeJS.ProcessEnv): string {
   const override = env[PACKAGED_APP_EXECUTABLE_ENV]?.trim();
   if (override) return path.resolve(repositoryRoot, override);
   const unpacked = process.arch === "x64" ? "linux-unpacked" : `linux-${process.arch}-unpacked`;
-  return path.join(repositoryRoot, "release", unpacked, "orkestrator-v2");
+  return path.join(repositoryRoot, PACKAGED_TEST_OUTPUT_DIRECTORY, unpacked, "orkestrator-v2");
 }
 
 /**

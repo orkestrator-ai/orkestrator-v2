@@ -225,6 +225,37 @@ describe("classifyNativeCommandSubmission", () => {
     });
   });
 
+  test("compact carries instructions only where its row accepts them", () => {
+    // The backend publishes this policy for Claude and Pi, which advertise
+    // `actions.compactInstructions`.
+    const accepting: NativeAgentSlashCommand = {
+      ...COMPACT,
+      argumentHint: "[instructions]",
+      inputPolicy: { arguments: "optional", attachments: "none", busy: "idle" },
+    };
+    const commands = [REVIEW, accepting];
+    expect(
+      classify({ text: "/compact  keep the failing test names\nand the plan ", commands }),
+    ).toEqual({
+      kind: "compact",
+      command: accepting,
+      instructions: "keep the failing test names\nand the plan",
+    });
+    expect(classify({ text: "/compact   ", commands })).toEqual({
+      kind: "compact",
+      command: accepting,
+    });
+    // Still idle only.
+    expect(classify({ text: "/compact keep it", commands, busy: true })).toMatchObject({
+      kind: "rejected",
+    });
+    // Everywhere else the text is refused rather than dropped.
+    expect(classify({ text: "/compact keep it" })).toEqual({
+      kind: "rejected",
+      message: "/compact takes no arguments. Remove the text after it and retry.",
+    });
+  });
+
   describe("/goal", () => {
     const commands = [REVIEW, GOAL];
 

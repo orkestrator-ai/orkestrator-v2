@@ -1,6 +1,7 @@
 /**
  * Prints the content digest (`sha256:<hex>`) of a staged preview worker build
- * context, the identity a published image and its pin are bound to (see
+ * context. Locally built images carry this digest as a label for startup
+ * comparison against the shipped context (see
  * apps/backend/src/core/transcript-artifacts/preview-worker-context-digest.ts).
  * Usage: bun context-digest.ts <context-dir>
  */

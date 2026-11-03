@@ -105,6 +105,11 @@ export class StorageFiles {
     return this.file("kanban.json");
   }
 
+  /** Kanban sync bookkeeping; written only under the Kanban lease, with the board. */
+  kanbanSyncFile(): string {
+    return this.file("kanban-sync.json");
+  }
+
   projectNotesFile(): string {
     return this.file("project-notes.json");
   }

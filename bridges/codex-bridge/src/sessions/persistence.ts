@@ -244,6 +244,9 @@ export interface BridgeSessionStoreOptions {
 
 const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** `loadRecord`'s "no file at this path", distinct from a file that is not a live record. */
+const RECORD_FILE_MISSING = Symbol("record-file-missing");
+
 /**
  * How long an orphaned `*.tmp` is left alone before it is collected. It only has
  * to outlast the write→rename window of any live writer — including one in
@@ -366,6 +369,61 @@ export class BridgeSessionStore {
     return migrationFailed && loaded.length === 0 ? legacy : loaded;
   }
 
+  /**
+   * The durable record for one session, as `load()` would report it, or null.
+   *
+   * Reads only that session's record file: no legacy migration, login-record
+   * adoption, directory listing, chmod or sweep. Those all belong to `load()`,
+   * which runs at startup; this is for hot paths that ask about one session
+   * (every Codex config read). A tombstone, an invalid or expired record, or a
+   * record naming another session is null, exactly as `load()` would drop it.
+   *
+   * Only when no record file exists does it look further, at the copies
+   * `load()` would have published there first: the former aggregate file, then
+   * this login's own records directory. Both are read, never written, and both
+   * are normally absent once `load()` has run.
+   */
+  async loadRecord(bridgeSessionId: string): Promise<PersistedBridgeSession | null> {
+    const cutoff = this.now() - this.retentionMs;
+    const key = `${this.recordKey(bridgeSessionId)}.json`;
+    const record = await this.readRecordFile(join(this.recordsDir(), key), bridgeSessionId, cutoff);
+    if (record !== RECORD_FILE_MISSING) return record;
+
+    const legacy = (await this.readLegacy(cutoff)).find(
+      (session) => session.bridgeSessionId === bridgeSessionId,
+    );
+    if (legacy) return legacy;
+
+    const loginRecords = this.loginRecordsDir();
+    if (!loginRecords) return null;
+    const adoptable = await this.readRecordFile(join(loginRecords, key), bridgeSessionId, cutoff);
+    return adoptable === RECORD_FILE_MISSING ? null : adoptable;
+  }
+
+  /** One record file, validated as `load()` validates it; missing only on ENOENT. */
+  private async readRecordFile(
+    path: string,
+    bridgeSessionId: string,
+    cutoff: number,
+  ): Promise<PersistedBridgeSession | null | typeof RECORD_FILE_MISSING> {
+    let raw: string;
+    try {
+      raw = await readFile(path, "utf8");
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? RECORD_FILE_MISSING : null;
+    }
+    try {
+      const value = JSON.parse(raw) as unknown;
+      if (isPersistedSessionTombstone(value)) return null;
+      return isPersistedBridgeSession(value, this.cwdHash, cutoff) &&
+        value.bridgeSessionId === bridgeSessionId
+        ? value
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Removes a `writeAtomicPath` temp file that no live writer can still rename. */
   private async collectStaleTemporary(path: string): Promise<void> {
     try {
@@ -422,6 +480,15 @@ export class BridgeSessionStore {
     try {
       await chmod(this.dir(), PRIVATE_DIRECTORY_MODE);
       await chmod(this.path(), PRIVATE_FILE_MODE);
+    } catch {
+      return [];
+    }
+    return this.readLegacy(cutoff);
+  }
+
+  /** The former aggregate file's valid entries, read without touching modes. */
+  private async readLegacy(cutoff: number): Promise<PersistedBridgeSession[]> {
+    try {
       const parsed = JSON.parse(await readFile(this.path(), "utf8")) as RegistryFile;
       if (parsed.version !== BRIDGE_SESSION_REGISTRY_VERSION) return [];
       if (!Array.isArray(parsed.sessions)) return [];

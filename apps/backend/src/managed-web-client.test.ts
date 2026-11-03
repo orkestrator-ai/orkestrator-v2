@@ -377,6 +377,47 @@ describe("managed Electron web client", () => {
     expect(ownership.current()).toBeNull();
   });
 
+  test("publishes an IPv6 loopback listener and removes exactly that route", async () => {
+    const ownership = memoryOwnershipStore();
+    const start = mock(async () => "https://workstation.example.ts.net/");
+    const stopOwned = mock(async () => true);
+    const client = new ManagedWebClient(
+      { start, stop: mock(async () => undefined), stopOwned },
+      443,
+      ownership,
+    );
+    client.setBrowserListenerUrl("http://[::1]:34121/");
+
+    await expect(client.setEnabled(true)).resolves.toMatchObject({ running: true, error: null });
+    expect(start).toHaveBeenCalledWith(34121, 443, { adoptExisting: false, targetHost: "::1" });
+    expect(ownership.current()).toEqual({
+      version: 1,
+      targetPort: 34121,
+      httpsPort: 443,
+      targetHost: "::1",
+    });
+
+    await expect(client.setEnabled(false)).resolves.toMatchObject({ running: false });
+    expect(stopOwned).toHaveBeenCalledWith(34121, 443, "::1");
+    expect(ownership.current()).toBeNull();
+  });
+
+  test("does not adopt a 127.0.0.1 route for an IPv6 loopback listener", async () => {
+    const ownership = memoryOwnershipStore({ version: 1, targetPort: 34121, httpsPort: 443 });
+    const start = mock(async () => "https://workstation.example.ts.net/");
+    const stopOwned = mock(async () => true);
+    const client = new ManagedWebClient(
+      { start, stop: mock(async () => undefined), stopOwned },
+      443,
+      ownership,
+    );
+    client.setBrowserListenerUrl("http://[::1]:34121/");
+
+    await expect(client.setEnabled(true)).resolves.toMatchObject({ running: true, error: null });
+    expect(stopOwned).toHaveBeenCalledWith(34121, 443);
+    expect(start).toHaveBeenCalledWith(34121, 443, { adoptExisting: false, targetHost: "::1" });
+  });
+
   test("persists ownership atomically for the factory-backed managed client", async () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-managed-web-client-"));
     temporaryDirectories.push(dataDir);
@@ -404,6 +445,16 @@ describe("managed Electron web client", () => {
 
     await writeFile(ownershipPath, JSON.stringify({ version: 1, targetPort: 0, httpsPort: 443 }));
     await expect(store.load()).rejects.toThrow("Managed web client ownership file is invalid");
+
+    await writeFile(
+      ownershipPath,
+      JSON.stringify({ version: 1, targetPort: 34121, httpsPort: 443, targetHost: "0.0.0.0" }),
+    );
+    await expect(store.load()).rejects.toThrow("Managed web client ownership file is invalid");
+
+    const ipv6 = { version: 1, targetPort: 34121, httpsPort: 443, targetHost: "::1" } as const;
+    await writeFile(ownershipPath, JSON.stringify(ipv6));
+    expect(await store.load()).toEqual(ipv6);
   });
 
   test("rejects malformed persisted ownership without touching Serve", async () => {

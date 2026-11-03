@@ -118,17 +118,20 @@ export function startToolchainRepair(
     let versions: Record<string, string>;
     if (service.updaterKind === "desktop") {
       const plan = await dependencies.plan({ dataDir });
+      // A repair is the one caller that must not trust verified stamps: it
+      // runs because something may be wrong with the installed bytes.
       const installed = await dependencies.ensure({
         dataDir,
         artifacts: plan.artifacts,
         onProgress,
+        fullVerification: true,
       });
       binDir = installed.binDir;
       versions = Object.fromEntries(
         plan.artifacts.map((artifact) => [artifact.name, artifact.version]),
       );
     } else {
-      const installed = await dependencies.install({ dataDir, onProgress });
+      const installed = await dependencies.install({ dataDir, onProgress, fullVerification: true });
       binDir = installed.binDir;
       versions = installed.versions as Record<string, string>;
     }

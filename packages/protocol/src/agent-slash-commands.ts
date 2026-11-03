@@ -117,6 +117,16 @@ interface SessionActionCommandDefinition {
   requiresArguments?: string;
   /** Refused with this message when the command carries any arguments. */
   rejectsArguments?: string;
+  /**
+   * When the platform advertises this capability too, arguments become
+   * optional instead of refused, and the hint and description below replace
+   * the plain ones. `/compact` uses it for compaction instructions.
+   */
+  optionalArguments?: {
+    capability: keyof NonNullable<NativeAgentCapabilities["actions"]>;
+    argumentHint: string;
+    description: string;
+  };
   description: string;
   argumentHint?: string;
   /** Absent: it works in both states, and neither queues nor interrupts a turn. */
@@ -141,7 +151,9 @@ interface SessionActionCommandDefinition {
  * and must never start a new one. `/compact` defers: a provider that ships
  * its own `/compact` (Claude's SDK does) keeps it, with its own events and
  * results; the action fills the gap for providers that only expose compact as
- * a runtime operation.
+ * a runtime operation. It takes instructions only where the platform
+ * advertises `compactInstructions`, and refuses them everywhere else, so text
+ * after `/compact` is never silently dropped.
  */
 export const SESSION_ACTION_SLASH_COMMANDS: Readonly<
   Record<string, SessionActionCommandDefinition>
@@ -161,6 +173,11 @@ export const SESSION_ACTION_SLASH_COMMANDS: Readonly<
     id: "orkestrator:compact",
     capability: "compact",
     rejectsArguments: "/compact takes no arguments here. Remove the text after it and retry.",
+    optionalArguments: {
+      capability: "compactInstructions",
+      argumentHint: "[instructions]",
+      description: "Compact the conversation to free context, optionally saying what to keep",
+    },
     description: "Compact the conversation to free context",
     busy: "idle",
     collision: "defer",
@@ -423,15 +440,31 @@ export function isProviderSlashCommand(
   );
 }
 
+/**
+ * Compaction instructions carried by a `/compact` argument suffix, or
+ * `undefined` when there are none. Surrounding whitespace is not part of them.
+ */
+export function compactInstructionsFromArguments(argumentText: string): string | undefined {
+  const instructions = argumentText.trim();
+  return instructions ? instructions : undefined;
+}
+
 function sessionActionDescriptor(
   name: string,
   definition: SessionActionCommandDefinition,
+  capabilities: NativeAgentCapabilities | undefined,
 ): NativeAgentSlashCommand {
+  const optional =
+    definition.optionalArguments &&
+    capabilities?.actions?.[definition.optionalArguments.capability] === true
+      ? definition.optionalArguments
+      : undefined;
+  const argumentHint = optional?.argumentHint ?? definition.argumentHint;
   return {
     name,
     source: "orkestrator",
-    description: definition.description,
-    ...(definition.argumentHint ? { argumentHint: definition.argumentHint } : {}),
+    description: optional?.description ?? definition.description,
+    ...(argumentHint ? { argumentHint } : {}),
     id: definition.id,
     executionKind: "session-action",
     origin: "orkestrator",
@@ -439,7 +472,7 @@ function sessionActionDescriptor(
     inputPolicy: {
       arguments: definition.requiresArguments
         ? "required"
-        : definition.rejectsArguments
+        : definition.rejectsArguments && !optional
           ? "none"
           : "optional",
       attachments: "none",
@@ -471,7 +504,7 @@ export function withSessionActionSlashCommands(
       commandSpellings(command).some((spelling) => spelling.toLowerCase() === name);
     if (definition.collision === "defer" && merged.some(collides)) continue;
     if (definition.collision === "reserve") merged = merged.filter((command) => !collides(command));
-    merged.push(sessionActionDescriptor(name, definition));
+    merged.push(sessionActionDescriptor(name, definition, capabilities));
   }
   const seen = new Set<string>();
   return merged

@@ -767,7 +767,12 @@ environment's changes would conflict, and which in-container edits would be
 overwritten. `refresh_mcp_environment_defaults` applies exactly that preview
 (a changed file on either side refuses the token), keeps this environment's
 changes on top, and rewrites the server map of the container's staged input so
-the next boot inherits the same servers. Claude's staged `.claude.json` is
+the next boot inherits the same servers. For Claude the backend user's
+servers are first narrowed to the ones staging hands a container
+(`containerSafeClaudeDefaults`: no `orkestrator` entry, no loopback URL,
+nothing naming a path in the backend user's home), so a preview, refresh or
+reset never copies the Control MCP connection or a host-only server into the
+container. Claude's staged `.claude.json` is
 already re-staged before every start, so its refresh reports `stagedCopy:
 "not-needed"` rather than a failure. So does a refresh of a file nothing was
 staged for (the backend user had none when the container was created, or the

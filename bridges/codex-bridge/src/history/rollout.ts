@@ -12,7 +12,7 @@
  * Full reads are reserved for hydrating one specific thread.
  */
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
@@ -89,14 +89,9 @@ import {
   parseCapacityRetryContinuation,
 } from "../sessions/capacity-retry.js";
 import { createLogger } from "@orkestrator/protocol/logger";
+import { readSessionIndex } from "./session-index-cache.js";
 
 const log = createLogger("bridge.codex");
-
-export interface PersistedSessionIndexEntry {
-  id?: unknown;
-  thread_name?: unknown;
-  updated_at?: unknown;
-}
 
 export interface PersistedSessionMeta {
   id: string;
@@ -281,27 +276,6 @@ export async function findTranscriptPath(
   const found = selectTranscriptPath(paths, threadId);
   rememberTranscriptPath(threadId, found);
   return found;
-}
-
-/**
- * Reads a JSONL file's non-empty lines without going through the transcript
- * cache. The cache retains parsed records only; the one remaining raw-line
- * consumer is `session_index.jsonl`, a small file where a plain read is
- * cheaper than caching it alongside multi-MB rollouts.
- *
- * Returns `[]` for a missing or unreadable index: an absent session index is
- * the normal state for a fresh Codex home, not an error.
- */
-export async function readTranscriptLines(path: string): Promise<string[]> {
-  try {
-    const raw = await readFile(path, "utf8");
-    return raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -803,26 +777,19 @@ export async function listPersistedSessionsWithTitlesForCwd(
   cwd: string,
   options?: { mustContainThreadId?: string },
 ): Promise<PersistedSessionListing> {
-  const indexPath = join(getCodexHomeDir(), "session_index.jsonl");
-  const lines = await readTranscriptLines(indexPath);
+  const index = await readSessionIndex(sessionIndexPath());
   const sessions = new Map<string, PersistedSessionMeta>();
   const transcriptCatalog = await buildTranscriptCatalogCached(options?.mustContainThreadId);
 
-  for (const line of lines) {
-    let entry: PersistedSessionIndexEntry;
-    try {
-      entry = JSON.parse(line) as PersistedSessionIndexEntry;
-    } catch {
-      continue;
-    }
-
-    const id = typeof entry.id === "string" ? entry.id : undefined;
-    if (!id) continue;
+  // Every line in file order, not just the last per id: a later line whose
+  // meta resolves to nothing leaves an earlier line's meta in place.
+  for (const entry of index.entries()) {
+    if (!entry.id) continue;
 
     const meta = await getPersistedSessionMeta(
-      id,
-      typeof entry.thread_name === "string" ? entry.thread_name : undefined,
-      typeof entry.updated_at === "string" ? entry.updated_at : undefined,
+      entry.id,
+      entry.threadName,
+      entry.updatedAt,
       transcriptCatalog,
     );
 
@@ -1119,31 +1086,20 @@ function persistedOutputState(
     : null;
 }
 
+function sessionIndexPath(): string {
+  return join(getCodexHomeDir(), "session_index.jsonl");
+}
+
 /**
  * The last `session_index.jsonl` entry for one thread, mirroring the
  * map-overwrite in the full listing where a later line for the same id wins.
+ * Served from the parsed-index cache, which reads only what was appended since
+ * the last hydrate.
  */
 async function findSessionIndexEntry(
   threadId: string,
 ): Promise<{ threadName?: string; updatedAt?: string } | null> {
-  const lines = await readTranscriptLines(join(getCodexHomeDir(), "session_index.jsonl"));
-  let match: { threadName?: string; updatedAt?: string } | null = null;
-  for (const line of lines) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-    const entry = parsed as PersistedSessionIndexEntry;
-    if (entry.id !== threadId) continue;
-    match = {
-      threadName: typeof entry.thread_name === "string" ? entry.thread_name : undefined,
-      updatedAt: typeof entry.updated_at === "string" ? entry.updated_at : undefined,
-    };
-  }
-  return match;
+  return (await readSessionIndex(sessionIndexPath())).last(threadId) ?? null;
 }
 
 /**

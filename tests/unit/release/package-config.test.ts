@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { SHIPPED_FUSE_STATES } from "../../../scripts/packaged-security";
 
 async function readJson<T>(relativePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(path.join(process.cwd(), relativePath), "utf8")) as T;
@@ -14,6 +15,19 @@ function expectPngSignature(bytes: Buffer): void {
   expect([...bytes.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 }
 
+/**
+ * Security report L3: a shipped app refuses `ELECTRON_RUN_AS_NODE`,
+ * `--inspect` and `NODE_OPTIONS`, and loads only an integrity-checked
+ * `app.asar`.
+ */
+const SHIPPED_FUSES = {
+  runAsNode: false,
+  enableNodeOptionsEnvironmentVariable: false,
+  enableNodeCliInspectArguments: false,
+  enableEmbeddedAsarIntegrityValidation: true,
+  onlyLoadAppFromAsar: true,
+};
+
 describe("Electron packaging configuration", () => {
   test("keeps package entry points and package files aligned with the Electron build output", async () => {
     const packageJson = await readJson<{
@@ -22,7 +36,7 @@ describe("Electron packaging configuration", () => {
       devDependencies: Record<string, string>;
       build: {
         directories: { buildResources: string; output: string };
-        electronFuses: { runAsNode: boolean };
+        electronFuses: Record<string, boolean>;
         files: string[];
         extraResources: Array<{ from: string; to: string; filter?: string[] }>;
         mac: {
@@ -85,6 +99,41 @@ describe("Electron packaging configuration", () => {
     expect(taskCommands("package:linux:unpacked")).toContain("mise run build:all");
     expect(taskCommands("package:linux:unpacked")).toContain("bunx electron-builder --linux --dir");
     expect(taskCommands("package:linux:unpacked")).not.toContain("install-packaged-app");
+    expect(taskCommands("package:linux:unpacked")).not.toContain("packaged-test");
+    // The packaged spec's own build: inspect fuse on, separate output, never installed.
+    expect(taskCommands("package:linux:unpacked:test")).toContain("mise run build:all");
+    expect(taskCommands("package:linux:unpacked:test")).toContain(
+      "bunx electron-builder --linux --dir --config electron-builder.packaged-test.config.ts --publish never",
+    );
+    expect(taskCommands("package:linux:unpacked:test")).not.toContain("install-packaged-app");
+    // L3 qualification: the shipping (not packaged-test) --dir build of this
+    // host, unsigned, fuses read from the binary, then the hostile-launch spec.
+    const securityTask = taskCommands("test:package:security");
+    expect(securityTask).toContain("mise run build:all");
+    expect(securityTask).toContain("--dir --publish never");
+    expect(securityTask).toContain("bun scripts/verify-packaged-security.ts");
+    expect(securityTask).toContain("packaged-security-electron.spec.ts");
+    const securityBuild = securityTask
+      .split("\n")
+      .find((command) => command.startsWith("bunx electron-builder"));
+    // package.json's own build: shipped fuses, ad-hoc mac identity, no notarization.
+    expect(securityBuild).not.toContain("--config");
+    for (const forbidden of [
+      "install-packaged-app",
+      "notarize",
+      "release.config",
+      "publish always",
+    ]) {
+      expect(securityTask).not.toContain(forbidden);
+    }
+    expect(securityTask.indexOf("electron-builder")).toBeLessThan(
+      securityTask.indexOf("verify-packaged-security"),
+    );
+    expect(packageJson.build.electronFuses).toEqual(
+      Object.fromEntries(
+        Object.entries(SHIPPED_FUSE_STATES).map(([name, state]) => [name, state === "enabled"]),
+      ),
+    );
     expect(taskCommands("package:release")).toContain("electron-builder.release.config.ts");
     expect(taskCommands("package:release")).toContain("bunx electron-builder --mac");
     expect(taskCommands("package:release")).toContain(
@@ -98,7 +147,7 @@ describe("Electron packaging configuration", () => {
       buildResources: "apps/desktop/electron/resources",
       output: "release",
     });
-    expect(packageJson.build.electronFuses).toEqual({ runAsNode: false });
+    expect(packageJson.build.electronFuses).toEqual(SHIPPED_FUSES);
     expect(packageJson.build.mac.icon).toBe("icon.icns");
     // Electron 44 requires macOS 13 (Ventura); LSMinimumSystemVersion makes
     // macOS refuse to open the app on Monterey instead of letting it crash.
@@ -150,6 +199,11 @@ describe("Electron packaging configuration", () => {
     expect(bootstrapPreload).toContain('ipcRenderer.on("orkestrator:toolchain-progress"');
     expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
     expect(desktopMain).toContain("userDataDirectoryName(isDev)");
+    // Security report L4: development mode and its dev-server URL come only
+    // from desktopDevMode, which a packaged app never satisfies.
+    expect(desktopMain).toContain("const devMode = desktopDevMode(app);");
+    expect(desktopMain).not.toContain("process.env.ELECTRON_DEV");
+    expect(desktopMain).not.toContain("process.env.VITE_DEV_SERVER_URL");
     expect(desktopMain).toContain("app.setDesktopName(LINUX_DESKTOP_ENTRY_FILENAME)");
     expect(desktopMain).toContain("app.setAboutPanelOptions(");
     expect(desktopMain).toContain("createToolchainProgressController");
@@ -222,7 +276,7 @@ describe("Electron packaging configuration", () => {
       "package:release requires Apple notarization credentials",
     );
     expect(releaseConfig.forceCodeSigning).toBe(true);
-    expect(releaseConfig.electronFuses).toEqual({ runAsNode: false });
+    expect(releaseConfig.electronFuses).toEqual(SHIPPED_FUSES);
     expect(releaseConfig.mac?.identity).toBeUndefined();
     expect(releaseConfig.mac?.hardenedRuntime).toBe(true);
     expect(releaseConfig.mac?.notarize).toBe(true);
@@ -248,6 +302,26 @@ describe("Electron packaging configuration", () => {
       NSPhotoLibraryUsageDescription:
         "Orkestrator checks Pictures, Movies, and Photos-library access at startup so agent searches are not interrupted later.",
     });
+  });
+
+  test("Linux releases ship the same fuses", async () => {
+    const { createLinuxReleaseConfig } =
+      await import("../../../electron-builder.release.linux.config");
+    expect(createLinuxReleaseConfig("2.23.0").electronFuses).toEqual(SHIPPED_FUSES);
+  });
+
+  test("only the packaged spec's own build turns the inspect fuse back on", async () => {
+    const { createPackagedTestConfig, PACKAGED_TEST_OUTPUT_DIRECTORY } =
+      await import("../../../electron-builder.packaged-test.config");
+    const config = createPackagedTestConfig();
+    expect(config.electronFuses).toEqual({
+      ...SHIPPED_FUSES,
+      enableNodeCliInspectArguments: true,
+    });
+    expect(config.directories?.output).toBe(PACKAGED_TEST_OUTPUT_DIRECTORY);
+    expect(PACKAGED_TEST_OUTPUT_DIRECTORY).toBe("release/packaged-test");
+    expect(config.publish).toBeUndefined();
+    expect(config.mac?.identity).toBe("-");
   });
 
   test("each release writes its own update channel's feed", async () => {

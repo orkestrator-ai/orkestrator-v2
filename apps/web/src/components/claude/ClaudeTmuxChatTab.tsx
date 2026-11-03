@@ -13,7 +13,7 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import { ClaudeQuestionCard } from "@/components/claude/ClaudeQuestionCard";
 import { ClaudeTmuxInteractiveTerminal } from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
-import { formatElapsed } from "@/lib/format-elapsed";
+import { LiveElapsed } from "@/components/chat/LiveElapsed";
 import { createUuid } from "@/lib/uuid";
 import {
   answerSelectionPrompt,
@@ -295,7 +295,6 @@ export function ClaudeTmuxChatTab({
   const centerCompose =
     showStartScreen && !hasPendingHookCards && !hasMessageHistory && !running && !isThinking;
   const showAddressAll = Boolean(isReviewTab && running && !isThinking && messages.length > 0);
-  const [elapsedSeconds, setElapsedSeconds] = useState<number | null>(null);
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive: isActive && !interactiveMode,
     persistKey: `claude-tmux-${stateKey}`,
@@ -1195,19 +1194,6 @@ export function ClaudeTmuxChatTab({
     }
   };
 
-  // Tick once a second while the spinner is visible so the elapsed counter
-  // updates. Mirrors the native tab's behavior.
-  useEffect(() => {
-    if (!isThinking || busyStartedAt === null) {
-      setElapsedSeconds(null);
-      return;
-    }
-    const update = () => setElapsedSeconds(Math.floor((Date.now() - busyStartedAt) / 1000));
-    update();
-    const id = setInterval(update, 1000);
-    return () => clearInterval(id);
-  }, [isThinking, busyStartedAt]);
-
   return (
     <div className="@container flex flex-col h-full bg-background overflow-hidden">
       {/* Header */}
@@ -1415,11 +1401,9 @@ export function ClaudeTmuxChatTab({
                     <div className="py-2">
                       <div className="flex items-center gap-2 text-muted-foreground">
                         <AgentThinkingIndicator agentName="Claude" />
-                        {elapsedSeconds !== null && elapsedSeconds > 0 && (
-                          <span className="text-xs text-muted-foreground/50">
-                            {formatElapsed(elapsedSeconds)}
-                          </span>
-                        )}
+                        {/* The one-second tick lives in this leaf, so the tab itself
+                          does not re-render while Claude works (WEB-17). */}
+                        {busyStartedAt !== null && <LiveElapsed startedAt={busyStartedAt} />}
                       </div>
                     </div>
                   )}

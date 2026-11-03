@@ -1708,9 +1708,9 @@ export class CodexRuntimeSessions {
   async isSessionConfigPersisted(session: BridgeSession): Promise<boolean> {
     if (!session.threadId) return true;
     try {
-      const persisted = (await this.ctx.store.load()).find(
-        (record) => record.bridgeSessionId === session.id,
-      );
+      // One record, not `load()`: this runs on every config read, and a full
+      // load lists, chmods and parses every record and may migrate or adopt.
+      const persisted = await this.ctx.store.loadRecord(session.id);
       if (!persisted) return false;
       // Round-tripped so both sides drop `undefined` members identically; key
       // order is the store's own serialization of this same object.

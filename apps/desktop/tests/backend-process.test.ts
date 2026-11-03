@@ -132,6 +132,19 @@ const FRESH_CONNECTED_FRAME = `id: desktop1:0\ndata: ${JSON.stringify({
 })}\n\n`;
 
 describe("Electron backend process supervisor", () => {
+  test("never inherits a renderer dev-server URL into the supervised backend", () => {
+    const parent = { ORKESTRATOR_RENDERER_DEV_SERVER_URL: "http://127.0.0.1:9999" };
+    for (const flavor of ["production", "development", "agent-test"] as const) {
+      expect(createBackendProcessEnvironment(parent, "2.8.2", { flavor })).not.toHaveProperty(
+        "ORKESTRATOR_RENDERER_DEV_SERVER_URL",
+      );
+    }
+    expect(createBackendProcessEnvironment(parent)).not.toHaveProperty(
+      "ORKESTRATOR_RENDERER_DEV_SERVER_URL",
+    );
+    expect(parent.ORKESTRATOR_RENDERER_DEV_SERVER_URL).toBe("http://127.0.0.1:9999");
+  });
+
   test("only the installed app asks for the fixed gateway port", () => {
     expect(desktopGatewayPort(false)).toBe(34121);
     expect(desktopGatewayPort(true)).toBe(0);

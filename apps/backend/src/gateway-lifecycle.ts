@@ -11,7 +11,6 @@ import {
   GATEWAY_PORT_FALLBACK_ATTEMPTS,
   parsePort,
   isAddressInUseError,
-  isTailscaleAddress,
   selectTailscaleBindAddress,
   formatHostForUrl,
   isLoopbackAddress,
@@ -22,6 +21,7 @@ import {
 } from "./gateway-internals.js";
 import type { ListenerKind, GatewayStartInfo } from "./gateway-internals.js";
 import { DEFAULT_CONTROL_MCP_PORT } from "./fixed-ports.js";
+import { assertGatewayBindAllowed } from "./gateway-bind-policy.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("gateway");
@@ -70,13 +70,11 @@ export class GatewayLifecycle {
     }
     const safeLoopbackFallback =
       usingFallback && bindAddress !== undefined && isLoopbackAddress(bindAddress);
-    if (
-      bindAddress &&
-      !this.ctx.allowNonTailscaleBind &&
-      !safeLoopbackFallback &&
-      !isTailscaleAddress(bindAddress)
-    ) {
-      throw new Error(`Refusing to bind gateway to non-Tailscale address: ${bindAddress}`);
+    if (bindAddress) {
+      assertGatewayBindAllowed(bindAddress, {
+        allowNonTailscaleBind: this.ctx.allowNonTailscaleBind,
+        safeLoopbackFallback,
+      });
     }
 
     const port =

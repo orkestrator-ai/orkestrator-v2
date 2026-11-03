@@ -14,6 +14,10 @@
  * - no work while the document is hidden;
  * - every pass shares one traversal budget and deadline.
  *
+ * A pin whose shadow host exists but is not yet defined resolves `missing`
+ * until its root attaches, which no observer sees; one pass is scheduled
+ * when that host's custom element is defined.
+ *
  * Pins are redrawn (not re-resolved) on scroll, resize, a settled font load
  * and a change in the document's size, so a font swap that reflows the page
  * without touching the DOM still moves them.
@@ -36,6 +40,12 @@ export interface BrowserPreviewPinsScriptLimits {
   /** Shared traversal budget per pass. */
   budgetVisits: number;
   budgetMs: number;
+  /**
+   * Where `customElements` is unavailable (an isolated world), how often and
+   * how many times hosts awaiting their definition are checked for `:defined`.
+   */
+  definitionCheckMs: number;
+  definitionChecks: number;
 }
 
 export const BROWSER_PREVIEW_PINS_DEFAULT_LIMITS: BrowserPreviewPinsScriptLimits = Object.freeze({
@@ -43,6 +53,8 @@ export const BROWSER_PREVIEW_PINS_DEFAULT_LIMITS: BrowserPreviewPinsScriptLimits
   maxPasses: 120,
   budgetVisits: 60_000,
   budgetMs: 120,
+  definitionCheckMs: 500,
+  definitionChecks: 120,
 });
 
 export interface BrowserPreviewPinsScriptQuery {
@@ -66,7 +78,14 @@ function installBrowserPreviewPins(
     }>;
     focusedAnnotationId: string | null;
     scrollIntoView: boolean;
-    limits: { throttleMs: number; maxPasses: number; budgetVisits: number; budgetMs: number };
+    limits: {
+      throttleMs: number;
+      maxPasses: number;
+      budgetVisits: number;
+      budgetMs: number;
+      definitionCheckMs: number;
+      definitionChecks: number;
+    };
   },
 ): string {
   const host = window as unknown as Record<string, unknown>;
@@ -264,6 +283,7 @@ function installBrowserPreviewPins(
     }
     if (budget.exhausted) diagnostics.budgetExhausted += 1;
     observeShadowRoots();
+    awaitDefinitions();
     const moved = place();
     if (changed && !moved) revision += 1;
     return changed || moved;
@@ -295,6 +315,75 @@ function installBrowserPreviewPins(
       } catch {
         // A root that cannot be observed still resolves on the next pass.
       }
+    }
+  };
+
+  // A host on a pin's root path that exists before its custom element is
+  // defined has no shadow root yet, and attaching one fires no mutation.
+  // One pass is scheduled when each such tag is defined. An isolated world
+  // has no `customElements`, so there the hosts the resolver reported are
+  // checked for `:defined` on a slow, bounded timer instead (an element
+  // check, not a resolution pass).
+  const awaitedTags = new Set<string>();
+  const watchedHosts: Element[] = [];
+  let definitionTimer: ReturnType<typeof setTimeout> | null = null;
+  let definitionChecks = 0;
+  const onDefined = (): void => {
+    if (destroyed) return;
+    dirty = true;
+    schedulePass();
+  };
+  const checkWatchedHosts = (): void => {
+    definitionTimer = null;
+    if (destroyed) return;
+    definitionChecks += 1;
+    let defined = false;
+    for (let index = watchedHosts.length - 1; index >= 0; index -= 1) {
+      const element = watchedHosts[index]!;
+      let ready = !element.isConnected;
+      if (!ready) {
+        try {
+          ready = element.matches(":defined");
+        } catch {
+          ready = true;
+        }
+      }
+      if (ready) {
+        watchedHosts.splice(index, 1);
+        if (element.isConnected) defined = true;
+      }
+    }
+    if (defined) onDefined();
+    if (watchedHosts.length > 0 && definitionChecks < config.limits.definitionChecks) {
+      definitionTimer = setTimeout(checkWatchedHosts, config.limits.definitionCheckMs);
+    }
+  };
+  const awaitDefinitions = (): void => {
+    const registry = (window as unknown as { customElements?: CustomElementRegistry | null })
+      .customElements;
+    for (const element of kit.undefinedHostsSeen()) {
+      const tag = element.localName;
+      if (registry && typeof registry.whenDefined === "function") {
+        // One wait per tag: a definition upgrades every element with it.
+        if (awaitedTags.has(tag) || awaitedTags.size >= 50) continue;
+        awaitedTags.add(tag);
+        try {
+          registry.whenDefined(tag).then(onDefined, () => undefined);
+          continue;
+        } catch {
+          // Fall through to the element check.
+        }
+      }
+      // Per element: a replaced host that is still undefined is watched again.
+      if (watchedHosts.length < 50 && !watchedHosts.includes(element)) watchedHosts.push(element);
+    }
+    if (
+      watchedHosts.length > 0 &&
+      definitionTimer === null &&
+      definitionChecks < config.limits.definitionChecks &&
+      !destroyed
+    ) {
+      definitionTimer = setTimeout(checkWatchedHosts, config.limits.definitionCheckMs);
     }
   };
 
@@ -426,6 +515,7 @@ function installBrowserPreviewPins(
     destroyed = true;
     observer?.disconnect();
     if (timer !== null) clearTimeout(timer);
+    if (definitionTimer !== null) clearTimeout(definitionTimer);
     window.removeEventListener("scroll", schedulePlace, true);
     window.removeEventListener("resize", schedulePlace);
     document.removeEventListener("visibilitychange", onVisibility);

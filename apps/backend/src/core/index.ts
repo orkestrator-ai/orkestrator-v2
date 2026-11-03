@@ -25,7 +25,7 @@ import {
   ScheduledJobExecutor,
   ScheduledJobService,
 } from "./scheduled-jobs/index.js";
-import { publicActionHandlers } from "./public-api/registry.js";
+import { publicActionHandlers } from "./public-api/index.js";
 import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
 import {
   bridgeRemoteCoordinatorEvents,
@@ -79,6 +79,7 @@ import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import {
   keyedSchedulingEnabled,
@@ -122,7 +123,7 @@ import {
   mcpRolloutLoader,
   mcpContainerOptions,
 } from "./commands-registry-mcp.js";
-import { McpManagementService } from "./mcp-management/service.js";
+import { McpManagementService } from "./mcp-management/index.js";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
   createCommandRegistry,
@@ -919,11 +920,13 @@ export class OrkestratorBackend {
         // that view (or every view after a gap). Deliberately nothing else
         // hangs off it; it is not a turn edge.
         onObservationInvalidation: (event) => {
+          nativeSessionInvalidationMetrics.record(event.cause, event.agent);
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,
             previous_state: event.state,
             state: event.state,
             reason: "content",
+            cause: event.cause,
             agent: event.agent,
             logical_session_key: event.logicalSessionKey,
             generation: event.observation.generation,
@@ -931,10 +934,12 @@ export class OrkestratorBackend {
           });
         },
         onActivityTransition: (event) => {
+          nativeSessionInvalidationMetrics.record("transition", event.agent);
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,
             previous_state: event.previousState,
             state: event.state,
+            cause: "transition",
             // Additive (step 07): which session, and the observer's stamp so a
             // client can invalidate exactly that view and detect a missed
             // transition as a revision gap. Older clients ignore these.
@@ -1221,7 +1226,7 @@ export class OrkestratorBackend {
     // A publication changes its conversation's projected transcript (the
     // artifact part beside its call): views of that environment re-read.
     this.transcriptArtifacts.onLedgerChange((change) =>
-      storage.announceNativeAgentSessionProjection(change.environmentId),
+      storage.announceNativeAgentSessionProjection(change.environmentId, "transcript-artifact"),
     );
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
       for (const home of await storage.getEnvironmentsByProject(projectId)) {

@@ -1052,6 +1052,42 @@ describe("AgentNativeTab", () => {
     }
   }
 
+  test("agent transcript loopback links carry the actual AgentNativeTab identity", async () => {
+    renderVirtualizedMessages = true;
+    const content = "Ready at [seeded app](http://localhost:5173/).";
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "seeded-link",
+          role: "assistant" as const,
+          content,
+          parts: [{ type: "text" as const, content }],
+          createdAt: "2026-11-03T00:00:00Z",
+        },
+      ],
+    }));
+    const requests: unknown[] = [];
+    const record = (event: Event) => requests.push((event as CustomEvent).detail);
+    const { TERMINAL_BROWSER_TAB_REQUEST_EVENT } = await import("@/lib/terminal-links");
+    window.addEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, record);
+    try {
+      render(<AgentNativeTab tabId="seeded-agent-tab" data={identity("cursor")} isActive />);
+      const link = await screen.findByRole("link", { name: "seeded app" });
+      fireEvent.click(link, { metaKey: true, shiftKey: true });
+      expect(requests).toEqual([
+        {
+          environmentId: "env-1",
+          sourceTabId: "seeded-agent-tab",
+          url: "http://localhost:5173/",
+          origin: "agent",
+        },
+      ]);
+    } finally {
+      window.removeEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, record);
+    }
+  });
+
   test("a resumed pipeline stage dispatches a manual message under its own request and tab identity", async () => {
     const stage = session("build", "stage-key", 0, {
       sdkSessionId: "claude-session",

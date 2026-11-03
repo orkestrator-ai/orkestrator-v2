@@ -286,6 +286,24 @@ describe("create_project_from_scratch", () => {
     });
   });
 
+  test("add_project refuses a Git URL git would read as an option", async () => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      for (const args of [
+        { gitUrl: "--upload-pack=touch pwned" },
+        { gitUrl: "  -oProxyCommand=evil" },
+        { gitUrl: "--upload-pack=touch pwned", localPath: path.join(root, "clone") },
+      ]) {
+        await expect(invokeCommand("add_project", args)).rejects.toThrow(
+          "Git URL must not start with '-'",
+        );
+      }
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(await storage.loadProjects()).toEqual([]);
+      await expect(fs.stat(path.join(root, "clone"))).rejects.toThrow();
+    });
+  });
+
   test("add_project clones an existing remote when the local path does not exist", async () => {
     const cloneCalls: Array<{
       args: string[];

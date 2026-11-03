@@ -45,6 +45,7 @@ export class ContainerLifecycleReactor {
     const context = this.context();
     if (!context) return;
     if (action !== "start") retireContainerLoops(context, containerId);
+    else context.runtime.tmux.claudeStatePolls.startedMatching(containerId);
     this.schedule(containerId);
   }
 

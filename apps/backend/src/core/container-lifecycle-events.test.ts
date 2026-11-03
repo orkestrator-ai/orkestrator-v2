@@ -27,6 +27,7 @@ function harness(options: { lifecycleWork?: boolean; status?: Environment["statu
       prMonitor: { sync: async () => void calls.push("pr-sync") },
       tmux: {
         claudeStatePolls: {
+          startedMatching: () => undefined,
           shutdownMatching: (id: string) => void calls.push(`state-poll-shutdown:${id}`),
           reconcile: async () => void calls.push("state-poll-reconcile"),
         },

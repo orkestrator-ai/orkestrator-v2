@@ -9,16 +9,22 @@ import {
 import type { ClaudeStateSignalSupport } from "./tmux-poll.js";
 
 const flush = async () => {
-  for (let index = 0; index < 5; index += 1) await Promise.resolve();
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
 };
 
 function harness(
-  options: { support?: ClaudeStateSignalSupport; probeRings?: boolean; failInstall?: boolean } = {},
+  options: {
+    support?: ClaudeStateSignalSupport;
+    probeRings?: boolean;
+    failInstall?: boolean;
+    installGate?: () => Promise<void>;
+  } = {},
 ) {
   let now = 1_000_000;
   const issued: Array<{ onSignal: () => void; revoked: boolean; token: string }> = [];
   let supportCalls = 0;
   let installs = 0;
+  let publishedToken: string | undefined;
   const context = {
     agentTools: {
       issueTmuxHookSignal: (onSignal: () => void): StateSignalCredential => {
@@ -46,6 +52,8 @@ function harness(
     },
     install: async (_containerId, credential) => {
       installs += 1;
+      await options.installGate?.();
+      publishedToken = credential.token;
       if (options.failInstall) throw new Error("exec failed");
       if (options.probeRings ?? true) ring(issued.findIndex((e) => e.token === credential.token));
     },
@@ -61,6 +69,7 @@ function harness(
     },
     supportCalls: () => supportCalls,
     installs: () => installs,
+    publishedToken: () => publishedToken,
   };
 }
 
@@ -151,6 +160,53 @@ describe("tmux hook doorbell", () => {
     expect(h.issued[0]!.revoked).toBe(true);
     // Releasing after the container was forgotten is harmless.
     doorbell.release();
+  });
+
+  test("serializes replacement config publication after a retired writer", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let writes = 0;
+    const h = harness({ installGate: () => (++writes === 1 ? gate : Promise.resolve()) });
+    const first = h.manager.attach("c1", h.context, () => undefined);
+    await flush();
+    expect(h.installs()).toBe(1);
+    first.release();
+    let wakes = 0;
+    const next = h.manager.attach("c1", h.context, () => {
+      wakes += 1;
+    });
+    await flush();
+    expect(h.installs()).toBe(1);
+    finish();
+    await flush();
+    expect(h.installs()).toBe(2);
+    expect(next.confirmed()).toBe(true);
+    expect(h.publishedToken()).toBe(h.issued[1]!.token);
+    expect(h.issued[0]!.revoked).toBe(true);
+    h.ring();
+    expect(wakes).toBe(2);
+    next.release();
+  });
+
+  test("surviving subscription rejoins after lifecycle invalidation", async () => {
+    const h = harness();
+    let wakes = 0;
+    const tab = h.manager.attach("c1", h.context, () => {
+      wakes += 1;
+    });
+    await flush();
+    expect(tab.confirmed()).toBe(true);
+    h.manager.forgetMatching("c1");
+    expect(tab.confirmed()).toBe(false);
+    await flush();
+    expect(tab.confirmed()).toBe(true);
+    expect(tab.rings()).toBe(2);
+    h.ring();
+    expect(wakes).toBe(3);
+    tab.release();
+    expect(h.manager.status().containers).toBe(0);
   });
 
   test("without an installer or a doorbell route nothing is armed", async () => {

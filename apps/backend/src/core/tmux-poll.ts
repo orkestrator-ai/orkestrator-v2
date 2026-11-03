@@ -52,6 +52,7 @@ export type PollTmuxLayerTypes = [
 ];
 export type ClaudeStatePoll = {
   timer: unknown;
+  demandTimer?: unknown;
   intervalMs: number;
   lastState: string;
   lastRevision?: number;
@@ -219,6 +220,7 @@ export function parseClaudeStateSnapshot(value: string): {
 }
 
 export class ClaudeStatePollManager {
+  private readonly retired = new Set<string>();
   private readonly polls = new Map<string, ClaudeStatePoll>();
   /** Survives retirement until the old installer has stopped writing. */
   private readonly signalInstallations = new Map<string, Promise<void>>();
@@ -251,7 +253,7 @@ export class ClaudeStatePollManager {
   }
 
   start(containerId: string, context: CommandContext, demand = true): void {
-    if (this.stopped) return;
+    if (this.stopped || this.isRetired(containerId)) return;
     const existing = this.polls.get(containerId);
     if (existing) {
       // Adopt the newest backend context after a supervisor reconciliation.
@@ -445,12 +447,33 @@ export class ClaudeStatePollManager {
     const running = new Set<string>();
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.containerId) continue;
+      if (context.runtime?.environments?.hasLifecycleWork(environment.id)) continue;
       running.add(environment.containerId);
       this.start(
         environment.containerId,
         context,
         terminalClaudeDemand(context, environment.id, environment.containerId),
       );
+      const poll = this.polls.get(environment.containerId);
+      if (poll && poll.demandTimer === undefined) {
+        // Re-evaluate backend-owned demand without an exec or storage read.
+        poll.demandTimer = this.schedule(() => {
+          this.start(
+            environment.containerId!,
+            poll.context,
+            terminalClaudeDemand(poll.context, environment.id, environment.containerId!),
+          );
+        }, CLAUDE_STATE_POLL_INTERVAL_MS);
+      }
+    }
+    for (const id of Array.from(this.retired)) {
+      if (
+        !environments.some(
+          (env) =>
+            env.containerId && (env.containerId.startsWith(id) || id.startsWith(env.containerId)),
+        )
+      )
+        this.retired.delete(id);
     }
     for (const containerId of this.polls.keys()) {
       if (!running.has(containerId)) this.shutdown(containerId);
@@ -473,8 +496,22 @@ export class ClaudeStatePollManager {
    */
   shutdownMatching(containerId: string): void {
     if (!containerId) return;
+    this.retired.add(containerId);
     for (const id of Array.from(this.polls.keys())) {
       if (id.startsWith(containerId) || containerId.startsWith(id)) this.shutdown(id);
+    }
+  }
+
+  private isRetired(containerId: string): boolean {
+    return Array.from(this.retired).some(
+      (id) => id.startsWith(containerId) || containerId.startsWith(id),
+    );
+  }
+
+  /** Only a positive start event reopens admission after container death. */
+  startedMatching(containerId: string): void {
+    for (const id of Array.from(this.retired)) {
+      if (id.startsWith(containerId) || containerId.startsWith(id)) this.retired.delete(id);
     }
   }
 
@@ -488,6 +525,7 @@ export class ClaudeStatePollManager {
     if (this.polls.get(containerId) !== poll) return;
     poll.active = false;
     this.cancel(poll.timer);
+    if (poll.demandTimer !== undefined) this.cancel(poll.demandTimer);
     this.revokeSignal(poll);
     this.polls.delete(containerId);
   }

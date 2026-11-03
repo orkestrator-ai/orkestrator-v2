@@ -83,6 +83,7 @@ const NEVER_CONFIRMED: TmuxHookDoorbell = {
 
 export class TmuxHookSignalManager {
   private readonly doorbells = new Map<string, ContainerDoorbell>();
+  private readonly installations = new Map<string, Promise<void>>();
   private readonly installer: TmuxHookSignalInstaller | null;
   private readonly nowMs: () => number;
   private readonly demotions: Partial<Record<SignalDemotionReason, number>> = {};
@@ -100,28 +101,38 @@ export class TmuxHookSignalManager {
    */
   attach(containerId: string, context: CommandContext, onRing: () => void): TmuxHookDoorbell {
     if (this.stopped || !this.installer) return NEVER_CONFIRMED;
-    let doorbell = this.doorbells.get(containerId);
-    if (!doorbell) {
-      doorbell = {
-        context,
-        listeners: new Set(),
-        confirmed: false,
-        unsupported: false,
-        demoted: false,
-        rings: 0,
-      };
-      this.doorbells.set(containerId, doorbell);
-    }
-    doorbell.context = context;
-    const entry = doorbell;
+    const join = (): ContainerDoorbell => {
+      let doorbell = this.doorbells.get(containerId);
+      if (!doorbell) {
+        doorbell = {
+          context,
+          listeners: new Set(),
+          confirmed: false,
+          unsupported: false,
+          demoted: false,
+          rings: 0,
+        };
+        this.doorbells.set(containerId, doorbell);
+      }
+      doorbell.context = context;
+      doorbell.listeners.add(listener);
+      return doorbell;
+    };
     const listener = () => onRing();
-    entry.listeners.add(listener);
+    let entry = join();
+    let released = false;
+    let ringOffset = 0;
     this.arm(containerId, entry);
     const current = () => this.doorbells.get(containerId) === entry;
     return {
-      rings: () => entry.rings,
+      rings: () => ringOffset + entry.rings,
       confirmed: () => {
-        if (!current()) return false;
+        if (released || this.stopped) return false;
+        if (!current()) {
+          ringOffset += entry.rings;
+          entry.listeners.delete(listener);
+          entry = join();
+        }
         if (!entry.confirmed) this.arm(containerId, entry);
         return entry.confirmed;
       },
@@ -129,6 +140,7 @@ export class TmuxHookSignalManager {
         if (current() && entry.confirmed) this.demote(containerId, entry, "missed-change");
       },
       release: () => {
+        released = true;
         entry.listeners.delete(listener);
         if (entry.listeners.size === 0 && current()) this.forgetContainer(containerId);
       },
@@ -199,7 +211,10 @@ export class TmuxHookSignalManager {
     }
     doorbell.lastAttemptAt = now;
     const current = () => !this.stopped && this.doorbells.get(containerId) === doorbell;
+    const previous = this.installations.get(containerId);
     const arming = (async () => {
+      await previous;
+      if (!current()) return;
       const support = await installer.support(containerId, doorbell.context);
       if (!current()) return;
       if (support !== "supported") {
@@ -226,9 +241,11 @@ export class TmuxHookSignalManager {
         log.warn("hook-signal.arm-failed", { containerId, error: formatLogError(error) });
       })
       .finally(() => {
+        if (this.installations.get(containerId) === arming) this.installations.delete(containerId);
         if (doorbell.arming === arming) doorbell.arming = undefined;
       });
     doorbell.arming = arming;
+    this.installations.set(containerId, arming);
   }
 
   private ring(containerId: string, doorbell: ContainerDoorbell): void {

@@ -1780,7 +1780,10 @@ export async function stopEnvironmentOnce(
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   // Draining execs into the container, so ownership is proven first.
-  if (environment.containerId) await assertDockerContainerOwned(environment.containerId, context);
+  if (environment.containerId) {
+    await assertDockerContainerOwned(environment.containerId, context);
+    shutdownClaudeStatePolling(context, environment.containerId);
+  }
   await stopEnvironmentReviewValidation(environmentId, context);
   await stopEnvironmentExecWorkers(environmentId, context);
   // Discovery runs inside the environment, so its cached result stops being

@@ -156,3 +156,80 @@ describe("a bridge restart", () => {
     ).rejects.toBeInstanceOf(PolicyWideningRefusedError);
   });
 });
+
+test("resume rechecks a sibling narrowed during engine resume and restores engine config", async () => {
+  const h = await harness(resumable);
+  const sessionId = await attachedSession(h, askPolicy);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const original = h.engine.resumeThread.bind(h.engine);
+  let held = false;
+  spyOn(h.engine, "resumeThread").mockImplementation(async (...args) => {
+    if (!held) {
+      held = true;
+      entered.resolve();
+      await release.promise;
+    }
+    return original(...args);
+  });
+  const restore = spyOn(h.engine, "configureThread");
+  const count = h.runtime.getRegistry().listSessions().length;
+  const pending = h.runtime.resumeSession({ threadId: "thread-1", policy: askPolicy });
+  const refused = pending.then(
+    () => null,
+    (error) => error,
+  );
+  await entered.promise;
+  try {
+    expect(await h.runtime.updateConfig(sessionId, { mode: "build", policy: narrowerPolicy })).toBe(
+      "updated",
+    );
+  } finally {
+    release.resolve();
+  }
+  expect(await refused).toBeInstanceOf(PolicyWideningRefusedError);
+  expect(h.runtime.getRegistry().listSessions()).toHaveLength(count);
+  expect(restore.mock.calls.at(-1)?.[1].policy).toEqual(narrowerPolicy);
+});
+
+test("policy-free resume refuses incompatible sibling inheritance", async () => {
+  const h = await harness(resumable);
+  await attachedSession(h, askPolicy);
+  await h.runtime.resumeSession({ threadId: "thread-1", policy: narrowerPolicy });
+  await expect(h.runtime.resumeSession({ threadId: "thread-1" })).rejects.toBeInstanceOf(
+    PolicyWideningRefusedError,
+  );
+});
+
+test("duplicate prompts leave the restored policy pending", async () => {
+  const h = await harness(resumable);
+  const sessionId = await attachedSession(h, askPolicy);
+  const session = h.runtime.getRegistry().getSession(sessionId)!;
+  session.policyPending = true;
+  expect(
+    await h.runtime.prompt(sessionId, { prompt: "duplicate", requestId: "first", attachments: [] }),
+  ).toMatchObject({ ok: true });
+  expect(session.policyPending).toBe(true);
+  expect(await h.runtime.updateConfig(sessionId, { mode: "build", policy: widerPolicy })).toBe(
+    "updated",
+  );
+});
+
+test("journal-blocked prompts leave the restored policy pending", async () => {
+  const h = await harness(resumable);
+  const { sessionId } = h.runtime.createSession({ policy: askPolicy });
+  const session = h.runtime.getRegistry().getSession(sessionId)!;
+  session.policyPending = true;
+  const classify = spyOn(h.runtime.getJournal(), "classify").mockReturnValue({
+    action: "blocked",
+    reason: "test blocked journal",
+  });
+  expect(
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "blocked", attachments: [] }),
+  ).toMatchObject({ ok: false, status: 503 });
+  expect(session.policyPending).toBe(true);
+  classify.mockRestore();
+  expect(await h.runtime.updateConfig(sessionId, { mode: "build", policy: widerPolicy })).toBe(
+    "updated",
+  );
+});

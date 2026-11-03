@@ -19,7 +19,8 @@ delete process.env.PI_BRIDGE_STATE_DIR;
 
 const { server, start, shutdown } = await import("./server.js");
 const { authToken: TOKEN } = await import("./config.js");
-const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
+const { createSession, resumeSession, ensureSession, newSessionState, setAgentSessionTestHooks } =
+  await import("./agent-session.js");
 const { sessions, clientSessionKeys } = await import("./state.js");
 const { loadPersistedState, settlePersistenceForTests } = await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
@@ -226,6 +227,35 @@ describe("POST /session/resume of a file a live session owns", () => {
     };
   }
 
+  test.each([narrowerPolicy, widerPolicy])(
+    "first-resume joiners enforce their policy",
+    async (policy) => {
+      await using owned = await ownedFile();
+      sessions.delete(owned.state.id);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      setAgentSessionTestHooks({
+        hydrateComposer: async (composer) => {
+          entered.resolve();
+          await release.promise;
+          return composer;
+        },
+      });
+      const first = resumeSession(owned.sessionFile, undefined, askPolicy);
+      await entered.promise;
+      const second = resumeSession(owned.sessionFile, undefined, policy);
+      const result = second.then(
+        (state) => ({ state }),
+        (error) => ({ error }),
+      );
+      release.resolve();
+      const settled = await result;
+      if (policy === widerPolicy) expect(settled).toHaveProperty("error");
+      else expect(settled).toMatchObject({ state: { policy: narrowerPolicy } });
+      await first;
+    },
+  );
+
   test("refuses a wider policy and changes nothing", async () => {
     await using owned = await ownedFile();
     const attached = fakeAgentSession();
@@ -387,4 +417,76 @@ describe("a bridge restart", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+});
+
+test("policy replacement fences prompts and attaches while an earlier attach settles", async () => {
+  hydrateOnly();
+  const state = await createSession("held-policy", undefined, askPolicy);
+  const release = Promise.withResolvers<AgentSession>();
+  state.attaching = release.promise;
+  const pending = createSession("held-policy", undefined, narrowerPolicy);
+  try {
+    await expect(ensureSession(state)).rejects.toThrow();
+    expect(
+      (await post(`/session/${state.id}/prompt`, { prompt: "go", requestId: "held" })).status,
+    ).toBe(409);
+  } finally {
+    release.resolve(fakeAgentSession());
+  }
+  await pending;
+  expect(state.policy).toEqual(narrowerPolicy);
+  expect(state.session).toBeNull();
+  expect(state.dispatching).toBe(false);
+});
+
+test.each([narrowerPolicy, widerPolicy])("concurrent create checks each policy", async (policy) => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  setAgentSessionTestHooks({
+    hydrateComposer: async (composer) => {
+      entered.resolve();
+      await release.promise;
+      return composer;
+    },
+  });
+  const first = createSession("join-policy", undefined, askPolicy);
+  await entered.promise;
+  const second = createSession("join-policy", undefined, policy);
+  const result = second.then(
+    (state) => ({ state }),
+    (error) => ({ error }),
+  );
+  release.resolve();
+  const settled = await result;
+  if (policy === widerPolicy) expect(settled).toHaveProperty("error");
+  else expect(settled).toMatchObject({ state: { policy: narrowerPolicy } });
+  await first;
+});
+
+test("policy replacement fences attaches during runtime disposal", async () => {
+  hydrateOnly();
+  const state = await createSession("dispose-policy", undefined, askPolicy);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  state.session = fakeAgentSession();
+  state.runtime = {
+    dispose: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  } as never;
+  const pending = createSession("dispose-policy", undefined, narrowerPolicy);
+  await entered.promise;
+  try {
+    await expect(ensureSession(state)).rejects.toThrow();
+    expect(
+      (await post(`/session/${state.id}/prompt`, { prompt: "go", requestId: "dispose" })).status,
+    ).toBe(409);
+    expect(state.session).toBeNull();
+  } finally {
+    release.resolve();
+  }
+  await pending;
+  expect(state.policy).toEqual(narrowerPolicy);
+  expect(state.dispatching).toBe(false);
 });

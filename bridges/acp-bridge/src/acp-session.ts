@@ -462,7 +462,10 @@ export async function createSession(
       }
     }
     const pending = sessionCreations.get(clientSessionKey);
-    if (pending) return pending;
+    if (pending) {
+      await pending;
+      return createSession(clientSessionKey, signal, spawnOptions);
+    }
   }
   if (activeSessionReservations() >= MAX_SESSIONS)
     throw new HttpError(429, "ACP session limit reached");

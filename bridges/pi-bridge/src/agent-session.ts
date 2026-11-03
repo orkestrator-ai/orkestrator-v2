@@ -368,7 +368,18 @@ export async function createSession(
       return existing;
     }
     const inFlight = sessionCreations.get(clientSessionKey);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      const existing = await inFlight;
+      if (isSessionClosed(existing)) throw new SessionClosingError();
+      const resolved = resolvePiExecutionPolicy(policy);
+      if (policy || resolved.id === "coordinator-read-only") {
+        await applyRequestedPolicy(existing, resolved);
+      }
+      if (resolved.id === "coordinator-read-only" && existing.readOnly !== true) {
+        await setSessionReadOnly(existing, true);
+      }
+      return existing;
+    }
   }
 
   const work = (async () => {
@@ -415,6 +426,7 @@ export async function createSession(
  * rather than a corner case.
  */
 export async function ensureSession(state: SessionState): Promise<AgentSession> {
+  if (policyChanges.has(state)) throw new SessionBusyError();
   if (closingSessions.has(state)) throw new SessionClosingError();
   if (state.session) return state.session;
   state.attaching ??= attach(state).finally(() => {
@@ -975,21 +987,32 @@ export function liveExecutionPolicy(
  * detach, because Pi fixes tool registrations and project resources when it
  * builds the session.
  */
+const policyChanges = new WeakSet<SessionState>();
+
 async function applyRequestedPolicy(
   state: SessionState,
   policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<void> {
+  if (policyChanges.has(state)) throw new SessionBusyError();
   assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
   if (JSON.stringify(state.policy) !== JSON.stringify(policy)) {
     if (state.status === "running" || state.dispatching) throw new SessionBusyError();
-    // An explicit attach may be constructing a session concurrently. Let it
-    // publish, then dispose it, as `setSessionReadOnly` does.
-    await state.attaching?.catch(() => undefined);
-    await detachSession(state);
-    if (isSessionClosed(state)) throw new SessionClosingError();
-    // The detach yields. Another request may have narrowed the policy meanwhile.
-    assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
-    state.policy = policy;
+    // Reserve admission before yielding: no replacement may attach with old options.
+    policyChanges.add(state);
+    state.dispatching = true;
+    try {
+      // An explicit attach may be constructing a session concurrently. Let it
+      // publish, then dispose it, as `setSessionReadOnly` does.
+      await state.attaching?.catch(() => undefined);
+      await detachSession(state);
+      if (isSessionClosed(state)) throw new SessionClosingError();
+      // The detach yields. Another request may have narrowed the policy meanwhile.
+      assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
+      state.policy = policy;
+    } finally {
+      state.dispatching = false;
+      policyChanges.delete(state);
+    }
   }
   state.policyPending = false;
 }
@@ -1357,6 +1380,7 @@ export async function resumeSession(
   if (inFlight) {
     const existing = await inFlight;
     if (isSessionClosed(existing)) throw new SessionClosingError();
+    if (policy) await applyRequestedPolicy(existing, resolvePiExecutionPolicy(policy));
     applyComposerPatch(existing, patch);
     existing.lastAccessed = Date.now();
     return existing;

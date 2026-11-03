@@ -9,7 +9,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { resolveCursorExecutionPolicy } from "./agent-session.js";
+import { createSession, ensureAgent, resolveCursorExecutionPolicy } from "./agent-session.js";
 import { authToken } from "./config.js";
 import { useCursorCredentialRuntimeForTests } from "./credentials.js";
 import { route } from "./http.js";
@@ -244,4 +244,62 @@ describe("a bridge restart", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+});
+
+test("policy replacement fences prompts and attaches throughout disposal", async () => {
+  const state = await liveSession("held-policy");
+  const release = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const agent = attachFake(state);
+  agent[Symbol.asyncDispose] = async () => {
+    entered.resolve();
+    await release.promise;
+  };
+  const pending = createSession("held-policy", undefined, narrowerPolicy);
+  await entered.promise;
+  try {
+    await expect(ensureAgent(state)).rejects.toThrow("policy is changing");
+    expect(
+      (await post(`/session/${state.id}/prompt`, { prompt: "go", requestId: "held" })).status,
+    ).toBe(409);
+    expect(state.agent).toBeNull();
+  } finally {
+    release.resolve();
+  }
+  await pending;
+  expect(state.policy).toEqual(resolveCursorExecutionPolicy(narrowerPolicy));
+  expect(state.dispatching).toBe(false);
+});
+
+test.each([narrowerPolicy, widerPolicy])("concurrent create checks each policy", async (policy) => {
+  const key = "join-policy";
+  const first = createSession(key, undefined, livePolicy);
+  const second = createSession(key, undefined, policy);
+  if (policy === widerPolicy) {
+    await expect(second).rejects.toThrow();
+    expect((await first).policy).toEqual(resolveCursorExecutionPolicy(livePolicy));
+  } else {
+    expect((await second).policy).toEqual(resolveCursorExecutionPolicy(policy));
+    expect(await first).toBe(await second);
+  }
+});
+
+test("policy replacement reserves admission while an existing attach settles", async () => {
+  const state = await liveSession("attaching-policy");
+  const agent = attachFake(state);
+  const release = Promise.withResolvers<typeof agent>();
+  state.attaching = release.promise;
+  const pending = createSession("attaching-policy", undefined, narrowerPolicy);
+  try {
+    await expect(ensureAgent(state)).rejects.toThrow("policy is changing");
+    expect(
+      (await post(`/session/${state.id}/prompt`, { prompt: "go", requestId: "attaching" })).status,
+    ).toBe(409);
+    expect(state.agent).toBe(agent);
+  } finally {
+    release.resolve(agent);
+  }
+  await pending;
+  expect(state.agent).toBeNull();
+  expect(state.policy).toEqual(resolveCursorExecutionPolicy(narrowerPolicy));
 });

@@ -133,7 +133,10 @@ export async function createSession(
       return existing;
     }
     const inFlight = sessionCreations.get(clientSessionKey);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      await inFlight;
+      return createSession(clientSessionKey, patch, policy, readOnly);
+    }
   }
 
   const work = (async () => {
@@ -173,6 +176,7 @@ export async function ensureAgent(
   state: SessionState,
   options: { atTurnStart?: boolean; requireCurrentModel?: boolean } = {},
 ): Promise<SDKAgent> {
+  if (policyChanges.has(state)) throw new SessionConflictError("Session policy is changing");
   // A closing session attaches nothing. Checked here rather than at each
   // route so no future caller can forget it.
   assertSessionOpen(state);
@@ -233,6 +237,7 @@ export async function ensureAgent(
     await detachAgent(state);
   }
   assertSessionOpen(state);
+  if (policyChanges.has(state)) throw new SessionConflictError("Session policy is changing");
   if (state.agent) return state.agent;
   state.attaching ??= attach(state).finally(() => {
     state.attaching = undefined;
@@ -997,23 +1002,34 @@ function resumePolicyKey(
  * request may only keep a live policy or make it stricter. A real change has to
  * detach, because the SDK takes the policy's options when an agent attaches.
  */
+const policyChanges = new WeakSet<SessionState>();
+
 async function applyRequestedPolicy(
   state: SessionState,
   policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<void> {
+  if (policyChanges.has(state)) throw new SessionConflictError("Session policy is changing");
   assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
   if (JSON.stringify(state.policy) !== JSON.stringify(policy)) {
     if (state.status === "running" || state.dispatching || state.rewinding) {
       throw new SessionConflictError("Session is already running");
     }
-    // An explicit attach may be building an agent concurrently. Let it publish,
-    // then dispose it, so the next attach is the one that takes this policy.
-    await state.attaching?.catch(() => undefined);
-    await detachAgent(state);
-    assertSessionOpen(state);
-    // The detach yields. Another request may have narrowed the policy meanwhile.
-    assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
-    state.policy = policy;
+    // Reserve admission before yielding: no replacement may attach with old options.
+    policyChanges.add(state);
+    state.dispatching = true;
+    try {
+      // An explicit attach may be building an agent concurrently. Let it publish,
+      // then dispose it, so the next attach is the one that takes this policy.
+      await state.attaching?.catch(() => undefined);
+      await detachAgent(state);
+      assertSessionOpen(state);
+      // The detach yields. Another request may have narrowed the policy meanwhile.
+      assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
+      state.policy = policy;
+    } finally {
+      state.dispatching = false;
+      policyChanges.delete(state);
+    }
   }
   state.policyPending = false;
 }

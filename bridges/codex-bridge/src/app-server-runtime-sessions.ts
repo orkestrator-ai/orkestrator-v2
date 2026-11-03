@@ -166,6 +166,12 @@ export class CodexRuntimeSessions {
       config,
     });
 
+    const recheckPolicy = () => {
+      for (const bound of this.ctx.registry.boundSessionsForThread(threadId)) {
+        if (config.policy) assertExecutionPolicyNotWidened(liveCodexPolicy(bound), config.policy);
+      }
+    };
+
     let thread: EngineThread;
     try {
       thread = await this.ctx.options.engine.resumeThread(threadId, { config, includeTurns: true });
@@ -173,16 +179,38 @@ export class CodexRuntimeSessions {
       // A resume can fail because the rollout is gone. Fall back to the parser so
       // the user still sees their conversation; the next prompt starts a fresh
       // thread with reconstructed context.
-      if (!isMissingRolloutError(error)) throw error;
+      if (!isMissingRolloutError(error)) {
+        this.ctx.registry.releaseSession(sessionId);
+        throw error;
+      }
       const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
         structuredOutputTurns: this.ctx.structuredOutputTurnsForThread(threadId),
       });
+      try {
+        recheckPolicy();
+      } catch (error) {
+        this.ctx.registry.releaseSession(sessionId);
+        throw error;
+      }
       session.title = hydrated.title;
       session.titleSource = hydrated.titleSource;
       this.ctx.registry.appendLocalMessages(session, ...hydrated.messages);
       if (hydrated.messages.length > 0) this.ctx.registry.bumpContentEpoch(session);
       session.recoveredContextPending = hydrated.messages.length > 0;
       return { sessionId, title: hydrated.title, threadId };
+    }
+
+    // Resume yields while another tab can narrow this thread's boundary.
+    try {
+      recheckPolicy();
+    } catch (error) {
+      this.ctx.registry.releaseSession(sessionId);
+      // A loaded resume may have applied options: restore the current owner.
+      const owner = this.ctx.registry
+        .boundSessionsForThread(threadId)
+        .find((bound) => liveCodexPolicy(bound));
+      if (owner) await this.ctx.options.engine.configureThread(thread.handle, owner.config);
+      throw error;
     }
 
     const modelsBeforeAttach = this.lifecycle.snapshotBoundModelOverrides(threadId);

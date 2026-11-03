@@ -234,3 +234,62 @@ describe("a bridge restart", () => {
     expect(await reportedApprovals(restarted, sessionId)).toBe("ask");
   });
 });
+
+test.each([narrowerPolicy, widerPolicy])(
+  "concurrent create checks the joining policy",
+  async (policy) => {
+    const directory = await temporaryDirectory();
+    const release = resolve(directory, "release-new");
+    const requests = resolve(directory, "new-requests");
+    const bridge = await spawnBridge({
+      env: {
+        FAKE_ACP_NEW_RELEASE_FILE: release,
+        FAKE_ACP_SESSION_REQUEST_FILE: requests,
+      },
+    });
+    const first = post(bridge, "/session/create", { clientSessionKey: "join", policy: askPolicy });
+    await waitFor(
+      () => fs.readFile(requests, "utf8").catch(() => ""),
+      (text) => text.includes("session/new"),
+    );
+    const second = post(bridge, "/session/create", { clientSessionKey: "join", policy });
+    // Keep the first child held while the second HTTP request reaches admission.
+    await Bun.sleep(30);
+    await fs.writeFile(release, "release");
+    const created = await first;
+    expect(created.status).toBe(201);
+    const sessionId = ((await created.json()) as { id: string }).id;
+    expect((await second).status).toBe(policy === widerPolicy ? 403 : 201);
+    expect(await reportedApprovals(bridge, sessionId)).toBe(
+      policy === widerPolicy ? "ask" : "deny",
+    );
+  },
+);
+
+test("narrowing a running ACP turn refuses without closing its child", async () => {
+  const directory = await temporaryDirectory();
+  const release = resolve(directory, "release-turn");
+  const lifecycle = resolve(directory, "lifecycle");
+  const bridge = await spawnBridge({
+    env: { FAKE_ACP_HOLD_TURN_FILE: release, FAKE_ACP_LIFECYCLE_FILE: lifecycle },
+  });
+  const sessionId = await liveSession(bridge, "busy-policy");
+  const starts = await agentStarts(lifecycle);
+  expect(
+    (await post(bridge, `/session/${sessionId}/prompt`, { prompt: "go", requestId: "busy" }))
+      .status,
+  ).toBe(202);
+  try {
+    for (const [path, body] of [
+      ["/session/create", { clientSessionKey: "busy-policy", policy: narrowerPolicy }],
+      ["/session/resume", { sessionId, policy: narrowerPolicy }],
+    ] as const) {
+      expect((await post(bridge, path, body)).status).toBe(409);
+    }
+    expect(await reportedApprovals(bridge, sessionId)).toBe("ask");
+    expect(await agentStarts(lifecycle)).toBe(starts);
+  } finally {
+    await fs.writeFile(release, "release");
+  }
+  await stopChild(bridge.child);
+});

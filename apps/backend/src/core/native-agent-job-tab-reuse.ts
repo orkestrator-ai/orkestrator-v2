@@ -23,6 +23,10 @@ export function isNativeAgentJobTabReuse(value: unknown): value is NativeAgentJo
 }
 
 interface ResendInput {
+  authorized?: () => Promise<boolean>;
+  onDispatchStarted?: () => void;
+  /** Automatic episodes retain distinct admissions even with identical prompts. */
+  coalesce?: boolean;
   environmentId: string;
   requestId: string;
   completionAction: NativeAgentJobCompletionAction;
@@ -126,7 +130,9 @@ export function jobPromptFingerprint(
 export async function resendToOpenJobTab(
   context: CommandContext,
   input: ResendInput,
-): Promise<ResentJob | null> {
+): Promise<ResentJob | { status: "skipped" } | null> {
+  const authorized = input.authorized ?? (async () => true);
+  const coalesce = input.coalesce !== false && input.tabReuse === "any-agent";
   const nativeAgents = context.nativeAgents;
   if (!nativeAgents) return null;
   // A durable receipt outranks recency, availability and even a closed tab.
@@ -194,7 +200,7 @@ export async function resendToOpenJobTab(
         !persisted?.dispatchedRequestIds?.includes(receipt.dispatchRequestId ?? receipt.requestId),
     );
   const activeReceipt =
-    input.tabReuse === "any-agent" &&
+    coalesce &&
     queue?.jobReceipts?.find(
       (receipt) =>
         receipt.fingerprint === jobPromptFingerprint(input.prompt, input.mode) &&
@@ -214,12 +220,12 @@ export async function resendToOpenJobTab(
     ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
     ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
   };
+  if (!(await authorized())) return { status: "skipped" };
   if (ambiguous) {
     const matching =
-      input.tabReuse === "any-agent" &&
-      queue?.jobReceipts?.find((receipt) => receipt.fingerprint === fingerprint);
+      coalesce && queue?.jobReceipts?.find((receipt) => receipt.fingerprint === fingerprint);
     const pendingMatches =
-      input.tabReuse === "any-agent" &&
+      coalesce &&
       (persisted?.pendingDispatch?.prompt === input.prompt ||
         persisted?.pendingSteer?.text === input.prompt);
     const dispatchRequestId = matching
@@ -281,11 +287,16 @@ export async function resendToOpenJobTab(
         status: "unknown",
       },
       undefined,
-      input.tabReuse === "any-agent",
+      coalesce,
     );
     if (receipt.dispatchRequestId && receipt.dispatchRequestId !== input.requestId) {
       return { ...resent, status: receipt.status, ...(receipt.queued ? { queued: true } : {}) };
     }
+    if (!(await authorized())) {
+      await context.storage.settleNativeAgentJobRequest(queueKey, input.requestId, "rejected");
+      return { status: "skipped" };
+    }
+    input.onDispatchStarted?.();
     const outcome = await nativeAgents.dispatchIntent({
       ...session,
       origin: "interactive-native",
@@ -315,7 +326,7 @@ export async function resendToOpenJobTab(
         queued: true,
       },
       queuedMessage,
-      input.tabReuse === "any-agent",
+      coalesce,
     );
   } catch (error) {
     if (error instanceof Error && error.message === "Native job receipt capacity reached")

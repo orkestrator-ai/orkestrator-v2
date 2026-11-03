@@ -631,7 +631,7 @@ describe("build pipeline multi-model review", () => {
   });
 
   test("pause stops the panel and resume starts a fresh fan-out", async () => {
-    await withPipeline(async ({ service, read, provider }) => {
+    await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       provider.runningModels.add("opus");
       provider.runningModels.add("sonnet");
       const started = await service.start(
@@ -654,8 +654,11 @@ describe("build pipeline multi-model review", () => {
       expect(provider.aborted).toEqual(expect.arrayContaining(firstPanel));
 
       await service.resume(started.id);
+      // Resume rebuilds the immutable review package before opening the panel.
+      // A single supervisor pass only starts that preparation turn.
       await service.advanceNow(started.id);
-      const resumed = await read(started.id);
+      const resumed = await advanceUntil(service, read, started.id, "reviewing");
+      expect(packageGeneration.count).toBe(2);
       expect(resumed.phase).toBe("reviewing");
       expect(resumed.pendingPromptAttempt).toBeUndefined();
       expect(

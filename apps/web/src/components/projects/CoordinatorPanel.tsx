@@ -854,6 +854,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       )
       .finally(() => setOperation(null));
   };
+  const clearFinishedWork = (associationIds: string[]) => {
+    setError(null);
+    return backend
+      .hideCoordinatorWork(projectId, associationIds)
+      .then(setSnapshot)
+      .catch((cause) =>
+        setError(cause instanceof Error ? cause.message : "Could not clear finished work"),
+      );
+  };
   // The badge speaks for the conversation in front: its platform's read-only
   // boundary is either enforced or only something the agent is asked to keep.
   const selectedQualification = selected?.agent
@@ -1151,6 +1160,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             counts={work.counts}
             openDelegations={work.openDelegations}
             onOpen={(target) => openCoordinatorWorkTarget(target)}
+            onClearFinished={clearFinishedWork}
           />
         </div>
         <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">

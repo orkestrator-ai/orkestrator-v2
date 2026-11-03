@@ -163,102 +163,106 @@ describe("StorageService agent mail routes", () => {
     }
   });
 
-  test("a coordinator-created worker wakes only its own coordinator", async () => {
-    const { storage, dataDir } = await coordinatorFixture();
-    try {
-      const main = coordinatorRuntimeId("coordinator-1", "conversation-1");
-      const side = coordinatorRuntimeId("coordinator-1", "conversation-2");
-      // The selected legacy conversation became the main; the other a side agent.
-      expect(
-        (await storage.getAgentMailMailbox(main, "tab-conversation-1")).descriptor
-          .coordinatorOrigin,
-      ).toBeUndefined();
-      expect((await storage.getAgentMailMailbox("e1", "agent")).descriptor.coordinatorOrigin).toBe(
-        main,
-      );
-      expect(
-        (await storage.getAgentMailMailbox("e2", "agent")).descriptor.coordinatorOrigin,
-      ).toBeUndefined();
+  test.each([false, true])(
+    "a coordinator-created worker wakes only its own coordinator (hidden: %s)",
+    async (hidden) => {
+      const { storage, dataDir } = await coordinatorFixture();
+      if (hidden) await storage.coordinators.hideCoordinatorWork("p1", new Set(["launch-e1"]));
+      try {
+        const main = coordinatorRuntimeId("coordinator-1", "conversation-1");
+        const side = coordinatorRuntimeId("coordinator-1", "conversation-2");
+        // The selected legacy conversation became the main; the other a side agent.
+        expect(
+          (await storage.getAgentMailMailbox(main, "tab-conversation-1")).descriptor
+            .coordinatorOrigin,
+        ).toBeUndefined();
+        expect(
+          (await storage.getAgentMailMailbox("e1", "agent")).descriptor.coordinatorOrigin,
+        ).toBe(main);
+        expect(
+          (await storage.getAgentMailMailbox("e2", "agent")).descriptor.coordinatorOrigin,
+        ).toBeUndefined();
 
-      // The "coordinator" address needs no tab id and reaches the main.
-      const report = await storage.sendAgentMail(tab("e1"), {
-        requestId: "report",
-        toEnvironmentId: "coordinator",
-        toTabId: "",
-        body: "done",
-      });
-      expect(report).toMatchObject({
-        route: "coordinator",
-        placement: "pending-inject",
-        toEnvironmentId: main,
-        toTabId: "tab-conversation-1",
-      });
-
-      for (const [sender, environmentId] of [
-        [tab("e1"), "e2"],
-        [tab("e2"), "e1"],
-      ] as const) {
-        const message = await storage.sendAgentMail(sender, {
-          requestId: `isolated-${sender.environmentId}-${environmentId}`,
-          toEnvironmentId: environmentId,
+        // The "coordinator" address needs no tab id and reaches the main.
+        const report = await storage.sendAgentMail(tab("e1"), {
+          requestId: "report",
+          toEnvironmentId: "coordinator",
           toTabId: "",
-          body: "sideways",
+          body: "done",
         });
-        expect(message).toMatchObject({
-          route: "isolated",
-          placement: "stored",
-          placementReason: "isolated-route",
+        expect(report).toMatchObject({
+          route: "coordinator",
+          placement: "pending-inject",
+          toEnvironmentId: main,
+          toTabId: "tab-conversation-1",
+        });
+
+        for (const [sender, environmentId] of [
+          [tab("e1"), "e2"],
+          [tab("e2"), "e1"],
+        ] as const) {
+          const message = await storage.sendAgentMail(sender, {
+            requestId: `isolated-${sender.environmentId}-${environmentId}`,
+            toEnvironmentId: environmentId,
+            toTabId: "",
+            body: "sideways",
+          });
+          expect(message).toMatchObject({
+            route: "isolated",
+            placement: "stored",
+            placementReason: "isolated-route",
+            toTabId: "agent",
+          });
+        }
+
+        // A coordinator that only messaged an environment can still wake it.
+        const delegated = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
+          requestId: "delegated",
+          toEnvironmentId: "e2",
           toTabId: "agent",
+          body: "please look",
         });
-      }
+        expect(delegated).toMatchObject({ route: "coordinator", placement: "pending-inject" });
 
-      // A coordinator that only messaged an environment can still wake it.
-      const delegated = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
-        requestId: "delegated",
-        toEnvironmentId: "e2",
-        toTabId: "agent",
-        body: "please look",
-      });
-      expect(delegated).toMatchObject({ route: "coordinator", placement: "pending-inject" });
-
-      // Side agents talk to the main coordinator and nobody else.
-      await expect(
-        storage.sendAgentMail(tab("e1"), {
-          requestId: "worker-to-side",
+        // Side agents talk to the main coordinator and nobody else.
+        await expect(
+          storage.sendAgentMail(tab("e1"), {
+            requestId: "worker-to-side",
+            toEnvironmentId: side,
+            toTabId: "",
+            body: "wrong door",
+          }),
+        ).rejects.toMatchObject({ code: "policy-denied" });
+        await expect(
+          storage.sendAgentMail(coordinatorSender("conversation-2"), {
+            requestId: "side-to-worker",
+            toEnvironmentId: "e1",
+            toTabId: "agent",
+            body: "not mine",
+          }),
+        ).rejects.toMatchObject({ code: "policy-denied" });
+        const sideToMain = await storage.sendAgentMail(coordinatorSender("conversation-2"), {
+          requestId: "side-to-main",
+          toEnvironmentId: "coordinator",
+          toTabId: "",
+          body: "a thought",
+        });
+        expect(sideToMain).toMatchObject({ toEnvironmentId: main, placement: "pending-inject" });
+        const mainToSide = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
+          requestId: "main-to-side",
           toEnvironmentId: side,
           toTabId: "",
-          body: "wrong door",
-        }),
-      ).rejects.toMatchObject({ code: "policy-denied" });
-      await expect(
-        storage.sendAgentMail(coordinatorSender("conversation-2"), {
-          requestId: "side-to-worker",
-          toEnvironmentId: "e1",
-          toTabId: "agent",
-          body: "not mine",
-        }),
-      ).rejects.toMatchObject({ code: "policy-denied" });
-      const sideToMain = await storage.sendAgentMail(coordinatorSender("conversation-2"), {
-        requestId: "side-to-main",
-        toEnvironmentId: "coordinator",
-        toTabId: "",
-        body: "a thought",
-      });
-      expect(sideToMain).toMatchObject({ toEnvironmentId: main, placement: "pending-inject" });
-      const mainToSide = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
-        requestId: "main-to-side",
-        toEnvironmentId: side,
-        toTabId: "",
-        body: "look into this",
-      });
-      expect(mainToSide).toMatchObject({
-        toTabId: "tab-conversation-2",
-        placement: "pending-inject",
-      });
-    } finally {
-      await fs.rm(dataDir, { recursive: true, force: true });
-    }
-  });
+          body: "look into this",
+        });
+        expect(mainToSide).toMatchObject({
+          toTabId: "tab-conversation-2",
+          placement: "pending-inject",
+        });
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("a worker launched by a closed conversation reports to the current main", async () => {
     const { storage, dataDir } = await coordinatorFixture({ closeCreator: true });

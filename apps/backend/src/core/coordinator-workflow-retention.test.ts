@@ -52,6 +52,26 @@ function select(
 }
 
 describe("selectCoordinatorWorkflowsToClear", () => {
+  test("hiding work leaves cleanup, replay, mail ownership and wake protections unchanged", () => {
+    const workflows = [
+      finished("expired"),
+      finished("replay", { createdAt: minutesAgo(1) }),
+      finished("mail-owner", { kind: "environment", resourceId: "live", baseCommit: "abc" }),
+      finished("status-wake", { kind: "pull-request", terminalNotifiedAt: undefined }),
+      finished("outcome-wake", { workerOutcome: { environmentId: "gone", observedAt: OLD } }),
+    ];
+    const expected = new Set(["expired"]);
+    expect(select(workflows, { environments: ["live"] })).toEqual(expected);
+    expect(
+      select(
+        workflows.map((item) => ({ ...item, workHiddenAt: minutesAgo(1) })),
+        {
+          environments: ["live"],
+        },
+      ),
+    ).toEqual(expected);
+  });
+
   test("clears the oldest finished records first, up to the batch", () => {
     const workflows = [
       finished("c", { createdAt: "2026-09-03T00:00:00.000Z" }),
@@ -320,33 +340,37 @@ describe("coordinator workflow store cleanup", () => {
     });
   });
 
-  test("a retry of a recent request replays its original record instead of adding work", async () => {
-    await withTemporaryStorage(async (storage, dataDir) => {
-      const recent = finished("recent", {
-        kind: "build-pipeline",
-        createdAt: new Date(Date.now() - 60 * 60_000).toISOString(),
-        terminalNotifiedAt: new Date(Date.now() - 30 * 60_000).toISOString(),
-      });
-      seedWorkflows(dataDir, [recent, ...history(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 1)]);
+  test.each([undefined, OLD])(
+    "a retry replays its original record (hidden: %s)",
+    async (workHiddenAt) => {
+      await withTemporaryStorage(async (storage, dataDir) => {
+        const recent = finished("recent", {
+          workHiddenAt,
+          kind: "build-pipeline",
+          createdAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+          terminalNotifiedAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+        });
+        seedWorkflows(dataDir, [recent, ...history(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - 1)]);
 
-      // An unrelated launch fills the store and triggers cleanup; the recent
-      // record, finished but inside the replay window, is kept.
-      await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("unrelated"));
-      expect(storedWorkflows(dataDir).some((item) => item.id === "recent")).toBe(true);
+        // An unrelated launch fills the store and triggers cleanup; the recent
+        // record, finished but inside the replay window, is kept.
+        await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("unrelated"));
+        expect(storedWorkflows(dataDir).some((item) => item.id === "recent")).toBe(true);
 
-      const before = storedWorkflows(dataDir).length;
-      const retried = await storage.coordinators.reserveCoordinatorWorkflowAssociation({
-        ...recent,
-        id: "retry-attempt",
-        terminalNotifiedAt: undefined,
+        const before = storedWorkflows(dataDir).length;
+        const retried = await storage.coordinators.reserveCoordinatorWorkflowAssociation({
+          ...recent,
+          id: "retry-attempt",
+          terminalNotifiedAt: undefined,
+        });
+        expect(retried).toEqual({
+          association: expect.objectContaining({ id: "recent" }),
+          claimed: false,
+        });
+        expect(storedWorkflows(dataDir)).toHaveLength(before);
       });
-      expect(retried).toEqual({
-        association: expect.objectContaining({ id: "recent" }),
-        claimed: false,
-      });
-      expect(storedWorkflows(dataDir)).toHaveLength(before);
-    });
-  });
+    },
+  );
 
   test("recent aliases survive cleanup and replay, including legacy aliases", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {

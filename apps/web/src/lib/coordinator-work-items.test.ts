@@ -8,6 +8,7 @@ import {
   countCoordinatorWork,
   deriveCoordinatorWorkItems,
   FINISHED_WORK_RETENTION_MS,
+  isClearableWorkItem,
   pullRequestStage,
   remoteWorkKey,
   type CoordinatorWorkSources,
@@ -840,4 +841,299 @@ test("an unqualified remote PR summary cannot label a followed URL with another 
   );
   expect(items[0]?.stage).toBe("PR · status unavailable");
   expect(items[0]?.target).toEqual({ type: "pull-request", url });
+});
+
+describe("a followed pull request whose worker is gone", () => {
+  const url = "https://github.com/o/r/pull/420";
+  const followed = (
+    overrides: Partial<CoordinatorWorkflowAssociation> = {},
+    follow: Partial<NonNullable<CoordinatorWorkflowAssociation["pullRequest"]>> = {},
+  ) =>
+    association({
+      kind: "pull-request",
+      resourceId: "gone",
+      createdAt: at(-5 * HOUR),
+      pullRequest: { source: "create-pr", prUrl: url, ...follow },
+      ...overrides,
+    });
+  const merged = {
+    statusNotice: { key: "merged:abc", notifiedAt: at(-HOUR) },
+    terminalNotifiedAt: at(-HOUR),
+  };
+
+  test("is merged, not running, when its recorded notice says so", () => {
+    const [item] = deriveCoordinatorWorkItems(sources({ workflows: [followed(merged)] }));
+    expect(item).toMatchObject({
+      bucket: "finished",
+      stage: "PR merged",
+      name: "PR #420",
+      prOpen: false,
+      finishedAt: NOW - HOUR,
+      target: { type: "pull-request", url },
+    });
+  });
+
+  test.each([false, true])(
+    "newer final merge supersedes a closed notice (grouped: %s)",
+    (grouped) => {
+      const old = followed({
+        statusNotice: { key: "closed:abc", notifiedAt: at(-3 * HOUR) },
+        terminalNotifiedAt: at(-3 * HOUR),
+      });
+      const captured = { prUrl: url, prState: "merged" as const, at: at(-HOUR) };
+      const workflows = grouped
+        ? [
+            old,
+            followed(
+              { createdAt: at(-2 * HOUR), terminalNotifiedAt: at(-HOUR) },
+              { final: captured },
+            ),
+          ]
+        : [{ ...old, pullRequest: { ...old.pullRequest!, final: captured } }];
+      expect(deriveCoordinatorWorkItems(sources({ workflows }))[0]?.stage).toBe("PR merged");
+    },
+  );
+
+  test.each([false, true])(
+    "a newer follow supersedes old closed history (merged: %s)",
+    (isMerged) => {
+      const old = followed({
+        statusNotice: { key: "closed:abc", notifiedAt: at(-3 * HOUR) },
+        terminalNotifiedAt: at(-3 * HOUR),
+      });
+      const newer = followed({
+        createdAt: at(-2 * HOUR),
+        ...(isMerged ? merged : {}),
+      });
+      for (const workflows of [
+        [old, newer],
+        [newer, old],
+      ]) {
+        expect(deriveCoordinatorWorkItems(sources({ workflows }))[0]).toMatchObject({
+          bucket: isMerged ? "finished" : "running",
+          stage: isMerged ? "PR merged" : "PR · status unavailable",
+        });
+      }
+    },
+  );
+
+  test("capturing a deletion reading does not revive expired terminal history", () => {
+    const old = at(-FINISHED_WORK_RETENTION_MS - HOUR);
+    expect(
+      deriveCoordinatorWorkItems(
+        sources({
+          workflows: [
+            followed(
+              {
+                createdAt: old,
+                statusNotice: { key: "merged:abc", notifiedAt: old },
+                terminalNotifiedAt: old,
+              },
+              { final: { prUrl: url, prState: "merged", at: at(0) } },
+            ),
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("a final outcome at creation time wins the timestamp tie", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          followed(
+            {
+              createdAt: at(-HOUR),
+              terminalNotifiedAt: at(-HOUR),
+            },
+            { final: { prUrl: url, prState: "merged", at: at(-HOUR) } },
+          ),
+        ],
+      }),
+    );
+    expect(item?.stage).toBe("PR merged");
+  });
+
+  test("a deletion with unavailable state keeps the last known outcome", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          followed(merged, {
+            final: { prUrl: url, prState: null, at: at(0) },
+          }),
+        ],
+      }),
+    );
+    expect(item?.stage).toBe("PR merged");
+  });
+
+  test("is closed when its recorded notice says so", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          followed({
+            statusNotice: { key: "closed:abc", notifiedAt: at(-HOUR) },
+            terminalNotifiedAt: at(-HOUR),
+          }),
+        ],
+      }),
+    );
+    expect(item).toMatchObject({ bucket: "finished", stage: "PR closed" });
+  });
+
+  test("uses the final reading captured at deletion when no notice recorded the end", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          followed(
+            { terminalNotifiedAt: at(-HOUR) },
+            { final: { prUrl: url, prState: "merged", name: "feature", at: at(-HOUR) } },
+          ),
+        ],
+      }),
+    );
+    expect(item).toMatchObject({
+      bucket: "finished",
+      stage: "PR merged",
+      name: "PR #420 · feature",
+    });
+  });
+
+  test("does not take the state of another pull request from its final reading", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          followed(
+            { terminalNotifiedAt: at(-HOUR) },
+            { final: { prUrl: `${url}0`, prState: "merged", at: at(-HOUR) } },
+          ),
+        ],
+      }),
+    );
+    expect(item).toMatchObject({ bucket: "finished", stage: "PR · no longer followed" });
+  });
+
+  test.each([
+    ["no reading at all", {}],
+    ["a last reading of open", { final: { prUrl: url, prState: "open" as const, at: at(-HOUR) } }],
+  ])("an ended follow with %s is finished and does not claim an outcome", (_name, follow) => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({ workflows: [followed({ terminalNotifiedAt: at(-HOUR) }, follow)] }),
+    );
+    expect(item).toMatchObject({
+      bucket: "finished",
+      stage: "PR · no longer followed",
+      prOpen: false,
+      target: { type: "pull-request", url },
+    });
+  });
+
+  test("an ended follow that never saw a pull request says so", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          association({
+            kind: "pull-request",
+            resourceId: "gone",
+            terminalNotifiedAt: at(-HOUR),
+            pullRequest: { source: "create-pr" },
+          }),
+        ],
+      }),
+    );
+    expect(item).toMatchObject({
+      bucket: "finished",
+      target: null,
+      unavailableReason: "No pull request was recorded.",
+    });
+  });
+
+  test("a live follow with no reading stays running", () => {
+    const [item] = deriveCoordinatorWorkItems(sources({ workflows: [followed()] }));
+    expect(item).toMatchObject({ bucket: "running", stage: "PR · status unavailable" });
+  });
+
+  test("a live reading of the same pull request wins over a recorded end", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [followed(merged)],
+        environments: new Map([["gone", environment("gone", { prUrl: url, prState: "open" })]]),
+      }),
+    );
+    expect(item).toMatchObject({ bucket: "running", prOpen: true });
+  });
+
+  test("drops off 24 hours after its end", () => {
+    const base = sources({ workflows: [followed(merged)] });
+    const justBefore = NOW - HOUR + FINISHED_WORK_RETENTION_MS - 1;
+    expect(deriveCoordinatorWorkItems({ ...base, now: justBefore })).toHaveLength(1);
+    expect(deriveCoordinatorWorkItems({ ...base, now: justBefore + 1 })).toEqual([]);
+  });
+});
+
+describe("clearing finished work", () => {
+  const hidden = { workHiddenAt: at(-HOUR) };
+
+  test("a cleared finished row is not listed or counted", () => {
+    const items = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          delegated("cleared", "completed", { completedAt: at(-HOUR) }, hidden),
+          delegated("kept", "completed", { completedAt: at(-HOUR) }),
+        ],
+        environments: new Map([
+          ["cleared", environment("cleared")],
+          ["kept", environment("kept")],
+        ]),
+      }),
+    );
+    expect(items.map((item) => item.name)).toEqual(["env kept"]);
+    expect(countCoordinatorWork(items).finished).toBe(1);
+  });
+
+  test("a row lists every record behind it, and a new one brings it back", () => {
+    const first = delegated("worker", "completed", { completedAt: at(-2 * HOUR) });
+    const second = delegated("worker", "completed", { completedAt: at(-HOUR) }, hidden);
+    const environments = new Map([["worker", environment("worker")]]);
+    const [item] = deriveCoordinatorWorkItems(
+      sources({ workflows: [first, second], environments }),
+    );
+    expect(item?.associationIds).toEqual([first.id, second.id]);
+    expect(
+      deriveCoordinatorWorkItems(
+        sources({ workflows: [{ ...first, ...hidden }, second], environments }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("a cleared row comes back when its work is running again", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [delegated("worker", "completed", { completedAt: at(-HOUR) }, hidden)],
+        environments: new Map([
+          ["worker", environment("worker", { agentActivityState: "working" })],
+        ]),
+      }),
+    );
+    expect(item?.bucket).toBe("running");
+  });
+
+  test("finished work whose pull request is open cannot be cleared", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [delegated("worker", "completed", { completedAt: at(-HOUR) }, hidden)],
+        environments: new Map([
+          [
+            "worker",
+            environment("worker", {
+              prUrl: "https://github.com/o/r/pull/1",
+              prState: "open",
+            }),
+          ],
+        ]),
+      }),
+    );
+    expect(item).toMatchObject({ bucket: "finished", prOpen: true });
+    expect(isClearableWorkItem(item!)).toBe(false);
+  });
 });

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { BACKEND_INSTANCE_DESCRIPTOR_MAX_BYTES } from "@orkestrator/protocol/backend-instance";
 import {
   descriptorTrustRefusal,
   isDescriptorRefusal,
@@ -116,6 +117,39 @@ describe("processIsAlive", () => {
     } finally {
       kill.mockRestore();
     }
+  });
+});
+
+describe("descriptor size limit", () => {
+  test("accepts the byte limit and refuses one byte over before connecting or falling back", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const dataDir = await box.publishDescriptor(backend);
+    const file = path.join(dataDir, "backend-instance.json");
+    const contents = await fs.readFile(file);
+    // Keep the JSON valid at both sizes so only the byte limit can cause refusal.
+    const padded = Buffer.alloc(BACKEND_INSTANCE_DESCRIPTOR_MAX_BYTES + 1, " ");
+    contents.copy(padded);
+    await writeFile(file, padded.subarray(0, BACKEND_INSTANCE_DESCRIPTOR_MAX_BYTES));
+    expect((await readDescriptor(file)).installationId).toBe("install-a");
+
+    await writeFile(file, padded);
+    const error = await readDescriptor(file).catch((caught: unknown) => caught);
+    expect(isDescriptorRefusal(error)).toBe(true);
+    expect((error as Error).message).toContain(file);
+    expect((error as Error).message).toContain("it is too large");
+
+    await publishProfile(box, backend, dataDir);
+    for (const args of [
+      ["connection", "add", "local", "--data-dir", dataDir],
+      ["--profile", "qa", "project", "list"],
+    ]) {
+      const result = await box.run(["--json", ...args]);
+      expect(result.code).toBe(4);
+      expect(JSON.parse(result.out).error).toMatchObject({ code: "connection-failed" });
+      expect(JSON.parse(result.out).error.message).toContain("it is too large");
+    }
+    expect(backend.requests).toHaveLength(0);
   });
 });
 

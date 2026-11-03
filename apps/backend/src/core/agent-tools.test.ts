@@ -551,11 +551,18 @@ describe("agent Kanban tools", () => {
       ...WORKFLOW_RESULT_KINDS.map(workflowResultToolName),
       "validate_workflow_result",
       "get_workflow_result_status",
+      ...AGENT_MAIL_TOOL_NAMES,
     ]);
     expect(listed.body.result?.tools?.[0]?.inputSchema).toMatchObject({
       required: ["resultKey", "capability"],
       properties: { result: expect.any(Object), validatedDigest: { type: "string" } },
     });
+
+    const unauthorizedMail = await rpc(first.url, first.token, "tools/call", {
+      name: "check_inbox",
+      arguments: { resultKey: firstKey, capability: first.workflowResultCapability },
+    });
+    expect(unauthorizedMail.body.result?.isError).toBe(true);
 
     const crossed = await rpc(first.url, first.token, "tools/call", {
       name: "submit_feature_plan_state",

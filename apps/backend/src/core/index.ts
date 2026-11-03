@@ -20,6 +20,7 @@ import { readTaskOutputTail } from "./task-output-tail.js";
 import { HumanPromptRegistry } from "./human-prompt-registry.js";
 import { UserCommandService } from "./user-commands.js";
 import { resolveUserCommandLaunch } from "./commands-registry-user-commands.js";
+import { isPipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import { workerSessionActivity, workerSessionGoal } from "./worker-session-activity.js";
 import {
   defaultOwnerLabel,
@@ -747,8 +748,15 @@ export class OrkestratorBackend {
       storage,
       () => this.controlMcp.getSettings(),
       undefined,
-      async (environmentId, tabId) =>
-        (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId)).turn,
+      async (environmentId, tabId) => {
+        // A build pipeline worker's turn, read from its pipeline: an ended
+        // worker reads idle, so a delegation to it settles.
+        if (isPipelineWorkerTabId(tabId)) {
+          const status = await this.buildPipelines.workerMail.state(environmentId, tabId);
+          return status === "running" ? "working" : status === null ? "unknown" : "idle";
+        }
+        return (await workerSessionActivity(storage, this.nativeAgents, environmentId, tabId)).turn;
+      },
       {
         lastAssistantExcerpt: (environmentId, tabId) =>
           this.lastAssistantExcerpt(environmentId, tabId),
@@ -1300,6 +1308,9 @@ export class OrkestratorBackend {
           usageLimitStops: this.accountAutoSwitch,
         },
         resolveAgentToolConnection,
+        // Each worker's own mailbox identity on turns without a result tool.
+        resolveWorkerToolConnection: (environmentId, projectId, target, tabId) =>
+          this.agentTools.connection(environmentId, projectId, target, tabId),
         assertAgentToolsReachable,
         workflowAdmission: this.workflowAdmission,
         artifactDispatch,
@@ -1642,6 +1653,14 @@ export class OrkestratorBackend {
           if (handler) await handler({ environmentId }, context);
         },
       ),
+      pipelineWorkers: this.buildPipelines.workerMail,
+    });
+    // A pipeline worker's queued mail becomes its next turn at its turn end.
+    this.buildPipelines.setWorkerMailbox({
+      claim: (environmentId, tabId, requestId) =>
+        this.agentMail.claimPipelineWorkerMail(environmentId, tabId, requestId),
+      settle: (environmentId, tabId, messageIds, outcome) =>
+        this.agentMail.settlePipelineWorkerMail(environmentId, tabId, messageIds, outcome),
     });
     context.drainAgentMail = () => this.agentMail.drainInjects();
     // Scoped workflow wakeups (step 08), subscribed before any owner's first

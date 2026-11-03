@@ -1,4 +1,29 @@
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { pipelineWorkers } from "@orkestrator/protocol/pipeline-worker-mail";
+
+/**
+ * A build pipeline's workers, each with the mailbox address a coordinator
+ * sends to and reads the transcript of. Derived from the snapshot itself, so
+ * a command node summarizing a leaf's pipeline lists the same workers.
+ */
+function buildPipelineWorkers(workflow: Record<string, unknown>): Record<string, unknown>[] {
+  if (!Array.isArray(workflow.sessions) || typeof workflow.environmentId !== "string") return [];
+  try {
+    return pipelineWorkers(workflow as unknown as BuildPipeline).map((worker) => ({
+      address: worker.address,
+      step: worker.step,
+      round: worker.round,
+      ...(worker.slot !== undefined ? { slot: worker.slot } : {}),
+      label: worker.label,
+      agent: worker.agent,
+      ...(worker.model ? { model: worker.model } : {}),
+      status: worker.status,
+    }));
+  } catch {
+    return [];
+  }
+}
 
 /** Bounded control response; never include provider configuration or controller fences. */
 export function workflowSummary(workflow: Record<string, unknown>): Record<string, unknown> {
@@ -13,6 +38,9 @@ export function workflowSummary(workflow: Record<string, unknown>): Record<strin
     addressPromptPending: workflow.addressPromptPending,
     fixTabId: workflow.fixTabId,
     ...("delivery" in workflow ? { delivery: workflow.delivery } : {}),
+    // Build pipelines: one mailbox per worker; send_message with toTabId set
+    // to `address` reaches that worker only.
+    ...(Array.isArray(workflow.sessions) ? { workers: buildPipelineWorkers(workflow) } : {}),
     ...("autoFix" in workflow || "autoPr" in workflow
       ? { automation: multiReviewAutomation(workflow) }
       : {}),

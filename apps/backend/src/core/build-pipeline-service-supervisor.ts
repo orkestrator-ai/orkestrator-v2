@@ -5,6 +5,7 @@ import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failu
  * dispatch, review packages, validation and the multi-model review).
  */
 import { randomUUID } from "node:crypto";
+import { dispatchWorkerMailTurn } from "./build-pipeline-worker-mail.js";
 import {
   type BuildPipeline,
   type BuildPipelineAgent,
@@ -217,6 +218,9 @@ export class BuildPipelineSupervisor {
   reviewFanout(): BuildPipelineReviewFanout {
     if (!this.reviewFanoutRunner) {
       this.reviewFanoutRunner = new BuildPipelineReviewFanout({
+        workerMailbox: () => this.ctx.workerMailbox,
+        workerMailTurn: (pipeline, sessionKey, agent) =>
+          this.ctx.workerMailTurn(pipeline, sessionKey, agent),
         provider: (pipeline, agent) => this.agents.provider(pipeline, agent),
         providerUnavailable: (pipeline, agent, provider) =>
           this.agents.evictUnreachableProvider(pipeline, agent, provider),
@@ -622,6 +626,16 @@ export class BuildPipelineSupervisor {
         await this.startReviewPackagePreparation(pipeline);
         return;
       }
+      const worker = sessionForCurrentPhase(pipeline);
+      if (worker) {
+        if (
+          await dispatchWorkerMailTurn(this.ctx, pipeline, worker, async () => {
+            const provider = await this.agents.provider(pipeline, sessionAgent(pipeline, worker));
+            await this.dispatchPending(pipeline, provider);
+          })
+        )
+          return;
+      }
       await this.advanceValidation(pipeline);
       return;
     }
@@ -883,6 +897,8 @@ export class BuildPipelineSupervisor {
       contextUsage,
       transcript.taken(),
     );
+    // Retain the result contract even if usage finalization defers this boundary.
+    session.validationPlan ??= pipeline.activePromptContext?.validationPlan;
     delete pipeline.pendingPromptAttempt;
     delete pipeline.activePromptContext;
     const previousUsagePolls = session.usageFinalizationPolls;
@@ -923,6 +939,10 @@ export class BuildPipelineSupervisor {
       await this.dispatchUserMessage(pipeline, provider, session);
       return;
     }
+
+    // Mail queued for this worker while its turn ran is its next turn, before
+    // the pipeline moves on and the worker ends.
+    if (await this.dispatchWorkerMail(pipeline, provider, session)) return;
 
     switch (pipeline.phase) {
       case "building":
@@ -1367,6 +1387,17 @@ export class BuildPipelineSupervisor {
     await this.dispatchPending(pipeline, provider);
   }
 
+  /** Queued mail for the current worker as its next turn (`build-pipeline-worker-mail.ts`). */
+  dispatchWorkerMail(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<boolean> {
+    return dispatchWorkerMailTurn(this.ctx, pipeline, session, () =>
+      this.dispatchPending(pipeline, provider),
+    );
+  }
+
   async ensureSourceLink(pipeline: BuildPipeline): Promise<void> {
     if (!pipeline.environmentId || pipeline.sourceLinkedAt) return;
     if (pipeline.source?.type === "kanban") {
@@ -1665,6 +1696,7 @@ export class BuildPipelineSupervisor {
         turnStartedAt: promptStartedAt,
         label,
         messageRevision: 0,
+        validationPlan: schema === REVIEW_VALIDATION_PLAN_SCHEMA,
         structuredRequestId: schema !== undefined ? requestId : undefined,
         resultTransport,
         resultSubmission: resultTransport === "tool-v1" ? ("preparing" as const) : undefined,
@@ -1784,7 +1816,8 @@ export class BuildPipelineSupervisor {
       agent,
       agentMcp,
     );
-    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
+    const workerTurn = agentMcp ? undefined : this.ctx.workerMailTurn(pipeline, sessionKey, agent);
+    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp ?? workerTurn?.agentMcp;
     await attachBeforeDispatch(
       provider,
       sessionId,
@@ -1820,6 +1853,7 @@ export class BuildPipelineSupervisor {
           ...(readOnlyReview ? readOnlyReviewSendOptions(agent, policy) : {}),
           ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
           ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
+          ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
           ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),

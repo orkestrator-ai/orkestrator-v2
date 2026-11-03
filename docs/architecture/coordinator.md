@@ -1398,7 +1398,116 @@ see [`agent-messaging.md`](agent-messaging.md#routes)), and mail to a side
 agent is refused. Mail between the main and its workers wakes whatever the
 default inject policy is. Workers are told to report with `send_message` to
 `"coordinator"`; the coordinator may message a worker by environment id alone,
-which resolves to the tab it is waiting on or the environment's agent tab.
+which resolves to the tab it is waiting on or the environment's agent tab. A
+pipeline environment never resolves that way: each of its workers has its own
+mailbox (see [Pipeline worker mailboxes](#pipeline-worker-mailboxes)).
+
+### Pipeline worker mailboxes
+
+Every agent session a build pipeline runs is a background worker with its own
+durable mailbox: build, package preparation, each reviewer of a multi-reviewer
+review, consolidation, address, verify, fix, PR and conflict resolution, in
+every round. There is no pane tab for any of them; the mailbox is the worker.
+
+- **Address.** The pipeline environment plus the tab id
+  `pipeline-worker:<sessionKey>` (`pipelineWorkerTabId`,
+  `packages/protocol/src/pipeline-worker-mail.ts`). The session key is minted
+  before the session starts and never reused, so one address names exactly
+  one worker instance; three parallel reviewers have three addresses.
+- **Discovery.** `pipelineWorkers(pipeline)` derives the list from the
+  pipeline record alone. The mailbox directory
+  (`storage-agent-mail-directory.ts`) publishes one mailbox of kind
+  `pipeline` per worker of a running pipeline, with `pipelineWorker`: step
+  (`build`, `preparation`, `review`, `consolidation`, `address`, `verify`,
+  `fix`, `pr`, `resolve-conflicts`), round, reviewer slot, label, model and
+  status (`running`, `idle`, `finished`, `failed`, `cancelled`).
+  `list_mailboxes` with `environmentId` lists them (with `nodeId` too, on a
+  leaf), and `get_build_pipeline` carries the same list as `workers`
+  (`control-workflow-summary.ts`), so a command node reading a leaf's pipeline
+  lists the same workers. A worker gets its mailbox the moment its session
+  starts: a send checks the pipeline's workers before it resolves the address
+  (`ensureAgentMailDirectoryFresh`), and the mail service resynchronizes when a
+  pipeline's worker set changes.
+- **No implicit routing.** A send naming only a pipeline environment is
+  refused with every worker's address, step, round and status. Mail is never
+  re-routed: a worker that has finished, failed or been cancelled refuses new
+  mail with that state (`recipient-not-found`), and mail still queued when its
+  worker ends is marked `expired` with reason `worker-<status>`; each sender is
+  told by a workflow notice (`state: "mail-expired"`; a command node's
+  coordinator through the node outbox). Nothing goes to the next session of
+  the same step.
+- **Delivery.** The existing model: queued, steered, acked and replied to
+  like any mail. While the worker's turn runs, mail waits. When the turn ends,
+  the supervisor hands everything queued for that worker to it as one turn,
+  before the pipeline advances (`dispatchWorkerMailTurn`,
+  `build-pipeline-worker-mail.ts`), journaled as the pending prompt attempt
+  like a queued user message, so it is delivered at most once; the attempt's
+  request id is kept on the session (`mailDeliveries`) so a claim interrupted
+  by a restart is reconciled against it. `deliverNow` steers into the running
+  turn through the pipeline (`BuildPipelineWorkerMail.steer`, under the
+  pipeline lock) and reports `steered`; an agent that cannot steer reports
+  `unsupported, queued`; a worker between turns reports `queued until idle`.
+  Fan-out reviewers and consolidation claim their own queued mail before
+  accepting a result. Each mail turn rotates the result key and preserves the
+  structured-result contract. Mail during fixed-snapshot validation cancels
+  and archives that validation run before writable work resumes; preparation
+  and validation must then certify the new state.
+- **Identity.** A worker sends, replies, acks and checks its inbox as its own
+  mailbox, on every agent and every turn (`pipeline-worker-identity.ts`):
+  - A tool-mode stage turn's workflow-result capability carries the mail
+    tools of the worker the backend's record says owns that attempt. On
+    OpenCode the persistent workflow-result broker authenticates each mail
+    call with the current resultKey and signed capability, then resolves the
+    worker the same way.
+  - A turn without one (build, address, fix, verify, PR, conflict resolution,
+    reviewers and consolidation alike) gets its worker's identity from
+    `BuildPipelineContext.workerMailTurn`. A bridge agent's turn connects
+    with a credential scoped to the worker's mailbox
+    (`resolveWorkerToolConnection`). OpenCode keeps its environment-wide
+    `orkestrator` connection, so the turn's trusted system instruction
+    carries the worker's mail capability (`workerMail`,
+    `openCodeWorkerMailInstruction`), and every mail tool on that connection
+    takes it as `mailCapability`. The capability names exactly one worker
+    mailbox and project, is signed by the workflow-result service's durable
+    identity (domain-separated, so it survives a restart), is never a bearer
+    credential, and stops working when its worker ends and loses its
+    mailbox.
+
+  An environment-wide credential without that capability cannot claim a
+  worker's mailbox, and no worker can use another's.
+- **Trust.** Unchanged: the same senders reach a worker as any other worker
+  in the project, with the same routes, budgets and untrusted peer-mail
+  framing. The carrier adds that the recipient is a build pipeline step: a
+  coordinator may guide the step's task but cannot change the pipeline's
+  settings, delivery policy, ticket or acceptance criteria, and the stage's
+  own instructions and required result still apply.
+- **Transcripts.** `get_tab_transcript` with a worker's address returns that
+  worker's own transcript, running or finished: the newest messages of its
+  stage session's committed transcript (`get_build_pipeline_worker_transcript`,
+  checkpointed every few seconds while the turn runs). It never touches the
+  provider. The `claude-build` tab itself is still not a transcript source.
+- **Durability.** Mailboxes and queued mail are rows in the mail store and
+  are rebuilt from the pipeline record on start, so they survive a backend
+  restart while the pipeline runs. A finished or removed pipeline's worker
+  mailboxes are tombstoned with their final status, and pruned with the rest.
+- **Delegations.** A coordinator message to a worker opens a delegation like
+  any other; it settles when that worker's turn ends or the worker ends
+  (`workerActivity` reads the pipeline for a `pipeline-worker:` tab).
+
+Decisions:
+
+- **Address workers, not steps (chosen).** Options: (a) a mailbox per worker
+  instance, named by its session key; (b) one mailbox per step that follows
+  whichever session runs it; (c) the environment, routed to the running
+  session. (b) and (c) deliver to a worker the sender did not choose when the
+  running session changes between send and delivery, and cannot address one
+  of several parallel reviewers. Con of (a): a sender must re-read the list
+  after a round moves on.
+- **Turn end, not idle (chosen).** A pipeline worker going idle is what
+  advances the pipeline, so idle injection would always lose the race; the
+  supervisor's own turn-end step delivers instead.
+- **Expire, never re-route (chosen).** Mail to a worker that ended expires
+  and the sender is told, rather than going to its successor.
 
 ### Course corrections with deliverNow
 
@@ -2584,6 +2693,19 @@ guarantee, not by one end-to-end scenario replayed per platform:
   coordinator, the operator profile or a public action
   (`graph-describe-coordinator.test.ts`)
 - single-turn mail batching: `agent-mail-service.test.ts`
+- build pipeline worker mailboxes (one per worker and per parallel reviewer,
+  discovery, delivery at turn end, `deliverNow`, the environment-only and
+  ended-worker refusals, expiry and its notice, worker replies, leaf-side node
+  delivery, transcripts, result-key identity, restart):
+  `pipeline-worker-mail.test.ts`; the coordinator tools for them, here and on a
+  leaf: `control-mcp-pipeline-workers.test.ts`; worker derivation and carrier
+  framing: `packages/protocol/src/pipeline-worker-mail.test.ts`; each worker's
+  own mail identity (result server, OpenCode broker, and the environment-wide
+  connection with `mailCapability`: send, reply, ack, forged, foreign and
+  ended-worker refusals, restart): `agent-tools-pipeline-worker-mail.test.ts`;
+  stage turns carrying it (`build-pipeline-worker-mail.test.ts`), each
+  reviewer and the consolidation (`build-pipeline-review-fanout-worker-mail.test.ts`)
+  and OpenCode's system field (`opencode-provider-dispatch.test.ts`)
 - tool contract and poll guard: `control-mcp-server-reads.test.ts` and
   `control-mcp-server-messaging.test.ts`
 - the answer relay: questions only, the proposal checked and stored, stale and

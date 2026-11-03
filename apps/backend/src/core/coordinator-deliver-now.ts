@@ -112,8 +112,11 @@ export async function settleCoordinatorDeliverNow(
     context.storage.getEnvironment(sent.toEnvironmentId),
   ]);
   const { kind, agent } = mailbox.descriptor;
+  // A build pipeline worker steers through its pipeline, on its own agent.
   const canSteer =
-    kind === "native" && agent != null && nativeAgentCapabilities(agent).actions?.steer === true;
+    (kind === "native" || kind === "pipeline") &&
+    agent != null &&
+    nativeAgentCapabilities(agent).actions?.steer === true;
   const descriptor = mailbox.descriptor;
   let blockedReason: string | undefined;
   if (!config.global.agentMessaging?.enabled) blockedReason = "messaging-disabled";

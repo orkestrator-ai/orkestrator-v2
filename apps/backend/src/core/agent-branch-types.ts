@@ -25,6 +25,7 @@ import type {
   WorkflowResultTransport,
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentToolConnection } from "./agent-tools.js";
+import type { PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
 import type {
   BuildPipelineProvider,
   ProviderPrepareDispatchOptions,
@@ -160,6 +161,12 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   /** Trusted policy for the branch's session, never provider defaults. */
   executionPolicy(branch: B): Promise<NativeAgentExecutionPolicy>;
   agentMcp?(branch: B, requestId: string): Promise<AgentToolConnection | undefined>;
+  /**
+   * The branch's own mail identity on a turn without a workflow-result
+   * connection (build pipeline workers). Absent: such turns keep the
+   * bridge's environment connection.
+   */
+  workerMailTurn?(branch: B): PipelineWorkerMailTurn | undefined;
   prepareResult?(branch: B, requestId: string, schema: JsonSchema): Promise<void>;
   supportsToolResult?(branch: B): boolean;
   readResult?<T>(requestId: string): Promise<StructuredOutputResult<T> | null>;
@@ -174,6 +181,7 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   consumeResult?(requestId: string): Promise<void>;
   stageResultConsumption?(requestId: string): void;
   finishResultConsumption?(requestId: string): void;
+  beforeResult?(branch: B): Promise<boolean>;
   closeResult?(requestId: string): Promise<void>;
   /** Persists the owner's record. The runner serializes every call. */
   save(): Promise<void>;

@@ -65,7 +65,11 @@ mailbox; the messages remain until retention prunes them.
 | `cursor`, `grok`, `pi` terminal, `plain`, `browser`, workflow tabs | none | Not addressable |
 
 Review and workflow tabs (`claude-build`, `multi-review`)
-are never mailboxes.
+are never mailboxes. A build pipeline's workers are, without a tab: each
+agent session the pipeline runs has a mailbox of kind `pipeline` and tab type
+`pipeline-worker`, addressed `pipeline-worker:<sessionKey>` in the pipeline
+environment. Its delivery, identity and expiry are the pipeline's
+([coordinator.md](coordinator.md#pipeline-worker-mailboxes)).
 
 **Actors.** Every message records who sent it:
 
@@ -95,7 +99,7 @@ carrier text tells the model the payload is untrusted.
 | `inject_failed` | Only after automatic recovery gave up: an ambiguous dispatch the journal never settled, or a tmux dispatch with no journal. UI can retry |
 | `undeliverable` | Recipient gone or superseded |
 | `bounced` | Policy refusal (muted inbound, messaging disabled, …) |
-| `expired` | Past retention |
+| `expired` | Past retention, or queued for a build pipeline worker that ended (`worker-finished`, `worker-failed`, `worker-cancelled`); its sender is told |
 
 **Receipts are two bits.** `userSeenAt` is the human opening the inbox.
 `ackedAt` is the agent calling `ack_message` (or `reply_message`, which acks
@@ -180,7 +184,8 @@ and cross-project mail and workflow notices start nothing. With no qualified
 agent the message is `stored` and waits. `toTabId` may be
 omitted for a coordinator address, and for an environment: it resolves to the
 tab a coordinator is waiting on, the environment's only agent tab, or its
-`startup-agent`, and otherwise fails listing the tab ids. Idempotency keys on
+`startup-agent`, and otherwise fails listing the tab ids. A pipeline
+environment never resolves: the send fails listing its workers' addresses. Idempotency keys on
 the address the sender wrote, so a retry still matches after a redirect.
 
 **Side agents** send only to their main coordinator and receive only from it
@@ -574,11 +579,18 @@ delegation is `mcpClient && canInject`
 | Native Claude / Codex / OpenCode / Pi / Cursor / Grok (locked) | yes | yes | yes |
 | Native, unlocked or no agent yet | no | no | no |
 | Claude tmux | yes | yes | yes |
+| Build pipeline worker (`pipeline-worker`, with an agent) | yes | yes | yes |
 | Terminal claude / codex / opencode | yes | yes | no |
 | Any other tab | no | no | no |
 
 Unlocked native tabs (composer open, platform not chosen) are UI-only so a
 half-created tab cannot consume the environment credential.
+
+A build pipeline worker's mailbox answers only to its own turn's identity: a
+mailbox-scoped credential, its workflow-result capability, or (OpenCode, whose
+connection is environment-wide) the signed `mailCapability` argument its turn
+was given. The environment credential alone cannot claim it
+([coordinator.md](coordinator.md#pipeline-worker-mailboxes)).
 
 ## Provider notes
 
@@ -728,3 +740,4 @@ capability row says so.
 | Node mail (leaf side, outbox, collection) | `apps/backend/src/core/nodes/node-mail.ts`, `node-mail-collector.ts`, `node-coordination.ts` |
 | Coordinator ↔ coordinator node mail | `apps/backend/src/core/coordinator-node-coordinator-mail.ts`, `node-mail-reply-target.ts`; scenarios in `coordinator-node-coordinator-mail.test.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |
+| Build pipeline workers | `packages/protocol/src/pipeline-worker-mail.ts`, `apps/backend/src/core/build-pipeline-worker-mail.ts`, `pipeline-worker-identity.ts`, `build-pipeline-worker-transcript.ts` |

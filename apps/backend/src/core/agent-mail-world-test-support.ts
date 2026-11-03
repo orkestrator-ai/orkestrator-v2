@@ -19,6 +19,7 @@ import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator-service.js";
 import type { CoordinatorDeliverNowResult } from "./coordinator-deliver-now.js";
 import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
+import type { PipelineWorkerMailPort } from "./build-pipeline-worker-mail.js";
 import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import type { CoordinatorStatusWakeOptions } from "./coordinator-status-wakes.js";
 import { runCommand } from "./shell.js";
@@ -44,6 +45,8 @@ export type MailWorldOptions = {
   delegations?: CoordinatorDelegationOptions;
   /** Leave the main coordinator as it is until someone first uses it: no agent. */
   unassignedMain?: boolean;
+  /** Build pipeline workers' side of delivery, built over the world's current storage. */
+  pipelineWorkers?: (storage: StorageService) => PipelineWorkerMailPort;
 };
 
 /** One carrier's JSON payload, the structured part of an injected mail prompt. */
@@ -141,6 +144,7 @@ export class MailWorld {
         coordinatorMailForStoppedEnvironment: async (environmentId) => {
           world().startRequests.push(environmentId);
         },
+        ...(options.pipelineWorkers ? { pipelineWorkers: options.pipelineWorkers(storage) } : {}),
       },
     );
     return { coordinator, mail };
@@ -418,7 +422,7 @@ export class MailWorld {
    */
   async delegate(
     from: MailActor,
-    worker: MailActor,
+    worker: Pick<MailActor, "environmentId" | "tabId">,
     body: string,
     options: { deliverNow?: boolean; requestId?: string; replyToMessageId?: string } = {},
   ): Promise<AgentMailMessage & Partial<CoordinatorDeliverNowResult>> {

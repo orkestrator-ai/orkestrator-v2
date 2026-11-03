@@ -428,7 +428,8 @@ export function registerCoordinatorWorkflowTools(
     "get_build_pipeline",
     {
       title: "Get a build pipeline",
-      description: "Read authoritative state for a coordinator-associated build pipeline.",
+      description:
+        "Read authoritative state for a coordinator-associated build pipeline, including workers: every agent session it has started (build, each reviewer, preparation, consolidation, address, verify, fix, PR, conflict resolution, every round), each with its mailbox address, step, round, slot, label, agent, model and status (running, idle, finished, failed, cancelled). Message one worker with send_message (toEnvironmentId the pipeline environment, toTabId its address) and read its transcript with get_tab_transcript (tabId its address).",
       inputSchema: z.object({
         pipelineId: z.string().trim().min(1).max(200),
         nodeId: nodeIdField,

@@ -1,3 +1,6 @@
+import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
+import type { BuildPipelineContext } from "./build-pipeline-context.js";
+import type { PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
 /**
  * The build pipeline's multi-model review stage.
  *
@@ -150,6 +153,13 @@ const CONSOLIDATION_TURN = buildPipelineStageTurn(buildPipelineStage("consolidat
 
 /** What the fan-out needs from the supervisor that owns the pipeline. */
 export interface BuildPipelineReviewFanoutDeps {
+  workerMailbox?(): BuildPipelineContext["workerMailbox"];
+  /** A worker's own mail identity on a turn without a workflow-result capability. */
+  workerMailTurn?(
+    pipeline: BuildPipeline,
+    sessionKey: string,
+    agent: string | undefined,
+  ): PipelineWorkerMailTurn | undefined;
   provider(pipeline: BuildPipeline, agent: BuildPipelineAgent): Promise<BuildPipelineProvider>;
   providerUnavailable?(
     pipeline: BuildPipeline,
@@ -490,6 +500,7 @@ export class BuildPipelineReviewFanout {
       return entry.prompt;
     };
     return {
+      beforeResult: (reviewer) => this.prepareWorkerMail(pipeline, reviewer),
       workflowId: pipeline.id,
       targetBranch,
       label: FANOUT_LABEL,
@@ -511,6 +522,12 @@ export class BuildPipelineReviewFanout {
       executionPolicy: () => this.deps.executionPolicy(pipeline),
       agentMcp: async (selection, resultKey) =>
         this.deps.agentMcp?.(pipeline, resultKey, selection.agent, "build pipeline reviewer"),
+      workerMailTurn: (reviewer) =>
+        this.deps.workerMailTurn?.(
+          pipeline,
+          reviewer.sessionKey ?? reviewerSessionKey(pipeline, reviewer),
+          reviewer.agent,
+        ),
       ...(this.deps.artifactDispatch
         ? {
             artifactTurns: {
@@ -1014,7 +1031,10 @@ export class BuildPipelineReviewFanout {
         agent: consolidation.agent,
         ...(agentMcp ? { agentMcp } : {}),
       });
-      const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
+      const workerTurn = agentMcp
+        ? undefined
+        : this.deps.workerMailTurn?.(pipeline, consolidation.sessionKey, consolidation.agent);
+      const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp ?? workerTurn?.agentMcp;
       await attachAgentBeforeDispatch(
         provider,
         consolidation.providerSessionId,
@@ -1053,6 +1073,7 @@ export class BuildPipelineReviewFanout {
               : {}),
             ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
             ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
+            ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
             ...(agentMcp
               ? {
                   workflowResultTool: workflowResultToolName(CONSOLIDATION_RESULT_KIND),
@@ -1201,6 +1222,12 @@ export class BuildPipelineReviewFanout {
       };
     }
 
+    if (
+      status === "idle" &&
+      !backgroundWorkLive &&
+      (await this.prepareWorkerMail(pipeline, consolidation))
+    )
+      return { kind: "working" };
     const result =
       consolidation.resultTransport === "tool-v1"
         ? ((await this.readConsolidationResult(consolidation)) ?? null)
@@ -1450,6 +1477,41 @@ export class BuildPipelineReviewFanout {
    * new request id; the spent flag is saved with it, before the old slot is
    * retired.
    */
+  private async prepareWorkerMail(
+    pipeline: BuildPipeline,
+    worker: ReviewerRecord | ReviewConsolidationSession,
+  ): Promise<boolean> {
+    const mailbox = this.deps.workerMailbox?.();
+    if (!mailbox || !worker.sessionKey) return false;
+    const session = pipeline.sessions.find((item) => item.sessionKey === worker.sessionKey);
+    if (!session) return false;
+    const tabId = pipelineWorkerTabId(worker.sessionKey);
+    const requestId = randomUUID();
+    const claim = await mailbox.claim(pipeline.environmentId, tabId, requestId);
+    if (!claim) return false;
+    const oldRequestId = worker.requestId;
+    worker.requestId = requestId;
+    worker.continuationPrompt = claim.text;
+    delete worker.schemaRepairPrompt;
+    delete worker.idleResultPolls;
+    worker.resultSubmission = worker.resultTransport === "tool-v1" ? "preparing" : undefined;
+    if ("status" in worker) worker.dispatchState = "prepared";
+    else worker.state = "prepared";
+    session.mailDeliveries = [...(session.mailDeliveries ?? []), requestId].slice(-20);
+    session.structuredRequestId = requestId;
+    delete session.completedAt;
+    try {
+      await this.save(pipeline);
+    } catch (error) {
+      await mailbox.settle(pipeline.environmentId, tabId, claim.messageIds, "returned");
+      throw error;
+    }
+    await mailbox.settle(pipeline.environmentId, tabId, claim.messageIds, "accepted");
+    if (oldRequestId && worker.resultTransport === "tool-v1")
+      await this.deps.workflowResults?.close(oldRequestId, "superseded");
+    return true;
+  }
+
   private async prepareConsolidationFollowUp(
     pipeline: BuildPipeline,
     consolidation: ReviewConsolidationSession,

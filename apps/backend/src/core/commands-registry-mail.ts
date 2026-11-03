@@ -64,12 +64,21 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
 
   register(
     "list_agent_mailboxes",
-    async ({ projectId, q, offset, limit, includeTombstoned, strictProjectScope }, { storage }) => {
+    async (
+      { projectId, environmentId, q, offset, limit, includeTombstoned, strictProjectScope },
+      { storage },
+    ) => {
       const settings = await requireMessagingEnabled(storage);
+      const environment =
+        typeof environmentId === "string" && environmentId.trim() ? environmentId.trim() : "";
+      // One environment's list includes its build pipeline workers as they
+      // are now, not as of the last directory pass.
+      if (environment) await storage.ensureAgentMailDirectoryFresh([environment]);
       return storage.listAgentMailboxes({
         ...(typeof projectId === "string" && projectId.trim()
           ? { projectId: projectId.trim() }
           : {}),
+        ...(environment ? { environmentId: environment } : {}),
         allowCrossProject: strictProjectScope === true ? false : settings.allowCrossProject,
         ...(typeof q === "string" ? { q } : {}),
         ...(typeof offset === "number" ? { offset } : {}),

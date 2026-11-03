@@ -23,3 +23,14 @@
 - **Isolated rerun:** `mise run test:logged -- --name probe-isolated -- bun --cwd=packages/protocol test --preload ../../tests/setup-node.ts ./src/node/workspace-change-probe.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 2.9 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.i0pmeY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis and changes:** concurrent Git fixture work remains the suspected cause; no probe implementation, assertion, deadline or skip changed.
+
+
+## Recurrence — 2026-11-03
+
+- **Original command:** `mise run test:logged -- --name fix-protocol-mail -- bun --cwd packages/protocol test ./src/pipeline-worker-mail.test.ts --parallel=1 --only-failures`. The leading --cwd selected the package test script, which ran the protocol package rather than only the intended file.
+- **Worker configuration:** one isolated protocol worker; other worktrees had aggregate suites active.
+- **Failure:** the same test timed out at 5238.43 ms (5000 ms limit).
+- **Suite counts:** 4503 passed, 2 skipped, 1 failed across 240 files; 120.65 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name workspace-change-probe-isolated -- bun test --cwd=packages/protocol ./src/node/workspace-change-probe.test.ts --parallel=1 --only-failures` passed unchanged (exit 0; 7.0 seconds).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Ulh9Q7/fix-protocol-mail.log.gz`.
+- **Changes:** recurrence recorded; probe implementation and tests are unchanged. Host contention remains a hypothesis.

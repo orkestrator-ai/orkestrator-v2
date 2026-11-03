@@ -123,6 +123,7 @@ export class FanoutProvider implements BuildPipelineProvider {
     readOnly?: boolean;
     agentMcp?: ProviderSendOptions["agentMcp"];
     artifactGrant?: string;
+    workerMail?: ProviderSendOptions["workerMail"];
     workflowResultTool?: string;
     workflowResultKey?: string;
   }> = [];
@@ -228,6 +229,7 @@ export class FanoutProvider implements BuildPipelineProvider {
       ...(options.readOnly !== undefined ? { readOnly: options.readOnly } : {}),
       ...(options.agentMcp ? { agentMcp: options.agentMcp } : {}),
       ...(options.artifactGrant ? { artifactGrant: options.artifactGrant } : {}),
+      ...(options.workerMail ? { workerMail: options.workerMail } : {}),
       ...(options.workflowResultTool ? { workflowResultTool: options.workflowResultTool } : {}),
       ...(options.workflowResultKey ? { workflowResultKey: options.workflowResultKey } : {}),
     });
@@ -417,6 +419,12 @@ export async function withPipeline(
     efficiency?: RecordingEfficiencyObserver;
     artifactDispatch?: BuildPipelineServiceOptions["artifactDispatch"];
     structuredResultDeadlineMs?: number;
+    /**
+     * Workers get their own mail identity on turns without a result tool:
+     * `worker:<tabId>` connections, and OpenCode's signed capability. Result
+     * tools stay off, so every turn is such a turn.
+     */
+    workerMail?: boolean;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-fanout-"));
@@ -504,7 +512,9 @@ export async function withPipeline(
     if (command === "pr_monitor_watch") return undefined as T;
     return undefined as T;
   };
-  const workflowResults = options.toolMode ? new WorkflowResultService(dataDir) : undefined;
+  const workflowResults =
+    options.toolMode || options.workerMail ? new WorkflowResultService(dataDir) : undefined;
+  if (options.workerMail) await workflowResults!.initializeCapabilityIdentity();
   const createService = () =>
     new BuildPipelineService(storage, invoke, {
       autoAdvance: false,
@@ -520,20 +530,31 @@ export async function withPipeline(
         : {}),
       ...(options.efficiency ? { efficiency: options.efficiency } : {}),
       ...(options.artifactDispatch ? { artifactDispatch: options.artifactDispatch } : {}),
-      ...(workflowResults
+      ...(options.workerMail
         ? {
             workflowResults,
-            resolveAgentToolConnection: () => ({
-              url: "http://127.0.0.1:1234/mcp",
-              token: "test-token",
-            }),
-            workflowResultRollout: new WorkflowResultRollout(async () => ({
-              enabled: true,
-              providers: ["claude"],
-              kinds: options.toolKinds ?? ["consolidated-review"],
-            })),
+            workflowResultRollout: new WorkflowResultRollout(async () => ({ enabled: false })),
+            resolveWorkerToolConnection: (
+              _environmentId: string,
+              _projectId: string,
+              _target: "host" | "container",
+              tabId: string,
+            ) => ({ url: "http://127.0.0.1:1234/mcp", token: `worker:${tabId}` }),
           }
-        : {}),
+        : workflowResults
+          ? {
+              workflowResults,
+              resolveAgentToolConnection: () => ({
+                url: "http://127.0.0.1:1234/mcp",
+                token: "test-token",
+              }),
+              workflowResultRollout: new WorkflowResultRollout(async () => ({
+                enabled: true,
+                providers: ["claude"],
+                kinds: options.toolKinds ?? ["consolidated-review"],
+              })),
+            }
+          : {}),
       ...(options.assertAgentToolsReachable
         ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
         : {}),

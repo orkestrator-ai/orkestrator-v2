@@ -680,6 +680,34 @@ export class AgentMailInjects {
     });
   }
 
+  /**
+   * Record, on messages this process has claimed, the request id of the
+   * dispatch that carries them, so a restart can ask that dispatch's journal.
+   */
+  async recordAgentMailInjectRequest(
+    mailboxId: string,
+    messageIds: readonly string[],
+    requestId: string,
+  ): Promise<void> {
+    await this.store.enqueue(async () => {
+      const store = await this.store.load();
+      const mailbox = store.mailboxes[mailboxId];
+      if (!mailbox) return;
+      let changed = false;
+      for (const message of mailbox.messages) {
+        if (
+          !messageIds.includes(message.id) ||
+          message.placement !== "inject-held" ||
+          message.placementReason !== "submitting"
+        )
+          continue;
+        message.injectRequestId = requestId;
+        changed = true;
+      }
+      if (changed) await this.store.save(store);
+    });
+  }
+
   async finishAgentMailInject(
     mailboxId: string,
     messageId: string,

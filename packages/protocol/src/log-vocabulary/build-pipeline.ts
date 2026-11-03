@@ -27,6 +27,8 @@ export const BUILD_PIPELINE_LOG_AREAS = defineLogAreas({
         "A stage transcript checkpoint could not be written yet; the provider's history stands.",
       "checkpoint.not-committed":
         "A stage transcript checkpoint was reverted in the commit that should have kept it.",
+      "worker-mail.claim-failed":
+        "Mail queued for a worker could not be claimed at its turn end; it stays queued.",
       "legacy-transcript.deferred":
         "Moving a legacy inline transcript failed; the inline body stays readable.",
     },

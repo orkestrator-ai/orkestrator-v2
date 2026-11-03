@@ -7,7 +7,8 @@ node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 2026-10-28), the shared review routing (2026-10-29), read-only reviewers
 with the Git guard (2026-10-29), per-stage instructions (2026-10-29),
 reviewer lenses (2026-10-29), the CLI's `build launch` (2026-10-29), the
-header's key information panel (2026-11-01), and delivery policies (2026-11-02).
+header's key information panel (2026-11-01), delivery policies (2026-11-02), and
+per-worker mailboxes (2026-11-03).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -646,6 +647,40 @@ notice.
 If an earlier attempt of the run opened a PR and a restart then ends in
 `push-no-pr`, the push updates that PR, which stays open, and the last node's
 inspector links it. Nothing closes a pull request.
+
+## Worker mailboxes
+
+Every session on the line is a worker with its own agent mailbox, addressed
+`pipeline-worker:<sessionKey>` in the pipeline environment
+([coordinator](coordinator.md#pipeline-worker-mailboxes) has the whole
+contract). A node is one worker: each reviewer of a pass, Prepare's package
+preparation, Consolidation, Address, Verify, Fix, Ship and conflict
+resolution, in every round, and a "Previous attempt" node's sessions are
+cancelled workers. The pipeline tab adds no tab, control or read for them: the
+graph still reads only the record, and the workers list (`pipelineWorkers`,
+`packages/protocol/src/pipeline-worker-mail.ts`) is derived from the same
+record by the mail directory and by `get_build_pipeline`.
+
+What the pipeline does for mail:
+
+- Mail queued for the running session becomes that session's next turn when
+  its turn ends, before the supervisor advances the stage, through the same
+  pending prompt attempt a queued user message uses. The attempt's request id
+  is kept on the session (`mailDeliveries`, newest 20).
+- A coordinator's `deliverNow` is steered into the running turn under the
+  pipeline lock, as the tab's own steer is; a steered build or fix drops its
+  preparation result the same way.
+- A fan-out reviewer and the consolidation take their queued mail as a
+  follow-up turn before their result is accepted, with a fresh result key.
+  Mail during fixed-snapshot validation cancels and archives that validation
+  run before the writable mail turn; preparation and validation then certify
+  the new state.
+- Every turn carries its worker's own mail identity: the workflow-result
+  server on a tool-mode turn, otherwise a credential scoped to the worker's
+  mailbox, or on OpenCode a signed `mailCapability` in the turn's system
+  instruction (`BuildPipelineContext.workerMailTurn`).
+- A worker's own transcript is its session's committed transcript, which the
+  coordinator reads with `get_tab_transcript` and the worker's address.
 
 ## Stage table and the built-in template
 

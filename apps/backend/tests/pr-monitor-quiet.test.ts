@@ -210,3 +210,28 @@ test("a shared-reading change leaves an entry on the normal cadence alone", asyn
   monitor.service.noteSharedActivity("env-1");
   expect(monitor.pendingDelay()).toBe(20_000);
 });
+
+test("sync replacement clears quiet knowledge before reading the new PR", async () => {
+  const monitor = harness();
+  await monitor.settle();
+  expect(monitor.pendingDelay()).toBe(QUIET);
+  const replacement = "https://github.com/org/repo/pull/2";
+  monitor.service.sync([{ ...monitor.target, prUrl: replacement }]);
+  expect(monitor.pendingDelay()).toBe(20_000);
+  monitor.setReading({
+    url: replacement,
+    updatedAt: undefined,
+    autoMergeRequested: undefined,
+    checkSummary: null,
+    checkSummaryStatus: "skipped",
+  });
+  await monitor.settle();
+  expect(monitor.pendingDelay()).toBe(20_000);
+  // A successful rollup alone does not supply GitHub auto-merge knowledge.
+  monitor.setReading({ url: replacement, autoMergeRequested: undefined });
+  await monitor.settle();
+  expect(monitor.pendingDelay()).toBe(20_000);
+  monitor.setReading({ url: replacement, autoMergeRequested: false });
+  await monitor.settle();
+  expect(monitor.pendingDelay()).toBe(QUIET);
+});

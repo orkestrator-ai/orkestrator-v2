@@ -228,10 +228,11 @@ export class PrMonitorBatchReader {
   private readonly readings = new Map<string, PrBatchReading>();
   /** `group\0url` → fingerprint of the latest reading, to notice a change. */
   private readonly fingerprints = new Map<string, string>();
-  /** `group\0url` → a batch started before this may not store a reading. */
+  /** `group\0url` → newest query/fallback sequence; older flights cannot publish or return. */
   private readonly notBefore = new Map<string, number>();
   /** Bumped by invalidation; a batch started under an older epoch stores nothing. */
   private epoch = 0;
+  private sequence = 0;
 
   constructor(options: PrMonitorBatchReaderOptions) {
     this.run = options.run;
@@ -262,7 +263,7 @@ export class PrMonitorBatchReader {
     if (!options.fresh) {
       const cached = this.readings.get(key);
       if (cached && now - cached.startedAt <= PR_BATCH_READING_MAX_AGE_MS) return cached;
-      for (const flight of state.flights) {
+      for (const flight of Array.from(state.flights).reverse()) {
         if (flight.urls.has(url)) return (await flight.promise).get(url) ?? null;
       }
     }
@@ -286,7 +287,7 @@ export class PrMonitorBatchReader {
     if (!this.groups.get(group.key)?.members.has(url)) return;
     const key = readingKey(group.key, url);
     this.readings.delete(key);
-    this.notBefore.set(key, this.now());
+    this.notBefore.set(key, ++this.sequence);
   }
 
   /** Credential rotation: drops every group named `scope` or `scope:…`, including running batches' results. */
@@ -318,7 +319,9 @@ export class PrMonitorBatchReader {
   ): Promise<Map<string, PrBatchReading>> {
     const startedAt = this.now();
     const epoch = this.epoch;
+    const sequence = ++this.sequence;
     const urls = members.map((member) => member.url);
+    for (const url of urls) this.notBefore.set(readingKey(group.key, url), sequence);
     const promise = (async () => {
       let stdout: string;
       try {
@@ -342,21 +345,22 @@ export class PrMonitorBatchReader {
         state.suspendedUntil = this.now() + PR_BATCH_FAILURE_BACKOFF_MS;
         return new Map<string, PrBatchReading>();
       }
-      if (epoch !== this.epoch || this.groups.get(group.key) !== state) return readings;
+      if (epoch !== this.epoch || this.groups.get(group.key) !== state)
+        return new Map<string, PrBatchReading>();
       const changed: string[] = [];
       const now = this.now();
       for (const url of urls) {
+        const key = readingKey(group.key, url);
+        if (this.notBefore.get(key) !== sequence) {
+          readings.delete(url);
+          continue;
+        }
         const reading = readings.get(url);
         if (!reading) {
           state.excluded.set(url, now + PR_BATCH_EXCLUDED_MS);
           continue;
         }
-        const key = readingKey(group.key, url);
-        if ((this.notBefore.get(key) ?? -Infinity) > startedAt) {
-          readings.delete(url);
-          continue;
-        }
-        this.notBefore.delete(key);
+
         this.readings.set(key, reading);
         const fingerprint = readingFingerprint(reading);
         const previous = this.fingerprints.get(key);

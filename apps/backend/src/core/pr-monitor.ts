@@ -1676,6 +1676,13 @@ export class PrMonitorService {
       target.prState === "closed";
     const summaryChanged =
       shouldClearSummary && (entry.checkSummary !== null || entry.viewerCanMerge !== null);
+    if (entry.target.prUrl !== target.prUrl) {
+      entry.rollupKnown = false;
+      entry.updatedAt = null;
+      entry.autoMergeRequested = null;
+      entry.activityKey = null;
+      entry.lastActivityAt = this.options.monotonicNow();
+    }
     if (shouldClearSummary) {
       entry.headSha = null;
       entry.lastSuccessfulCheckStartedAt = null;

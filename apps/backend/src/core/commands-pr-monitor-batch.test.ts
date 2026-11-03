@@ -478,3 +478,78 @@ test("branch discovery never batches", async () => {
   expect((await ghCalls()).every((call) => call[0] === "pr")).toBe(true);
   expect(batch.memberCount("local-gh:github.com:host-cli")).toBe(0);
 });
+
+for (const freshFirst of [false, true]) {
+  test(`overlapping batches preserve newer state and checks (fresh finishes first: ${freshFirst})`, async () => {
+    const pending: Array<{ args: string[]; resolve: (value: string) => void }> = [];
+    const { reader, changed } = harness(
+      (args) => new Promise((resolve) => pending.push({ args, resolve })),
+    );
+    const older = reader.read(GROUP, url(1));
+    // Same clock tick: ordering must not depend on timestamp resolution.
+    const newer = reader.read(GROUP, url(1), { fresh: true });
+    const joining = reader.read(GROUP, url(1));
+    const finishOld = () => pending[0]!.resolve(answer(pending[0]!.args));
+    const finishNew = () =>
+      pending[1]!.resolve(
+        answer(pending[1]!.args, () => ({ state: "MERGED" })).replaceAll("SUCCESS", "FAILURE"),
+      );
+    if (freshFirst) {
+      finishNew();
+      await newer;
+      finishOld();
+    } else {
+      finishOld();
+      expect(await older).toBeNull();
+      finishNew();
+    }
+    expect(await older).toBeNull();
+    const latest = await newer;
+    expect(latest?.pullRequest.state).toBe("MERGED");
+    expect(latest?.rollup).toEqual([expect.objectContaining({ conclusion: "FAILURE" })]);
+    expect(await joining).toEqual(latest);
+    expect(await reader.read(GROUP, url(1))).toEqual(latest);
+    expect(changed).toEqual([]);
+  });
+}
+
+test("credential invalidation discards pending readings for requester and joiners", async () => {
+  let release!: (value: string) => void;
+  let args!: string[];
+  const { reader } = harness((query) => {
+    args = query;
+    return new Promise((resolve) => {
+      release = resolve;
+    });
+  });
+  const requester = reader.read(GROUP, url(1));
+  const joining = reader.read(GROUP, url(1));
+  reader.invalidate("local-gh");
+  release(answer(args));
+  expect(await requester).toBeNull();
+  expect(await joining).toBeNull();
+});
+
+test("detection falls back after its pending batch credential is invalidated", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const batch = new PrMonitorBatchReader({
+    run: async (_group, args) => {
+      started();
+      await gate;
+      return answer(args, () => ({ state: "MERGED" }));
+    },
+  });
+  const pending = detectEnvironmentPullRequest(localTarget(1), { batch });
+  await running;
+  batch.invalidate("local-gh");
+  release();
+  expect(await pending).toMatchObject({ state: "open", url: url(1) });
+  expect((await ghCalls()).map((call) => call.slice(0, 2))).toEqual([["pr", "view"]]);
+});

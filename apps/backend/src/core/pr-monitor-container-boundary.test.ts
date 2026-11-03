@@ -141,3 +141,23 @@ for (const [message, invalidated] of [
     }
   });
 }
+
+for (const autoMergeRequest of [null, { enabledAt: "2026-11-03T00:00:00Z" }]) {
+  test(`container activity parsing with auto-merge ${autoMergeRequest ? "enabled" : "disabled"}`, async () => {
+    spyOn(shell, "runCommand").mockResolvedValue(
+      result(
+        JSON.stringify({
+          url: PR,
+          state: "OPEN",
+          mergeable: "MERGEABLE",
+          updatedAt: "2026-11-03T01:00:00Z",
+          autoMergeRequest,
+        }),
+      ),
+    );
+    expect(await detectEnvironmentPullRequest(target)).toMatchObject({
+      updatedAt: "2026-11-03T01:00:00Z",
+      autoMergeRequested: autoMergeRequest !== null,
+    });
+  });
+}

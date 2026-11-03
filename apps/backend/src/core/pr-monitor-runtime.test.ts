@@ -371,3 +371,41 @@ test("a credential rotation also drops the PR batch readings of that scope", asy
     runtime.shutdown();
   }
 });
+
+test("batch changes wake every matching snapshot entry and leave other PRs alone", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const context = {
+    runtime,
+    storage: { loadEnvironments: async () => [] } as unknown as StorageService,
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+  } as CommandContext;
+  try {
+    await runtime.prMonitor.sync(context);
+    const service = runtime.prMonitor.service;
+    const snapshot = spyOn(service, "snapshot").mockReturnValue([
+      monitorState(),
+      monitorState({ environmentId: "env-2" }),
+      monitorState({ environmentId: "env-other", prUrl: "https://github.com/o/r/pull/2" }),
+      monitorState({ environmentId: "env-none", prUrl: null }),
+    ]);
+    const wake = spyOn(service, "noteSharedActivity").mockImplementation(() => undefined);
+    // Invoke the reader's real composition-root callback without a network call.
+    const reader = runtime.prMonitor.prBatches as unknown as {
+      onChanged: (urls: string[]) => void;
+    };
+    reader.onChanged([
+      "https://github.com/o/r/pull/1",
+      "https://github.com/o/r/pull/1",
+      "https://github.com/o/r/pull/99",
+    ]);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(wake.mock.calls).toEqual([["env-1"], ["env-2"]]);
+    snapshot.mockRestore();
+    wake.mockRestore();
+  } finally {
+    runtime.shutdown();
+  }
+});

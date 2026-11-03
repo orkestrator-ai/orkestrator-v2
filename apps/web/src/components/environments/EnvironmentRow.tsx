@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   Container,
   Copy,
+  GitMerge,
   Laptop,
   Link2,
   Loader2,
@@ -257,6 +258,11 @@ function RowChangeSummary({ changes }: { changes: EnvironmentRowChanges }) {
 export interface EnvironmentRowActions {
   /** "Open workspace": another machine's row opens that machine's workspace. */
   open?: () => void;
+  /**
+   * Present while the action bar shows its green Merge PR button for this
+   * environment; `disabled` mirrors that button's disabled state.
+   */
+  mergePr?: { run: () => void; disabled: boolean };
   /** A machine-qualified link to the environment. */
   copyLink?: () => void;
   openSettings: () => void;
@@ -296,6 +302,18 @@ export function environmentRowMenuItems(
             onSelect: actions.open,
           },
         ]
+      : []),
+    ...(actions.mergePr
+      ? ([
+          {
+            key: "merge-pr",
+            label: "Merge PR",
+            icon: <GitMerge className={`${icon} text-green-500`} />,
+            onSelect: actions.mergePr.run,
+            disabled: actions.mergePr.disabled,
+          },
+          { key: "merge-pr-separator", separator: true },
+        ] satisfies EnvironmentMenuItem[])
       : []),
     ...(actions.copyLink
       ? [

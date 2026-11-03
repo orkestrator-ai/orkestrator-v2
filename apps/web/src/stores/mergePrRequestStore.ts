@@ -1,0 +1,34 @@
+import { create } from "zustand";
+
+/**
+ * A pending "open the Merge PR dialog" request from an environment's row menu.
+ *
+ * The row selects the environment and records the request; the action bar,
+ * which owns the merge dialog and its handler, opens the dialog for it, so the
+ * menu item behaves exactly like the action bar's green Merge PR button. The
+ * action bar drops a request it cannot honour (another environment selected,
+ * or the button not pressable), so a stale request never opens a dialog later.
+ *
+ * Renderer-only view state: it carries an environment ID and nothing else.
+ */
+export interface MergePrRequest {
+  environmentId: string;
+  /** Distinguishes repeated requests for the same environment. */
+  nonce: number;
+}
+
+interface MergePrRequestState {
+  request: MergePrRequest | null;
+  requestMergePr: (environmentId: string) => void;
+  /** Clears the request, but only the one named, so a newer request survives. */
+  clearMergePrRequest: (nonce: number) => void;
+}
+
+let nextNonce = 1;
+
+export const useMergePrRequestStore = create<MergePrRequestState>((set) => ({
+  request: null,
+  requestMergePr: (environmentId) => set({ request: { environmentId, nonce: nextNonce++ } }),
+  clearMergePrRequest: (nonce) =>
+    set((state) => (state.request?.nonce === nonce ? { request: null } : state)),
+}));

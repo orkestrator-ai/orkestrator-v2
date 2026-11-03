@@ -20,6 +20,7 @@ import {
 } from "@/components/environments/EnvironmentNameShimmer";
 import type { EnvironmentNameSignal } from "@/lib/environment-name-signal";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
@@ -173,6 +174,14 @@ export function MobileAppShellLayout({
       else if (!open && wasOpen) closed();
     };
     const unsubscribers = [
+      // Merge confirmation is owned by ActionBar, outside the drawer too.
+      // Close on the request even when selecting the row leaves selection unchanged.
+      useMergePrRequestStore.subscribe((state, previous) => {
+        if (state.request && state.request !== previous.request) {
+          restoreSidebarFocusRef.current = false;
+          setSidebarOpen(false);
+        }
+      }),
       useAppDialogStore.subscribe((state, previous) =>
         follow(state.request !== null, previous.request !== null),
       ),

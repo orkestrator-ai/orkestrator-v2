@@ -244,11 +244,13 @@ async function seeded(name: Name): Promise<PreviewServiceSnapshot> {
 }
 
 /** Visible preview views in the main window, with the dev server marker each shows. */
-function visiblePreviews(): Promise<Array<{ url: string; marker: string | null }>> {
+function visiblePreviews(): Promise<
+  Array<{ url: string; marker: string | null; documentId: string | null }>
+> {
   return s().app.evaluate(
     async ({ BrowserWindow }, { windowId, rendererUrl }) => {
       const host = BrowserWindow.fromId(windowId);
-      const out: Array<{ url: string; marker: string | null }> = [];
+      const out: Array<{ url: string; marker: string | null; documentId: string | null }> = [];
       for (const child of host?.contentView.children ?? []) {
         const view = child as unknown as {
           getVisible(): boolean;
@@ -263,9 +265,16 @@ function visiblePreviews(): Promise<Array<{ url: string; marker: string | null }
         const url = contents.getURL();
         if (!url || url.startsWith(rendererUrl)) continue;
         const marker = await contents
-          .executeJavaScript("document.body?.dataset.serviceMarker ?? null", true)
+          .executeJavaScript('document.querySelector("h1")?.textContent ?? null', true)
           .catch(() => null);
-        out.push({ url, marker: typeof marker === "string" ? marker : null });
+        const documentId = await contents.executeJavaScript(
+          "document.body?.dataset.documentId ?? null",
+        );
+        out.push({
+          url,
+          marker: typeof marker === "string" ? marker : null,
+          documentId: typeof documentId === "string" ? documentId : null,
+        });
       }
       return out;
     },
@@ -653,6 +662,8 @@ test("3. a restarted dev server is reached from the open tab without a reload, a
   await select("a");
   await activateTab("a", env("a").serviceTabId!);
   const before = await expectShown(markerOf("a"));
+  const documentId = (await visiblePreviews())[0]!.documentId;
+  expect(documentId).toBeTruthy();
   const service = await seeded("a");
   const generation = service.endpoint.endpointGeneration;
   // A credential bound to the current generation, to show the old one is refused.
@@ -694,19 +705,8 @@ test("3. a restarted dev server is reached from the open tab without a reload, a
 
   await new Promise((resolve) => setTimeout(resolve, Math.max(0, stoppedAt + 6_000 - Date.now())));
 
-  // The open page, never reloaded, reaches the new process on its next
-  // request. That request re-verifies the binding, which bumps the endpoint
-  // generation; the tunnel's old attachment is refused and it re-attaches.
-  let reached: unknown = null;
-  await expect
-    .poll(async () => (reached = await pageRequestMarker()), {
-      timeout: 60_000,
-      message: "a request from the open tab reaches the restarted server",
-    })
-    .toBe(after)
-    .catch((error: Error) => {
-      throw new Error(`${error.message}\n${JSON.stringify(reached)}`);
-    });
+  // The fixture client reconnects and visibly renders the new process.
+  await expectShown(markerOf("a"), { previous: before });
   // The service now points at the new process, at a newer generation.
   let lastEndpoint: unknown = null;
   await expect
@@ -733,15 +733,46 @@ test("3. a restarted dev server is reached from the open tab without a reload, a
       throw new Error(`${error.message}\n${JSON.stringify(lastEndpoint)}`);
     });
 
-  // Same document (still the first process's page), same tab, same service.
-  expect(await visiblePreviews()).toEqual([expect.objectContaining({ marker: before })]);
+  // The fixture's own reconnect client rendered the new process in the same document.
+  expect(await visiblePreviews()).toEqual([expect.objectContaining({ marker: after, documentId })]);
+
   expect(await activeTabId("a")).toBe(env("a").serviceTabId);
   expect((await tabs("a")).find((tab) => tab.id === env("a").serviceTabId)?.url).toBe(tabUrl);
   const renewal = await invoke("renew_preview_attachment", { attachmentId: probe.attachmentId })
     .then(() => "renewed")
     .catch((error: Error) => error.message);
-  expect(renewal).not.toBe("renewed");
+  expect(renewal).toMatch(/access-expired|generation-changed/);
   record(testInfo, "old-generation", renewal.slice(0, 200));
+});
+
+test("6. fast restart refuses the old generation inside the verification window (3230)", async () => {
+  await select("a");
+  await activateTab("a", env("a").serviceTabId!);
+  const before = await expectShown(markerOf("a"));
+  const service = await seeded("a");
+  await invoke("probe_preview_service", { serviceId: service.definition.serviceId });
+  const generation = (await seeded("a")).endpoint.endpointGeneration;
+  const startedAt = Date.now();
+  const sessionId = (await tabs("a")).find((tab) => tab.id === env("a").runTabId)?.sessionId;
+  await invoke("local_terminal_write", { sessionId, data: "\u0003" });
+  await expect.poll(() => alive(pidOf(before))).toBe(false);
+  await invoke("local_terminal_write", { sessionId, data: `${s().runCommand}\r` });
+  let after: unknown;
+  await expect
+    .poll(
+      async () => {
+        after = await pageRequestMarker();
+        return typeof after === "string" && after !== before && markerOf("a").test(after);
+      },
+      { intervals: [50] },
+    )
+    .toBe(true);
+  s().devServerPids.add(pidOf(after as string));
+  const current = await seeded("a");
+  // A slow setup is a failure, not evidence of the known bug.
+  expect(Date.now() - startedAt).toBeLessThan(5_000);
+  test.fail(true, "3230: cached process binding survives a fast restart; remove when fixed");
+  expect(current.endpoint.endpointGeneration).toBeGreaterThan(generation);
 });
 
 test("4. ⌘⇧-click on a loopback link in an agent's reply opens a preview tab there, and a plain click opens the system browser", async () => {

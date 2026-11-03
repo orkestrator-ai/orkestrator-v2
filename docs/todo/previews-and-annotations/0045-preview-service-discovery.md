@@ -260,10 +260,10 @@ environments", §"Diagnostics" and §"Framework configuration".
      ⌘⇧-click on the address it prints opens the link chooser with **Move app
      from port N to N+1**, which moves B's service and loads B's server. A
      still shows its own server on N.
-  3. After Ctrl-C and the same command in A's terminal, a request from the
-     open page, which is never reloaded, reaches the new process. That request
-     bumps the endpoint generation, and an attachment issued at the old
-     generation is refused on renewal. This holds only once the registry's
+  3. After Ctrl-C and the same command in A's terminal, the fixture client
+     polls and renders the new process in its visible heading. The document
+     identity stays unchanged. The endpoint generation advances, and an
+     attachment issued at the old generation is specifically refused on renewal. This holds only once the registry's
      5 s verification window has passed since the last verified connection: a
      restart faster than that was observed reaching the new process at the old
      generation, with no revocation. See D12 and
@@ -279,8 +279,8 @@ environments", §"Diagnostics" and §"Framework configuration".
      clipboard. The user's clipboard text is restored afterwards.
 
   Not covered: Linux and Windows desktops (the spec is not platform-gated, but
-  was only run on macOS); a live agent transcript (D13); how a page shows a
-  restart by itself, which is the application's own client (D12); the real
+  was only run on macOS); a billed provider transcript (the actual
+  AgentNativeTab is covered with synthetic projection data, D13); the real
   system browser opening (deliberately captured).
 
 ## Constraints and rationale
@@ -401,25 +401,21 @@ marker names the worktree and the process id. The agent-project's own
 `server.ts` binds a fixed port and has a constant marker, so it could not show
 the port move or tell two processes apart; it is unchanged.
 
-**D12. Task 1, the restart pass criterion.** The task's recommended pass is
-"the tab shows the new process without a reload, and the old generation is
-refused". The tunnel re-attaches lazily, on the page's next upstream
-connection (`PreviewTransportManager.connect`), and nothing reloads the page,
-so a static page keeps showing the old process's HTML until it makes a
-request. A real dev server's client (Vite's HMR socket) is what makes such a
-request. **Chosen:** the check makes one request from inside the open,
-never-reloaded page and requires it to answer with the new process's marker;
-the document is still the first process's, and the tab and its service URL are
-unchanged. It then requires a newer endpoint generation, still
-`managed-process`, and an attachment issued before the restart refused on
-renewal. The check waits until 6 s after the old process exits before that
-request. Without the wait, a request made within the registry's 5 s
-verification window of the last verified connection reached the new process
-at the old generation: three runs saw the generation unchanged and no
-revocation for the next 30–90 s, and in the third an explicit probe then
-bumped it. That is the
-documented cost of D3, now observed; follow-up in
-[3230](3230-restart-inside-verification-window.md).
+**D12. Task 1, the restart pass criterion.** Options: (a) inject a health
+request and check transport reachability (simple, but cannot prove the visible
+update); (b) give the fixture an application-owned polling client and check its
+rendered marker alongside a document identity sentinel (recommended).
+**Chosen: (b).** The client renders the new process marker in its heading and
+body dataset. The test requires the new marker, unchanged document identity,
+unchanged tab URL, a newer generation and specifically `access-expired` or
+`generation-changed` on old-attachment renewal. Unrelated errors fail.
+The normal restart check still allows the verification window to expire.
+Check 6 separately restarts within five seconds and expects only the generation
+assertion to fail under [3230](3230-restart-inside-verification-window.md).
+The fixture closes each health response so polling opens new connections
+and exercises tunnel revalidation rather than indefinitely reusing a socket.
+Setup, process identity and timing assertions run before the expected-failure
+annotation, so they cannot masquerade as the known defect.
 
 **D13. Task 1, the agent reply is the real `MessageMarkdown`, not a live agent
 turn.** Options: (a) drive a real agent to print the link; (b) render the real
@@ -428,8 +424,11 @@ provides, sourced from a tab of that environment. **Chosen: (b).** (a) needs a
 billed provider turn and credentials in the test profile. (b) runs the real
 `MarkdownLink` handler, `requestTerminalBrowserTab`, `TerminalContainer`'s
 listener, `linkBrowserTarget(…, "agent")` and the link chooser's resolution;
-only the provider of the context is skipped, which
-`MessageMarkdown.preview-links.test.tsx` covers. `shell.openExternal` is
+the Electron check skips the provider of the context. A companion
+`AgentNativeTab.test.tsx` test now renders an actual agent transcript from a
+synthetic authoritative projection, clicks its real Markdown link and requires
+the actual environment and agent tab identity in the preview request event.
+This covers the provider without a billed turn. `shell.openExternal` is
 captured in the main process for the plain click, so no browser opens on the
 host.
 
@@ -464,3 +463,15 @@ therefore the ownership root are the ones **Run** created.
   (framework setup hints, later discovery)
 - `docs/improvements/browser/proposal.md` §1 and §6 (later discovery,
   multiple services)
+
+
+## Assumptions and decisions
+
+### Task 1: review coverage repairs
+
+Chose a polling fixture client with a document sentinel over transport-only
+assertions because the acceptance criterion requires a visible update. Kept
+production ownership behavior unchanged and added a narrowly annotated
+expected-failure fast-restart check for 3230. Chose an actual AgentNativeTab
+component with synthetic projection data to cover its context provider without
+credentials or billing; the Electron check still owns the end-to-end chooser.

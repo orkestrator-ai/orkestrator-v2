@@ -104,6 +104,14 @@ rebinds to the new process" (generation unchanged), as described in task 1.
     - Pros: covers both timings.
     - Cons: a third server process and more runtime for little extra signal.
 
+## Needs verification
+
+The seeded Electron spec now includes check 6: restart within five seconds of
+an explicit probe and require a newer generation. Only that final assertion is
+marked expected failure for this open defect; setup and the timing bound must
+pass normally. Remove the annotation when task 1 is fixed. Check 3 separately
+covers eventual visible reconnection in an unchanged document.
+
 ## Related
 
 - [0045-preview-service-discovery.md](0045-preview-service-discovery.md) (D3,

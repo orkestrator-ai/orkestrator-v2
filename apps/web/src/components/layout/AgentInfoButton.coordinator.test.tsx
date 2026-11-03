@@ -117,6 +117,22 @@ beforeEach(() => {
     if (command === "list_agent_accounts") {
       return { accounts: [account], active: { claude: "work" } };
     }
+    if (command === "get_agent_account_usage") {
+      return {
+        platform: "claude",
+        status: "ok",
+        windows: [
+          {
+            window: "seven_day",
+            label: "Weekly limit",
+            usedPercent: 62,
+            resetsAt: "2026-07-30T00:00:00.000Z",
+            windowMinutes: 7 * 24 * 60,
+          },
+        ],
+        fetchedAt: "2026-07-27T10:00:00.000Z",
+      };
+    }
     if (command === "get_cursor_account_usage") return new Promise(() => undefined);
     return undefined;
   });
@@ -163,6 +179,59 @@ describe("AgentInfoButton coordinator conversations", () => {
     expect(quota.getByText("Weekly quota")).toBeTruthy();
     expect(await quota.findByText("(Work) (me@example.com)")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Compact" })).toBeTruthy();
+  });
+
+  test("reads the account's plan limits when the coordinator's CLI reports none", async () => {
+    const projection = coordinatorProjection();
+    delete projection.contextUsage!.account;
+    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection);
+
+    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    open();
+
+    const quota = within(await screen.findByRole("region", { name: "Account usage" }));
+    expect(quota.getByText("Weekly limit")).toBeTruthy();
+    expect(quota.getByText("(Work) (me@example.com)")).toBeTruthy();
+    expect(nativeInvokeMock).toHaveBeenCalledWith("get_agent_account_usage", {
+      platform: "claude",
+      accountId: "work",
+    });
+  });
+
+  test("keeps the session's own plan limits when the coordinator reports them", async () => {
+    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, coordinatorProjection());
+
+    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    open();
+
+    const quota = within(screen.getByRole("region", { name: "Account usage" }));
+    expect(await quota.findByText("(Work) (me@example.com)")).toBeTruthy();
+    expect(quota.getByText("Weekly quota")).toBeTruthy();
+    expect(quota.queryByText("Weekly limit")).toBe(null);
+    expect(nativeInvokeMock).not.toHaveBeenCalledWith("get_agent_account_usage", expect.anything());
+  });
+
+  test("leaves an environment tab's plan limits to its own session", async () => {
+    const projection = coordinatorProjection();
+    delete projection.contextUsage!.account;
+    projection.environmentId = "environment-1";
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(createSessionKey("environment-1", TAB_ID), projection);
+    const tab = coordinatorTab();
+    tab.nativeAgentData!.environmentId = "environment-1";
+
+    render(<AgentInfoButton activeTab={tab} />);
+    open();
+
+    await waitFor(() =>
+      expect(nativeInvokeMock).toHaveBeenCalledWith(
+        "get_native_agent_session_account",
+        expect.anything(),
+      ),
+    );
+    expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
+    expect(nativeInvokeMock).not.toHaveBeenCalledWith("get_agent_account_usage", expect.anything());
   });
 
   test("hides Undo and Redo even when the coordinator provider supports both", () => {

@@ -1133,6 +1133,7 @@ export function UsagePanel({
   rateLimits,
   accountLabel,
   accountEmail,
+  planWindows,
 }: {
   usage: AgentInfoUsageSnapshot | undefined;
   modelId: string | undefined;
@@ -1149,10 +1150,15 @@ export function UsagePanel({
   accountLabel?: string;
   /** That account's email, shown after a label that does not already say it. */
   accountEmail?: string;
+  /**
+   * The account's plan windows from the machine's own plan-usage read, for a
+   * session whose provider does not report them (a coordinator conversation).
+   */
+  planWindows?: NativeAgentAccountUsageWindow[];
 }) {
   const displayedRateLimits = rateLimits ?? usage?.rateLimits;
   const { rows: accountRows, daily: dailyTokens } = buildAccountRows({
-    account: usage?.account,
+    account: planWindows ? [...(usage?.account ?? []), ...planWindows] : usage?.account,
     rateLimits: displayedRateLimits,
     credits: usage?.credits,
   });

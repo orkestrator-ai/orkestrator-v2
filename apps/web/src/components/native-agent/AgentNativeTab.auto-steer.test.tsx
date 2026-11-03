@@ -14,6 +14,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import * as realAgentHandoff from "@/hooks/useAgentHandoff";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
@@ -29,6 +30,11 @@ import {
   resetSonnerMocks,
 } from "../../../../../tests/mocks/sonner";
 
+const realHandoffSnapshot = { ...realAgentHandoff };
+const emptyMessages: NativeMessage[] = [];
+let pendingHistory: string | undefined;
+let steerError: Error | undefined;
+let refreshError = false;
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const realNativeComposeBarPasteSnapshot = { ...realNativeComposeBarPaste };
@@ -63,6 +69,23 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
       composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
       actions: { steer: providerSteers },
     },
+    slashCommandCatalogue: { status: "ready", revision: 1, enhanced: true },
+    slashCommands: [
+      {
+        name: "/review",
+        id: "cursor:review",
+        source: "project",
+        executionKind: "bridge-template",
+        bindingRevision: "v1",
+      },
+      {
+        name: "$deploy",
+        id: "cursor:deploy",
+        source: "skill",
+        executionKind: "structured-skill",
+        bindingRevision: "v1",
+      },
+    ],
     revision: 1,
     generation: "generation-1",
   } as NativeAgentSessionProjection<NativeMessage>;
@@ -70,9 +93,11 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
 
 const configSnapshot = useConfigStore.getState().config;
 
-const getNativeAgentProjectionMock = mock(async (input: { agent: AgentPlatform }) =>
-  projectionFor(input.agent),
-);
+const getNativeAgentProjectionMock = mock(async (input: { agent: AgentPlatform }) => {
+  if (refreshError && steerNativeAgentQueuedPromptMock.mock.calls.length)
+    throw new Error("Refresh unavailable");
+  return projectionFor(input.agent);
+});
 const dispatchNativeAgentIntentMock = mock(async () => ({
   outcome: "accepted" as const,
   requestId: "unused",
@@ -80,10 +105,20 @@ const dispatchNativeAgentIntentMock = mock(async () => ({
 const enqueuePromptQueueMessageMock = mock(async () => ({}));
 let steerOutcome: NativeAgentSessionActionOutcome | null = { outcome: "applied" };
 const performNativeAgentSessionActionMock = mock(async () => ({ outcome: "applied" as const }));
-const steerNativeAgentQueuedPromptMock = mock(
-  async (_input: { messageId: string }) => steerOutcome,
-);
+const steerNativeAgentQueuedPromptMock = mock(async (_input: { messageId: string }) => {
+  if (steerError) throw steerError;
+  return steerOutcome;
+});
 
+mock.module("@/hooks/useAgentHandoff", () => ({
+  ...realHandoffSnapshot,
+  useAgentHandoff: () => ({
+    ready: true,
+    pendingHistory,
+    displayMessages: emptyMessages,
+    backendDelivers: true,
+  }),
+}));
 mock.module("@/hooks/useNativeComposeBarPaste", () => ({
   useNativeComposeBarPaste: () => {},
 }));
@@ -130,6 +165,7 @@ mock.module("@/lib/pane-layout-persistence", () => ({
 const { AgentNativeTab } = await import("./AgentNativeTab");
 
 afterAll(() => {
+  mock.module("@/hooks/useAgentHandoff", () => realHandoffSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/pane-layout-persistence", () => realPaneLayoutPersistenceSnapshot);
   mock.module("@/hooks/useNativeComposeBarPaste", () => realNativeComposeBarPasteSnapshot);
@@ -161,7 +197,9 @@ async function sendWhileRunning(tabId: string, text: string) {
   await act(async () => {
     await Promise.resolve();
   });
-  fireEvent.keyDown(input, { key: "Enter" });
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
   await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1));
 }
 
@@ -195,6 +233,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  steerError = undefined;
+  pendingHistory = undefined;
+  refreshError = false;
   steerOutcome = { outcome: "applied" };
   providerSteers = true;
   resetSonnerMocks();
@@ -269,7 +310,140 @@ describe("AgentNativeTab auto-steer", () => {
     providerSteers = false;
     await sendWhileRunning("tab-auto-steer-unsupported", "also update the docs");
 
+    await waitFor(() => expect(draftText("tab-auto-steer-unsupported") ?? "").toBe(""));
     expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
   });
+});
+
+for (const outcome of ["thrown", "unknown", "null", "refresh-failed"] as const) {
+  test(`auto-steer ${outcome} keeps delivery ownership and releases the composer`, async () => {
+    setAutoSteer(true);
+    if (outcome === "thrown") steerError = new Error("Transport unavailable");
+    if (outcome === "unknown") steerOutcome = { outcome: "unknown", requestId: "steer-1" };
+    if (outcome === "null") steerOutcome = null;
+    if (outcome === "refresh-failed") refreshError = true;
+    const tabId = `tab-${outcome}`;
+    await sendWhileRunning(tabId, "also update the docs");
+    await waitFor(() => expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(draftText(tabId) ?? "").toBe("");
+    expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    if (outcome === "thrown")
+      expect(mockToastInfo.mock.calls[0]?.[0]).toContain("saved to the queue");
+    if (outcome === "null")
+      expect(mockToastInfo.mock.calls[0]?.[0]).toContain("sent as the next turn");
+    if (outcome === "unknown") {
+      expect(mockToastInfo).not.toHaveBeenCalled();
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+    }
+    if (outcome === "refresh-failed")
+      expect(mockToastSuccess.mock.calls[0]?.[0]).toBe("Steered the active Cursor Agent turn");
+    refreshError = false;
+    const input = screen.getByRole("textbox");
+    await act(async () => {
+      useNativeComposeStore
+        .getState()
+        .updateDraft(createSessionKey("env-1", tabId), { text: "a separate follow-up" });
+    });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(2));
+  });
+}
+
+test("pending handoff only queues", async () => {
+  setAutoSteer(true);
+  pendingHistory = "Transferred context";
+  await sendWhileRunning("tab-handoff", "continue this work");
+  await waitFor(() => expect(draftText("tab-handoff") ?? "").toBe(""));
+  expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
+});
+
+test.each(["$deploy now", "/review changes"])(
+  "command %s does not promise auto-steering",
+  async (text) => {
+    setAutoSteer(true);
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-command"), { text });
+    render(<AgentNativeTab tabId="tab-command" data={identity("cursor")} isActive />);
+    await screen.findByRole("textbox");
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTitle("Steer the current Cursor Agent turn")).toBeNull();
+    expect(screen.getByTitle("Add to queue")).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    });
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1));
+    expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
+  },
+);
+
+test("attachments only queue", async () => {
+  setAutoSteer(true);
+  const tabId = "tab-attachment";
+  useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
+    attachments: [{ id: "file-1", type: "image", path: "/workspace/image.png", name: "image.png" }],
+  });
+  await sendWhileRunning(tabId, "read this file");
+  await waitFor(() => expect(draftText(tabId) ?? "").toBe(""));
+  expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
+  expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
+});
+
+test("a prepared initial prompt waits for idle without auto-steering", async () => {
+  setAutoSteer(true);
+  render(
+    <AgentNativeTab
+      tabId="tab-prepared"
+      data={identity("cursor")}
+      initialPrompt="Review this work"
+      isActive
+    />,
+  );
+  await screen.findByRole("textbox");
+  await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
+  expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+  expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+});
+
+test("an unknown auto-steer rehydrates backend recovery without restoring or resending the draft", async () => {
+  setAutoSteer(true);
+  steerOutcome = { outcome: "unknown", requestId: "steer-1" };
+  const tabId = "tab-unknown-recovery";
+  await sendWhileRunning(tabId, "also update the docs");
+  await waitFor(() => expect(draftText(tabId) ?? "").toBe(""));
+  const sessionKey = createSessionKey("env-1", tabId);
+  const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+  await act(async () => {
+    useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+      ...current,
+      revision: current.revision + 1,
+      recoverableDispatch: {
+        requestId: "steer-1",
+        kind: "steer",
+        createdAt: "2026-11-03T12:00:00Z",
+      },
+    });
+  });
+  expect(await screen.findByRole("button", { name: "Retry steer" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+  expect(mockToastSuccess).not.toHaveBeenCalled();
+  expect(mockToastInfo).not.toHaveBeenCalled();
+  expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
+  expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1);
+  expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  expect(draftText(tabId) ?? "").toBe("");
 });

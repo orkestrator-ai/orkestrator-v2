@@ -2322,8 +2322,8 @@ export function SharedNativeAgentController({
               if (notice?.tone === "success") toast.success(notice.message);
               else if (notice) toast.info(notice.message);
             } catch (error) {
-              toast.error(
-                `Could not steer the running turn: ${
+              toast.info(
+                `Your message was saved to the queue, but steering could not be confirmed. Check the queue or recovery controls before sending it again. ${
                   error instanceof Error ? error.message : String(error)
                 }`,
               );
@@ -4167,7 +4167,15 @@ export function SharedNativeAgentController({
                     ? shouldAutoSteer({
                         enabled: autoSteerEnabled,
                         steerAvailable,
-                        command: false,
+                        command:
+                          commandComposer.previewClassification({
+                            text: draft.text,
+                            attachments: draft.attachments,
+                            annotationCount: sendableTranscriptAnnotations(draft.annotations)
+                              .length,
+                            pendingHandoff: Boolean(handoff.pendingHistory),
+                            busy: isRunning,
+                          }).kind !== "prompt",
                         preparedPrompt: false,
                         attachmentCount: draft.attachments.length,
                         pendingHandoff: Boolean(handoff.pendingHistory),

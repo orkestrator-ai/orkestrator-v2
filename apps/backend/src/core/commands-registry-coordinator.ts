@@ -24,16 +24,16 @@ import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js"
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
 import { registerWorkerQuestionRelayCommands } from "./worker-question-relay.js";
 import {
+  openWorkerDelegation,
+  registerCoordinatorWorkerMailCommands,
+} from "./coordinator-worker-mail.js";
+import {
   buildPipelineInputWithDefaults,
   multiReviewInputWithDefaults,
   readLaunchModelCatalog,
   savedLaunchSettings,
 } from "./coordinator-launch-defaults.js";
 import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
-import {
-  coordinatorDeliverNowResult,
-  settleCoordinatorDeliverNow,
-} from "./coordinator-deliver-now.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import { coordinatorBuildTicketSource } from "./build-pipeline-launch.js";
 import {
@@ -41,55 +41,9 @@ import {
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
-import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-
-const log = createLogger("coordinator");
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-/**
- * Open the delegation that makes a coordinator wait for one worker answer.
- *
- * Every way a coordinator can ask a worker for something funnels through here —
- * a launch, a job, a follow-up message — because the wake contract is per
- * request, not per launch: a coordinator that reads a report and replies has
- * asked a new question and earns exactly one more wake for it.
- *
- * Each request owns its own association. Reusing an environment-wide record
- * would overwrite another tab's outstanding wake; reusing the same request id
- * is still idempotent through the storage layer.
- */
-async function openWorkerDelegation(
-  context: CommandContext,
-  scope: { projectId: string; coordinatorId: string; conversationId: string },
-  workerEnvironmentId: string,
-  workerTabId: string,
-  requestId: string,
-): Promise<boolean> {
-  const association = await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
-    id: randomUUID(),
-    projectId: scope.projectId,
-    coordinatorId: scope.coordinatorId,
-    conversationId: scope.conversationId,
-    kind: "environment",
-    resourceId: workerEnvironmentId,
-    requestId: `delegation:${requestId}`,
-    createdAt: new Date().toISOString(),
-  });
-  if (
-    association.conversationId !== scope.conversationId ||
-    association.resourceId !== workerEnvironmentId
-  ) {
-    throw new Error("Coordinator request id was reused with a different delegation target");
-  }
-  const opened = await context.storage.coordinators.openCoordinatorDelegation(
-    association.id,
-    workerTabId,
-  );
-  if (!opened) throw new Error("Coordinator delegation association was not found");
-  return opened.delegation?.state === "running";
 }
 
 async function assertWorkerDelegationAvailable(
@@ -153,6 +107,7 @@ export function registerCoordinatorCommands(
   registerCoordinatorGraphActions(register);
   registerAgentsMdCommands(register, dependencies);
   registerWorkerQuestionRelayCommands(register, dependencies);
+  registerCoordinatorWorkerMailCommands(register, dependencies);
   const workflowStarts = new Map<string, Promise<unknown>>();
   const runWorkflowStart = <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     const existing = workflowStarts.get(key);
@@ -356,159 +311,6 @@ export function registerCoordinatorCommands(
         asNonBlankString(filename, "filename"),
         asNonBlankString(base64Data, "base64Data"),
       );
-    },
-  );
-  register(
-    "send_coordinator_agent_mail",
-    async (
-      {
-        projectId,
-        coordinatorId,
-        conversationId,
-        requestId,
-        toEnvironmentId,
-        toTabId,
-        subject,
-        body,
-        replyToMessageId,
-        deliverNow,
-      },
-      context,
-    ) => {
-      const project = asNonBlankString(projectId, "projectId");
-      const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
-      const conversation = asNonBlankString(conversationId, "conversationId");
-      const steer = deliverNow === true;
-      const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
-      if (!workspace || workspace.projectId !== project || workspace.lifecycleState !== "ready") {
-        throw new Error("Coordinator identity is unavailable");
-      }
-      const tab = workspace.conversations.find(
-        (item) => item.id === conversation && !item.closedAt,
-      );
-      if (!tab) throw new Error("Coordinator conversation is unavailable");
-      const sender = {
-        kind: "coordinator" as const,
-        projectId: project,
-        coordinatorId: coordinator,
-        conversationId: conversation,
-        environmentId: coordinatorRuntimeId(coordinator, conversation),
-        tabId: tab.tabId,
-      };
-      const stableRequestId = asNonBlankString(requestId, "requestId");
-      const target = asNonBlankString(toEnvironmentId, "toEnvironmentId");
-      // Main ↔ side agent mail. Not a delegation: nothing to wait on, and the
-      // mail store decides which of the two may talk to which.
-      if (
-        target === COORDINATOR_MAIL_ADDRESS ||
-        coordinatorIdFromRuntimeId(target) === coordinator
-      ) {
-        const message = await context.storage.sendAgentMail(sender, {
-          requestId: stableRequestId,
-          toEnvironmentId: target,
-          toTabId: typeof toTabId === "string" ? toTabId : "",
-          body: asNonBlankString(body, "body"),
-          ...(typeof subject === "string" ? { subject } : {}),
-          ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
-        });
-        return {
-          ...message,
-          coordinatorDelegationOpened: false,
-          // A coordinator conversation is never steered: a side agent must not
-          // cut into the main's turn with the user, nor the main into a side's.
-          ...(steer ? coordinatorDeliverNowResult(message) : {}),
-        };
-      }
-      if (tab.role === "side") {
-        throw new Error(
-          'A side agent can only message the main coordinator. Send to "coordinator".',
-        );
-      }
-      const destination = await context.storage.getEnvironment(target);
-      if (!destination || destination.projectId !== project) {
-        throw new Error("Coordinator messages must stay within their project");
-      }
-      const requestedTabId = typeof toTabId === "string" ? toTabId.trim() : "";
-      const admit = <T>(work: () => Promise<T>) =>
-        context.storage.withAgentMailWorkerAdmission(destination.id, work);
-      const admitted = await admit(async () => {
-        // A follow-up to a worker that is still on an earlier request joins
-        // that delegation rather than opening a second one. The open delegation
-        // does not close while this message is undelivered, so the worker reads
-        // it in its next turn and the coordinator is woken once, after both.
-        const joining = (await context.storage.coordinators.listOpenCoordinatorDelegations()).find(
-          (association) =>
-            association.coordinatorId === coordinator &&
-            association.kind === "environment" &&
-            association.nodeId === undefined &&
-            association.resourceId === destination.id &&
-            (!requestedTabId || association.delegation?.workerTabId === requestedTabId) &&
-            association.requestId !== `delegation:${stableRequestId}`,
-        );
-        const message = await context.storage.sendAgentMail(
-          sender,
-          {
-            requestId: stableRequestId,
-            toEnvironmentId: destination.id,
-            toTabId: requestedTabId,
-            body: asNonBlankString(body, "body"),
-            ...(typeof subject === "string" ? { subject } : {}),
-            ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
-          },
-          { newDelegation: !joining, steer },
-        );
-        const destinationTabId = message.toTabId;
-        // Asking a worker something is a delegation, so the coordinator is woken
-        // once when that worker's turn ends rather than on whatever it says
-        // along the way. A message the recipient bounced or that was never
-        // scheduled for delivery has asked nothing and opens nothing.
-        let coordinatorDelegationOpened = false;
-        if (message.placement === "pending-inject" && joining) {
-          coordinatorDelegationOpened = true;
-        } else if (message.placement === "pending-inject") {
-          try {
-            coordinatorDelegationOpened = await openWorkerDelegation(
-              context,
-              { projectId: project, coordinatorId: coordinator, conversationId: conversation },
-              destination.id,
-              destinationTabId,
-              stableRequestId,
-            );
-          } catch (error) {
-            log.warn("delegation.open-failed", {
-              source: "outbound-message",
-              error: formatLogError(error),
-            });
-          }
-        }
-        // Say plainly when the worker cannot read it yet: "pending" alone reads
-        // as delivered to a coordinator deciding whether to wait.
-        const recipientMailbox =
-          destination.status === "stopped"
-            ? await context.storage.getAgentMailMailbox(destination.id, destinationTabId)
-            : null;
-        const autoStarts =
-          destination.environmentType === "local" &&
-          recipientMailbox?.descriptor.coordinatorOrigin === sender.environmentId;
-        const deliveryNote =
-          destination.status !== "stopped"
-            ? undefined
-            : autoStarts
-              ? "The worker's environment is stopped. Orkestrator will attempt to start it once; the message is delivered once it is running."
-              : "The recipient environment is stopped and is not started automatically. Call start_environment to deliver this message, or ask the user.";
-        return {
-          ...message,
-          coordinatorDelegationOpened,
-          ...(deliveryNote ? { deliveryNote } : {}),
-        };
-      });
-      // Outside the admission lock: the delivery pass may need it.
-      if (!steer) return admitted;
-      return {
-        ...(await settleCoordinatorDeliverNow(context, admitted)),
-        coordinatorDelegationOpened: admitted.coordinatorDelegationOpened,
-        ...(admitted.deliveryNote ? { deliveryNote: admitted.deliveryNote } : {}),
-      };
     },
   );
   register(

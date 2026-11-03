@@ -364,7 +364,7 @@ describe("pull request status wakes", () => {
     expect(states(current, coordinator).slice(-1)).toEqual(["pr-merged"]);
     expect(current.wakes(coordinator)).toBe(2);
     const [merged] = current.carriers(coordinator)[1]!;
-    expect(merged!.subject).toBe("Pull request pr-env was merged");
+    expect(merged!.subject).toBe("Pull request pr-env was merged and its environment deleted");
     for (const actor of [worker, gone])
       expect((await followOf(current, actor))?.terminalNotifiedAt).toBeDefined();
   });

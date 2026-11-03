@@ -548,7 +548,7 @@ export class BuildPipelineLifecycle {
         existingEnvironment.projectId !== input.projectId ||
         existingEnvironment.deletionRequestedAt
       ) {
-        throw new Error("The selected build environment does not belong to this project");
+        throw new Error("The selected pipeline environment does not belong to this project");
       }
     }
     const taskSnapshot = await this.snapshotWithCriteria(input);
@@ -1001,7 +1001,9 @@ export class BuildPipelineLifecycle {
       delete candidate.delivery;
       pruneKeyInformationAfterRewind(candidate, candidate.iteration, false, false);
       discardSessionReviewReports(candidate);
-      delete candidate.reviewPackage;
+      // Preparation archives the cancelled run with its sealed failure summary
+      // before deleting the package. Keep that evidence until then.
+      if (!candidate.validationRun) delete candidate.reviewPackage;
       delete candidate.structuredReview;
       delete candidate.structuredReviewRequestId;
       delete candidate.verificationResult;

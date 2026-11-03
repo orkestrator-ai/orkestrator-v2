@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
-import { AGENT_MAIL_MAX_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
+import {
+  AGENT_MAIL_MAX_LIST_LIMIT,
+  normalizeAgentMessagingSettings,
+} from "@orkestrator/protocol/agent-mail";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerAgentMailCommands } from "./commands-registry-mail.js";
 
@@ -102,5 +105,33 @@ describe("retry_agent_mail_inject", () => {
     ]);
     // The delivery attempt runs before the command answers, so the caller sees its result.
     expect(drainAgentMail).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("update_agent_messaging_settings", () => {
+  test("answers with the stored messaging settings, never the config and its credentials", async () => {
+    const config = {
+      global: {
+        githubToken: "ghp-stored-token",
+        anthropicApiKey: "anthropic-stored-key",
+        agentMessaging: { enabled: true },
+      },
+    };
+    const patchGlobalConfig = mock(async (patch: Record<string, unknown>) => {
+      config.global = { ...config.global, ...patch } as typeof config.global;
+      return config;
+    });
+    const storage = { loadConfig: async () => config, patchGlobalConfig };
+    const handlers = new Map<string, CommandHandler>();
+    registerAgentMailCommands((name, handler) => handlers.set(name, handler));
+
+    const answer = await handlers.get("update_agent_messaging_settings")!(
+      { settings: { wakePeers: true } },
+      { storage } as unknown as CommandContext,
+    );
+
+    expect(answer).toEqual(normalizeAgentMessagingSettings(config.global.agentMessaging));
+    expect(answer).toMatchObject({ enabled: true, wakePeers: true });
+    expect(JSON.stringify(answer)).not.toContain("stored");
   });
 });

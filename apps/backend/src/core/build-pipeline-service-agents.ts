@@ -126,7 +126,7 @@ export class BuildPipelineAgents {
   ): Promise<BuildPipelineProvider> {
     if (this.ctx.options.provider) return this.ctx.options.provider(pipeline, agent);
     const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
-    if (!environment) throw new Error("Build environment no longer exists");
+    if (!environment) throw new Error("Pipeline environment no longer exists");
     const config = await this.ctx.storage.loadConfig();
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     const connection = await this.bridgeConnection(agent, environment);
@@ -246,7 +246,7 @@ export class BuildPipelineAgents {
    */
   async selectionContext(pipeline: BuildPipeline): Promise<BuildSelectionContext> {
     const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
-    if (!environment) throw new Error("Build environment no longer exists");
+    if (!environment) throw new Error("Pipeline environment no longer exists");
     const config = await this.ctx.storage.loadConfig();
     const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     return {

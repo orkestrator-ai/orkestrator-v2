@@ -399,6 +399,24 @@ The final staged-resolution aggregate, `mise run test:logged -- --name retry-fin
 - **Evidence:** `/tmp/orkestrator-test-run.EowbMk/root-and-agent-support-tests.log.gz`; enclosing aggregate evidence is under `/tmp/orkestrator-test-run.bAsP8q/`.
 - **Assessment:** existing aggregate deadline recurrence. Host contention remains a hypothesis; no disk-report source, assertion, timeout or skip changed.
 
+### Coordinator workflow retention review, 2026-11-02
+
+Preparation at `81d21fa80` ran `mise run test` (root group used parallel
+workers) and failed `disk report > reports an isolated checkout and only fixes
+named legacy Turbo artifacts` in `tests/unit/disk-report.test.ts` after
+5013.86 ms. `fixed.status` was null instead of 0 at line 157; root summary:
+3444 tests, 3442 pass, one fail and one between-test error. Original evidence:
+`.orkestrator/review-artifacts/review-validation-a344d229-2c6c-4bb8-8f3e-d1e85a861aa0/validation-04.stdout.txt`.
+
+The unchanged owning file passed alone on this branch with
+`mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+(1.8 s). The same command with log name `main-disk-report` also passed in
+an independently installed detached `origin/main` worktree at `d7cdfaa8b`
+(1.8 s); that worktree was removed. This does not establish a cause for the
+aggregate timeout. The exact aggregate rerun passed the root group (214.1 s),
+including disk-report, but failed two other workspace owners; see cases 1314
+and 1653. Evidence: `/tmp/orkestrator-test-run.kQC3bQ/repaired-validation-test.log.gz`.
+
 ## R4 diagnostics review recurrence — 2026-11-03
 
 Preparation ran `mise run test` at `ced9dbce70ca0cab52b304fb548b58e15af716c2`

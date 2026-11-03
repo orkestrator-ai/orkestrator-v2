@@ -209,3 +209,19 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+
+## Main merge validation — 2026-11-03
+
+Merge parents: `75a0942990e169213c57b193efb5dfe87589abc2` and
+`b58d401e12b948de0f9c4d966c706bfe00d04225`. The owner was not conflicted.
+`mise run test:logged -- --name merge-tests -- mise run test` failed in the
+workspace group (323.4 s overall); backend used four workers and reported
+13,478 pass, 100 skip, 3 fail across 908 files. The test
+`each child keeps one card, its transcript and status across a fresh backend and a cold restart`
+received `recovering` instead of `idle` at line 170 (947.19 ms).
+
+The unchanged complete owner passed alone:
+`mise run test:logged -- --name merge-codex-cards-rerun -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures`
+(exit 0, 1.0 s; passing counts not retained). This repeats the open cold-restart
+projection race; no root cause is established. Original group evidence:
+`/tmp/orkestrator-test-run.svBnLQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

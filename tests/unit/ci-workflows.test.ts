@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { TEST_GROUP_KEYS } from "../../scripts/test-all";
 
 const read = (relativePath: string) =>
   readFileSync(join(import.meta.dir, "..", "..", relativePath), "utf8");
@@ -12,10 +13,16 @@ type Workflow = {
     {
       name: string;
       needs?: string;
+      if?: string;
       "runs-on"?: string;
       permissions?: Record<string, string>;
       outputs?: Record<string, string>;
-      strategy?: { matrix: { runner: string[] } };
+      strategy?: {
+        matrix: {
+          runner?: string[];
+          include?: { shard: string; groups: string; "qualify-claude"?: boolean }[];
+        };
+      };
       steps?: { id?: string; run?: string; env?: Record<string, string> }[];
     }
   >;
@@ -51,9 +58,26 @@ describe("CI workflow contracts", () => {
     for (const context of contexts) expect(jobNames).toContain(context);
   });
 
-  test("the complete CI suite has a 45-minute group deadline", () => {
-    const step = workflow("ci").jobs.test!.steps!.find((step) => step.run === "mise run test:full");
-    expect(step?.env?.ORKESTRATOR_TEST_GROUP_TIMEOUT_MS).toBe("2700000");
+  test("the test shards together run every aggregate group exactly once", () => {
+    const jobs = workflow("ci").jobs;
+    const shard = jobs["test-shard"]!;
+    const step = shard.steps!.find((step) => step.run === "mise run test:full");
+    expect(step?.env?.ORKESTRATOR_TEST_GROUPS).toBe("${{ matrix.groups }}");
+    // Each shard fits the default group deadline; raising it is not the fix.
+    expect(step?.env?.ORKESTRATOR_TEST_GROUP_TIMEOUT_MS).toBeUndefined();
+    const shards = shard.strategy!.matrix.include!;
+    expect(shards.flatMap((entry) => entry.groups.split(",")).sort()).toEqual(
+      [...TEST_GROUP_KEYS].sort(),
+    );
+    // The paired AppArmor evidence comes from one host.
+    expect(shards.filter((entry) => entry["qualify-claude"])).toHaveLength(1);
+
+    // One status for the suite, under the planned required-check name, which
+    // reports failure rather than going missing when a shard fails.
+    const gate = jobs.test!;
+    expect(gate.name).toBe("Unit and integration tests");
+    expect(gate.needs).toBe("test-shard");
+    expect(gate.if).toBe("${{ !cancelled() }}");
   });
 
   test("CI compares independently installed worker contexts across hosts", () => {

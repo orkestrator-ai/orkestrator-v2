@@ -177,6 +177,12 @@ const assignAgent = mock(async () => ensuredSnapshot);
 const firstUpstreamTip = "b".repeat(40);
 const checkUpstream = mock(async (): Promise<unknown> => null);
 const declineUpstream = mock(async (): Promise<unknown> => undefined);
+let storedAutoMerge = false;
+const getAutoMerge = mock(async (): Promise<unknown> => ({ enabled: storedAutoMerge }));
+const setAutoMerge = mock(async (_projectId: string, enabled: boolean): Promise<unknown> => {
+  storedAutoMerge = enabled;
+  return { enabled };
+});
 
 function storedDecline(): unknown {
   const declines = readLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY)?.declines;
@@ -283,6 +289,8 @@ mock.module("@/lib/backend", () => ({
   fetchProjectGit: fetchGit,
   checkCoordinatorUpstreamMerge: checkUpstream,
   declineCoordinatorUpstreamMerge: declineUpstream,
+  getCoordinatorUpstreamAutoMerge: getAutoMerge,
+  setCoordinatorUpstreamAutoMerge: setAutoMerge,
   switchProjectGitBranch: switchBranch,
   prepareProjectGitBranchSwitch: prepareSwitch,
   syncProjectGit: syncGit,
@@ -419,6 +427,9 @@ describe("CoordinatorPanel", () => {
     resetClientStateCapabilitiesForTests();
     checkUpstream.mockReset();
     declineUpstream.mockReset();
+    storedAutoMerge = false;
+    getAutoMerge.mockClear();
+    setAutoMerge.mockClear();
     runCommand.mockClear();
   });
 
@@ -795,6 +806,8 @@ describe("CoordinatorPanel", () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Cancel" }) === null).toBe(true);
+    // A backend that cannot keep the setting offers no "Always merge".
+    expect(screen.queryByRole("button", { name: "Always merge" }) === null).toBe(true);
     // Enter activates the focused default action: merging.
     const merge = screen.getByRole("button", { name: "Merge and send" });
     await waitFor(() => expect(document.activeElement).toBe(merge));
@@ -828,9 +841,180 @@ describe("CoordinatorPanel", () => {
       resetClientStateCapabilitiesForTests({
         coordinatorPaneLayouts: false,
         coordinatorUpstreamMerge: true,
+        coordinatorUpstreamAutoMerge: true,
         noticeDismissals: false,
         environmentAttention: false,
       });
+    });
+
+    test("a delayed rejected Always merge save stays visible after the current send", async () => {
+      prepareUnassignedLaunch();
+      checkUpstream.mockImplementation(async () => ({ offer: true, status: behindGit() }));
+      let reject!: (error: Error) => void;
+      setAutoMerge.mockImplementationOnce(
+        () =>
+          new Promise((_, fail) => {
+            reject = fail;
+          }),
+      );
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByRole("button", { name: "Always merge upstream commits" });
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Always merge" }));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+      await act(async () => reject(new Error("disk unavailable")));
+      expect(
+        await screen.findByText("Could not save the merge setting. disk unavailable"),
+      ).toBeTruthy();
+      expect(
+        screen
+          .getByRole("button", { name: "Always merge upstream commits" })
+          .getAttribute("aria-pressed"),
+      ).toBe("false");
+      fireEvent.click(screen.getByRole("button", { name: "Always merge upstream commits" }));
+      await waitFor(() => expect(storedAutoMerge).toBe(true));
+      expect(
+        screen.queryByText("Could not save the merge setting. disk unavailable") === null,
+      ).toBe(true);
+    });
+
+    test("focus and reconnect reconcile external changes and retry a failed initial read", async () => {
+      getAutoMerge.mockRejectedValueOnce(new Error("offline"));
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      await waitFor(() => expect(getAutoMerge).toHaveBeenCalled());
+      storedAutoMerge = true;
+      fireEvent(window, new Event("online"));
+      const toggle = await screen.findByRole("button", { name: "Always merge upstream commits" });
+      await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("true"));
+      fireEvent.click(toggle);
+      await waitFor(() => expect(storedAutoMerge).toBe(false));
+      storedAutoMerge = true;
+      fireEvent(window, new Event("focus"));
+      await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("true"));
+      storedAutoMerge = false;
+      fireEvent(window, new Event("focus"));
+      await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("false"));
+    });
+
+    test("a click reads the authoritative value even before the next refresh", async () => {
+      render(<CoordinatorPanel projectId="project-1" />);
+      const toggle = await screen.findByRole("button", { name: "Always merge upstream commits" });
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+      storedAutoMerge = true;
+      fireEvent.click(toggle);
+      await waitFor(() => expect(setAutoMerge).toHaveBeenCalledWith("project-1", false));
+      expect(storedAutoMerge).toBe(false);
+    });
+
+    test("a toolbar save error is visible and preserves the saved state", async () => {
+      setAutoMerge.mockRejectedValueOnce(new Error("save refused"));
+      render(<CoordinatorPanel projectId="project-1" />);
+      const toggle = await screen.findByRole("button", { name: "Always merge upstream commits" });
+      fireEvent.click(toggle);
+      expect(await screen.findByText("save refused")).toBeTruthy();
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    test("a non-automatic offer clears a stale enabled toggle", async () => {
+      prepareUnassignedLaunch();
+      storedAutoMerge = true;
+      checkUpstream.mockImplementation(async () => ({ offer: true, status: behindGit() }));
+      render(<CoordinatorPanel projectId="project-1" />);
+      const toggle = await screen.findByRole("button", { name: "Always merge upstream commits" });
+      await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("true"));
+      storedAutoMerge = false;
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      await screen.findByRole("button", { name: "Merge and send" });
+      await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("false"));
+    });
+
+    test("an automatic sync failure preserves the real composer draft and reports the error", async () => {
+      useRealAgentTab = true;
+      useConfigStore.getState().updateGlobalConfig({
+        enabledAgentPlatforms: ["claude"],
+        agentSettings: { defaultAgent: "claude" },
+      });
+      prepareUnassignedLaunch();
+      storedAutoMerge = true;
+      checkUpstream.mockImplementation(async () => ({
+        offer: true,
+        status: behindGit(),
+        automatic: true,
+      }));
+      syncGit.mockRejectedValueOnce(new Error("Automatic fast-forward refused"));
+      render(<CoordinatorPanel projectId="project-1" />);
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Preserve this automatic draft" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(await screen.findByText("Automatic fast-forward refused")).toBeTruthy();
+      expect(input.textContent).toBe("Preserve this automatic draft");
+      const key = createSessionKey("coordinator:coordinator-1:conversation-1", "coordinator-tab");
+      expect(useNativeComposeStore.getState().drafts.get(key)?.text).toBe(
+        "Preserve this automatic draft",
+      );
+      expect(assignAgent).not.toHaveBeenCalled();
+      expect(mergeDialog()).toBeNull();
+    });
+
+    test("Always merge merges now and saves the project's setting", async () => {
+      prepareUnassignedLaunch();
+      const status = behindGit({ behind: 2 });
+      checkUpstream.mockImplementation(async () => ({ offer: true, status }));
+      const order: string[] = [];
+      syncGit.mockImplementation(async () => {
+        order.push("sync");
+        return behindGit({ behind: 0, headCommit: firstUpstreamTip });
+      });
+      assignAgent.mockImplementation(async () => {
+        order.push("assign");
+        return ensuredSnapshot;
+      });
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      const toggle = await screen.findByRole("button", { name: "Always merge upstream commits" });
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      expect(await screen.findByText("Merge 2 upstream commits?")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Always merge" }));
+      await waitFor(() => expect(order).toEqual(["sync", "assign"]));
+      expect(setAutoMerge).toHaveBeenCalledWith("project-1", true);
+      expect(declineUpstream).not.toHaveBeenCalled();
+      expect(mergeDialog() === null).toBe(true);
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Always merge upstream commits" })
+            .getAttribute("aria-pressed"),
+        ).toBe("true"),
+      );
+    });
+
+    test("an automatic offer merges without asking, and the toggle turns it off", async () => {
+      prepareUnassignedLaunch();
+      storedAutoMerge = true;
+      const status = behindGit({ behind: 2 });
+      checkUpstream.mockImplementation(async () => ({ offer: true, status, automatic: true }));
+      const order: string[] = [];
+      syncGit.mockImplementation(async () => {
+        order.push("sync");
+        return behindGit({ behind: 0, headCommit: firstUpstreamTip });
+      });
+      assignAgent.mockImplementation(async () => {
+        order.push("assign");
+        return ensuredSnapshot;
+      });
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      const toggle = await screen.findByRole("button", { name: "Always merge upstream commits" });
+      await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("true"));
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      await waitFor(() => expect(order).toEqual(["sync", "assign"]));
+      expect(mergeDialog() === null).toBe(true);
+
+      fireEvent.click(toggle);
+      await waitFor(() => expect(setAutoMerge).toHaveBeenCalledWith("project-1", false));
+      await waitFor(() => expect(toggle.getAttribute("aria-pressed")).toBe("false"));
     });
 
     test("shows the question only when the backend says to, and records the decline there", async () => {

@@ -108,3 +108,103 @@ for (const state of ["loading", "error", "missing"] as const) {
     }
   });
 }
+
+test("the panel's section headings stay put and scroll the brief to a section", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/key-information-tab");
+  await page
+    .getByTestId("build-pipeline-header")
+    .getByRole("button", { name: "Key information" })
+    .click();
+  const panel = page.getByRole("dialog", { name: "Key information" });
+  const nav = panel.getByRole("navigation", { name: "Key information sections" });
+  await expect(nav).toBeVisible();
+  const scroller = panel.getByTestId("pipeline-key-information-scroller");
+  const briefBox = await scroller.boundingBox();
+  const navBox = await nav.boundingBox();
+  if (!briefBox || !navBox) throw new Error("Missing panel layout");
+  if (testInfo.project.name === "mobile-chromium") {
+    expect(navBox.y + navBox.height).toBeLessThanOrEqual(briefBox.y + 1);
+  } else {
+    expect(navBox.x + navBox.width).toBeLessThanOrEqual(briefBox.x + 1);
+  }
+  await expect(page.getByTestId("pipeline-flow-scroll")).toBeVisible();
+  const snapshot = () =>
+    page.evaluate(() => ({
+      pageX: window.scrollX,
+      pageY: window.scrollY,
+      ancestors: Array.from(document.querySelectorAll("*"))
+        .filter(
+          (element) =>
+            !element.closest('[role="dialog"]') &&
+            (element.scrollHeight > element.clientHeight ||
+              element.scrollWidth > element.clientWidth),
+        )
+        .map((element) => [element.scrollLeft, element.scrollTop]),
+      graphBounds: document
+        .querySelector('[data-testid="pipeline-flow-scroll"]')!
+        .getBoundingClientRect()
+        .toJSON(),
+      graphTransforms: Array.from(
+        document.querySelectorAll('[data-testid="pipeline-flow-scroll"] [style]'),
+      ).map((element) => element.getAttribute("style")),
+    }));
+  const outsideBefore = await snapshot();
+  await page.screenshot({
+    path: `output/visual-previews/key-nav-before-${testInfo.project.name}.png`,
+  });
+  const before = await nav.boundingBox();
+
+  const verification = nav.getByRole("button", { name: "Verification" });
+  await verification.click();
+
+  const region = panel.getByRole("region", { name: "Verification" });
+  await expect(region).toBeInViewport();
+  await expect(verification).toHaveAttribute("aria-current", "location");
+  await expect.poll(async () => (await nav.boundingBox())?.y).toBe(before?.y);
+  // The list did not scroll away with the brief; a phone's row of headings
+  // slides sideways to keep the current one showing.
+  await expect(nav).toBeInViewport();
+  await expect(verification).toBeInViewport();
+  await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  expect(await snapshot()).toEqual(outsideBefore);
+  await page.screenshot({
+    path: `output/visual-previews/key-nav-after-${testInfo.project.name}.png`,
+  });
+});
+
+test("wide paired headings keep either selected member on a small manual scroll", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "paired layout requires a wide pane");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/key-information-tab?view=tab");
+  const tab = page.getByTestId("pipeline-key-information-tab");
+  const context = tab.getByRole("region", { name: "Context", exact: true });
+  // Model a long context while preserving the real paired-grid layout.
+  await context.evaluate((element) => {
+    element.style.minHeight = "1200px";
+  });
+  const nav = tab.getByRole("navigation", { name: "Key information sections" });
+  for (const name of ["Context", "Solution"]) {
+    const button = nav.getByRole("button", { name: new RegExp(`^${name}`) });
+    await button.click();
+    const scroller = tab.locator(".overflow-y-auto").first();
+    await scroller.evaluate((element) => element.dispatchEvent(new Event("scrollend")));
+    await scroller.evaluate((element) => {
+      element.scrollTop += 5;
+    });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await expect(button).toHaveAttribute("aria-current", "location");
+    await page.screenshot({
+      path: `output/visual-previews/key-nav-paired-${name.toLowerCase()}.png`,
+    });
+  }
+});

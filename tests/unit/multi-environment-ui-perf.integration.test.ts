@@ -82,9 +82,13 @@ const CHROMIUM = [
 
 describe.skipIf(!CHROMIUM)("in-page deadlines", () => {
   let browser: Browser;
+  // On a loaded CI runner Chromium's first page can take longer than Bun's
+  // five-second test timeout, which then tears the browser down for every
+  // later case. Pay that start-up cost here, under a hook budget.
   beforeAll(async () => {
     browser = await chromium.launch({ executablePath: CHROMIUM });
-  });
+    await (await browser.newPage()).close();
+  }, 60_000);
   afterAll(async () => {
     await browser?.close();
   });
@@ -169,6 +173,6 @@ describe.skipIf(!CHROMIUM)("in-page deadlines", () => {
       } finally {
         await page.close();
       }
-    });
+    }, 30_000);
   }
 });

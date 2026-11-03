@@ -355,6 +355,43 @@ export class AgentMailRepository {
     return { actor, senderScope, senderMailbox };
   }
 
+  /** Read an authenticated idempotent result without admitting new mail. */
+  async replayAgentMail(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<AgentMailMessage | null> {
+    await this.repos.agentMailboxes.ensureAgentMailDirectoryFresh([
+      sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
+    ]);
+    return await this.store.enqueue(async () => {
+      const store = await this.store.snapshot();
+      const { senderScope } = this.authenticateMailSender(store, sender);
+      const key = idempotencyKey(senderScope, input.requestId.trim());
+      const fingerprint = sendFingerprint({
+        ...input,
+        subject: input.subject?.trim() || undefined,
+      });
+      const prior = store.idempotency[key];
+      if (prior) {
+        if (prior.fingerprint !== fingerprint)
+          throw new AgentMailError(
+            "idempotency-conflict",
+            "requestId was already used with different content",
+          );
+        if (prior.bounce) return prior.bounce;
+        const located = prior.messageId ? findMessage(store, prior.messageId) : null;
+        if (located) return located.message;
+        const counterpart = prior.messageId ? store.counterparts[prior.messageId] : undefined;
+        if (counterpart) return { ...counterpart, body: "" };
+        throw new AgentMailError(
+          "message-not-found",
+          "Idempotent message record is no longer retained",
+        );
+      }
+      return null;
+    });
+  }
+
   async sendAgentMail(
     sender: AgentMailSender,
     input: AgentMailSendInput,
@@ -417,40 +454,12 @@ export class AgentMailRepository {
     // Idempotency keys on what the sender asked for, so a retry still matches
     // after "coordinator" has come to mean a different conversation.
     const requested = input;
-    await this.repos.agentMailboxes.ensureAgentMailDirectoryFresh([
-      sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
-    ]);
-    const replay = await this.store.enqueue(async () => {
-      const store = await this.store.snapshot();
-      const { senderScope } = this.authenticateMailSender(store, sender);
-      const key = idempotencyKey(senderScope, requestId);
-      const fingerprint = sendFingerprint({
-        ...requested,
-        subject,
-        ...(nodeParent
-          ? { replyToMessageId: `${nodeParent.threadId}:${nodeParent.id}:${nodeParent.hopCount}` }
-          : {}),
-      });
-      const prior = store.idempotency[key];
-      if (prior) {
-        if (prior.fingerprint !== fingerprint)
-          throw new AgentMailError(
-            "idempotency-conflict",
-            "requestId was already used with different content",
-          );
-        if (prior.bounce) return prior.bounce;
-        const located = prior.messageId ? findMessage(store, prior.messageId) : null;
-        if (located) return located.message;
-        const counterpart = prior.messageId ? store.counterparts[prior.messageId] : undefined;
-        if (counterpart) return { ...counterpart, body: "" };
-        throw new AgentMailError(
-          "message-not-found",
-          "Idempotent message record is no longer retained",
-        );
-      }
-      return null;
+    const replay = await this.replayAgentMail(sender, {
+      ...requested,
+      ...(nodeParent
+        ? { replyToMessageId: `${nodeParent.threadId}:${nodeParent.id}:${nodeParent.hopCount}` }
+        : {}),
     });
-    // A copy: the snapshot is shared and frozen, and a send returns its own message.
     if (replay) return structuredClone(replay);
     const config = await this.repos.config.loadConfig();
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
@@ -1017,6 +1026,33 @@ export class AgentMailRepository {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX)
       .map(metadataMessage);
+  }
+
+  /**
+   * When `coordinatorId` last sent mail that reached `environmentId`'s
+   * mailboxes (any of its conversations), or null. Mail the store refused or
+   * bounced was never sent and does not count.
+   */
+  async latestCoordinatorMailTo(
+    environmentId: string,
+    coordinatorId: string,
+  ): Promise<string | null> {
+    const store = await this.store.snapshot();
+    let latest: string | null = null;
+    for (const mailbox of Object.values(store.mailboxes)) {
+      for (const message of mailbox.messages) {
+        if (
+          message.toEnvironmentId === environmentId &&
+          message.from.kind === "coordinator" &&
+          message.from.coordinatorId === coordinatorId &&
+          message.placement !== "bounced" &&
+          message.placement !== "undeliverable" &&
+          (latest === null || message.createdAt > latest)
+        )
+          latest = message.createdAt;
+      }
+    }
+    return latest;
   }
 
   async listUserSentAgentMail(): Promise<AgentMailMessageSummary[]> {

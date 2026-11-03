@@ -13,8 +13,7 @@ import { useCallback, useState } from "react";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { parseGitHubPullRequestLink } from "@orkestrator/protocol/github-pull-requests";
+import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import type { PrState } from "@/types";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import type { HydrationStatus } from "@/lib/bounded-hydration";
@@ -36,8 +35,10 @@ interface UsePullRequestReturn {
   /** When the backend last checked this PR successfully (ISO), if known. */
   lastSuccessfulCheckAt: string | null;
   error: string | null;
-  /** Open the PR in the default browser */
-  /** Opens the PR in the environment's files panel, or on GitHub when `external`. */
+  /**
+   * Opens the PR in the right-hand files panel of the current view, or on
+   * GitHub when `external` or when the panel cannot show it.
+   */
   viewPR: (options?: { external?: boolean }) => Promise<void>;
   /** Clear the stored PR data */
   resetPR: () => Promise<void>;
@@ -93,14 +94,8 @@ export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePul
         }
       }
 
-      const pullRequest = options?.external ? null : parseGitHubPullRequestLink(url);
-      if (pullRequest && environmentId) {
-        useFilesPanelStore.getState().openPullRequest(environmentId, pullRequest, pullRequest.view);
-        return;
-      }
-
       try {
-        await backend.openInBrowser(url);
+        await openPullRequestUrl(url, { external: options?.external });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to open browser";
         setError(message);

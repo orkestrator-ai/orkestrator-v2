@@ -27,6 +27,12 @@ interface StoredUpstreamDecline extends DeclinedUpstreamMerge {
   declinedAt: string;
 }
 
+interface StoredUpstreamAutoMerge {
+  projectId: string;
+  enabled: true;
+  updatedAt: string;
+}
+
 interface StoredNoticeDismissals {
   revision: number;
   sessions: NoticeDismissalSession[];
@@ -57,6 +63,9 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
  * - `coordinator-upstream-declines`: one row per project, the upstream tip the
  *   user chose not to merge before messaging the coordinator. Read by the
  *   backend's own "ask first?" decision, so it is not announced.
+ * - `coordinator-upstream-auto-merge`: one row per project that the user set to
+ *   always merge upstream commits without being asked. Kept by this machine's
+ *   backend only; read by the same decision, and not announced.
  * - `notice-dismissals`: one document, notices dismissed per session identity,
  *   bounded in both dimensions; announces `notice-dismissal`.
  *
@@ -72,6 +81,10 @@ export class ClientStateRepository {
 
   private declinesFile(): string {
     return this.context.file("coordinator-upstream-declines.json");
+  }
+
+  private autoMergeFile(): string {
+    return this.context.file("coordinator-upstream-auto-merge.json");
   }
 
   private dismissalsFile(): string {
@@ -163,7 +176,23 @@ export class ClientStateRepository {
     );
   }
 
-  /** Deletes a project's layout and decline (project removal). */
+  /** Whether a project merges upstream commits before coordinator messages without asking. */
+  getCoordinatorUpstreamAutoMerge(projectId: string): boolean {
+    const stored = this.context.loadStoreRow(this.autoMergeFile(), projectId);
+    return isRecord(stored) && stored.enabled === true;
+  }
+
+  /** Turns "always merge" on or off for a project; off deletes the row. Returns the setting now in force. */
+  setCoordinatorUpstreamAutoMerge(projectId: string, enabled: boolean): boolean {
+    return this.context.updateStoreRow<boolean>(this.autoMergeFile(), projectId, (current) => {
+      if (!enabled)
+        return current === undefined ? { result: false } : { result: false, delete: true };
+      const stored: StoredUpstreamAutoMerge = { projectId, enabled: true, updatedAt: nowIso() };
+      return { result: true, value: stored };
+    });
+  }
+
+  /** Deletes a project's layout, decline and auto-merge setting (project removal). */
   deleteProjectClientState(projectId: string): void {
     const deleted = this.context.updateStoreRow<boolean>(
       this.layoutsFile(),
@@ -171,6 +200,9 @@ export class ClientStateRepository {
       (current) => (current === undefined ? { result: false } : { result: true, delete: true }),
     );
     this.context.updateStoreRow<boolean>(this.declinesFile(), projectId, (current) =>
+      current === undefined ? { result: false } : { result: true, delete: true },
+    );
+    this.context.updateStoreRow<boolean>(this.autoMergeFile(), projectId, (current) =>
       current === undefined ? { result: false } : { result: true, delete: true },
     );
     if (deleted) {
@@ -275,6 +307,8 @@ export type ClientStateStorage = Pick<
   | "saveCoordinatorPaneLayout"
   | "getCoordinatorUpstreamDecline"
   | "recordCoordinatorUpstreamDecline"
+  | "getCoordinatorUpstreamAutoMerge"
+  | "setCoordinatorUpstreamAutoMerge"
   | "listNoticeDismissals"
   | "dismissNotices"
   | "reconcileNoticeDismissals"

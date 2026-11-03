@@ -89,12 +89,12 @@ The material risks are concentrated in four themes:
 | --- | --- | --- | --- | --- |
 | H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Verified (browser behaviour: standard) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Verified |
-| H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Verified code / Potential runtime |
+| H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §4) |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Verified |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
-| M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Verified |
+| M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Fixed (see §4) |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
 | M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Fixed (see §4) |
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
@@ -178,8 +178,16 @@ Docker, since there is no `--privileged` and no docker.sock mount.
 
 ### H3. `.env`, `.env.local` and `opencode.json` symlinks in the project checkout bind-mount arbitrary host paths into the container
 
-**Status:** Verified code / Potential runtime (Docker resolves bind-mount
-source symlinks on the host; not exercised here)
+**Status:** Fixed. The three files are no longer bind-mounted. Before the
+container is created the backend `lstat`s each one and reads it only when it
+is a regular file, not a link, whose `realpath` stays inside the project
+(opened `O_NOFOLLOW`, same inode, at most 1 MiB); those bytes are copied into
+the stopped container with `docker cp`. A refused file is skipped, recorded on
+the container and explained in the setup terminal. See
+[container-lifecycle.md](../architecture/container-lifecycle.md#project-seed-files).
+The other `bindIfExists` callers mount the user's own host agent homes and
+`~/.gitconfig` (images without staged inputs), not repository content, and
+were left as they are. The original finding follows.
 **Actors:** A2, then A1
 
 **Where:** `apps/backend/src/core/commands-containers.ts:422-424, 546-553`
@@ -301,7 +309,19 @@ a container a pivot into the host's loopback, at minimum for blind requests.
 
 ### M3. `update_agent_messaging_settings` returns the full unredacted config
 
-**Status:** Verified
+**Status:** Fixed. Since 2026-11-03 the command answers with the normalised
+messaging settings alone (`normalizeAgentMessagingSettings` of what it stored),
+never the config; the renderer never read the old answer. The guard test
+`apps/backend/src/core/commands-secret-sweep.test.ts` calls every registered
+command three times (no arguments; the seeded project, environment and tab;
+those plus round-tripped settings bodies) against a private data directory
+whose stored `githubToken`, `anthropicApiKey`, `cursorApiKey` and
+`openCodeZenApiKey` are canaries, with canaries also in the inherited
+environment and the agents' credential files under a temporary HOME. It fails
+if any answer, error, emitted event or log line carries one. On its first run
+it caught only this command. A command that rejects the arguments it gets is
+checked only that far, so the guard is a floor, not proof for every code path.
+The original finding follows.
 
 **Where:** `apps/backend/src/core/commands-registry-mail.ts:269-276`.
 ```ts

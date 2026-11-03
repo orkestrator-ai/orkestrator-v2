@@ -15,17 +15,22 @@ preparation stage owns the final full validation pass. Workers a coordinator
 sends to Multi Review are held to the same split
 ([coordinator](coordinator.md)).
 
-Later pipeline stages read that evidence rather than repeating it. Address runs
-targeted checks for the files it edits. It also owns failure triage: it fixes
-recorded failures that relate to the ticket or the branch, and reproduces any
-it believes are unrelated on the target branch. It ends by submitting a typed
-fix result ([below](#the-address--verify-handoff)). Verify is a quick
-acceptance review of the diff, read alongside the recorded package and that
-result. It runs no suite, typecheck, lint or build, never builds or tests the
-target branch, and creates no worktrees. A recorded failure in code the branch
-changes blocks it unless the diff shows a repair; that sends the round to Fix,
-which does the reproducing. Verify runs one narrow check only when an acceptance
-criterion cannot be judged by reading the code.
+Later pipeline stages read that evidence rather than repeating it, and no stage
+runs extra tests to decide whether a failure is the branch's doing. Sealing
+classifies each failing test from evidence that already exists
+([failure triage](#failure-triage)). Address runs targeted checks for the files
+it edits and fixes the recorded failures that relate to the ticket or the
+branch; for one it believes unrelated it cites the triage, and it never runs a
+check against the target branch. It ends by submitting a typed fix result
+([below](#the-address--verify-handoff)). Verify is a quick acceptance review of
+the diff, read alongside the recorded package and that result. It runs no
+suite, typecheck, lint or build, never builds or tests the target branch, and
+creates no worktrees. It judges each failing test rather than each command: a
+`related` failure blocks unless the diff shows a repair, an `unrelated` one
+never blocks unless an acceptance criterion names it, and an `undetermined` one
+blocks only when its diagnostics tie it to the change. A blocking failure sends
+the round to Fix. Verify runs one narrow check only when an acceptance criterion
+cannot be judged by reading the code.
 
 ## The Address → Verify handoff
 
@@ -36,7 +41,7 @@ workflow result slot, the same kind Multi Review's fix step submits
 schema. The prompt (`addressValidationInstruction`) says what goes where:
 `summary`, `filesChanged`, `commandsRun` with each check's result, the repairs
 and their commits in `notes`, and every finding left unaddressed and every
-excused failure, with its target-branch reproduction or environmental evidence,
+excused failure, with its triage evidence or demonstrated environmental cause,
 in `limitations`. The contract's own rule holds: `complete` is true only when
 no check still fails and `limitations` is empty.
 
@@ -141,6 +146,19 @@ timeouts range from one second to two hours. Cancellation, timeout, and output
 overflow terminate the command's process group. A worker-death watchdog also
 terminates its command groups. Intentionally detached commands are unsupported.
 
+A repository can mark a slow suite as on demand in
+`.orkestrator-test-scheduler.json` (`commandProfiles[<command>].onDemand`,
+parsed by `testSchedulingPolicy`): `when` lists path globs (`*` within a
+segment, `**` across segments) and `instead` optionally names a cheaper command.
+When the change (`git diff origin/<target>...HEAD`) touches none of the `when`
+paths, the worker runs `instead` in the planned command's place, or skips it.
+The plan and the result keep the planned command line, and the result's
+limitation says what ran instead and why. A skipped suite covers nothing. When
+the worker cannot read the changed paths, or the backend could not name the
+target branch, every command runs as planned. This repository marks `test:full`
+(replaced by `test`), `test:slow`, `test:all` and the real-stack
+`test:agent:*:isolated` suites, with the trigger paths AGENTS.md gives for each.
+
 Each workspace has one validation lock, preventing separate review jobs from
 interfering. Waiting for another job is bounded by
 `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS` (default 30 minutes). Backend or UI
@@ -169,6 +187,75 @@ Reviewer prompts request summaries first, targeted reads of failure evidence,
 and no duplicate full validation pass. Large successful logs are not injected
 into reviewer prompts. Read-only files and hashes detect accidental changes;
 they are not a security sandbox against a malicious project command.
+
+## Failure triage
+
+A failed aggregate command (`mise run test`, `playwright test`) says nothing
+about which of its tests failed or why. Read as one blocking failure, a test
+already failing on the target branch sent a pipeline round its loop: Fix could
+not repair it, spent the round proving it fails on the target branch,
+validation ran the same suites again, and Verify failed again until the
+iteration cap. Package generation (`generateReviewPackage`) therefore writes
+`failureTriage` into the sealed package
+(`packages/protocol/src/validation-failure-triage.ts`): every failing test the
+failed and incomplete commands' output names, classified from evidence that
+already exists. It never runs a test, and on the real failing artifacts of a
+production pipeline it took about half a second (two seconds with the CI read).
+
+The classifier (`validation-failure-classifier.ts`) runs inside the environment,
+local worktree or container, through `bun -e`, and is shipped as the source of
+one self-contained function. It reads:
+
+- **The recorded output.** Bun (`(fail)` lines, the stack frame naming the
+  test file, since a parallel run interleaves file headers, and each package's
+  `N fail` total), Playwright (the closing `failed`/`flaky` lists), Vitest,
+  Jest and pytest. A command whose output does not account for its failure (a
+  type or lint error, a crash, a timeout, a total its listed tests do not
+  match) is `unattributed` and is judged from its diagnostics as before.
+- **The branch diff and the test's static import graph** (`Bun.Transpiler` and
+  `Bun.resolveSync`, which follow tsconfig paths and workspace packages; every
+  bunfig `preload` counts as each Bun test's own import). A test that is
+  changed, imports a changed file, or whose test or helper files name a changed
+  path or a changed directory is `related`. A change to configuration every
+  test loads (manifests, lockfiles, tsconfig, bunfig, mise, test setup) leaves
+  an untouched test `undetermined`, as does an unresolvable local import.
+  Playwright and pytest failures are `undetermined` unless other evidence below
+  decides them: an end-to-end spec drives the whole application.
+- **The runner's retry verdict.** A Playwright test that passed on retry is
+  `unrelated`.
+- **The repository's flake registry.** An open row in
+  `docs/tests/flaky-tests/**/0000-index.md` naming the test makes it
+  `unrelated`. Repositories without that layout skip this source.
+- **The target branch's CI on the merge-base**, read with `gh` only while a
+  failure is still `related` or `undetermined`: the merge-base commit's check
+  runs, then the tail of each failed GitHub Actions job's log, parsed the same
+  way. A test that failed there is `unrelated` (`failed-on-target-ci`). An
+  unreadable or missing CI result is a limitation, never an error.
+
+The backend (`validation-failure-triage-service.ts`) then adds the one source
+only it holds: another pipeline in the project on the same merge-base that
+recorded the same failure without its own change being `related` to it
+(`failed-on-same-base`, `failuresSharedOnBase`). Package references and
+archived validation summaries carry a compact `failureSummary` (64-bit digests
+of each test's key, never titles) for that lookup and for the loop breaker.
+
+The triage is evidence for the round, never a gate on sealing: if the
+classifier cannot run, the package is sealed without it and a limitation says
+so. Its input travels as one `bash -lc` argument inside containers, so the
+changed-file list is cut to fit (`MAX_TRIAGE_PAYLOAD_BASE64_BYTES`) and a cut
+list stops any failure being called unrelated on import evidence alone.
+
+### The loop breaker
+
+`validationStallReason` (`build-pipeline-validation-stall.ts`) runs when Verify
+fails, before the next round starts. When no acceptance criterion failed, every
+failing test is listed and no command is unattributed, and either every failure
+is `unrelated` or the round failed exactly the same tests as the previous one,
+the pipeline pauses (`pauseCause: "supervisor"`) instead of dispatching Fix. The
+round is queued as a `restartRequest`, so Resume runs it as it would have run;
+the pause message also offers steering the fix or cancelling. A failed
+criterion is always work for Fix, and the iteration cap still fails the
+pipeline as before.
 
 ## Read-only reviewers and the Git guard
 

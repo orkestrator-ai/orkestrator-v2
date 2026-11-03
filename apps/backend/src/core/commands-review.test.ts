@@ -11,6 +11,7 @@ import {
   createEnvironmentCommandRunner,
   createGitEnvironmentCommandRunner,
   generateReviewPackage,
+  validationCommandCwd,
   parseGitPorcelainPaths,
   parseReviewArtifactStatOutput,
   REVIEW_ARTIFACT_STAT_SCRIPT,
@@ -25,6 +26,7 @@ import { parsePrDetectionOutput } from "./commands-review.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { configureLogger } from "@orkestrator/protocol/logger";
 import * as shell from "./shell.js";
+import { validationStallReason } from "./build-pipeline-validation-stall.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -826,4 +828,98 @@ describe("pipeline environment Git wiring", () => {
     await expect(git("missing", ["status"])).rejects.toThrow("Environment not found");
     expect(runner).not.toHaveBeenCalled();
   });
+});
+
+test("validation command cwd decodes shell quoted prefixes", () => {
+  expect(validationCommandCwd("cd 'apps/backend' && bun test")).toBe("apps/backend");
+  expect(validationCommandCwd(`cd 'a'"'"'b directory' && bun test`)).toBe("a'b directory");
+  expect(validationCommandCwd("bun test")).toBe(".");
+});
+
+test("sealed triage includes incomplete commands with no artifacts", async () => {
+  const { worktree, storage } = await reviewEnvironment();
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  await fs.writeFile(path.join(worktree, "a.test.ts"), 'test("already failing", () => {});');
+  await git(worktree, "add", "a.test.ts");
+  await git(worktree, "commit", "-m", "base test");
+  await git(worktree, "update-ref", "refs/remotes/origin/main", "HEAD");
+  await writeValidationArtifacts(worktree, "a.test.ts:\n(fail) already failing\n 1 fail\n", "");
+  try {
+    const reference = await generateReviewPackage(
+      "env-1",
+      "package-1",
+      1,
+      "main",
+      [
+        validationEntry({ status: "failed", exitCode: 1 }),
+        validationEntry({
+          command: "never started",
+          status: "incomplete",
+          exitCode: null,
+          stdoutPath: null,
+          stderrPath: null,
+          limitation: "Never started",
+        }),
+      ],
+      [],
+      [],
+      { storage, runtime, appRoot: "/missing-app", resourceRoot: "/missing-resources" } as never,
+    );
+    const written = JSON.parse(
+      await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+    ) as ReviewPackage;
+    expect(written.failureTriage!.commands).toHaveLength(2);
+    expect(written.failureTriage!.commands[1]).toMatchObject({
+      command: "never started",
+      unattributed: true,
+    });
+    expect(reference.failureSummary).toMatchObject({ unrelated: 1, unattributedCommands: 1 });
+    expect(
+      validationStallReason({ reviewPackage: reference, iteration: 0 }, [
+        { id: "criterion", status: "passed", evidence: "done" },
+      ]),
+    ).toBeNull();
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+test("classifier execution failure seals a package with a limitation", async () => {
+  const { worktree, storage } = await reviewEnvironment();
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const original = shell.runCommand;
+  const spy = spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+    if (args[0] === "-e") throw new Error("classifier unavailable");
+    return original(command, args, options);
+  });
+  try {
+    const reference = await generateReviewPackage(
+      "env-1",
+      "package-1",
+      1,
+      "main",
+      [
+        validationEntry({
+          status: "incomplete",
+          exitCode: null,
+          stdoutPath: null,
+          stderrPath: null,
+          limitation: "Never started",
+        }),
+      ],
+      [],
+      [],
+      { storage, runtime, appRoot: "/missing-app", resourceRoot: "/missing-resources" } as never,
+    );
+    const written = JSON.parse(
+      await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+    ) as ReviewPackage;
+    expect(written.failureTriage).toBeUndefined();
+    expect(written.limitations).toContain(
+      "Failure triage was skipped: the classifier could not run",
+    );
+  } finally {
+    spy.mockRestore();
+    runtime.shutdown();
+  }
 });

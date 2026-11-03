@@ -1620,6 +1620,9 @@ describe("project coordinator", () => {
   });
 
   test("preserves pending reservations and old idempotency receipts at store capacity", async () => {
+    // Inside the replay window, so cleanup may not clear any of them and the
+    // store is genuinely full.
+    const seededAt = Date.now() - 60_000;
     const associations = Array.from({ length: 2_001 }, (_, index) => ({
       id: `association-${index}`,
       coordinatorId: "coordinator-capacity",
@@ -1629,7 +1632,7 @@ describe("project coordinator", () => {
       requestId: `request-${index}`,
       payloadHash: `hash-${index}`,
       pending: index === 0,
-      createdAt: new Date(index).toISOString(),
+      createdAt: new Date(seededAt + index).toISOString(),
     }));
     seedStore(storage.getDataDir(), "coordinators.json", {
       version: 1,
@@ -2010,6 +2013,8 @@ describe("project coordinator", () => {
       createdAt: new Date().toISOString(),
       lastNotifiedRevision: 5,
       terminalNotifiedAt: new Date().toISOString(),
+      // Its worker's outcome watch already knows the worker.
+      workerOutcome: { environmentId: "env-1" },
     });
     const original = storage.getBuildPipeline.bind(storage);
     const read = mock(async () => {
@@ -2019,6 +2024,46 @@ describe("project coordinator", () => {
     try {
       await coordinator.reconcileWorkflowNotifications();
       expect(read).not.toHaveBeenCalled();
+    } finally {
+      storage.getBuildPipeline = original;
+    }
+  });
+
+  test("reads a settled pipeline once to learn the worker its outcome watch follows", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const snapshot = await coordinator.ensure(project.id);
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: "settled-workflow",
+      coordinatorId: snapshot.workspace.id,
+      projectId: project.id,
+      conversationId: snapshot.workspace.conversations[0]!.id,
+      kind: "build-pipeline",
+      resourceId: "pipeline-1",
+      requestId: "request-1",
+      createdAt: new Date().toISOString(),
+      lastNotifiedRevision: 5,
+      terminalNotifiedAt: new Date().toISOString(),
+    });
+    const original = storage.getBuildPipeline.bind(storage);
+    const read = mock(async () => ({
+      snapshot: { environmentId: "env-1" },
+    })) as unknown as typeof storage.getBuildPipeline;
+    storage.getBuildPipeline = read;
+    try {
+      await coordinator.reconcileWorkflowNotifications();
+      await coordinator.reconcileWorkflowNotifications();
+      expect(read).toHaveBeenCalledTimes(1);
+      const [association] = await storage.coordinators.listCoordinatorWorkflowAssociations(
+        project.id,
+      );
+      expect(association?.workerOutcome?.environmentId).toBe("env-1");
     } finally {
       storage.getBuildPipeline = original;
     }

@@ -769,6 +769,52 @@ export const MAX_SLOW_BACKEND_TEST_WORKERS = 2;
 export const ALLOW_MISSING_PROTOCOL_BINARY_ENV = "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
 /**
+ * Selects which groups a run starts: a comma-separated list of
+ * {@link TEST_GROUP_KEYS}. Unset runs every group. CI spreads the suite over
+ * several runners with one selection per job, because on one four-core runner
+ * the groups slowed each other past their per-test timeouts.
+ *
+ * `backend` and `workspace` split the workspace group: `workspace` is every
+ * workspace package except the backend. Selecting both runs the combined group.
+ */
+export const TEST_GROUPS_ENV = "ORKESTRATOR_TEST_GROUPS";
+export const TEST_GROUP_KEYS = [
+  "backend",
+  "workspace",
+  "root",
+  "bridges",
+  "codex-protocol",
+] as const;
+export type TestGroupKey = (typeof TEST_GROUP_KEYS)[number];
+
+export function selectedTestGroups(env: NodeJS.ProcessEnv): ReadonlySet<TestGroupKey> {
+  const value = env[TEST_GROUPS_ENV];
+  if (value === undefined || value.trim() === "") return new Set(TEST_GROUP_KEYS);
+  const keys = value
+    .split(",")
+    .map((key) => key.trim())
+    .filter(Boolean);
+  const unknown = keys.filter((key) => !(TEST_GROUP_KEYS as readonly string[]).includes(key));
+  // A typo must not quietly run less than was asked for.
+  if (unknown.length > 0 || keys.length === 0) {
+    throw new Error(
+      `${TEST_GROUPS_ENV} must list groups from ${TEST_GROUP_KEYS.join(", ")}; got "${value}"`,
+    );
+  }
+  return new Set(keys as TestGroupKey[]);
+}
+
+/** Workspace packages other than the backend, in the combined group's filter order. */
+const WORKSPACE_PACKAGES_BEFORE_BACKEND = ["@orkestrator/web"];
+const WORKSPACE_PACKAGES_AFTER_BACKEND = [
+  "@orkestrator/desktop",
+  "@orkestrator/web-public",
+  "orkestrator",
+  "@orkestrator/protocol",
+  "@orkestrator/toolchain",
+];
+
+/**
  * Output and failure handling shared by the Turbo groups.
  *
  * Both output flags keep task output streaming, which the no-progress watchdog
@@ -845,6 +891,7 @@ export function buildConcurrentGroups(
   timingsDirectory?: string,
   /** Which test files run; package scripts read the same tier from the environment. */
   tier: TestTier = "default",
+  selection: ReadonlySet<TestGroupKey> = new Set(TEST_GROUP_KEYS),
 ): TestGroup[] {
   const workers = planWorkers(cores, tier);
   // Groups may queue on tiny hosts, but no individual child may exceed the
@@ -852,16 +899,39 @@ export function buildConcurrentGroups(
   const capacity = Math.max(1, Math.floor(cores) || 1);
   workers.root = Math.min(capacity, workers.root);
   workers.bridges = Math.min(capacity, workers.bridges);
+  const withBackend = selection.has("backend");
+  const withWorkspace = selection.has("workspace");
+  // Alone on a host (a CI shard), the backend need not leave room for the
+  // other groups; one core stays free for Turbo and the build.
+  if (withBackend && selection.size === 1) {
+    workers.backend = Math.min(
+      tier === "default" ? MAX_BACKEND_TEST_WORKERS : MAX_SLOW_BACKEND_TEST_WORKERS,
+      Math.max(1, capacity - 1),
+    );
+  }
+  const workspaceConcurrency = withBackend && withWorkspace ? workers.workspaceConcurrency : 1;
   // The backend task occupies one of the concurrent workspace slots.
   const workspaceReservation = Math.min(
     capacity,
-    workers.backend + workers.workspace * (workers.workspaceConcurrency - 1),
+    withBackend
+      ? workers.backend + workers.workspace * (workspaceConcurrency - 1)
+      : workers.workspace,
   );
+  const workspacePackages = [
+    ...(withWorkspace ? WORKSPACE_PACKAGES_BEFORE_BACKEND : []),
+    ...(withBackend ? ["@orkestrator/backend"] : []),
+    ...(withWorkspace ? WORKSPACE_PACKAGES_AFTER_BACKEND : []),
+  ];
   const changedArguments = affected ? ["--changed=main", "--pass-with-no-tests"] : [];
   const rootSelection = tierArguments(tier, root, ".", ROOT_TEST_PATHS);
   const groups: (TestGroup | false | undefined)[] = [
-    {
-      name: "workspace (web, backend, desktop, web-public, cli, protocol, toolchain)",
+    workspacePackages.length > 0 && {
+      name:
+        withBackend && withWorkspace
+          ? "workspace (web, backend, desktop, web-public, cli, protocol, toolchain)"
+          : withBackend
+            ? "backend"
+            : "workspace (web, desktop, web-public, cli, protocol, toolchain)",
       workers: workspaceReservation,
       command: "bunx",
       args: [
@@ -871,14 +941,8 @@ export function buildConcurrentGroups(
         "test:workspace",
         "--cwd",
         ".",
-        "--filter=@orkestrator/web",
-        "--filter=@orkestrator/backend",
-        "--filter=@orkestrator/desktop",
-        "--filter=@orkestrator/web-public",
-        "--filter=orkestrator",
-        "--filter=@orkestrator/protocol",
-        "--filter=@orkestrator/toolchain",
-        `--concurrency=${workers.workspaceConcurrency}`,
+        ...workspacePackages.map((name) => `--filter=${name}`),
+        `--concurrency=${workspaceConcurrency}`,
         ...TURBO_GROUP_OUTPUT_FLAGS,
         "--summarize",
         ...(affected ? ["--affected"] : []),
@@ -888,22 +952,23 @@ export function buildConcurrentGroups(
         [BACKEND_WORKERS_ENV]: String(workers.backend),
       },
     },
-    rootSelection && {
-      name: "root and agent-support tests",
-      workers: workers.root,
-      command: "bun",
-      args: [
-        "test",
-        ...rootSelection,
-        "--only-failures",
-        ...changedArguments,
-        ...(timingsDirectory
-          ? ["--timings", path.join(timingsDirectory, "root.json"), "--update-timings"]
-          : []),
-        `--parallel=${workers.root}`,
-      ],
-    },
-    {
+    selection.has("root") &&
+      rootSelection && {
+        name: "root and agent-support tests",
+        workers: workers.root,
+        command: "bun",
+        args: [
+          "test",
+          ...rootSelection,
+          "--only-failures",
+          ...changedArguments,
+          ...(timingsDirectory
+            ? ["--timings", path.join(timingsDirectory, "root.json"), "--update-timings"]
+            : []),
+          `--parallel=${workers.root}`,
+        ],
+      },
+    selection.has("bridges") && {
       // Bridges use a separate Turbo task without a build dependency, which
       // preserves the previous cold-run shape. The task is declared
       // `"cache": false`: replaying a stored pass would let this group report
@@ -928,18 +993,19 @@ export function buildConcurrentGroups(
       ],
       env: { [WORKSPACE_WORKERS_ENV]: "1" },
     },
-    tier !== "slow" && {
-      // Always validates the committed TypeScript lockfile. On developer
-      // machines with the pinned binary it additionally regenerates and checks
-      // the full TypeScript + JSON Schema contract. Minimal CI environments may
-      // lack that managed binary, so the generator has an explicit offline
-      // fallback for this pipeline only.
-      name: "codex protocol lockfile",
-      workers: 1,
-      command: "mise",
-      args: ["run", "codex:protocol:check"],
-      env: { [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1" },
-    },
+    selection.has("codex-protocol") &&
+      tier !== "slow" && {
+        // Always validates the committed TypeScript lockfile. On developer
+        // machines with the pinned binary it additionally regenerates and checks
+        // the full TypeScript + JSON Schema contract. Minimal CI environments may
+        // lack that managed binary, so the generator has an explicit offline
+        // fallback for this pipeline only.
+        name: "codex protocol lockfile",
+        workers: 1,
+        command: "mise",
+        args: ["run", "codex:protocol:check"],
+        env: { [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1" },
+      },
   ];
   return groups.filter((group): group is TestGroup => Boolean(group));
 }
@@ -953,9 +1019,11 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
   const usesDefaultRunner = dependencies.runGroup === defaultRunGroup;
   const affected = dependencies.env[TEST_AFFECTED_ENV] === "1";
   let tier: TestTier;
+  let selection: ReadonlySet<TestGroupKey>;
   let admission: ReturnType<typeof createTestAdmission> | undefined;
   try {
     tier = testTier(dependencies.env);
+    selection = selectedTestGroups(dependencies.env);
     if (usesDefaultRunner)
       admission = createTestAdmission(dependencies.root, dependencies.env, dependencies.log, {
         // Affected runs are small; complete runs queue behind each other.
@@ -1030,7 +1098,14 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
       affected,
       timingsDirectory,
       tier,
+      selection,
     );
+    if (groups.length === 0) {
+      dependencies.log(
+        `INCOMPLETE: ${TEST_GROUPS_ENV}="${dependencies.env[TEST_GROUPS_ENV]}" selects no ${tier}-tier test groups`,
+      );
+      return 75;
+    }
     const configuredLogDirectory = dependencies.env[TEST_LOG_DIRECTORY_ENV];
     const logDirectory = usesDefaultRunner
       ? configuredLogDirectory || createTestLogDirectory()

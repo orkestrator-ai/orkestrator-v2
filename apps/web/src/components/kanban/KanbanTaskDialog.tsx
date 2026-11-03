@@ -54,7 +54,13 @@ import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
 import { readImage } from "@/lib/native/clipboard";
-import { getKanbanImageData, openInBrowser } from "@/lib/backend";
+import { getKanbanImageData } from "@/lib/backend";
+import {
+  openPullRequestUrl,
+  openPullRequestInApp,
+  PullRequestOpenerProvider,
+  usePullRequestOpener,
+} from "@/lib/pull-request-opener";
 import {
   composeDraftKey,
   discardComposeDraft,
@@ -132,7 +138,8 @@ function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
 }
 
 /** Renders comment text with clickable URLs */
-function CommentText({ text }: { text: string }) {
+export function CommentText({ text }: { text: string }) {
+  const opener = usePullRequestOpener();
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
   if (parts.length === 1) return <>{text}</>;
   return (
@@ -144,7 +151,10 @@ function CommentText({ text }: { text: string }) {
             className="text-blue-400 hover:underline cursor-pointer inline"
             onClick={(e) => {
               e.preventDefault();
-              void openInBrowser(part);
+              // A pull request opens in the right-hand PR pane; Cmd/Ctrl-click opens GitHub.
+              void openPullRequestUrl(part, { external: e.metaKey || e.ctrlKey, opener }).catch(
+                () => toast.error("Could not open the link"),
+              );
             }}
           >
             {part}
@@ -1029,7 +1039,14 @@ export function KanbanTaskDialog({
   if (!task) return null;
 
   return (
-    <>
+    <PullRequestOpenerProvider
+      open={(ref, view) => {
+        // Preserve unsaved edits and use the browser while the modal cannot close.
+        if (isEditing || !openPullRequestInApp(ref, view)) return false;
+        handleOpenChange(false);
+        return true;
+      }}
+    >
       {fileInput}
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
@@ -1222,6 +1239,8 @@ export function KanbanTaskDialog({
                       >
                         <div className="flex items-start justify-between gap-2">
                           <p className="whitespace-pre-wrap text-foreground flex-1">
+                            {/* The PR pane sits behind this modal, so a pull
+                                request opened there closes it unless edits are open. */}
                             <CommentText text={comment.text} />
                           </p>
                           <Button
@@ -1317,6 +1336,6 @@ export function KanbanTaskDialog({
         onConfirm={handleBuildConfirmed}
       />
       {renderPreviewDialog()}
-    </>
+    </PullRequestOpenerProvider>
   );
 }

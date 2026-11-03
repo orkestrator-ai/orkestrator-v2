@@ -11,7 +11,8 @@
  * `graph-run-coordinator-status.ts`, one notice per wait), and a worker's
  * pull request the coordinator raised, resolved or got from its review's
  * auto-PR (a `pull-request` association; the reduction is in
- * `coordinator-pr-status.ts`), including its Resolve tab finishing.
+ * `coordinator-pr-status.ts`), including its Resolve tab finishing. A worker
+ * it owns being merged, closed or deleted is `coordinator-worker-outcomes.ts`.
  *
  * Ownership is the durable workflow association recorded when the coordinator
  * launched or prompted the resource, never anything the user started. Each
@@ -47,7 +48,6 @@ import {
 import {
   coordinatorMainConversation,
   coordinatorRuntimeId,
-  type CoordinatorDelegation,
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
@@ -68,10 +68,24 @@ import {
   type CoordinatorPrReading,
   type PullRequestStatus,
 } from "./coordinator-pr-status.js";
+import {
+  boundedLine,
+  waitingStatus,
+  type CoordinatorWaitingBlocker,
+} from "./coordinator-waiting-status.js";
+import { CoordinatorWorkerOutcomes } from "./coordinator-worker-outcomes.js";
 import type { Environment } from "./models.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");
+
+export {
+  boundedLine,
+  lastAssistantText,
+  waitingBlocker,
+  waitingStatus,
+  type CoordinatorWaitingBlocker,
+} from "./coordinator-waiting-status.js";
 
 /** How long a notice waits for others before waking the coordinator. */
 export const COORDINATOR_STATUS_COALESCE_MS = 10_000;
@@ -100,7 +114,6 @@ export const COORDINATOR_RESOLVE_START_GRACE_MS = 60_000;
  * recheck before it reports the latest reading anyway.
  */
 export const COORDINATOR_RESOLVE_REFRESH_WAIT_MS = 60_000;
-const MAX_DETAIL_CHARS = 400;
 const MAX_DETAILS = 8;
 const MAX_LABEL_CHARS = 80;
 
@@ -139,12 +152,6 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-/** One line, at most `limit` characters, never empty. */
-export function boundedLine(value: string, limit = MAX_DETAIL_CHARS): string {
-  const flat = value.replace(/\s+/g, " ").trim();
-  return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
 
 function hash(value: string): string {
@@ -655,7 +662,9 @@ export function renderCoordinatorStatusNotice(
           ? "Graph run"
           : resource.kind === "pull-request"
             ? "Pull request"
-            : "Worker";
+            : resource.kind === "environment"
+              ? "Environment"
+              : "Worker";
   const label = resource.label ? ` ${boundedLine(resource.label, MAX_LABEL_CHARS)}` : "";
   const subject = boundedLine(`${name}${label} ${status.headline}`, 160);
   const where =
@@ -685,122 +694,6 @@ export function renderCoordinatorStatusNotice(
       state: status.state,
       tone: status.tone,
     },
-  };
-}
-
-/**
- * The text of the newest assistant message in a projection page, or undefined.
- *
- * Reads the shared native message shape (`role`, `content`, text `parts`)
- * without trusting it, since it comes from a provider transcript.
- */
-export function lastAssistantText(messages: unknown): string | undefined {
-  if (!Array.isArray(messages)) return undefined;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!record(message) || message.role !== "assistant") continue;
-    const parts = Array.isArray(message.parts)
-      ? message.parts
-          .filter(
-            (part) => record(part) && part.type === "text" && typeof part.content === "string",
-          )
-          .map((part) => (part as { content: string }).content)
-      : [];
-    const content = (parts.length > 0 ? parts.join("\n") : text(message.content)) ?? "";
-    if (content.trim()) return boundedLine(content);
-  }
-  return undefined;
-}
-
-/** What a waiting worker is blocked on, read from its pending interactions. */
-export type CoordinatorWaitingBlocker = "approval" | "question" | "approval-and-question";
-
-const APPROVAL_INTERACTION_KINDS: ReadonlySet<string> = new Set([
-  "plan-approval",
-  "command-approval",
-  "file-approval",
-  "permission",
-]);
-const QUESTION_INTERACTION_KINDS: ReadonlySet<string> = new Set([
-  "question",
-  "mcp-form",
-  "mcp-url",
-  "elicitation",
-  "terminal-selection",
-]);
-
-/**
- * Whether a worker's open interactions are approvals, questions or both.
- *
- * Only requests the turn is actually waiting on count: a non-blocking request
- * does not hold the session at `waiting`, so it cannot be why it is. Undefined
- * when nothing blocking is open (the activity state then says only "waiting").
- */
-export function waitingBlocker(interactions: unknown): CoordinatorWaitingBlocker | undefined {
-  if (!Array.isArray(interactions)) return undefined;
-  let approval = false;
-  let question = false;
-  for (const interaction of interactions) {
-    if (!record(interaction) || interaction.blocking === false) continue;
-    if (interaction.state !== "pending" && interaction.state !== "answering") continue;
-    if (typeof interaction.kind !== "string") continue;
-    if (APPROVAL_INTERACTION_KINDS.has(interaction.kind)) approval = true;
-    else if (QUESTION_INTERACTION_KINDS.has(interaction.kind)) question = true;
-  }
-  if (approval && question) return "approval-and-question";
-  if (approval) return "approval";
-  return question ? "question" : undefined;
-}
-
-/**
- * What the coordinator may do about a waiting question: propose an answer the
- * user confirms (`answer_worker_question`). It never answers on its own, and
- * approvals stay with the person in the worker's tab.
- */
-const WAITING_RELAY_HINTS: Partial<Record<CoordinatorWaitingBlocker | "unknown", string>> = {
-  question:
-    "It may propose an answer with answer_worker_question (the interaction id is in get_tab_state's state.interactions); the user confirms, edits or declines it in Orkestrator, and only their approval answers the worker.",
-  "approval-and-question":
-    "Approvals stay with the person in the worker's tab. For the question it may propose an answer with answer_worker_question (the interaction id is in get_tab_state's state.interactions); only the user's approval in Orkestrator answers it.",
-  unknown:
-    "If get_tab_state shows a pending question, it may propose an answer with answer_worker_question, which the user confirms in Orkestrator before anything is sent; approvals stay in the worker's tab.",
-};
-
-const WAITING_HEADLINES: Record<CoordinatorWaitingBlocker | "unknown", string> = {
-  approval: "is waiting for an approval",
-  question: "is waiting for an answer to a question",
-  "approval-and-question": "is waiting for an approval and an answer to a question",
-  unknown: "is waiting for input or an approval",
-};
-
-/** A delegated tab that has been waiting long enough to tell its coordinator. */
-export function waitingStatus(
-  delegation: Pick<CoordinatorDelegation, "waiting">,
-  environmentId: string,
-  tabId: string,
-  excerpt?: string,
-  blocker?: CoordinatorWaitingBlocker,
-): CoordinatorStatus | null {
-  const since = delegation.waiting?.since;
-  if (!since) return null;
-  return {
-    key: `waiting:${since}`,
-    state: "waiting",
-    tone: "attention",
-    terminal: false,
-    headline: WAITING_HEADLINES[blocker ?? "unknown"],
-    details: [
-      `Waiting since ${since}. A person has to answer it${blocker === "question" ? "" : " in the worker's tab"}; the coordinator cannot ${blocker === "approval-and-question" ? "approve or answer" : blocker === "question" ? "answer" : "approve"} on its behalf.`,
-      ...(WAITING_RELAY_HINTS[blocker ?? "unknown"]
-        ? [WAITING_RELAY_HINTS[blocker ?? "unknown"]!]
-        : []),
-      ...(excerpt ? [`Last message: ${boundedLine(excerpt)}`] : []),
-    ],
-    tools: [
-      `get_tab_state { "environmentId": "${environmentId}", "tabId": "${tabId}" }`,
-      `get_tab_transcript { "environmentId": "${environmentId}", "tabId": "${tabId}" }`,
-    ],
-    mode: "settled",
   };
 }
 
@@ -856,7 +749,13 @@ export function statusOnNode(
   return {
     ...status,
     details: [`Runs on ${nodeName} (nodeId ${nodeId}).`, ...status.details],
-    tools: status.tools.map((tool) => tool.replace(/^(\w+) \{ /, `$1 { "nodeId": "${nodeId}", `)),
+    tools: status.tools.map((tool) =>
+      tool.replace(
+        /^(\w+) \{\s*/,
+        (_match, name: string) =>
+          `${name} { "nodeId": ${JSON.stringify(nodeId)}${/^\w+ \{\s*\}/.test(tool) ? " " : ", "}`,
+      ),
+    ),
   };
 }
 
@@ -919,6 +818,7 @@ export class CoordinatorStatusWakes {
   private queue: Promise<unknown> = Promise.resolve();
   /** Reads of workflows and workers on other nodes, once the node services exist. */
   private remote: CoordinatorRemoteAccess | null = null;
+  private readonly outcomes: CoordinatorWorkerOutcomes;
 
   constructor(
     private readonly storage: StorageService,
@@ -927,6 +827,14 @@ export class CoordinatorStatusWakes {
     this.timers = options.timers ?? SYSTEM_TIMERS;
     this.coalesceMs = options.coalesceMs ?? COORDINATOR_STATUS_COALESCE_MS;
     this.waitingDebounceMs = options.waitingDebounceMs ?? COORDINATOR_WAITING_DEBOUNCE_MS;
+    this.outcomes = new CoordinatorWorkerOutcomes({
+      storage,
+      now: () => this.timers.now(),
+      remote: () => this.remote,
+      statusOnNode,
+      deliver: (workspaces, association, resource, status) =>
+        this.deliver(workspaces, association, resource, status),
+    });
   }
 
   setRemoteAccess(remote: CoordinatorRemoteAccess): void {
@@ -983,7 +891,12 @@ export class CoordinatorStatusWakes {
    * workflow save. Free when nobody follows that worker's PR.
    */
   notePullRequestChange(environmentId: string, nodeId?: string): void {
-    if (this.followed && !this.followed.has(followKey(environmentId, nodeId))) return;
+    if (
+      this.followed &&
+      !this.followed.has(followKey(environmentId, nodeId)) &&
+      !this.outcomes.watches(environmentId, nodeId)
+    )
+      return;
     const key = `pull-request\0${nodeId ?? ""}\0${environmentId}`;
     if (this.changeTimers.has(key)) return;
     this.changeTimers.set(
@@ -1006,7 +919,7 @@ export class CoordinatorStatusWakes {
     this.notePullRequestChange(environmentId, nodeId);
   }
 
-  /** Observe the pull requests followed on one worker now. */
+  /** Observe the pull requests followed on one worker, and its outcome watches, now. */
   observePullRequests(environmentId: string, nodeId?: string): Promise<void> {
     return this.serialize(async () => {
       const since = this.followNotes;
@@ -1019,16 +932,22 @@ export class CoordinatorStatusWakes {
           !association.pending &&
           !association.terminalNotifiedAt,
       );
-      if (owned.length === 0) {
-        const key = followKey(environmentId, nodeId);
-        // Unless it was followed after the read began.
-        if ((this.recentFollows.get(key) ?? 0) <= since) this.followed?.delete(key);
-        return;
-      }
+      const key = followKey(environmentId, nodeId);
+      // Unless it was followed after the read began.
+      if (owned.length === 0 && (this.recentFollows.get(key) ?? 0) <= since)
+        this.followed?.delete(key);
       const mode = await this.mode();
       for (const association of owned) {
         await this.observePullRequest(state.workspaces, association, mode);
       }
+      // After the follows, from the same read: a follow live in it covers its own merge.
+      await this.outcomes.observeWorker(
+        state.workspaces,
+        state.workflows,
+        environmentId,
+        nodeId,
+        mode,
+      );
     });
   }
 
@@ -1141,6 +1060,11 @@ export class CoordinatorStatusWakes {
           );
         }
       }
+      await this.outcomes
+        .reconcile(state.workspaces, state.workflows, mode)
+        .catch((error: unknown) => {
+          log.warn("wake.worker-outcomes-failed", { error: formatLogError(error) });
+        });
       if (MODE_ORDER[mode] < MODE_ORDER.settled) return;
       for (const association of state.workflows) {
         if (association.kind !== "environment" || association.delegation?.state !== "running") {
@@ -1431,7 +1355,7 @@ export class CoordinatorStatusWakes {
     const onNode = (status: CoordinatorStatus) =>
       nodeName && nodeId ? statusOnNode(status, nodeId, nodeName) : status;
     const settled = MODE_ORDER[mode] >= MODE_ORDER.settled;
-    const pr = pullRequestStatus(reading, environmentId, association.statusNotice?.key);
+    const pr = pullRequestStatus(reading, environmentId, association.statusNotice?.key, deleting);
     const resolve = follow.resolve;
     // While a Resolve tab runs, its own report says how the PR ended up.
     if (resolve && !resolve.notifiedAt && !pr?.status.terminal) {
@@ -1538,7 +1462,9 @@ export class CoordinatorStatusWakes {
         },
       );
     }
-    if (follows.length > 0) this.notePullRequestChange(environment.id);
+    // The outcome watches of the coordinators that own the worker hear the deletion.
+    const watched = await this.outcomes.captureDeleted(environment);
+    if (follows.length > 0 || watched) this.notePullRequestChange(environment.id);
   }
 
   /**

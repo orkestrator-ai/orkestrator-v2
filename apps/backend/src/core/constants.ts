@@ -18,6 +18,11 @@ export const DOCKER_LABEL_RUNTIME_GENERATION = "orkestrator-runtime-generation";
 export const DOCKER_LABEL_NETWORK_POLICY = "orkestrator-network-policy";
 /** Staged portable-input revision a container binds (step 08). */
 export const DOCKER_LABEL_INPUTS_REVISION = "orkestrator-inputs-revision";
+/**
+ * Project seed files (`.env`, `.env.local`, `opencode.json`) refused at
+ * creation, as `name=reason` pairs from a fixed vocabulary.
+ */
+export const DOCKER_LABEL_PROJECT_SEED_REFUSED = "orkestrator-project-seed-refused";
 /** Role of an owned volume/network/helper (workspace, state, network, helper…). */
 export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
 

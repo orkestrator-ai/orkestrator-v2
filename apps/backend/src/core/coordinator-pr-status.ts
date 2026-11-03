@@ -334,6 +334,13 @@ function tools(environmentId: string, conflicts: boolean): string[] {
   ];
 }
 
+/**
+ * The line every merge, close and deletion notice ends with: the coordinator
+ * is told so it can follow up, not because something is expected of it.
+ */
+export const WORKER_OUTCOME_AWARENESS =
+  "For awareness only: nothing is expected of you. Act only if it affects work you are tracking (dependent tasks, tickets, branches built on it, or work you meant to send there).";
+
 /** A status recorded on the association without waking anyone. */
 export interface PullRequestStatus {
   status: CoordinatorStatus;
@@ -356,6 +363,8 @@ export function pullRequestStatus(
   reading: CoordinatorPrReading,
   environmentId: string,
   previousKey: string | undefined,
+  /** The worker is being deleted, or is gone: a merge or close says so. */
+  deleting = false,
 ): PullRequestStatus | null {
   const condition = prCondition(reading);
   if (condition === "none" || !reading.prUrl) return null;
@@ -363,6 +372,7 @@ export function pullRequestStatus(
   const told = previousKey?.endsWith(`:${tag}`) === true;
   const url = `Pull request: ${bounded(reading.prUrl)}`;
   const state = prStateLine(reading);
+  const gone = deleting ? ["The worker environment is gone; do not send it more work."] : [];
   const make = (
     key: string,
     noticeState: string,
@@ -384,7 +394,14 @@ export function pullRequestStatus(
     case "merged":
       return {
         wake: true,
-        status: make("merged", "pr-merged", "success", "was merged", [], true),
+        status: make(
+          "merged",
+          "pr-merged",
+          "success",
+          `was merged${deleting ? " and its environment deleted" : ""}`,
+          [...gone, WORKER_OUTCOME_AWARENESS],
+          true,
+        ),
       };
     case "closed":
       return {
@@ -393,8 +410,12 @@ export function pullRequestStatus(
           "closed",
           "pr-closed",
           "info",
-          "was closed without merging",
-          ["It is no longer followed; a reopened PR is not reported."],
+          `was closed without merging${deleting ? " and its environment deleted" : ""}`,
+          [
+            "It is no longer followed; a reopened PR is not reported.",
+            ...gone,
+            WORKER_OUTCOME_AWARENESS,
+          ],
           true,
         ),
       };

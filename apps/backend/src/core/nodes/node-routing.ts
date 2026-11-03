@@ -93,6 +93,8 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   // `answer_controller_worker_question` instead.
   "request_coordinator_worker_answer",
   "answer_project_worker_question",
+  // Sends a coordinator's project-home message only the user approved here.
+  "send_approved_project_home_message",
   "stop_coordinator_worker_turn",
   "list_coordinator_worker_commands",
   "run_coordinator_worker_command",

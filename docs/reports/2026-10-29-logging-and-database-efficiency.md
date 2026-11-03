@@ -756,10 +756,12 @@ the level of each snapshot kind, and what the new default no longer shows.
     pending over N seconds, `tickDelayMs` high); or
   - every 10 minutes as a keepalive.
 - Give `bridge.diagnostics` its own category, so it can run at `info`
-  (stall-only) while `debug` keeps today's per-minute stream.
+  (stalls, sampled changes and keepalive) while `debug` keeps today's per-minute stream.
 
 - **Benefits**
-  - About 85% of today's log bytes go away.
+  - Unchanged minutes, about 85% of the sampled log bytes, no longer need snapshots.
+    This is not a guaranteed reduction for healthy turns: tools changing at every
+    look can still produce a snapshot every minute at info.
   - Stalls, the reason these exist, still produce a snapshot at the right
     moment.
 - **Trade-offs**

@@ -3,7 +3,8 @@
 Status: Living — shared bridge debug logging.
 
 At the default level (`info`) every bridge writes the lifecycle of each turn or
-process scope and a snapshot when a turn stalls, plus a keepalive every ten minutes.
+process scope and snapshots for stalls and sampled state changes, plus a keepalive
+every ten minutes.
 [When a snapshot is written](#when-a-snapshot-is-written) has the rules. For a
 snapshot every minute, as before, set `bridge` or `bridge.diagnostics` to Debug or
 Trace in **Settings → Debug → Log Detail**, or the default level to either. It
@@ -63,6 +64,13 @@ kind, and writes when one of these differs:
 Ages growing, deltas arriving and the other counters (`deltaCount`, `completedTools`
 and so on) moving are not changes: that is what a healthy turn does. A look writes at
 most one snapshot, so a scope writes at most one change snapshot a minute.
+
+Change snapshots apply to healthy turns too, as required by acceptance criterion
+ac-3. A healthy tool-heavy turn with a different tool pending at each look can
+therefore write every minute at info. Tools that start and finish between looks
+produce no pending-set change; the savings depend on what each look observes,
+not just whether the turn is healthy. Moving change snapshots behind a stall or
+debug gate would remove the evidence required by ac-3.
 
 A persistent no-delta or tool-pending stall is written when it starts and again when
 it clears. In between, it is written again only for a change as above. An unchanged

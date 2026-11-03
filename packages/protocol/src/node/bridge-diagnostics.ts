@@ -634,7 +634,9 @@ function installShutdownFlush(): void {
   shutdownFlushInstalled = true;
   process.once("exit", flushBufferedDebugLoggers);
   for (const signal of SHUTDOWN_SIGNALS) {
-    process.once(signal, () => {
+    // Run before existing once-handlers remove themselves and begin async cleanup.
+    // Their presence means they own termination, even if they later remove themselves.
+    process.prependOnceListener(signal, () => {
       flushBufferedDebugLoggers();
       if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
     });
@@ -682,7 +684,7 @@ export function createBufferedDebugLogger(
   const flush = () => {
     if (closed || (entries.size === 0 && dropped === 0)) return;
     try {
-      writeDiagnostic(
+      const accepted = writeDiagnostic(
         bridge,
         "debug-events",
         {
@@ -698,11 +700,13 @@ export function createBufferedDebugLogger(
         },
         write,
       );
+      if (accepted) {
+        entries.clear();
+        dropped = 0;
+      }
     } catch {
       /* Logging never owns the operation being diagnosed. */
     }
-    entries.clear();
-    dropped = 0;
   };
   const timer = setInterval(flush, INTERVAL_MS);
   timer.unref();

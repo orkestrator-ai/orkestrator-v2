@@ -80,6 +80,39 @@ afterEach(() => {
 });
 
 describe("change-driven snapshots at info", () => {
+  test("healthy tools pending at successive looks write at most once per minute at info", () => {
+    const h = harness();
+    try {
+      h.scope.sent("run-1");
+      for (let minute = 0; minute < 12; minute++) {
+        if (minute > 0) h.scope.tool(`call-${minute - 1}`, "shell", "completed");
+        h.scope.tool(`call-${minute}`, "shell", "started");
+        // Tool churn itself never writes; the periodic look samples it.
+        expect(h.events()).toHaveLength(2 + minute);
+        h.run(TICK);
+        expect(h.events()).toHaveLength(3 + minute);
+        expect(h.written.at(-1)).toMatchObject({
+          event: "heartbeat",
+          phase: "following",
+          pendingToolCount: 1,
+          lastDeltaAgoMs: 0,
+          tickDelayMs: 0,
+        });
+        expect(h.written.at(-1)!.pendingTools[0].ageMs).toBe(TICK);
+      }
+      h.scope.tool("call-11", "shell", "completed");
+      h.run(TICK);
+      expect(h.events()).toHaveLength(15);
+      expect(h.written.at(-1)!.pendingToolCount).toBe(0);
+      h.run(BRIDGE_DIAGNOSTICS_KEEPALIVE_MS - TICK);
+      expect(h.events()).toHaveLength(15);
+      h.run(TICK);
+      expect(h.events()).toHaveLength(16);
+    } finally {
+      h.scope.close();
+    }
+  });
+
   test("a healthy turn writes its lifecycle and the keepalive, and no other look", () => {
     const h = harness();
     try {
@@ -622,6 +655,63 @@ describe("timers", () => {
 });
 
 describe("buffered debug logger", () => {
+  test.each(["rejected", "throwing", "filtered", "production-sink"] as const)(
+    "a %s flush preserves metrics and dropped counts until a successful retry",
+    (failure) => {
+      const written: Snapshot[] = [];
+      let fail = true;
+      configureLogger({
+        sink: ({ record }) => {
+          if (fail && failure === "production-sink") throw new Error("unavailable");
+          written.push(JSON.parse(record!.fields!.payload as string));
+        },
+      });
+      const logger = createBufferedDebugLogger(
+        "claude",
+        new Set(["result"]),
+        () => true,
+        failure === "filtered" || failure === "production-sink"
+          ? undefined
+          : ({ payload }) => {
+              if (fail && failure === "rejected") return false;
+              if (fail && failure === "throwing") throw new Error("unavailable");
+              written.push(JSON.parse(payload));
+              return true;
+            },
+      );
+      try {
+        logger.record("result", { durationMs: 4 });
+        logger.record("unknown");
+        if (failure === "filtered")
+          configureLogger({ areaLevels: { "bridge.diagnostics": "warn" } });
+        logger.flush();
+        flushBufferedDebugLoggers();
+        expect(written).toHaveLength(0);
+        fail = false;
+        configureLogger({ areaLevels: {} });
+        logger.record("result", { durationMs: 8 });
+        logger.close();
+        expect(written).toHaveLength(1);
+        expect(written[0]).toMatchObject({
+          event: "debug-events",
+          dropped: 1,
+          events: [
+            {
+              event: "result",
+              count: 2,
+              metrics: { durationMs: { n: 2, min: 4, max: 8, sum: 12 } },
+            },
+          ],
+        });
+        logger.flush();
+        flushBufferedDebugLoggers();
+        expect(written).toHaveLength(1);
+      } finally {
+        logger.close();
+      }
+    },
+  );
+
   test("aggregates every call's metrics rather than keeping the last", () => {
     const written: Snapshot[] = [];
     const logger = createBufferedDebugLogger(

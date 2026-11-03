@@ -904,7 +904,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             coordinatorWorkspacePath={snapshot.projectPath}
             availablePlatforms={availablePlatforms}
             platformNotes={platformNotes}
-            unassignedPlaceholder={COORDINATOR_COMPOSER_PLACEHOLDER}
+            composerPlaceholder={COORDINATOR_COMPOSER_PLACEHOLDER}
+            connectionEnabled={
+              snapshot.workspace.lifecycleState === "ready" && providerState?.available !== false
+            }
             // Only the main coordinator delegates, so only it is offered work
             // that has to run in a pipeline or environment.
             {...(conversation.role === "main"
@@ -1300,8 +1303,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         ) : null}
       </div>
       <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
-        The coordinator reads this checkout and never changes it. Code changes, commands, builds and
-        fixes run in build pipelines or prompt environments.
+        Code changes, commands, builds and fixes run in build pipelines or prompt environments.
       </div>
       <AlertDialog
         open={pendingSwitch !== null}

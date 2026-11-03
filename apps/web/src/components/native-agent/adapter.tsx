@@ -70,6 +70,10 @@ export interface AgentNativeTabProps {
    */
   platformNotes?: Partial<Record<AgentPlatform, string>>;
   unassignedPlaceholder?: string;
+  /** Composer copy shared by assigned and unassigned conversations. */
+  composerPlaceholder?: string;
+  /** Keep presentation mounted while the owning runtime cannot accept connections. */
+  connectionEnabled?: boolean;
   emptyPlatformsMessage?: string;
   /** Example requests the unassigned composer offers while it is empty. */
   unassignedStarterPrompts?: readonly string[];

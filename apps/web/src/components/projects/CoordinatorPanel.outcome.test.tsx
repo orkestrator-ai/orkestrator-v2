@@ -171,6 +171,14 @@ function projection(messages: unknown[] = []): NativeAgentSessionProjection {
 }
 let agentProjection = projection();
 
+const ensureSession = mock(
+  async (input: Parameters<typeof realBackend.ensureNativeAgentSession>[0]) => {
+    if (ensuredSnapshot.workspace.lifecycleState !== "ready")
+      throw new Error("workspace not ready");
+    return { ...input, providerSessionId: "codex-session" };
+  },
+);
+
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getLocalFileTree: mock(async () => []),
@@ -192,9 +200,7 @@ mock.module("@/lib/backend", () => ({
   closeCoordinatorConversation: closeConversation,
   assignCoordinatorConversationAgent: assignAgent,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
-  ensureNativeAgentSession: async (
-    input: Parameters<typeof realBackend.ensureNativeAgentSession>[0],
-  ) => ({ ...input, providerSessionId: "codex-session" }),
+  ensureNativeAgentSession: ensureSession,
   getNativeAgentProjection: mock(async () => agentProjection),
   dispatchNativeAgentIntent: dispatchIntent,
 }));
@@ -208,7 +214,7 @@ mock.module("@/components/native-agent", () => ({
       <div
         data-testid="native-agent"
         data-tab-id={props.tabId}
-        data-placeholder={props.unassignedPlaceholder ?? ""}
+        data-placeholder={props.composerPlaceholder ?? ""}
         data-starter-prompts={(props.unassignedStarterPrompts ?? []).join("|")}
       />
     ),
@@ -240,6 +246,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     resume.mockClear();
     closeConversation.mockClear();
     dispatchIntent.mockClear();
+    ensureSession.mockClear();
     viewBody = null;
     ensuredSnapshot = baseSnapshot;
     ensuredGit = gitStatus;
@@ -328,6 +335,8 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         "Review this branch for security issues",
       ),
     );
+    fireEvent.input(input, { target: { textContent: " \n\t" } });
+    await screen.findByRole("group", { name: "Starter prompts" });
     expect(assignAgent).not.toHaveBeenCalled();
     expect(dispatchIntent).not.toHaveBeenCalled();
   });
@@ -401,6 +410,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     );
     expect(badge.textContent).toContain("Read-only protection is advisory");
     expect(badge.className).toContain("amber");
+    expect(screen.queryByText(/never changes it/)).toBeNull();
 
     act(() => badge.focus());
     const tooltip = await screen.findByRole("tooltip");
@@ -445,6 +455,72 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     await waitFor(() => expect(ensure.mock.calls.length).toBeGreaterThan(calls));
     await waitFor(() => expect(screen.queryByText(/Coordinator startup failed/)).toBeNull());
     expect(screen.getByTestId("native-agent")).toBeTruthy();
+  });
+
+  test.each(["error", "paused"] as const)(
+    "a real assigned controller recovers from %s without a second Retry",
+    async (lifecycleState) => {
+      useRealAgentTab = true;
+      ensuredSnapshot = withWorkspace({ lifecycleState });
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByText(
+        lifecycleState === "error" ? "Coordinator startup failed." : /Coordination is paused/,
+      );
+      // A blocked workspace must not attempt initial session creation. Its
+      // composer and draft stay mounted until readiness enables connection.
+      expect(ensureSession).not.toHaveBeenCalled();
+      const calls = ensureSession.mock.calls.length;
+      ensuredSnapshot = withWorkspace({ lifecycleState: "ready" });
+      const recoveryScope =
+        lifecycleState === "error"
+          ? within(
+              screen
+                .getByText("Coordinator startup failed.")
+                .closest('[role="alert"]') as HTMLElement,
+            )
+          : screen;
+      fireEvent.click(
+        recoveryScope.getByRole("button", {
+          name: lifecycleState === "error" ? "Retry" : "Resume",
+        }),
+      );
+      await waitFor(() => expect(ensureSession.mock.calls.length).toBeGreaterThan(calls));
+      await waitFor(() =>
+        expect(
+          useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.connection,
+        ).toBe("connected"),
+      );
+      const input = await screen.findByRole("textbox");
+      expect(input.getAttribute("data-placeholder") ?? input.getAttribute("placeholder")).toBe(
+        "What would you like to get done?",
+      );
+      fireEvent.input(input, { target: { textContent: "Review this branch" } });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+      await waitFor(() => expect(dispatchIntent).toHaveBeenCalled());
+      expect(input.getAttribute("data-placeholder") ?? input.getAttribute("placeholder")).toBe(
+        "What would you like to get done?",
+      );
+    },
+  );
+
+  test("identical repository and coordinator errors appear once", async () => {
+    ensuredGit = {
+      ...gitStatus,
+      lastError: {
+        operation: "fetch",
+        message: "pause failed",
+        stderr: "pause failed",
+        occurredAt: new Date(0).toISOString(),
+        retryable: true,
+      },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByText("Repository error");
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    await waitFor(() => expect(pause).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.getAllByText("pause failed")).toHaveLength(1);
+    expect(screen.queryByText("Coordinator error")).toBeNull();
   });
 
   test("an unavailable provider keeps the transcript under a banner", async () => {

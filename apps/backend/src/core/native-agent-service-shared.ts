@@ -502,7 +502,8 @@ export interface NativeAgentServiceOptions {
   /** Reports newly persisted, content-free background questions to the shell. */
   onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */
-  beginCoordinatorTurn?: (projectId: string) => () => void;
+  beginCoordinatorTurn?: (projectId: string) => (() => void) | Promise<() => void>;
+  waitForMergeSync?: (projectId: string) => Promise<void>;
   /**
    * The user `!` commands this tab's agent has not been told about yet
    * (`user-commands.ts`): a block to start the next ordinary prompt with, and

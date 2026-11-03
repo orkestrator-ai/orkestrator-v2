@@ -84,6 +84,7 @@ type SocketState = {
   authenticated: boolean;
   authTimer: ReturnType<typeof setTimeout> | null;
   credentialExpiryTimer: ReturnType<typeof setTimeout> | null;
+  unsubscribeRevocation: (() => void) | null;
   closeTimer: ReturnType<typeof setTimeout> | null;
   channels: Map<number, Channel>;
   sessions: Map<string, Channel>;
@@ -99,6 +100,11 @@ export type TerminalWebSocketServerOptions = {
   backend: BackendInvoker;
   tokenMatches(request: IncomingMessage, suppliedToken?: string): boolean;
   credentialExpiresAt?(request: IncomingMessage, suppliedToken?: string): number | null;
+  onCredentialRevoked?(
+    request: IncomingMessage,
+    suppliedToken: string | undefined,
+    close: () => void,
+  ): () => void;
   originAllowed(request: IncomingMessage): boolean;
   authTimeoutMs?: number;
   maxSockets?: number;
@@ -315,6 +321,7 @@ export class TerminalWebSocketGateway {
       authenticated,
       authTimer: null,
       credentialExpiryTimer: null,
+      unsubscribeRevocation: null,
       closeTimer: null,
       channels: new Map(),
       sessions: new Map(),
@@ -988,7 +995,10 @@ export class TerminalWebSocketGateway {
     this.pendingOperationBytes += options.bytes;
     const previous = sequence.tail;
     const next = previous
-      .then(() => options.invoke())
+      .then(() => {
+        if (!options.state.authenticated) throw new Error("Terminal credential revoked");
+        return options.invoke();
+      })
       .then(
         (result) => {
           const refusal = operationRefusal(result);
@@ -1109,6 +1119,8 @@ export class TerminalWebSocketGateway {
   }
 
   private dispose(state: SocketState): void {
+    state.unsubscribeRevocation?.();
+    state.unsubscribeRevocation = null;
     if (state.authTimer) clearTimeout(state.authTimer);
     if (state.credentialExpiryTimer) clearTimeout(state.credentialExpiryTimer);
     if (state.closeTimer) clearTimeout(state.closeTimer);
@@ -1135,6 +1147,16 @@ export class TerminalWebSocketGateway {
   ): void {
     if (state.credentialExpiryTimer) clearTimeout(state.credentialExpiryTimer);
     state.credentialExpiryTimer = null;
+    state.unsubscribeRevocation?.();
+    state.unsubscribeRevocation =
+      this.options.onCredentialRevoked?.(request, suppliedToken, () => {
+        state.authenticated = false;
+        this.closeSocket(
+          state,
+          TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
+          "Authentication expired",
+        );
+      }) ?? null;
     const expiresAt = this.options.credentialExpiresAt?.(request, suppliedToken) ?? null;
     if (expiresAt === null) return;
     state.credentialExpiryTimer = setTimeout(

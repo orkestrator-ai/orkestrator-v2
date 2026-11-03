@@ -336,15 +336,17 @@ function renderJson(record: LogRecord): string {
   return escapeLogLine(JSON.stringify(record));
 }
 
-function deliver(record: LogRecord): void {
+function deliver(record: LogRecord): boolean {
   try {
     config.sink({
       method: OUTPUT_METHOD[record.level],
       line: config.format === "json" ? renderJson(record) : renderText(record),
       record,
     });
+    return true;
   } catch {
     // Logging never owns the operation being logged.
+    return false;
   }
 }
 
@@ -567,6 +569,34 @@ function resolveFields(
   }
 }
 
+function deliverEvent(
+  level: LogLevel,
+  area: LogArea,
+  event: string,
+  fields: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const spec = areaSpec(area);
+  if (!spec) return deliver(buildRecord(level, "logging", "unknown-area", undefined));
+  if (!Object.hasOwn(spec.events, event))
+    return deliver(buildRecord(level, area, "invalid-event", undefined));
+  return deliver(buildRecord(level, area, event, fields));
+}
+
+/**
+ * A local entry whose caller needs synchronous sink acknowledgement, such as a
+ * diagnostics baseline. False means filtered or rejected; it does not promise
+ * that an asynchronous file writer has persisted an accepted line.
+ */
+export function tryWriteLog<Area extends LogArea>(
+  level: LogLevel,
+  area: Area,
+  event: LogEventOf<Area>,
+  fields?: LogFieldsInput,
+): boolean {
+  if (LEVEL_RANK[level] > thresholdRank(area)) return false;
+  return deliverEvent(level, area, event, resolveFields(fields));
+}
+
 export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventOf<Area>> {
   const spec = areaSpec(area);
   let seenGeneration = -1;
@@ -583,14 +613,7 @@ export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventO
     event: string,
     resolved: Readonly<Record<string, unknown>> | undefined,
   ): void => {
-    if (!spec) {
-      deliver(buildRecord(level, "logging", "unknown-area", undefined));
-    } else if (Object.hasOwn(spec.events, event)) {
-      deliver(buildRecord(level, area, event, resolved));
-    } else {
-      // The unlisted name itself may be dynamic, so it never reaches the log.
-      deliver(buildRecord(level, area, "invalid-event", undefined));
-    }
+    deliverEvent(level, area, event, resolved);
   };
   const write = (level: LogLevel, event: string, fields?: LogFieldsInput): void => {
     if (!enabled(level)) return;

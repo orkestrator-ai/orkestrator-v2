@@ -87,12 +87,12 @@ The material risks are concentrated in four themes:
 
 | ID | Severity | Area | Title | Status |
 | --- | --- | --- | --- | --- |
-| H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Verified (browser behaviour: standard) |
-| H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Verified |
-| H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §4) |
+| H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Fixed (see §3) |
+| H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
+| H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
-| M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Verified |
+| M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
 | M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Fixed (see §4) |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
@@ -116,7 +116,15 @@ grants nothing new.
 
 ### H1. The gateway auth cookie is the durable token and is sent to every port on the host
 
-**Status:** Verified (cookie port scoping is standard browser behaviour)
+**Status:** Fixed (2026-11-03). The cookie now holds an opaque, in-memory
+session id (`apps/backend/src/gateway-sessions.ts`) with a 12-hour idle and
+7-day absolute lifetime, revoked by logout, token rotation and a backend
+restart; it is `Secure` over HTTPS. A cookie holding the durable token is
+refused and expired, and the browser gets the login page. `gateway-settings`
+reveals or rotates the token only for the token sent as a bearer header. A
+leaked cookie still authenticates as that session until it ends. The
+`__Host-` name is read and stripped but not issued yet, because older iOS
+builds look the cookie up by its plain name (todo 2960).
 **Actors:** A1 (container agent), A5
 
 **Where**
@@ -146,7 +154,25 @@ bearer token in `sessionStorage`.
 
 ### H2. The unprivileged `node` user can get code executed as root inside the container
 
-**Status:** Verified
+**Status:** Fixed (2026-11-03). Every root `docker exec`/`docker run`, and
+every root terminal, passes `PATH=/usr/sbin:/usr/bin:/sbin:/bin`
+(`CONTAINER_ROOT_USER_ARGS`). Each root script resets PATH itself. Root shells
+source neither `runtime-env.sh` nor `bash-env.sh` and take only root-owned
+PATH entries. `/usr/local/share` is root-owned, with `npm-global` its own
+`node`-owned directory, and root zsh runs `compinit -i`. The image build
+fails if `node` can write anything on a root path
+(`docker/verify-root-boundary.sh`). Checked on images built locally from
+before and after the fix: `docker/tests/root-boundary-smoke.sh` planted
+`awk`, `ps`, `iptables` and others, a v3 `runtime-env.sh`, `bash-env.sh`, a
+zsh `compinit` and a trusted `mise.toml` as `node`. On the old image root ran
+11 of them, through the stop drain, `update-firewall.sh` and a root terminal.
+On the new image it ran none, and npm globals still install and run for
+`node`. In-container firewall enforcement is not retired: images without the
+egress gateway, and policy 1 runtimes, still depend on it until they are
+rebuilt. Removing the `ORKESTRATOR_EGRESS=in-container` cap stays with
+[todo 0018 task 4](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
+See [`docker/AGENTS.md`](../../docker/AGENTS.md). The original finding
+follows.
 **Actor:** A1
 
 **Where**
@@ -268,7 +294,13 @@ explicit opt-in with a scope warning. Avoid persisting the token in
 
 ### M1. Legacy loopback previews run agent HTML on the gateway origin, isolated only by the client's iframe sandbox
 
-**Status:** Verified
+**Status:** Fixed in part (2026-11-03). Every `browser/loopback` response now
+carries `Content-Security-Policy: sandbox allow-scripts allow-forms
+allow-pointer-lock allow-presentation` in place of the upstream policy, so a
+preview opened top-level is an opaque origin and cannot call gateway routes.
+Turning the isolated transport on by default is not yet low risk (its
+two-machine, Windows and threshold gates are open) and stays with
+`docs/todo/previews-and-annotations/0042-service-preview-rollout.md` task 7.
 
 **Where**
 - `apps/backend/src/gateway-proxy.ts:204-211`: for browser previews the proxy deletes upstream `x-frame-options`, `content-security-policy` and `content-security-policy-report-only`, and adds no `Content-Security-Policy: sandbox` of its own.
@@ -647,13 +679,13 @@ write and terminal calls when the policy denies them.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
 - The iOS app (`apps/ios`) was not reviewed.
-- No dynamic testing was done. In particular, run H1/M1/M2 in Chromium and Safari, H3 against rootful and rootless Docker, and H2 against a built image.
+- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). Dynamic testing remains for H1/M1/M2 in Chromium and Safari and H3 against rootful and rootless Docker.
 
 ## 9. Recommended remediation order
 
 1. **H1 + M1.** Replace the token-valued cookie with an opaque session. Add a server-side `CSP: sandbox` on legacy previews and make the isolated transport the default. Together these close the cleanest container → host path.
 2. **H3.** `lstat` and realpath the `.env`/`opencode.json` sources and copy them instead of bind-mounting. This is a small change with large impact.
-3. **H2.** Fix the root PATH on root execs, stop root sourcing `node`-owned files, and make `/usr/local/share` root-owned.
+3. **H2 — completed.** Root exec PATH, root shell startup and `/usr/local/share` ownership are fixed and covered by built-image checks. The remaining follow-up is retiring in-container firewall enforcement, tracked in todo 0018 task 4 after gateway qualification.
 4. **M3.** Redact the `update_agent_messaging_settings` response and add the all-commands canary test.
 5. **H4 + M13.** Move bridge-control credentials out of the agent's uid, and make policy changes narrow-only.
 6. **M4, M5, L1.** Harden the coordinator git allowlist, gate `setupLocal` on approval, and use confined writers for seeding.

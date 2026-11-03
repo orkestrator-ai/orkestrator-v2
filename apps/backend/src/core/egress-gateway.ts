@@ -9,6 +9,7 @@ import { egressGatewayOf, forgetNetworkOwner } from "./container-network-owner.j
 import { startDockerContainer } from "./container-start.js";
 import { PROBE_WINDOW_MS, boundedWaitScript, probeIterations } from "./container-readiness.js";
 import { copyGithubRangesSeed } from "./github-ranges-cache.js";
+import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 
 export { egressGatewayOf, networkOwnerContainer } from "./container-network-owner.js";
 
@@ -126,8 +127,7 @@ export function egressGatewayCreateArguments(spec: EgressGatewaySpec): string[] 
     `${DOCKER_LABEL_EGRESS_WORKLOAD}=${spec.workloadName}`,
     "--label",
     `${DOCKER_LABEL_EGRESS_ENVIRONMENT}=${spec.environmentId}`,
-    "--user",
-    "root",
+    ...CONTAINER_ROOT_USER_ARGS,
     "--entrypoint",
     EGRESS_GATEWAY_ENTRYPOINT,
     "--cap-add",

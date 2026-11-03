@@ -20,6 +20,7 @@ at `79f3bc97e` (same tree as `main`).
 12. [Addendum: backend levels and evidence after the R1 backend slice](#addendum-backend-levels-and-evidence-after-the-r1-backend-slice)
 13. [Addendum: renderer levels changed by R1](#addendum-renderer-levels-changed-by-r1)
 14. [Addendum: levels and evidence changed by the R1 cleanup slice](#addendum-levels-and-evidence-changed-by-the-r1-cleanup-slice)
+15. [Addendum: bridge snapshots after R4](#addendum-bridge-snapshots-after-r4)
 
 ## Scope and method
 
@@ -744,6 +745,9 @@ Retire the five bespoke variants, and bound `loggedKeptBranches`.
 
 #### R4. Make bridge heartbeats change-driven (L2)
 
+Built. See the [addendum](#addendum-bridge-snapshots-after-r4) for the thresholds,
+the level of each snapshot kind, and what the new default no longer shows.
+
 - Keep lifecycle events.
 - Emit the periodic snapshot only when one of these holds:
   - something changed since the last snapshot (phase, pending tools, the
@@ -752,10 +756,12 @@ Retire the five bespoke variants, and bound `loggedKeptBranches`.
     pending over N seconds, `tickDelayMs` high); or
   - every 10 minutes as a keepalive.
 - Give `bridge.diagnostics` its own category, so it can run at `info`
-  (stall-only) while `debug` keeps today's per-minute stream.
+  (stalls, sampled changes and keepalive) while `debug` keeps today's per-minute stream.
 
 - **Benefits**
-  - About 85% of today's log bytes go away.
+  - Unchanged minutes, about 85% of the sampled log bytes, no longer need snapshots.
+    This is not a guaranteed reduction for healthy turns: tools changing at every
+    look can still produce a snapshot every minute at info.
   - Stalls, the reason these exist, still produce a snapshot at the right
     moment.
 - **Trade-offs**
@@ -1703,3 +1709,139 @@ Most hold text from our own code; protocol violations have a peer-supplied excep
 
 The `core/transcript-artifacts/` warnings stay silent: nothing passes them a logger,
 and turning them on would add lines, which is undecided.
+
+## Addendum: bridge snapshots after R4
+
+Added 2026-11-03 for R4, built against `main` at `a4e6c3087`. The living reference
+is [bridge-diagnostics.md](../architecture/bridge-diagnostics.md#when-a-snapshot-is-written).
+
+### What each level writes
+
+Before R4 the snapshots had one switch. With `bridge.diagnostics` below `debug`
+(the default) a bridge wrote **no** snapshot at all, lifecycle included; at `debug`
+it wrote the lifecycle plus a snapshot every minute. The sampled 2026-10-28 log was
+the second case: `debugLogging` on before the split meant bridge snapshots.
+
+| Kind | Before, at `info` | Before, at `debug` | After, at `info` | After, at `debug` | After, at `trace` |
+| --- | --- | --- | --- | --- | --- |
+| Lifecycle (`send-started`, `send-resolved`, `cancel-*`, `closed`, `snapshot-overflow`) | Not written | Written | Written | Written | Written |
+| Stall onset and clearing, late timer | Not written | In the minute stream | Written | In the minute stream | In the minute stream |
+| Change during a silent (no-delta) stall | Not written | In the minute stream | Written at the next look | In the minute stream | In the minute stream, and as `change` |
+| Change of phase, pending tools or a thresholded counter otherwise | Not written | In the minute stream | Not written | In the minute stream | Written as it happens (`change`) |
+| Keepalive, 10 minutes after the last snapshot | Not written | In the minute stream | Written | In the minute stream | In the minute stream |
+| Every other minute | Not written | Written | Not written | Written, unchanged | Written, unchanged |
+| Cursor `sdk-snapshot`, Claude `debug-events` | Not written | Written | Not written | Written | Written |
+
+Every entry is written at the `info` record level, as before, so the per-minute
+stream is byte-for-byte the same shape and `bridge.diagnostics=warn` still
+silences everything.
+
+**Where change snapshots sit.** The ticket asks for both "a healthy turn at the
+default level writes no periodic snapshot, apart from lifecycle events and the
+keepalive" and "a change in phase, pending tools or a counter delta over its
+threshold produces a snapshot, and an unchanged state does not". At `info` these
+cannot both hold, because a healthy turn's phase, tools and request counters
+change all the time; at `debug` every look is written, so a change is not
+distinguishable from no change. The ticket left the level of change snapshots to
+this work, so they sit at `trace`: there each change is written as a `change`
+snapshot as soon as it happens (coalesced to the end of the producer's synchronous
+work), on top of the unchanged minute stream, and an unchanged scope writes no
+`change`. At `info` a change is written only while the turn is silent (the no-delta
+signal), where it is stall evidence. An earlier round wrote changes at `info` for
+healthy turns too; a turn with a different tool held across each look then wrote
+every minute, which failed the first criterion.
+
+The default therefore writes, for someone with saving on and Log Detail untouched:
+three lifecycle snapshots per turn (about 1.9 KB for Claude), one per process scope
+start and end for Codex and ACP, a keepalive every ten minutes per open scope (a
+Codex bridge's process scope is open for the bridge's whole life: about 100 KB a
+day), and the stall snapshots. That is more than the old default (nothing), and
+far less than the old per-minute stream. A healthy turn writes no other snapshot,
+however much it changes.
+
+### Thresholds
+
+| Constant | Value | Chosen from |
+| --- | --- | --- |
+| `STALL_NO_DELTA_MS` | 2 min | Two diagnostic intervals. One quiet minute can be a model pause or a short tool; two quiet snapshots were the earliest the old stream told a stall from a pause. A reader of the old stream could not act sooner than this. |
+| `STALL_TOOL_PENDING_MS` | 10 min | The app's own stall warning (`DEFAULT_STALL_WARNING_MS` in Multi Review and the build pipeline). A tool pending while deltas arrive is weak evidence: builds, test suites and subagent `task` tools run for many minutes, and the Cursor investigation found unmatched starts in healthy runs. A tool that is pending and silent trips the two-minute signal first. |
+| `STALL_TICK_DELAY_MS` | 10 s | `EVENT_LOOP_STALL_ALWAYS_LOG_MS`: the length at which the event-loop monitor writes a stall at `error` whatever the level. |
+| `BRIDGE_DIAGNOSTICS_KEEPALIVE_MS` | 10 min | Agreed in the ticket. Bounds how long "healthy" and "the timer died" are indistinguishable. |
+| `COUNTER_CHANGE_THRESHOLDS` | 1 for timeouts, protocol errors, requests and responses; 4 KiB for stderr; never for notifications | Used by `change` snapshots (trace) and by changes during a silent stall (info). Any timeout or protocol error is news, and requests and responses are few per turn (ACP sends them alongside its pending-request set, which already changes). Stderr is counted in pages so a trickle accumulates instead of writing on every line. Notifications are the delta stream (every ACP `session/update`): counting them would write on every update, and their silence is the no-delta signal. |
+
+Every signal is computed at the look from fields the snapshot already carries
+(`lastDeltaAgoMs` or the turn's start, `pendingTools[].ageMs`, `tickDelayMs`,
+`phase`, `counters`). No field was added. A stall is written when it starts and
+when it clears, not at every look while it lasts. Each qualifying late timer
+firing is a separate observation and is always written, including consecutive
+late firings. Only a successful write advances the comparison baseline; a failed
+write remains eligible for retry at the next qualifying look. Process-scope
+identity survives cancellation, so an idle ACP process still needs a pending
+request before it can report a no-delta stall.
+
+### The upgrade
+
+A config saved with `debugLogging` on and no `logDetail` resolves to
+`{ level: info, areaLevels: { bridge: debug } }` (`legacyDebugLogDetail`, unchanged).
+`bridge.diagnostics` inherits `debug` from `bridge`, so `logDetailEnablesBridgeDiagnostics`
+is true, the backend sends the switch on, and the bridge's own logger has the area at
+`debug`. Either one turns the per-minute stream on (`bridgeDiagnosticsStreamEnabled`),
+so the upgrade keeps the stream with no new mapping. A test applies that mapping
+through `applyBridgeLogPolicy` and checks every minute is written.
+
+### What the new default no longer shows
+
+Compared with the per-minute stream someone with detail on had before (the old
+default showed nothing at all, so nothing is lost against it):
+
+1. **A healthy turn's progress.** The minute-by-minute `deltaCount`, `streamCount`,
+   `completedTools`, `elapsedMs`, `revision` and `activeSubagents` between
+   `send-resolved` and `closed`. Only the lifecycle totals and the keepalive remain,
+   so the rate of progress during a turn cannot be read back.
+2. **A healthy turn's changes.** Its phase moving (`following` to `draining`), the
+   tools and requests it holds across a minute, and its counters (requests,
+   responses, a timeout or protocol error, stderr) moving while deltas still arrive.
+   The old stream showed each of these at the next minute; the new default shows
+   only where they ended up, in the next keepalive, stall or `closed` snapshot. A
+   timeout or protocol error in a turn that then recovers is visible only in
+   `closed`'s counters. `trace` writes every one of them as it happens.
+3. **Short pauses.** A silence of 60 to 119 seconds, visible in the old stream as a
+   growing `lastDeltaAgoMs`, writes nothing. A stall is reported from two minutes,
+   at the first look after it (so between 2 and 3 minutes after the last delta).
+4. **A persistent no-delta or tool-pending stall's repeats.** While it lasts unchanged, the minute snapshots that
+   confirmed it and showed the timer alive are gone; the keepalive replaces them
+   every ten minutes. The ages in them were implied by the first one.
+5. **Tools that start and finish between two looks.** The old stream showed them
+   only if one happened to be pending at a look, and so does the new default, but
+   the old stream also showed `completedTools` climbing minute by minute; now only
+   the next written snapshot carries the total.
+6. **A held tool's existence and age before it is a stall.** The old stream showed
+   each look's `pendingTools` with its age. Now a tool held while deltas arrive is
+   written only when it crosses ten minutes (or in a keepalive that happens to
+   catch it); one held for under ten minutes in a moving turn is not written.
+7. **Timer delays under ten seconds.** `tickDelayMs` of 1 to 9,999 ms, a sign of a
+   busy bridge event loop, is written only inside another snapshot.
+8. **Process health between keepalives.** Codex's sampled `metrics` (generation,
+   restarts, circuit state, queue depth and high-water mark, RPC counters) and ACP's
+   `pendingRequests` and transport counters were sampled every minute. A Codex
+   process scope is never waiting and does not count its RPC traffic, so it
+   reports only a late timer and the keepalive; a restart or an open circuit between keepalives is not in a snapshot
+   (the Codex bridge's own `bridge.codex` lines still record those).
+9. **Notification volume on its own.** ACP's `notificationsReceived` moving is
+   never a change, at any level; it is visible only inside another snapshot. (At
+   `trace` the timing of changes is finer than the old stream's minute, so nothing
+   is lost there.)
+10. **Cursor SDK snapshots and Claude's batched debug events.** As before, these are
+   written only with the per-minute stream; a default Cursor stall snapshot has no
+   `sdk-snapshot` beside it, because the SDK seam installs only when detail is on.
+11. **The timer's death, for up to ten minutes.** A gap shorter than the keepalive
+    cannot be told from a healthy turn.
+
+### The buffered debug logger
+
+`createBufferedDebugLogger` (Claude's legacy `debugLog` sites) now keeps each label's
+metrics summed across the batch (`{ n, min, max, sum }` for a number, a count per
+value for a boolean or `state`) instead of the last call's. It is flushed at process
+exit and on `SIGTERM`/`SIGINT`: the signal flushes and is then left to the process's
+own handlers, or raised again when there are none, so a bridge still ends the way it
+did. `flushBufferedDebugLoggers()` is exported for an explicit shutdown path.

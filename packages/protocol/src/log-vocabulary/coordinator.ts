@@ -29,6 +29,10 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "store.workflows-in-use":
         "The workflow store was full and every record was still in use, so new work was refused.",
       "remote-worker.settle-failed": "A remote worker could not be settled.",
+      "checkout.merge-followed":
+        "After an environment's PR merged, the project checkout was fast-forwarded, or `outcome` says why not.",
+      "checkout.merge-follow-failed":
+        "After an environment's PR merged, fast-forwarding the project checkout failed.",
     },
   },
 });

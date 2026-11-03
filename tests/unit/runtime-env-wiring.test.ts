@@ -137,6 +137,7 @@ describe("container runtime environment wiring", () => {
     expect(zshrc).toContain('eval "$(starship init zsh)"');
     expect(zshrc).toContain("autoload -Uz compinit");
     expect(zshrc).toContain("compinit -u");
+    expect(zshrc).toContain("compinit -i");
     expect(zshrc).toContain("source /etc/orkestrator/git-aliases.zsh");
     expect(zshrc).toContain("setopt APPEND_HISTORY SHARE_HISTORY");
     expect(zshrc).toContain("(( EUID == 0 ))");

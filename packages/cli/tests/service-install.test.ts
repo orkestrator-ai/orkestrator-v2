@@ -493,6 +493,7 @@ test("a pinned Serve service parses as strict and cannot silently fall back", as
       strictPort: options.strictGatewayPort,
     },
     {
+      requestCredentialMatches: () => false,
       gatewayCredentialMatches: () => false,
       gatewayCredentialExpiresAt: () => null,
       isOriginAllowed: () => false,

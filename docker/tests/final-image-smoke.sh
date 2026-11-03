@@ -10,7 +10,8 @@
 # - every bridge the manifest lists starts from its built entry point and
 #   answers /global/health;
 # - Codex's code-mode host is installed beside it;
-# - Chromium launches for the `node` user.
+# - Chromium launches for the `node` user;
+# - root runs nothing the node user plants (root-boundary-smoke.sh).
 #
 # The container has no network, no host mounts or credentials, and uses full
 # network policy to avoid DNS/firewall prerequisites. It is labelled for this
@@ -203,5 +204,9 @@ done
 in_container 'NODE_PATH=/usr/local/share/npm-global/lib/node_modules node /usr/local/share/verify-playwright.cjs' >/dev/null \
     || fail "Chromium did not launch for node"
 echo "ok   chromium (node)"
+
+# Root boundary (security H2): its own container, since it drains everything.
+bash "$(dirname "$0")/root-boundary-smoke.sh" "$IMAGE" || fail "root ran code the node user planted"
+echo "ok   root boundary"
 
 echo "final image smoke: passed"

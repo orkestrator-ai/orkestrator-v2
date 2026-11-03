@@ -8,6 +8,7 @@ import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useBugReportStore } from "@/stores/bugReportStore";
 import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
@@ -23,6 +24,7 @@ const originalGateway = window.orkestratorGateway;
 
 afterEach(() => {
   cleanup();
+  useMergePrRequestStore.setState({ request: null });
   useAppDialogStore.setState({ request: null });
   useGlobalSettingsStore.setState({ open: false, section: undefined, sectionRequest: 0 });
   useBugReportStore.setState({ sheetOpen: false, draftInProgress: false });
@@ -505,6 +507,40 @@ describe("MobileAppShellLayout", () => {
     fireEvent.click(document.querySelector("[data-slot='mobile-projects-overlay']")!);
 
     expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+  });
+
+  test("closes the drawer for a merge request without changing the selected environment", () => {
+    function MergeConfirmation() {
+      const request = useMergePrRequestStore((state) => state.request);
+      return request
+        ? createPortal(
+            <div role="alertdialog" aria-label="Merge Pull Request">
+              <button
+                onClick={() => useMergePrRequestStore.getState().clearMergePrRequest(request.nonce)}
+              >
+                Cancel merge
+              </button>
+            </div>,
+            document.body,
+          )
+        : null;
+    }
+    renderLayout(
+      {
+        actionBar: <MergeConfirmation />,
+        sidebar: (
+          <button onClick={() => useMergePrRequestStore.getState().requestMergePr("environment-1")}>
+            Merge selected PR
+          </button>
+        ),
+      },
+      { keepInitialDrawerOpen: true },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Merge selected PR" }));
+    expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" }));
+    expect(screen.getByRole("alertdialog", { name: "Merge Pull Request" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel merge" }));
+    expectDomAbsent(screen.queryByRole("alertdialog", { name: "Merge Pull Request" }));
   });
 
   test("gives way to a dialog requested from the drawer and returns focus to its trigger once it closes", async () => {

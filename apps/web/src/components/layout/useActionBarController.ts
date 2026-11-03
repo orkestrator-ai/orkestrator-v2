@@ -65,6 +65,8 @@ import { legacyLaunchMultiReview } from "@/lib/multi-review-launch-compat";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import { mergePrControl } from "@/lib/merge-pr-control";
+import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { toast } from "sonner";
 import type { ResolveLaunchResult } from "./ActionBar.types";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -179,8 +181,41 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   cleanupTargetRef.current = cleanupTarget;
   const [deletingEnvironmentId, setDeletingEnvironmentId] = useState<string | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
-  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeDialogOpenState, setMergeDialogOpenState] = useState(false);
   const [mergingEnvironmentId, setMergingEnvironmentId] = useState<string | null>(null);
+  // A row's "Merge PR" menu item selects its environment and asks for the
+  // dialog the green button opens. Eligibility is checked once on admission;
+  // an admitted dialog has the same lifetime as one opened with the button.
+  const mergePrRequest = useMergePrRequestStore((state) => state.request);
+  const selectedMergePrControl = selectedEnvironment
+    ? mergePrControl(selectedEnvironment, {
+        dockerAvailable,
+        merging: mergingEnvironmentId === selectedEnvironmentId,
+      })
+    : null;
+  const mergePrRequested =
+    mergePrRequest !== null &&
+    mergePrRequest.environmentId === selectedEnvironmentId &&
+    selectedMergePrControl?.disabled === false;
+  const [handledMergePrNonce, setHandledMergePrNonce] = useState<number | null>(null);
+  // Adjust this component's state before committing a new request, so later
+  // readiness updates cannot dismiss a confirmation the user is reading.
+  if (mergePrRequest && mergePrRequest.nonce !== handledMergePrNonce) {
+    setHandledMergePrNonce(mergePrRequest.nonce);
+    if (mergePrRequested) setMergeDialogOpenState(true);
+  }
+  const mergeDialogOpen = mergeDialogOpenState;
+  const setMergeDialogOpen = useCallback((open: boolean) => {
+    setMergeDialogOpenState(open);
+    if (open) return;
+    const request = useMergePrRequestStore.getState().request;
+    if (request) useMergePrRequestStore.getState().clearMergePrRequest(request.nonce);
+  }, []);
+  useEffect(() => {
+    if (mergePrRequest) {
+      useMergePrRequestStore.getState().clearMergePrRequest(mergePrRequest.nonce);
+    }
+  }, [mergePrRequest]);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [resolveLaunchEnvironmentId, setResolveLaunchEnvironmentId] = useState<string | null>(null);
 
@@ -2088,6 +2123,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       selectedEnvironment?.name,
       selectedEnvironmentId,
       prUrl,
+      setMergeDialogOpen,
     ],
   );
 

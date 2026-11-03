@@ -1127,7 +1127,11 @@ export class NativeAgentService {
       throw new Error(bugReportRuntimeUnavailableMessage(bugReport));
     }
     if (bugReport.status === "ready") return this.trustedBugReportInput(input, bugReport.record);
-    const coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
+    let coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
+    if (coordinator.status === "ready" && this.options.waitForMergeSync) {
+      await this.options.waitForMergeSync(coordinator.workspace.projectId);
+      coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
+    }
     if (coordinator.status === "not-coordinator") {
       const environment = await this.storage.getEnvironment(input.environmentId);
       const existing = await this.storage.getNativeAgentSession(
@@ -3327,7 +3331,7 @@ export class NativeAgentService {
           ? home!.projectId
           : undefined;
     const releaseCoordinatorTurn = checkoutProjectId
-      ? this.options.beginCoordinatorTurn?.(checkoutProjectId)
+      ? await this.options.beginCoordinatorTurn?.(checkoutProjectId)
       : undefined;
     try {
       if (isProjectHomeEnvironment(home))

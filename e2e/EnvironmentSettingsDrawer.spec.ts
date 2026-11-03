@@ -111,3 +111,24 @@ test("bottom-bar environment settings return focus after first load and cached r
     await expect(drawerTrigger).toBeFocused();
   }
 });
+
+test("selected row merge closes the phone drawer and keeps confirmation usable", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "phone drawer");
+  await page.goto("/environment-settings-drawer?merge=1");
+  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
+  await expect(drawer).toBeVisible();
+  await touchTap(page, drawer.getByRole("button", { name: "Environment actions" }));
+  await expect(page.getByRole("menuitem", { name: "Merge PR" })).toBeVisible();
+  await page.screenshot({ path: "output/visual-previews/merge-mobile-before.png" });
+  await touchTap(page, page.getByRole("menuitem", { name: "Merge PR" }));
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await page.screenshot({ path: "output/visual-previews/merge-mobile-after.png" });
+  await touchTap(page, confirmation.getByRole("button", { name: "Cancel" }));
+  await expect(confirmation).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});

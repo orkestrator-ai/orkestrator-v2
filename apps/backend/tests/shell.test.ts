@@ -436,4 +436,14 @@ describe("inferLanguage", () => {
     expect(inferLanguage("file.go")).toBe("go");
     expect(inferLanguage("Makefile")).toBe("");
   });
+
+  test("maps environment files to dotenv", () => {
+    expect(inferLanguage(".env")).toBe("dotenv");
+    expect(inferLanguage("apps/web/.env")).toBe("dotenv");
+    expect(inferLanguage(".env.local")).toBe("dotenv");
+    expect(inferLanguage("config/.Env.Production")).toBe("dotenv");
+    expect(inferLanguage("production.env")).toBe("dotenv");
+    expect(inferLanguage(".envrc")).not.toBe("dotenv");
+    expect(inferLanguage("environment.ts")).toBe("typescript");
+  });
 });

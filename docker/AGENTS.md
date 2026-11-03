@@ -15,6 +15,8 @@ These rules apply to `docker/` and to container lifecycle code such as
 | `runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
 | `verify-playwright.cjs` | Launches Chromium; run at build time and on demand       |
+| `verify-root-boundary.sh` | Build-time check that root uses nothing `node` can write |
+| `tests/root-boundary-smoke.sh` | Plants files as `node` in a built image; root must run none |
 
 ## Image contents
 
@@ -89,6 +91,37 @@ Users and isolation:
 - `orkroot`, a uid-0 user for root terminal sessions. The backend opens those
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
   become `orkroot`.
+- `node` cannot get code run as root through the files root uses either
+  (security report H2). Keep these four rules when adding a root path:
+  - Every root `docker exec` or `docker run` the backend makes passes
+    `CONTAINER_ROOT_USER_ARGS` (`--env PATH=/usr/sbin:/usr/bin:/sbin:/bin
+    --user root`, `apps/backend/src/core/container-scripts.ts`), and a root
+    terminal gets the same PATH. The image `ENV PATH` puts `node`-writable
+    `npm-global/bin` and `~/.opencode/bin` first, and every exec inherits it.
+    `tests/unit/container-root-boundary.test.ts` fails on a bare
+    `"--user", "root"` in the backend.
+  - Every script root runs resets `PATH` to root-owned directories before
+    its first command, so an older backend or a manual `docker exec -u root`
+    is safe too. The entrypoint uses sudo's `secure_path`, which `node`'s
+    `entrypoint.sh` inherits.
+  - A root shell never sources a `node`-writable file. `runtime-env.sh` skips
+    the `/tmp/orkestrator-ai` snapshot, `bash-env.sh` and the tool directories
+    for uid 0, sets `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+    and unsets `BASH_ENV`, `NPM_CONFIG_PREFIX` and `MISE_TRUSTED_CONFIG_PATHS`.
+    It still reads the credential files, as data. Root zsh runs
+    `compinit -i`.
+  - Only the trees listed in `verify-root-boundary.sh` are `node`-writable.
+    `/usr/local/share` is root-owned, with `npm-global` its own `node`-owned
+    directory, because root zsh autoloads from
+    `/usr/local/share/zsh/site-functions`. The image build fails when `node`
+    can write anything else, or anything on a root PATH, root's `fpath` or
+    sudo's `secure_path`.
+
+  A root terminal therefore has no npm globals (`claude`, `codex`,
+  `playwright`) or OpenCode on its PATH. Running one by absolute path runs
+  `node`-writable code as root. `docker/tests/root-boundary-smoke.sh` (part of
+  `final-image-smoke.sh`) plants files as `node` in a built image and fails if
+  any root process runs them.
 - Network firewall (iptables/ipset) for security isolation. `node` has
   passwordless sudo for exactly two things: the image entrypoint
   (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network
@@ -131,6 +164,11 @@ Playwright work here?" without reconstructing it:
 NODE_PATH=/usr/local/share/npm-global/lib/node_modules \
   node /usr/local/share/verify-playwright.cjs
 ```
+
+Run it as `node` in a live container. The Playwright package (under
+`npm-global`) and the browsers in `/ms-playwright` are `node`-writable, so
+launching them from a root terminal runs code the agent could have replaced.
+The build-time root check is safe because nothing untrusted has run yet.
 
 Three constraints apply:
 

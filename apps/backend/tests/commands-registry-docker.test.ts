@@ -30,7 +30,7 @@ ${ownedContainerInspect()}
 case "$*" in *'{{.HostConfig.NetworkMode}}'*) printf 'bridge\\n'; exit 0 ;; esac
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
-  if [ "$2" = "--user" ]; then exit 0; fi
+  if [ "$2" = "--env" ] && [ "$4" = "--user" ]; then exit 0; fi
   cat >> "$FAKE_DOCKER_EXEC_LOG.stdin"
   printf '\\n--sync--\\n' >> "$FAKE_DOCKER_EXEC_LOG.stdin"
   exit 0
@@ -493,7 +493,11 @@ exit 1
           expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
           const calls = await fs.readFile(logs.all, "utf8");
           expect(calls.match(/start container-1/g)).toHaveLength(2);
-          expect(calls.match(/exec --user root container-1 sh -c/g)).toHaveLength(2);
+          expect(
+            calls.match(
+              /exec --env PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin --user root container-1 sh -c/g,
+            ),
+          ).toHaveLength(2);
           expect(calls).toContain(
             "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
           );
@@ -527,7 +531,11 @@ exit 1
           // the container id, so the credential lands owned by the agent's user.
           // The single `--user root` exec is the project-files access repair.
           expect(calls).toContain("exec -i container-1 bash -lc");
-          expect(calls.match(/exec --user root container-1/g)).toHaveLength(1);
+          expect(
+            calls.match(
+              /exec --env PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin --user root container-1/g,
+            ),
+          ).toHaveLength(1);
           // The token must never be passed as an argv value a `ps` or
           // `docker inspect` could read.
           expect(calls).not.toContain("sk-ant-oat01-from-host");
@@ -619,7 +627,7 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ] && [ "$3" = "{{.State.Running}}" ]; then printf 'true\\n'; exit 0; fi
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
-  if [ "$2" = "--user" ]; then exit 0; fi
+  if [ "$2" = "--env" ] && [ "$4" = "--user" ]; then exit 0; fi
   payload="$(cat)"
   case "$payload" in
     *claudeAiOauth*)
@@ -663,7 +671,7 @@ exit 1
 if [ "$1" = "inspect" ] && [ "$3" = "{{.State.Running}}" ]; then printf 'true\\n'; exit 0; fi
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
-  if [ "$2" = "--user" ]; then exit 0; fi
+  if [ "$2" = "--env" ] && [ "$4" = "--user" ]; then exit 0; fi
   token="$(cat)"
   printf 'sync rejected %s\\n' "$token" >&2
   exit 7

@@ -2,6 +2,9 @@ export const GATEWAY_TOKEN_MIN_LENGTH = 16;
 export const GATEWAY_TOKEN_MAX_LENGTH = 1024;
 export const GATEWAY_COOKIE_MAX_BYTES = 4096;
 
+// The token never goes into a cookie any more (the gateway cookie holds an
+// opaque session id), but older gateways stored it in one, and tokens that fit
+// that bound stay the accepted range so no existing token becomes invalid.
 const AUTH_COOKIE = "orkestrator_gateway_auth";
 const COOKIE_ATTRIBUTES = "HttpOnly; SameSite=Strict; Path=/";
 const textEncoder = new TextEncoder();
@@ -47,9 +50,4 @@ export function normalizeGatewayToken(value: string): string {
   const error = getGatewayTokenValidationError(token);
   if (error) throw new GatewayTokenValidationError(error);
   return token;
-}
-
-export function gatewayTokenCookieHeader(value: string): string {
-  const token = normalizeGatewayToken(value);
-  return `${AUTH_COOKIE}=${encodeURIComponent(token)}; ${COOKIE_ATTRIBUTES}`;
 }

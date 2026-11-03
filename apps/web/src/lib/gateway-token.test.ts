@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  GATEWAY_COOKIE_MAX_BYTES,
   GatewayTokenValidationError,
-  gatewayTokenCookieHeader,
   getGatewayTokenValidationError,
   normalizeGatewayToken,
 } from "./gateway-token";
@@ -28,14 +26,5 @@ describe("gateway token validation", () => {
     const multibyteToken = "😀".repeat(512);
     expect(multibyteToken.length).toBe(1024);
     expect(getGatewayTokenValidationError(multibyteToken)).toContain("too large");
-  });
-
-  test("creates a bounded HttpOnly strict cookie for accepted values", () => {
-    const header = gatewayTokenCookieHeader("valid token value 123");
-    expect(header).toContain("orkestrator_gateway_auth=valid%20token%20value%20123");
-    expect(header).toContain("HttpOnly; SameSite=Strict; Path=/");
-    expect(new TextEncoder().encode(header).byteLength).toBeLessThanOrEqual(
-      GATEWAY_COOKIE_MAX_BYTES,
-    );
   });
 });

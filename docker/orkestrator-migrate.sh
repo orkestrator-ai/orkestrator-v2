@@ -32,6 +32,10 @@
 # Output (last line, never file names):
 #   ORKESTRATOR_COPY status=<ok|mismatch|extract-failed|usage> files=<n> bytes=<n> links=<n> dirs=<n> git=<ok|failed|none>
 set -uo pipefail
+# Root runs this, and the image PATH puts node-writable directories first.
+# Resolve every command from root-owned directories only (security H2).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 result() {
     echo "ORKESTRATOR_COPY $*"

@@ -158,6 +158,8 @@ describe("dispatchPrompt", () => {
           toolName: "bash",
           args: { command: "PRIVATE COMMAND" },
         });
+        // A tool appearing or finishing is not stall evidence: off the per-minute
+        // stream these looks write nothing; on it, each one is written.
         state.diagnostics?.report("heartbeat");
         if (enabled) {
           expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
@@ -172,18 +174,22 @@ describe("dispatchPrompt", () => {
           result: { content: [] },
         });
         state.diagnostics?.report("heartbeat");
-        if (enabled)
+        if (enabled) {
           expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
             '"pendingToolCount":0',
           );
+        }
+        state.diagnostics?.report("heartbeat");
         stub.finish();
         await completion;
         expect(state.diagnostics).toBeUndefined();
-        if (enabled)
-          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
-            '"event":"closed"',
-          );
-        else expect(lines).toHaveLength(0);
+        // Lifecycle is written either way, and its close carries the finished tool.
+        const closed = JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1));
+        expect(closed).toContain('"event":"closed"');
+        expect(closed).toContain('"completedTools":1');
+        expect(
+          bridgeDiagnosticPayloads(lines).filter((entry) => entry.event === "heartbeat"),
+        ).toHaveLength(enabled ? 3 : 0);
         expect(lines.join("\n")).not.toContain("PRIVATE");
       } finally {
         stub.finish();
@@ -212,9 +218,11 @@ describe("dispatchPrompt", () => {
         toolName: "bash",
         args: { command: "PRIVATE COMMAND" },
       });
-      expect(lines).toHaveLength(0);
+      const heartbeats = () =>
+        bridgeDiagnosticPayloads(lines).filter((entry) => entry.event === "heartbeat");
+      expect(heartbeats()).toHaveLength(0);
       setLiveBridgeDiagnostics(true);
-      const snapshots = bridgeDiagnosticPayloads(lines);
+      const snapshots = heartbeats();
       expect(snapshots).toHaveLength(1);
       expect(snapshots[0]).toMatchObject({ event: "heartbeat", pendingToolCount: 1 });
       expect(snapshots[0]?.pendingTools[0].kind).toBe("bash");

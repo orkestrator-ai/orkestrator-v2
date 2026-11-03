@@ -53,7 +53,7 @@ const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
  * which leaves the socket CONNECTING.
  */
 const EVENT_SOURCE_CLOSED = 2;
-export const AGENT_TEST_SESSION_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
+export const BROWSER_SESSION_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
 export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 /** How long a shared-stream filter narrowing waits for its siblings. */
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
@@ -123,8 +123,12 @@ export interface BrowserGatewayOptions {
   /** A main stream attempt with no answer after this long counts as failed. */
   eventStreamConnectTimeoutMs?: number;
   reportBootMetrics?: boolean;
-  /** Same-origin app install probes for the agent-test-only activity endpoint. */
-  agentTestSessionActivity?: boolean;
+  /**
+   * Same-origin app install probes the gateway's cookie-session endpoint, so a
+   * tab signed in through the login form renews on activity and goes back to
+   * the login page when its session ends.
+   */
+  browserSessionActivity?: boolean;
   /**
    * Test/embedding override for the lapsed-credential recovery. Production
    * navigates to the gateway login page, which cannot be asserted in happy-dom.
@@ -312,9 +316,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const credentials = bearerToken || crossOrigin ? ("omit" as const) : ("same-origin" as const);
   const websocketTerminalsEnabled = terminalTransportEnabled(options);
   let terminalSocket: TerminalWebSocketClient | null = null;
-  let disposeAgentTestActivity: () => void = () => undefined;
-  /** Set once the gateway confirms this tab holds an agent-test cookie session. */
-  let agentTestSessionActive = false;
+  let disposeBrowserSessionActivity: () => void = () => undefined;
+  /** Set once the gateway confirms this tab holds a cookie session. */
+  let browserSessionActive = false;
   let credentialLapseHandled = false;
 
   const applyGatewayToken = (token: string): void => {
@@ -339,37 +343,39 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     : undefined;
 
   /**
-   * An agent-test session has a sliding idle deadline and a hard absolute one,
-   * and the gateway tears down this tab's event stream and terminal sockets the
-   * moment either passes. Nothing the tab does afterwards can succeed, so a 401
-   * has to become a visible, actionable state: send the browser to the login
-   * page, which names the `dev:login` command that mints a fresh link. Without
-   * this the tab keeps rendering stale state behind an EventSource that retries
-   * forever, which reads as a regression in whatever was being tested.
+   * A cookie session (login form or agent-test link) has a sliding idle
+   * deadline and a hard absolute one, ends when the backend restarts, and is
+   * revoked by token rotation; the gateway tears down this tab's event stream
+   * and terminal sockets the moment it ends. Nothing the tab does afterwards
+   * can succeed, so a 401 has to become a visible, actionable state: reload,
+   * which lands on the gateway's login page (on a development profile it names
+   * the `dev:login` command that mints a fresh link). Without this the tab
+   * keeps rendering stale state behind an EventSource that retries forever.
    *
-   * Scoped to confirmed agent-test sessions on purpose. A durable-token client
-   * has no deadline to trip, and a remote/bearer client must never be navigated.
+   * Scoped to confirmed cookie sessions on purpose. A bearer client (hosted,
+   * Electron, a workspace realm) must never be navigated.
    */
   const handleCredentialLapse = () => {
-    if (!agentTestSessionActive || credentialLapseHandled) return;
+    if (!browserSessionActive || credentialLapseHandled) return;
     credentialLapseHandled = true;
-    disposeAgentTestActivity();
+    disposeBrowserSessionActivity();
     // The session ended: protected rich content must not outlive it.
     clearProtectedRichContent("logout");
     if (options.onCredentialLapsed) {
       options.onCredentialLapsed();
       return;
     }
-    if (typeof window !== "undefined") {
-      window.location.assign(apiUrl(`${GATEWAY_PREFIX}/login`));
-    }
+    // Reload rather than open `/login`: the gateway answers the reloaded page
+    // with its login form and the reason the session ended, and the iOS shell
+    // treats that main-frame 401 as its cue to offer a fresh native sign-in.
+    if (typeof window !== "undefined") window.location.reload();
   };
 
   /**
    * The gateway refused the stream's credential, so the link is up and no retry
    * will help. That is no outage: stop calling it one, so reads run again and
    * show the failure (see `transport-connectivity.ts`) instead of a banner
-   * promising a reconnect, and an agent-test tab goes to its login page.
+   * promising a reconnect, and a cookie-session tab goes to its login page.
    */
   const mainStreamCredentialRejected = () => {
     mainStreamCredentialRefused = true;
@@ -383,12 +389,15 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     mainStreamCredentialProbe = null;
   };
 
-  /** An `EventSource` cannot read the status that closed it, so ask the same gate. */
+  /**
+   * An `EventSource` cannot read the status that closed it, so ask the same
+   * gate. `/status` answers only that, and never carries the token back.
+   */
   const checkMainStreamCredential = () => {
     invalidateMainStreamCredentialProbe();
     const controller = new AbortController();
     mainStreamCredentialProbe = controller;
-    void fetch(apiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
+    void fetch(apiUrl(`${GATEWAY_PREFIX}/status`), {
       credentials,
       headers: requestHeaders(),
       signal: controller.signal,
@@ -403,55 +412,82 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       });
   };
 
-  const detectAgentTestSession = async () => {
-    if (credentials !== "same-origin" || !options.agentTestSessionActivity) return;
+  const detectBrowserSession = async () => {
+    if (credentials !== "same-origin" || !options.browserSessionActivity) return;
     const controller = new AbortController();
     let disposed = false;
     let lastRefreshAt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryDelay = 1000;
+    let probing = false;
     const removeListeners = () => {
       if (disposed) return;
       disposed = true;
-      agentTestSessionActive = false;
+      browserSessionActive = false;
       controller.abort();
+      clearTimeout(retryTimer);
+      window.removeEventListener("online", probe);
       window.removeEventListener("keydown", refreshAfterActivity);
       window.removeEventListener("pointerdown", refreshAfterActivity);
     };
     const refreshAfterActivity = () => {
       const now = Date.now();
-      if (disposed || now - lastRefreshAt < AGENT_TEST_SESSION_ACTIVITY_REFRESH_INTERVAL_MS) return;
+      if (disposed || now - lastRefreshAt < BROWSER_SESSION_ACTIVITY_REFRESH_INTERVAL_MS) return;
       lastRefreshAt = now;
-      void fetch(apiUrl(`${GATEWAY_PREFIX}/agent-test/session`), {
+      void fetch(apiUrl(`${GATEWAY_PREFIX}/session`), {
         method: "POST",
         credentials,
         signal: controller.signal,
       })
         .then((response) => {
-          // 401 is a lapsed session and needs the login page. 404 only means this
-          // gateway has no such route, so the tab is fine and simply has nothing
-          // to renew — tearing it down further would be wrong.
+          // 401 is a lapsed session and needs the login page. 404 means the
+          // gateway holds no session for this tab, so it has nothing to renew —
+          // tearing it down further would be wrong.
           if (response.status === 401) handleCredentialLapse();
           else if (response.status === 404) removeListeners();
         })
         .catch(() => undefined);
     };
-    disposeAgentTestActivity = removeListeners;
-    try {
-      const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/agent-test/session`), {
-        credentials,
-        signal: controller.signal,
-      });
-      if (!response.ok || disposed) {
-        removeListeners();
-        return;
+    disposeBrowserSessionActivity = removeListeners;
+    const scheduleRetry = () => {
+      if (disposed) return;
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(probe, retryDelay);
+      retryDelay = Math.min(30_000, retryDelay * 2);
+    };
+    const probe = async () => {
+      if (disposed || probing) return;
+      probing = true;
+      clearTimeout(retryTimer);
+      try {
+        const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/session`), {
+          credentials,
+          signal: controller.signal,
+        });
+        if (disposed) return;
+        if (response.status === 401) {
+          browserSessionActive = true;
+          handleCredentialLapse();
+        } else if (response.status === 404) {
+          removeListeners();
+        } else if (!response.ok) {
+          scheduleRetry();
+        } else {
+          browserSessionActive = true;
+          window.removeEventListener("online", probe);
+          window.addEventListener("keydown", refreshAfterActivity);
+          window.addEventListener("pointerdown", refreshAfterActivity);
+        }
+      } catch {
+        scheduleRetry();
+      } finally {
+        probing = false;
       }
-      agentTestSessionActive = true;
-      window.addEventListener("keydown", refreshAfterActivity);
-      window.addEventListener("pointerdown", refreshAfterActivity);
-    } catch {
-      removeListeners();
-    }
+    };
+    window.addEventListener("online", probe);
+    await probe();
   };
-  void detectAgentTestSession();
+  void detectBrowserSession();
 
   /**
    * Receive every authoritative state event, but only terminal byte streams
@@ -1303,8 +1339,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
     const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
     if (!response.ok) {
-      // The gateway only answers 401 from its authentication gate, so on an
-      // agent-test session this is the deadline having passed rather than a
+      // The gateway only answers 401 from its authentication gate, so on a
+      // cookie session this is the deadline having passed rather than a
       // command-specific failure. Surface it before the throw: the idle path can
       // lapse with no pointer or key activity to notice it.
       if (response.status === 401) handleCredentialLapse();
@@ -1530,7 +1566,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     invalidateMainStreamCredentialProbe();
     setMainStreamConnectionState("idle");
     mainStreamConnectionListeners.clear();
-    disposeAgentTestActivity();
+    disposeBrowserSessionActivity();
     stopWatchingMainStream();
     removeRetryWakeListeners();
     terminalInput.dispose(reason);
@@ -1565,13 +1601,9 @@ export function installBrowserGatewayApi(
       ...options,
       baseUrl,
       reportBootMetrics: !options.unavailableReason,
-      // Only an isolated development profile can hold an agent-test session, and
-      // its Vite instance is the only one given a profile id. Probing anywhere
-      // else would spend a request per boot on a route that is always 404 —
-      // including on every production gateway client.
-      agentTestSessionActivity:
-        options.agentTestSessionActivity ??
-        (!options.unavailableReason && Boolean(import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim())),
+      // Every same-origin cookie client holds an expiring gateway session (login
+      // form or agent-test link). A bearer client skips the probe on its own.
+      browserSessionActivity: options.browserSessionActivity ?? !options.unavailableReason,
     });
   }
 }

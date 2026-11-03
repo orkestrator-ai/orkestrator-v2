@@ -58,6 +58,14 @@ function installBackend() {
         environmentType: "local",
         status: "running",
         setupPhase: "ready",
+        ...(new URLSearchParams(location.search).has("merge")
+          ? {
+              worktreePath: "/fixture/settings-project/worktree",
+              prUrl: "https://github.com/fixture/project/pull/7",
+              prState: "open",
+              hasMergeConflicts: false,
+            }
+          : {}),
         networkAccessMode: "restricted",
         createdAt: "2026-10-16T00:00:00.000Z",
       } as Environment,
@@ -81,7 +89,9 @@ export function EnvironmentSettingsDrawerFixture() {
         <AppDialogHost />
         <MobileAppShellLayout
           selectedProjectId="settings-drawer-project"
-          selectedEnvironmentId={null}
+          selectedEnvironmentId={
+            new URLSearchParams(location.search).has("merge") ? ENVIRONMENT_ID : null
+          }
           title="Settings drawer fixture"
           filesPanelOpen={false}
           centralPanelStyle={{}}
@@ -92,7 +102,7 @@ export function EnvironmentSettingsDrawerFixture() {
               <div className="min-h-0 flex-1 pt-12">
                 <EnvironmentItem
                   environment={environment}
-                  isSelected={false}
+                  isSelected={new URLSearchParams(location.search).has("merge")}
                   onSelect={() => {}}
                   onDelete={() => {}}
                   onStart={() => {}}

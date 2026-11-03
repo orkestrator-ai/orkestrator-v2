@@ -19,6 +19,10 @@
 # A failed firewall leaves the namespace closed (init-firewall.sh fails
 # closed) and the gateway running, so the report and log stay readable.
 set -euo pipefail
+# Root runs this, and the image PATH puts node-writable directories first.
+# Resolve every command from root-owned directories only (security H2).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 /usr/local/bin/network-policy-entrypoint.sh --record-only
 # Docker shares network files with containers joining this namespace. Snapshot

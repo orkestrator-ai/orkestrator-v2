@@ -1,8 +1,8 @@
 import * as support from "./gateway-support-core.js";
 import {
   API_PREFIX,
-  AUTH_COOKIE,
   DYNAMIC_GZIP_LEVEL,
+  GATEWAY_AUTH_COOKIE_NAMES,
   GatewayTokenValidationError,
   InvalidRequestBodyError,
   MAX_JSON_BODY_BYTES,
@@ -311,7 +311,7 @@ export function filterGatewayCookie(
     .map((cookie) => cookie.trim())
     .filter((cookie) => {
       const name = cookie.split("=", 1)[0] ?? "";
-      return name !== AUTH_COOKIE && name.length > 0;
+      return !GATEWAY_AUTH_COOKIE_NAMES.includes(name) && name.length > 0;
     });
 
   return cookies.length > 0 ? cookies.join("; ") : undefined;
@@ -396,7 +396,7 @@ export function rewriteSetCookieHeader(header: string, proxyPrefix?: string): st
   const [nameValue = "", ...attributes] = parts;
   if (!nameValue) return null;
   const cookieName = nameValue.split("=", 1)[0] ?? "";
-  if (cookieName === AUTH_COOKIE) return null;
+  if (GATEWAY_AUTH_COOKIE_NAMES.includes(cookieName)) return null;
 
   let path: string | null = null;
   const rewrittenAttributes: string[] = [];

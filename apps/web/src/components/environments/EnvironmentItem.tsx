@@ -9,12 +9,14 @@ import { useEnvironmentDisplayActivity } from "@/hooks/useEnvironmentDisplayActi
 import { useEnvironmentPrMergeState } from "@/hooks/useEnvironmentNameSignal";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
+import { mergePrControl } from "@/lib/merge-pr-control";
 import { resolveEnvironmentAgentActivity } from "@/lib/environment-agent-activity";
 import { hydrationFreshnessNotice } from "@/lib/view-freshness";
 import { useBuildPipelineStore, useEnvironmentDiffStore, useEnvironmentStore } from "@/stores";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import type { Environment, EnvironmentType } from "@/types";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
 import { EnvironmentRow, type EnvironmentRowChanges } from "./EnvironmentRow";
@@ -138,6 +140,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
     localCheckoutAvailable,
   });
 
+  // The same rule as the action bar's green Merge PR button.
+  const mergePr = mergePrControl(environment, { dockerAvailable });
   const localAddress = getEnvironmentPortAddress(environment);
   const initialPrompt = environment.initialPrompt?.trim();
   const tooltip = useHoverTooltip();
@@ -155,6 +159,19 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       }}
       onActivate={(modifiers) => onSelect(environment.id, modifiers)}
       actions={{
+        // Opens the environment and then the action bar's own merge dialog,
+        // exactly as clicking its green Merge PR button would.
+        ...(mergePr
+          ? {
+              mergePr: {
+                disabled: mergePr.disabled,
+                run: () => {
+                  onSelect(environment.id);
+                  useMergePrRequestStore.getState().requestMergePr(environment.id);
+                },
+              },
+            }
+          : {}),
         // The dialog lives in `AppDialogHost`, not in this row: in the mobile
         // projects drawer the row unmounts with the drawer, and a modal opened
         // from inside the drawer would be trapped behind it.

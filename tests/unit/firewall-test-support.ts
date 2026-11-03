@@ -6,6 +6,20 @@ export const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 export const policyPath = "/etc/orkestrator";
 
 /**
+ * The PATH reset at the top of every root container script (security H2):
+ * the image runs them with root-owned directories only. A fixture removes it
+ * so its command stubs and the GNU tools on its PATH apply instead of the
+ * host's real `iptables` and friends.
+ */
+const ROOT_SCRIPT_PATH_RESET =
+  /^PATH=(?:\/usr\/local\/sbin:\/usr\/local\/bin:)?\/usr\/sbin:\/usr\/bin:\/sbin:\/bin$/m;
+
+export function withCallerPath(text: string): string {
+  if (!ROOT_SCRIPT_PATH_RESET.test(text)) throw new Error("Root script has no PATH reset");
+  return text.replace(ROOT_SCRIPT_PATH_RESET, ": # fixture keeps the caller's PATH");
+}
+
+/**
  * Rewrites a firewall script's fixed root paths into a temporary directory:
  * policy, seed, runtime status, state and the shared library. The sibling
  * update script is only reachable when a test installs it executable.
@@ -32,7 +46,8 @@ export function fixtureScript(dir: string, name: string): string {
     read("docker/default-allowed-domains"),
   );
   const script = join(dir, name);
-  writeFileSync(script, rewriteFirewallPaths(dir, read(`docker/${name}`)));
+  const text = rewriteFirewallPaths(dir, read(`docker/${name}`));
+  writeFileSync(script, name === "run-root-setup.sh" ? text : withCallerPath(text));
   return script;
 }
 

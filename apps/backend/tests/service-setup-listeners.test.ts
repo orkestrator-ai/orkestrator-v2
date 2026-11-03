@@ -57,6 +57,7 @@ test.each(["ssh", "tailnet"])(
       {
         gatewayCredentialMatches: () => false,
         gatewayCredentialExpiresAt: () => null,
+        requestCredentialMatches: () => false,
         isOriginAllowed: () => false,
       },
     );

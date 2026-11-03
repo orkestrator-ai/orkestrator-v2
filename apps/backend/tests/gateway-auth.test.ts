@@ -5,7 +5,7 @@ import {
   appendVary,
   loadOrCreateGatewayToken,
   MAX_AGENT_TEST_BOOTSTRAPS,
-  MAX_AGENT_TEST_SESSIONS,
+  MAX_BROWSER_SESSIONS,
   OrkestratorGateway,
 } from "../src/gateway";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -683,11 +683,11 @@ describe("remote gateway", () => {
       body: `token=${encodeURIComponent(info.token)}`,
     });
     expect(accepted.status).toBe(303);
-    expect(accepted.headers["set-cookie"]?.[0]).toContain("orkestrator_gateway_auth=");
+    const cookie = accepted.headers["set-cookie"]![0]!.split(";")[0]!;
+    expect(cookie).toStartWith("orkestrator_gateway_auth=");
+    expect(cookie).not.toContain(info.token);
 
-    const logout = await requestUrl(`${info.url}__orkestrator/logout`, {
-      headers: { cookie: `orkestrator_gateway_auth=${info.token}` },
-    });
+    const logout = await requestUrl(`${info.url}__orkestrator/logout`, { headers: { cookie } });
     expect(logout.status).toBe(303);
     expect(logout.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
   });
@@ -902,27 +902,27 @@ describe("remote gateway", () => {
   test("evicts the nearest-deadline agent-test session, not the earliest issued", async () => {
     const { gateway } = await startGateway({ agentTestMode: true });
     const internals = gateway as unknown as {
-      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
-      issueAgentTestSession(now?: number): string;
-      refreshAgentTestSession(candidate: string, now?: number): boolean;
+      browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      issueBrowserSession(now?: number): string;
+      refreshBrowserSession(candidate: string, now?: number): boolean;
       gatewayCredentialMatches(candidate: string | null): boolean;
     };
-    const sessions = internals.agentTestSessions;
+    const sessions = internals.browserSessions;
 
     // Fill the map to its cap. The first session issued is then kept alive by
     // activity, which is exactly the entry insertion-ordered eviction would drop.
     const issued: string[] = [];
-    while (sessions.size < MAX_AGENT_TEST_SESSIONS) issued.push(internals.issueAgentTestSession());
-    expect(sessions.size).toBe(MAX_AGENT_TEST_SESSIONS);
+    while (sessions.size < MAX_BROWSER_SESSIONS) issued.push(internals.issueBrowserSession());
+    expect(sessions.size).toBe(MAX_BROWSER_SESSIONS);
     const oldestIssued = issued[0]!;
     const idle = issued[1]!;
-    expect(internals.refreshAgentTestSession(oldestIssued)).toBe(true);
+    expect(internals.refreshBrowserSession(oldestIssued)).toBe(true);
     // Leave one entry closest to lapsing without letting it expire outright, so
     // pruning cannot be what removes it.
     sessions.get(idle)!.expiresAt = Date.now() + 60_000;
 
-    const fresh = internals.issueAgentTestSession();
-    expect(sessions.size).toBe(MAX_AGENT_TEST_SESSIONS);
+    const fresh = internals.issueBrowserSession();
+    expect(sessions.size).toBe(MAX_BROWSER_SESSIONS);
     expect(internals.gatewayCredentialMatches(fresh)).toBe(true);
     expect(internals.gatewayCredentialMatches(oldestIssued)).toBe(true);
     expect(sessions.has(idle)).toBe(false);
@@ -971,9 +971,9 @@ describe("remote gateway", () => {
     const cookie = exchanged.headers["set-cookie"]![0]!;
     const sessions = (
       gateway as unknown as {
-        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+        browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
       }
-    ).agentTestSessions;
+    ).browserSessions;
     expect(sessions.size).toBe(1);
 
     // The token stream connects first, while the session is still healthy, so its
@@ -1002,9 +1002,9 @@ describe("remote gateway", () => {
     const { gateway, info } = await startGateway({ agentTestMode: true });
     const sessions = (
       gateway as unknown as {
-        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+        browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
       }
-    ).agentTestSessions;
+    ).browserSessions;
     const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
       method: "POST",
       headers: { authorization: `Bearer ${info.token}` },
@@ -1058,9 +1058,9 @@ describe("remote gateway", () => {
     const cookie = exchanged.headers["set-cookie"]![0]!;
     const sessions = (
       gateway as unknown as {
-        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+        browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
       }
-    ).agentTestSessions;
+    ).browserSessions;
     const entry = [...sessions.values()][0]!;
     // Capture the production expiry callback without letting a deliberately
     // tiny session lifetime race the real loopback handshake. Only the long
@@ -1115,12 +1115,12 @@ describe("remote gateway", () => {
     expect(settings.body).not.toContain(info.token);
   });
 
-  test("returns and rotates the persisted token for an authenticated client", async () => {
+  test("returns and rotates the persisted token for a bearer client", async () => {
     const { info, dataDir } = await startGateway({ env: {} });
-    const oldCookie = `orkestrator_gateway_auth=${info.token}`;
+    const oldAuthorization = { authorization: `Bearer ${info.token}` };
 
     const current = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
-      headers: { cookie: oldCookie },
+      headers: oldAuthorization,
     });
     expect(current.status).toBe(200);
     expect(current.json()).toEqual({ token: info.token, editable: true, source: "file" });
@@ -1128,23 +1128,21 @@ describe("remote gateway", () => {
     const replacement = "replacement-token-123456";
     const updated = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
       method: "PUT",
-      headers: {
-        cookie: oldCookie,
-        "content-type": "application/json",
-      },
+      headers: { ...oldAuthorization, "content-type": "application/json" },
       body: JSON.stringify({ token: replacement }),
     });
     expect(updated.status).toBe(200);
     expect(updated.json()).toEqual({ token: replacement, editable: true, source: "file" });
-    expect(updated.headers["set-cookie"]?.[0]).toContain(`orkestrator_gateway_auth=${replacement}`);
+    // The token never goes into a cookie, not even for the client that set it.
+    expect(updated.headers["set-cookie"]).toBeUndefined();
 
     const rejectedOldToken = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
-      headers: { cookie: oldCookie },
+      headers: oldAuthorization,
     });
     expect(rejectedOldToken.status).toBe(401);
 
     const acceptedNewToken = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
-      headers: { cookie: `orkestrator_gateway_auth=${replacement}` },
+      headers: { authorization: `Bearer ${replacement}` },
     });
     expect(acceptedNewToken.status).toBe(200);
     expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe(replacement);
@@ -1152,31 +1150,31 @@ describe("remote gateway", () => {
 
   test("rejects invalid token boundaries before changing the active credential", async () => {
     const { info } = await startGateway({ env: {} });
-    const oldCookie = `orkestrator_gateway_auth=${info.token}`;
+    const oldAuthorization = { authorization: `Bearer ${info.token}` };
     const invalidTokens = ["short", "a".repeat(1025), "\ud800".repeat(16), "😀".repeat(512)];
 
     for (const token of invalidTokens) {
       const response = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
         method: "PUT",
-        headers: { cookie: oldCookie, "content-type": "application/json" },
+        headers: { ...oldAuthorization, "content-type": "application/json" },
         body: JSON.stringify({ token }),
       });
       expect(response.status).toBe(400);
     }
 
     const stillAuthenticated = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
-      headers: { cookie: oldCookie },
+      headers: oldAuthorization,
     });
     expect(stillAuthenticated.status).toBe(200);
     expect(stillAuthenticated.json()).toMatchObject({ token: info.token });
   });
 
-  test("normalizes valid token whitespace before persistence and cookie issuance", async () => {
+  test("normalizes valid token whitespace before persistence", async () => {
     const { info, dataDir } = await startGateway({ env: {} });
     const response = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
       method: "PUT",
       headers: {
-        cookie: `orkestrator_gateway_auth=${info.token}`,
+        authorization: `Bearer ${info.token}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({ token: "  replacement-token-123456  " }),
@@ -1184,7 +1182,6 @@ describe("remote gateway", () => {
 
     expect(response.status).toBe(200);
     expect(response.json()).toMatchObject({ token: "replacement-token-123456" });
-    expect(response.headers["set-cookie"]?.[0]).toContain("replacement-token-123456");
     expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe("replacement-token-123456");
   });
 

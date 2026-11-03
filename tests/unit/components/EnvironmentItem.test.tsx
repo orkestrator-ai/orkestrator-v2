@@ -123,6 +123,7 @@ import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
 import { useAppDialogStore } from "../../../apps/web/src/stores/appDialogStore";
+import { useMergePrRequestStore } from "../../../apps/web/src/stores/mergePrRequestStore";
 import {
   environmentMarkerState,
   sidebarActivityFromMarkerState,
@@ -1637,5 +1638,67 @@ describe("live-spec sidebar probe", () => {
     // A same-named label outside any row is passed over, not read as unknown.
     expect(readRow("probe-working")).toBe("working");
     expect(environmentMarkerState("probe-stopping")).toBeNull();
+  });
+});
+
+describe("EnvironmentItem Merge PR", () => {
+  const openPr = {
+    prUrl: "https://github.com/org/repo/pull/7",
+    prState: "open" as const,
+    hasMergeConflicts: false,
+  };
+
+  beforeEach(() => {
+    useMergePrRequestStore.setState({ request: null });
+  });
+
+  test("offers Merge PR first while the action bar would show its Merge PR button", () => {
+    const { container } = renderItem(makeEnvironment(openPr));
+
+    expect(contextMenuLabels(container)[0]).toBe("Merge PR");
+    expect(findMenuItem(container, "Merge PR")!.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  test("opens the environment and asks the action bar for its merge dialog", () => {
+    const onSelect = mock(
+      (_environmentId: string, _modifiers?: { shiftKey?: boolean; metaKey?: boolean }) => {},
+    );
+    const { container } = renderItem(makeEnvironment({ ...openPr, id: "env-merge" }), {
+      onSelect,
+      isMultiSelectMode: true,
+    });
+
+    fireEvent.click(findMenuItem(container, "Merge PR")!);
+
+    // A plain selection, as a click on the row, so multi-select is left.
+    expect(onSelect).toHaveBeenCalledWith("env-merge");
+    expect(useMergePrRequestStore.getState().request?.environmentId).toBe("env-merge");
+  });
+
+  test("is disabled, as the button is, while the container is not running", () => {
+    const onSelect = mock(() => {});
+    const { container } = renderItem(makeEnvironment({ ...openPr, status: "stopped" }), {
+      onSelect,
+    });
+
+    const item = findMenuItem(container, "Merge PR")!;
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(useMergePrRequestStore.getState().request).toBeNull();
+  });
+
+  test("is absent when the action bar shows no Merge PR button", () => {
+    for (const overrides of [
+      {},
+      { ...openPr, prState: "merged" as const },
+      { ...openPr, prState: "closed" as const },
+      { ...openPr, hasMergeConflicts: true },
+      { ...openPr, hasMergeConflicts: null },
+    ]) {
+      const { container, unmount } = renderItem(makeEnvironment(overrides));
+      expect(contextMenuLabels(container)).not.toContain("Merge PR");
+      unmount();
+    }
   });
 });

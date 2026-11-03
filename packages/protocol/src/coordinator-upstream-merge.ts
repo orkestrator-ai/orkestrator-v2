@@ -1,13 +1,17 @@
 import type { ProjectGitStatus } from "./coordinator.js";
 
 /**
- * The "merge upstream first?" question asked before a message to a project's
- * main coordinator. The backend decides whether to ask
- * (`check_coordinator_upstream_merge`) and remembers declines per project
- * (`decline_coordinator_upstream_merge`), so every client asks the same
- * question once; clients only show it. A project can instead be set to merge
- * every time without asking (`set_coordinator_upstream_auto_merge`), kept by
- * the backend on this machine. Browser-safe.
+ * Keeping a project's checkout on its upstream before a message to the main
+ * coordinator. The backend decides (`check_coordinator_upstream_merge`):
+ * whenever Git can fast-forward the checkout cleanly, it is fast-forwarded,
+ * without asking. Nothing is merged under a running turn or into a checkout a
+ * fast-forward would not apply to (local commits, uncommitted changes, an
+ * unfinished operation). Browser-safe.
+ *
+ * Earlier releases asked first, remembered declines
+ * (`decline_coordinator_upstream_merge`) and kept an "always merge" setting
+ * (`get/set_coordinator_upstream_auto_merge`). The backend still answers those
+ * commands for older clients, but neither changes the decision any more.
  */
 
 /** Why a behind checkout cannot be fast-forwarded, or null when it can. */
@@ -24,37 +28,20 @@ export function behindFastForwardBlocker(
   return status.repositoryOperationBlockedReason;
 }
 
-/** The upstream tip a declined merge was answered for. */
+/** The upstream tip an older client declined to merge (kept for compatibility only). */
 export interface DeclinedUpstreamMerge {
   upstream: string;
   upstreamCommit: string;
 }
 
 /**
- * Whether sending to the main coordinator should first offer to merge the
- * upstream commits this checkout has not merged.
- *
- * Only when merging can actually happen: an upstream is configured, the
- * checkout is behind it, and nothing blocks a fast-forward. A decline is
- * remembered against the upstream tip it was given for, so the question comes
- * back as soon as a new upstream commit arrives. A status that does not report
- * the tip cannot be matched to a decline, so it always asks.
+ * Whether the checkout can be fast-forwarded to upstream commits it has not
+ * merged: an upstream is configured, the checkout is behind it, and nothing
+ * blocks a fast-forward.
  */
-export function shouldOfferUpstreamMerge(
-  status: ProjectGitStatus | null | undefined,
-  declined: DeclinedUpstreamMerge | null | undefined,
-): boolean {
+export function canFastForwardUpstream(status: ProjectGitStatus | null | undefined): boolean {
   if (!status?.upstream || (status.behind ?? 0) <= 0) return false;
-  if (behindFastForwardBlocker(status)) return false;
-  if (
-    declined &&
-    status.upstreamCommit &&
-    declined.upstream === status.upstream &&
-    declined.upstreamCommit === status.upstreamCommit
-  ) {
-    return false;
-  }
-  return true;
+  return behindFastForwardBlocker(status) === null;
 }
 
 export const COORDINATOR_UPSTREAM_MERGE_SKIP_REASONS = [
@@ -66,7 +53,7 @@ export const COORDINATOR_UPSTREAM_MERGE_SKIP_REASONS = [
   "not-behind",
   /** Behind, but a fast-forward is blocked (local commits, changes, an operation). */
   "blocked",
-  /** The user already declined this upstream tip. */
+  /** Only from backends that still honoured a stored decline. */
   "declined",
 ] as const;
 
@@ -74,35 +61,25 @@ export type CoordinatorUpstreamMergeSkipReason =
   (typeof COORDINATOR_UPSTREAM_MERGE_SKIP_REASONS)[number];
 
 /**
- * The backend's answer to "ask before sending?". `status` is the refreshed
- * checkout. `automatic` means the project is set to always merge: the client
- * fast-forwards without showing the question. A client that predates it shows
- * the question, which is the safe reading.
+ * The backend's answer to "merge before sending?". `status` is the refreshed
+ * checkout. Current backends answer every offer `automatic`; the client
+ * fast-forwards, then sends. An offer without `automatic` comes only from an
+ * older backend, and current clients merge it all the same.
  */
 export type CoordinatorUpstreamMergeCheck =
   | { offer: true; status: ProjectGitStatus; automatic?: true }
   | { offer: false; reason: CoordinatorUpstreamMergeSkipReason; status: ProjectGitStatus | null };
 
-/**
- * The decision both the backend and an older-backend client apply. With
- * `autoMerge` a mergeable checkout is merged without asking, whatever was
- * declined before; a blocked one is still left alone.
- */
+/** The decision both the backend and an older-backend client apply. */
 export function decideUpstreamMergeOffer(
   status: ProjectGitStatus | null | undefined,
-  declined: DeclinedUpstreamMerge | null | undefined,
-  options: { autoMerge?: boolean } = {},
 ): CoordinatorUpstreamMergeCheck {
   if (!status) return { offer: false, reason: "no-status", status: null };
-  if (options.autoMerge && shouldOfferUpstreamMerge(status, null)) {
-    return { offer: true, status, automatic: true };
-  }
-  if (shouldOfferUpstreamMerge(status, declined)) return { offer: true, status };
+  if (canFastForwardUpstream(status)) return { offer: true, status, automatic: true };
   if (!status.upstream || (status.behind ?? 0) <= 0) {
     return { offer: false, reason: "not-behind", status };
   }
-  if (behindFastForwardBlocker(status)) return { offer: false, reason: "blocked", status };
-  return { offer: false, reason: "declined", status };
+  return { offer: false, reason: "blocked", status };
 }
 
 export function parseCoordinatorUpstreamMergeCheck(
@@ -152,7 +129,10 @@ export function isDeclinedUpstreamMerge(value: unknown): value is DeclinedUpstre
   );
 }
 
-/** Whether a project merges upstream commits without asking (`get/set_coordinator_upstream_auto_merge`). */
+/**
+ * The retired "always merge" setting (`get/set_coordinator_upstream_auto_merge`),
+ * still answered for older clients. It no longer changes anything.
+ */
 export interface CoordinatorUpstreamAutoMerge {
   enabled: boolean;
 }

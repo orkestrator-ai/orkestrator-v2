@@ -167,7 +167,9 @@ printf 'ORKESTRATOR_STORAGE status=ok initialized=2\\n'
           ok: true,
         });
         const call = await log.read();
-        expect(call).toContain("run --rm --network none --user root");
+        expect(call).toContain(
+          "run --rm --network none --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root",
+        );
         expect(call).toContain("--entrypoint /usr/local/bin/orkestrator-storage.sh");
         expect(call).toContain(`dst=/storage/workspace,volume-nocopy`);
         expect(call).toContain(`${IMAGE_ID} init env-lifecycle ${owner} set1 2`);

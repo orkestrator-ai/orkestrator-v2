@@ -4,7 +4,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   AlertCircle,
   CheckCircle2,
-  FastForward,
   GitBranch,
   Hourglass,
   Loader2,
@@ -78,18 +77,10 @@ import {
   selectCoordinatorPaneLayoutReady,
   useCoordinatorPaneLayoutStore,
 } from "@/stores/coordinatorPaneLayoutStore";
-import {
-  checkUpstreamMergeOffer,
-  declineUpstreamMerge,
-  getUpstreamAutoMerge,
-  setUpstreamAutoMerge,
-} from "@/lib/coordinator-upstream-check";
+import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
 
-/** How long a message waits on the pre-send fetch before it is sent without asking. */
+/** How long a message waits on the pre-send fetch before it is sent without merging. */
 const UPSTREAM_CHECK_TIMEOUT_MS = 5_000;
-
-/** "Always" merges now and saves the project's auto-merge setting. */
-type UpstreamMergeChoice = "merge" | "skip" | "always";
 
 interface CoordinatorPanelProps {
   projectId: string;
@@ -128,70 +119,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const [pendingMainClose, setPendingMainClose] = useState<{ id: string; title: string } | null>(
     null,
   );
-  // Asked before a message to the main coordinator when its checkout can merge
-  // upstream commits it has not merged: it would otherwise read older code.
-  const [upstreamMerge, setUpstreamMerge] = useState<{
-    status: ProjectGitStatus;
-    resolve: (choice: UpstreamMergeChoice) => void;
-  } | null>(null);
-  // Whether this machine merges the project's upstream commits without asking;
-  // null while unknown or when the backend cannot keep the setting.
-  const [autoMerge, setAutoMerge] = useState<{ projectId: string; enabled: boolean } | null>(null);
-  const autoMergeEnabled = autoMerge?.projectId === projectId ? autoMerge.enabled : null;
-  const [preferenceError, setPreferenceError] = useState<string | null>(null);
-  const preferenceRevision = useRef(0);
-  const invalidatePreferenceReads = useCallback(() => {
-    ++preferenceRevision.current;
-  }, []);
-  const refreshAutoMerge = useCallback(async () => {
-    const revision = ++preferenceRevision.current;
-    const enabled = await getUpstreamAutoMerge(projectId);
-    if (revision === preferenceRevision.current) {
-      setAutoMerge(enabled === null ? null : { projectId, enabled });
-    }
-    return enabled;
-  }, [projectId]);
-  useEffect(() => {
-    const refresh = () => {
-      void refreshAutoMerge().catch(() => undefined);
-    };
-    refresh();
-    const timer = setInterval(refresh, 10_000);
-    window.addEventListener("focus", refresh);
-    window.addEventListener("online", refresh);
-    return () => {
-      invalidatePreferenceReads();
-      clearInterval(timer);
-      window.removeEventListener("focus", refresh);
-      window.removeEventListener("online", refresh);
-    };
-  }, [refreshAutoMerge, invalidatePreferenceReads]);
-  const changeAutoMerge = useCallback(
-    async (enabled: boolean) => {
-      ++preferenceRevision.current;
-      setPreferenceError(null);
-      try {
-        const saved = await setUpstreamAutoMerge(projectId, enabled);
-        ++preferenceRevision.current;
-        setAutoMerge({ projectId, enabled: saved });
-        return saved;
-      } catch (cause) {
-        setPreferenceError(
-          "Could not save the merge setting. " +
-            (cause instanceof Error ? cause.message : "Please try again."),
-        );
-        throw cause;
-      }
-    },
-    [projectId],
-  );
   const upstreamCheckLifetimeRef = useRef<AbortController | null>(null);
   useEffect(() => {
     const lifetime = new AbortController();
     upstreamCheckLifetimeRef.current = lifetime;
     return () => lifetime.abort();
   }, [projectId]);
-  const mergeActionRef = useRef<HTMLButtonElement>(null);
   const [actionError, setError] = useState<string | null>(null);
   const error = actionError ?? loadError;
   const [pendingLaunch, setPendingLaunch] = useState<{
@@ -438,23 +371,19 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    * branch is behind its upstream is answered from older code. Before each
    * message to the main coordinator (its first prompt included), the backend
    * refreshes the "behind" state with a cooldown-bound fetch and decides
-   * whether to ask about merging the upstream commits
-   * (`check_coordinator_upstream_merge`); this panel only asks.
+   * whether the upstream commits can be merged
+   * (`check_coordinator_upstream_merge`). Whenever Git can fast-forward the
+   * checkout cleanly, the panel does so without asking.
    *
    * Merging resolves only after the fast-forward, so the message then reads
-   * the merged code; a failed fast-forward rejects, which the composer reports
-   * with the draft kept. Declining resolves straight away and is remembered by
-   * the backend against the upstream tip, on every client, so the question
-   * returns only with new commits. A blocked checkout (local commits,
-   * uncommitted changes, an unfinished operation) is not asked about: the
-   * header already says why it cannot sync. Nor is one while any of this
-   * coordinator's conversations or the project home is running a turn, since
-   * the backend refuses to change the checkout under it.
-   *
-   * "Always merge" saves a per-project setting in this machine's backend; from
-   * then on the backend answers `automatic` and the panel fast-forwards
-   * without asking, under the same conditions, until the toolbar toggle turns
-   * it off.
+   * the merged code. A fast-forward that fails anyway (the remote moved, the
+   * network dropped) is reported in the toolbar and the message is still
+   * sent: nobody is asked any more, so a failure must not strand the draft
+   * with no way to send it. A blocked checkout (local commits, uncommitted
+   * changes, an unfinished operation) is left alone: the header already says
+   * why it cannot sync. So is one while any of this coordinator's
+   * conversations or the project home is running a turn, since the backend
+   * refuses to change the checkout under it.
    */
   const confirmUpstreamMerge = useCallback(
     async (conversation: { role?: string }) => {
@@ -502,7 +431,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       });
       try {
         // An unreachable or slow remote is no reason to hold the message: past
-        // the bound it is sent without asking, and the fetch still lands.
+        // the bound it is sent without merging, and the fetch still lands.
         let timer: ReturnType<typeof setTimeout> | undefined;
         const check = await Promise.race([
           cancelled,
@@ -518,27 +447,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         ]).finally(() => clearTimeout(timer));
         if (lifetime.signal.aborted || check === false) return false;
         if (!check?.offer) return;
-        void refreshAutoMerge().catch(() => undefined);
-        const status = check.status;
-        if (check.automatic) {
-          setAutoMerge({ projectId, enabled: true });
-        } else {
-          const choice = await Promise.race([
-            cancelled,
-            new Promise<UpstreamMergeChoice>((resolve) => setUpstreamMerge({ status, resolve })),
-          ]);
-          if (lifetime.signal.aborted || choice === false) return false;
-          setUpstreamMerge(null);
-          if (choice === "skip") {
-            // Best effort: a lost decline only means the question is asked again.
-            void declineUpstreamMerge(projectId, status).catch(() => undefined);
-            return;
-          }
-          if (choice === "always") {
-            // Save errors remain visible while the current merge proceeds.
-            void changeAutoMerge(true).catch(() => undefined);
-          }
-        }
         setOperation("sync");
         setError(null);
         try {
@@ -548,16 +456,17 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           await refreshView();
           if (lifetime.signal.aborted) return false;
         } catch (cause) {
+          if (lifetime.signal.aborted) return false;
           if (
             cause instanceof Error &&
             cause.message === "Stop the active coordinator turn before changing the checkout"
           )
             return;
+          setError(cause instanceof Error ? cause.message : "Could not merge the upstream commits");
           void backend
             .getProjectGitStatus(projectId)
             .then(setGit)
             .catch(() => undefined);
-          throw cause;
         } finally {
           if (!lifetime.signal.aborted) setOperation(null);
         }
@@ -565,7 +474,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         lifetime.signal.removeEventListener("abort", cancel);
       }
     },
-    [changeAutoMerge, projectId, refreshAutoMerge, refreshView, setGit],
+    [projectId, refreshView, setGit],
   );
   const startConversation = useCallback(
     async (
@@ -1077,35 +986,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             ) : null}
             {gitSummary(git)}
           </span>
-          {autoMergeEnabled !== null ? (
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="Always merge upstream commits"
-              aria-pressed={autoMergeEnabled}
-              title={
-                autoMergeEnabled
-                  ? "Upstream commits are merged before each coordinator message without asking, on this machine. Click to ask again."
-                  : "Merge upstream commits before each coordinator message without asking, on this machine"
-              }
-              disabled={operation !== null}
-              className={cn(autoMergeEnabled && "bg-emerald-500/15 text-emerald-300")}
-              onClick={() => {
-                setError(null);
-                void refreshAutoMerge()
-                  .then((enabled) => {
-                    if (enabled !== null) return changeAutoMerge(!enabled);
-                  })
-                  .catch((cause) =>
-                    setPreferenceError(
-                      cause instanceof Error ? cause.message : "Could not save the merge setting",
-                    ),
-                  );
-              }}
-            >
-              <FastForward className="size-4" />
-            </Button>
-          ) : null}
           {canSync ? (
             <Button
               size="sm"
@@ -1148,11 +1028,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           </p>
         ) : null}
         {blocked && switchBlocked ? <p className="mt-1 text-xs text-amber-300">{blocked}</p> : null}
-        {preferenceError ? (
-          <p role="alert" className="mt-1 text-xs text-red-300">
-            {preferenceError}
-          </p>
-        ) : null}
         {gitError ? <CoordinatorErrorDetails label="Repository error" message={gitError} /> : null}
         {coordinatorError ? (
           <CoordinatorErrorDetails label="Coordinator error" message={coordinatorError} />
@@ -1366,53 +1241,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               }}
             >
               Close conversation
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <AlertDialog
-        open={upstreamMerge !== null}
-        onOpenChange={(open) => {
-          // Escape and "Don't merge" both send without merging.
-          if (!open) upstreamMerge?.resolve("skip");
-        }}
-      >
-        <AlertDialogContent
-          onOpenAutoFocus={(event) => {
-            // Enter merges: the default action, not the dismissal Radix focuses.
-            event.preventDefault();
-            mergeActionRef.current?.focus();
-          }}
-        >
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Merge {upstreamMerge?.status.behind} upstream{" "}
-              {upstreamMerge?.status.behind === 1 ? "commit" : "commits"}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              There {upstreamMerge?.status.behind === 1 ? "is" : "are"}{" "}
-              {upstreamMerge?.status.behind} upstream{" "}
-              {upstreamMerge?.status.behind === 1 ? "commit" : "commits"} on{" "}
-              {upstreamMerge?.status.upstream} that{" "}
-              {upstreamMerge?.status.behind === 1 ? "hasn’t" : "haven’t"} been merged into{" "}
-              {upstreamMerge?.status.branch ?? "this checkout"}. Do you wish to merge{" "}
-              {upstreamMerge?.status.behind === 1 ? "it" : "them"}? Merging fast-forwards the
-              checkout before your message is sent, so the coordinator reads the latest code.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Don’t merge</AlertDialogCancel>
-            {autoMergeEnabled !== null ? (
-              <Button
-                variant="outline"
-                title="Merge now, and from now on merge upstream commits for this project without asking (on this machine)"
-                onClick={() => upstreamMerge?.resolve("always")}
-              >
-                Always merge
-              </Button>
-            ) : null}
-            <AlertDialogAction ref={mergeActionRef} onClick={() => upstreamMerge?.resolve("merge")}>
-              Merge and send
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

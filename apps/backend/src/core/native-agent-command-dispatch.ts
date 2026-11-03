@@ -18,6 +18,7 @@ import {
   type NativeAgentBridgeCommandInvocation,
 } from "@orkestrator/protocol/agent-command-catalogue";
 import {
+  compactInstructionsFromArguments,
   GOAL_COMMAND_ID,
   parseCommandToken,
   resolveCommandInvocation,
@@ -43,7 +44,17 @@ export type CommandDispatchPlan =
       /** The resolved command's display name, for bounded diagnostics only. */
       commandName?: string;
     }
-  | { kind: "session-action"; action: "compact"; commandName: string }
+  | {
+      kind: "session-action";
+      action: "compact";
+      commandName: string;
+      /**
+       * Text after `/compact`, trimmed. Only present when the row accepted
+       * arguments, which it does only where the platform advertises
+       * `actions.compactInstructions`.
+       */
+      instructions?: string;
+    }
   /** Acts on the goal record: nothing is journaled and no turn is disturbed. */
   | { kind: "goal"; commandName: string; arguments: string }
   | {
@@ -160,7 +171,13 @@ export function planCommandDispatch(input: CommandDispatchInput): CommandDispatc
   if (attachmentError) return { kind: "rejected", message: attachmentError };
   if (command.executionKind === "session-action") {
     if (command.id === "orkestrator:compact") {
-      return { kind: "session-action", action: "compact", commandName: command.name };
+      const instructions = compactInstructionsFromArguments(token.arguments);
+      return {
+        kind: "session-action",
+        action: "compact",
+        commandName: command.name,
+        ...(instructions ? { instructions } : {}),
+      };
     }
     if (command.id === GOAL_COMMAND_ID) {
       return { kind: "goal", commandName: command.name, arguments: token.arguments };

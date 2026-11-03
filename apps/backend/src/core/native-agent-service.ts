@@ -59,6 +59,7 @@ import {
   createNativeAgentProvider,
   isValidInteractionMetadata,
   nativeAgentSessionStorageKey,
+  compactInstructionsRefusal,
   nativeCapabilities,
   nonBlank,
   readProviderStatus,
@@ -3418,7 +3419,7 @@ export class NativeAgentService {
           session.key,
           input.requestId,
           async (durable) => {
-            await this.performCommandSessionAction(input, durable, provider, commandPlan.action);
+            await this.performCommandSessionAction(input, durable, provider, commandPlan);
           },
         );
         return result.session;
@@ -3878,12 +3879,14 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
     session: PersistedNativeAgentSession,
     provider: NativeAgentRuntimeProvider,
-    action: "compact",
+    plan: Extract<CommandDispatchPlan, { kind: "session-action" }>,
   ): Promise<void> {
     const label = AGENT_PLATFORM_LABELS[input.agent] ?? input.agent;
     if (!nativeCapabilities(input.agent).actions?.compact || !provider.performSessionAction) {
       throw new PromptRejectedError(`${label} does not support /compact here.`);
     }
+    const refusal = compactInstructionsRefusal(input.agent, plan.instructions);
+    if (refusal) throw new PromptRejectedError(refusal);
     if (session.pendingDispatch || session.pendingSteer) {
       throw new PromptRejectedError(PARKED_DISPATCH_CONFLICT_MESSAGE);
     }
@@ -3897,9 +3900,13 @@ export class NativeAgentService {
       );
     }
     const outcome = await provider.performSessionAction(session.providerSessionId, {
-      kind: action,
+      kind: plan.action,
+      ...(plan.instructions ? { instructions: plan.instructions } : {}),
     });
     this.projections.invalidateProjection(session.key);
+    // An applied outcome with `instructionsIgnored` still succeeds: the
+    // compaction ran, and refusing now would invite a second one. The bridge
+    // adapter has already counted and logged the older bridge.
     if (outcome.outcome !== "applied") {
       throw new PromptRejectedError(
         outcome.outcome === "idle"

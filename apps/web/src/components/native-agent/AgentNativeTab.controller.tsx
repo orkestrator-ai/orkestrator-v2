@@ -2103,10 +2103,21 @@ export function SharedNativeAgentController({
         submitInFlightRef.current = true;
         setIsSubmitting(true);
         try {
-          const outcome = await performAction({ kind: "compact" });
+          const outcome = await performAction({
+            kind: "compact",
+            ...(commandSubmission.instructions
+              ? { instructions: commandSubmission.instructions }
+              : {}),
+          });
           if (outcome.outcome === "applied") {
             clearDraft(sessionKey);
             discardProvisionalDraft();
+            if (outcome.instructionsIgnored) {
+              // It did compact, so the draft goes; retrying would compact twice.
+              reportSendError(
+                `${label} compacted without your instructions: this environment's agent bridge predates them. Restart the environment to update it.`,
+              );
+            }
             return true;
           }
           if (outcome.outcome !== "unknown") {

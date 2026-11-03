@@ -150,6 +150,7 @@ describe("native agent capability table", () => {
     expect(nativeAgentCapabilities("claude").actions).toEqual({
       goal: true,
       compact: true,
+      compactInstructions: true,
       rewindFiles: true,
       steer: true,
     });
@@ -188,8 +189,23 @@ describe("native agent capability table", () => {
         mode: false,
         executionProfile: false,
       },
-      actions: { compact: true, steer: true, rewindMessages: true, branches: true },
+      actions: {
+        compact: true,
+        compactInstructions: true,
+        steer: true,
+        rewindMessages: true,
+        branches: true,
+      },
     });
+
+    // Compaction instructions reach only providers whose compaction takes
+    // them: Codex `thread/compact/start`, OpenCode `session.summarize`, Cursor
+    // `agent.summarize()` and Grok's unverified `/compact` do not.
+    for (const platform of AGENT_PLATFORMS) {
+      expect(nativeAgentCapabilities(platform).actions?.compactInstructions === true).toBe(
+        platform === "claude" || platform === "pi",
+      );
+    }
 
     // Only Claude reports execution profiles, local settings or prompt
     // suggestions today, and the projection is now gated on these rather than on

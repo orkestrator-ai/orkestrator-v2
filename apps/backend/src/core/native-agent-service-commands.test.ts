@@ -343,6 +343,64 @@ describe("NativeAgentService command intent", () => {
     });
   });
 
+  test("/compact <instructions> reaches a Pi provider with its instructions", async () => {
+    const stub = providerStub("pi", {
+      catalogue: async () => ({ enhanced: true, status: "ready", commands: [] }),
+      performSessionAction: async () => ({ outcome: "applied" }),
+    });
+    await withService(stub.provider, async ({ service }) => {
+      await expect(
+        service.dispatchIntent({
+          ...base,
+          agent: "pi",
+          prompt: "/compact keep the failing test names",
+          requestId: "c-pi",
+        }),
+      ).resolves.toMatchObject({ outcome: "accepted" });
+      expect(stub.performSessionAction).toHaveBeenCalledWith("provider-session", {
+        kind: "compact",
+        instructions: "keep the failing test names",
+      });
+      expect(stub.send).not.toHaveBeenCalled();
+    });
+  });
+
+  test("an older bridge that ignored the instructions still counts as compacted", async () => {
+    // The compaction ran; refusing now would invite the user to run it twice.
+    const stub = providerStub("pi", {
+      catalogue: async () => ({ enhanced: true, status: "ready", commands: [] }),
+      performSessionAction: async () => ({ outcome: "applied", instructionsIgnored: true }),
+    });
+    await withService(stub.provider, async ({ service }) => {
+      await expect(
+        service.dispatchIntent({
+          ...base,
+          agent: "pi",
+          prompt: "/compact keep the plan",
+          requestId: "c-old",
+        }),
+      ).resolves.toMatchObject({ outcome: "accepted" });
+      expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("/compact <instructions> is refused where the provider cannot take them", async () => {
+    const stub = providerStub("codex", {
+      catalogue: async () => ({ enhanced: true, status: "ready", commands: [] }),
+      performSessionAction: async () => ({ outcome: "applied" }),
+    });
+    await withService(stub.provider, async ({ service }) => {
+      const outcome = await service.dispatchIntent({
+        ...base,
+        agent: "codex",
+        prompt: "/compact keep the plan",
+        requestId: "c-codex",
+      });
+      expect(outcome).toMatchObject({ outcome: "rejected" });
+      expect(stub.performSessionAction).not.toHaveBeenCalled();
+    });
+  });
+
   test("an idle-only provider command is refused while its session is running", async () => {
     const stub = providerStub("claude", {
       status: async () => "running",

@@ -1961,6 +1961,54 @@ describe("compaction", () => {
     const response = await call(`/session/${state.id}/compact`, { method: "POST" });
     expect(response.status).toBe(409);
   });
+  function compactingSession(state: ReturnType<typeof seedSession>): unknown[][] {
+    const calls: unknown[][] = [];
+    state.session = {
+      compact: async (...args: unknown[]) => {
+        calls.push(args);
+      },
+    } as unknown as AgentSession;
+    return calls;
+  }
+
+  test("a plain compaction sends Pi no instructions, as older backends expect", async () => {
+    const state = seedSession();
+    const calls = compactingSession(state);
+    const response = await call(`/session/${state.id}/compact`, { method: "POST" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ compacted: true });
+    expect(calls).toEqual([[undefined]]);
+    expect(state.compacting).toBe(false);
+    expect(state.dispatching).toBe(false);
+  });
+
+  test("passes instructions to Pi's compact and confirms them", async () => {
+    const state = seedSession();
+    const calls = compactingSession(state);
+    const response = await call(`/session/${state.id}/compact`, {
+      method: "POST",
+      body: JSON.stringify({ instructions: "  keep the failing test names  " }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ compacted: true, instructions: "applied" });
+    expect(calls).toEqual([["keep the failing test names"]]);
+  });
+
+  test("refuses malformed instructions without compacting or keeping the claim", async () => {
+    const state = seedSession();
+    const calls = compactingSession(state);
+    for (const body of [
+      JSON.stringify({ instructions: 42 }),
+      JSON.stringify({ instructions: "x".repeat(16_001) }),
+      "{not json",
+    ]) {
+      const response = await call(`/session/${state.id}/compact`, { method: "POST", body });
+      expect(response.status).toBe(400);
+    }
+    expect(calls).toEqual([]);
+    expect(state.compacting).toBe(false);
+    expect(state.dispatching).toBe(false);
+  });
 });
 
 describe("cancel", () => {

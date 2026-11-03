@@ -1035,6 +1035,15 @@ export interface NativeAgentCapabilities {
   /** Platform-specific behavior exposed through the shared session surface. */
   actions?: {
     compact?: boolean;
+    /**
+     * The compact action honours optional instructions for the summary
+     * (`/compact <instructions>`). Only providers whose compaction takes them
+     * set it: Claude's CLI `/compact <instructions>` and Pi's
+     * `session.compact(customInstructions)`. Codex `thread/compact/start` and
+     * OpenCode `session.summarize` take none, so `/compact` refuses arguments
+     * there rather than dropping them.
+     */
+    compactInstructions?: boolean;
     rewindFiles?: boolean;
     undo?: boolean;
     redo?: boolean;
@@ -1182,7 +1191,7 @@ function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
         // Claude's permission mode rides on each prompt request.
         modeScope: "turn",
       },
-      actions: { compact: true, rewindFiles: true, steer: true },
+      actions: { compact: true, compactInstructions: true, rewindFiles: true, steer: true },
       // Questions through `AskUserQuestion`, plan approvals through
       // `ExitPlanMode`, tool approvals through `canUseTool` (raised only
       // under an `ask` execution policy), and MCP elicitations through
@@ -1239,7 +1248,13 @@ function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
         speed: false,
         mode: false,
       },
-      actions: { compact: true, steer: true, rewindMessages: true, branches: true },
+      actions: {
+        compact: true,
+        compactInstructions: true,
+        steer: true,
+        rewindMessages: true,
+        branches: true,
+      },
       // Pi asks only under an `ask` execution policy, so this is what the
       // platform *may* raise. The live session reports the empty set under any
       // other policy — see `publicInteractionKinds` in the bridge.
@@ -1265,8 +1280,45 @@ function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
   };
 }
 
+/**
+ * Longest compaction instructions accepted, in UTF-16 code units. Generous for
+ * a hand-written focus note; bounded because the text is forwarded verbatim to
+ * the bridge and on to the provider.
+ */
+export const COMPACT_INSTRUCTIONS_MAX_LENGTH = 16_000;
+
+/**
+ * Read the optional `{ "instructions": "…" }` body of a bridge's
+ * `POST /session/:id/compact`. A missing body, a missing field and blank text
+ * all mean a plain compaction; anything else malformed is refused, so text
+ * meant for the summary is never dropped on the way.
+ */
+export function parseCompactInstructionsBody(
+  body: unknown,
+): { ok: true; instructions?: string } | { ok: false; error: string } {
+  if (body === undefined || body === null) return { ok: true };
+  if (typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "Compact request body must be an object" };
+  }
+  const raw = (body as { instructions?: unknown }).instructions;
+  if (raw === undefined) return { ok: true };
+  if (typeof raw !== "string") return { ok: false, error: "instructions must be a string" };
+  const instructions = raw.trim();
+  if (instructions.length > COMPACT_INSTRUCTIONS_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `instructions must be at most ${COMPACT_INSTRUCTIONS_MAX_LENGTH} characters`,
+    };
+  }
+  return instructions ? { ok: true, instructions } : { ok: true };
+}
+
 export type NativeAgentSessionAction =
-  | { kind: "compact"; modelId?: string }
+  /**
+   * `instructions` steer what the summary keeps. Only sent where the platform
+   * advertises `actions.compactInstructions`; the backend refuses it elsewhere.
+   */
+  | { kind: "compact"; modelId?: string; instructions?: string }
   | { kind: "rewind-files"; messageId: string; dryRun?: boolean }
   | { kind: "undo"; messageId?: string }
   | { kind: "redo" }
@@ -1284,6 +1336,11 @@ export type NativeAgentSessionAction =
 export type NativeAgentSessionActionOutcome =
   | {
       outcome: "applied" | "idle" | "mismatch" | "unknown";
+      /**
+       * The compaction ran, but the bridge did not confirm it used the
+       * instructions that were sent: it predates them and dropped them.
+       */
+      instructionsIgnored?: boolean;
       shareUrl?: string;
       preview?: unknown;
       requestId?: string;

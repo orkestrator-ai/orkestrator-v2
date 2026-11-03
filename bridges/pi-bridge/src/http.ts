@@ -87,6 +87,7 @@ import { changeEvidence } from "./change-evidence.js";
 import {
   DISPATCH_OUTCOME_LOST_KIND,
   isNativeAgentExecutionPolicy,
+  parseCompactInstructionsBody,
 } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -707,7 +708,7 @@ async function routeSession(
     return await handleCancel(response, state);
   }
   if (action === "compact" && request.method === "POST") {
-    return await handleCompact(response, state);
+    return await handleCompact(request, response, state);
   }
   if (action === "steer" && request.method === "POST") {
     return await handleSteer(request, response, state);
@@ -902,8 +903,17 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
  * Refused while a turn is running: Pi's manual compaction aborts the current
  * operation first, so allowing it mid-turn would silently cancel the turn the
  * user is watching in order to shrink its context.
+ *
+ * An optional `{ instructions }` body becomes Pi's `customInstructions` for
+ * the summary. `instructions: "applied"` in the answer is how the backend
+ * tells this bridge from one that predates the body and would have compacted
+ * without them.
  */
-async function handleCompact(response: ServerResponse, state: SessionState): Promise<void> {
+async function handleCompact(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: SessionState,
+): Promise<void> {
   assertSessionOpen(state);
   if (
     state.status === "running" ||
@@ -922,9 +932,15 @@ async function handleCompact(response: ServerResponse, state: SessionState): Pro
   state.dispatching = true;
   state.compacting = true;
   state.revision += 1;
+  let instructions: string | undefined;
   try {
+    // Read under the claim: the body arrives after the busy check, and a
+    // prompt must not slip into the gap. Older backends send no body.
+    const parsed = parseCompactInstructionsBody(await readJson(request));
+    if (!parsed.ok) throw new HttpError(400, parsed.error);
+    instructions = parsed.instructions;
     const session = await ensureSession(state);
-    await session.compact();
+    await session.compact(instructions);
   } finally {
     state.compacting = false;
     state.dispatching = false;
@@ -934,7 +950,11 @@ async function handleCompact(response: ServerResponse, state: SessionState): Pro
       .then(() => schedulePersist())
       .catch(() => undefined);
   }
-  return json(response, 200, { compacted: true });
+  return json(
+    response,
+    200,
+    instructions ? { compacted: true, instructions: "applied" } : { compacted: true },
+  );
 }
 
 /**

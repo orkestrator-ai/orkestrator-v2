@@ -89,7 +89,7 @@ The material risks are concentrated in four themes:
 | --- | --- | --- | --- | --- |
 | H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Verified (browser behaviour: standard) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Verified |
-| H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Verified code / Potential runtime |
+| H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §4) |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Verified |
@@ -178,8 +178,16 @@ Docker, since there is no `--privileged` and no docker.sock mount.
 
 ### H3. `.env`, `.env.local` and `opencode.json` symlinks in the project checkout bind-mount arbitrary host paths into the container
 
-**Status:** Verified code / Potential runtime (Docker resolves bind-mount
-source symlinks on the host; not exercised here)
+**Status:** Fixed. The three files are no longer bind-mounted. Before the
+container is created the backend `lstat`s each one and reads it only when it
+is a regular file, not a link, whose `realpath` stays inside the project
+(opened `O_NOFOLLOW`, same inode, at most 1 MiB); those bytes are copied into
+the stopped container with `docker cp`. A refused file is skipped, recorded on
+the container and explained in the setup terminal. See
+[container-lifecycle.md](../architecture/container-lifecycle.md#project-seed-files).
+The other `bindIfExists` callers mount the user's own host agent homes and
+`~/.gitconfig` (images without staged inputs), not repository content, and
+were left as they are. The original finding follows.
 **Actors:** A2, then A1
 
 **Where:** `apps/backend/src/core/commands-containers.ts:422-424, 546-553`

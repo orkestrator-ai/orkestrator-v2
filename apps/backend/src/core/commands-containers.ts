@@ -23,6 +23,7 @@ import {
   DOCKER_LABEL_OPERATION_ID,
   DOCKER_LABEL_INPUTS_REVISION,
   DOCKER_LABEL_NETWORK_POLICY,
+  DOCKER_LABEL_PROJECT_SEED_REFUSED,
   DOCKER_LABEL_RUNTIME_GENERATION,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
@@ -32,6 +33,12 @@ import { dockerContainerRuntimeName, dockerOwnerNamespace } from "./docker-owner
 import { defaultRepositoryConfig } from "./storage.js";
 import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "./agent-tools.js";
 import { pathExists, runCommand } from "./shell.js";
+import {
+  copyProjectSeedFilesIntoContainer,
+  PROJECT_SEED_FILES,
+  projectSeedRefusalLabel,
+  readProjectSeedFiles,
+} from "./container-project-seed-files.js";
 import type {
   Environment,
   ClaudeEffortLevel,
@@ -204,11 +211,13 @@ export async function createDockerContainer(
   const repoConfig = config.repositories[project.id] ?? defaultRepositoryConfig();
   const seedRoot = seedFilesDir(context.storage.getDataDir(), environment.id);
   const seededFiles = await readSeedManifest(seedRoot);
-  const configuredFilesToCopy = normalizeConfiguredProjectFiles([
+  const allFilesToCopy = normalizeConfiguredProjectFiles([
     ...(repoConfig.filesToCopy ?? []),
     ...seededFiles,
   ]);
-  if (configuredFilesToCopy.length > 0 && !project.localPath) {
+  const seedNames = new Set<string>(PROJECT_SEED_FILES.map((file) => file.name));
+  const configuredFilesToCopy = allFilesToCopy.filter((name) => !seedNames.has(name));
+  if (allFilesToCopy.length > 0 && !project.localPath) {
     throw new Error("Project has files configured to copy, but no local path is set");
   }
   // Agent-test fixtures use a deterministic bare repository on the host. A host
@@ -551,16 +560,23 @@ export async function createDockerContainer(
     }
   }
 
-  // A command node may have staged seed files this node's project root lacks;
-  // the node's own copy always wins.
-  if (project.localPath) {
-    for (const envFile of [".env", ".env.local"]) {
-      const own = path.join(project.localPath, envFile);
-      // Staged dotenv files are copied into the stopped container with the
-      // other seed inputs below, so no host secret mount survives setup.
-      await bindIfExists(own, `/project-env/${envFile}`);
-    }
-    await bindIfExists(path.join(project.localPath, "opencode.json"), "/opencode-project-json");
+  // The project's own `.env`, `.env.local` and `opencode.json` are read and
+  // checked now and copied into the stopped container below, never bound: a
+  // bind source is resolved by the daemon on the host, so a committed link
+  // could mount any host path. A refused file is skipped and recorded on the
+  // container for the setup terminal. Command-node fallback seeds go through
+  // the same reader; generic configured-file staging cannot reread these names.
+  const projectSeedFiles = project.localPath
+    ? await readProjectSeedFiles(project.localPath, seedRoot, allFilesToCopy)
+    : { accepted: [], refused: [] };
+  for (const { name, reason } of projectSeedFiles.refused) {
+    dockerLog.warn("project-seed.refused", { environmentId: environment.id, file: name, reason });
+  }
+  if (projectSeedFiles.refused.length > 0) {
+    args.push(
+      "--label",
+      `${DOCKER_LABEL_PROJECT_SEED_REFUSED}=${projectSeedRefusalLabel(projectSeedFiles.refused)}`,
+    );
   }
 
   const publishArgs = [
@@ -699,6 +715,7 @@ export async function createDockerContainer(
     void pruneEnvironmentInputRevisions(environment.id, context).catch(() => undefined);
   }
   try {
+    await copyProjectSeedFilesIntoContainer(containerId, projectSeedFiles.accepted);
     if (project.localPath) {
       await stageConfiguredProjectFilesForContainer(
         containerId,

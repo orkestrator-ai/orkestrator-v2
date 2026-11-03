@@ -10,6 +10,8 @@ export interface SegmentedSelectorOption<T extends string> {
    * out of flow and take no pointer events or focus; the selector only hosts it.
    */
   overlay?: ReactNode;
+  /** Classes for this option's button alone, applied after `buttonClassName`. */
+  className?: string;
   disabled?: boolean;
   panelId?: string;
 }
@@ -90,6 +92,7 @@ export function SegmentedSelector<T extends string>({
                 : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
               option.overlay && "relative",
               buttonClassName,
+              option.className,
             )}
           >
             {option.icon}

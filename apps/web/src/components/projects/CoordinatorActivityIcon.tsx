@@ -56,8 +56,9 @@ export function CoordinatorActivityIcon({
  * scrolling container or a neighbour cannot clip it and it changes no layout.
  * It takes its colour from the tab's text, which already contrasts with the
  * tab's fill, and sits 1px in so that fill shows on both sides of it: at the very
- * edge, white on a blue tab would melt into a pale bar. The parent's inset focus
- * ring would sit underneath it, so a focused parent moves it just inside that ring.
+ * edge, white on a blue tab would melt into a pale bar. The parent's 2px inset
+ * focus ring would sit underneath it, so a focused parent moves it inside that
+ * ring and leaves a 1px gap, or the two would read as one thick band.
  */
 export function CoordinatorWorkingOutline() {
   const ringRef = useRef<HTMLSpanElement>(null);
@@ -67,7 +68,7 @@ export function CoordinatorWorkingOutline() {
       data-testid="coordinator-working-outline"
       data-shape="square"
       aria-hidden="true"
-      className="pointer-events-none absolute inset-px rounded-[inherit] [:focus-visible>&]:inset-0.5"
+      className="pointer-events-none absolute inset-px rounded-[inherit] [:focus-visible>&]:inset-[3px]"
     >
       <span
         ref={ringRef}

@@ -597,6 +597,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </CoordinatorActivityIcon>
               ),
               overlay: coordinatorActivity === "working" ? <CoordinatorWorkingOutline /> : null,
+              // The default ring is the selected fill's blue, and forced colours
+              // drop box-shadows, so either would leave this tab's focus unseen.
+              className:
+                "focus-visible:ring-current forced-colors:focus-visible:outline-2 forced-colors:focus-visible:-outline-offset-2 forced-colors:focus-visible:outline-solid forced-colors:focus-visible:outline-[Highlight]",
               panelId: "project-panel-coordinator",
             },
             {
@@ -640,6 +644,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             label: string;
             icon: ReactNode;
             overlay?: ReactNode;
+            className?: string;
             panelId: string;
           }>
         }

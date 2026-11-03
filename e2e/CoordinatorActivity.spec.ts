@@ -22,6 +22,50 @@ const boxInTablist = (tab: Locator) =>
     };
   });
 
+/** Light surface and text tokens; the app ships no light theme to switch to. */
+const SIMULATED_LIGHT = `:root {
+  --color-background: #ffffff;
+  --color-chrome: #ffffff;
+  --color-foreground: #18181b;
+  --color-muted-foreground: #52525b;
+  --color-elevated: #f4f4f5;
+}`;
+
+/** The first opaque background at or behind an element. */
+const surfaceColor = (element: Locator) =>
+  element.evaluate((start) => {
+    let surface: Element | null = start;
+    while (surface && getComputedStyle(surface).backgroundColor === "rgba(0, 0, 0, 0)")
+      surface = surface.parentElement;
+    return getComputedStyle(surface!).backgroundColor;
+  });
+
+/** The WCAG contrast ratio between two CSS colors. */
+const contrast = (page: Page, first: string, second: string) =>
+  page.evaluate(
+    ([a, b]) => {
+      // Canvas resolves both rgb and oklch computed colors into sRGB bytes.
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext("2d")!;
+      const luminance = (color: string) => {
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, 1, 1);
+        const values = Array.from(ctx.getImageData(0, 0, 1, 1).data)
+          .slice(0, 3)
+          .map((v) => {
+            const n = v / 255;
+            return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+          });
+        return values[0]! * 0.2126 + values[1]! * 0.7152 + values[2]! * 0.0722;
+      };
+      const [x, y] = [luminance(a!), luminance(b!)];
+      return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+    },
+    [first, second],
+  );
+
 test("a coordinator's activity shows on its tab and its project heading", async ({ page }) => {
   await page.goto("/coordinator-activity");
   const tab = coordinatorTab(page);
@@ -132,25 +176,65 @@ test("the tab's spinner follows its outline, unclipped, on the shared timeline",
   expect(await scrollWidth()).toBe(workingWidth);
 });
 
-test("the tab's focus ring stays visible beside the spinner", async ({ page }) => {
+for (const palette of ["dark", "simulated-light"] as const) {
+  for (const selected of [true, false]) {
+    test(`the tab's focus ring contrasts beside the spinner: ${palette}, selected=${selected}`, async ({
+      page,
+    }) => {
+      await page.goto("/coordinator-activity");
+      await page.addStyleTag({ content: "*, *::before { transition: none !important; }" });
+      if (palette === "simulated-light") await page.addStyleTag({ content: SIMULATED_LIGHT });
+      const tab = coordinatorTab(page);
+      const outline = tab.getByTestId("coordinator-working-outline");
+      await expect(outline).toBeVisible();
+      if (!selected) {
+        await page.getByRole("tab", { name: "Kanban", exact: true }).click();
+        await page.mouse.move(0, 0);
+        // Keyboard modality, so the scripted focus below counts as focus-visible.
+        await page.keyboard.press("Shift");
+      }
+      await expect(tab).toHaveAttribute("aria-selected", String(selected));
+      await tab.focus();
+      await expect(tab).toBeFocused();
+      expect(await tab.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
+
+      // A 2px inset ring on the tab that reads against whatever is behind it.
+      const shadow = await tab.evaluate((element) => getComputedStyle(element).boxShadow);
+      const ringColor = /(\w+\([^)]*\)) 0px 0px 0px 2px inset/.exec(shadow)?.[1];
+      expect(ringColor).toBeDefined();
+      const ratio = await contrast(page, ringColor!, await surfaceColor(tab));
+      expect(ratio).toBeGreaterThanOrEqual(3);
+
+      // The spinner runs inside the ring with a 1px gap, so they stay two lines.
+      const tabBox = (await tab.boundingBox())!;
+      const outlineBox = (await outline.boundingBox())!;
+      expect(outlineBox.x - tabBox.x).toBe(3);
+      expect(outlineBox.y - tabBox.y).toBe(3);
+      expect(outlineBox.width).toBe(tabBox.width - 6);
+      expect(outlineBox.height).toBe(tabBox.height - 6);
+    });
+  }
+}
+
+test("forced colours keep a focus indicator around the tab's static outline", async ({ page }) => {
+  await page.emulateMedia({ forcedColors: "active" });
   await page.goto("/coordinator-activity");
   const tab = coordinatorTab(page);
-  const outline = tab.getByTestId("coordinator-working-outline");
-  await expect(outline).toBeVisible();
-  await tab.focus();
-  await expect(tab).toBeFocused();
-  expect(await tab.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
+  await expect(tab.getByTestId("coordinator-working-outline-ring")).toBeVisible();
 
-  // A 2px inset ring on the tab, with the spinner moved just inside it.
-  const shadow = await tab.evaluate((element) => getComputedStyle(element).boxShadow);
-  expect(shadow).toMatch(/inset/);
-  expect(shadow).toMatch(/2px/);
-  const tabBox = (await tab.boundingBox())!;
-  const outlineBox = (await outline.boundingBox())!;
-  expect(outlineBox.x - tabBox.x).toBe(2);
-  expect(outlineBox.y - tabBox.y).toBe(2);
-  expect(outlineBox.width).toBe(tabBox.width - 4);
-  expect(outlineBox.height).toBe(tabBox.height - 4);
+  const outlineBefore = await tab.evaluate((element) => getComputedStyle(element).outlineStyle);
+  expect(outlineBefore).toBe("none");
+
+  await tab.focus();
+  const style = await tab.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    return {
+      line: computed.outlineStyle,
+      width: computed.outlineWidth,
+      offset: computed.outlineOffset,
+    };
+  });
+  expect(style).toEqual({ line: "solid", width: "2px", offset: "-2px" });
 });
 
 test("forced colours replace the tab's spinner with a static outline", async ({ page }) => {
@@ -183,17 +267,7 @@ for (const palette of ["dark", "simulated-light"] as const) {
       await page.addStyleTag({ content: "*, *::before { transition: none !important; }" });
       // There is no shipped light theme. Exercise the same currentColor contract
       // with explicit light surface/text tokens rather than claiming theme support.
-      if (palette === "simulated-light") {
-        await page.addStyleTag({
-          content: `:root {
-          --color-background: #ffffff;
-          --color-chrome: #ffffff;
-          --color-foreground: #18181b;
-          --color-muted-foreground: #52525b;
-          --color-elevated: #f4f4f5;
-        }`,
-        });
-      }
+      if (palette === "simulated-light") await page.addStyleTag({ content: SIMULATED_LIGHT });
       const tab = coordinatorTab(page);
       if (!selected) await page.getByRole("tab", { name: "Kanban", exact: true }).click();
       await expect(tab).toHaveAttribute("aria-selected", String(selected));
@@ -214,34 +288,14 @@ for (const palette of ["dark", "simulated-light"] as const) {
           }),
         )
         .toBe(true);
-      const contrast = () =>
-        tab.evaluate((element) => {
-          const ring = element.querySelector("[data-testid='coordinator-working-outline-ring']")!;
-          // Canvas resolves both rgb and oklch computed colors into sRGB bytes.
-          const canvas = document.createElement("canvas");
-          canvas.width = canvas.height = 1;
-          const ctx = canvas.getContext("2d")!;
-          const luminance = (color: string) => {
-            ctx.clearRect(0, 0, 1, 1);
-            ctx.fillStyle = color;
-            ctx.fillRect(0, 0, 1, 1);
-            const values = Array.from(ctx.getImageData(0, 0, 1, 1).data)
-              .slice(0, 3)
-              .map((v) => {
-                const n = v / 255;
-                return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
-              });
-            return values[0]! * 0.2126 + values[1]! * 0.7152 + values[2]! * 0.0722;
-          };
-          let surface: Element | null = element;
-          while (surface && getComputedStyle(surface).backgroundColor === "rgba(0, 0, 0, 0)")
-            surface = surface.parentElement;
-          const head = luminance(getComputedStyle(ring).color);
-          const background = luminance(getComputedStyle(surface!).backgroundColor);
-          return (Math.max(head, background) + 0.05) / (Math.min(head, background) + 0.05);
-        });
+      const headContrast = async () =>
+        contrast(
+          page,
+          await ring.evaluate((element) => getComputedStyle(element).color),
+          await surfaceColor(tab),
+        );
       // The opaque head is the activity cue; the intentional transparent tail fades.
-      await expect.poll(contrast).toBeGreaterThanOrEqual(3);
+      await expect.poll(headContrast).toBeGreaterThanOrEqual(3);
       expect(await spinning(ring)).toBe(true);
     });
   }

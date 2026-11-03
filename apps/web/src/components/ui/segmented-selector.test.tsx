@@ -70,4 +70,26 @@ describe("SegmentedSelector", () => {
     expect(coordinator.className).toContain("relative");
     expect(kanban.className).not.toContain("relative");
   });
+
+  test("an option's classes override the shared ones on that option alone", () => {
+    render(
+      <SegmentedSelector
+        value="coordinator"
+        ariaLabel="Project navigation"
+        buttonClassName="focus-visible:ring-inset"
+        onValueChange={() => undefined}
+        options={[
+          { value: "coordinator", label: "Coordinator", className: "focus-visible:ring-current" },
+          { value: "kanban", label: "Kanban" },
+        ]}
+      />,
+    );
+    const coordinator = screen.getByRole("button", { name: "Coordinator" }).className;
+    const kanban = screen.getByRole("button", { name: "Kanban" }).className;
+    expect(coordinator).toContain("focus-visible:ring-current");
+    expect(coordinator).not.toContain("focus-visible:ring-ring/60");
+    expect(coordinator).toContain("focus-visible:ring-inset");
+    expect(kanban).toContain("focus-visible:ring-ring/60");
+    expect(kanban).not.toContain("focus-visible:ring-current");
+  });
 });

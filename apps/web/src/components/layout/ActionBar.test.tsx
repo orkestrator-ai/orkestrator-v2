@@ -1457,6 +1457,15 @@ describe("ActionBar coordinator tab activity", () => {
     const kanban = screen.getByRole("button", { name: "Kanban" });
     expect(kanban.className).not.toContain("relative");
   });
+
+  test("the coordinator tab alone takes its focus ring from its text", () => {
+    const { tab } = renderTab("working");
+    expect(tab.className).toContain("focus-visible:ring-current");
+    expect(tab.className).not.toContain("focus-visible:ring-ring/60");
+    const kanban = screen.getByRole("button", { name: "Kanban" });
+    expect(kanban.className).toContain("focus-visible:ring-ring/60");
+    expect(kanban.className).not.toContain("focus-visible:ring-current");
+  });
 });
 
 describe("ActionBar experimental graphs", () => {

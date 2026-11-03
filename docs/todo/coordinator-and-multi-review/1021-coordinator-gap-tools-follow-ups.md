@@ -4,7 +4,8 @@
 
 Analysed 2026-10-31 against `main` at `931e55417`. Tasks 5 to 8 rechecked and
 worked on 2026-11-01 against `main` at `93b99bfba`: all three code problems were
-still present.
+still present. Task 3 rechecked 2026-11-03 against `main` at `7b48c23fb`: the
+dialog still had Happy DOM tests only; its browser spec is now built.
 
 A review of what coordinators could not do (2026-10-30) led to ten new
 Control MCP tools and one new status-wake resource, built on branch
@@ -29,7 +30,7 @@ This file holds that qualification and the gaps the build left.
 
 1. **Live `gap-tools` scenario**: each new tool called once by a live main coordinator on a real stack. Status: open (needs a live provider).
 2. **Live PR follow against GitHub**: one PR followed through opened, conflicts, resolve, checks failed, ready and merged. Status: open (needs a GitHub test repository).
-3. **Answer relay in the app**: the approval dialog, an edited answer and a real worker resuming. Status: open.
+3. **Answer relay in the app**: the approval dialog, an edited answer and a real worker resuming. Status: open (needs a live provider); the browser spec is done (2026-11-03).
 4. **Remote-node paths live**: the new tools' `nodeId` paths over a real node link. Status: open (needs two nodes).
 5. **Sidebar fork keeps the source's build pipeline**: deleting a user's fork deletes the source worker's pipeline record. Status: done (2026-11-01).
 6. **PR follow gaps**: PR-tab failure and remote Merge and Cleanup wakes are done; reopened PRs remain outside a finished follow. Status: decided, keep the terminal-follow policy (2026-11-01); reopen only when a coordinator needs it.
@@ -99,16 +100,41 @@ the merge-and-cleanup path against a real `gh` are unverified.
 
 ### 3. Answer relay in the app
 
-**Problem.** `WorkerQuestionApprovalDialog.tsx` is covered by Happy DOM
+**Problem.** `WorkerQuestionApprovalDialog.tsx` was covered by Happy DOM
 component tests only. No real worker has been answered through it.
 
 **Context.** The dialog opens from `NodeActionRequestsDialog.tsx`. Approval
 runs `answer_project_worker_question`, which re-reads the question and answers
 only the recorded revision.
 
-**Investigation.** Not run in a browser or the app. Providers ask questions
-differently (Claude's AskUserQuestion, Codex and OpenCode question requests),
-so the option shapes need checking per provider.
+**Investigation.** Providers ask questions differently (Claude's
+AskUserQuestion, Codex and OpenCode question requests), so the option shapes
+need checking per provider. Rechecked 2026-11-03 against `main` at
+`7b48c23fb`: still no browser or live coverage.
+
+**Done (browser half, 2026-11-03).** `e2e/WorkerQuestionApproval.spec.ts`
+renders the dialog through the `/worker-question-approval` fixture
+(`e2e/fixture/WorkerQuestionApprovalFixture.tsx`, a fake backend that records
+the `resolve_node_action_request` arguments) on both the phone and desktop
+projects of `mise run test:browser`. It checks the heading, reason and
+preselected proposal; that the dialog fits the viewport with no sideways
+scroll, options stack at full width and the "proposed" tag sits on the
+option's first line; that Escape does not dismiss it; that an edited answer
+(another single choice, an extra multiple choice from the keyboard and a
+written note) is the one approved; that a written answer replaces the single
+choice and an empty required answer disables Approve; and that a long question
+list (`?many`, 390×600) scrolls while the heading and both buttons stay in
+view.
+
+The last check found a real defect: the question list was capped at 60vh
+inside a dialog that itself scrolled, so on a short screen Approve was cut off
+and Decline sat below the fold. The dialog now uses the same column layout as
+`AgentsMdApprovalDialog` (header and footer `shrink-0`, the question list
+`min-h-0 flex-1` and still capped at 60vh), so only the questions scroll.
+
+**Still open (live half).** No real worker has been answered through the
+dialog, and the per-provider question shapes are unchecked. This needs Claude,
+Codex and OpenCode signed in on a `dev:test` profile.
 
 **Decisions.**
 
@@ -327,6 +353,9 @@ changed in a commit and again uncommitted shows each side's lines apart),
 
 ## Current state
 
+On 2026-11-03 task 3's browser spec was added and the dialog's short-screen
+layout fixed; the live half of task 3 remains open.
+
 On 2026-11-01 tasks 5, 7 and 8 were fixed and task 6 was decided (keep the
 terminal-follow policy); see each task. Tasks 1 to 4 need live providers,
 GitHub or two nodes and were not run.
@@ -344,8 +373,9 @@ were not checked by name. All of these were fixed on the same branch.
 
 ### Qualification
 
-1. Task 1 (live scenario), task 2 (GitHub), task 3 (dialog and providers),
-   task 4 (two nodes).
+1. Task 1 (live scenario), task 2 (GitHub), task 3 (a real worker answered
+   through the dialog, once per question-capable provider), task 4 (two
+   nodes).
 
 ### Code
 
@@ -376,6 +406,22 @@ protection (task 2) and a coordinator using `diffScope` (task 1).
   on-demand and only created by `get_worker_changes`). Each read of a worker's
   changes now runs one more guarded `git diff` pair, and later scans recompute
   `committed-net` like `uncommitted-net` once a coordinator has asked.
+
+### 2026-11-03: task 3, browser spec
+
+- **Task 3.** Took the recommended option's browser half: a
+  `mise run test:browser` spec with its own fixture, not a live run, because
+  the live half needs provider logins this build may not use. The fixture
+  renders the dialog alone with a fake `window.orkestrator.invoke`, like
+  `ProjectHomeMessageApprovalFixture`, rather than through
+  `NodeActionRequestsDialog`, so the spec checks the dialog and the approval
+  arguments it sends and nothing about request listing (the Happy DOM tests
+  cover that path).
+- **Task 3.** Fixed the short-screen layout the spec found, in the same change,
+  rather than recording it as a follow-up: it was a few class changes following
+  `AgentsMdApprovalDialog`'s existing pattern, and a dialog whose Approve
+  button is cut off is the layout regression the spec exists to catch. The 60vh
+  cap is kept so the desktop dialog looks as before.
 
 ### Task 6: completion recovery
 

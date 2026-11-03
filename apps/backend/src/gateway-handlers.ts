@@ -1,4 +1,4 @@
-import { withRelayController } from "./core/public-api/relay-context.js";
+import { withRelayController } from "./core/public-api/index.js";
 import type { GatewayAuth } from "./gateway-auth.js";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayEvents } from "./gateway-events.js";

@@ -25,7 +25,7 @@ import {
   ScheduledJobExecutor,
   ScheduledJobService,
 } from "./scheduled-jobs/index.js";
-import { publicActionHandlers } from "./public-api/registry.js";
+import { publicActionHandlers } from "./public-api/index.js";
 import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
 import {
   bridgeRemoteCoordinatorEvents,
@@ -123,7 +123,7 @@ import {
   mcpRolloutLoader,
   mcpContainerOptions,
 } from "./commands-registry-mcp.js";
-import { McpManagementService } from "./mcp-management/service.js";
+import { McpManagementService } from "./mcp-management/index.js";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
   createCommandRegistry,

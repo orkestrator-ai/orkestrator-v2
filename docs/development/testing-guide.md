@@ -505,8 +505,11 @@ ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest \
 # On Linux that Playwright does not support (Arch), WebKit lacks ICU 74, libxml2 2.9
 # and flite: run mise run test:preview:webkit-libs, then prefix the command with the
 # PLAYWRIGHT_BROWSERS_PATH it prints (checksummed Ubuntu libraries, no system change).
-# Add the Vite variable for HMR; --project=firefox or --grep can narrow the run.
+# Add the Vite variable for HMR and the Next.js one for the app-router fixture
+# (installed copies of test-fixtures/preview-vite and test-fixtures/preview-next);
+# --project=firefox or --grep can narrow the run.
 ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
+ORKESTRATOR_TEST_PREVIEW_NEXT_DIR=/tmp/preview-next \
   mise run test:logged -- --name preview-browser -- mise run test:preview:browser
 
 # Loopback route latency for the evidence log (prints one [preview-bench] line)

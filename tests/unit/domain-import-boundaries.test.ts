@@ -14,6 +14,19 @@ const domains = [
   { name: "change-tracking", leaf: "capture.js", exceptions: ["ledger-schema.js"] },
   { name: "transcript-artifacts", leaf: "service.js", exceptions: ["store-layout.js"] },
   { name: "scheduled-jobs", leaf: "service.js", exceptions: ["layout.js", "store.js", "tools.js"] },
+  { name: "mcp-management", leaf: "service.js", exceptions: [] },
+  {
+    name: "public-api",
+    leaf: "registry.js",
+    exceptions: [
+      "attention-cursor.js",
+      "dispatch.js",
+      "errors.js",
+      "exec-control.js",
+      "operation-ledger.js",
+      "revisions.js",
+    ],
+  },
 ];
 
 interface LintReport {
